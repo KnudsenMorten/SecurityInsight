@@ -1,0 +1,33 @@
+{
+  "product": "securityinsight",
+  "version": "3.0.0",
+  "pages": [
+    { "slug": "install",                    "title": "Install SecurityInsight Pro",        "order": 1,  "file": "install.md" },
+    { "slug": "upgrade",                    "title": "Updates and upgrades",               "order": 2,  "file": "upgrade.md" },
+    { "slug": "operations",                 "title": "Operations",                         "order": 3,  "file": "operations.md" },
+    { "slug": "security",                   "title": "Security",                           "order": 4,  "file": "security.md" },
+    { "slug": "identities-and-permissions", "title": "Identities and permissions",         "order": 5,  "file": "identities-and-permissions.md" },
+    { "slug": "sql-access",                 "title": "SQL access",                         "order": 6,  "file": "sql-access.md" },
+    { "slug": "guards",                     "title": "Guards and guard modes",             "order": 7,  "file": "guards.md" },
+    { "slug": "data-health",                "title": "Data health",                        "order": 8,  "file": "data-health.md" },
+    { "slug": "releases",                   "title": "Releases, rings and waves",          "order": 9,  "file": "releases.md" },
+    { "slug": "support-access",             "title": "Support access",                     "order": 10, "file": "support-access.md" },
+    { "slug": "naming",                     "title": "Naming",                             "order": 11, "file": "naming.md" },
+    { "slug": "settings",                   "title": "Settings",                           "order": 12, "file": "settings.md" },
+    { "slug": "pipeline",                   "title": "The daily pipeline",                 "order": 13, "file": "pipeline.md" },
+    { "slug": "departments",                "title": "Departments",                        "order": 14, "file": "departments.md" },
+    { "slug": "exemptions",                 "title": "Exemptions",                         "order": 15, "file": "exemptions.md" },
+    { "slug": "cmdb-servicenow",            "title": "CMDB and ServiceNow",                "order": 16, "file": "cmdb-servicenow.md" },
+    { "slug": "weighted-risk",              "title": "Weighted risk by CMDB service",      "order": 17, "file": "weighted-risk.md" },
+    { "slug": "community-scripts",          "title": "Community edition: the scripts you run", "order": 18, "file": "community-scripts.md" },
+    { "slug": "data-out-contract", "title": "The SecurityInsight data contract", "order": 700, "file": "data-out-contract.md" },
+    { "slug": "servicenow-overview", "title": "ServiceNow integration overview", "order": 701, "file": "servicenow-overview.md" },
+    { "slug": "servicenow-columns", "title": "ServiceNow staging tables and columns", "order": 702, "file": "servicenow-columns.md" },
+    { "slug": "servicenow-records-and-states", "title": "Handling records and states", "order": 703, "file": "servicenow-records-and-states.md" },
+    { "slug": "servicenow-sync-complete", "title": "Knowing when a sync is complete", "order": 704, "file": "servicenow-sync-complete.md" },
+    { "slug": "servicenow-setup", "title": "Setting up ServiceNow for SecurityInsight", "order": 705, "file": "servicenow-setup.md" },
+    { "slug": "servicenow-test-pack", "title": "Testing with the SecurityInsight test pack", "order": 706, "file": "servicenow-test-pack.md" },
+    { "slug": "servicenow-troubleshooting", "title": "ServiceNow troubleshooting and FAQ", "order": 707, "file": "servicenow-troubleshooting.md" },
+    { "slug": "side-by-side",               "title": "SecurityInsight 3 beside 2.2",       "order": 19, "file": "side-by-side.md" }
+  ]
+}

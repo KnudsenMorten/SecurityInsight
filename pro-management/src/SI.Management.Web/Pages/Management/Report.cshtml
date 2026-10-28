@@ -1,0 +1,27 @@
+@page
+@model SI.Management.Web.Pages.Management.ReportModel
+@{
+    ViewData["Title"] = "Executive report";
+    var f = Model.Figures;
+}
+<h1>Executive report</h1>
+<partial name="_ExportPdf" model="@("Executive report")" />
+<p class="scope-line muted" data-scope>@if (f.Current is { } cur) { <text>What you're looking at: the collection of </text><time data-utc datetime="@cur.CollectionTime.ToString("o")">@Fmt.When(cur.CollectionTime)</time><text>; open findings (exempted ones left out); active assets (not seen for more than 30 days are counted under Coverage); accepted lifecycle: </text>@f.Grace<text> (per your settings); change since </text>@(f.Since ?? "the last report (none yet)")<text>.</text> } else { @f.Missing }</p>
+@if (f.Error is not null) { <div class="notice error" role="alert">@f.Error</div> }
+<partial name="_RunPicker" model="Model.Picker()" />
+<partial name="_KeyHeadline" model="f" />
+<nav class="seg-row noprint" aria-label="Protection Score view" data-protection-views>
+    <span class="muted">Protection Score view</span>
+    <span class="seg" role="group">
+        @foreach (var (code, label) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews)
+        {
+            <a href="/Management/Report?@(Model.RunQuery)view=@code" data-view="@code" aria-current="@(code == Model.ViewKey ? "true" : "false")">@label</a>
+        }
+    </span>
+</nav>
+@foreach (var b in Model.Blocks)
+{
+    <partial name="_ReportBlock" model="b" />
+}
+<p class="hint noprint">The same blocks are mailed to management on a schedule: <nav-ref page="/Reports/Index" then="Management summary" />. <a href="/Management/Overview">Explore the topics</a>.</p>
+@foreach (var q in f.Queries) { <partial name="_Query" model="q" /> }

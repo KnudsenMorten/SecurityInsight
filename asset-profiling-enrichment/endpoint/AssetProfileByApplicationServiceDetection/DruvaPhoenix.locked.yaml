@@ -1,0 +1,21 @@
+id:        DruvaPhoenix
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Druva Phoenix'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Druva Phoenix'
+
+detections:
+  - id: DruvaPhoenix
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'phoenix*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

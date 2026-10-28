@@ -1,0 +1,102 @@
+{
+  "about": "The values SecurityInsight 2.2.460 set in each engine's launcher\\<engine>\\LauncherConfig.defaults.ps1 WITHOUT a guard. 2.2 loaded those files AFTER config\\SecurityInsight.custom.ps1, so these values replaced the customer's own. 3.0 loads the defaults first; on the first 3.0 run of an upgraded installation each engine lists the settings from the customer's configuration that now take effect. Read-only reference data; never loaded as configuration.",
+  "source": "tag SI-2.2.460, launcher/<engine>/LauncherConfig.defaults.ps1, top-level $global: assignments",
+  "engines": {
+    "azure": {
+      "SI_AssetLimit_Azure": 0,
+      "SI_Sinks_Azure": [
+        "LA",
+        "JSON",
+        "Excel"
+      ],
+      "SI_ForceFullRun_Azure": false,
+      "SI_EnableAI_azure": false,
+      "SI_SystemPrompt_azure": null,
+      "SI_ActiveStaleDays": 30,
+      "WhatIfMode": false
+    },
+    "endpoint": {
+      "SI_AssetLimit_Endpoint": 0,
+      "SI_Sinks_Endpoint": [
+        "LA",
+        "JSON",
+        "Excel"
+      ],
+      "SI_ForceFullRun_Endpoint": false,
+      "SI_EnableAI_endpoint": false,
+      "SI_SystemPrompt_endpoint": null,
+      "SI_DefenderWorkspaceResourceId": null,
+      "SI_ActiveStaleDays": 30,
+      "WhatIfMode": false
+    },
+    "identity": {
+      "SI_AssetLimit_Identity": 0,
+      "SI_Sinks_Identity": [
+        "LA",
+        "JSON",
+        "Excel"
+      ],
+      "SI_ForceFullRun_Identity": false,
+      "SI_EnableAI_identity": false,
+      "SI_AI_CostPerCallEstimate": 0.01,
+      "SI_SystemPrompt_identity": null,
+      "SI_ActiveStaleDays": 30,
+      "WhatIfMode": false
+    },
+    "privilege-tier-classifier": {},
+    "publicip": {
+      "SI_AssetLimit_PublicIp": 0,
+      "SI_Sinks_PublicIp": [
+        "LA",
+        "JSON",
+        "Excel"
+      ],
+      "SI_ForceFullRun_PublicIp": false,
+      "SI_EnableAI_publicip": false,
+      "SI_ShodanCacheAgeDays": 7,
+      "SI_ShodanMonthlyCreditCap": 4000,
+      "SI_PublicIp_TableName": "SI_VulnerabilityPIP",
+      "SI_PublicIP_DiscoverySource": "profile-cl",
+      "SI_Shodan_TierMax": 3,
+      "SI_Shodan_ServerOnly": true,
+      "SI_Shodan_LookbackDays": 8,
+      "SI_Shodan_ThrottleMs": 1100,
+      "SI_Shodan_TimeoutSec": 15,
+      "SI_Shodan_ForceFreshScan": false,
+      "SI_Shodan_ScanWaitMaxSec": 300,
+      "SI_Shodan_ScanPollIntervalSec": 30,
+      "SI_Shodan_FreshScanIntervalHours": 20,
+      "SI_ActiveStaleDays": 30,
+      "WhatIfMode": false
+    },
+    "risk-analysis": {
+      "ReportTemplate": "RiskAnalysis_Summary_Bucket",
+      "OverwriteXlsx": true,
+      "ShowConfig": false,
+      "WriteJsonOutput": false,
+      "SendToLogAnalytics": true,
+      "SI_RiskAnalysis_DcrResourceGroup": null,
+      "SI_RiskAnalysis_DceName": null,
+      "SI_RiskAnalysis_DceIngestionUri": null,
+      "SI_RiskAnalysis_WorkspaceName": null,
+      "SI_RiskAnalysis_WorkspaceResourceId": null,
+      "SI_RiskAnalysis_WorkspaceResourceGroup": null,
+      "SI_RiskAnalysis_TableName_Summary": "SI_RiskAnalysis_Summary",
+      "SI_RiskAnalysis_TableName_Detailed": "SI_RiskAnalysis_Detailed",
+      "ExportDestination": null,
+      "AutoBucketCount": true,
+      "AutoBucketMax": 131072,
+      "AutoBucketCache": true,
+      "ResetCache": false,
+      "GraphReconnectMaxAgeMinutes": 45,
+      "GraphQueryMaxRetries": 4,
+      "WhatIfMode": false,
+      "Summary": false,
+      "Detailed": false,
+      "DebugQueryHash": false,
+      "Scope": [
+        "PROD"
+      ]
+    }
+  }
+}

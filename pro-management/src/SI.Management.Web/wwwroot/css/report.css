@@ -1,0 +1,42 @@
+/* Print-designed pages (framework ENV-REPORT-1, MAIL-2 items 3 and 7): the environment report and every page with an
+   Export PDF button. On screen the report reads as a document; in print it is A4 with page numbers and "Confidential",
+   without the menu, the header bar or the buttons. */
+.report-actions .actions, .print-bar { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+.report-doc { max-width: 1100px; }
+.report-cover { border-bottom: 3px solid var(--brand-blue); padding: 1.5rem 0 1rem 0; margin-bottom: 1rem; }
+.report-cover h1 { font-size: 2rem; margin: .8rem 0 .3rem 0; color: var(--brand-ink); }
+.report-logo { height: 44px; }
+.report-customer { font-size: 1.25rem; font-weight: 600; }
+.report-confidential { color: var(--critical); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.report-toc ol { columns: 2; }
+.report-section { margin: 1.4rem 0; }
+.report-section h2 { border-bottom: 2px solid var(--border); padding-bottom: .25rem; color: var(--brand-ink); }
+.report-diagram { width: 100%; max-width: 960px; height: auto; margin: .6rem 0 1rem 0; }
+.report-footer { margin-top: 2rem; font-size: .8rem; color: var(--text-secondary); border-top: 1px solid var(--border); padding-top: .4rem; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }
+.facts dt { font-weight: 600; color: var(--text-secondary); }
+.facts dd { margin: 0; }
+.print-only { display: none; }
+
+@page {
+  size: A4;
+  margin: 16mm 14mm 18mm 14mm;
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 9pt; color: #57606a; }
+  @bottom-left { content: "SecurityInsight Pro -- Confidential"; font-size: 9pt; color: #57606a; }
+}
+
+@media print {
+  .topbar, nav.navgroups, .page-tabs, .no-print, .toasts, [data-print], .report-actions, .print-bar, form { display: none !important; }
+  .print-only { display: block; }
+  body, main { background: #ffffff !important; color: #000000 !important; }
+  main { padding: 0 !important; margin: 0 !important; }
+  .report-cover { page-break-after: always; min-height: 60vh; }
+  .report-toc { page-break-after: always; }
+  .report-section h2 { page-break-after: avoid; }
+  .table-wrap { max-height: none !important; overflow: visible !important; }
+  table { font-size: 8.5pt; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  thead th { position: static !important; }
+  a { color: #000000; text-decoration: none; }
+}

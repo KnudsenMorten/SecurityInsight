@@ -1,0 +1,21 @@
+id:        ManageengineAdauditPlus
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'ManageEngine ADAudit Plus'
+category:  'Identity Audit'
+description: ''
+displayNames:
+  - 'ManageEngine ADAudit Plus'
+
+detections:
+  - id: ManageengineAdauditPlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'adaudit_plus*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Audit'
+      Category: 'Identity Audit'

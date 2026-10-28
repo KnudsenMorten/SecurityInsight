@@ -1,0 +1,349 @@
+@page
+@model SI.Management.Web.Pages.Admin.PerformanceModel
+@using SI.Management.Web.Performance
+@using SI.Management.Web.DataHealth
+@{
+    ViewData["Title"] = "Performance";
+    var d = Model.Data;
+    var isAdmin = User.IsAdmin();
+    var isSuperAdmin = User.IsSuperAdmin();
+    var now = Model.NowUtc;
+    var prices = Model.Prices;
+    string Badge(string state) => state switch { "complete" => "good", "running" => "info", "partial" => "warn", "held" => "warn", "never" => "", _ => "bad" };
+    string RunBadge(string state) => state switch { "Succeeded" => "good", "Running" => "info", "Failed" => "bad", _ => "warn" };
+    IReadOnlyList<(DateTime, double)> Max(IReadOnlyList<PerfLoadHour> l) => l.Select(h => (h.HourUtc, h.Max)).ToList();
+}
+<h1>Performance</h1>
+<p class="lede">How long SecurityInsight's runs take, whether every source was collected, and how busy the databases and the web app were over the last 7 days -- with what size would fit better. Everything here is read from SecurityInsight's own records; the load is measured every hour by its status job.</p>
+<details class="help">
+    <summary>How to read this page</summary>
+    <p><strong>At its limit</strong> means an hour in which the database (or the web app) used 95 % or more of what its size allows (the web app: 90 %). Many such hours make the nightly run longer. <strong>Idle</strong> means an hour in which it used less than 10 % on average.</p>
+    <p>A recommendation needs at least a day of measurements. The prices are approximate monthly list prices, before discounts (as of @prices.AsOf). An Admin can ask for another size here; SecurityInsight's updater makes the change -- this web app has no right to change Azure itself.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+@* ---------------------------------------------------------------- 1. the pipeline -------------------------------------------- *@
+<section class="card" aria-labelledby="h-runs" data-perf-runs>
+    <h2 id="h-runs">Pipeline runs</h2>
+    @if (Model.Progress is { } p)
+    {
+        <div class="notice@(p.Stalled ? " warn" : "")" role="status" data-perf-progress="@(p.Stalled ? "stalled" : "running")">
+            <strong>A run is in progress</strong> since @Fmt.Time(p.Run.StartedUtc) (@PerfRules.Span(now - p.Run.StartedUtc)): @Fmt.Int(p.Done) of @Fmt.Int(p.Total) steps done.
+            @foreach (var (label, since) in p.Running)
+            {
+                <br /><span data-perf-running-step>@label runs now@(since is { } s ? ", for " + PerfRules.Span(now - s) : "").</span>
+            }
+            @if (p.Stalled)
+            {
+                <br /><span>The run has not reported for a while; it continues on the pipeline's next wake-up.</span>
+            }
+            else if (p.EstimatedEndUtc is { } end)
+            {
+                <br /><span data-perf-estimate="@p.Confidence">Expected to end around @Fmt.Time(end)@(p.Confidence == "known" ? "" : p.Confidence == "overdue" ? " at the earliest -- a step runs longer than last time" : " at the earliest -- a step has no earlier time to go by").</span>
+            }
+            else
+            {
+                <br /><span data-perf-estimate="unknown">No end can be estimated yet: the steps left have no earlier time to go by.</span>
+            }
+        </div>
+    }
+    @if (d.Runs.Count == 0)
+    {
+        <p class="hint" data-perf-no-runs>No pipeline run is recorded yet.</p>
+    }
+    else
+    {
+        <h3>The last @Fmt.Int(d.Runs.Count) runs</h3>
+        @PerfSvg.Bars(d.Runs.Reverse().Select(r => r.Duration(now)?.TotalMinutes).ToList(), "Total time of each run, oldest first", 560, 40)
+        <div class="table-wrap">
+            <table data-sortable data-perf-run-table>
+                <thead><tr><th>Started</th><th>Started by</th><th>State</th><th class="num">Total time</th></tr></thead>
+                <tbody>
+                    @foreach (var r in d.Runs)
+                    {
+                        var dur = r.Duration(now);
+                        <tr data-run="@r.Id" data-state="@r.State">
+                            <td data-value="@LocalTime.Iso(r.StartedUtc)">@Fmt.Time(r.StartedUtc)</td>
+                            <td>@(r.Trigger switch { "manual" => "a person (Run now)", "schedule" or "timer" => "the schedule", "" => "--", _ => r.Trigger })</td>
+                            <td><span class="badge @RunBadge(r.State)">@PerfRules.RunStateLabel(r.State)</span></td>
+                            <td class="num" data-value="@(dur is { } x ? Fmt.Raw(x.TotalMinutes) : "")">@PerfRules.Span(dur)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <h3>Time per step</h3>
+        <p class="hint">Each bar is one run, oldest on the left; a gap is a run in which the step did not run, or did not end well. Typical = the middle value of its good runs.</p>
+        <div class="table-wrap">
+            <table data-sortable data-perf-step-table>
+                <thead><tr><th>Step</th><th class="num">Typical</th><th class="num">Last</th><th>Per run</th></tr></thead>
+                <tbody>
+                    @foreach (var t in Model.Trends)
+                    {
+                        <tr data-step="@t.Key">
+                            <td>@t.Label</td>
+                            <td class="num" data-value="@Fmt.Raw(t.TypicalMinutes)">@PerfRules.Minutes(t.TypicalMinutes)</td>
+                            <td class="num" data-value="@Fmt.Raw(t.LastMinutes)">@PerfRules.Minutes(t.LastMinutes)</td>
+                            <td>@PerfSvg.Bars(t.Minutes, t.Label + ": time per run, oldest first")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@* ---------------------------------------------------------------- 2. the data ------------------------------------------------ *@
+<section class="card" aria-labelledby="h-data" data-perf-data>
+    <h2 id="h-data">Collected data</h2>
+    @if (Model.Sources.Count == 0)
+    {
+        <p class="hint" data-perf-no-sources>No collection is recorded yet.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable data-perf-source-table>
+                <thead><tr><th>Source</th><th>State</th><th>Last good collection</th><th class="num">Records</th><th>Note</th></tr></thead>
+                <tbody>
+                    @foreach (var s in Model.Sources)
+                    {
+                        <tr data-source="@s.Kind" data-state="@s.State" data-stale="@(s.Stale ? "true" : "false")">
+                            <td>@s.Label</td>
+                            <td><span class="badge @Badge(s.State)">@PerfRules.StateLabel(s.State)</span>@if (s.Stale) { <text> </text><span class="badge warn" title="The last good collection is older than @PerfRules.StaleHours hours">Stale</span> }</td>
+                            <td data-value="@LocalTime.Iso(s.LastGoodUtc)">@Fmt.Time(s.LastGoodUtc, empty: "never")</td>
+                            <td class="num" data-value="@(s.Collected?.ToString(System.Globalization.CultureInfo.InvariantCulture))">@(s.Collected is { } c ? Fmt.Int(c) + (s.Expected is { } e ? " of " + Fmt.Int(e) : "") : "--")</td>
+                            <td>@(s.Note ?? "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <h3>Risk Analysis reports not complete</h3>
+    @if (!Model.ReportsKnown)
+    {
+        <p class="hint">Not available: this database does not record the reports' verdicts yet.</p>
+    }
+    else if (Model.Incomplete.Count == 0)
+    {
+        <p class="hint" data-perf-reports-complete>Every report of the newest Risk Analysis runs was complete.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable data-perf-incomplete>
+                <thead><tr><th>Report</th><th>Run</th><th class="num">Stored</th><th>Why</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.Incomplete)
+                    {
+                        <tr><td>@r.Report</td><td>@r.Grain, @Fmt.Time(r.CollectionTime)</td><td class="num">@(r.Stored is { } st ? Fmt.Int(st) + (r.Expected is { } ex ? " of " + Fmt.Int(ex) : "") : "--")</td><td>@(r.Reason ?? "not stated")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    @if (Model.HeldReports.Count > 0)
+    {
+        @* #902: the reports SI held ON PURPOSE -- amber, never counted as not complete *@
+        <h3>Risk Analysis reports held at their last good result</h3>
+        <div class="table-wrap">
+            <table data-sortable data-perf-held>
+                <thead><tr><th>Report</th><th>Run</th><th>State</th><th>Kept result</th><th>Why</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.HeldReports)
+                    {
+                        <tr data-report="@r.Report"><td>@r.Report</td><td>@r.Grain, @Fmt.Time(r.CollectionTime)</td>
+                            <td><span class="badge @(r.Escalated ? "bad" : "warn")">@(r.Escalated ? "Held " + r.HeldRuns + " runs in a row -- support told" : "Held: last good result kept")</span></td>
+                            <td>@(r.KeptResultAt is { } k ? Fmt.Time(DateTime.SpecifyKind(k, DateTimeKind.Utc)) + " (" + r.KeptAge(DateTime.UtcNow) + ")" : "none")</td><td>@(r.Reason ?? "not stated")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <p class="hint">Every report with its verdict: <a href="/Admin/RunHealth/Reports">Risk Analysis reports</a>.</p>
+</section>
+
+@* ---------------------------------------------------------------- 3. the databases ------------------------------------------- *@
+<section class="card" aria-labelledby="h-db" data-perf-databases>
+    <h2 id="h-db">Databases</h2>
+    @if (!d.HasSamples)
+    {
+        <p class="hint" data-perf-no-samples>The load over time is not available yet: this database has no place for the hourly measurements. The next update adds it; the status job then records them every hour.</p>
+    }
+    @foreach (var c in Model.Databases)
+    {
+        var a = c.Advice;
+        <article class="perf-item" data-perf-database="@c.Name" data-advice="@a.Direction">
+            <h3>@c.Label</h3>
+            <dl class="perf-facts">
+                <dt>Size</dt><dd>@(c.Sku is { Length: > 0 } sku ? sku + (c.Capacity is { } cap && PerfSizing.SqlDtu.ContainsKey(sku) ? " (" + Fmt.Int((long)cap) + " DTU)" : "") : "not available")@(prices.Sql(c.Sku) is { } pr ? " -- " + prices.Money(pr) : "")</dd>
+                <dt>Space</dt><dd>@(c.UsedMb is { } u ? Fmt.Num(u / 1024.0, 1) + " GB used" : "not available")@(c.MaxMb is { } mx && mx > 0 ? " of " + Fmt.Num(mx / 1024.0, 0) + " GB" + (c.UsedMb is { } uu ? " (" + Fmt.Num(uu * 100.0 / mx, 0) + " %)" : "") : "")</dd>
+                <dt>Last 7 days</dt>
+                <dd>@if (a.HoursSampled == 0) { <text>not available</text> } else { <text>@Fmt.Int(a.HoursSampled) hours measured; at its limit @Fmt.Int(a.HoursAtLimit) hours; idle @Fmt.Num(a.IdleShare * 100, 0) % of the hours; busiest @(a.PeakPercent is { } pk ? Fmt.Num(pk, 0) + " %" : "--")</text> }</dd>
+                @if (a.HoursSampled > 0)
+                {
+                    <dt>Writers slowed</dt>
+                    <dd data-perf-pacing="@a.HoursAbovePacing">@(a.HoursAbovePacing == 0 ? "never -- the database stayed under the mark at which SecurityInsight's large writers slow down" : $"in up to {Fmt.Int(a.HoursAbovePacing)} hours the database was above {Fmt.Num(d.PacingHighPercent, 0)} %, the mark at which SecurityInsight's large writers slow down to leave room for the pages")</dd>
+                }
+            </dl>
+            @PerfSvg.Load(Max(c.Load), PerfAdvisor.DbLimit, c.Label + ": the busiest minute of each hour, in percent of what its size allows, over the last 7 days")
+            @if (c.Parts.Count > 0)
+            {
+                <details>
+                    <summary>Per part (CPU, data reads, log write)</summary>
+                    @foreach (var (metric, pts) in c.Parts)
+                    {
+                        var name = metric switch { "dtu_consumption_percent" => "DTU", "cpu_percent" => "CPU", "physical_data_read_percent" => "Data reads", "log_write_percent" => "Log write", _ => metric };
+                        <h4>@name</h4>
+                        @PerfSvg.Load(pts.Select(x => (x.HourUtc, x.Max ?? x.Avg ?? 0)).ToList(), PerfAdvisor.DbLimit, c.Label + ": " + name + " per hour, highest, in percent")
+                    }
+                </details>
+            }
+            <p class="perf-advice" data-perf-advice-text>@a.Text</p>
+            @if (c.Name == "pro")
+            {
+                var (req, applied) = Model.SqlRequest();
+                if (req is not null)
+                {
+                    <p class="hint" data-perf-request="@(applied ? "applied" : "requested")">Asked for: @req.Value (@(req.By ?? "someone"), @Fmt.Time(req.AtUtc)) -- @(applied ? "applied, the database runs it now." : "waits for the updater; it is applied at the next update.")</p>
+                }
+                @if (isAdmin)
+                {
+                    if (c.Changeable)
+                    {
+                        <form method="post" asp-page-handler="Size" class="stack-form" data-perf-size-form="database"
+                              data-confirm-title="Change the main database's size?" data-confirm="The updater changes the database's size at its next run (or now, with Apply now). The database stays online; open pages may reconnect once. Larger sizes cost more.">
+                            <input type="hidden" name="Target" value="database" />
+                            <label for="perf-db-size">New size</label>
+                            <select id="perf-db-size" name="Value">
+                                @foreach (var o in PerfSizing.SqlLadder)
+                                {
+                                    <option value="@o" selected="@(string.Equals(o, a.Suggest ?? c.Sku, StringComparison.OrdinalIgnoreCase))">@o (@Fmt.Int(PerfSizing.SqlDtu[o]) DTU) -- @prices.Money(prices.Sql(o))@(string.Equals(o, c.Sku, StringComparison.OrdinalIgnoreCase) ? " -- now" : "")@(string.Equals(o, a.Suggest, StringComparison.OrdinalIgnoreCase) ? " -- recommended" : "")</option>
+                                }
+                            </select>
+                            <label for="perf-db-why">Why (optional, on the audit trail)</label>
+                            <input id="perf-db-why" name="Reason" maxlength="400" />
+                            <button type="submit" class="secondary">Ask for this size</button>
+                        </form>
+                    }
+                    else
+                    {
+                        <p class="hint" data-perf-size-later>Changing the size from this page comes with a later update. Sizes offered: @string.Join(", ", PerfSizing.SqlLadder.Select(o => o + " " + prices.Money(prices.Sql(o)))).</p>
+                    }
+                }
+            }
+        </article>
+    }
+    <p class="hint">@prices.Note (as of @prices.AsOf)</p>
+</section>
+
+@* ---------------------------------------------------------------- 4. the web app and the jobs --------------------------------- *@
+<section class="card" aria-labelledby="h-web" data-perf-webapp>
+    <h2 id="h-web">Web app and jobs</h2>
+    @{ var w = Model.Web; var wa = Model.WebAdvice!; }
+    <article class="perf-item" data-perf-web data-advice="@wa.Direction">
+        <h3>Web app</h3>
+        <dl class="perf-facts">
+            <dt>Size</dt><dd>@(w?.Cpu is { } cpu && w.MemoryGi is { } mem ? PerfSizing.WebText(cpu, mem) + " -- " + prices.Money(prices.Web(cpu, mem)) : "not available")</dd>
+            <dt>Last 7 days</dt>
+            <dd>@if (wa.HoursSampled == 0) { <text>not available</text> } else { <text>@Fmt.Int(wa.HoursSampled) hours measured; at its limit @Fmt.Int(wa.HoursAtLimit) hours; idle @Fmt.Num(wa.IdleShare * 100, 0) % of the hours; busiest @(wa.PeakPercent is { } pk ? Fmt.Num(pk, 0) + " %" : "--")</text> }</dd>
+        </dl>
+        @PerfSvg.Load(Max(Model.WebLoad), PerfAdvisor.WebLimit, "Web app: the busiest of CPU and memory per hour, in percent of its size, over the last 7 days")
+        <p class="perf-advice" data-perf-advice-text>@wa.Text</p>
+        @{ var wr = Model.WebRequest(); }
+        @if (wr.Text is not null)
+        {
+            <p class="hint" data-perf-request="@(wr.Applied ? "applied" : "requested")">Asked for: @wr.Text (@(wr.By ?? "someone"), @Fmt.Time(wr.At)) -- @(wr.Applied ? "applied, the web app runs it now." : "waits for the updater; it is applied at the next update.")</p>
+        }
+        @if (isAdmin)
+        {
+            if (Model.WebChangeable)
+            {
+                <form method="post" asp-page-handler="Size" class="stack-form" data-perf-size-form="webapp"
+                      data-confirm-title="Change the web app's size?" data-confirm="The updater changes the web app's size at its next run (or now, with Apply now). The web app restarts once; open pages reload. Larger sizes cost more.">
+                    <input type="hidden" name="Target" value="webapp" />
+                    <label for="perf-web-size">New size</label>
+                    <select id="perf-web-size" name="Value">
+                        @foreach (var o in PerfSizing.WebLadder)
+                        {
+                            var t = PerfSizing.WebText(o.Cpu, o.MemoryGi);
+                            <option value="@PerfSizing.WebValue(o.Cpu, o.MemoryGi)" selected="@(t == (wa.Suggest ?? wa.Current))">@t -- @prices.Money(prices.Web(o.Cpu, o.MemoryGi))@(t == wa.Current ? " -- now" : "")@(t == wa.Suggest ? " -- recommended" : "")</option>
+                        }
+                    </select>
+                    <label for="perf-web-why">Why (optional, on the audit trail)</label>
+                    <input id="perf-web-why" name="Reason" maxlength="400" />
+                    <button type="submit" class="secondary">Ask for this size</button>
+                </form>
+            }
+            else
+            {
+                <p class="hint" data-perf-size-later>Changing the size from this page comes with a later update. Sizes offered: @string.Join(", ", PerfSizing.WebLadder.Select(o => PerfSizing.WebText(o.Cpu, o.MemoryGi) + " " + prices.Money(prices.Web(o.Cpu, o.MemoryGi)))).</p>
+            }
+        }
+    </article>
+    @if (isAdmin && (Model.SqlChangeable || Model.WebChangeable))
+    {
+        <div class="perf-apply" data-perf-apply>
+            @if (isSuperAdmin)
+            {
+                <form method="post" asp-page-handler="Apply" data-confirm-title="Start the updater now?" data-confirm="The updater applies the sizes asked for now. It does not stop a pipeline run.">
+                    <button type="submit">Apply now</button>
+                </form>
+            }
+            else
+            {
+                <p class="hint">A size asked for is applied at the next update; a SuperAdmin can apply it now.</p>
+            }
+        </div>
+    }
+    <h3>Jobs</h3>
+    @if (Model.JobSizes.Count == 0)
+    {
+        <p class="hint" data-perf-no-jobs>The jobs' sizes are not available yet. The status job reads them every hour.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable data-perf-job-table>
+                <thead><tr><th>Job</th><th class="num">CPU</th><th class="num">Memory (GiB)</th></tr></thead>
+                <tbody>
+                    @foreach (var j in Model.JobSizes)
+                    {
+                        <tr data-job="@j.Name"><td>@SI.Management.Web.Jobs.JobSchedule.Label(j.Name)</td><td class="num">@(j.Cpu is { } jc ? Fmt.Num(jc, 2) : "--")</td><td class="num">@(j.MemoryGi is { } jm ? Fmt.Num(jm, 1) : "--")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="hint">The jobs are sized by the updater from the size of your tenant; read @Fmt.Time(Model.JobSizes.Max(j => j.ReadUtc)).</p>
+    }
+</section>
+
+@* ---------------------------------------------------------------- 5. data health ---------------------------------------------- *@
+<section class="card" aria-labelledby="h-health" data-perf-health>
+    <h2 id="h-health">Data health</h2>
+    @{ var h = Model.Health; var shown = h.Cycles.FirstOrDefault(x => x.FinishedAt is not null); }
+    @if (!h.HasTables || !h.State.Recorded)
+    {
+        <p class="hint" data-perf-health="none">No data health check has finished yet.</p>
+    }
+    else
+    {
+        <p data-perf-health="@h.State.State">@(h.State.IsUnhealthy ? "Unhealthy since " + DataHealthRules.When(h.State.Since) + " -- nothing is sent out while it lasts." : "Healthy since " + DataHealthRules.When(h.State.Since) + ".")@(shown is not null ? " Last check: " + DataHealthRules.When(shown.FinishedAt) + "." : "")</p>
+        @if (h.Results.Count > 0)
+        {
+            <div class="table-wrap">
+                <table data-sortable data-perf-health-results>
+                    <thead><tr><th>Source / report</th><th class="num">Checked</th><th class="num">Missing</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in h.Results)
+                        {
+                            <tr data-verdict="@r.Verdict"><td>@r.Label</td><td class="num">@Fmt.Int(r.Sampled)</td><td class="num">@Fmt.Int(r.Missing)</td><td>@DataHealthRules.VerdictLabel(r.Verdict)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+    <p class="hint">Every record that did not match, and letting a channel through: <nav-ref page="/Admin/DataHealth" />.</p>
+</section>

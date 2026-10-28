@@ -1,0 +1,201 @@
+@page
+@model SI.Management.Web.Pages.SchemaOverlay.NewContextModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.GetStarted
+@using SI.Management.Web.NewContext
+@using SI.Management.Web.Pages.SchemaOverlay
+@{
+    ViewData["Title"] = "New context available";
+    var v = Model.View;
+    var isAdmin = User.IsAdmin();
+    var window = Model.Window;
+}
+<h1>New context available</h1>
+<p class="lede">What each source offers that was not there before. On every run SecurityInsight lists the properties of everything it read, and once a week what each source says it offers; a property seen for the first time is shown here -- with a sample value, how many records carry it, and whether it is already used.</p>
+<details class="help" data-newcontext-help>
+    <summary>How this works</summary>
+    <p><strong>Where it comes from.</strong> Every source SecurityInsight reads: Microsoft Entra ID and Intune (Microsoft Graph), Azure, Microsoft Defender for Cloud, Microsoft Defender for Endpoint, Exposure Graph, the public IP scan and ServiceNow. The properties are counted from the objects the runs read anyway (no extra request); once a week the sources are also asked what they offer -- a property a source offers that SecurityInsight does not read yet says so.</p>
+    <p><strong>What is new.</strong> The first time a source and record type is discovered is its starting point: nothing of it is new. Everything first seen after that is new context.</p>
+    <p><strong>What you can do</strong> (an Admin, one step each): <em>add the column</em> to the layout a view opens with -- for everyone without a layout of their own; or <em>map it to an SI field</em> -- the field is then filled on the next run of that source, is a column of every view and can be used by rules and risk factors. A mapping is staged and written only when you commit it in <nav-ref page="/Changes/Index" />.</p>
+    <p><strong>Columns.</strong> A property of a device, user, application or Azure resource is a column of the data views (group "Source: ..." in the column chooser) when full asset details are collected. Without them the column stays empty -- map the property to an SI field instead.</p>
+    <p><strong>Permissions.</strong> Nothing here requests or grants a permission. When a source needs a read permission this install does not have, the page says which, and gives the command for an administrator to run.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database has no discovery tables yet. Run the Pro schema (setup or the updater) once; the next collection run then fills them.</div> }
+else if (v.Counts.Count == 0 && v.States.Count == 0) { <div class="notice" role="status" data-no-run>Nothing has been discovered yet. The next collection run lists what every source offers; that first list is the starting point, and what appears after it is shown here.</div> }
+else
+{
+    <nav class="tabs" aria-label="Period" data-newcontext-windows>
+        @foreach (var (key, label) in NewContextModel.Windows)
+        {
+            <a href="/SchemaOverlay/NewContext?show=@key" class="@(key == window ? "active" : "")" aria-current="@(key == window ? "page" : null)" data-window="@key">@label</a>
+        }
+    </nav>
+    if (v.More) { <p class="hint" data-newcontext-more>Only the newest @Fmt.Int(SqlNewContextStore.PageRows) properties are listed. Choose a shorter period to see fewer.</p> }
+    if (isAdmin)
+    {
+        <datalist id="si-fields">
+            @foreach (var f in Model.SiFields) { <option value="@f"></option> }
+        </datalist>
+    }
+    foreach (var source in Model.SourcesShown)
+    {
+        var rows = v.Properties.Where(p => p.Source.Equals(source, StringComparison.OrdinalIgnoreCase)).ToList();
+        var count = v.Counts.FirstOrDefault(c => c.Source.Equals(source, StringComparison.OrdinalIgnoreCase));
+        var states = v.States.Where(s => s.Source.Equals(source, StringComparison.OrdinalIgnoreCase)).ToList();
+        var failed = states.Where(s => !string.IsNullOrWhiteSpace(s.Error)).ToList();
+        var last = states.Count > 0 ? states.Max(s => s.LastRunAt) : (DateTime?)null;
+        <section class="card" aria-labelledby="h-src-@source" data-newcontext-source="@source" data-new="@rows.Count">
+            <div class="split">
+                <h2 id="h-src-@source">@NewContextText.Source(source)</h2>
+                <span class="muted">
+                    @if (count is null) { <span data-newcontext-never>Not discovered yet</span> }
+                    else
+                    {
+                        <span>@Fmt.Int(count.Known) properties known, @Fmt.Int(count.NewSinceStart) new since the starting point, @Fmt.Int(count.NotRead) offered and not read</span>
+                        if (last is not null) { <span> -- last discovered @Fmt.Time(last)</span> }
+                    }
+                </span>
+            </div>
+            @foreach (var f in failed)
+            {
+                <p class="hint" data-newcontext-notread="@f.RecordType">Not read: @f.RecordType.Replace('_', ' ') (@(f.Origin == "schema" ? "what the source offers" : "the run's records")) -- @f.Error. What was listed before stays; nothing is treated as gone.</p>
+            }
+            @if (rows.Count == 0)
+            {
+                <p class="hint" data-newcontext-none>@(window == NewContextModel.ShowKnown ? "Nothing is known for this source yet." : "Nothing new in this period.")</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-newcontext-table="@source">
+                        <thead>
+                            <tr>
+                                <th scope="col">Property</th><th scope="col">On</th><th scope="col">First seen</th><th scope="col">Sample value</th>
+                                <th scope="col">Carried by</th><th scope="col">Already used</th>@if (isAdmin) { <th scope="col">Use it</th> }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in rows)
+                            {
+                                var column = r.ColumnKey;
+                                var mapped = r.Mapped;
+                                <tr data-property="@r.Id" data-collected="@(r.Collected ? "yes" : "no")" data-baseline="@(r.Baseline ? "yes" : "no")">
+                                    <td class="wrap"><code>@r.MappingPath</code>@if (!string.IsNullOrWhiteSpace(r.ValueType)) { <br /><span class="muted small">@r.ValueType</span> }</td>
+                                    <td class="wrap small">@NewContextText.RecordType(r)</td>
+                                    <td data-value="@r.FirstSeen.ToString("o")">@Fmt.Time(r.FirstSeen, "date")@if (r.Baseline) { <br /><span class="muted small">starting point</span> }</td>
+                                    <td class="wrap small" data-sample>@r.SampleValue</td>
+                                    <td class="wrap small" data-value="@Fmt.Raw((long)r.Records)" data-carried>@NewContextText.Carried(r, n => Fmt.Int(n))@if (!string.IsNullOrWhiteSpace(r.NeedsPermission) && !r.Collected) { <br /><span class="muted small">needs @r.NeedsPermission</span> }</td>
+                                    <td class="wrap small" data-used>@Model.Used(r)</td>
+                                    @if (isAdmin)
+                                    {
+                                        <td class="wrap small" data-actions>
+                                            @if (r.Collected && (column is not null || mapped.Count > 0))
+                                            {
+                                                <form method="post" asp-page-handler="Promote" class="inline" data-newcontext-promote>
+                                                    <input type="hidden" name="Id" value="@r.Id" />
+                                                    <input type="hidden" name="Show" value="@window" />
+                                                    @if (mapped.Count > 0) { <input type="hidden" name="Field" value="@mapped[0]" /> }
+                                                    <label class="sr-only" for="t-@r.Id.GetHashCode()">View</label>
+                                                    <select name="Target" id="t-@r.Id.GetHashCode()">
+                                                        @foreach (var (target, label) in NewContextText.Targets) { <option value="@target">@label</option> }
+                                                    </select>
+                                                    <button type="submit" class="secondary small">Add to the default layout</button>
+                                                </form>
+                                            }
+                                            @if (r.Collected)
+                                            {
+                                                <form method="post" asp-page-handler="Map" class="inline" data-newcontext-map>
+                                                    <input type="hidden" name="Id" value="@r.Id" />
+                                                    <input type="hidden" name="Show" value="@window" />
+                                                    <label class="sr-only" for="f-@r.Id.GetHashCode()">SI field</label>
+                                                    <input type="text" name="Field" id="f-@r.Id.GetHashCode()" list="si-fields" placeholder="si_ field" size="22" required />
+                                                    <button type="submit" class="secondary small">Map to this SI field</button>
+                                                </form>
+                                            }
+                                            else
+                                            {
+                                                <span class="muted">Not read yet -- it can be used once SecurityInsight reads it.</span>
+                                            }
+                                        </td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+    if (Model.Proposals.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-perm" data-newcontext-permissions>
+            <h2 id="h-perm">Read permissions a source would need</h2>
+            <p class="hint">These are proposals. SecurityInsight reads only; it never requests or adds a permission by itself.</p>
+            @foreach (var p in Model.Proposals)
+            {
+                <div class="gs-perm-fix" data-newcontext-permission="@p.Permission">
+                    <p><strong>@p.Permission</strong> -- @p.For</p>
+                    @if (!p.InPermissionSet)
+                    {
+                        <p class="hint" data-newcontext-notinset>This permission is not part of SecurityInsight's permission set, so no command is offered and it is not requested. Tell your SecurityInsight contact if you want this context.</p>
+                    }
+                    else if (p.Fix is { } fix)
+                    {
+                        <p><strong>Who:</strong> @fix.Who</p>
+                        <p><strong>Where:</strong> @fix.Where</p>
+                        if (fix.Commands is { } cmds)
+                        {
+                            <p>Copy and run these commands -- they download the script from Invardia and run it with this install's names filled in:</p>
+                            <pre data-newcontext-cmd><code>@cmds</code></pre>
+                            <button type="button" class="copy secondary small" data-copy="@cmds" aria-label="Copy the commands">Copy</button>
+                        }
+                        else
+                        {
+                            <p class="hint" data-newcontext-unknown>The web app does not know @fix.Unknown of this install, so it cannot fill in the command. The complete command is on <a href="/Admin/GetStarted">Get Started</a> (the Permissions step).</p>
+                        }
+                    }
+                    else
+                    {
+                        <p class="hint">The complete command is on <a href="/Admin/GetStarted">Get Started</a> (the Permissions step).</p>
+                    }
+                </div>
+            }
+        </section>
+    }
+    if (Model.Promoted.Values.Any(l => l.Count > 0))
+    {
+        <section class="card" aria-labelledby="h-promoted" data-newcontext-added>
+            <h2 id="h-promoted">Columns added to the default layouts</h2>
+            <p class="hint">These columns open with the view for everyone without a layout of their own. A person's own layout is not changed.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th scope="col">View</th><th scope="col">Column</th>@if (isAdmin) { <th scope="col"></th> }</tr></thead>
+                    <tbody>
+                        @foreach (var (target, keys) in Model.Promoted)
+                        {
+                            foreach (var k in keys)
+                            {
+                                <tr data-promoted="@k" data-target="@target">
+                                    <td>@NewContextText.TargetLabel(target)</td>
+                                    <td><code>@DataColumnKeys.Label(k)</code></td>
+                                    @if (isAdmin)
+                                    {
+                                        <td>
+                                            <form method="post" asp-page-handler="Unpromote" class="inline">
+                                                <input type="hidden" name="Target" value="@target" />
+                                                <input type="hidden" name="Column" value="@k" />
+                                                <input type="hidden" name="Show" value="@window" />
+                                                <button type="submit" class="secondary small">Remove</button>
+                                            </form>
+                                        </td>
+                                    }
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+}

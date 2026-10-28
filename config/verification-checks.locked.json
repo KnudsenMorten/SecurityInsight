@@ -1,0 +1,110 @@
+{
+  "_": "THE CHECK CATALOG of the verification service (SecurityInsight Pro; docs/V3-DATA-MODEL.md 2.11): settings and plans SecurityInsight's data depends on that are NOT enabled in the customer's Microsoft estate. Each check has a stable id (never renamed -- decisions and history are keyed by it), a title, WHY it matters for SecurityInsight's results, the FIX, a severity (high | medium | low | info), the scope it applies to (tenant | subscription | device | resource | workspace | engine) and the source it reads. The service is READ-ONLY: it never changes a setting. state: production = evaluated and shown; testing = evaluated and shown as testing; not_used = not evaluated. A check whose source cannot be read is NOT CHECKED with the reason -- never 'no gaps' (working rule 4).",
+  "version": "1.0",
+  "defaults": { "decisionReviewDays": 180, "heartbeatDays": 7 },
+  "defenderPlans": [ "VirtualMachines", "StorageAccounts", "SqlServers", "KeyVaults", "AppServices", "Containers", "Arm", "Dns" ],
+  "unsupportedOs": [
+    { "osPlatform": "Windows7", "endOfSupport": "2020-01-14" },
+    { "osPlatform": "Windows8", "endOfSupport": "2016-01-12" },
+    { "osPlatform": "Windows8.1", "endOfSupport": "2023-01-10" },
+    { "osPlatform": "Windows10", "endOfSupport": "2025-10-14", "note": "devices enrolled in Extended Security Updates can be ignored with a decision" },
+    { "osPlatform": "WindowsServer2008R2", "endOfSupport": "2020-01-14" },
+    { "osPlatform": "WindowsServer2012", "endOfSupport": "2023-10-10" },
+    { "osPlatform": "WindowsServer2012R2", "endOfSupport": "2023-10-10" }
+  ],
+  "huntingTables": [ "DeviceInfo", "DeviceTvmSoftwareVulnerabilities", "ExposureGraphNodes", "IdentityInfo" ],
+  "signInTables": [ "SigninLogs", "AuditLogs", "AADServicePrincipalSignInLogs" ],
+  "collectorEngines": [ "endpoint", "identity", "azure", "publicip", "privilege-tier-classifier" ],
+  "checks": [
+    {
+      "id": "defender-plan-off",
+      "title": "A Defender for Cloud plan is off on a subscription",
+      "why": "Without the plan, Defender for Cloud produces no recommendations, vulnerability assessments or alerts for that resource type in that subscription -- SecurityInsight then shows those resources with no findings, which reads as 'secure' when it is 'unknown'.",
+      "fix": "In Defender for Cloud > Environment settings > the subscription > Defender plans, turn the plan on (or decide to ignore it here with a reason).",
+      "severity": "high",
+      "scope": "subscription",
+      "source": "Azure Resource Graph: securityresources (microsoft.security/pricings) and the subscriptions",
+      "state": "production"
+    },
+    {
+      "id": "vm-not-onboarded",
+      "title": "An Azure virtual machine has no Defender for Endpoint sensor",
+      "why": "A running VM that Defender for Endpoint does not know has no vulnerability, software or exposure data -- SecurityInsight cannot score it and it is missing from every device report.",
+      "fix": "Onboard the VM to Defender for Endpoint (Defender for Servers integration, or the onboarding package).",
+      "severity": "high",
+      "scope": "resource",
+      "source": "Azure Resource Graph: running virtual machines; Defender for Endpoint: machines (vmMetadata, name)",
+      "state": "production"
+    },
+    {
+      "id": "device-not-onboarded",
+      "title": "An active Entra device has no Defender for Endpoint sensor",
+      "why": "A Windows or macOS device that signs in to Entra but is not in Defender for Endpoint has no vulnerability or software data -- SecurityInsight cannot score it.",
+      "fix": "Onboard the device to Defender for Endpoint (Intune onboarding policy, Group Policy or the onboarding package).",
+      "severity": "medium",
+      "scope": "device",
+      "source": "Microsoft Graph: devices (active within the staleness window); Defender for Endpoint: machines (aadDeviceId, name)",
+      "state": "production"
+    },
+    {
+      "id": "sensor-unhealthy",
+      "title": "A Defender for Endpoint sensor is not reporting",
+      "why": "A device whose sensor is inactive or impaired, or has not reported within the heartbeat window, gives SecurityInsight data that is out of date -- its findings and exposure may no longer be true.",
+      "fix": "Check the sensor on the device (service running, connectivity to the Defender endpoints); offboard devices that are gone.",
+      "severity": "medium",
+      "scope": "device",
+      "source": "Defender for Endpoint: machines (healthStatus, lastSeen)",
+      "state": "production"
+    },
+    {
+      "id": "os-unsupported",
+      "title": "A device runs an operating system that is out of support",
+      "why": "An operating system past its end of support receives no security updates -- every vulnerability SecurityInsight finds on it stays open, and new ones are not fixed.",
+      "fix": "Upgrade or replace the device, or enrol it in Extended Security Updates and record that here as a decision.",
+      "severity": "high",
+      "scope": "device",
+      "source": "Defender for Endpoint: machines (osPlatform)",
+      "state": "production"
+    },
+    {
+      "id": "multicloud-connector-absent",
+      "title": "No Defender for Cloud connector for AWS or GCP",
+      "why": "Without a multicloud connector, resources in AWS or GCP are not seen by Defender for Cloud or by SecurityInsight. If the organisation uses no other cloud, ignore this with that reason.",
+      "fix": "In Defender for Cloud > Environment settings, add the AWS account or GCP project.",
+      "severity": "info",
+      "scope": "tenant",
+      "source": "Azure Resource Graph: microsoft.security/securityconnectors",
+      "state": "production"
+    },
+    {
+      "id": "hunting-table-empty",
+      "title": "An Advanced Hunting table SecurityInsight reads is empty",
+      "why": "SecurityInsight reads devices, vulnerabilities, the Exposure Graph and identities from Advanced Hunting. An empty table means there is no data: the Defender product behind it is not deployed, its licence is missing, or it has not collected yet -- those parts of the reports are then missing, not clean.",
+      "fix": "Deploy or license the Defender product that fills the table (Defender for Endpoint, Defender Vulnerability Management, Exposure Management, Defender for Identity).",
+      "severity": "high",
+      "scope": "tenant",
+      "source": "Advanced Hunting: the tables in huntingTables",
+      "state": "production"
+    },
+    {
+      "id": "signin-logs-missing",
+      "title": "Sign-in or audit logs do not reach the security workspace",
+      "why": "SecurityInsight reads sign-in and audit logs from the security workspace for identity activity. Without them, identity findings that depend on sign-ins are incomplete.",
+      "fix": "Send the Entra sign-in and audit logs to the workspace (Entra ID > Diagnostic settings, or the Microsoft Entra ID data connector in Sentinel).",
+      "severity": "medium",
+      "scope": "workspace",
+      "source": "Log Analytics: the tables in signInTables in the security workspace (SI_DefenderWorkspaceResourceId)",
+      "state": "production"
+    },
+    {
+      "id": "collector-incomplete",
+      "title": "A SecurityInsight collector did not complete its last run",
+      "why": "A collector that failed, ran partially or did not run in the last day leaves SecurityInsight's view of that area out of date -- what it would have found is unknown, not resolved.",
+      "fix": "Open Jobs in the web app, read the failed run's log, and fix the cause (permissions, timeouts, size).",
+      "severity": "high",
+      "scope": "engine",
+      "source": "Log Analytics: SI_RunHealth_CL in SecurityInsight's workspace",
+      "state": "production"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+id:        SapNetweaver
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'SAP NetWeaver'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'SAP NetWeaver'
+
+detections:
+  - id: SapNetweaver
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'netweaver*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

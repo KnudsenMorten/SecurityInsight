@@ -1,0 +1,92 @@
+@page
+@model SI.Management.Web.Pages.AssetTagging.EditModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.AssetTagging
+@{
+    var isAdmin = User.IsAdmin();
+    var e = Model.Entry;
+    var cat = Model.Catalog;
+    ViewData["Title"] = e is null ? "Add an asset tag" : "Asset tag " + e.Name;
+    var f = Model.Form;
+}
+<div class="split"><h1>@(e is null ? "Add an asset tag" : e.Name)</h1>
+    <a class="button secondary" href="/AssetTagging">All tags</a>
+</div>
+@if (e is not null)
+{
+    <p class="lede"><span class="badge @IndexModel.OriginClass(e.Origin)" data-origin="@IndexModel.OriginLabel(e.Origin)">@IndexModel.OriginLabel(e.Origin)</span>
+        @if (e.UpdatedBy is not null) { <span class="hint">last changed by @e.UpdatedBy @Fmt.Time(e.UpdatedAt)</span> }</p>
+}
+<details class="help">
+    <summary>Editing a tag</summary>
+    <p>The <strong>name</strong> is the tag written on the asset (CI): its name part, then <em>--tier&lt;N&gt;--SI</em> or <em>--Excluded--SI</em>. The name part identifies the tag -- a tag of yours with the vendor's name part replaces the vendor's. The <strong>query</strong> returns the assets to tag (Defender exposure graph, Azure Resource Graph or Log Analytics, by the query engine). A <strong>gate</strong> is a switch on the Asset tagging page: the tag runs only while it is on. <strong>Scoped by device names</strong>: only the returned devices whose names match the device-name patterns are tagged.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@foreach (var n in cat?.Notes ?? Array.Empty<string>()) { <div class="notice warn" role="status">@n</div> }
+@foreach (var m in Model.Messages) { <div class="notice @(m.StartsWith("Not ", StringComparison.Ordinal) ? "error" : "ok")" role="status" data-message>@m</div> }
+@if (Model.Problems.Count > 0) { <div class="notice error" role="alert" data-problems><strong>Problems</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div> }
+
+@if (cat is { Schema: true } && (e is not null || isAdmin))
+{
+    @if (!isAdmin)
+    {
+        <section class="card" aria-labelledby="h-text"><h2 id="h-text">The tag in force</h2><pre class="code" data-tag-text>@(e?.EditBody)</pre></section>
+    }
+    else
+    {
+        <form method="post" data-tag-form>
+            <input type="hidden" name="Key" value="@Model.Key" />
+            <input type="hidden" name="Form.Original" value="@f.Original" />
+            <section class="card" aria-labelledby="h-tag">
+                <h2 id="h-tag">The tag</h2>
+                <div class="filters">
+                    <div><label for="t-stem">Name part</label><input id="t-stem" type="text" name="Form.Stem" value="@f.Stem" maxlength="100" readonly="@(e is null ? null : "readonly")" data-stem /></div>
+                    <div><label for="t-marker">Sets</label>
+                        <select id="t-marker" name="Form.Marker" data-marker>
+                            @for (var t = 0; t <= 3; t++) { var v = "tier" + t; <option value="@v" selected="@(f.Marker == v ? "selected" : null)">Tier @t</option> }
+                            <option value="excluded" selected="@(f.Marker == "excluded" ? "selected" : null)">excluded (keep out of the reports)</option>
+                        </select></div>
+                    <div><label for="t-mode">Mode</label><input id="t-mode" type="text" name="Form.Mode" value="@f.Mode" list="t-modes" maxlength="20" /></div>
+                    <div><label for="t-engine">Query engine</label>
+                        <select id="t-engine" name="Form.QueryEngine">
+                            @foreach (var q in TagFormModel.Engines) { <option value="@q" selected="@(string.Equals(f.QueryEngine, q, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">@q</option> }
+                            @if (!TagFormModel.Engines.Contains(f.QueryEngine, StringComparer.OrdinalIgnoreCase)) { <option value="@f.QueryEngine" selected>@f.QueryEngine</option> }
+                        </select></div>
+                    <div><label for="t-gate">Gate (runs only while this switch is on; empty = always)</label><input id="t-gate" type="text" name="Form.Gate" value="@f.Gate" list="t-gates" maxlength="200" /></div>
+                    <div class="checks"><label><input type="checkbox" name="Form.NamePatterns" value="true" checked="@(f.NamePatterns ? "checked" : null)" /> scoped by the device-name patterns</label><input type="hidden" name="Form.NamePatterns" value="false" /></div>
+                    <div class="wide"><label for="t-desc">Description</label><textarea id="t-desc" name="Form.Description" rows="3">@f.Description</textarea></div>
+                </div>
+                <p class="hint" data-tag-name>Written on the asset as: <strong>@(string.IsNullOrWhiteSpace(f.Stem) ? "(name part)" : f.Name)</strong></p>
+                <datalist id="t-modes">@foreach (var m in TagFormModel.Modes) { <option value="@m"></option> }</datalist>
+                <datalist id="t-gates">@foreach (var g in GatesFormModel.Known) { <option value="@g"></option> }</datalist>
+            </section>
+            <section class="card" aria-labelledby="h-q">
+                <h2 id="h-q">Queries</h2>
+                @for (var i = 0; i < f.Queries.Count; i++)
+                {
+                    <div class="param-row" data-query="@i">
+                        <div class="wide"><label for="t-q-@i">Query @(i + 1)</label><textarea id="t-q-@i" name="Form.Queries[@i]" class="code" rows="14" spellcheck="false">@f.Queries[i]</textarea></div>
+                        <div class="actions"><button type="submit" name="Op" value="remove-query:@i" asp-page-handler="Edit" class="small secondary">Remove</button></div>
+                    </div>
+                }
+                <div class="actions"><button type="submit" name="Op" value="add-query" asp-page-handler="Edit" class="small secondary" data-add-query>Add a query</button></div>
+            </section>
+            <section class="card" aria-labelledby="h-stage" data-stage>
+                <h2 id="h-stage">Check and stage</h2>
+                <div class="filters"><div class="wide"><label for="t-reason">Reason (recorded with the change)</label><input id="t-reason" type="text" name="Reason" maxlength="400" value="@Model.Reason" placeholder="why" /></div></div>
+                <div class="actions">
+                    <button type="submit" name="Op" value="check" asp-page-handler="Edit" class="secondary" data-check>Check</button>
+                    <button type="submit" name="Act" value="save" asp-page-handler="Stage" data-stage-save>Stage for Review &amp; commit</button>
+                    @if (e is not null && e.VendorBody is not null && e.Origin != RuleOrigin.Off) { <button type="submit" name="Act" value="off" asp-page-handler="Stage" class="danger" data-stage-off>Turn this tag off</button> }
+                    @if (e is not null && e.VendorBody is not null && e.Version is not null) { <button type="submit" name="Act" value="reset" asp-page-handler="Stage" class="secondary" data-stage-reset>Reset to the vendor's tag</button> }
+                    @if (e is not null && e.VendorBody is null) { <button type="submit" name="Act" value="remove" asp-page-handler="Stage" class="danger" data-stage-remove>Remove this tag</button> }
+                </div>
+            </section>
+        </form>
+        @if (Model.Checked is not null) { <section class="card" aria-labelledby="h-checked" data-checked><h2 id="h-checked">What will be stored</h2><pre class="code">@Model.Checked</pre></section> }
+    }
+    @if (e?.VendorBody is not null && e.Origin != RuleOrigin.Vendor)
+    {
+        <details class="card" data-vendor-text><summary>The vendor's tag</summary><pre class="code">@e.VendorBody</pre></details>
+    }
+}

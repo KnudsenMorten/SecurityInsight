@@ -1,0 +1,103 @@
+@page
+@model SI.Management.Web.Pages.Management.TrendsModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Trends";
+    IReadOnlyList<string> Facet(string k) => Model.Facets.TryGetValue(k, out var v) ? v : Array.Empty<string>();
+    var days = Model.Cells.Select(c => c.Day).Distinct().OrderByDescending(d => d).ToList();
+}
+<div class="split"><h1>Trends</h1><partial name="_ExportExcel" /></div>
+<p class="lede">How the estate's findings moved over time, split by asset tier, severity, security domain or report; a day opens that day's findings. Every finding counts (one finding = one issue on one asset): the trend comes from the detailed findings, not from the Summary report, so a day counts findings, not Summary rows.</p>
+<details class="help">
+    <summary>How to read this page</summary>
+    <p>This is the Pro <strong>trends</strong> page: computed in the Pro database from every complete run, any combination of dimensions, with drill-down to the findings. <nav-ref page="/Management/Index" /> shows the same numbers for the whole estate (this page split by "Nothing (total)") -- one source for the risk score over time. When a day has several collections, the newest one counts. "Assets with findings" counts each asset once in a group, however many findings it has there; an asset with findings in two groups is in both groups, so the groups do not add up to the day's total, and an "Other" line is not drawn for assets. "–" = not counted yet for that day.</p>
+    <p><strong>The risk score is measured per finding.</strong> "Average risk score per finding" is how serious a typical finding in the group is, "Highest risk score" is the single worst finding, and "Very High + High findings" counts the findings at the two top severities. Adding every finding's score together is not offered: that total only grows with the number of findings, so it cannot tell a better day from a worse one. Severities are always listed by rank: Very High, High, Medium, Low, Informational.</p>
+</details>
+@* #855: what the trend counts -- the findings of ACTIVE CIs by default, with the choice of the other lifecycle states *@
+<partial name="~/Pages/Shared/_ViewScope.cshtml" model="Model.Scope" />
+<partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(ViewContext.HttpContext.Request, Model.Lifecycle)" />
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+<form method="get" class="filterbar" data-autosubmit aria-label="Trend selection">
+    @if (Model.Lifecycle.QueryValue is { } lcv) { <input type="hidden" name="lifecycle" value="@lcv" /> }
+    <div>
+        <label for="t-dim">Split by</label>
+        <select id="t-dim" name="dim">
+            <option value="tier" selected="@(Model.Dim == "tier")">Asset tier</option>
+            <option value="severity" selected="@(Model.Dim == "severity")">Severity</option>
+            <option value="domain" selected="@(Model.Dim == "domain")">Security domain</option>
+            <option value="report" selected="@(Model.Dim == "report")">Report</option>
+            <option value="none" selected="@(Model.Dim == "none")">Nothing (total)</option>
+        </select>
+    </div>
+    <div>
+        <label for="t-m">Measure</label>
+        <select id="t-m" name="measure">
+            <option value="findings" selected="@(Model.Measure == "findings")">Findings</option>
+            <option value="assets" selected="@(Model.Measure == "assets")">Assets with findings</option>
+            <option value="score" selected="@(Model.Measure == "score")">Average risk score per finding</option>
+            <option value="maxscore" selected="@(Model.Measure == "maxscore")">Highest risk score</option>
+            <option value="topseverity" selected="@(Model.Measure == "topseverity")">Very High + High findings</option>
+        </select>
+    </div>
+    <div>
+        <label for="t-days">Period</label>
+        <select id="t-days" name="days">
+            @foreach (var d in new[] { 30, 90, 180, 365 }) { <option value="@d" selected="@(d == Model.Days)">@d days</option> }
+        </select>
+    </div>
+    @* THE shared filter (MultiFilter) for every filter (owner 2026-10-19): ticks OR-ed, filters AND-ed *@
+    @foreach (var (key, label, values, words) in new (string, string, IEnumerable<string>, Func<string, string>?)[]
+    {
+        ("tier", "Asset tier", ProDataFilters.Tiers, t => t == ProDataFilters.Unclassified ? t : "Tier " + t),
+        ("sev", "Severity", Facet("severity").OrderBy(ProDataQueries.SeverityOrder), null),
+        ("dom", "Domain", Facet("domain"), null),
+        ("rep", "Report", Facet("report"), null),
+    })
+    {
+        var mf = new SI.Management.Web.Pages.MultiFilter { Id = "t-" + key, Name = key, Label = label, Chosen = Model.Chosen(key), Choices = SI.Management.Web.Pages.MultiFilter.Plain(values, words), Apply = "Show" };
+        <div class="@(key == "rep" ? "wide" : null)"><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div>
+    }
+    <div class="actions"><button type="submit">Show</button> <a class="button secondary" href="/Management/Trends">Reset</a></div>
+</form>
+@if (Model.Measure == TrendMeasures.Assets && ProDataSql.SeveralOutsideSplit(new TrendRequest { Dimension = Model.Dim, Tier = Model.Tier, Severity = Model.Sev, Domain = Model.Dom, Report = Model.Rep }))
+{
+    <p class="notice" role="status" data-assets-several>Assets with findings are counted for one value of a filter at a time (an asset can be in two of them), so they read "–" here. Pick one value of that filter, or split by it.</p>
+}
+
+<section class="card" aria-labelledby="h-chart">
+    <h2 id="h-chart">@Model.MeasureLabel by @(Model.Dim == "none" ? "day" : Model.Dim), last @Model.Days days</h2>
+    @if (Model.Cards is not null)
+    {
+        <p class="hint">Each card: the newest day, its change against the day before and against 7 days earlier (green = fewer / lower, red = more / higher), and the period as a small line on the card's own scale. Point at or tab to the line to read a day; click a card for its findings.</p>
+        <partial name="_TrendCards" model="Model.Cards" />
+    }
+    @if (Model.Chart is not null) { <partial name="_Chart" model="Model.Chart" /> }
+    @if (Model.Series.Contains("Other")) { <p class="hint">The @TrendsModel.MaxSeries largest groups are drawn; the rest are added up as "Other" (the table below has every group).</p> }
+</section>
+
+@if (days.Count > 0)
+{
+    <section class="card" aria-labelledby="h-t">
+        <h2 id="h-t">By day</h2>
+        <div class="table-wrap">
+            <table data-sortable data-default-sort="Day">
+                <thead><tr><th>Day</th><th>@(Model.Dim == "none" ? "" : Model.Dim)</th><th class="num">Findings</th><th class="num">Assets</th><th class="num" title="The average risk score of one finding in the group">Average risk score per finding</th><th class="num" title="The risk score of the single worst finding in the group">Highest risk score</th><th class="num">Very High + High</th><th data-sort="off"><span class="sr-only">Open</span></th></tr></thead>
+                <tbody>
+                    @foreach (var d in days.Take(60))
+                    {
+                        var dayCells = Model.Cells.Where(c => c.Day == d);
+                        // severity groups by RANK (Very High first); any other split by the chosen measure, largest first
+                        var ordered = Model.Dim == "severity" ? dayCells.OrderBy(c => c.Dimension, Model.GroupOrder) : dayCells.OrderByDescending(Model.Value);
+                        foreach (var c in ordered)
+                        {
+                            <tr><td>@Fmt.Day(c.Day)</td><td>@if (Model.Dim == "tier" && c.Dimension == ProDataFilters.Unclassified) { <a class="tier-link" href="@SI.Management.Web.Pages.Tiers.TierLinks.Unclassified" title="@SI.Management.Web.Pages.Tiers.TierLinks.Title">@Model.Label(c.Dimension)</a> } else { @Model.Label(c.Dimension) }</td><td class="num">@Fmt.Int(c.Findings)</td><td class="num">@Fmt.Int(c.Assets)</td><td class="num">@Fmt.Score(c.ScoreAverage)</td><td class="num">@Fmt.Score(c.ScoreMax)</td><td class="num">@Fmt.Int(c.TopSeverityFindings)</td><td><a href="@Model.Drill(c)">findings</a></td></tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (days.Count > 60) { <p class="hint">The newest 60 days are listed; the trend above covers the whole period.</p> }
+    </section>
+}
+@if (Model.Query is not null) { <partial name="_Query" model='Model.Query.For("Trends")' /> }

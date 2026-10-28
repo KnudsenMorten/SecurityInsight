@@ -1,0 +1,12 @@
+@page
+@model SI.Management.Web.Pages.ErrorModel
+@{
+    ViewData["Title"] = "Error";
+    Model.Describe();
+}
+<h1>@Model.Title</h1>
+<div class="notice error" role="alert" data-error-ref="@Model.Reference">
+    <p>@Model.Why@(Model.FailedPath is null ? "" : " (page: " + Model.FailedPath + ")")</p>
+    <p>@Model.WhatToDo</p>
+    <p>Reference: <code>@Model.Reference</code></p>
+</div>

@@ -1,0 +1,1056 @@
+#Requires -Version 5.1
+<#
+    Risk Analysis -- THE RESULT GOES TO SQL, A BUCKET AT A TIME (#638, owner 2026-10-13: "ra must newer only be in memory, as
+    memory will newer support millions of rows" / "sql is tool gui talks with").
+
+    Per bucket: the report's query (unchanged), the rows scored, WRITTEN to the Pro database, then the next bucket -- the
+    result is never gathered in memory across buckets. What needs the whole picture is read back from SQL afterwards, in
+    pages, in the final order (score, highest first; then the order the rows were written):
+
+      * a Detailed run writes sidata.Finding (the data sync's mapping, DetailJson = the whole row), a Summary run
+        sidata.SummaryRow + sidata.SummaryAsset (the data sync's mapping, RowJson = the whole row) -- the tables the web app
+        reads; the run's own collection (sidata.Collection / sidata.SummaryLoad) stays 'Loading' until every bucket of every
+        report is in;
+      * a retried bucket replaces its own rows (delete by bucket, then insert) -- never doubles; a report that has to start
+        again with more buckets, or cannot run at all, has its rows removed;
+      * a finding two buckets both returned is kept once, the first written (the same key the scoring de-duplicates on);
+      * a Summary report's rows go to sidata.RaStage per bucket first: a group that spans buckets is combined by the SAME
+        rules as before (Merge-RASummaryBucketRows), a page of whole groups at a time, then scored and written;
+      * two different assets that share a trace name get the asset id at the end of it, decided over the whole report
+        (Set-RATraceIdentity per bucket, then one fix-up of the rows whose name another bucket shares);
+      * #641: per report, what the source says the report holds (counted in the report's own slices: Measure-RAReportExpectedRows;
+        a Summary report in its distinct groups) against what the buckets returned, kept in sidata.RaReportStatus -- a report
+        that does not match, or is not in the run, is NOT COMPLETE.
+
+    ONE SEAM: -Invoke (sql, params, mode 'reader'|'scalar'|'nonquery') -- the data sync's (New-SIDataSqlInvoke), so tests
+    replace the database. Every statement converts its parameters itself (a test seam may pass them all as text).
+    No DDL here: the schema is sql/si-data-schema.sql (the updater's step); a database without it is told and the run
+    keeps its result in memory as before.
+#>
+
+# Newtonsoft.Json ships with PowerShell 7; it is loaded on first use of the JSON cmdlets -- made sure of here.
+if (-not ('Newtonsoft.Json.JsonConvert' -as [type])) {
+    try { $null = ConvertFrom-Json -InputObject '{}' } catch { }
+}
+$script:RAStreamLegalName = [regex]'^[A-Za-z][A-Za-z0-9_]*$'
+$script:RAStreamInv = [System.Globalization.CultureInfo]::InvariantCulture
+$script:RAStreamDedupCols = @('SecurityDomain','Category','Subcategory','ConfigurationName','<cfg>','CriticalityTier','SecuritySeverity','cmdbCriticality','cmdbDataSensitivity','AssetName','SI_AssetId','AssetId','AadDeviceId')
+
+function Get-RAStreamSchemaCheckSql {
+    "SELECT CASE WHEN COL_LENGTH('sidata.Finding','RaSeq') IS NOT NULL AND COL_LENGTH('sidata.Finding','RaAssetTier') IS NOT NULL AND COL_LENGTH('sidata.SummaryRow','RowJson') IS NOT NULL AND COL_LENGTH('sidata.Collection','RaCompletedAt') IS NOT NULL AND OBJECT_ID('sidata.RaStage') IS NOT NULL AND OBJECT_ID('sidata.RaReportStatus') IS NOT NULL THEN 1 ELSE 0 END"
+}
+
+function Test-RAStreamWanted {
+    <# PURE over the globals. Stream to SQL when the Pro database is configured and SI_RA_ResultInSql is not off. #>
+    param([hashtable]$Globals)
+    $g = { param($n) if ($Globals) { [string]$Globals[$n] } else { [string](Get-Variable -Name $n -Scope Global -ValueOnly -ErrorAction SilentlyContinue) } }
+    # [string] around the call: a setting that is not set at all comes back as nothing, not '' (live 2026-10-13: the
+    # internal install's Risk Analysis stopped here before its first report, "You cannot call a method on a null-valued expression")
+    $sw = ([string](& $g 'SI_RA_ResultInSql')).Trim().ToLowerInvariant()
+    if ($sw -in 'off', 'false', '0', 'no') { return $false }
+    $srv = & $g 'SI_Pro_DataSqlServer'; if (-not $srv) { $srv = & $g 'SI_ProSqlServer' }
+    $db = & $g 'SI_Pro_DataSqlDatabase'; if (-not $db) { $db = & $g 'SI_ProSqlDatabase' }
+    [bool]($srv -and $db)
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  ROWS <-> JSON
+# ------------------------------------------------------------------------------------------------------------------
+
+function ConvertTo-RAStreamJsonValue {
+    param($Value, [System.Collections.Generic.HashSet[string]]$DateCols, [string]$Name)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Management.Automation.PSObject] -and $Value -isnot [System.Management.Automation.PSCustomObject]) { $Value = $Value.PSObject.BaseObject }
+    if ($Value -is [string] -or $Value -is [bool] -or $Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single] -or $Value -is [int16] -or $Value -is [byte]) { return $Value }
+    if ($Value -is [datetime]) { if ($DateCols -and $Name) { [void]$DateCols.Add($Name) }; return $Value.ToString('o', $script:RAStreamInv) }
+    if ($Value -is [guid]) { return $Value.ToString() }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [System.Collections.IDictionary] -and $Value -isnot [System.Management.Automation.PSCustomObject]) {
+        $simple = $true; $items = New-Object System.Collections.Generic.List[object]
+        foreach ($e in $Value) {
+            $b = $e; if ($b -is [System.Management.Automation.PSObject] -and $b -isnot [System.Management.Automation.PSCustomObject]) { $b = $b.PSObject.BaseObject }
+            if ($null -eq $b -or $b -is [string] -or $b -is [bool] -or $b -is [int] -or $b -is [long] -or $b -is [double] -or $b -is [decimal]) { $items.Add($b) } else { $simple = $false; break }
+        }
+        if ($simple) { return , $items.ToArray() }
+    }
+    # anything richer: PowerShell's own JSON form, kept as it is
+    [pscustomobject]@{ __SIRawJson = [string](ConvertTo-Json -InputObject $Value -Compress -Depth 20) }
+}
+
+function Test-RAStreamEmpty {
+    <# PURE. Log Analytics' pack_all(true) leaves out null, '' and an empty list: the stored row does too (the data sync's DetailJson). #>
+    param($Value)
+    if ($null -eq $Value) { return $true }
+    if ($Value -is [string]) { return ($Value -eq '') }
+    if ($Value -is [System.Collections.ICollection] -and $Value -isnot [System.Collections.IDictionary]) { return ($Value.Count -eq 0) }
+    $false
+}
+
+function ConvertTo-RAStreamJson {
+    <#
+        PURE. One result row -> its stored JSON: every property with a legal column name (the names Log Analytics and the
+        workbook keep) and a value; null, '' and empty lists left out (as the data sync's DetailJson). A [datetime] value is
+        stored in round-trip form and its column is noted in -DateCols (so it is read back as a [datetime]).
+        Returns @{ Json; Illegal (property names left out) }.
+    #>
+    param([Parameter(Mandatory)]$Row, [System.Collections.Generic.HashSet[string]]$DateCols)
+    # Written as text, one value at a time: a simple value / a list of simple values through the JSON library's own
+    # value writer, anything richer as PowerShell's JSON of it -- never an object graph the library has to walk.
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('{')
+    $first = $true
+    $illegal = 0
+    foreach ($p in $Row.PSObject.Properties) {
+        if (-not $script:RAStreamLegalName.IsMatch($p.Name)) { $illegal++; continue }
+        $v = $p.Value
+        if (Test-RAStreamEmpty $v) { continue }
+        $j = ConvertTo-RAStreamJsonValue -Value $v -DateCols $DateCols -Name $p.Name
+        if (Test-RAStreamEmpty $j) { continue }
+        $txt = if ($j -is [System.Management.Automation.PSCustomObject] -and $j.PSObject.Properties['__SIRawJson']) { [string]$j.__SIRawJson }
+               elseif ($j -is [string]) { [Newtonsoft.Json.JsonConvert]::ToString([string]$j) }
+               elseif ($j -is [bool]) { $(if ($j) { 'true' } else { 'false' }) }
+               elseif ($j -is [System.Array]) {
+                   '[' + ((@(foreach ($e in $j) { if ($null -eq $e) { 'null' } elseif ($e -is [string]) { [Newtonsoft.Json.JsonConvert]::ToString([string]$e) } elseif ($e -is [bool]) { $(if ($e) { 'true' } else { 'false' }) } else { [Newtonsoft.Json.JsonConvert]::ToString($e) } })) -join ',') + ']'
+               }
+               elseif ($j -is [int] -or $j -is [long] -or $j -is [double] -or $j -is [decimal] -or $j -is [single] -or $j -is [int16] -or $j -is [byte]) { [Newtonsoft.Json.JsonConvert]::ToString($j) }
+               else { [string]$j }
+        if (-not $first) { [void]$sb.Append(',') }
+        $first = $false
+        [void]$sb.Append([Newtonsoft.Json.JsonConvert]::ToString([string]$p.Name)).Append(':').Append($txt)
+    }
+    [void]$sb.Append('}')
+    @{ Json = $sb.ToString(); Illegal = $illegal }
+}
+
+function ConvertFrom-RAStreamToken {
+    param($Token)
+    # by TYPE, never by member: a JObject is a dynamic object to PowerShell -- $token.Type reads a JSON key named "Type"
+    if ($null -eq $Token) { return $null }
+    if ($Token -is [Newtonsoft.Json.Linq.JObject]) {
+        $o = [ordered]@{}
+        foreach ($p in $Token.Properties()) { $o[$p.Name] = ConvertFrom-RAStreamToken $p.Value }
+        return [pscustomobject]$o
+    }
+    if ($Token -is [Newtonsoft.Json.Linq.JArray]) { $a = New-Object System.Collections.Generic.List[object]; foreach ($e in $Token.Children()) { $a.Add((ConvertFrom-RAStreamToken $e)) }; return , $a.ToArray() }
+    if ($Token -is [Newtonsoft.Json.Linq.JValue]) { return $Token.ToObject([object]) }
+    return $Token.ToString()
+}
+
+function ConvertFrom-RAStreamJson {
+    <#
+        PURE. A stored row -> the row: strings stay strings (no date guessing), the columns in -DateCols become [datetime]
+        again, and -Columns (the report's columns, in order) puts every column on the row (absent = $null) -- the shape the
+        report's rows had before they were stored.
+    #>
+    param([Parameter(Mandatory)][string]$Json, [string[]]$Columns, [System.Collections.Generic.HashSet[string]]$DateCols)
+    $sr = New-Object System.IO.StringReader($Json)
+    $jr = New-Object Newtonsoft.Json.JsonTextReader($sr)
+    $jr.DateParseHandling = [Newtonsoft.Json.DateParseHandling]::None
+    $jr.FloatParseHandling = [Newtonsoft.Json.FloatParseHandling]::Double
+    try { $tok = [Newtonsoft.Json.Linq.JToken]::ReadFrom($jr) } finally { $jr.Close() }
+    $vals = @{}
+    foreach ($p in $tok.Properties()) {
+        $v = ConvertFrom-RAStreamToken $p.Value
+        if ($DateCols -and $DateCols.Contains($p.Name) -and $v -is [string]) {
+            $dt = [datetime]::MinValue
+            if ([datetime]::TryParse($v, $script:RAStreamInv, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$dt)) { $v = $dt }
+        }
+        $vals[$p.Name] = $v
+    }
+    $o = [ordered]@{}
+    if ($Columns -and @($Columns).Count -gt 0) {
+        foreach ($c in $Columns) { if ($vals.ContainsKey($c)) { $o[$c] = $vals[$c]; $vals.Remove($c) } else { $o[$c] = $null } }
+    }
+    foreach ($p in $tok.Properties()) { if ($vals.ContainsKey($p.Name)) { $o[$p.Name] = $vals[$p.Name] } }
+    [pscustomobject]$o
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  KEYS -- the same rules the in-memory path applies to the whole report
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-RAStreamHash16 {
+    <# PURE. The first 16 bytes of SHA-256 over the UTF-8 text, as 32 hex characters. #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $b = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text)) } finally { $sha.Dispose() }
+    ([System.BitConverter]::ToString($b, 0, 16) -replace '-', '')
+}
+
+function Get-RARowDedupKey {
+    <#
+        PURE. The key Calculate-RiskScore de-duplicates a non-Summary report's rows on (RA-RiskScore.ps1: every dimension
+        column, lower-cased) -- '' when the row has neither a configuration name nor id (such rows are always kept).
+        Across buckets the FIRST row written with a key is kept (Complete-RAStreamReport), as the whole-report pass kept the first.
+    #>
+    param([Parameter(Mandatory)]$Row, [string]$ConfigurationIdInputName = 'ConfigurationId')
+    $cfg = if ($ConfigurationIdInputName) { $ConfigurationIdInputName } else { 'ConfigurationId' }
+    $g = { param($n) $p = $Row.PSObject.Properties[$n]; if ($p) { [string]$p.Value } else { '' } }
+    if ([string]::IsNullOrWhiteSpace((& $g 'ConfigurationName')) -and [string]::IsNullOrWhiteSpace((& $g $cfg))) { return '' }
+    $parts = foreach ($c in $script:RAStreamDedupCols) { if ($c -eq '<cfg>') { & $g $cfg } else { & $g $c } }
+    (($parts -join '|').ToLowerInvariant())
+}
+
+function Get-RAStreamCiIdsOfRow {
+    <# PURE. The ids a row could be matched to its CI by (Find-RACiForRow's columns), normalised as the CI index keys them. #>
+    param([Parameter(Mandatory)]$Row)
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($col in 'si_ci_id', 'SI_CorrelationId', 'SI_AssetId', 'MdeDeviceId', 'DeviceId', 'AadDeviceId', 'AzureResourceId', 'ResourceId', 'EntraObjectId', 'EntraAccountObjectId', 'AccountObjectId', 'ObjectId', 'EgNodeId', 'NodeId', 'PrimaryEntityId', 'AssetId') {
+        $p = $Row.PSObject.Properties[$col]
+        if (-not $p -or -not $p.Value) { continue }
+        $k = ConvertTo-RACiIdKey ([string]$p.Value)
+        if ($k) { $out.Add($k) }
+    }
+    $out.ToArray()
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  THE STATEMENTS
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-RAStreamBeginSql {
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+SET XACT_ABORT ON;
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+BEGIN TRAN;
+DELETE FROM sidata.SummaryAsset WHERE CollectionTime = @t;
+DELETE FROM sidata.SummaryRow WHERE CollectionTime = @t;
+DELETE FROM sidata.SummaryLoad WHERE CollectionTime = @t;
+DELETE FROM sidata.RaStage WHERE RunKey = @RunKey;
+DELETE FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = 'Summary';
+INSERT sidata.SummaryLoad (CollectionTime, RunId, Status, SolutionVersion, Source) VALUES (@t, NULLIF(@RunId, ''), 'Loading', NULLIF(@SolutionVersion, ''), 'risk-analysis');
+COMMIT;
+SELECT 0;
+'@
+    }
+    @'
+SET XACT_ABORT ON;
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+IF EXISTS (SELECT 1 FROM sidata.Collection WHERE Kind = 'Detailed' AND CollectionTime = @t)
+    THROW 50001, 'a collection with this time already exists', 1;
+DELETE FROM sidata.RaStage WHERE RunKey = @RunKey;
+DELETE FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = 'Detailed';
+INSERT sidata.Collection (CollectionTime, Kind, RunId, Status, SolutionVersion, Source)
+OUTPUT inserted.CollectionId
+VALUES (@t, 'Detailed', NULLIF(@RunId, ''), 'Loading', NULLIF(@SolutionVersion, ''), 'risk-analysis');
+'@
+}
+
+function Get-RAStreamDeleteBucketSql {
+    <# One bucket's rows of one report (-Bucket '*' = the whole report), so a retried bucket never doubles. #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+SET XACT_ABORT ON;
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126); DECLARE @r int = CONVERT(int, @Report);
+BEGIN TRAN;
+DELETE a FROM sidata.SummaryAsset a JOIN sidata.SummaryRow s ON s.CollectionTime = a.CollectionTime AND s.RowNo = a.RowNo
+WHERE s.CollectionTime = @t AND s.RaReport = @r AND (@Bucket = '*' OR s.RaBucket = @Bucket);
+DELETE FROM sidata.SummaryRow WHERE CollectionTime = @t AND RaReport = @r AND (@Bucket = '*' OR RaBucket = @Bucket);
+DECLARE @n int = @@ROWCOUNT;
+COMMIT;
+SELECT @n;
+'@
+    }
+    @'
+DELETE FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND RaReport = CONVERT(int, @Report) AND (@Bucket = '*' OR RaBucket = @Bucket);
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-RAStreamInsertFindingSql {
+    # The data sync's finding insert (Get-SIDataInsertFindingSql, same mapping) plus Risk Analysis' own columns.
+    @'
+SET XACT_ABORT ON;
+BEGIN TRAN;
+INSERT sidata.Finding (CollectionId, AssetKey, AssetName, ReportName, SecurityDomain, ConfigurationId, Cve, Title, Severity, Tier, RiskScore, DetailJson,
+                       ExemptionId, ExemptedUntil, ExemptionRequestId,
+                       RaReport, RaBucket, RaSeq, RaDedup, RaSort, RaInView, RaTraceHash, RaTraceKey, RaTraceSuffixed, RaFindingKey, RaAssetId, RaAssetTier)
+SELECT CONVERT(int, @CollectionId), NULLIF(j.AssetKey, ''), NULLIF(j.AssetName, ''), NULLIF(j.ReportName, ''), NULLIF(j.SecurityDomain, ''),
+       NULLIF(j.ConfigurationId, ''), NULLIF(j.Cve, ''), NULLIF(j.Title, ''), NULLIF(j.Severity, ''), j.Tier, j.RiskScore, j.DetailJson,
+       j.ExemptionId, CONVERT(datetime2(0), NULLIF(j.ExemptedUntil, ''), 126), j.ExemptionRequestId,
+       j.RaReport, j.RaBucket, j.RaSeq, CONVERT(binary(16), NULLIF(j.RaDedup, ''), 2), j.RaSort, j.RaInView,
+       CONVERT(binary(16), NULLIF(j.RaTraceHash, ''), 2), NULLIF(j.RaTraceKey, ''), j.RaTraceSuffixed, NULLIF(j.RaFindingKey, ''), NULLIF(j.RaAssetId, ''), j.RaAssetTier
+FROM OPENJSON(@j) WITH (AssetKey nvarchar(400), AssetName nvarchar(400), ReportName nvarchar(256), SecurityDomain nvarchar(128),
+                        ConfigurationId nvarchar(256), Cve nvarchar(100), Title nvarchar(1000), Severity nvarchar(30), Tier tinyint,
+                        RiskScore float, DetailJson nvarchar(max), ExemptionId bigint, ExemptedUntil nvarchar(40), ExemptionRequestId bigint,
+                        RaReport int, RaBucket nvarchar(64), RaSeq bigint, RaDedup varchar(32), RaSort float, RaInView bit,
+                        RaTraceHash varchar(32), RaTraceKey nvarchar(450), RaTraceSuffixed bit, RaFindingKey nvarchar(900), RaAssetId nvarchar(400), RaAssetTier tinyint) j;
+DECLARE @n int = @@ROWCOUNT;
+COMMIT;
+SELECT @n;
+'@
+}
+
+function Get-RAStreamInsertSummaryRowSql {
+    # The data sync's Summary row insert (Get-SIDataSummaryInsertRowSql, same mapping) plus Risk Analysis' own columns.
+    $base = Get-SIDataSummaryInsertRowSql
+    $base = $base.Replace('FixRemediation, FixRecommendedUpdate, FixRecommendedUpdateId, AffectedSoftware, ConfigurationDescription, RiskDescription)',
+        'FixRemediation, FixRecommendedUpdate, FixRecommendedUpdateId, AffectedSoftware, ConfigurationDescription, RiskDescription, RaReport, RaBucket, RaDedup, RaSort, RaInView, RaTraceHash, RaTraceKey, RaTraceSuffixed, RaTrendSeverity, RaTrendTier, RaTrendDomain, RaTrendScore, RaExempt, RaTrendAssetIds, RowJson)')
+    $base = [regex]::Replace($base, 'j\.ConfigurationDescription, j\.RiskDescription\s*\r?\nFROM OPENJSON', "j.ConfigurationDescription, j.RiskDescription, j.RaReport, j.RaBucket, CONVERT(binary(16), NULLIF(j.RaDedup, ''), 2), j.RaSort, j.RaInView, CONVERT(binary(16), NULLIF(j.RaTraceHash, ''), 2), NULLIF(j.RaTraceKey, ''), j.RaTraceSuffixed, j.RaTrendSeverity, j.RaTrendTier, j.RaTrendDomain, j.RaTrendScore, j.RaExempt, j.RaTrendAssetIds, j.RowJson`nFROM OPENJSON")
+    $base = $base.Replace('ConfigurationDescription nvarchar(4000), RiskDescription nvarchar(4000)) j;',
+        'ConfigurationDescription nvarchar(4000), RiskDescription nvarchar(4000), RaReport int, RaBucket nvarchar(64), RaDedup varchar(32), RaSort float, RaInView bit, RaTraceHash varchar(32), RaTraceKey nvarchar(450), RaTraceSuffixed bit, RaTrendSeverity nvarchar(256), RaTrendTier nvarchar(256), RaTrendDomain nvarchar(256), RaTrendScore float, RaExempt bit, RaTrendAssetIds nvarchar(max), RowJson nvarchar(max)) j;')
+    "SET XACT_ABORT ON;`nBEGIN TRAN;`n" + $base.Replace('SELECT @@ROWCOUNT;', "DECLARE @n int = @@ROWCOUNT;`nCOMMIT;`nSELECT @n;")
+}
+
+function Get-RAStreamInsertStageSql {
+    @'
+INSERT sidata.RaStage (RunKey, RaReport, RaBucket, RaSeq, GroupHash, RowJson)
+SELECT @RunKey, j.RaReport, j.RaBucket, j.RaSeq, CONVERT(binary(16), j.GroupHash, 2), j.RowJson
+FROM OPENJSON(@j) WITH (RaReport int, RaBucket nvarchar(64), RaSeq bigint, GroupHash varchar(32), RowJson nvarchar(max)) j;
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-RAStreamDeleteStageSql {
+    "DELETE FROM sidata.RaStage WHERE RunKey = @RunKey AND RaReport = CONVERT(int, @Report) AND (@Bucket = '*' OR RaBucket = @Bucket); SELECT @@ROWCOUNT;"
+}
+
+function Get-RAStreamStageGroupsSql {
+    <# The staged report's groups, in the order their first row was written, with their size -- what the pages are cut from. #>
+    @'
+SELECT g.G0, g.Chars FROM (
+    SELECT MIN(RaSeq) AS G0, SUM(CAST(LEN(RowJson) AS bigint)) AS Chars
+    FROM sidata.RaStage WHERE RunKey = @RunKey AND RaReport = CONVERT(int, @Report) GROUP BY GroupHash) g
+ORDER BY g.G0;
+'@
+}
+
+function Get-RAStreamStagePageSql {
+    <# The rows of the groups whose first row is in (@From, @To], group by group, each in its written order. #>
+    @'
+WITH g AS (SELECT GroupHash, MIN(RaSeq) AS G0 FROM sidata.RaStage WHERE RunKey = @RunKey AND RaReport = CONVERT(int, @Report) GROUP BY GroupHash)
+SELECT s.RowJson FROM sidata.RaStage s JOIN g ON g.GroupHash = s.GroupHash
+WHERE s.RunKey = @RunKey AND s.RaReport = CONVERT(int, @Report) AND g.G0 > CONVERT(bigint, @From) AND g.G0 <= CONVERT(bigint, @To)
+ORDER BY g.G0, s.RaSeq;
+'@
+}
+
+function Get-RAStreamDedupSql {
+    <# A finding two buckets both returned is kept ONCE -- the first written (the whole-report pass kept the first too). #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+SET XACT_ABORT ON;
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126); DECLARE @r int = CONVERT(int, @Report);
+DECLARE @d TABLE (RowNo int PRIMARY KEY);
+INSERT @d SELECT f.RowNo FROM sidata.SummaryRow f
+WHERE f.CollectionTime = @t AND f.RaReport = @r AND f.RaDedup IS NOT NULL
+  AND EXISTS (SELECT 1 FROM sidata.SummaryRow e WHERE e.CollectionTime = @t AND e.RaReport = @r AND e.RaDedup = f.RaDedup AND e.RowNo < f.RowNo);
+BEGIN TRAN;
+DELETE a FROM sidata.SummaryAsset a JOIN @d d ON d.RowNo = a.RowNo WHERE a.CollectionTime = @t;
+DELETE s FROM sidata.SummaryRow s JOIN @d d ON d.RowNo = s.RowNo WHERE s.CollectionTime = @t;
+DECLARE @n int = @@ROWCOUNT;
+COMMIT;
+SELECT @n;
+'@
+    }
+    @'
+DECLARE @c int = CONVERT(int, @CollectionId); DECLARE @r int = CONVERT(int, @Report);
+DELETE f FROM sidata.Finding f
+WHERE f.CollectionId = @c AND f.RaReport = @r AND f.RaDedup IS NOT NULL
+  AND EXISTS (SELECT 1 FROM sidata.Finding e WHERE e.CollectionId = @c AND e.RaReport = @r AND e.RaDedup = f.RaDedup AND e.RaSeq < f.RaSeq);
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-RAStreamTraceCandidatesSql {
+    <# The rows whose trace name another asset of the SAME report shares, that did not get the asset id at the end yet. #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    $t = 'sidata.Finding'; $w = 'f.CollectionId = CONVERT(int, @CollectionId)'; $wi = 'CollectionId = CONVERT(int, @CollectionId)'; $id = 'f.FindingId'; $j = 'f.DetailJson'
+    if ($Grain -eq 'Summary') { $t = 'sidata.SummaryRow'; $w = 'f.CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126)'; $wi = 'CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126)'; $id = 'f.RowNo'; $j = 'f.RowJson' }
+    @"
+SELECT $id AS Id, $j AS Json FROM $t f
+WHERE $w AND f.RaReport = CONVERT(int, @Report) AND f.RaTraceSuffixed = 0 AND f.RaTraceKey IS NOT NULL
+  AND f.RaTraceHash IN (SELECT RaTraceHash FROM $t WHERE $wi AND RaReport = CONVERT(int, @Report) AND RaTraceKey IS NOT NULL
+                        GROUP BY RaTraceHash HAVING COUNT(DISTINCT RaTraceKey) > 1);
+"@
+}
+
+function Get-RAStreamTraceUpdateSql {
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+UPDATE f SET RowJson = JSON_MODIFY(JSON_MODIFY(f.RowJson, '$.TraceName', j.N), '$.TraceID', j.I), RaTraceSuffixed = 1
+FROM sidata.SummaryRow f JOIN OPENJSON(@j) WITH (Id int, N nvarchar(4000), I nvarchar(32)) j ON f.RowNo = j.Id
+WHERE f.CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126);
+SELECT @@ROWCOUNT;
+'@
+    }
+    @'
+UPDATE f SET DetailJson = JSON_MODIFY(JSON_MODIFY(f.DetailJson, '$.TraceName', j.N), '$.TraceID', j.I), RaTraceSuffixed = 1
+FROM sidata.Finding f JOIN OPENJSON(@j) WITH (Id bigint, N nvarchar(4000), I nvarchar(32)) j ON f.FindingId = j.Id
+WHERE f.CollectionId = CONVERT(int, @CollectionId);
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-RAStreamCountSql {
+    <# How many rows the run holds -- all of them, the workbook / mail view, or one report. #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain, [ValidateSet('All', 'View', 'Report')][string]$Source = 'All')
+    $w = if ($Grain -eq 'Summary') { 'FROM sidata.SummaryRow WHERE CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126) AND RaReport IS NOT NULL' } else { 'FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND RaSeq IS NOT NULL' }
+    if ($Source -eq 'View') { $w += ' AND RaInView = 1' }
+    if ($Source -eq 'Report') { $w += ' AND RaReport = CONVERT(int, @Report)' }
+    "SELECT COUNT_BIG(*) $w;"
+}
+
+function Get-RAStreamPageSql {
+    <#
+        One page of the run's rows in the FINAL ORDER: the sort score (highest first), then the order they were written --
+        the report order, then each report's buckets in order. Keyset paging: after (@Sort, @Seq).
+        -Source FindingKey: grouped by the SI finding key (SI_Finding_CL), rows without one left out.
+    #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain, [ValidateSet('All', 'View', 'FindingKey')][string]$Source = 'All')
+    if ($Grain -eq 'Summary') {
+        $view = if ($Source -eq 'View') { ' AND RaInView = 1' } else { '' }
+        return @"
+SELECT TOP (CONVERT(int, @Take)) RowNo AS Seq, RaSort, RaReport, RowJson AS Json FROM sidata.SummaryRow
+WHERE CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126) AND RaReport IS NOT NULL$view
+  AND (@First = '1' OR RaSort < CONVERT(float, @Sort) OR (RaSort = CONVERT(float, @Sort) AND RowNo > CONVERT(bigint, @Seq)))
+ORDER BY RaSort DESC, RowNo;
+"@
+    }
+    if ($Source -eq 'FindingKey') {
+        return @'
+SELECT TOP (CONVERT(int, @Take)) RaSeq AS Seq, RaFindingKey AS FKey, RaReport, DetailJson AS Json FROM sidata.Finding
+WHERE CollectionId = CONVERT(int, @CollectionId) AND RaSeq IS NOT NULL AND RaFindingKey IS NOT NULL
+  AND (@First = '1' OR RaFindingKey > @FKey OR (RaFindingKey = @FKey AND RaSeq > CONVERT(bigint, @Seq)))
+ORDER BY RaFindingKey, RaSeq;
+'@
+    }
+    $view = if ($Source -eq 'View') { ' AND RaInView = 1' } else { '' }
+    @"
+SELECT TOP (CONVERT(int, @Take)) RaSeq AS Seq, RaSort, RaReport, DetailJson AS Json FROM sidata.Finding
+WHERE CollectionId = CONVERT(int, @CollectionId) AND RaSeq IS NOT NULL$view
+  AND (@First = '1' OR RaSort < CONVERT(float, @Sort) OR (RaSort = CONVERT(float, @Sort) AND RaSeq > CONVERT(bigint, @Seq)))
+ORDER BY RaSort DESC, RaSeq;
+"@
+}
+
+function Get-RAStreamStatusSql {
+    @'
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+DELETE FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = @Grain AND ReportName = @ReportName;
+INSERT sidata.RaReportStatus (CollectionTime, Grain, ReportName, ExpectedRows, RetrievedRows, StoredRows, State, Reason)
+VALUES (@t, @Grain, @ReportName, TRY_CONVERT(bigint, NULLIF(@Expected, '')), TRY_CONVERT(bigint, NULLIF(@Retrieved, '')), TRY_CONVERT(bigint, NULLIF(@Stored, '')), @State, NULLIF(LEFT(@Reason, 2000), ''));
+SELECT 1;
+'@
+}
+
+function Get-RAStreamCompleteSql {
+    <#
+        The END of the run: every bucket of every report is in. A Detailed collection is marked so (RaCompletedAt); the data
+        sync adds its CIs, recommendations and daily aggregates and marks it 'Complete'. A Summary collection is complete
+        here. Only a collection still 'Loading' whose row count is what was written.
+    #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+UPDATE sidata.SummaryLoad SET Status = 'Complete', [Rows] = CONVERT(int, @Rows), LoadedAt = SYSUTCDATETIME()
+WHERE CollectionTime = @t AND Status = 'Loading'
+  AND (SELECT COUNT_BIG(*) FROM sidata.SummaryRow WHERE CollectionTime = @t) = CONVERT(bigint, @Rows);
+SELECT @@ROWCOUNT;
+'@
+    }
+    @'
+DECLARE @c int = CONVERT(int, @CollectionId);
+UPDATE sidata.Collection SET RaCompletedAt = SYSUTCDATETIME(), [Rows] = CONVERT(int, @Rows), RaPartialReason = NULLIF(LEFT(@Partial, 2000), '')
+WHERE CollectionId = @c AND Status = 'Loading' AND RaCompletedAt IS NULL
+  AND (SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = @c) = CONVERT(bigint, @Rows);
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-RAStreamTrendSql {
+    <#
+        The day's trend rollup of a SUMMARY run, in SQL (ConvertTo-SITrendRollup's rules): per dimension (global / severity /
+        tier / domain, and the '-counted' twin over the rows without an exemption mark) the rows, the DISTINCT assets they
+        hit (the Summary row's asset ids, else its own asset id) and the score total. An empty dimension value adds nothing.
+    #>
+    @'
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+WITH r AS (SELECT RowNo, RaTrendSeverity, RaTrendTier, RaTrendDomain, ISNULL(RaTrendScore, 0) AS Score, ISNULL(RaExempt, 0) AS Ex, RaTrendAssetIds
+           FROM sidata.SummaryRow WHERE CollectionTime = @t AND RaReport IS NOT NULL),
+d AS (SELECT r.RowNo, r.Score, r.RaTrendAssetIds, x.Dim, x.Val FROM r
+      CROSS APPLY (VALUES ('global', N'all'), ('severity', r.RaTrendSeverity), ('tier', r.RaTrendTier), ('domain', r.RaTrendDomain)) x(Dim, Val)
+      UNION ALL
+      SELECT r.RowNo, r.Score, r.RaTrendAssetIds, x.Dim + '-counted', x.Val FROM r
+      CROSS APPLY (VALUES ('global', N'all'), ('severity', r.RaTrendSeverity), ('tier', r.RaTrendTier), ('domain', r.RaTrendDomain)) x(Dim, Val)
+      WHERE r.Ex = 0),
+f AS (SELECT Dim, Val, COUNT(*) AS Findings, SUM(Score) AS ScoreTotal FROM d WHERE ISNULL(Val, '') <> '' GROUP BY Dim, Val),
+a AS (SELECT d.Dim, d.Val, COUNT(DISTINCT LTRIM(RTRIM(i.value))) AS Assets FROM d
+      CROSS APPLY OPENJSON(ISNULL(d.RaTrendAssetIds, '[]')) i
+      WHERE ISNULL(d.Val, '') <> '' AND LTRIM(RTRIM(i.value)) <> '' GROUP BY d.Dim, d.Val)
+SELECT f.Dim AS Dimension, f.Val AS DimensionValue, f.Findings, ISNULL(a.Assets, 0) AS Assets, f.ScoreTotal
+FROM f LEFT JOIN a ON a.Dim = f.Dim AND a.Val = f.Val
+ORDER BY f.Dim, f.Val;
+'@
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  THE RUN
+# ------------------------------------------------------------------------------------------------------------------
+
+function Invoke-RAStreamSql {
+    <# One statement through the seam, retried on a passing failure (a timeout, a dropped connection): 3 attempts. #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params = @{}, [string]$Mode = 'scalar', [int]$Attempts = 3)
+    for ($a = 1; ; $a++) {
+        try { return (& $Stream.Invoke $Sql $Params $Mode) }
+        catch {
+            $m = $_.Exception.Message
+            $passing = $m -match '(?i)timeout|transport-level|connection was (forcibly )?closed|deadlock|40613|40501|49918|10928|10929|semaphore|broken pipe'
+            if (-not $passing -or $a -ge $Attempts) { throw }
+            Start-Sleep -Seconds ([Math]::Min(60, 5 * $a * $a))
+        }
+    }
+}
+
+function New-RAStream {
+    <#
+        Begins the run's collection in SQL ('Loading'). Returns the stream: the seam, the grain, the collection, the write
+        order counter and what is kept per report (its columns, its date columns, rows retrieved) -- a handful of names and
+        numbers per report, never rows. Throws when the database does not carry the tables (the caller keeps the result in
+        memory as before and says so).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain,
+          [Parameter(Mandatory)][datetime]$CollectionTime, [string]$RunId = '', [string]$SolutionVersion = '', [scriptblock]$Log)
+    if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
+    $s = @{ Invoke = $Invoke; Grain = $Grain; Log = $Log }
+    if ([int](& $Invoke (Get-RAStreamSchemaCheckSql) @{} 'scalar') -ne 1) {
+        throw 'the Pro database does not have the tables Risk Analysis writes its result to yet -- the updater adds them with the data schema'
+    }
+    $s.TimeText = Format-SIDataSqlTime -Time $CollectionTime
+    $s.RunKey = '{0}|{1}' -f $Grain, $s.TimeText
+    $s.CollectionTime = $CollectionTime
+    $p = @{ CollectionTime = $s.TimeText; RunId = [string]$RunId; SolutionVersion = [string]$SolutionVersion; RunKey = $s.RunKey }
+    $id = Invoke-RAStreamSql -Stream $s -Sql (Get-RAStreamBeginSql -Grain $Grain) -Params $p -Mode 'scalar'
+    $s.CollectionId = if ($Grain -eq 'Detailed') { [int]$id } else { 0 }
+    if ($Grain -eq 'Detailed' -and $s.CollectionId -le 0) { throw 'the run''s collection could not be registered in the database' }
+    $s.Seq = 0L
+    $s.Chunk = [long]0
+    $s.Reports = [ordered]@{}        # name -> @{ Ordinal; Columns (List); ColSet; DateCols; Retrieved; Staged; StagePlan }
+    $s.Ordinal = 0
+    $s.Illegal = 0L
+    $s.Current = $null
+    $s.Broken = ''
+    $s
+}
+
+function Start-RAStreamReport {
+    <# A report begins: its ordinal in the run (the final order's tie-break after the score), its rows so far removed. #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$ReportName, [bool]$Staged, [string]$Query = '')
+    if (-not $Stream.Reports.Contains($ReportName)) {
+        $Stream.Ordinal++
+        $Stream.Reports[$ReportName] = @{ Ordinal = $Stream.Ordinal; Name = $ReportName
+            Columns = (New-Object System.Collections.Generic.List[string]); ColSet = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase))
+            DateCols = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)); Retrieved = 0L; Account = @{}; Staged = $Staged; Plan = $null; Pages = 0
+            StageCols = (New-Object System.Collections.Generic.List[string]); StageColSet = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)) }
+    }
+    $r = $Stream.Reports[$ReportName]
+    $r.Staged = $Staged
+    if ($Staged -and $Query -and (Get-Command -Name Get-RASummaryMergePlan -ErrorAction SilentlyContinue)) { $r.Plan = Get-RASummaryMergePlan -Query $Query }
+    $Stream.Current = $r
+    Clear-RAStreamReport -Stream $Stream -Why ''
+    $r
+}
+
+function Clear-RAStreamReport {
+    <# Removes everything the current report wrote (its bucket count went up and it starts again, or it could not run). #>
+    param([Parameter(Mandatory)]$Stream, [string]$Why = '')
+    $r = $Stream.Current; if ($null -eq $r) { return }
+    $p = @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId; Report = [string]$r.Ordinal; Bucket = '*'; RunKey = $Stream.RunKey }
+    $n = [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDeleteBucketSql -Grain $Stream.Grain) -Params $p)
+    $n += [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDeleteStageSql) -Params $p)
+    $r.Retrieved = 0L
+    $r.Account = @{}
+    if ($Why -and $n -gt 0) { & $Stream.Log 'INFO' ("{0} row(s) this report already stored are removed -- {1}" -f $n, $Why) }
+}
+
+function Add-RAStreamColumns {
+    <# The report's columns, union in first-seen order (case-insensitive) -- what its rows are shaped to when read back. #>
+    param([Parameter(Mandatory)]$Stream, [string[]]$Columns)
+    $r = $Stream.Current; if ($null -eq $r) { return }
+    foreach ($c in @($Columns)) { if ($c -and $script:RAStreamLegalName.IsMatch($c) -and $r.ColSet.Add($c)) { $r.Columns.Add($c) } }
+}
+
+function Get-RAStreamTraceInfo {
+    <# PURE. The parts of a row's trace identity the report-wide fix-up needs (Get-RATraceBase, RA-RowShaping.ps1). #>
+    param([Parameter(Mandatory)]$Row, [bool]$IsDetailed)
+    $b = Get-RATraceBase -Row $Row -IsDetailed $IsDetailed
+    $tn = ''; $p = $Row.PSObject.Properties['TraceName']; if ($p) { $tn = [string]$p.Value }
+    $base = (@($b.Parts) + 'SI') -join '-'
+    @{ Hash = (Get-RAStreamHash16 -Text $b.Lower); Key = $(if ($b.AssetKey) { $b.AssetKey.ToLowerInvariant() } else { '' }); Suffixed = ($tn -ne $base) }
+}
+
+function ConvertTo-RAStreamSummaryItem {
+    <# PURE. One result row as the Summary load reads it: its columns through the data sync's names (si_ first, else the old name). #>
+    param([Parameter(Mandatory)]$Row)
+    $o = [ordered]@{}
+    foreach ($k in $script:SIDataSummaryColumns.Keys) {
+        $c = $script:SIDataSummaryColumns[$k]
+        $v = $null
+        foreach ($n in @($c[1], $c[0])) {
+            $p = $Row.PSObject.Properties[$n]
+            if (-not $p -or $null -eq $p.Value) { continue }
+            $x = $p.Value
+            if ($x -is [System.Collections.IEnumerable] -and $x -isnot [string]) { $x = ConvertTo-Json -InputObject @($x) -Compress -Depth 8 } else { $x = [string]$x }
+            if ($x -ne '') { $v = $x; break }
+        }
+        $o[$k] = $v
+    }
+    [pscustomobject]$o
+}
+
+function Join-RAStreamJson {
+    <# PURE. Adds the fields of -Extra to the JSON object -Json (both objects as text). #>
+    param([Parameter(Mandatory)][string]$Json, [Parameter(Mandatory)][System.Collections.IDictionary]$Extra)
+    $add = ConvertTo-SIDataJsonObject -Values $Extra
+    $inner = $add.Substring(1, $add.Length - 2)
+    if (-not $inner) { return $Json }
+    if ($Json.Trim() -eq '{}') { return '{' + $inner + '}' }
+    $Json.TrimEnd().Substring(0, $Json.TrimEnd().Length - 1) + ',' + $inner + '}'
+}
+
+function Write-RAStreamRows {
+    <#
+        Writes ONE bucket's scored rows of the current report (-Bucket names it: '3/16', 'late:3/16', 'sub:...', 'page:2'),
+        replacing whatever that bucket wrote before (a retry never doubles). -InView: the rows the workbook / mail view
+        shows (by reference). -IsDetailedShape: the trace identity's asset part. Returns the rows written.
+    #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows, [Parameter(Mandatory)][string]$Bucket,
+          [System.Collections.Generic.HashSet[object]]$InView, [bool]$IsDetailedShape, [string]$ConfigurationIdInputName = 'ConfigurationId',
+          [string]$SortColumn = 'RiskScoreTotal_Weighted', [string]$FallbackSortColumn = 'RiskScoreTotal', [bool]$Dedup = $true, $Equivalence)
+    $r = $Stream.Current
+    if ($null -eq $r) { throw 'Write-RAStreamRows: no report started' }
+    $p = @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId; Report = [string]$r.Ordinal; Bucket = $Bucket; RunKey = $Stream.RunKey }
+    $null = Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDeleteBucketSql -Grain $Stream.Grain) -Params $p
+    $items = New-Object System.Collections.Generic.List[string]
+    $assetItems = New-Object System.Collections.Generic.List[string]
+    $firstSeq = $Stream.Seq + 1
+    foreach ($row in $Rows) {
+        if ($null -eq $row) { continue }
+        $Stream.Seq++
+        $seq = $Stream.Seq
+        $j = ConvertTo-RAStreamJson -Row $row -DateCols $r.DateCols
+        if ($j.Illegal -gt 0) { $Stream.Illegal++ }
+        $sortP = $row.PSObject.Properties[$SortColumn]; if (-not $sortP) { $sortP = $row.PSObject.Properties[$FallbackSortColumn] }
+        $sort = ConvertTo-RADouble -Value $(if ($sortP) { $sortP.Value } else { $null }) -Default 0.0
+        $dk = ''; if ($Dedup) { $dk = Get-RARowDedupKey -Row $row -ConfigurationIdInputName $ConfigurationIdInputName }
+        $ti = Get-RAStreamTraceInfo -Row $row -IsDetailed $IsDetailedShape
+        # (not $inView: PowerShell names are case-insensitive -- that IS the -InView parameter)
+        $ra = [ordered]@{ RaReport = $r.Ordinal; RaBucket = $Bucket; RaDedup = $(if ($dk) { Get-RAStreamHash16 -Text $dk } else { '' }); RaSort = $sort; RaInView = $(if ($null -ne $InView) { $InView.Contains($row) } else { $true })
+                          RaTraceHash = $ti.Hash; RaTraceKey = $ti.Key; RaTraceSuffixed = [bool]$ti.Suffixed }
+        if ($Stream.Grain -eq 'Detailed') {
+            # the data sync's projection of a Log Analytics row (Get-SIDataFindingsKql), then its mapping (ConvertTo-SIDataFindingJson)
+            $g = { param($n) $q = $row.PSObject.Properties[$n]; if ($q -and $null -ne $q.Value) { [string]$q.Value } else { '' } }
+            $aid = & $g 'SI_AssetId'; if (-not $aid) { $aid = & $g 'AssetId' }
+            $cfg = & $g 'ConfigurationId'
+            $rn = & $g 'AssetDetectedInReportName'; if (-not $rn) { $rn = & $g 'ReportName' }
+            $cat = & $g 'Category'
+            $narrow = [pscustomobject]@{ SI_AssetId = $aid; AssetName = (& $g 'AssetName'); ReportName = $rn; SecurityDomain = (& $g 'SecurityDomain')
+                ConfigurationId = $cfg; Cve = $(if ($cfg.StartsWith('CVE-')) { $cfg.ToUpperInvariant() } else { '' }); Title = (& $g 'ConfigurationName'); Severity = (& $g 'SecuritySeverity')
+                Tier = (& $g 'CriticalityTier'); SourceTier = (& $g 'SourceCriticalityTier'); IsPath = ($rn.StartsWith('Attack_Paths') -or $cat.StartsWith('AttackPath') -or $cat -eq 'Attack Paths')
+                RiskScore = (& $g 'RiskScoreTotal'); ExemptionId = (& $g 'SI_ExemptionId'); ExemptedUntil = (& $g 'SI_ExemptedUntil'); ExemptionRequestId = (& $g 'SI_ExemptionRequestId'); DetailJson = $j.Json }
+            $tiers = Get-SIDataRowTiers -Row $narrow
+            if ($tiers.IsPath) { $narrow.Tier = $tiers.FindingTier }
+            $ra['RaSeq'] = $seq
+            $ra['RaFindingKey'] = [string](Get-SIFindingGroupKey -Row $row -Equivalence $Equivalence)
+            $ra['RaAssetId'] = $aid
+            $ra['RaAssetTier'] = $tiers.AssetTier
+            $items.Add((Join-RAStreamJson -Json (ConvertTo-SIDataFindingJson -Row $narrow -KeyOf @{}) -Extra $ra))
+        } else {
+            $one = ConvertTo-SIDataSummaryItems -Rows @(ConvertTo-RAStreamSummaryItem -Row $row) -StartRowNo $seq
+            $tr = @{}
+            $tr.Sev = ConvertTo-SITrendDimensionValue ($row.PSObject.Properties['SecuritySeverity'] | ForEach-Object { $_.Value })
+            $tr.Tier = ConvertTo-SITrendDimensionValue ($row.PSObject.Properties['CriticalityTier'] | ForEach-Object { $_.Value })
+            $tr.Dom = ConvertTo-SITrendDimensionValue ($row.PSObject.Properties['SecurityDomain'] | ForEach-Object { $_.Value })
+            $sc = 0.0; $sp = $row.PSObject.Properties['RiskScoreTotal']; if ($sp -and $null -ne $sp.Value -and [string]$sp.Value -ne '') { try { $sc = [double]$sp.Value } catch { $sc = 0.0 } }
+            $ex = $row.PSObject.Properties['SI_ExemptionId']; $exempt = [bool]($ex -and -not [string]::IsNullOrEmpty([string]$ex.Value))
+            $ids = @(Get-SITrendRowAssetIds -Row $row)
+            $ra['RaTrendSeverity'] = $tr.Sev; $ra['RaTrendTier'] = $tr.Tier; $ra['RaTrendDomain'] = $tr.Dom; $ra['RaTrendScore'] = $sc; $ra['RaExempt'] = $exempt
+            $ra['RaTrendAssetIds'] = $(if ($ids.Count) { ConvertTo-Json -InputObject @($ids) -Compress } else { $null })
+            $ra['RowJson'] = $j.Json
+            $items.Add((Join-RAStreamJson -Json $one.Rows[0] -Extra $ra))
+            foreach ($a in $one.Assets) { $assetItems.Add($a) }
+        }
+    }
+    if ($items.Count -eq 0) { return 0L }
+    $chunk = [ref]$Stream.Chunk
+    $what = 'Risk Analysis rows of {0} (bucket {1})' -f $r.Name, $Bucket
+    if ($Stream.Grain -eq 'Detailed') {
+        $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertFindingSql) -Items $items.ToArray() -Params @{ CollectionId = [string]$Stream.CollectionId } -ChunkChars $chunk -What $what
+    } else {
+        $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertSummaryRowSql) -Items $items.ToArray() -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What $what
+        if ($assetItems.Count) { $null = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-SIDataSummaryInsertAssetSql) -Items $assetItems.ToArray() -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What ($what + ', impacted assets') }
+    }
+    $Stream.Chunk = $chunk.Value
+    [long]$n
+}
+
+function Add-RAStreamStage {
+    <#
+        A Summary report's RAW rows of one bucket, staged (sidata.RaStage) until every bucket is in: a group that spans buckets
+        is combined later by the same rules (Merge-RASummaryBucketRows). Each row carries its group (the query's final
+        summarize-by values, as the merge groups them); a report whose query has no readable summarize-by groups nothing.
+    #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows, [Parameter(Mandatory)][string]$Bucket)
+    $r = $Stream.Current
+    $p = @{ RunKey = $Stream.RunKey; Report = [string]$r.Ordinal; Bucket = $Bucket }
+    $null = Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDeleteStageSql) -Params $p
+    $items = New-Object System.Collections.Generic.List[string]
+    foreach ($row in $Rows) {
+        if ($null -eq $row) { continue }
+        $Stream.Seq++
+        # the staged JSON leaves empty values out: the row's columns are kept, so a page reads every row back with all of
+        # them (an empty group column, e.g. cmdbId = '', must still be on the row or the merge refuses the group)
+        foreach ($cp in $row.PSObject.Properties) { if ($r.StageColSet.Add($cp.Name)) { $r.StageCols.Add($cp.Name) } }
+        $gk = Get-RASummaryGroupKey -Row $row -Plan $r.Plan
+        if ($null -eq $gk) { $gk = 'row:' + $Stream.Seq }
+        $j = ConvertTo-RAStreamJson -Row $row -DateCols $r.DateCols
+        $items.Add((ConvertTo-SIDataJsonObject -Values ([ordered]@{ RaReport = $r.Ordinal; RaBucket = $Bucket; RaSeq = $Stream.Seq; GroupHash = (Get-RAStreamHash16 -Text $gk); RowJson = $j.Json })))
+    }
+    if ($items.Count -eq 0) { return 0L }
+    $chunk = [ref]$Stream.Chunk
+    $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertStageSql) -Items $items.ToArray() -Params @{ RunKey = $Stream.RunKey } -ChunkChars $chunk -What ('staged rows of ' + $r.Name)
+    $Stream.Chunk = $chunk.Value
+    [long]$n
+}
+
+function Invoke-RAStreamStagePages {
+    <#
+        Reads the staged report back a page of WHOLE groups at a time (a group never spans pages), in the order the groups
+        were first written, and hands each page to -OnPage (param($rows, $pageNo)). The page size follows the measured size
+        of the groups (-TargetChars of stored JSON a page) -- a small report is one page, as before. Then the stage is removed.
+        Returns the pages.
+    #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][scriptblock]$OnPage, [long]$TargetChars = 64MB)
+    $r = $Stream.Current
+    $p = @{ RunKey = $Stream.RunKey; Report = [string]$r.Ordinal }
+    $groups = @(Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamStageGroupsSql) -Params $p -Mode 'reader')
+    $groups = @($groups | ForEach-Object { $_ } | Where-Object { $_ })
+    [string[]]$stageCols = if ($r.StageCols) { $r.StageCols.ToArray() } else { @() }
+    $pages = 0
+    $i = 0
+    $from = [long]0
+    while ($i -lt $groups.Count) {
+        $chars = 0L; $j = $i
+        while ($j -lt $groups.Count -and ($j -eq $i -or ($chars + [long]$groups[$j]['Chars']) -le $TargetChars)) { $chars += [long]$groups[$j]['Chars']; $j++ }
+        $to = [long]$groups[$j - 1]['G0']
+        $pp = @{ RunKey = $Stream.RunKey; Report = [string]$r.Ordinal; From = [string]$from; To = [string]$to }
+        $rows = @(Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamStagePageSql) -Params $pp -Mode 'reader')
+        $objs = New-Object System.Collections.Generic.List[object]
+        foreach ($x in $rows) { foreach ($h in @($x)) { if ($h) { $objs.Add((ConvertFrom-RAStreamJson -Json ([string]$h['RowJson']) -Columns $stageCols -DateCols $r.DateCols)) } } }
+        $rows = $null
+        $pages++
+        & $OnPage $objs.ToArray() $pages
+        $objs = $null
+        $from = $to; $i = $j
+    }
+    $null = Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDeleteStageSql) -Params @{ RunKey = $Stream.RunKey; Report = [string]$r.Ordinal; Bucket = '*' }
+    $r.Pages = $pages
+    $pages
+}
+
+function Complete-RAStreamReport {
+    <#
+        The current report's buckets are all in: a finding two buckets both returned is kept once (the first), two assets
+        that share a trace name in DIFFERENT buckets get the asset id at the end of it (as the whole-report pass gave it), and
+        the rows the report stored are counted. Returns @{ Stored; Duplicates; Traces }.
+    #>
+    param([Parameter(Mandatory)]$Stream)
+    $r = $Stream.Current
+    $p = @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId; Report = [string]$r.Ordinal }
+    $dup = [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamDedupSql -Grain $Stream.Grain) -Params $p)
+    if ($dup -gt 0) { & $Stream.Log 'INFO' ("{0} finding(s) two query slices both returned are kept once" -f $dup) }
+    $cand = @(Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamTraceCandidatesSql -Grain $Stream.Grain) -Params $p -Mode 'reader')
+    $fix = New-Object System.Collections.Generic.List[string]
+    foreach ($x in $cand) {
+        foreach ($h in @($x)) {
+            if (-not $h) { continue }
+            $row = ConvertFrom-RAStreamJson -Json ([string]$h['Json'])
+            $b = Get-RATraceBase -Row $row -IsDetailed $true
+            if (-not $b.AssetKey) { continue }
+            $name = (@($b.Parts) + $b.AssetKey + 'SI') -join '-'
+            $fix.Add((ConvertTo-SIDataJsonObject -Values ([ordered]@{ Id = [long]$h['Id']; N = $name; I = (Get-RATraceId -TraceName $name) })))
+        }
+    }
+    $cand = $null
+    $traces = 0L
+    if ($fix.Count) {
+        $chunk = [ref]$Stream.Chunk
+        $traces = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamTraceUpdateSql -Grain $Stream.Grain) -Items $fix.ToArray() -Params $p -ChunkChars $chunk -What 'trace names'
+        & $Stream.Log 'INFO' ("{0} finding(s) share a trace name with another asset's finding in another query slice -- the asset id is added to theirs" -f $traces)
+    }
+    $stored = [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCountSql -Grain $Stream.Grain -Source Report) -Params $p)
+    [pscustomobject]@{ Stored = $stored; Duplicates = $dup; Traces = $traces }
+}
+
+function Set-RAStreamReportStatus {
+    <# #641: one report's verdict for this run (Complete | NotComplete | Unverified), with what the source said and what was stored. #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$ReportName, $Expected, $Retrieved, $Stored, [Parameter(Mandatory)][ValidateSet('Complete', 'NotComplete', 'Unverified')][string]$State, [string]$Reason = '')
+    $p = @{ CollectionTime = $Stream.TimeText; Grain = $Stream.Grain; ReportName = $ReportName; State = $State; Reason = [string]$Reason
+            Expected = $(if ($null -ne $Expected) { [string][long]$Expected } else { '' }); Retrieved = $(if ($null -ne $Retrieved) { [string][long]$Retrieved } else { '' })
+            Stored = $(if ($null -ne $Stored) { [string][long]$Stored } else { '' }) }
+    $null = Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamStatusSql) -Params $p
+}
+
+function Get-RACompletenessVerdict {
+    <#
+        PURE (#641). A report's verdict from what the source said it holds (-Expected; $null = the count could not be had)
+        and what its buckets returned (-Retrieved). Equal = Complete; different = NotComplete (the rows the source has and SI
+        does not are UNKNOWN, not resolved); no count = Unverified (said, not a failure). @{ State; Reason }.
+    #>
+    param($Expected, [long]$Retrieved, [string]$CountError = '')
+    if ($null -eq $Expected) {
+        $why = 'the source could not count the report''s rows in one query'
+        if ($CountError) { $why += (' (' + $CountError + ')') }
+        return @{ State = 'Unverified'; Reason = $why }
+    }
+    if ([long]$Expected -eq $Retrieved) { return @{ State = 'Complete'; Reason = '' } }
+    @{ State = 'NotComplete'; Reason = ('the source holds {0} row(s) for this report, the run retrieved {1}' -f [long]$Expected, $Retrieved) }
+}
+
+function Set-RAStreamAccount {
+    <#
+        What ONE slice of the current report did with the rows it retrieved (#641 item 4): In (rows into the scoring path),
+        Scope (left out by the report's tier / severity scope), Excluded (left out by the default exclusion rules), Duplicate
+        (the scoring kept one of rows with the same finding key), Written (stored). A slice written again replaces its own.
+    #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Bucket, [Parameter(Mandatory)][hashtable]$Values)
+    $r = $Stream.Current; if ($null -eq $r) { return }
+    if ($null -eq $r.Account) { $r.Account = @{} }
+    if (-not $r.Account.ContainsKey($Bucket)) { $r.Account[$Bucket] = @{ In = 0L; Scope = 0L; Excluded = 0L; Duplicate = 0L; Written = 0L } }
+    foreach ($k in $Values.Keys) { $r.Account[$Bucket][$k] = [long]$Values[$k] }
+}
+
+function Get-RAStreamAccountTotal {
+    <# PURE. The report's slices' accounts added up: @{ In; Scope; Excluded; Duplicate; Written }. #>
+    param([hashtable]$Account)
+    $t = @{ In = 0L; Scope = 0L; Excluded = 0L; Duplicate = 0L; Written = 0L }
+    if ($Account) { foreach ($b in $Account.Values) { foreach ($k in @($t.Keys)) { if ($b.ContainsKey($k)) { $t[$k] += [long]$b[$k] } } } }
+    $t
+}
+
+function Get-RAStoredVerdict {
+    <#
+        PURE (#641 item 4). A report whose rows the source fully returned (Retrieved = Expected) is COMPLETE only when what
+        it STORED is what it retrieved less what is accounted for, each named: the report's tier / severity scope, the default
+        exclusion rules, a finding the scoring keeps once, a finding two slices both returned (kept once). Any other
+        difference is rows LOST between retrieval and storage -> NotComplete, with the numbers. @{ State; Reason }.
+    #>
+    param([long]$Retrieved, [long]$Stored, [hashtable]$Total, [long]$CrossSliceDuplicates = 0)
+    $t = if ($Total) { $Total } else { @{ Scope = 0L; Excluded = 0L; Duplicate = 0L } }
+    $explained = [long]$t.Scope + [long]$t.Excluded + [long]$t.Duplicate + $CrossSliceDuplicates
+    $why = New-Object System.Collections.Generic.List[string]
+    if ([long]$t.Scope -gt 0) { $why.Add(('{0} outside the report''s tier / severity scope' -f $t.Scope)) }
+    if ([long]$t.Excluded -gt 0) { $why.Add(('{0} left out by the default exclusion rules' -f $t.Excluded)) }
+    if ([long]$t.Duplicate -gt 0) { $why.Add(('{0} duplicate finding(s) kept once by the scoring' -f $t.Duplicate)) }
+    if ($CrossSliceDuplicates -gt 0) { $why.Add(('{0} finding(s) two query slices both returned, kept once' -f $CrossSliceDuplicates)) }
+    $lost = $Retrieved - $explained - $Stored
+    if ($lost -eq 0) {
+        $reason = if ($why.Count) { 'stored {0} of {1} retrieved: {2}' -f $Stored, $Retrieved, ($why -join ', ') } else { '' }
+        return @{ State = 'Complete'; Reason = $reason }
+    }
+    $acc = if ($why.Count) { ' (accounted for: ' + ($why -join ', ') + ')' } else { '' }
+    @{ State = 'NotComplete'; Reason = ('the run retrieved {0} row(s) and stored {1}: {2} row(s) are neither stored nor accounted for{3}' -f $Retrieved, $Stored, $lost, $acc) }
+}
+
+function Get-RAReportCountKql {
+    <#
+        PURE (#641). The count query of ONE slice of a report (-Query: that slice's query): '| count' -- or, with -GroupKeys
+        (a Summary report whose final summarize-by the merge groups on), each group's identity (its group values, lower-cased
+        as the merge compares them, hashed), so a group that spans slices is counted once.
+    #>
+    param([Parameter(Mandatory)][string]$Query, [string[]]$GroupKeys)
+    $q = $Query.TrimEnd().TrimEnd(';').TrimEnd()
+    $keys = @($GroupKeys | Where-Object { $_ })
+    if ($keys.Count -eq 0) { return $q + "`n| count" }
+    $parts = @($keys | ForEach-Object { 'tostring({0})' -f $_ })
+    $e = if ($parts.Count -eq 1) { $parts[0] } else { 'strcat_delim("|~|", {0})' -f ($parts -join ', ') }
+    $q + "`n| project SIGroupHash = hash_sha256(tolower($e))`n| distinct SIGroupHash"
+}
+
+function Measure-RAReportExpectedRows {
+    <#
+        #641. What the SOURCE holds for a report, asked the way the report's rows were asked: -BucketCount 1 = the query
+        whole; more = slice by slice. -RunSlice gets the slice's index (0..n-1) and returns @{ Ok; Rows; Error } of THAT
+        slice's count query (Get-RAReportCountKql) -- the same bucket filter and the same per-slice lookup cut as the slice's
+        own query, so a count never carries what the query itself could not (live 2026-10-13: the unbucketed count carried
+        every lookup whole -- "413 Request Entity Too Large", 8 reports Unverified).
+          Detailed (no -GroupKeys): the slices' counts added -- the slices partition the rows.
+          Summary (-GroupKeys): the DISTINCT groups over every slice -- a group that spans slices is one row after the merge.
+        A slice that cannot be counted = no count: @{ Count = $null; Error } (the report is then Unverified, never Complete).
+    #>
+    param([Parameter(Mandatory)][int]$BucketCount, [Parameter(Mandatory)][scriptblock]$RunSlice, [string[]]$GroupKeys)
+    $n = [Math]::Max(1, $BucketCount)
+    $byGroup = (@($GroupKeys | Where-Object { $_ }).Count -gt 0)
+    $sum = 0L
+    $groups = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    for ($i = 0; $i -lt $n; $i++) {
+        $what = if ($n -gt 1) { 'slice {0}/{1}: ' -f ($i + 1), $n } else { '' }
+        $r = $null
+        try { $r = & $RunSlice $i } catch { return @{ Count = $null; Error = ($what + $_.Exception.Message) } }
+        if ($null -eq $r -or -not $r.Ok) { return @{ Count = $null; Error = ($what + $(if ($r) { [string]$r.Error } else { 'no answer' })) } }
+        $rows = @(@($r.Rows) | Where-Object { $null -ne $_ })
+        if ($byGroup) {
+            foreach ($x in $rows) {
+                $p = $x.PSObject.Properties['SIGroupHash']
+                if (-not $p) { return @{ Count = $null; Error = ($what + 'the count returned no group column') } }
+                [void]$groups.Add([string]$p.Value)
+            }
+            continue
+        }
+        if ($rows.Count -eq 0) { continue }
+        $c = $null
+        foreach ($nm in 'Count', 'count_', 'count') { $pp = $rows[0].PSObject.Properties[$nm]; if ($pp -and $null -ne $pp.Value) { $c = [long]$pp.Value; break } }
+        if ($null -eq $c) { return @{ Count = $null; Error = ($what + 'the count returned no Count column') } }
+        $sum += $c
+    }
+    if ($byGroup) { return @{ Count = [long]$groups.Count; Error = '' } }
+    @{ Count = $sum; Error = '' }
+}
+
+function Complete-RAStream {
+    <# The run's END: every bucket of every report is in -- the collection is marked so (see Get-RAStreamCompleteSql). Throws when it cannot be. #>
+    param([Parameter(Mandatory)]$Stream, [string]$Partial = '')
+    $p = @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId }
+    $rows = [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCountSql -Grain $Stream.Grain -Source All) -Params $p)
+    $p['Rows'] = [string]$rows; $p['Partial'] = [string]$Partial
+    $n = [int](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCompleteSql -Grain $Stream.Grain) -Params $p)
+    if ($n -ne 1) { throw ("the run's result could not be marked complete in the database ({0} row(s))" -f $rows) }
+    $rows
+}
+
+function Get-RAStreamCount {
+    param([Parameter(Mandatory)]$Stream, [ValidateSet('All', 'View')][string]$Source = 'All')
+    [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCountSql -Grain $Stream.Grain -Source $Source) -Params @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId })
+}
+
+function Get-RAStreamColumnsByOrdinal {
+    param([Parameter(Mandatory)]$Stream)
+    $m = @{}
+    foreach ($k in $Stream.Reports.Keys) { $r = $Stream.Reports[$k]; $m[[int]$r.Ordinal] = $r }
+    $m
+}
+
+function New-RARowPager {
+    <#
+        The run's rows a PAGE at a time, in the final order, for everything after the queries (the workbook, the JSON file,
+        Log Analytics, the AI summary, the KPIs, the findings). $pager.Next() returns the next page (an array) or $null.
+          -Stream: read from SQL -- -Source All (every row), View (the rows the workbook and mail show), FindingKey (grouped
+           by the SI finding key). Each row is shaped as its report's rows were (every report column, absent = $null).
+          -Rows: no database -- the rows in memory, as one page (the result as before).
+        The page size follows the measured size of the rows (-TargetChars of stored JSON per page).
+    #>
+    param($Stream, [AllowNull()][AllowEmptyCollection()][object[]]$Rows, [ValidateSet('All', 'View', 'FindingKey')][string]$Source = 'All', [long]$TargetChars = 32MB)
+    $st = @{ Stream = $Stream; Rows = $Rows; Source = $Source; Done = $false; First = $true; Sort = 0.0; Seq = 0L; FKey = ''; Take = 2000; Target = $TargetChars; Read = 0L; ByOrd = $null }
+    if ($Stream) { $st.ByOrd = Get-RAStreamColumnsByOrdinal -Stream $Stream }
+    $o = [pscustomobject]@{ State = $st }
+    $o | Add-Member -MemberType ScriptMethod -Name Next -Value {
+        $s = $this.State
+        if ($s.Done) { return $null }
+        if ($null -eq $s.Stream) {
+            $s.Done = $true
+            if ($null -eq $s.Rows) { return $null }
+            return , @($s.Rows)
+        }
+        $p = @{ CollectionTime = $s.Stream.TimeText; CollectionId = [string]$s.Stream.CollectionId; Take = [string]$s.Take; First = $(if ($s.First) { '1' } else { '0' })
+                Sort = $s.Sort.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture); Seq = [string]$s.Seq; FKey = [string]$s.FKey }
+        $res = @(Invoke-RAStreamSql -Stream $s.Stream -Sql (Get-RAStreamPageSql -Grain $s.Stream.Grain -Source $s.Source) -Params $p -Mode 'reader')
+        $hs = @($res | ForEach-Object { $_ } | Where-Object { $_ })
+        $res = $null
+        if ($hs.Count -eq 0) { $s.Done = $true; return $null }
+        $out = New-Object 'System.Collections.Generic.List[object]' ($hs.Count)
+        $chars = 0L
+        foreach ($h in $hs) {
+            $json = [string]$h['Json']; $chars += $json.Length
+            $rep = $s.ByOrd[[int]$h['RaReport']]
+            $cols = $null; $dc = $null; if ($rep) { $cols = $rep.Columns.ToArray(); $dc = $rep.DateCols }
+            $out.Add((ConvertFrom-RAStreamJson -Json $json -Columns $cols -DateCols $dc))
+        }
+        $last = $hs[$hs.Count - 1]
+        $s.First = $false
+        $s.Seq = [long]$last['Seq']
+        if ($s.Source -eq 'FindingKey') { $s.FKey = [string]$last['FKey'] } else { $s.Sort = [double]$last['RaSort'] }
+        if ($hs.Count -lt $s.Take) { $s.Done = $true }
+        # measured, not fixed: the next page is sized from this one's stored size (working rule 5)
+        if ($chars -gt 0) { $s.Take = [int][Math]::Max(1, [Math]::Min(1000000, [Math]::Floor($s.Take * ([double]$s.Target / [double]$chars)))) }
+        $s.Read += $out.Count
+        return , $out.ToArray()
+    }
+    $o
+}
+
+function Get-RAStreamTrendRollup {
+    <# The day's trend rollup of a Summary run, computed in SQL (Get-RAStreamTrendSql). Rows of Dimension, DimensionValue, Findings, Assets, ScoreTotal. #>
+    param([Parameter(Mandatory)]$Stream)
+    $res = @(Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamTrendSql) -Params @{ CollectionTime = $Stream.TimeText } -Mode 'reader')
+    @(foreach ($x in $res) { foreach ($h in @($x)) { if ($h) { [pscustomobject]@{ Dimension = [string]$h['Dimension']; DimensionValue = [string]$h['DimensionValue']; Findings = [int]$h['Findings']; Assets = [int]$h['Assets']; ScoreTotal = [double]$h['ScoreTotal'] } } } })
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  THE CI CONTEXT OF ONE BUCKET (item 3): the bucket's assets looked up in sidata.Ci -- never the whole tenant's CIs.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-RAStreamCiSql {
+    <#
+        The CIs one bucket's rows can be matched to: by an id the CI carries (its own, or a linked object's -- with or
+        without SI's id prefixes), or by a name exactly ONE current CI has. Retired CIs are not current.
+    #>
+    @'
+-- (table variables named apart from the parameters: T-SQL names are case-insensitive)
+DECLARE @idList TABLE (v nvarchar(450) PRIMARY KEY);
+INSERT @idList SELECT DISTINCT LEFT(value, 450) FROM OPENJSON(@Ids) WHERE value IS NOT NULL AND value <> '';
+DECLARE @nameList TABLE (v nvarchar(400) PRIMARY KEY);
+INSERT @nameList SELECT DISTINCT LEFT(value, 400) FROM OPENJSON(@Names) WHERE value IS NOT NULL AND value <> '';
+SELECT c.CiId, c.DocJson, CASE WHEN c.LastSeen IS NOT NULL AND c.LastSeen < DATEADD(day, -CONVERT(int, @StaleDays), SYSUTCDATETIME()) THEN 1 ELSE 0 END AS Stale
+FROM sidata.Ci c
+WHERE ISNULL(c.Lifecycle, '') <> 'retired' AND c.DocJson IS NOT NULL
+  AND (c.CiId IN (SELECT v FROM @idList)
+       OR c.CiId IN (SELECT l.CiId FROM sidata.CiLink l WHERE l.NativeId IN (SELECT v FROM @idList))
+       OR (c.Name IN (SELECT v FROM @nameList)
+           AND (SELECT COUNT(*) FROM sidata.Ci c2 WHERE c2.Name = c.Name AND ISNULL(c2.Lifecycle, '') <> 'retired') = 1));
+'@
+}
+
+function Get-RAStreamCiIndex {
+    <#
+        The CI index (New-RACiIndex) of ONE bucket's rows, read from sidata.Ci: only the CIs these rows can match. A name
+        is only used when exactly one current CI in the WHOLE tenant has it (as the whole-tenant index did). -Invoke: the seam.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [AllowEmptyCollection()][object[]]$Rows = @(), [int]$StaleDays = 30)
+    $prefixes = @('', 'az:', 'eg:az:', 'eg:dev:', 'eg:', 'mde:', 'entra-user:', 'entra-sp:', 'entra-device:', 'aad:')
+    $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($row in $Rows) {
+        if ($null -eq $row) { continue }
+        foreach ($k in (Get-RAStreamCiIdsOfRow -Row $row)) { foreach ($px in $prefixes) { [void]$ids.Add($px + $k) } }
+        foreach ($col in 'SI_AssetName', 'AssetName', 'DeviceName') { $p = $row.PSObject.Properties[$col]; if ($p -and $p.Value) { [void]$names.Add(([string]$p.Value).Trim()) } }
+    }
+    if ($ids.Count -eq 0 -and $names.Count -eq 0) { return (New-RACiIndex -Cis @()) }
+    $res = @(& $Invoke (Get-RAStreamCiSql) @{ Ids = (ConvertTo-Json -InputObject @($ids) -Compress); Names = (ConvertTo-Json -InputObject @($names) -Compress); StaleDays = [string]$StaleDays } 'reader')
+    $cis = New-Object System.Collections.Generic.List[object]
+    foreach ($x in $res) {
+        foreach ($h in @($x)) {
+            if (-not $h -or -not $h['DocJson'] -or $h['DocJson'] -is [System.DBNull]) { continue }
+            $c = ConvertFrom-RAStreamJson -Json ([string]$h['DocJson'])
+            if (-not $c.PSObject.Properties['si_ci_id']) { Add-Member -InputObject $c -NotePropertyName 'si_ci_id' -NotePropertyValue ([string]$h['CiId']) }
+            Add-Member -InputObject $c -NotePropertyName 'si_stale_' -NotePropertyValue $(if ([int]$h['Stale'] -eq 1) { 'true' } else { 'false' }) -Force
+            $cis.Add($c)
+        }
+    }
+    New-RACiIndex -Cis $cis.ToArray()
+}
+
+function Merge-RAColumnFillSnapshot {
+    <# PURE. Two column-fill snapshots of one report (Get-RAColumnFillSnapshot, per bucket) as one: rows and filled counts added. #>
+    param($Into, $Add)
+    if ($null -eq $Into) { return $Add }
+    if ($null -eq $Add) { return $Into }
+    $out = @{}
+    foreach ($k in $Into.Keys) { $out[$k] = [long]$Into[$k] }
+    foreach ($k in $Add.Keys) { if ($out.ContainsKey($k)) { $out[$k] = [long]$out[$k] + [long]$Add[$k] } else { $out[$k] = [long]$Add[$k] } }
+    $out
+}

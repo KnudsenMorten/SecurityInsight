@@ -1,0 +1,228 @@
+@* The output fields of ONE area (OutputFieldsModel.Area): the workbooks on Configuration > Reports, every connector output
+   on Configuration > Connectors (owner 2026-10-19: "one for reports and one for connectors") -- one store, two views. *@
+@model SI.Management.Web.Pages.Reports.OutputFieldsModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Outputs
+@using SI.Management.Web.Pages.Reports
+@{
+    var sel = Model.Selected;
+    var edit = Model.CanEdit;
+}
+<details class="help" data-outputfields-help>
+    <summary>How output fields work</summary>
+    <p>Every output reads the same data: the CI with its linked objects, its findings with their state, or the records each source reported. Its columns are shipped with SecurityInsight and updated with it. Your change replaces one column and is kept on every update. When we change a shipped column you have changed, the column is marked <em>the shipped column changed since</em>: compare the two on <nav-ref page="/Templates/Index" /> and keep yours or take ours. Nothing is merged on its own.</p>
+    <p>Every output is a connector: each run and each item it wrote, changed (with the value before and now) or stopped sending is listed on <nav-ref page="/Collection/Connectors" />. A ServiceNow import reads columns by their name -- agree a rename or a removal with the ServiceNow team first.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Error is null && Model.Maps.Count == 0) { <div class="notice warn" role="status" data-outputfields-notpublished>@OutputMapStore.NotPublishedMessage</div> }
+
+<section class="card" aria-labelledby="h-outputs">
+    <h2 id="h-outputs">Outputs</h2>
+    <div class="table-wrap">
+        <table class="grid" data-outputs-table data-sortable>
+            <thead><tr><th scope="col">Output</th><th scope="col">Where it goes</th><th scope="col">Connector</th><th scope="col">Runs</th><th scope="col" class="num">Your changes</th><th scope="col" class="num">To review</th></tr></thead>
+            <tbody>
+                @foreach (var e in Model.Catalog)
+                {
+                    var m = Model.Maps.FirstOrDefault(x => x.Entry.Output == e.Output);
+                    var on = Model.On?.Contains(e.Output);
+                    var snow = OutputFieldsModel.DirectionOf(e) is not null;
+                    <tr data-output="@e.Output" aria-current="@(sel?.Entry.Output == e.Output ? "true" : "false")">
+                        <td>@if (m is not null) { <a href="@Model.PagePath?output=@Uri.EscapeDataString(e.Output)">@e.Label</a> } else { @e.Label }
+                            @if (snow)
+                            {
+                                <div><a class="small" href="@Model.PagePath?handler=TeamPack&amp;output=@Uri.EscapeDataString(e.Output)" data-team-pack="@e.Output">ServiceNow team pack (Excel)</a></div>
+                                <div><a class="small" href="@Model.PagePath?handler=Schema&amp;output=@Uri.EscapeDataString(e.Output)" data-snow-schema="@e.Output">ServiceNow schema (JSON)</a></div>
+                                @* owner 2026-10-20: the rows it would send, and every one of them as Excel / CSV for the ServiceNow team to test with *@
+                                @if (Model.SnowCounts.TryGetValue(e.Output, out var rowsWords)) { <div class="hint" data-snow-count="@e.Output">@rowsWords</div> }
+                                <div><a class="small" href="@Model.PagePath?handler=Export&amp;output=@Uri.EscapeDataString(e.Output)" data-snow-export-xlsx="@e.Output">Every row it would send (Excel)</a> &middot; <a class="small" href="@Model.PagePath?handler=Export&amp;output=@Uri.EscapeDataString(e.Output)&amp;format=csv" data-snow-export-csv="@e.Output">(CSV)</a></div>
+                            }</td>
+                        <td>@e.Destination
+                            @if (snow)
+                            {
+                                var missing = new List<string>();
+                                if (Model.Tables.GetValueOrDefault(e.Output) is null) missing.Add("its Import Set table (" + e.TableSetting + ")");
+                                if (Model.DataOutProblem is null && !Model.HasConnector.GetValueOrDefault(e.Output)) missing.Add("a ServiceNow connector (instance + secret names), switched on as the data-out connector");
+                                if (missing.Count > 0)
+                                {
+                                    <div class="hint" data-output-missing="@e.Output">Missing: @string.Join(" and ", missing) -- <a href="/Admin/ConnectorSetup/Index">set it up on Connectors &gt; Setup</a>.</div>
+                                }
+                                if (Model.DataOutProblem is { } twoOn)
+                                {
+                                    <div class="notice error" role="alert" data-output-two-on="@e.Output">@twoOn <a href="/Admin/ConnectorSetup/Index">Connectors &gt; Setup</a>.</div>
+                                }
+                            }</td>
+                        <td><code>@e.Connector</code></td>
+                        <td data-output-runs="@e.Output">
+                            @if (e.Kind == "fixed") { <text>its connector's switch (Connectors &gt; Setup)</text> }
+                            else if (on is null) { <text>@(e.Default ? "on by default" : "off by default")</text> }
+                            else
+                            {
+                                <span class="badge @(on.Value ? "ok" : "")" data-output-on="@(on.Value ? "1" : "0")">@(on.Value ? "on" : "off")</span>@(on.Value == e.Default ? " (default)" : "")
+                                @if (Model.CanEdit)
+                                {
+                                    <form method="post" asp-page-handler="Switch" class="inline-form" data-output-switch="@e.Output">
+                                        <input type="hidden" name="Output" value="@(sel?.Entry.Output ?? e.Output)" />
+                                        <input type="hidden" name="SwitchOutput" value="@e.Output" />
+                                        <input type="hidden" name="SwitchOn" value="@(on.Value ? "false" : "true")" />
+                                        <input type="text" name="Reason" maxlength="400" minlength="3" required placeholder="why" aria-label="Reason for switching @e.Label @(on.Value ? "off" : "on")" />
+                                        <button type="submit" class="small secondary">Switch @(on.Value ? "off" : "on")</button>
+                                    </form>
+                                }
+                            }
+                        </td>
+                        <td class="num">@(m is null ? "" : Fmt.Int(m.ChangedCount))</td>
+                        <td class="num">@if (m is { UpgradeAvailable: > 0 }) { <span class="badge danger">@Fmt.Int(m.UpgradeAvailable)</span> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="hint">Switching an output on or off writes the setting SI_DataOut_Outputs with your reason (every other output keeps what it does now; all at their defaults = the setting is cleared). A ServiceNow hand-off also needs its Import Set table and a ServiceNow connector (Connectors &gt; Setup). The ServiceNow team pack is one Excel file for the ServiceNow team: the table, every column with its meaning, and real sample rows -- no secret. The ServiceNow schema is the same table as JSON for creating it: every column sent now with its type and the length to create, the coalesce key and how rows arrive -- made when you click, so it always matches the columns below; no data, no secret.</p>
+</section>
+
+@if (sel is not null)
+{
+    var locked = OutputMapRules.Locked(sel.Entry.Output);
+    <section class="card" aria-labelledby="h-cols" data-output-columns="@sel.Entry.Output">
+        <h2 id="h-cols">@sel.Entry.Label <span class="badge">@Fmt.Int(sel.Columns.Count(c => !c.Removed)) columns</span></h2>
+        @if (sel.Description is { Length: > 0 } d) { <p>@d</p> }
+        @if (locked is not null) { <div class="notice info" role="status" data-output-locked>@locked</div> }
+        <div class="table-wrap">
+            <table class="grid" data-columns-table data-sortable>
+                <thead><tr><th scope="col">Column</th><th scope="col">Sent as</th><th scope="col">Reads</th><th scope="col">Operation</th><th scope="col" title="The type of the value sent (the field catalog's type of what the column reads, then its operation)">Type</th><th scope="col">State</th><th scope="col">Changed by</th>@if (edit && locked is null) { <th scope="col">Change</th> }</tr></thead>
+                <tbody>
+                    @foreach (var c in sel.Columns)
+                    {
+                        var f = c.InForce;
+                        <tr data-column="@f.Target" data-state="@c.State">
+                            <td><code>@f.Target</code></td>
+                            <td>@(c.Removed ? "(not sent)" : f.Name)</td>
+                            <td><code>@f.From</code>@if (c.Override is not null && c.Shipped is not null && c.Override.From != c.Shipped.From) { <span class="hint"> (shipped: @c.Shipped.From)</span> }</td>
+                            <td>@f.Op</td>
+                            @{ var ft = ServiceNowSchema.TypeOf(f); }
+                            <td data-column-type="@ft.Type" title="@ft.Format">@ft.Type</td>
+                            <td><span class="badge @OutputFieldsModel.StateBadge(c)">@OutputFieldsModel.StateText(c)</span></td>
+                            <td>@c.UpdatedBy</td>
+                            @if (edit && locked is null)
+                            {
+                                <td>
+                                    <details>
+                                        <summary>Change</summary>
+                                        <form method="post" asp-page-handler="Stage" data-column-form="@f.Target">
+                                            <input type="hidden" name="Output" value="@sel.Entry.Output" />
+                                            <input type="hidden" name="Target" value="@f.Target" />
+                                            <label>Reads <input name="From" value="@f.From" list="si-fields" required /></label>
+                                            <label>Operation <input name="Op" value="@f.Op" placeholder="none" /></label>
+                                            <label>Sent as <input name="Name" value="@f.As" placeholder="@f.Target" maxlength="128" /></label>
+                                            <label>Reason <input name="Reason" required minlength="3" maxlength="400" /></label>
+                                            <button type="submit" name="Action" value="change">Stage the change</button>
+                                            @if (!c.Removed) { <button type="submit" name="Action" value="remove" class="secondary">@(c.Own ? "Delete this column" : "Stop sending it")</button> }
+                                            @if (c.Changed && !c.Own) { <button type="submit" name="Action" value="restore" class="secondary">Put the shipped column back</button> }
+                                        </form>
+                                    </details>
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (edit && locked is null)
+        {
+            <details class="card-sub" data-add-column>
+                <summary>Add a column</summary>
+                <form method="post" asp-page-handler="Stage">
+                    <input type="hidden" name="Output" value="@sel.Entry.Output" />
+                    <input type="hidden" name="Action" value="add" />
+                    <label>Column <input name="Target" required maxlength="100" /></label>
+                    <label>Reads <input name="From" list="si-fields" required /></label>
+                    <label>Operation <input name="Op" placeholder="none" /></label>
+                    <label>Sent as <input name="Name" maxlength="128" placeholder="the column's name" /></label>
+                    <label>Reason <input name="Reason" required minlength="3" maxlength="400" /></label>
+                    <button type="submit">Stage the column</button>
+                </form>
+                <p class="hint">Reads: a SecurityInsight field, or $run_id, $run_time, $changed_at, $row_hash, $const:&lt;text&gt;. Operations: @string.Join(", ", OutputMapRules.Ops.Where(o => o != "enum")) -- for example join:; or round:1.</p>
+            </details>
+            <datalist id="si-fields">
+                @foreach (var fld in OutputFieldsModel.FieldChoices) { <option value="@fld"></option> }
+            </datalist>
+        }
+        <p class="actions"><a class="button secondary" href="@Model.PagePath?output=@Uri.EscapeDataString(sel.Entry.Output)&amp;preview=1#h-preview" data-preview-link>Preview 10 rows</a></p>
+    </section>
+
+    @* owner 2026-10-19: THE column builder -- pick, order, rename, remove and add columns in one go, preview ten rows, and
+       stage the changes for Review & commit (OutputColumnBuilder) *@
+    @if (edit && locked is null)
+    {
+        var brows = Model.BuilderRows();
+        <section class="card" aria-labelledby="h-builder" data-column-builder="@sel.Entry.Output">
+            <h2 id="h-builder">Column builder</h2>
+            <p class="hint">Tick the columns to send, give a column another name, and set its place (1 = first) -- or move it with the arrows. Add up to @OutputFieldsModel.AddRows columns of your own. Preview shows ten rows with these columns; nothing is changed until you stage the changes and commit them on <nav-ref page="/Changes/Index" />.</p>
+            @if (Model.BuilderProblems.Count > 0)
+            {
+                <div class="notice error" role="alert" data-builder-problems><ul>@foreach (var p in Model.BuilderProblems) { <li>@p</li> }</ul></div>
+            }
+            <form method="post" class="stack" data-builder-form>
+                <input type="hidden" name="Output" value="@sel.Entry.Output" />
+                <ol class="builder-list" data-builder-list>
+                    @for (var i = 0; i < brows.Count; i++)
+                    {
+                        var (row, send, name, place) = brows[i];
+                        var t = row.InForce.Target;
+                        <li class="builder-item" data-builder-item="@t">
+                            <input type="hidden" name="BTarget" value="@t" />
+                            <label class="builder-send"><input type="checkbox" name="BSend" value="@t" checked="@send" /> <code>@t</code> <small class="col-tech">@row.InForce.From</small></label>
+                            <label>Sent as <input type="text" name="BName" value="@name" placeholder="@t" maxlength="128" /></label>
+                            <label>Place <input type="number" name="BPlace" value="@place" min="1" max="@OutputMapRules.MaxPosition" data-builder-place class="narrow" /></label>
+                            <span class="builder-move">
+                                <button type="button" class="secondary small" data-builder-up aria-label="Move @t up">↑</button>
+                                <button type="button" class="secondary small" data-builder-down aria-label="Move @t down">↓</button>
+                            </span>
+                        </li>
+                    }
+                </ol>
+                <fieldset class="builder-add">
+                    <legend>Add a column</legend>
+                    @for (var i = 0; i < OutputFieldsModel.AddRows; i++)
+                    {
+                        var a = i < Model.PostedAdds.Count ? Model.PostedAdds[i] : null;
+                        <div class="builder-add-row">
+                            <label>Column <input type="text" name="ATarget" value="@a?.Target" maxlength="100" /></label>
+                            <label>Reads <input type="text" name="AFrom" value="@a?.From" list="si-fields" maxlength="200" /></label>
+                            <label>Sent as <input type="text" name="AName" value="@a?.Name" maxlength="128" /></label>
+                        </div>
+                    }
+                </fieldset>
+                <label>Reason <input type="text" name="Reason" value="@Model.Reason" minlength="3" maxlength="400" /></label>
+                <div class="actions">
+                    <button type="submit" asp-page-handler="Preview" class="secondary" data-builder-preview>Preview 10 rows</button>
+                    <button type="submit" asp-page-handler="Build" data-builder-stage>Stage the changes</button>
+                </div>
+            </form>
+        </section>
+    }
+
+    @if (Model.PreviewResult is { } pv)
+    {
+        <section class="card" aria-labelledby="h-preview" data-output-preview="@sel.Entry.Output">
+            <h2 id="h-preview">Preview: the first rows the next run sends</h2>
+            @if (pv.Note is { } note) { <p class="hint" data-preview-note>@note</p> }
+            @if (pv.Rows.Count > 0)
+            {
+                <div class="table-wrap">
+                    <table class="grid" data-preview-table data-sortable>
+                        <thead><tr>@foreach (var h in pv.Header) { <th scope="col">@h</th> }</tr></thead>
+                        <tbody>
+                            @foreach (var r in pv.Rows)
+                            {
+                                <tr>@foreach (var cell in r) { <td class="wrap">@(cell.Length > 160 ? cell[..160] + "…" : cell)</td> }</tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="hint">From the newest data, read the way the data sync reads it. A value the run sets itself ($run_id, $run_time, $changed_at, $row_hash) says "@SI.Management.Core.ProData.OutputMapper.ComputedAtSend"; a value translation uses the shipped value maps.</p>
+            }
+        </section>
+    }
+}

@@ -1,0 +1,295 @@
+@model SI.Management.Web.Pages.Cis.IndexModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@* THE CI grid (one row per CI from sidata.Ci): search, the filters above the grid, the view bar and the column chooser,
+   the toolbar (selection + pager), the table, the exports. The CIs page and the tier board both render it -- the tier
+   board at its own address, with its tiles setting the tier / decided-by / class filters (Model.TileFilters), a drawer
+   per row (Model.RowDrawer) and a mark on a row with a staged change (Model.RowMark). *@
+@{
+    var g = Model.Grid;
+    var spec = Model.Spec;
+    var isAdmin = User.IsAdmin();
+    var req = Model.Request.Query;
+    var id = Model.GridId;
+    var route = Model.Route;
+    IReadOnlyList<string> Chosen(string p) => req[p].Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToList();
+    string TierLabel(string t) => t == ProDataFilters.Unclassified ? t : "Tier " + t;
+}
+@if (g is not null && spec is not null)
+{
+    var st = g.State;
+    // #589: the chosen columns in the chosen order -- the CI fields and the extra ones (identifiers, linked objects, sources)
+    var cols = Model.DisplayColumns.Count > 0 ? Model.DisplayColumns : CollectionPageModel.Visible(spec);
+    var pages = g.Total == 0 ? 1 : (int)Math.Ceiling(g.Total / (double)st.Size);
+    // a grid whose rows open a drawer carries one more column: the same content as a plain link, and the staged mark
+    var hasPanel = g.Rows.Any(r => Model.RowPanelLink(r) is not null);
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")));
+    string AriaSort(GridColumn c) => st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> selection =
+        @<form id="@(id)-s" method="get" action="@route">
+            @foreach (var kv in req.Where(k => k.Key is not ("sel" or "handler" or "p")))
+            {
+                foreach (var v in kv.Value) { <input type="hidden" name="@kv.Key" value="@v" /> }
+            }
+            <div class="quickstrip" id="@(id)-strip" data-action-strip>
+                <strong><span data-selected-count>0</span> selected</strong>
+                <div class="actions">
+                    <button type="submit" data-show-selected>Show only these</button>
+                </div>
+            </div>
+        </form>;
+    var toolbar = new GridToolbar
+    {
+        Id = id + "-tools", Total = g.Total, Skip = st.Skip, Count = g.Rows.Count, Page = st.Page, Pages = pages, Noun = "CI(s)",
+        PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))), FirstLast = true, AlwaysShowPage = true, Actions = selection,
+        Size = st.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+    };
+    // THE shared filter (MultiFilter) for every filter above the grid. A choice's count is the CIs holding it -- shown only
+    // while nothing else narrows the list (then it is exactly what ticking it gives)
+    // #855 M25: the choices are counted over the CIs of the lifecycle in force (CiViews.CiFacetsAsync), so the lifecycle alone
+    // never hides the counts -- under the active default they are the active CIs'
+    var narrowed = st.Filters.Any(f => f.Key != "Lifecycle") || st.Search is not null;
+    long? CountOf(string facet, string value) => narrowed ? null : Model.Facets.FirstOrDefault(f => f.Facet == facet && string.Equals(f.Value, value, StringComparison.Ordinal))?.N;
+    SI.Management.Web.Pages.MultiFilter Filter(string param, string label, string facet, IEnumerable<string> values, Func<string, string>? words = null) => new()
+    {
+        Id = id + "-mf-" + System.Text.RegularExpressions.Regex.Replace(param, "[^A-Za-z0-9_-]", "-"), Name = param, Label = label, Form = id + "-f",
+        Choices = SI.Management.Web.Pages.MultiFilter.Plain(values, words, v => CountOf(facet, v)), Chosen = SI.Management.Web.Pages.MultiFilter.ValuesOf(req, param),
+    };
+    // owner 2026-10-19: the default filters in ONE order (CiColumns.DefaultFilterOrder) -- class, asset (device) type, OS
+    // family, patch cycle, tier, lifecycle, component, environment, department -- the others after; a field the data
+    // model does not carry yet appears by itself once it is a prepared column with a value list
+    var ranked = new List<(int Rank, SI.Management.Web.Pages.MultiFilter Filter)>();
+    if (!Model.TileFilters.Contains("class")) ranked.Add((CiColumns.FilterRank("si_class"), Filter("class", "Class", "Class", Model.FacetValues("Class"))));
+    ranked.Add((CiColumns.FilterRank("si_asset_type"), Filter("type", "Asset type", "AssetType", Model.FacetValues("AssetType"))));
+    ranked.Add((CiColumns.FilterRank(CiColumns.AssetSubtypeField), Filter("subtype", "Asset subtype", "AssetSubtype", Model.FacetValues("AssetSubtype"))));
+    if (!Model.TileFilters.Contains("tier")) ranked.Add((CiColumns.FilterRank("si_tier"), Filter("tier", "Tier", "Tier", ProDataFilters.Tiers, TierLabel)));
+    if (!Model.TileFilters.Contains("tiersetby")) ranked.Add((CiColumns.FilterRank("si_tier_set_by"), Filter("tiersetby", "Tier decided by", CiColumns.TierSetByKey, Model.TierSetByChoices(), CiColumns.TierSetByText)));
+    // #406 the lifecycle with its counts (active, not seen, retired) and the page's NAMED default (active): while the default
+    // is on, its value shows ticked; "All" sends lifecycle=all, which clears the default instead of bringing it back. Its
+    // counts are shown while nothing BUT the lifecycle narrows the list (ticking another state OR-s it in)
+    var lifeNarrowed = st.Filters.Any(f => f.Key != "Lifecycle") || st.Search is not null;
+    var lifeChosen = Model.LifecycleDefaulted && Model.DefaultLifecycle is { } dlv
+        ? new[] { dlv }
+        : SI.Management.Web.Pages.MultiFilter.ValuesOf(req, "lifecycle").Where(v => !string.Equals(v, CiLifecycleDefinitions.ClearedFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
+    ranked.Add((CiColumns.FilterRank("si_lifecycle"), new SI.Management.Web.Pages.MultiFilter
+    {
+        Id = id + "-mf-lifecycle", Name = "lifecycle", Label = "Lifecycle", Form = id + "-f",
+        AllValue = Model.DefaultLifecycle is null ? null : CiLifecycleDefinitions.ClearedFilter,
+        Choices = Model.LifecycleChoices().Select(c => new SI.Management.Web.Pages.FilterChoice(c.Value, c.Label, lifeNarrowed ? null : c.Count)).ToList(),
+        Chosen = lifeChosen,
+        Note = string.Join(" ", Model.LifecycleRules.States.Select(s => s.Definition)),
+    }));
+    // the context filters: a prepared column with a short list of values (environment, MFA strength, risk level, device
+    // value, Defender plan tier, department)
+    // #855 item 3: the onboarding status (next to the lifecycle) in its words, its stored order first
+    foreach (var cf in Model.ContextFilters)
+    {
+        var onboarding = cf.Field == CiColumns.OnboardingField;
+        var cfValues = onboarding ? CiColumns.OnboardingStatuses.Where(v => Model.FacetValues(cf.Key).Contains(v, StringComparer.OrdinalIgnoreCase)).Concat(Model.FacetValues(cf.Key).Where(v => !CiColumns.OnboardingStatuses.Contains(v, StringComparer.OrdinalIgnoreCase))).ToList() : Model.FacetValues(cf.Key);
+        ranked.Add((CiColumns.FilterRank(cf.Field), Filter(SI.Management.Web.Pages.Cis.IndexModel.ContextFilterParam(cf), onboarding ? "Onboarding" : cf.Label, cf.Key, cfValues, onboarding ? (Func<string, string>)CiColumns.OnboardingLabel : null)));
+    }
+    var filters = ranked.OrderBy(r => r.Rank).Select(r => r.Filter).ToList();
+    var activeFilters = st.Filters.Count;
+    var exports = SI.Management.Web.Columns.ViewExports.Of(Model.HandlerLink).ForGrid(id + "-s", "#" + id + "-strip");
+    <section class="card" aria-labelledby="@(id)-h" id="@(id)-grid">
+        @* every CI count says what it includes (owner 2026-10-19): all of them, or the ones the filters keep *@
+        @{
+            // owner 2026-10-19: what the list shows, from its real state -- the lifecycle filter (with the numbers from the
+            // settings), the filters, the search and the selection as chips, "Show everything"
+            var rules = Model.LifecycleRules;
+            var lifeFilter = st.Filters.FirstOrDefault(f => f.Key == "Lifecycle");
+            var scopeChips = new List<SI.Management.Web.Pages.ScopeChip>();
+            if (st.Search is not null) { scopeChips.Add(new("Search: " + st.Search, Model.Link(("q", null)))); }
+            foreach (var f in st.Filters)
+            {
+                var chipText = f.Kind switch
+                {
+                    GridFilter.Dates => CollectionPageModel.DateWords(f),
+                    GridFilter.Range => Fmt.RangeWords(f.Low, f.High),
+                    GridFilter.Contains => f.Text ?? "",
+                    _ => string.Join(" or ", f.Values.Select(v => f.Key == "Tier" ? TierLabel(v) : f.Key == CiColumns.TierSetByKey ? CiColumns.TierSetByText(v) : v)),
+                };
+                // #406 the lifecycle chip says its states in words (and "(default)" for the page's named default); removing it
+                // clears to every state (lifecycle=all) -- dropping the parameter would bring the default back
+                if (f.Key == "Lifecycle")
+                {
+                    var lifeWords = string.Join(" or ", f.Values.Select(CiLifecycleDefinitions.Label)) + (Model.LifecycleDefaulted ? " (default)" : "");
+                    scopeChips.Add(new((spec.Column(f.Key)?.Label ?? f.Key) + ": " + lifeWords, Model.DefaultLifecycle is null ? Model.Link(("lifecycle", null)) : Model.LifecycleClearLink));
+                    continue;
+                }
+                scopeChips.Add(new((spec.Column(f.Key)?.Label ?? f.Key) + ": " + chipText, Model.Link((Model.FilterParam(f.Key), null))));
+            }
+            if (st.Selected.Count > 0) { scopeChips.Add(new("Only the " + Fmt.Int(st.Selected.Count) + " selected CI(s)", Model.Link(("sel", null)))); }
+            var scope = new SI.Management.Web.Pages.ViewScope
+            {
+                Lifecycle = Model.LifecycleDefaulted
+                    ? Model.LifecycleRules.DefaultFilterText
+                    : lifeFilter is null
+                    ? "every CI, whatever its lifecycle (active, not seen or retired; active = seen by a source within the last " + SI.Management.Core.ProData.CiLifecycleRules.Days(rules.SeenWithinDays) + ")"
+                    : "only " + string.Join(" or ", lifeFilter.Values.Select(v => CiLifecycleDefinitions.Label(v).ToLowerInvariant())) + " CIs (active = seen by a source within the last " + SI.Management.Core.ProData.CiLifecycleRules.Days(rules.SeenWithinDays) + ")",
+                LifecycleDefaulted = Model.LifecycleDefaulted,
+                // "Show everything" = no filter at all, the lifecycle default cleared too (a page with a named default)
+                Chips = scopeChips, ShowEverythingHref = scopeChips.Count > 0 ? (Model.DefaultLifecycle is null ? route : route + "?lifecycle=" + CiLifecycleDefinitions.ClearedFilter) : null, Definitions = rules.Definitions,
+            };
+        }
+        <partial name="~/Pages/Shared/_ViewScope.cshtml" model="scope" />
+        @{ var countKind = st.Search is null && st.Selected.Count == 0 && (st.Filters.Count == 0 ? "all" : Model.LifecycleDefaulted && st.Filters.Count == 1 ? "active" : null) is { } ck ? ck : "filtered"; }
+        <h2 id="@(id)-h" data-ci-count="@countKind">@Fmt.Int(g.Total) @(g.Total == 1 ? "CI" : "CIs") (@countKind)</h2>
+
+        @* the filter form: its controls sit in the toolbar row and its Filters panel (form attribute) *@
+        <form id="@(id)-f" method="get" action="@route" role="search" aria-label="Search and filter the CIs">
+            @foreach (var s in st.Selected) { <input type="hidden" name="sel" value="@s" /> }
+            @foreach (var tile in new[] { "class", "tier", "tiersetby" }.Where(Model.TileFilters.Contains))
+            {
+                foreach (var v in Chosen(tile)) { <input type="hidden" name="@tile" value="@v" /> }
+            }
+        </form>
+        @* THE view toolbar, one row (owner 2026-10-19): Search · Filters · Columns · Layout · Export *@
+        <div class="data-toolbar" role="group" aria-label="Search, filters, columns, layout and export">
+            <div class="gridbar dt-search">
+                <label for="@(id)-q" class="sr-only">Search</label>
+                <input form="@(id)-f" id="@(id)-q" type="search" name="q" value="@st.Search" placeholder="Search: name, CI id or CMDB" maxlength="200" data-search data-grid-search />
+                <button form="@(id)-f" type="submit">Apply</button> <a class="button secondary" href="@route">Clear</a>
+            </div>
+            <details class="tool-menu filters-menu" data-filters-menu>
+                <summary class="tool-button">Filters@(activeFilters > 0 ? " · " + Fmt.Int(activeFilters) + " active" : "")</summary>
+                <div class="tool-panel filters-panel">
+                    @foreach (var mf in filters) { <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div> }
+                    <div>
+                        <label for="@(id)-sort">Sort by</label>
+                        <select form="@(id)-f" id="@(id)-sort" name="sort">@foreach (var (k, l) in CiColumns.Sorts) { <option value="@k" selected="@(st.Sort == k)">@l</option> }</select>
+                    </div>
+                    <div>
+                        <label for="@(id)-dir">Order</label>
+                        <select form="@(id)-f" id="@(id)-dir" name="dir"><option value="desc" selected="@st.Desc">Highest / newest first</option><option value="asc" selected="@(!st.Desc)">Lowest / oldest first</option></select>
+                    </div>
+                    @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+                    <input form="@(id)-f" type="hidden" name="size" value="@st.Size" />
+                    <div class="actions"><button form="@(id)-f" type="submit">Apply</button> <a class="button secondary" href="@route">Clear</a></div>
+                </div>
+            </details>
+            @{
+                // owner 2026-10-19: "+ Add filter" -- every other field the CI holds as a typed column, with the control of its
+                // type; the fields it cannot offer are listed with the reason
+                var addable = Model.AddableFilters;
+                var notFilterable = Model.NotFilterable;
+            }
+            @if (addable.Count > 0)
+            {
+                <details class="tool-menu add-filter" data-add-filter>
+                    <summary class="tool-button">+ Add filter</summary>
+                    <div class="tool-panel filters-panel">
+                        <p class="hint add-filter-hint">Every CI field held as a typed column. A filter added here is in the address, in a saved layout and in every export, like any other.</p>
+                        @foreach (var c in addable)
+                        {
+                            var p = SI.Management.Web.Pages.Cis.IndexModel.ContextFilterParam(c);
+                            var given = Chosen(p);
+                            <div data-add-filter-column="@c.Key">
+                                @switch (c.Filter)
+                                {
+                                    case GridFilter.Values or GridFilter.Tokens:
+                                        var amf = new SI.Management.Web.Pages.MultiFilter
+                                        {
+                                            Id = id + "-af-" + c.Key, Name = p, Label = c.Label, Form = id + "-f", Fill = true,
+                                            Chosen = SI.Management.Web.Pages.MultiFilter.ValuesOf(req, p), CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key,
+                                        };
+                                        <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="amf" />
+                                        break;
+                                    case GridFilter.Range:
+                                        <label for="@(id)-af-@c.Key">@c.Label (from..to)</label>
+                                        <input form="@(id)-f" id="@(id)-af-@c.Key" type="text" name="@p" value="@given.FirstOrDefault()" placeholder="e.g. 7..10, 7.. or ..10" maxlength="40" inputmode="decimal" />
+                                        break;
+                                    case GridFilter.Contains:
+                                        <label for="@(id)-af-@c.Key">@c.Label (contains)</label>
+                                        <input form="@(id)-f" id="@(id)-af-@c.Key" type="search" name="@p" value="@given.FirstOrDefault()" maxlength="200" />
+                                        break;
+                                    case GridFilter.Dates:
+                                        var dfm = new SI.Management.Web.Pages.DateFilter(id + "-af-" + c.Key, p, c.Label, id + "-f", given.FirstOrDefault(), v => Model.Link((p, v)));
+                                        <partial name="~/Pages/Shared/_DateFilter.cshtml" model="dfm" />
+                                        break;
+                                }
+                            </div>
+                        }
+                        <div class="actions"><button form="@(id)-f" type="submit">Apply</button></div>
+                        @if (notFilterable.Count > 0)
+                        {
+                            <details class="add-filter-none" data-not-filterable>
+                                <summary>Fields that cannot be filtered (@Fmt.Int(notFilterable.Count))</summary>
+                                <ul>@foreach (var (label, why) in notFilterable) { <li><strong>@label</strong>: @why</li> }</ul>
+                            </details>
+                        }
+                    </div>
+                </details>
+            }
+            @if (Model.Chooser(isAdmin) is { } chooser) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="chooser" /> }
+            <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
+        </div>
+
+        @* the filters, the search and the selection are chips of the "What you're looking at" line above *@
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+
+        <div class="table-wrap" data-selectable data-strip="#@(id)-strip">
+            <table class="findings grid" data-grid="@id" aria-describedby="@(id)-h">
+                <thead>
+                    <tr>
+                        <th class="sel"><input type="checkbox" data-select-all aria-label="Select every CI on this page" /></th>
+                        @foreach (var c in cols)
+                        {
+                            <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key">
+                                @if (c.Sortable) { <a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @c.Label }
+                            </th>
+                        }
+                        @if (hasPanel) { <th scope="col" class="rowopen">Tier details</th> }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (g.Rows.Count == 0)
+                    {
+                        <tr><td colspan="@(cols.Count + (hasPanel ? 2 : 1))" class="hint">No CI matches.</td></tr>
+                    }
+                    @foreach (var row in g.Rows)
+                    {
+                        var key = Model.Key(row);
+                        // the row's start tag is written out: the row-click hook (data-row-drawer) is on a row ONLY when the
+                        // page gives it an address -- an empty one would mark every row as clickable
+                        var drawer = Model.RowDrawer(row);
+                        <text>@Html.Raw("<tr data-key=\"" + HtmlEncoder.Encode(key ?? "") + "\"" + (string.IsNullOrEmpty(drawer) ? "" : " data-row-drawer=\"" + HtmlEncoder.Encode(drawer) + "\"") + ">")</text>
+                            <td class="sel"><input form="@(id)-s" type="checkbox" name="sel" value="@key" data-select-row checked="@(st.Selected.Contains(key ?? ""))" aria-label="Select this CI" /></td>
+                            foreach (var c in cols)
+                            {
+                                var text = Model.CellText(c, row);
+                                if (SI.Management.Web.Columns.GridLayout.IsExtra(c))
+                                {
+                                    <td class="wrap" data-col="@c.Key" data-extra>@SI.Management.Web.Columns.DataCellHtml.Render(text)</td>
+                                    continue;
+                                }
+                                var href = text.Length == 0 ? null : Model.CellLink(c, row);
+                                // #856 a CI without a name: its IP / MAC address or source id, MARKED as a fallback (never its name)
+                                var noName = c.Key == "Name" && text.Length == 0 ? SI.Management.Web.Pages.Cis.IndexModel.NameFallback(row) : null;
+                                <td class="@(c.Type == GridType.Number ? "num" : "wrap")" data-col="@c.Key">
+                                    @if (c.Type == GridType.Tier && text.Length > 0) { <span class="tierdot t@(CollectionPageModel.Cell0(row, c.Key))"></span> }
+                                    @if (noName is not null) { <a href="@Model.CellLink(c, row)" data-name-fallback="@noName.Kind"><span class="@SI.Management.Core.ProData.CiDisplayName.CssClass" title="@noName.Title">@noName.Value</span> <span class="hint">@noName.Hint</span></a> }
+                                    else if (c.Type == GridType.Date && CollectionPageModel.Moment(c, row) is { } when) { @Fmt.Time(when) }
+                                    else if (href is not null) { <a href="@href">@text</a> }
+                                    else { @SI.Management.Web.Pages.Cis.IndexModel.CellShown(c, text) }
+                                </td>
+                            }
+                            if (hasPanel)
+                            {
+                                var panel = Model.RowPanelLink(row);
+                                var mark = Model.RowMark(row);
+                                var rowName = row.TryGetValue("Name", out var nm) && nm is string name && name.Length > 0 ? name : SI.Management.Web.Pages.Cis.IndexModel.NameFallback(row)?.Value ?? key;
+                                <td class="rowopen" data-row-panel>
+                                    @if (panel is not null) { <a href="@panel" data-drawer-link aria-label="How the tier of @rowName was decided, and what you can change">Details</a> }
+                                    @if (mark is not null) { <span class="badge warn" data-staged>@mark</span> }
+                                </td>
+                            }
+                        <text>@Html.Raw("</tr>")</text>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}

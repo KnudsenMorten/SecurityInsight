@@ -1,0 +1,237 @@
+#Requires -Version 5.1
+<#
+    SchemaOutput stage. Three sinks:
+      1. posture-rules-pending/<engine>/<NewRuleName>.yaml  -- AI drafts
+         (NEVER auto-promoted; opt-in via $global:SI_LoadPendingRules to
+         load pending rules at runtime; promotion = move to -locked/)
+      2. risk-queries-pending/<NewRuleName>.kql              -- standalone
+         risk-analysis KQL for review
+      3. SI_SchemaCatalog_CL                                 -- audit row
+         per finding (proposed or skipped) so KQL can answer "what new
+         properties has Microsoft shipped lately + what did we draft for them"
+      4. schema-baseline.json (staging blob) -- updated baseline so next
+         run's diff is correct.
+#>
+
+# Azure access: plain REST, no PowerShell modules (engine/_shared/SI-AzRest.ps1).
+if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-AzRest.ps1') }
+
+function Invoke-SISchemaOutput {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$RunContext)
+
+    if ($RunContext.StorageContext.Mode -eq 'Mock') {
+        return [pscustomobject]@{ Stage='SchemaOutput'; Summary='mock (skipped)' }
+    }
+    if (-not $RunContext.SchemaCatalog) {
+        return [pscustomobject]@{ Stage='SchemaOutput'; Summary='no catalog -- skipped' }
+    }
+
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $proposals = @($RunContext.SchemaProposals)
+
+    # A dry run (#257) writes no draft, no audit row and no baseline -- the baseline would hide these findings
+    # from the next real sweep.
+    if ([bool]$RunContext.WhatIf) {
+        $withDraft = @($proposals | Where-Object { -not [string]::IsNullOrWhiteSpace($_.PostureRuleYaml) }).Count
+        return [pscustomobject]@{ Stage = 'SchemaOutput'; DraftsWritten = 0; AuditRows = 0
+                                  Summary = ('dry run: {0} finding(s), {1} with a draft rule -- nothing written' -f $proposals.Count, $withDraft) }
+    }
+
+    # ---- Sink 1: write YAML drafts to posture-rules-pending/<engine>/ ----
+    $drafted = 0
+    foreach ($p in $proposals) {
+        if ([string]::IsNullOrWhiteSpace($p.PostureRuleYaml)) { continue }
+        $engine = if ($p.Engine -in 'endpoint','identity','azure','crossengine') { $p.Engine } else { 'endpoint' }
+        $folder = Join-Path $siRoot (Join-Path 'posture-rules-pending' $engine)
+        if (-not (Test-Path $folder)) { New-Item -Path $folder -ItemType Directory -Force | Out-Null }
+
+        # Filename derived from finding -- deterministic so the same finding
+        # next sweep updates the same file (reviewers see proper diffs).
+        $key = switch ($p.Finding.Type) {
+            'newProperty' { ('Property_{0}_{1}' -f $p.Finding.Label, ($p.Finding.Path -replace '[^A-Za-z0-9]','_')) }
+            'newEdge'     { ('Edge_{0}'         -f ($p.Finding.EdgeLabel -replace '[^A-Za-z0-9]','_')) }
+            'newTriple'   { ('Triple_{0}__{1}__{2}' -f $p.Finding.Source, ($p.Finding.Edge -replace '[^A-Za-z0-9]','_'), $p.Finding.Target) }
+            'newColumn'   { ('Column_{0}_{1}'   -f $p.Finding.Table, $p.Finding.Column) }
+            default       { 'Unknown_{0}' -f [guid]::NewGuid().ToString().Substring(0,8) }
+        }
+        $path = Join-Path $folder ($key + '.yaml')
+        try {
+            Set-Content -Path $path -Value $p.PostureRuleYaml -Encoding utf8 -Force
+            $drafted++
+        } catch {
+            Write-Warning ('Failed to write draft {0}: {1}' -f $path, $_.Exception.Message)
+        }
+
+        # Sink 2: companion .kql when AI provided one
+        if (-not [string]::IsNullOrWhiteSpace($p.RiskQueryKql)) {
+            $kqlFolder = Join-Path $siRoot 'risk-queries-pending'
+            if (-not (Test-Path $kqlFolder)) { New-Item -Path $kqlFolder -ItemType Directory -Force | Out-Null }
+            $kqlPath = Join-Path $kqlFolder ($key + '.kql')
+            try { Set-Content -Path $kqlPath -Value $p.RiskQueryKql -Encoding utf8 -Force } catch { }
+        }
+    }
+
+    # ---- Sink 3: SI_SchemaCatalog_CL audit ----
+    $auditRows = New-Object System.Collections.ArrayList
+    foreach ($p in $proposals) {
+        $f = $p.Finding
+        [void]$auditRows.Add([pscustomobject]@{
+            CollectionTime  = $RunContext.CollectionTime
+            SI_RunId        = $RunContext.RunId
+            FindingType     = $f.Type
+            Label           = if ($f.Label) { $f.Label } elseif ($f.EdgeLabel) { $f.EdgeLabel } elseif ($f.Source) { $f.Source } elseif ($f.Table) { $f.Table } else { '' }
+            Detail          = if ($f.Path) { $f.Path } elseif ($f.Edge) { ('{0} -> {1}' -f $f.Edge, $f.Target) } elseif ($f.Column) { ('{0} ({1})' -f $f.Column, $f.ColumnType) } else { '' }
+            Relevance       = $p.Relevance
+            ProposedEngine  = $p.Engine
+            ProposedRuleType= $p.RuleType
+            DraftWritten    = -not [string]::IsNullOrWhiteSpace($p.PostureRuleYaml)
+            Reasoning       = $p.Reasoning
+        })
+    }
+
+    if ($auditRows.Count -gt 0 -and ($RunContext.Sinks -contains 'LA')) {
+        try {
+            $auditTable = if ($global:SI_SchemaCatalogTable) { [string]$global:SI_SchemaCatalogTable } else { 'SI_SchemaCatalog' }
+            $auditDcr   = if ($global:SI_SchemaCatalogDcr)   { [string]$global:SI_SchemaCatalogDcr }   else { 'dcr-si-schema-catalog' }
+            # v2.2.237 -- mirror Invoke-Output.ps1 auth resolution. Prefer SI_SPN_*
+            # (unified Bootstrap-Auth output) with cert OR secret; fall back to
+            # SI_LogIngest_* legacy globals; MI when SI_UAMI_ClientId is set.
+            $_appId   = if ($global:SI_SPN_AppId)           { $global:SI_SPN_AppId }           else { $global:SI_LogIngest_AppId }
+            $_secret  = if ($global:SI_SPN_Secret)          { $global:SI_SPN_Secret }          else { $global:SI_LogIngest_Secret }
+            $_tenant  = if ($global:SI_SPN_TenantId)        { $global:SI_SPN_TenantId }        else { $global:SI_LogIngest_TenantId }
+            $_certThumb = [string]$global:SI_SPN_CertThumbprint
+            # v2.2.243 -- auto-detect cert store (LocalMachine vs CurrentUser).
+            $_certStore = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation }
+                          elseif ($_certThumb) {
+                              $_clean = $_certThumb -replace '\s',''
+                              if (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue) {
+                                  $_resolved = 'LocalMachine'
+                                  foreach ($_s in 'LocalMachine','CurrentUser') {
+                                      $_c = Get-ChildItem "Cert:\$_s\My" -ErrorAction SilentlyContinue |
+                                            Where-Object { $_.Thumbprint -eq $_clean -and $_.HasPrivateKey } |
+                                            Select-Object -First 1
+                                      if ($_c) { $_resolved = $_s; break }
+                                  }
+                                  $_resolved
+                              } else {
+                                  # #209: no Cert: drive (a Linux container) -- read the X509Store instead.
+                                  if (-not (Get-Command Get-SICertStoreLocation -ErrorAction SilentlyContinue)) {
+                                      . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'auth/Find-SICertificate.ps1')
+                                  }
+                                  Get-SICertStoreLocation -Thumbprint $_clean
+                              }
+                          } else { 'LocalMachine' }
+            $useMi      = -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+            $useCert    = -not $useMi -and -not [string]::IsNullOrWhiteSpace($_certThumb)
+            $authParams = if ($useMi) {
+                @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
+            } elseif ($useCert) {
+                @{ AzAppId = $_appId; AzAppCertificateThumbprint = $_certThumb; AzAppCertificateStoreLocation = $_certStore; TenantId = $_tenant }
+            } else {
+                @{ AzAppId = $_appId; AzAppSecret = $_secret; TenantId = $_tenant }
+            }
+
+            Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)
+            Write-SIInfo ('audit rows  : {0}' -f $auditRows.Count)
+            # 🔴 THE CAP IS GONE, AND THE WARNING IT PRINTED WAS FALSE -- 2026-08-31.
+            # It said *"only the first N row(s) are ingested … {x} row(s) are NOT in Log Analytics"*,
+            # but the POST below sends `@($auditRows)` -- every row. The cap applied ONLY to the schema
+            # declaration, which is precisely where it must not: the module declares the union of
+            # property names across what it is handed, so capping there dropped COLUMNS (audit #48),
+            # while the message claimed it was dropping ROWS. Wrong on both halves.
+            # 🔒 The knob is still READ, so a customer who set it is told it no longer does anything
+            # rather than left to discover a silent no-op -- this codebase's own rule about inert
+            # settings.
+            if ($global:SI_SchemaAuditRowCap -gt 0) {
+                Write-SIWarn ('audit rows  : $global:SI_SchemaAuditRowCap is set ({0}) but no longer caps anything. It only ever limited the SCHEMA sample, which silently dropped columns; all {1} row(s) are ingested.' -f `
+                    [int]$global:SI_SchemaAuditRowCap, $auditRows.Count)
+            }
+            # v2.2.246 -- same DCR/DCE name-collision guard as Stage Output.
+            # AzLogDcrIngestPS resolves names against $global:AzD*Details via
+            # name-only Where-Object; cross-scope same-named records hijack
+            # the lookup and 4xx the ingest. Build + scope-filter the caches
+            # before calling CheckCreateUpdate. Helper is defined in
+            # Invoke-Output.ps1 (dot-sourced by the engine runner).
+            $global:AzDceDetails = Get-SIDceList @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-SIDcrList @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'schema-pre-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
+            Write-SIInfo '-> CheckCreateUpdate-TableDcr-Structure'
+            # 🔴 THE FULL SET DECIDES THE SCHEMA -- CORRECTED 2026-08-31. `-Data` was
+            # `Select-Object -First $auditCap` (default 50) while the POST below sends
+            # `@($auditRows)` -- ALL of them. The module declares the UNION of property names across
+            # whatever it is HANDED, so any column first appearing on row 51 was never declared and
+            # every value for it was silently DROPPED AT INGEST.
+            # 📌 This is AUDIT #48 exactly, in a place it was not fixed: there, a `-First 100`
+            # sample on the RA Detailed export declared 69 of 151 columns and dropped 82 -- 57 of
+            # them holding real data, because RecommendedAction/RemediationOptions first appear on
+            # row 596. The cap belongs on what is POSTED, if anywhere, never on what is DECLARED.
+            #
+            # 🔴 ABOVE THE CALL, NOT INSIDE IT (audit #102, 2026-09-02). Written between two
+            # backtick-continued argument lines, **a comment TERMINATES the continuation** and every
+            # argument after it is dropped -- including the `-Data` this comment was added to explain.
+            # Its twin in the correlation engine failed loudly on exactly that; here the call sits
+            # inside a try/catch, so the audit table simply stopped being maintained.
+            $null = Update-SILogTableSchema `
+                -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
+                @authParams `
+                -DceName                                    $global:SI_DceName `
+                -DcrName                                    $auditDcr `
+                -DcrResourceGroup                           $global:SI_DcrResourceGroup `
+                -TableName                                  $auditTable `
+                -Data                                       @($auditRows) `
+                -LogIngestServicePricipleObjectId           (Get-SILogIngestObjectId) `
+                -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+                -AzLogDcrTableCreateFromAnyMachine          $true `
+                -AzLogDcrTableCreateFromReferenceMachine    @()
+            Write-SIInfo '-> waiting 15s for ARM eventual consistency...'
+            Start-Sleep -Seconds 15
+            # Re-scope-filter post-create so Post-* resolves to the local-scope DCR.
+            $global:AzDceDetails = Get-SIDceList @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-SIDcrList @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'schema-post-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
+
+            $payload = @($auditRows)
+            # a Linux container has no COMPUTERNAME, and an empty value fails the parameter binding
+            $__siHost = if ($env:COMPUTERNAME) { [string]$env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() }
+            $payload = Add-SIColumnData -Data $payload `
+                            -Column1Name Computer     -Column1Data $__siHost `
+                            -Column2Name ComputerFqdn -Column2Data $__siHost `
+                            -Column3Name UserLoggedOn -Column3Data 'container'
+            $payload = Repair-SILogColumnName -Data $payload
+            $payload = Format-SILogRowsToSchema -Data $payload
+            Write-SIInfo ('-> Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output (rows={0})' -f $payload.Count)
+            $null = Send-SILogData `
+                -DceName $global:SI_DceName -DcrName $auditDcr -Data $payload -TableName $auditTable @authParams
+        } catch {
+            Write-Warning ('SI_SchemaCatalog ingest failed: {0}' -f $_.Exception.Message)
+        }
+    }
+
+    # ---- Sink 4: update baseline blob so next run can diff ----
+    try {
+        $tmp = New-TemporaryFile
+        $RunContext.SchemaCatalog | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path $tmp.FullName -Encoding utf8
+        Set-SIAzStorageBlobContent -File $tmp.FullName -Container $RunContext.StagingContainer -Blob 'schema-baseline.json' -Context $RunContext.StorageContext.AzContext -Force | Out-Null
+        Remove-Item -Path $tmp.FullName -Force
+    } catch {
+        Write-Warning ('Failed to write schema baseline: {0}' -f $_.Exception.Message)
+    }
+
+    [pscustomobject]@{
+        Stage         = 'SchemaOutput'
+        DraftsWritten = $drafted
+        AuditRows     = $auditRows.Count
+        Summary       = ('{0} drafts -> posture-rules-pending/, {1} audit rows -> SI_SchemaCatalog_CL' -f $drafted, $auditRows.Count)
+    }
+}

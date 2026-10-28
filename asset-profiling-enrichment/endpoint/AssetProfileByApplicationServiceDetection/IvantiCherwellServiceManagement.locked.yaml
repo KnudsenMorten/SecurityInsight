@@ -1,0 +1,21 @@
+id:        IvantiCherwellServiceManagement
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Cherwell Service Management'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Cherwell Service Management'
+
+detections:
+  - id: IvantiCherwellServiceManagement
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cherwell_service_management*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

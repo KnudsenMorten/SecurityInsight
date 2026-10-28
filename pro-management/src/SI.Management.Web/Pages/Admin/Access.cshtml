@@ -1,0 +1,165 @@
+@page
+@model SI.Management.Web.Pages.Admin.AccessModel
+@{
+    ViewData["Title"] = "Access";
+    var e = Model.Editing;
+    var isNew = e is null || Model.EditingIsNew;
+    var editing = e is not null && !Model.EditingIsNew;
+    var delegated = e?.Role == SiRole.Delegated;
+}
+<h1>Access <span class="badge">people and roles</span></h1>
+<p class="lede">Who can use SecurityInsight and what they may do. Add a person or a group below, give them a role, and they can sign in at once. A person who is not listed here sees nothing -- only a page saying they have no access yet.</p>
+<details class="help" data-access-help>
+    <summary>The four roles, and how access works</summary>
+    <ul>
+        <li><strong>Reader</strong> -- every view, export and the chat; no changes.</li>
+        <li><strong>Delegated</strong> -- what an Admin can change, but only inside the scope you choose: exemptions, overrides, tier moves and reviews for the chosen security domains, optionally only some asset kinds and tiers. Read-only everywhere else; the Admin pages stay closed.</li>
+        <li><strong>Admin</strong> -- everything in the installation except this page and the installation's own lifecycle.</li>
+        <li><strong>SuperAdmin</strong> -- also this page, the licence, updates and template releases, and support access. There is always at least one SuperAdmin, and you cannot lower your own access -- another SuperAdmin can.</li>
+    </ul>
+    <p>The role given here is the role the person has. Roles given earlier in Microsoft Entra (on the enterprise application <em>SecurityInsight</em>) were moved into this table once, marked "carried over from Entra" -- nobody gained or lost access by it. After that, changing or removing a person here is all it takes.</p>
+    <p><strong>Send SecurityInsight mail to</strong>: an admin account often has no mailbox anyone reads. Give the person's normal mail address here and every SecurityInsight mail to that account -- reports, alerts, approvals -- goes there instead (never to both). Leave it empty to use the account's own mail. The table shows where each person's mail goes.</p>
+    <p>A change applies within a few seconds. A group's members get the group's role@(Model.NameLookup ? "" : " when their sign-in carries the group"). Every change is in the change history with your name and reason.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-access-error>@Model.Error</div> }
+@if (!Model.TableExists)
+{
+    <div class="notice warn" role="status">@SI.Management.Web.Auth.SqlAccessStore.MissingTableMessage. Apply the Pro settings schema (sql\si-pro-settings.sql) -- setup\Import-SIProSettings.ps1 -CreateSchema does it -- and reload.</div>
+}
+else
+{
+    <section class="card" aria-labelledby="h-add" data-access-add>
+        <h2 id="h-add">@(editing ? "Change " + e!.DisplayName : "Add a person or group")</h2>
+        <form method="post" asp-page-handler="Save" class="stack" data-access-form>
+            <input type="hidden" name="Version" value="@(editing ? Fmt.Raw(e!.Version) : "")" />
+            <input type="hidden" name="AccountMail" value="@e?.AccountMail" data-access-mail />
+            @if (isNew && Model.NameLookup)
+            {
+                @* #446 / #765: find the person (a member or a guest) or the group by name or mail -- the picker fills the fields below *@
+                <div class="picker" data-access-picker data-search-url="/Admin/Access?handler=Search">
+                    <label for="a-find">Person or group</label>
+                    <input id="a-find" type="search" autocomplete="off" spellcheck="false" placeholder="Start typing a name or mail address (guests too)"
+                           role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="a-find-list" data-picker-input value="@(Model.EditingIsNew ? e?.DisplayName : null)" />
+                    <ul id="a-find-list" class="picker-list" role="listbox" hidden data-picker-list></ul>
+                    <p class="hint" data-picker-chosen hidden></p>
+                </div>
+            }
+            else if (isNew)
+            {
+                <p class="hint" data-access-nolookup>Searching people and groups by name is not switched on for this install: SecurityInsight needs read access to user and group names in Entra (the setup grants it). Until then, paste the person's or group's object id from the Entra admin center.</p>
+            }
+            <div class="filterbar">
+                <div class="wide">
+                    <label for="a-id">Entra object id (person or group)</label>
+                    <input id="a-id" type="text" name="PrincipalId" value="@e?.PrincipalId" required pattern="[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}" readonly="@editing" />
+                </div>
+                <div>
+                    <label for="a-type">Type</label>
+                    <select id="a-type" name="PrincipalType" data-access-type>
+                        <option value="User" selected="@(e?.PrincipalType != "Group")">Person</option>
+                        <option value="Group" selected="@(e?.PrincipalType == "Group")">Group</option>
+                    </select>
+                </div>
+                <div class="wide">
+                    <label for="a-name">Name shown</label>
+                    <input id="a-name" type="text" name="DisplayName" value="@e?.DisplayName" maxlength="256" required="@(!Model.NameLookup)" placeholder="@(Model.NameLookup ? "looked up from the directory when left empty" : "e.g. Identity team")" />
+                </div>
+                <div>
+                    <label for="a-role">Role</label>
+                    <select id="a-role" name="Role" data-access-role>
+                        @foreach (var r in SI.Management.Web.Pages.Admin.AccessModel.AssignableRoles)
+                        {
+                            <option value="@AccessClaims.Label(r)" selected="@((e?.Role ?? SiRole.Reader) == r)">@AccessClaims.Label(r)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="filterbar">
+                <div class="wide" data-access-forward hidden="@(e?.PrincipalType == "Group")">
+                    <label for="a-fwd">Send SecurityInsight mail to <span class="hint">(optional)</span></label>
+                    <input id="a-fwd" type="email" name="ForwardTo" value="@e?.ForwardTo" maxlength="320" autocomplete="off" spellcheck="false" placeholder="empty = the account's own mail" />
+                </div>
+                <div class="wide">
+                    <label for="a-reason">Reason</label>
+                    <input id="a-reason" type="text" name="Reason" required minlength="3" maxlength="400" placeholder="what the change history shows" />
+                </div>
+                <div class="actions">
+                    <button type="submit" data-access-save>Save</button>
+                    @if (e is not null) { <a class="button secondary" href="/Admin/Access">Cancel</a> }
+                </div>
+            </div>
+            <fieldset data-access-scope hidden="@(!delegated)">
+                <legend>Scope (Delegated only)</legend>
+                <p class="hint">Security domains this person or group looks after. Asset kinds and tiers narrow it further; leave them empty for every kind and tier.</p>
+                <p class="chips-label">Security domains</p>
+                <div class="chips" role="group" aria-label="Security domains">
+                    <label><input type="checkbox" name="ScopeDomains" value="*" checked="@(e?.Scope.AllDomains == true)" /> every domain</label>
+                    @foreach (var d in Model.Domains)
+                    {
+                        <label><input type="checkbox" name="ScopeDomains" value="@d" checked="@(e?.Scope.Domains.Contains(d, StringComparer.OrdinalIgnoreCase) == true)" /> @d</label>
+                    }
+                </div>
+                <p class="chips-label">Asset kinds</p>
+                <div class="chips" role="group" aria-label="Asset kinds">
+                    @foreach (var k in SecurityDomains.AssetKinds)
+                    {
+                        <label><input type="checkbox" name="ScopeKinds" value="@k" checked="@(e?.Scope.AssetKinds.Contains(k, StringComparer.OrdinalIgnoreCase) == true)" /> @k</label>
+                    }
+                </div>
+                <p class="chips-label">Tiers</p>
+                <div class="chips" role="group" aria-label="Tiers">
+                    @foreach (var t in new[] { "0", "1", "2", "3" })
+                    {
+                        <label><input type="checkbox" name="ScopeTiers" value="@t" checked="@(e?.Scope.Tiers.Contains(t) == true)" /> Tier @t</label>
+                    }
+                </div>
+            </fieldset>
+        </form>
+    </section>
+
+    <section class="card" aria-labelledby="h-list">
+        <h2 id="h-list">People with access <span class="badge">@Fmt.Int(Model.People.Count)</span></h2>
+        @if (Model.People.Count == 0) { <p class="hint">Nobody is listed yet. Add the first person above.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-access-list data-sortable>
+                    <thead><tr><th>Name</th><th>Type</th><th>Role</th><th>Scope</th><th>Mail goes to</th><th>Source</th><th>Changed</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var p in Model.People)
+                        {
+                            var a = p.Assignment;
+                            var dest = MailForward.Destination(a);
+                            var fwd = MailForward.Usable(a.ForwardTo);
+                            <tr id="p-@a.PrincipalId" data-principal="@a.PrincipalId" data-source="@(p.FromEntraOnly ? "entra" : a.CarriedOver ? "carried" : "si")" class="@(string.Equals(Model.Saved, a.PrincipalId, StringComparison.OrdinalIgnoreCase) ? "is-saved" : null)" data-saved="@(string.Equals(Model.Saved, a.PrincipalId, StringComparison.OrdinalIgnoreCase) ? "true" : null)">
+                                <td>@a.DisplayName @if (a.AccountMail is { Length: > 0 } am && !string.Equals(am, a.DisplayName, StringComparison.OrdinalIgnoreCase)) { <br /><span class="hint">@am</span> }</td>
+                                <td>@a.Kind</td>
+                                <td><span class="badge">@AccessClaims.Label(a.Role)</span></td>
+                                <td class="wrap">@(AccessClaims.IsScopeBound(a.Role) ? a.Scope.Describe() : "everywhere")</td>
+                                <td class="wrap" data-mail-to="@dest">@if (a.PrincipalType == AccessAssignment.Group) { <span class="hint">each member's own mail</span> }
+                                    else if (fwd is not null) { @((a.AccountMail ?? a.DisplayName) + " → " + fwd) }
+                                    else if (dest is not null) { @dest }
+                                    else { <span class="hint">their own mail</span> }</td>
+                                <td class="wrap">@p.Source</td>
+                                <td class="wrap">@(p.FromEntraOnly ? "" : a.UpdatedBy + ", " + Fmt.Time(a.UpdatedAt))</td>
+                                <td>
+                                    <a href="/Admin/Access?edit=@Uri.EscapeDataString(a.PrincipalId)">Change</a>
+                                    @if (!p.FromEntraOnly)
+                                    {
+                                        <form method="post" asp-page-handler="Remove" class="inline">
+                                            <input type="hidden" name="PrincipalId" value="@a.PrincipalId" />
+                                            <input type="hidden" name="Version" value="@a.Version" />
+                                            <label class="sr-only" for="rm-@a.PrincipalId">Reason to remove</label>
+                                            <input id="rm-@a.PrincipalId" type="text" name="Reason" placeholder="reason" required minlength="3" maxlength="400" />
+                                            <button type="submit" class="secondary">Remove</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}

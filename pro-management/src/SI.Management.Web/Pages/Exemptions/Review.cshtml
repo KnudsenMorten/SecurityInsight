@@ -1,0 +1,70 @@
+@page
+@model SI.Management.Web.Pages.Exemptions.ReviewModel
+@using SI.Management.Web.Exemptions
+@{
+    ViewData["Title"] = "Review exemptions";
+}
+<h1>Review exemptions</h1>
+<p class="lede">The exemptions of the security domains and categories you own@(Model.Domain is null ? "" : " -- " + DomainRoles.Label(Model.Domain, string.IsNullOrWhiteSpace(Model.Category) ? null : Model.Category)): extend those still needed (a new period from today), keep those that stay as they are, end the rest. Select one or many.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@if (Model.MyDomains.Count > 0) { <p class="hint" data-owned>You own: @string.Join(", ", Model.MyDomains). <a href="/Exemptions">All exemptions</a></p> }
+
+@if (Model.Rows.Count == 0 && Model.Error is null)
+{
+    <p class="hint">Nothing to review.</p>
+}
+else if (Model.Rows.Count > 0)
+{
+    <form method="post" data-selectable data-strip="#review-strip" data-review>
+        <input type="hidden" name="domain" value="@Model.Domain" /><input type="hidden" name="category" value="@Model.Category" />
+        @{
+            // #282: the review of the ticked exemptions sits ABOVE the table, in the shared grid toolbar
+            Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> review =
+                @<div class="quickstrip" id="review-strip">
+                    <strong><span data-selected-count>0</span> selected</strong>
+                    <div class="filterbar">
+                        <div>
+                            <label for="rv-action">Action</label>
+                            <select id="rv-action" name="ReviewAction">
+                                <option value="keep">Keep (reviewed, unchanged)</option>
+                                <option value="extend">Extend (new period from today)</option>
+                                <option value="end">End now</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="rv-period">New period (extend)</label>
+                            <select id="rv-period" name="Period">
+                                @foreach (var (v, l) in ExemptionPeriods.Choices(Model.Settings.AllowOpenEnded)) { <option value="@v" selected="@(v == Model.Period)">@l</option> }
+                            </select>
+                        </div>
+                        <div><label for="rv-date">Custom end date</label><input id="rv-date" type="date" name="CustomDate" value="@ExemptionPeriods.DefaultCustomDate(Model.Settings.DefaultMonths, Model.Now)" /></div>
+                        <div class="wide"><label for="rv-reason">Reason (required to end)</label><input id="rv-reason" type="text" name="Reason" maxlength="400" /></div>
+                        <div class="actions"><button type="submit">Apply</button></div>
+                    </div>
+                </div>;
+            var toolbar = new GridToolbar { Id = "review-tools", Total = Model.Rows.Count, Count = Model.Rows.Count, Noun = "exemption(s)", Actions = review };
+        }
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th class="sel" data-sort="off"><input type="checkbox" data-select-all aria-label="Select every exemption" /></th><th>Id</th><th>Domain</th><th>What</th><th>Reason</th><th>Until</th><th>State</th><th>Last reviewed</th></tr></thead>
+                <tbody>
+                    @foreach (var e in Model.Rows)
+                    {
+                        var st = e.State(Model.Now);
+                        var expiring = e.IsExpiringWithin(Model.Now, Math.Max(Model.Settings.ExpiryWarningDays, 1));
+                        var overdue = e.IsReviewOverdue(Model.Now, Model.Settings.ReviewOverdueDays);
+                        <tr data-exemption="@e.ExemptionId" data-state="@st">
+                            <td class="sel"><input type="checkbox" name="Sel" value="@e.ExemptionId" data-select-row aria-label="Select exemption @e.ExemptionId" /></td>
+                            <td>@e.ExemptionId</td><td>@e.ScopeLabel</td><td class="wrap">@e.AsItem().Describe()</td><td class="wrap">@e.Reason</td>
+                            <td>@ExemptionPeriods.Describe(e.ExpiresAt)</td>
+                            <td><span class="badge @(st == "expired" ? "bad" : "good")">@st</span>@if (expiring) { <span class="badge warn">expiring</span> }@if (overdue) { <span class="badge warn">review overdue</span> }</td>
+                            <td>@Fmt.Time(e.LastReviewed)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </form>
+}

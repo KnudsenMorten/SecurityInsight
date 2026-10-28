@@ -1,0 +1,43 @@
+@* #264: the exempted findings bar of a page that shows findings or their numbers -- the view's tick (it overrides the
+   setting for THIS view only, and is carried through its links, drill-downs and exports), the note when exempted
+   findings are left out, and "simulated" when a numbers page includes them on the tick. Rendered by the layout for every
+   page marked [ExemptedSurface]. *@
+@using SI.Management.Web.Exemptions
+@{
+    var v = ExemptedView.Of(Context);
+}
+@* #415: a page without the tick whose numbers leave nothing out says nothing (it drew an empty bar -- seen on the wall board, now the home page) *@
+@if (v is not null && !(v.NoTick && v.Include) && !(v.NoTick && v.Ready && !v.Simulated && v.NotCounted is 0))
+{
+    <div class="exempted-bar" role="region" aria-label="Exempted findings" data-exempted-bar data-exempted-carry="@(v.Carry ?? "")">
+        @if (!v.Ready)
+        {
+            <span class="hint">Exempted findings are counted as before: this Pro database does not carry the exemption mark yet (run setup\Initialize-SIDataSql.ps1 again -- it only adds).</span>
+        }
+        else
+        {
+            @if (!v.NoTick)
+            {
+                <a class="exempted-tick" role="switch" aria-checked="@(v.Include ? "true" : "false")" href="@(v.Include ? v.HideUrl : v.ShowUrl)"
+                   data-exempted-tick title="@(v.Surface == ExemptedSurface.Views ? "Show or hide findings an approved exemption covers -- this view only" : "Recompute these figures with or without exempted findings -- this view only, never saved")"><span class="box" aria-hidden="true">@(v.Include ? "☑" : "☐")</span> @v.TickLabel</a>
+            }
+            @if (v.Simulated)
+            {
+                <span class="badge warn" data-exempted-simulated>Including exempted: simulated</span>
+                <span class="hint">These figures count exempted findings for this view only; the setting is unchanged.</span>
+            }
+            else if (v.Include && v.Surface == ExemptedSurface.Views)
+            {
+                <span class="hint">Exempted findings are shown, each marked "Exempted until &lt;date&gt;".</span>
+            }
+            else if (v.Include)
+            {
+                <span class="hint">Exempted findings are counted.</span>
+            }
+            else if (v.NotCounted is not 0)
+            {
+                <span class="hint" data-exempted-note>@(v.NotCounted is { } n ? (n == 1 ? "1 exempted finding not counted" : Fmt.Int(n) + " exempted not counted") : "Exempted findings not counted")@if (!v.NoTick) {<text> · <a href="@v.ShowUrl">show</a></text>}</span>
+            }
+        }
+    </div>
+}

@@ -1,0 +1,1877 @@
+{
+  "$comment": "Field mapping for provider 'entra': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/entra.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "entra",
+  "version": "1.0.0",
+  "description": "Entra ID (Microsoft Graph): users, service principals and devices, with the collector's role, permission and registration look-ups attached.",
+  "objects": [
+    {
+      "recordType": "user",
+      "class": "identity",
+      "parts": {
+        "user": "GET /users (security $select)",
+        "registration": "GET /reports/authenticationMethods/userRegistrationDetails (bulk)",
+        "authenticationMethods": "GET /users/{id}/authentication/methods (Graph $batch, the users the profile keeps; written only when the user's list was read in full): readComplete, methodTypes, passwordlessOnly (absent = unknown)",
+        "roles": "roleAssignments + roleEligibilitySchedules for the user (collector)",
+        "memberOf": "GET /users/{id}/transitiveMemberOf (collector)",
+        "azureRoles": "Azure RBAC role assignments of the principal (Azure Resource Graph authorizationresources, collector)",
+        "derived": "computed when the record is assembled (engine/data-model/SI-RecordDerived.ps1): mfaStrength (the strongest MFA method registered), ownerNames (a guest's sponsors)",
+        "manager": "GET /users?$expand=manager (one read for the tenant; discovery/Get-SIEntraContext.ps1): id, userPrincipalName, displayName",
+        "sponsors": "GET /users?$filter=userType eq 'Guest'&$expand=sponsors: items { id, upn, name, type }",
+        "ca": "Conditional Access for the user, from GET /identity/conditionalAccess/policies (enabled policies only): policyCount, mfaEnforced, mfaPolicies, excluded { id, name }, excludedFromAll (every policy that would apply excludes the user)",
+        "breakGlass": "the break-glass extension attribute the customer defines (data-model list break_glass_attribute), when the user carries it: attribute, value, match (attribute=value)",
+        "risk": "Identity Protection: riskyUsers (riskLevel, riskState, riskDetail, riskLastUpdatedDateTime) and the risk detections of 30 days summarised (detections30d, detectionTypes30d)",
+        "roleScopes": "every role assignment with its scope (items), the paths a role is held through (paths), what activating an eligible role requires (activation), the level inside Tier 0 for an identity that holds a Tier 0 role (tierLevel: tier, level 1 tenant-wide or 2 scoped only, text, scoped)",
+        "controls": "the privileged objects the identity owns: items { kind, id, name, roles }",
+        "accessReview": "the last access review of the roles and groups it holds: items, lastReviewed",
+        "notLicensed": "the context the tenant is not licensed for: items { fields, licence, text }",
+        "profile": "the identity profiler's computed values for the object (Add-SIRecordPartsFromProfileRows): role and permission look-ups, privilege tiers, break-glass, credential expiry, owner count (#505)"
+      },
+      "key": "user.id",
+      "timestamp": "$collection_time",
+      "gone": "user.deletedDateTime is set"
+    },
+    {
+      "recordType": "service_principal",
+      "class": "identity",
+      "parts": {
+        "sp": "GET /servicePrincipals",
+        "app": "GET /applications (one read for the tenant, owners expanded; discovery/Get-SIEntraContext.ps1): credentials, requestedPermissions (id and name), owners, publisherDomain, notes, federatedIdentityCredentials + hasFederatedCredential (a second read)",
+        "owners": "GET /servicePrincipals?$expand=owners: count, items { id, upn, name, type }",
+        "credUsage": "GET beta/reports/appCredentialSignInActivities: items { keyId, lastUsed }",
+        "spExtra": "a managed identity's alternativeNames (its Azure resource)",
+        "contextReads": "which tenant-wide reads completed: applications, federatedCredentials, delegatedGrants, credentialUse",
+        "risk": "Identity Protection riskyServicePrincipals: riskLevel, riskState, riskDetail, riskLastUpdatedDateTime",
+        "roleScopes": "every role assignment with its scope (items), the paths a role is held through (paths), what activating an eligible role requires (activation), the level inside Tier 0 for an identity that holds a Tier 0 role (tierLevel: tier, level 1 tenant-wide or 2 scoped only, text, scoped)",
+        "controls": "the privileged objects the identity owns: items { kind, id, name, roles }",
+        "accessReview": "the last access review of the application and of the roles and groups it holds: items, lastReviewed",
+        "notLicensed": "the context the tenant is not licensed for: items { fields, licence, text }",
+        "roles": "role assignments for the service principal (collector)",
+        "azureRoles": "Azure RBAC role assignments of the principal (collector)",
+        "appRoleAssignments": "GET /servicePrincipals/{id}/appRoleAssignments",
+        "oauth2Grants": "GET /oauth2PermissionGrants (one read for the tenant, summarised per client): permissions, consentType, consentedUserCount, grants { resourceId, resourceName, consentType, permissions, userCount }",
+        "signIn": "GET beta/reports/servicePrincipalSignInActivities (by application id): lastSignInActivity, delegatedClientSignInActivity, applicationAuthenticationClientSignInActivity ... each { lastSignInDateTime }",
+        "derived": "computed when the record is assembled (engine/data-model/SI-RecordDerived.ps1): credentialExpiryDays (min over the key / password credentials of sp and app, negative = expired), ownerCount (the owners part the owners read writes; unknown when not read), isThirdPartyMultiTenant (appOwnerOrganizationId <> this tenant)",
+        "profile": "the identity profiler's computed values for the object (Add-SIRecordPartsFromProfileRows): role and permission look-ups, privilege tiers, break-glass, credential expiry, owner count (#505)"
+      },
+      "key": "sp.id",
+      "timestamp": "$collection_time"
+    },
+    {
+      "recordType": "device",
+      "class": "device",
+      "parts": {
+        "device": "GET /devices",
+        "registeredOwners": "GET /devices?$expand=registeredOwners (one read for the tenant): items { id, upn, name, type }"
+      },
+      "key": "device.deviceId",
+      "timestamp": "device.approximateLastSignInDateTime"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "entra_object_id",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userPrincipalName",
+        "user.displayName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_upn",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userPrincipalName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_mail",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.mail"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "ad_sid",
+      "recordTypes": [
+        "user",
+        "device"
+      ],
+      "sources": [
+        "user.onPremisesSecurityIdentifier",
+        "device.onPremisesSecurityIdentifier"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "ad_object_guid",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesImmutableId"
+      ],
+      "normalize": [
+        "base64_guid"
+      ]
+    },
+    {
+      "field": "si_sam_account_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesSamAccountName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_ad_distinguished_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesDistinguishedName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_ad_domain",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesDomainName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_employee_id",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.employeeId"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.accountEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_identity_type",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userType"
+      ],
+      "normalize": [
+        "enum:identity_type_user"
+      ]
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userType"
+      ],
+      "normalize": [
+        "enum:identity_type_user"
+      ]
+    },
+    {
+      "field": "si_is_external",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userType"
+      ],
+      "normalize": [
+        "equals:Guest"
+      ]
+    },
+    {
+      "field": "si_onprem_synced",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesSyncEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_created",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.createdDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_sign_in",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.signInActivity.lastSuccessfulSignInDateTime",
+        "user.signInActivity.lastSignInDateTime",
+        "user.signInActivity.lastNonInteractiveSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "combine": "max"
+    },
+    {
+      "field": "si_password_last_changed",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.lastPasswordChangeDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_leave_date",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.employeeLeaveDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_mfa_registered",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isMfaRegistered"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_mfa_methods",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.methodsRegistered[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_org_department",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.department"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_job_title",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.jobTitle"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_country",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.country",
+        "user.usageLocation"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_employee_type",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.employeeType"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_manager_upn",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "manager.userPrincipalName",
+        "user.manager.userPrincipalName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_entra_roles_permanent",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roles.permanent"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_entra_roles_eligible",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roles.eligible"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_azure_role_assignments",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "azureRoles"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_group_memberships",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "memberOf[*].displayName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_custom_security_attributes",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.customSecurityAttributes"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_extension_attributes",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesExtensionAttributes"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.onPremisesExtensionAttributes"
+      ],
+      "normalize": [
+        "tags:entra"
+      ]
+    },
+    {
+      "field": "si_eg_query_rules",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "egQueryRules[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "entra_object_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "entra_app_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.appId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.displayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_identity_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.servicePrincipalType"
+      ],
+      "normalize": [
+        "enum:identity_type_sp"
+      ]
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.servicePrincipalType"
+      ],
+      "normalize": [
+        "enum:identity_type_sp"
+      ]
+    },
+    {
+      "field": "si_sp_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.servicePrincipalType"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.accountEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_publisher_name",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.publisherName",
+        "sp.verifiedPublisher.displayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_publisher_verified",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.verifiedPublisher.verifiedPublisherId"
+      ],
+      "normalize": [
+        "present"
+      ],
+      "whenAbsent": false,
+      "note": "Graph returns verifiedPublisher with a null verifiedPublisherId for an unverified publisher: the SP is there, the id is not = not verified (false). Without whenAbsent the field was never false."
+    },
+    {
+      "field": "si_app_owner_org_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.appOwnerOrganizationId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_is_multitenant_app",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "app.signInAudience",
+        "sp.signInAudience"
+      ],
+      "normalize": [
+        "enum:multitenant_audience"
+      ]
+    },
+    {
+      "field": "si_is_third_party_multitenant",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.isThirdPartyMultiTenant"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_is_orphan_sp",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.ownerCount"
+      ],
+      "normalize": [
+        "equals:0"
+      ]
+    },
+    {
+      "field": "si_credential_expiry_days",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.credentialExpiryDays"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_has_client_secret",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.passwordCredentials[*].keyId",
+        "app.passwordCredentials[*].keyId"
+      ],
+      "normalize": [
+        "present"
+      ]
+    },
+    {
+      "field": "si_app_permissions",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "appRoleAssignments"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_delegated_permissions",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "oauth2Grants.permissions[*]"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_last_sign_in",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "signIn.lastSignInActivity.lastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.tags[*]"
+      ],
+      "normalize": [
+        "tags:entra"
+      ]
+    },
+    {
+      "field": "entra_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.deviceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.displayName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_hostname",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.displayName"
+      ],
+      "normalize": [
+        "lower",
+        "split:.",
+        "first"
+      ]
+    },
+    {
+      "field": "si_os_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.operatingSystem"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.operatingSystem"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ]
+    },
+    {
+      "field": "si_os_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.operatingSystemVersion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_join_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.trustType"
+      ],
+      "normalize": [
+        "enum:join_type"
+      ]
+    },
+    {
+      "field": "si_is_compliant",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.isCompliant"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.accountEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_onprem_synced",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.onPremisesSyncEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_created",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.registrationDateTime",
+        "device.createdDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.approximateLastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.extensionAttributes"
+      ],
+      "normalize": [
+        "tags:entra"
+      ]
+    },
+    {
+      "field": "si_display_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.displayName",
+        "profile.DisplayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_display_name",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.displayName",
+        "profile.DisplayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_app_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "sp.appId",
+        "profile.AppId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_external_user_state",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.externalUserState",
+        "profile.ExternalUserState"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_high_risk_permission_grant",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.IsHighRiskPermissionGrant"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_privilege_tier_permanent",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraRolesPermanentVerdict_Tier"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_privilege_tier_eligible",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraRolesEligibleVerdict_Tier"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_is_break_glass",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.IsBreakGlass"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_entra_roles_permanent",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraRoles_Permanent"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_entra_roles_eligible",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraRoles_Eligible"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_azure_role_assignments",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.AzureRoles_Assignments"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_app_permissions",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraAppPermissions_Application"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_group_memberships",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.NestedGroups"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_ad_critical_groups",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.AdNestedCriticalGroups"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_custom_security_attributes",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.CSA"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_is_orphan_sp",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.IsOrphanSPN"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_credential_expiry_days",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.CredentialExpiryDays"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_is_third_party_multitenant",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.IsThirdPartyMultiTenantSpn"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_last_sign_in",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "profile.LastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_created",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.CreatedDateTime",
+        "sp.createdDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "note": "#690 (35): the service principal's own Graph object carries createdDateTime too -- a service principal without an identity profile row (a Microsoft application the collection scope leaves out of the profile) still gets its creation date, so old_account can be decided"
+    },
+    {
+      "field": "si_password_last_changed",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.LastPasswordChangeDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_is_shadow_admin",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.IsShadowAdmin"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_passwordless_only",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "authenticationMethods.passwordlessOnly"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_password_never_expires",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.passwordPolicies"
+      ],
+      "normalize": [
+        "require_contains:DisablePasswordExpiration",
+        "present"
+      ]
+    },
+    {
+      "field": "si_password_never_expires",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "profile.HasPasswordNeverExpires"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_intune_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "intuneState.notLicensed"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_manager_id",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "manager.id"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_manager_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "manager.displayName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_sponsors",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "sponsors.items"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "derived.ownerNames"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_interactive_sign_in",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.signInActivity.lastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_non_interactive_sign_in",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.signInActivity.lastNonInteractiveSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_mfa_strength",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "derived.mfaStrength"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_mfa_default_method",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.defaultMfaMethod"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_ca_mfa_enforced",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "ca.mfaEnforced"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ca_policy_count",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "ca.policyCount"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ca_excluded_policies",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "ca.excluded"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_ca_excluded_from_all",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "ca.excludedFromAll"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_break_glass_attribute",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "breakGlass.match"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ca_mfa_policies",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "ca.mfaPolicies"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_entra_risk_level",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "risk.riskLevel"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_entra_risk_state",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "risk.riskState"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_entra_risk_detail",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "risk.riskDetail"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_entra_risk_updated",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "risk.riskLastUpdatedDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_risk_detections_30d",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "risk.detections30d"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_risk_detection_types_30d",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "risk.detectionTypes30d[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_entra_role_scopes",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roleScopes.items"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_privilege_tier_level",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roleScopes.tierLevel.level"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_privilege_tier_level_text",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roleScopes.tierLevel.text"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_role_paths",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roleScopes.paths[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_pim_activation_requires",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "roleScopes.activation"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_controls_privileged_objects",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "controls.items"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_last_access_review",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "accessReview.items"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_last_access_review_date",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "accessReview.lastReviewed"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_not_licensed",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "notLicensed.items"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_has_federated_credential",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "app.hasFederatedCredential"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_federated_credentials",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "app.federatedIdentityCredentials"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_requested_vs_granted_perms",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.permissionGap"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.ownerNames"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_owners",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.owners"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_owner_upns",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.ownerUpns[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_owner_ids",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.ownerIds[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_delegated_permissions",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "profile.EntraAppPermissions_Delegated"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_consent_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "oauth2Grants.consentType"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_consented_user_count",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "oauth2Grants.consentedUserCount"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_delegated_grants",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "oauth2Grants.grants"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_last_app_sign_in",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "signIn.applicationAuthenticationClientSignInActivity.lastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_delegated_sign_in",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "signIn.delegatedClientSignInActivity.lastSignInDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_credentials",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.credentials"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_credential_fix",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.credentialFix"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_attached_resource",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.attachedResourceName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_attached_resource_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.attachedResourceId"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_managed_identity_kind",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "derived.managedIdentityKind"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_publisher_domain",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "app.publisherDomain"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_app_notes",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "app.notes"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_primary_user",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "registeredOwners.items[*].upn"
+      ],
+      "normalize": [
+        "lower",
+        "first"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_primary_user_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "registeredOwners.items[*].id"
+      ],
+      "normalize": [
+        "lower",
+        "first"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_primary_user_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "registeredOwners.items[*].name"
+      ],
+      "normalize": [
+        "trim",
+        "first"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_registered_owners",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "registeredOwners.items"
+      ],
+      "normalize": [],
+      "verify": true
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "registeredOwners.items[*].name"
+      ],
+      "normalize": [
+        "trim",
+        "first"
+      ],
+      "verify": true
+    }
+  ]
+}

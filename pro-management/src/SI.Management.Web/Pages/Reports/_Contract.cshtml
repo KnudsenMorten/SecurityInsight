@@ -1,0 +1,13 @@
+@using SI.Management.Core.ProData
+@* The Risk Analysis report contract (#274) -- the lists come from SI.Management.Core.ProData.ReportContract, which xunit
+   checks against the engine and the shipped catalog. *@
+<details class="help" data-contract>
+    <summary>The report contract: what Risk Analysis needs from a report's query</summary>
+    <ul>
+        <li><strong>Required columns</strong> (every row): @string.Join(", ", ReportContract.InputNames.Select(x => x.Column)). Risk Analysis scores each row from them and applies the report's severity scope to <code>SecuritySeverity</code> (@string.Join(", ", ReportVocabulary.Severities)) and its tier scope to <code>CriticalityTierLevel</code> (@string.Join(", ", ReportVocabulary.Tiers)). A row whose value is outside the scope is not reported; a blank value is kept.</li>
+        <li><strong>Optional risk columns</strong> (numbers): @string.Join(", ", ReportContract.RiskFactorInputs) -- added to the consequence / probability score.</li>
+        <li><strong>Set by Risk Analysis</strong> on every row (a value from the query is replaced): @string.Join(", ", ReportContract.EngineScores).</li>
+        <li><strong>CollectionTime</strong> and the other run columns (@string.Join(", ", ReportContract.EngineMeta)) are stamped by Risk Analysis -- identical on every row of one run; the query does not set them.</li>
+        <li>Any other column the query returns is kept after these, in the report's output order.</li>
+    </ul>
+</details>

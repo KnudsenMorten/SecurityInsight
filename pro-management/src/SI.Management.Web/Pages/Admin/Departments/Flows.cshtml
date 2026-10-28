@@ -1,0 +1,76 @@
+@page
+@model SI.Management.Web.Pages.Admin.Departments.FlowsModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Remediation flows";
+}
+<h1>Remediation flows</h1>
+<p class="lede">What each department does with a category (security domain) and subcategory (report) of findings. The most specific flow wins -- a department's own over one for every department, a named category or subcategory over *, then the order. SecurityInsight never pushes a change to Defender, Intune, Entra or Azure: <em>Auto</em> plans the fix for the department's next maintenance window (<nav-ref page="/Admin/Departments/Index" /> sets them), logs it and tells the technical owners.</p>
+<p class="lede"><a href="/Admin/Departments">Departments</a> · <a href="/Admin/Departments/Rules">Department rules</a> · @if (Model.Retired) { <a href="/Admin/Departments/Flows">Hide retired</a> } else { <a href="/Admin/Departments/Flows?retired=true">Show retired</a> }</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Refusal is not null) { <div class="notice error" role="alert" data-refusal>@Model.Refusal</div> }
+@if (Model.GovernanceReady)
+{
+    <section class="card" aria-labelledby="fl-h">
+        <h2 id="fl-h">Flows</h2>
+        @if (Model.Flows.Count == 0) { <p class="hint">No flow yet: every finding is handled by hand.</p> }
+        else
+        {
+            <table class="findings" data-flows data-sortable>
+                <thead><tr><th>Department</th><th>Category</th><th>Subcategory</th><th>Flow</th><th>Vendor</th><th class="num">Order</th><th>Note</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                <tbody>
+                    @foreach (var f in Model.Flows)
+                    {
+                        <tr data-flow="@f.FlowId" class="@(f.Retired ? "muted" : "")">
+                            <td>@(f.DepartmentName ?? "every department")</td>
+                            <td>@f.Category</td>
+                            <td>@f.Subcategory</td>
+                            <td>@RemediationActions.Label(f.Action)@if (f.Retired) { <span class="badge">retired</span> }</td>
+                            <td>@(f.VendorMail is null ? "" : (f.VendorName ?? "") + " " + f.VendorMail)</td>
+                            <td class="num" data-value="@Fmt.Raw(f.SortOrder)">@Fmt.Int(f.SortOrder)</td>
+                            <td class="wrap">@f.Note</td>
+                            <td>
+                                @if (!f.Retired)
+                                {
+                                    <form method="post" asp-page-handler="Retire" class="row-actions">
+                                        <input type="hidden" name="flowId" value="@f.FlowId" />
+                                        <input type="text" name="reason" required minlength="3" maxlength="400" placeholder="why" aria-label="Reason to retire" />
+                                        <button type="submit" class="small secondary">Retire</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+    <section class="card" aria-labelledby="add-h">
+        <h2 id="add-h">Add a flow</h2>
+        <form method="post" asp-page-handler="Add" class="stack" data-add-flow>
+            <label for="f-dept">Department</label>
+            <select id="f-dept" name="departmentId">
+                <option value="">Every department</option>
+                @foreach (var d in Model.Active) { <option value="@d.DepartmentId">@d.Name</option> }
+            </select>
+            <label for="f-cat">Category (security domain)</label>
+            <input id="f-cat" name="category" list="f-cats" value="*" maxlength="128" />
+            <datalist id="f-cats"><option value="*"></option>@foreach (var c in FlowsModel.Categories) { <option value="@c"></option> }</datalist>
+            <label for="f-sub">Subcategory (report name, or *)</label>
+            <input id="f-sub" name="subcategory" value="*" maxlength="256" />
+            <label for="f-action">Flow</label>
+            <select id="f-action" name="action">
+                @foreach (var a in RemediationActions.All) { <option value="@a">@RemediationActions.Label(a) -- @RemediationActions.Purpose(a)</option> }
+            </select>
+            <label for="f-vname">Vendor name (Escalate to the vendor)</label>
+            <input id="f-vname" name="vendorName" maxlength="256" />
+            <label for="f-vmail">Vendor contact mail (required to escalate)</label>
+            <input id="f-vmail" name="vendorMail" type="email" maxlength="256" />
+            <label for="f-note">Note (shown with the flow)</label>
+            <input id="f-note" name="note" maxlength="400" />
+            <label for="f-order">Order (lower first)</label>
+            <input id="f-order" name="sortOrder" type="number" min="0" max="100000" value="100" />
+            <button type="submit">Add flow</button>
+        </form>
+    </section>
+}

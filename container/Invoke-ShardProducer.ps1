@@ -1,0 +1,138 @@
+#Requires -Version 7.0
+<#
+    Producer entrypoint for the KEDA queue-driven worker pattern.
+
+    Runs in the cron-triggered Container App Job 'caj-si-{engine}-producer'.
+    Mints a single CollectionTime + pushes one message per shard onto the
+    'si-{engine}-shards' queue. KEDA polls that queue and spins up worker
+    replicas based on backlog -- idle = 0 replicas, billing = vCPU-seconds
+    actually consumed.
+
+    Required env vars (same SET as Start-SIInContainer.ps1, minus OpenAI
+    which the worker needs but the producer doesn't):
+      SI_ENGINE                -- 'endpoint' | 'identity' | 'azure'
+      SI_STORAGE_ACCOUNT       -- queue host (reached with the job's identity)
+      SI_UAMI_CLIENTID         -- when in UAMI mode (preferred)
+      SI_SHARD_COUNT           -- number of shards to enqueue (== worker
+                                  parallelism cap)
+
+    Worker side: each replica reads ONE message, extracts ShardIndex +
+    ShardCount + CollectionTime, runs the full pipeline for that shard,
+    then deletes the message on success.
+#>
+
+# Azure access: plain REST, no PowerShell modules (engine/_shared/SI-AzRest.ps1).
+if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-AzRest.ps1') }
+
+$ErrorActionPreference = 'Stop'
+
+function Get-RequiredEnv {
+    param([Parameter(Mandatory)][string]$Name)
+    $v = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($v)) { throw "Required env var $Name is missing" }
+    return $v
+}
+
+function Get-OptionalEnv {
+    param([string]$Name, $Default = $null)
+    $v = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($v)) { return $Default }
+    return $v
+}
+
+# ---- #55.1: run transcripts on the container host (see Start-SIInContainer.ps1) ----
+. /app/launcher/_lib/Start-LauncherTranscript.ps1
+. /app/launcher/_lib/Publish-LauncherTranscript.ps1
+
+$engine     = Get-RequiredEnv 'SI_ENGINE'
+$shardCount = [int](Get-OptionalEnv 'SI_SHARD_COUNT' 1)
+if ($shardCount -lt 1) { $shardCount = 1 }
+
+# '<engine>-producer', not '<engine>' -- the producer and its workers are separate
+# executions of the same engine, and logs that differ only by timestamp are the
+# ones you cannot tell apart at the moment you need to.
+$runLogEngine = ('{0}-producer' -f $engine)
+Start-SILauncherTranscript -Engine $runLogEngine -Flavour container -RepoRoot '/app' | Out-Null
+
+$global:SI_StorageAccount      = Get-RequiredEnv 'SI_STORAGE_ACCOUNT'
+$global:SI_WorkspaceResourceId = Get-RequiredEnv 'SI_WORKSPACE_RESOURCEID'
+$global:SI_UAMI_ClientId       = Get-OptionalEnv 'SI_UAMI_CLIENTID' $null
+
+# Sign in (recorded, over REST) -- queue access needs an identity regardless of OAuth/Key.
+# #209: managed identity > certificate (PFX from Key Vault) > client secret, decided as the workers decide it.
+. /app/container/_shared/SI-ContainerConfig.ps1
+$siAuth = Resolve-SIContainerAuthMode
+$subId = ($global:SI_WorkspaceResourceId -split '/')[2]
+if ($global:SI_UAMI_ClientId) {
+    Connect-SIAzAccount -Identity -AccountId $global:SI_UAMI_ClientId -Subscription $subId | Out-Null
+} elseif ($siAuth.Mode -eq 'Certificate') {
+    . /app/auth/Find-SICertificate.ps1
+    $siCert = Import-SIContainerCertificate -PfxBase64 (Get-RequiredEnv 'SI_SPN_CERT_PFX_B64') -Password (Get-OptionalEnv 'SI_SPN_CERT_PASSWORD' '') -SkipStore
+    $siCertArgs = @{ ServicePrincipal = $true; ApplicationId = (Get-RequiredEnv 'SI_SPN_APPID'); Tenant = (Get-RequiredEnv 'SI_SPN_TENANTID')
+                     CertificatePath = $siCert.PfxPath; Subscription = $subId }
+    $siCertPw = Get-OptionalEnv 'SI_SPN_CERT_PASSWORD' $null
+    if ($siCertPw) { $siCertArgs['CertificatePassword'] = (ConvertTo-SecureString $siCertPw -AsPlainText -Force) }
+    Connect-SIAzAccount @siCertArgs | Out-Null
+} else {
+    # v2.3 single-SPN model. SI_SPN_* are the primary env names;
+    # SI_GRAPH_* fall back for legacy callers still pinned to preview-25 bootstrap.
+    $appId    = Get-OptionalEnv 'SI_SPN_APPID'    (Get-OptionalEnv 'SI_GRAPH_APPID')
+    $secret   = Get-OptionalEnv 'SI_SPN_SECRET'   (Get-OptionalEnv 'SI_GRAPH_SECRET')
+    $tenantId = Get-OptionalEnv 'SI_SPN_TENANTID' (Get-OptionalEnv 'SI_GRAPH_TENANTID')
+    if (-not $appId -or -not $secret -or -not $tenantId) { throw "Producer requires SI_SPN_APPID + SI_SPN_SECRET + SI_SPN_TENANTID (or SI_GRAPH_* legacy aliases)" }
+    $secureStr = ConvertTo-SecureString $secret -AsPlainText -Force
+    $cred      = New-Object System.Management.Automation.PSCredential($appId, $secureStr)
+    Connect-SIAzAccount -ServicePrincipal -Tenant $tenantId -Credential $cred -Subscription $subId | Out-Null
+}
+
+. /app/engine/asset-profiling/storage/StorageContext.ps1
+. /app/engine/asset-profiling/storage/WorkerQueue.ps1
+
+# Storage context: the signed-in identity (the managed identity, or the app identity signed in above).
+$ctx = New-SIStorageContext -AccountName $global:SI_StorageAccount
+
+$queueName = ('si-{0}-shards' -f $engine)
+Initialize-SIQueue -Context $ctx -QueueName $queueName | Out-Null
+
+# CollectionTime: ONE value, stamped onto every shard message. All workers
+# inherit and emit it on every classified row -- KQL's
+# "where CollectionTime == max(CollectionTime)" then returns the full set
+# from this one execution.
+$now = [datetime]::UtcNow
+$collectionTime = [datetime]::new($now.Year, $now.Month, $now.Day, $now.Hour, $now.Minute, 0, [DateTimeKind]::Utc)
+$collectionTimeStr = $collectionTime.ToString('o')
+
+# The build this image was made from (BUILD.json, stamped by Bootstrap-ContainerAppJob.ps1 at image build time; never git at run time).
+. (Join-Path $PSScriptRoot '../engine/_shared/SI-BuildInfo.ps1')
+$siBuild = Read-SIBuildInfo -SolutionRoot (Split-Path -Parent $PSScriptRoot)
+Write-Host '======================================================================'
+Write-Host (' SecurityInsight {0} Producer -- engine={1}  CollectionTime={2}' -f (Format-SIBuildLine $siBuild), $engine, $collectionTimeStr)
+Write-Host (' shards: {0}  -- queue: {1}' -f $shardCount, $queueName)
+Write-Host '======================================================================'
+
+# #475: the Collect step's MANIFEST -- the pipeline waits until every part listed here is marked done or failed by its
+# worker. The run id is this execution's name (the pipeline started it and knows it).
+$collectRunId = Get-OptionalEnv 'CONTAINER_APP_JOB_EXECUTION_NAME' ([guid]::NewGuid().ToString())
+try {
+    . /app/engine/_shared/SI-CollectParts.ps1
+    $collectStore = New-SICollectBlobStore -Account $global:SI_StorageAccount
+    Write-SICollectManifest -Store $collectStore -Manifest (New-SICollectManifest -Engine $engine -RunId $collectRunId -CollectionTime $collectionTime -Parts $shardCount -ProducerExecution $collectRunId)
+    Write-Host (' manifest: {0} part(s), run {1}' -f $shardCount, $collectRunId)
+} catch { Write-Warning ('the manifest could not be written ({0}) -- the pipeline cannot follow this run''s parts' -f $_.Exception.Message) }
+for ($i = 0; $i -lt $shardCount; $i++) {
+    $payload = @{
+        ShardIndex     = $i
+        ShardCount     = $shardCount
+        CollectionTime = $collectionTimeStr
+        EnqueuedAt     = ([datetime]::UtcNow.ToString('o'))
+        RunId          = $collectRunId
+    }
+    Add-SIWorkItem -Context $ctx -QueueName $queueName -Payload $payload
+    Write-Host ('  -> shard {0}/{1} enqueued' -f ($i+1), $shardCount)
+}
+
+Write-Host ('Done. {0} messages on {1}. KEDA will scale workers within ~30s.' -f $shardCount, $queueName)
+
+# #55.1(b). $ctx is the context this script already built for the queue -- same
+# account, so there is nothing to rebuild.
+Publish-SILauncherTranscript -Engine $runLogEngine -Context $ctx | Out-Null

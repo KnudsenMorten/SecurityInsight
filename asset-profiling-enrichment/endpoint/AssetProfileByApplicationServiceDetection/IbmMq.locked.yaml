@@ -1,0 +1,22 @@
+id:        IbmMq
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'IBM WebSphere MQ'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'IBM WebSphere MQ'
+  - 'IBM MQ'
+
+detections:
+  - id: IbmMq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mq*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

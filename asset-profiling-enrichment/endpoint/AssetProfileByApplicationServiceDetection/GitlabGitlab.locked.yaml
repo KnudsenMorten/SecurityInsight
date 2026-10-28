@@ -1,0 +1,22 @@
+id:        GitlabGitlab
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'GitLab Self-Managed'
+category:  'SCM'
+description: ''
+displayNames:
+  - 'GitLab Self-Managed'
+  - 'GitLab Enterprise Edition'
+
+detections:
+  - id: GitlabGitlab
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'gitlab*'
+    set:
+      Tier:     1
+      Purpose:  'SCM'
+      Category: 'SCM'

@@ -1,0 +1,18 @@
+{
+  "_comment": "#574 -- the .NET PDF library SecurityInsight renders its mail PDFs with: PDFsharp + MigraDoc 6.2.4 (MIT, verified on the nuspec of this exact version: <license type=\"expression\">MIT</license>; https://licenses.nuget.org/MIT) and its two Microsoft.Extensions dependencies (MIT). Never QuestPDF. ONE pinned list for every consumer: container/Install-SIPdfLibrary.ps1 downloads exactly these packages at image build and refuses any whose SHA-512 differs; engine/_shared/SI-MailPdf.ps1 finds the DLLs by these names; engine/_shared/pdf/SI.Pdf.csproj references the same versions (a test keeps them equal). Only the managed DLLs listed here are copied -- no native code, no executable, no PowerShell module.",
+  "framework": "net8.0",
+  "packages": [
+    { "id": "PDFsharp", "version": "6.2.4", "license": "MIT",
+      "sha512": "2b5fea680c984317f8839ece1804b6d51c436e2e67017e13ad68edf110707530b6340c0ef2f3c57860b4b1f7352ef42c162b5ea425c5b3a08685a9c0d4d45f0e",
+      "dlls": [ "PdfSharp.dll", "PdfSharp.Shared.dll", "PdfSharp.System.dll", "PdfSharp.Charting.dll" ] },
+    { "id": "PDFsharp-MigraDoc", "version": "6.2.4", "license": "MIT",
+      "sha512": "0dff6eddb3086207f0458fa0815d311b5b65f626fa3279bf2c4ca79ce18a37b1920ff282323949302c295fe096c9a621c868c8537718d16f2283624064eb5f19",
+      "dlls": [ "MigraDoc.DocumentObjectModel.dll", "MigraDoc.Rendering.dll" ] },
+    { "id": "Microsoft.Extensions.Logging.Abstractions", "version": "8.0.3", "license": "MIT",
+      "sha512": "e689ec1e2cb9d2fafa9fd9f6ab861a0895aa9a1cbc9fb37e9dd856c8d1709004eb1455e64570b51013be88b60e9ae0c44f8f853932d9cdeab33ddb42fcec199b",
+      "dlls": [ "Microsoft.Extensions.Logging.Abstractions.dll" ] },
+    { "id": "Microsoft.Extensions.DependencyInjection.Abstractions", "version": "8.0.2", "license": "MIT",
+      "sha512": "ba1960ef110ac7387a2a06eefc02c59ce57b0fe58b3e0cccb79b1c8f2150105c5d1f4b65e0ed95ff50d70f28142917c6a735b83f4e5406bb1d8f9dd1f9635d7d",
+      "dlls": [ "Microsoft.Extensions.DependencyInjection.Abstractions.dll" ] }
+  ]
+}

@@ -1,0 +1,57 @@
+@page
+@model SI.Management.Web.Pages.SchemaOverlay.IndexModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.SchemaOverlay
+@{
+    ViewData["Title"] = "Schema overlays";
+}
+<h1>Schema overlays</h1>
+<p class="lede">The columns you add to -- or change in -- each profile table (endpoint, identity, Azure, public IP), and the extra raw data the profilers keep. One overlay per engine.</p>
+<details class="help" data-schema-help>
+    <summary>How a schema overlay works</summary>
+    <p>The profiling run merges your overlay over the shipped table layout: a <strong>column</strong> with the name of a shipped column replaces it, a new name adds a column; an aggregator <strong>contributor</strong> with a shipped id replaces it, a new id adds one; the <strong>raw-payload include paths</strong> are added to the shipped ones, and a new source name adds a source. The table's identity, hashes and keys cannot be changed. This is v2.2's asset-profiling-schema\&lt;engine&gt;.schema.custom.json.</p>
+    <p data-add-column-help><a href="/SchemaOverlay/Edit?engine=endpoint" data-add-column-link>How to add your own column</a>: open a profile's overlay (an Admin), add a column with a new name and the source field it reads, and stage it -- it is written on Review &amp; commit, and the next profiling run fills it.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (!Model.Schema && Model.Error is null) { <div class="notice warn" role="status">@SqlItemSource.MissingSchemaMessage</div> }
+@if (Model.Schema)
+{
+    <section class="card" aria-labelledby="h-ov">
+        <h2 id="h-ov">Overlays</h2>
+        @* owner 2026-10-19 ("what is this - shows 0, is that bad"): no rows of zeros -- one plain line when nothing is
+           changed; else only the profiles that have an overlay. The "2.2 file" column only where an overlay came from v2.2. *@
+        @if (Model.WithOverlay.Count == 0)
+        {
+            <p data-no-overlays>No changes — SecurityInsight's standard columns are used for every profile.</p>
+            <p class="hint">Open a profile to add your own: @foreach (var o in Model.Overlays) { <span data-overlay="@o.Engine"><a href="/SchemaOverlay/Edit?engine=@o.Engine">@o.Engine</a></span><text> </text> }</p>
+        }
+        else
+        {
+        var v22 = Model.ShowV22File;
+        <div class="table-wrap">
+            <table data-sortable data-overlays-table>
+                <thead><tr><th scope="col">Engine</th><th scope="col">Overlay</th><th scope="col" class="num">Columns</th><th scope="col" class="num">Contributors</th><th scope="col" class="num">Raw-payload sources</th>@if (v22) { <th scope="col" data-v22-file>2.2 file</th> }<th scope="col">Changed by</th></tr></thead>
+                <tbody>
+                    @foreach (var o in Model.WithOverlay)
+                    {
+                        var (fc, cc, sc) = IndexModel.Counts(o.Body);
+                        <tr data-overlay="@o.Engine">
+                            <td><a href="/SchemaOverlay/Edit?engine=@o.Engine">@o.Engine</a></td>
+                            <td><span class="badge @(o.Body is null ? "" : "warn")" data-has-overlay="@(o.Body is null ? "no" : "yes")">@(o.Body is null ? "none (shipped layout)" : "yours")</span></td>
+                            <td class="num" data-value="@Fmt.Raw(fc)">@Fmt.Int(fc)</td>
+                            <td class="num" data-value="@Fmt.Raw(cc)">@Fmt.Int(cc)</td>
+                            <td class="num" data-value="@Fmt.Raw(sc)">@Fmt.Int(sc)</td>
+                            @if (v22) { <td>@if (SI.Management.Web.Pages.SchemaOverlay.IndexModel.FromV22(o)) { <code>@o.FileName</code> }</td> }
+                            <td>@o.UpdatedBy</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (Model.WithOverlay.Count < Model.Overlays.Count)
+        {
+            <p class="hint" data-other-profiles>The other profiles use the standard columns.@foreach (var o in Model.Overlays.Where(x => x.Body is null)) { <text> </text><span data-overlay="@o.Engine"><a href="/SchemaOverlay/Edit?engine=@o.Engine">@o.Engine</a></span> }</p>
+        }
+        }
+    </section>
+}

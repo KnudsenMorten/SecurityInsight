@@ -1,0 +1,41 @@
+@page
+@model SI.Management.Web.Pages.Collection.LifecycleModel
+@{
+    var prev = Model.Previous;
+    var (from, to) = Model.Window;
+}
+<partial name="_Header" model="Model" />
+@if (Model.Current is not null)
+{
+    @if (prev is not null)
+    {
+        <p class="hint" data-findings-changes>The findings and CIs this collection added or no longer reports are on <a href="@Model.ViewLink("/Collection/Changes", ("a", prev.CollectionId))"><nav-ref page="/Collection/Changes" link="false" /></a>.</p>
+    }
+    <section class="card" aria-labelledby="h-cl">
+        <h2 id="h-cl" data-utc>The close-loop between @Fmt.Time(from) and @(Model.Current.NextTime is null ? "now" : Fmt.When(to))</h2>
+        @* #865: never a bare 0 -- why the close-loop recorded nothing *@
+        @if (Model.CloseLoopStatus is { } cls) { <div class="notice warn" role="status" data-closeloop-status>@cls</div> }
+        @if (Model.CloseLoopNote is not null) { <p class="hint">@Model.CloseLoopNote</p> }
+        else
+        {
+            <div class="stat-row" data-closeloop-lifecycle>
+                @foreach (var (action, label) in new[] { ("Open", "opened"), ("Close", "closed by SecurityInsight"), ("EngineerClose", "closed by an engineer"), ("Reopen", "reopened") })
+                {
+                    <div class="stat"><div class="n">@Fmt.Int(Model.Count(Model.EventCounts, "events", action))</div><div class="l">@label</div></div>
+                }
+            </div>
+            @if (Model.Days.Count > 0)
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-lifecycle-days>
+                        <caption class="hint">Per day, the two weeks up to this collection and the days after it</caption>
+                        <thead><tr><th scope="col">Day</th><th scope="col" class="num">Opened</th><th scope="col" class="num">Closed</th><th scope="col" class="num">Reopened</th><th scope="col" class="num">Open at end of day</th></tr></thead>
+                        <tbody>@foreach (var d in Model.Days) { <tr><td>@Fmt.Day(d.Day)</td><td class="num">@Fmt.Int(d.Opened)</td><td class="num">@Fmt.Int(d.Closed)</td><td class="num">@Fmt.Int(d.Reopened)</td><td class="num">@(d.OpenAtEndOfDay is { } o ? Fmt.Int(o) : "")</td></tr> }</tbody>
+                    </table>
+                </div>
+            }
+        }
+    </section>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

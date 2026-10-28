@@ -1,0 +1,111 @@
+@page
+@model SI.Management.Web.Pages.Admin.ResendModel
+@using SI.Management.Web.ChangeJournal
+@{
+    ViewData["Title"] = "Resend and undo";
+}
+<h1>Resend and undo</h1>
+<p class="lede">When a connector missed a run, or a run went wrong: send an earlier collection into a vulnerability connector again, or undo the connector's last run where the connector can put it back. Both run through the connector's own job and its normal checks (a close limit still holds a mass close) and both are on the audit trail. Collections of the last @Fmt.Int(Model.Days) day(s) are offered (Settings: <code>@ConfigSettings.ResendDays</code>).</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+@if (!Model.HasTable)
+{
+    @if (Model.Error is null) { <div class="notice warn" role="status" data-resend-missing>Resend and undo are not set up in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds).</div> }
+}
+else
+{
+    @if (!Model.JobsConfigured)
+    {
+        <div class="notice warn" role="status" data-jobs-missing>This web app cannot start jobs in this installation, so nothing can be sent from here.</div>
+    }
+    @if (Model.Connectors.Count == 0)
+    {
+        <p class="hint" data-no-connectors>No vulnerability connector is set up (<nav-ref page="/Admin/ConnectorSetup/Index" />).</p>
+    }
+    else
+    {
+        <section class="card" aria-labelledby="resend-h" data-resend>
+            <h2 id="resend-h">Send an earlier collection again</h2>
+            @if (Model.Collections.Count == 0)
+            {
+                <p class="hint" data-no-collections>No complete collection of the last @Fmt.Int(Model.Days) day(s) is in the Pro database.</p>
+            }
+            else
+            {
+                <form method="post" asp-page-handler="Resend" class="stack-form" data-resend-form
+                      data-confirm-title="Send this collection again?" data-confirm="The connector's job runs once with the chosen collection instead of the newest one: it opens, updates and closes items to match it, through its normal checks.">
+                    <label for="rs-connector">Into connector</label>
+                    <select id="rs-connector" name="Connector" required>
+                        @foreach (var c in Model.Connectors) { <option value="@c.Name" disabled="@(!c.Enabled)">@c.Name (@c.Kind, @(c.Enabled ? c.Mode : "switched off"))</option> }
+                    </select>
+                    <label for="rs-collection">Collection</label>
+                    <select id="rs-collection" name="CollectionId" required>
+                        @foreach (var col in Model.Collections) { <option value="@col.CollectionId" data-utc>@Fmt.When(col.CollectionTime) -- @Fmt.Int(col.Rows) finding(s)@(col.Partial ? " (partial)" : "")</option> }
+                    </select>
+                    <label for="rs-reason">Why send it again? (required, on the audit trail)</label>
+                    <input id="rs-reason" name="Reason" type="text" required minlength="@ResendModel.ReasonMin" maxlength="1000" />
+                    <button type="submit" disabled="@(!Model.JobsConfigured)">Send this collection</button>
+                </form>
+            }
+        </section>
+        <section class="card" aria-labelledby="undo-h" data-connector-undo>
+            <h2 id="undo-h">Undo the last run into a connector</h2>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="connector-undo" aria-describedby="undo-h">
+                    <thead><tr><th scope="col">Connector</th><th scope="col">Last applied run</th><th scope="col" class="num">Opened</th><th scope="col" class="num">Reopened</th><th scope="col" class="num">Closed</th><th scope="col">Undo</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in Model.Connectors)
+                        {
+                            <tr data-connector="@c.Name" data-kind="@c.Kind" data-undoable="@(c.CannotUndo is null ? "1" : "0")">
+                                <td>@c.Name<div class="hint">@c.Kind · @(c.Enabled ? c.Mode : "switched off")</div></td>
+                                <td>@if (c.LastRunUtc is { } t) { @Fmt.Time(t) <div class="hint"><code class="tech">@c.LastRunId</code></div> } else { <span class="hint">none yet</span> }</td>
+                                <td class="num">@Fmt.Int(c.Opened)</td>
+                                <td class="num">@Fmt.Int(c.Reopened)</td>
+                                <td class="num">@Fmt.Int(c.Closed)</td>
+                                <td class="wrap">
+                                    @if (c.CannotUndo is { } no)
+                                    {
+                                        <span data-cannot-undo>Can't be undone: @no.</span>
+                                    }
+                                    else
+                                    {
+                                        <form method="post" asp-page-handler="Undo" class="stack-form" data-undo-form
+                                              data-confirm-title="Undo the last run into @c.Name?" data-confirm="Closes it made are reopened, reopens are closed again and items it opened are closed as undone. Items changed again since are left as they are.">
+                                            <input type="hidden" name="Connector" value="@c.Name" />
+                                            <label for="ur-@c.Name">Why undo it? (required)</label>
+                                            <input id="ur-@c.Name" name="Reason" type="text" required minlength="@ResendModel.ReasonMin" maxlength="1000" />
+                                            <button type="submit" class="small" disabled="@(!Model.JobsConfigured || !c.Enabled)">Undo this run</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+    <section class="card" aria-labelledby="sends-h" data-sends>
+        <h2 id="sends-h">Requests</h2>
+        <div class="table-wrap">
+            <table class="findings grid" data-sortable data-list="sends" aria-describedby="sends-h">
+                <thead><tr><th scope="col">Asked</th><th scope="col">By</th><th scope="col">What</th><th scope="col">State</th><th scope="col">Outcome</th></tr></thead>
+                <tbody>
+                    @if (Model.Recent.Count == 0) { <tr><td colspan="5" class="hint">No request yet.</td></tr> }
+                    @foreach (var r in Model.Recent)
+                    {
+                        <tr data-send="@r.Id" data-state="@r.State">
+                            <td>@Fmt.Time(r.RequestedUtc, zone: true)</td>
+                            <td>@r.RequestedBy</td>
+                            <td class="wrap" data-utc>@(r.Kind == "undo" ? "Undo run " + r.TargetRunId : "Collection of " + (r.CollectionTime is { } ct ? Fmt.When(ct) : "?")) into @r.Connector<div class="hint">@r.Reason</div></td>
+                            <td><span class="badge @(r.State == "done" ? "ok" : r.State is "failed" or "refused" ? "bad" : "info")">@r.State</span></td>
+                            <td class="wrap">@r.OutcomeText</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}

@@ -1,0 +1,1792 @@
+{
+  "$comment": "Field mapping for provider 'mde': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/mde.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "mde",
+  "version": "1.0.0",
+  "description": "Defender for Endpoint: the machines API joined with the latest DeviceInfo row (advanced hunting) per device.",
+  "objects": [
+    {
+      "recordType": "device",
+      "class": "device",
+      "parts": {
+        "machine": "GET api.securitycenter.microsoft.com/api/machines",
+        "deviceInfo": "advanced hunting: DeviceInfo | summarize arg_max(Timestamp, *) by DeviceId (only the columns that have a value; InternetFacing = the InternetFacing* properties of AdditionalFields)",
+        "defender": "advanced hunting, one query per batch of devices (Get-SIDefenderDeviceContext): Hardening (DeviceTvmInfoGathering AdditionalFields), BiosVersion / Cpu / HardwareModel (DeviceTvmHardwareFirmware), Networks / OnPublicNetwork / DefaultGateways / AdapterAddresses (DeviceNetworkInfo, 7 days), Alerts30d / HighAlerts30d / LastAlert* (AlertEvidence + AlertInfo, 30 days), LastAdminLogon / AdminLogons30d / AdminLogonAccounts (DeviceLogonEvents, 30 days), NotLicensed",
+        "openAlerts": "Microsoft Graph security alerts, ONE tenant-wide paged read per run of the alerts whose status is new or in progress (Get-SIDefenderOpenAlerts, SecurityAlert.Read.All), summarised per device by the Defender device id of the alert's device evidence: Open (how many; 0 when the read was whole and none names the device), HighestSeverity, and the newest one's Title / Id / Time. No part when the read was refused or did not complete (unknown, never 0)",
+        "software": "DeviceTvmSoftwareInventory: vendor/product per device (the rule index)",
+        "logon": "the endpoint profiler's logon correlation: MostFrequentUserTier",
+        "egQueryRules": "ids of the detection rules whose Exposure Graph query matched",
+        "vulnerabilities": "advanced hunting, one query per batch of devices (Get-SIDefenderFindingSummary), SUMMARISED per device: Total (distinct CVEs), Critical / High / Medium / Low, Exploitable, HighestCvss, Software (affected products), NewestPublished / OldestPublished, Top (id = the CVE, name = the software, severity, cvss, exploit, published, fix), TopText; Status when the tenant has no such data",
+        "configurations": "the same query, SUMMARISED per device: Assessed, NonCompliant, HighestImpact, AssessedAt, Categories, Top (id = the configuration id, name, category, impact), TopText; Status when the tenant has no such data",
+        "findingLicence": "NotLicensed: the licence the two summaries need, when the tenant has no such data at all",
+        "softwareInventory": "advanced hunting, one query per batch of devices (Get-SIDefenderFindingSummary, Add-SIDefenderSoftwareInventoryParts): DeviceTvmSoftwareInventory SUMMARISED per device -- Installed (distinct products), Products (vendor/product, every one), EndOfSupport (how many past or near their end of support) and EndOfSupportItems (\"vendor/product version (status, date)\"); always read, whether or not a rule needs the software list"
+      },
+      "key": "machine.id",
+      "timestamp": "machine.lastSeen",
+      "gone": "machine.onboardingStatus == Offboarded"
+    },
+    {
+      "recordType": "vulnerability",
+      "class": "finding",
+      "parts": {
+        "vuln": "advanced hunting: DeviceTvmSoftwareVulnerabilities -- one row per device x software x CVE (DeviceId, SoftwareVendor, SoftwareName, SoftwareVersion, CveId, VulnerabilitySeverityLevel, RecommendedSecurityUpdate, RecommendedSecurityUpdateId)",
+        "kb": "advanced hunting: DeviceTvmSoftwareVulnerabilitiesKB -- the CVE (CvssScore, IsExploitAvailable, PublishedDate, LastModifiedTime, VulnerabilityDescription)",
+        "export": "Defender API: GET /api/machines/SoftwareVulnerabilitiesExport (Vulnerability.Read.All) -- the software vulnerabilities export files (GZIP, one JSON object per line): deviceId, cveId, firstSeenTimestamp, lastSeenTimestamp, ... -- read once per Risk Analysis run, only the first sighting per device + CVE is kept"
+      },
+      "key": "vuln.CveId",
+      "timestamp": "$collection_time",
+      "note": "#560 the generic SI finding fields of a Defender vulnerability (Device_Missing_CVEs_* reads the same tables). verify = true: the path is to be confirmed on live rows. NO RECORD IS WRITTEN PER CVE ROW: the device record carries the summary (part vulnerabilities, summarised per device -- owner 2026-10-11); these rows say what each finding field reads in the Risk Analysis reports."
+    },
+    {
+      "recordType": "configuration",
+      "class": "finding",
+      "parts": {
+        "assessment": "advanced hunting: DeviceTvmSecureConfigurationAssessment -- one row per device x configuration (DeviceId, ConfigurationId, ConfigurationImpact, IsCompliant, IsApplicable)",
+        "kb": "advanced hunting: DeviceTvmSecureConfigurationAssessmentKB (ConfigurationName, ConfigurationCategory, ConfigurationSubcategory, ConfigurationImpact, RiskDescription, ConfigurationDescription, RemediationOptions, ConfigurationBenchmarks, Tags, RelatedMitreTactics, RelatedMitreTechniques)"
+      },
+      "key": "assessment.ConfigurationId",
+      "timestamp": "$collection_time",
+      "note": "#560 the generic SI finding fields of a Defender security configuration (Device_Recommendations_* reads the same tables). NO RECORD IS WRITTEN PER SETTING ROW: the device record carries the summary (part configurations, summarised per device -- owner 2026-10-11); these rows say what each finding field reads in the Risk Analysis reports."
+    }
+  ],
+  "mappings": [
+    {
+      "field": "mde_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.id",
+        "deviceInfo.DeviceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "entra_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.aadDeviceId",
+        "deviceInfo.AadDeviceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "azure_vm_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.vmMetadata.vmId",
+        "deviceInfo.AzureVmId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "azure_resource_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.vmMetadata.resourceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_azure_subscription_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.vmMetadata.subscriptionId",
+        "deviceInfo.AzureVmSubscriptionId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cloud_provider",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.vmMetadata.cloudProvider",
+        "deviceInfo.CloudPlatforms"
+      ],
+      "normalize": [
+        "enum:cloud"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.computerDnsName",
+        "deviceInfo.DeviceName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_hostname",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.computerDnsName",
+        "deviceInfo.DeviceName"
+      ],
+      "normalize": [
+        "lower",
+        "split:.",
+        "first"
+      ]
+    },
+    {
+      "field": "si_fqdn",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.computerDnsName",
+        "deviceInfo.DeviceName"
+      ],
+      "normalize": [
+        "lower",
+        "require_contains:."
+      ]
+    },
+    {
+      "field": "si_ip_addresses",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.ipAddresses[*].ipAddress",
+        "machine.lastIpAddress"
+      ],
+      "normalize": [
+        "ip"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_public_ip",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.lastExternalIpAddress",
+        "deviceInfo.PublicIP"
+      ],
+      "normalize": [
+        "ip"
+      ]
+    },
+    {
+      "field": "si_mac_addresses",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.ipAddresses[*].macAddress"
+      ],
+      "normalize": [
+        "mac"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_hardware_uuid",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.HardwareUuid"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_os_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.osPlatform",
+        "deviceInfo.OSPlatform"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.osPlatform",
+        "deviceInfo.OSPlatform"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ]
+    },
+    {
+      "field": "si_os_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.osVersion",
+        "machine.version",
+        "deviceInfo.OSVersion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_build",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.osBuild",
+        "deviceInfo.OSBuild"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_architecture",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.osArchitecture",
+        "deviceInfo.OSArchitecture"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.DeviceType"
+      ],
+      "normalize": [
+        "enum:device_type"
+      ]
+    },
+    {
+      "field": "si_device_category",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.DeviceCategory"
+      ],
+      "normalize": [
+        "enum:device_category"
+      ]
+    },
+    {
+      "field": "si_device_subtype",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.DeviceSubtype"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_join_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.JoinType"
+      ],
+      "normalize": [
+        "enum:join_type"
+      ]
+    },
+    {
+      "field": "si_managed_by",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.managedBy",
+        "deviceInfo.DeviceManagementType"
+      ],
+      "normalize": [
+        "enum:managed_by"
+      ]
+    },
+    {
+      "field": "si_onboarding_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.onboardingStatus",
+        "deviceInfo.OnboardingStatus"
+      ],
+      "normalize": [
+        "enum:onboarding"
+      ]
+    },
+    {
+      "field": "si_sensor_health",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.healthStatus",
+        "deviceInfo.SensorHealthState"
+      ],
+      "normalize": [
+        "enum:health"
+      ]
+    },
+    {
+      "field": "si_av_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.DefenderAvStatus",
+        "machine.defenderAvStatus"
+      ],
+      "normalize": [
+        "enum:av_status"
+      ]
+    },
+    {
+      "field": "si_av_mode",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.DefenderAvMode",
+        "defender.AvMode"
+      ],
+      "normalize": [
+        "enum:av_mode"
+      ]
+    },
+    {
+      "field": "si_edr_mode",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.EdrMode"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_is_excluded",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.isExcluded",
+        "deviceInfo.IsExcluded"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_excluded_reason",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.exclusionReason",
+        "deviceInfo.ExclusionReason"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_exposure_level",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.exposureLevel",
+        "deviceInfo.ExposureLevel"
+      ],
+      "normalize": [
+        "enum:level"
+      ]
+    },
+    {
+      "field": "si_machine_risk",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.riskScore"
+      ],
+      "normalize": [
+        "enum:level"
+      ]
+    },
+    {
+      "field": "si_internet_exposed",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.IsInternetFacing"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_logged_on_users",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.LoggedOnUsers"
+      ],
+      "normalize": [
+        "parse_json"
+      ]
+    },
+    {
+      "field": "si_machine_groups",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.rbacGroupName",
+        "deviceInfo.MachineGroup"
+      ],
+      "normalize": [
+        "to_list"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.machineTags[*]"
+      ],
+      "normalize": [
+        "tags:mde"
+      ]
+    },
+    {
+      "field": "si_first_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.firstSeen"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_installed_software",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "software[*]",
+        "softwareInventory.Products[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_software_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "softwareInventory.Installed"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_software_eos_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "softwareInventory.EndOfSupport"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_software_eos",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "softwareInventory.EndOfSupportItems[*]"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_frequent_user_tier",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "logon.MostFrequentUserTier"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_eg_query_rules",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "egQueryRules[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "machine.lastSeen",
+        "deviceInfo.Timestamp"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "combine": "max"
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.CveId"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_cve",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.CveId"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_title",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.CveId"
+      ],
+      "normalize": [
+        "upper"
+      ],
+      "note": "A CVE is named by its id (Defender gives no title)."
+    },
+    {
+      "field": "si_description",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.VulnerabilityDescription"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_severity",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.VulnerabilitySeverityLevel"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cvss",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.CvssScore"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_has_exploit",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.IsExploitAvailable"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_published",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.PublishedDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_reference",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.RecommendedSecurityUpdate",
+        "vuln.RecommendedSecurityUpdateId"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_fix_available",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.RecommendedSecurityUpdate",
+        "vuln.RecommendedSecurityUpdateId"
+      ],
+      "normalize": [
+        "present"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_recommended_update",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.RecommendedSecurityUpdate"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_recommended_update_id",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.RecommendedSecurityUpdateId"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_remediation_type",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.RecommendedSecurityUpdate",
+        "vuln.RecommendedSecurityUpdateId"
+      ],
+      "normalize": [
+        "present",
+        "if_true:patch"
+      ],
+      "verify": true,
+      "note": "A named security update is a patch; without one the type stays unknown."
+    },
+    {
+      "field": "si_affected_product",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.SoftwareName"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_vendor",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.SoftwareVendor"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_version",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.SoftwareVersion"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "assessment.ConfigurationId"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_title",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.ConfigurationName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_description",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.ConfigurationDescription",
+        "kb.RiskDescription"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_remediation",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RemediationOptions"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_fix_remediation",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RemediationOptions"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_remediation_type",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RemediationOptions"
+      ],
+      "normalize": [
+        "present",
+        "if_true:configuration"
+      ],
+      "note": "A configuration remediation is a configuration change."
+    },
+    {
+      "field": "si_fix_available",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RemediationOptions"
+      ],
+      "normalize": [
+        "present"
+      ]
+    },
+    {
+      "field": "si_severity",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.ConfigurationImpact",
+        "assessment.ConfigurationImpact"
+      ],
+      "normalize": [
+        "int",
+        "enum:mde_configuration_impact"
+      ],
+      "note": "The impact 1..10 banded as Device_Recommendations_* bands it (10 critical, 9 high, 5..8 medium, else low)."
+    },
+    {
+      "field": "si_category",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.ConfigurationCategory"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_subcategory",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.ConfigurationSubcategory"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_compliance_tags",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.Tags[*]",
+        "kb.ConfigurationBenchmarks[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_mitre_tactics",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RelatedMitreTactics[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "note": "The ComplianceTags / MITRE_* columns of Device_Recommendations_* are built from these KB columns."
+    },
+    {
+      "field": "si_mitre_techniques",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "kb.RelatedMitreTechniques[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_device_model",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.Model"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_device_manufacturer",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.Vendor"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_device_value",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.AssetValue",
+        "machine.deviceValue"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_sensor_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.ClientVersion",
+        "machine.agentVersion"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_os_distribution",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.OSDistribution"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_os_version_info",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.OSVersionInfo"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_internet_exposed_reason",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.AdditionalFields.InternetFacingReason"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_internet_exposed_detail",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.InternetFacing"
+      ],
+      "normalize": [
+        "parse_json"
+      ],
+      "verify": true,
+      "note": "InternetFacing is put on the part by the collector (ConvertTo-SIDeviceInfoPart) from the InternetFacing* properties of AdditionalFields."
+    },
+    {
+      "field": "si_connectivity_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "deviceInfo.ConnectivityType"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_hardening",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.Hardening"
+      ],
+      "normalize": [
+        "parse_json"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_hardening_note",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.HardeningNote"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_bios_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.BiosVersion"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cpu",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.Cpu"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_hardware_model",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.HardwareModel"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_networks",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.Networks[*]"
+      ],
+      "normalize": [
+        "to_list"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_on_public_network",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.OnPublicNetwork"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_default_gateways",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.DefaultGateways[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_adapter_addresses",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.AdapterAddresses[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_alerts_30d",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.Alerts30d"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_high_alerts_30d",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.HighAlerts30d"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_alert_title",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.LastAlertTitle"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_alert_severity",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.LastAlertSeverity"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_alert_category",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.LastAlertCategory"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_alert_time",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.LastAlertTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_open_alerts",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "openAlerts.Open"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_open_alerts_highest_severity",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "openAlerts.HighestSeverity"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_open_alert_title",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "openAlerts.Title"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_open_alert_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "openAlerts.Id"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_open_alert_time",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "openAlerts.Time"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_admin_logon",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.LastAdminLogon"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_admin_logons_30d",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.AdminLogons30d"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_admin_logon_accounts",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.AdminLogonAccounts[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_not_licensed",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "defender.NotLicensed[*]",
+        "findingLicence.NotLicensed[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_epss",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.EpssScore"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "verify": true,
+      "note": "RECORD CAPTURE (owner 2026-10-11: both, in two steps): the device record carries the vulnerabilities and the security settings SUMMARISED per device (parts vulnerabilities / configurations); no record is written per CVE or setting row -- these fields reach the findings through the Risk Analysis reports (Device_Missing_CVEs_*, Device_Recommendations_*)."
+    },
+    {
+      "field": "si_cvss_vector",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.CvssVector"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cve_supportability",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "kb.CveSupportability"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cve_tags",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.CveTags[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cve_mitigation_status",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.CveMitigationStatus"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_evidence",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "assessment.Context"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_user_impact",
+      "recordTypes": [
+        "configuration"
+      ],
+      "sources": [
+        "assessment.IsExpectedUserImpact"
+      ],
+      "normalize": [
+        "bool",
+        "if_true:User impact expected"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Total"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true,
+      "note": "Summarised per device in the query (never one record per CVE or setting); the findings themselves arrive through Risk Analysis."
+    },
+    {
+      "field": "si_vuln_critical_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Critical"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_high_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.High"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_medium_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Medium"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_low_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Low"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_exploitable_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Exploitable"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_highest_cvss",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.HighestCvss"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vulnerable_software_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Software"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_newest_published",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.NewestPublished"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_oldest_published",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.OldestPublished"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_vuln_top",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.TopText[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_vuln_summary_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "vulnerabilities.Status"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_config_assessed_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.Assessed"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true,
+      "note": "Summarised per device in the query (never one record per CVE or setting); the findings themselves arrive through Risk Analysis."
+    },
+    {
+      "field": "si_config_noncompliant_count",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.NonCompliant"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_config_highest_impact",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.HighestImpact"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_config_assessed_at",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.AssessedAt"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_config_noncompliant_categories",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.Categories[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_config_top",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.TopText[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_config_summary_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "configurations.Status"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_source_first_seen",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "export.firstSeenTimestamp"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true,
+      "note": "#636 (owner 2026-10-19, the protection score's age): Defender's own first sighting of the CVE of this software on this device -- the software vulnerabilities export (GET /api/machines/SoftwareVulnerabilitiesExport, Vulnerability.Read.All; documented property FirstSeenTimestamp, firstSeenTimestamp in the JSON), read once per Risk Analysis run and put on the Device_Missing_CVEs_* rows by device id + CVE (engine/risk-analysis/_shared/RA-SourceFirstSeen.ps1). Advanced hunting (DeviceTvmSoftwareVulnerabilities) has no such column. Secure configurations have none either: the configuration export's Timestamp is the LAST time the configuration was seen."
+    }
+  ]
+}

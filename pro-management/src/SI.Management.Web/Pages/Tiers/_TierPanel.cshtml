@@ -1,0 +1,183 @@
+@model SI.Management.Web.Pages.Tiers.TierPanel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Changes
+@* What a row of the tier board opens -- beside the grid as a fragment (?handler=Drawer), or on the plain page (?ci=): the
+   tier in one sentence, every claim on the tier (the one that decided first), and -- for someone who may change -- each
+   claim's own buttons (turn the rule that made it off, move it, put it back: _ClaimChange.cshtml) and the forms that
+   STAGE a pin or an exclusion. A claim no rule made has no button and says why in a word. Nothing here writes: every
+   form posts to the board's Stage handler, and the change waits on Review & commit. *@
+@{
+    var ci = Model.Ci;
+    var doc = Model.Doc;
+    var asset = Model.Asset;
+    var tier = SI.Management.Web.Pages.Tiers.IndexModel.TierOf(ci.Tier);
+    var name = string.IsNullOrWhiteSpace(ci.Name) ? ci.CiId : ci.Name;
+    // the ids of the form fields: the panel can be on the page and in the drawer at the same time
+    var sfx = Model.Plain ? "p" : "d";
+    var claims = doc.Claims.Where(c => c.Tier is not null).OrderByDescending(c => c.Winner).ThenByDescending(c => c.Admissible).ThenBy(c => c.Tier ?? 99).ToList();
+    // the rules the profiler recorded on this asset, as rule keys: what a claim of a document written before claims
+    // carried their rule's key is matched against, and the rules of an asset whose document has no claims yet
+    var ruleKeys = Model.RecordedClaims.Where(c => c.Source == "rule" && !string.IsNullOrWhiteSpace(c.Evidence)).Select(c => Model.Engine + "/" + c.Evidence)
+        .Where(k => DocumentValidator.RuleKey().IsMatch(k)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var pinTiers = new[] { "0", "1", "2", "3" };
+    // how the forms name the asset: by its CI (the asset is looked up from it), or -- an asset no CI stands for -- by its own key
+    var assetField = Model.AssetOnly ? "AssetKey" : "CiId";
+    // one claim's buttons: the form of the rule with that key (a number keeps the field ids apart)
+    var claimNo = 0;
+    SI.Management.Web.Pages.Tiers.ClaimChangeForm ChangeForm(string key) => new(key, assetField, ci.CiId, Model.Return, SI.Management.Web.Pages.Tiers.IndexModel.ClaimIdSuffix(sfx, ++claimNo),
+        Model.MovedRules.TryGetValue(key, out var movedNow) ? movedNow : (int?)null, Model.StagedRules.TryGetValue(key, out var stagedNow) ? stagedNow : null);
+}
+<div class="tier-panel" data-tier-panel="@ci.CiId" data-tier="@tier">
+    <h2 id="tp-h-@sfx"><span class="tierdot t@(tier)"></span><span>@name</span> <span class="badge" data-panel-tier>@SI.Management.Web.Pages.Cis.DetailModel.TierText(ci.Tier)</span>@if (Model.Staged is not null) { <span class="badge warn" data-staged>@Model.Staged</span> }</h2>
+    @if (Model.Plain) { <p><a href="@Model.CloseHref" data-panel-close>Close these details</a></p> }
+
+    @if (Model.AssetOnly)
+    {
+        @* an asset of the asset table that no CI stands for yet: what the asset table holds about it *@
+        <p class="hint" data-asset-only>This asset is not a CI yet -- none of the sources a CI is built from has seen it -- so it is not in the table below. A pin still gives it a tier, by its name, from the next run.</p>
+        <p class="lede" data-tier-explanation>@SI.Management.Web.Pages.Cis.DetailModel.TierText(ci.Tier).@if (!string.IsNullOrWhiteSpace(ci.TierReason)) { <text> @ci.TierReason</text> } else if (ci.Tier is null) { <text> No tier rule, pin or default tier rule gave this asset a tier.</text> }</p>
+    }
+    else if (!string.IsNullOrWhiteSpace(doc.Explanation))
+    {
+        <p class="lede" data-tier-explanation>@doc.Explanation</p>
+    }
+    else
+    {
+        <p class="lede" data-tier-explanation>@SI.Management.Web.Pages.Cis.DetailModel.TierText(ci.Tier), set by @SI.Management.Web.Pages.Cis.DetailModel.SetByText(ci.TierSetBy).@if (!string.IsNullOrWhiteSpace(ci.TierReason)) { <text> Reason: @ci.TierReason.</text> }</p>
+    }
+    @if (!Model.AssetOnly)
+    {
+        <p class="hint">Decided by @CiColumns.TierSetByText(ci.TierSetBy). An SI rule decides when one matches (the lowest tier wins); your tag counts only when no SI rule decides; the default applies only when nothing claims; a manual override wins over everything.</p>
+    }
+
+    <dl class="kv">
+        @if (Model.AssetOnly) { <dt>Asset</dt><dd class="mono">@ci.CiId</dd> }
+        else { <dt>CI</dt><dd><a href="/Cis/Detail?id=@Uri.EscapeDataString(ci.CiId)" class="mono">@ci.CiId</a></dd> }
+        <dt>Class</dt><dd>@ci.Class</dd>
+        @if (!string.IsNullOrWhiteSpace(ci.AssetType)) { <dt>Asset type</dt><dd>@ci.AssetType</dd> }
+        <dt>Last seen</dt><dd>@Fmt.Time(ci.LastSeen)</dd>
+    </dl>
+
+    <h3 id="tp-claims-@sfx">Every claim on the tier</h3>
+    @if (claims.Count > 0)
+    {
+        <div class="table-wrap">
+            <table data-tier-claims data-sortable data-default-sort="off" aria-labelledby="tp-claims-@sfx">
+                <thead><tr><th scope="col">Claim</th><th scope="col">Who</th><th scope="col">Tier</th><th scope="col">What matched</th><th scope="col">Rule or source</th><th scope="col">Outcome</th>@if (Model.MayStage) { <th scope="col" data-sort="off">Change this rule</th> }</tr></thead>
+                <tbody>
+                    @foreach (var c in claims)
+                    {
+                        var matched = c.Matched.Count > 0 ? string.Join("; ", c.Matched) : string.Join(", ", c.Evidence.Select(CiColumns.LabelOf));
+                        var change = SI.Management.Web.Pages.Tiers.IndexModel.ChangeOf(c, ruleKeys, Model.Engine);
+                        <tr class="@(c.Winner ? "winner" : null)" data-claim="@c.Rule" data-winner="@(c.Winner ? "1" : "0")">
+                            <td class="wrap">@(c.Label ?? c.Name ?? c.Rule)</td>
+                            <td>@SI.Management.Web.Pages.Cis.DetailModel.ClaimKindText(c.Kind)</td>
+                            <td>@SI.Management.Web.Pages.Cis.DetailModel.TierText(c.Tier)</td>
+                            <td class="wrap">@matched</td>
+                            <td class="wrap"><span class="mono">@c.Rule</span>@if (!string.IsNullOrWhiteSpace(c.Mechanism)) { <br /><span class="muted">@c.Mechanism</span> }</td>
+                            <td class="wrap">
+                                @if (c.Winner) { <span class="badge good">@SI.Management.Web.Pages.Cis.DetailModel.Decided(c)</span> }
+                                else if (c.Admissible) { <span class="badge info">@SI.Management.Web.Pages.Cis.DetailModel.Decided(c)</span> }
+                                else { <span class="badge warn">@SI.Management.Web.Pages.Cis.DetailModel.Decided(c)</span> }
+                                @if (!string.IsNullOrWhiteSpace(c.Reason)) { <br /><span class="muted">@c.Reason</span> }
+                            </td>
+                            @if (Model.MayStage)
+                            {
+                                <td class="wrap" data-claim-change>
+                                    @if (change.Key is { } changeKey) { <partial name="_ClaimChange" model="ChangeForm(changeKey)" /> }
+                                    else { <span class="muted" data-claim-nochange>@change.Why</span> }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (Model.RecordedClaims.Count > 0)
+    {
+        @* a CI whose document carries no claims yet: what the profiler recorded on the asset *@
+        <div class="table-wrap">
+            <table data-tier-claims data-recorded-claims data-sortable data-default-sort="off" aria-labelledby="tp-claims-@sfx">
+                <thead><tr><th scope="col">Source</th><th scope="col">Tier</th><th scope="col">What matched</th><th scope="col">Outcome</th>@if (Model.MayStage) { <th scope="col" data-sort="off">Change this rule</th> }</tr></thead>
+                <tbody>
+                    @foreach (var c in Model.RecordedClaims.OrderByDescending(c => c.FeedsTier).ThenBy(c => c.Tier ?? 99))
+                    {
+                        // a rule the profiler recorded on the asset is named by its key; anything else is no rule
+                        string? recordedKey = null;
+                        var recordedWhy = "not set by a rule";
+                        if (c.Source == "rule" && !string.IsNullOrWhiteSpace(c.Evidence))
+                        {
+                            if (c.Evidence.StartsWith(RuleTemplates.PinPrefix, StringComparison.OrdinalIgnoreCase)) { recordedWhy = SI.Management.Web.Pages.Tiers.IndexModel.WhyPin; }
+                            else
+                            {
+                                recordedKey = ruleKeys.FirstOrDefault(k => k.Equals(Model.Engine + "/" + c.Evidence, StringComparison.OrdinalIgnoreCase));
+                                recordedWhy = SI.Management.Web.Pages.Tiers.IndexModel.WhyPack;
+                            }
+                        }
+                        <tr data-claim="@c.Evidence">
+                            <td>@c.Source</td>
+                            <td>@(c.Tier is null ? "" : "Tier " + c.Tier)</td>
+                            <td class="wrap mono">@c.Evidence</td>
+                            <td>@(c.FeedsTier ? "can decide the tier" : "recorded only")</td>
+                            @if (Model.MayStage)
+                            {
+                                <td class="wrap" data-claim-change>
+                                    @if (recordedKey is not null) { <partial name="_ClaimChange" model="ChangeForm(recordedKey)" /> }
+                                    else { <span class="muted" data-claim-nochange>@recordedWhy</span> }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <p class="hint" data-no-claims>No tier rule matched this asset, so no claim is recorded.</p>
+    }
+    @* a rule of this asset that is moved as a whole (committed): its claim counts for the new tier from the next run *@
+    @foreach (var k in ruleKeys)
+    {
+        if (Model.MovedRules.TryGetValue(k, out var movedTo))
+        {
+            <p class="hint" data-moved-claim="@k">The rule <span class="mono">@k</span> is moved to Tier @movedTo from the next run.</p>
+        }
+    }
+    <p class="hint">
+        @if (!Model.AssetOnly) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(ci.CiId)">Everything about @name</a> }
+        @if (asset is not null) { <a href="/Findings?q=@Uri.EscapeDataString(asset.AssetName)">Findings on @asset.AssetName</a> }
+    </p>
+
+    @if (Model.MayStage)
+    {
+        <h3>Change it</h3>
+        <p class="hint">Each change is staged: nothing is written until <a href="/Changes">Review &amp; commit</a>.</p>
+        @if (asset is null)
+        {
+            <p class="hint" data-no-asset>A pin or an exclusion cannot be staged for this CI yet: the asset table has no row for it. It gets one with the next data sync.</p>
+        }
+        else
+        {
+            <form method="post" asp-page="/Tiers/Index" asp-page-handler="Stage" class="stack" data-tier-stage="pin">
+                <input type="hidden" name="Action" value="pin" /><input type="hidden" name="@assetField" value="@ci.CiId" /><input type="hidden" name="Return" value="@Model.Return" />
+                <h4>Pin to a tier</h4>
+                <div>
+                    <label for="tp-tier-@sfx">Tier</label>
+                    <select id="tp-tier-@sfx" name="Tier">@foreach (var t in pinTiers) { <option value="@t" disabled="@(t == asset.Tier)">Tier @t</option> }</select>
+                </div>
+                <div><label for="tp-pin-reason-@sfx">Reason</label><input id="tp-pin-reason-@sfx" type="text" name="Reason" maxlength="400" required minlength="3" /></div>
+                <div class="actions"><button type="submit">Stage pin</button></div>
+            </form>
+            <form method="post" asp-page="/Tiers/Index" asp-page-handler="Stage" class="stack" data-tier-stage="exclude">
+                <input type="hidden" name="Action" value="exclude" /><input type="hidden" name="@assetField" value="@ci.CiId" /><input type="hidden" name="Return" value="@Model.Return" />
+                <h4>Exclude the asset</h4>
+                <p class="hint">Exempts every finding on @asset.AssetName (an asset exemption).</p>
+                <div><label for="tp-x-reason-@sfx">Reason</label><input id="tp-x-reason-@sfx" type="text" name="Reason" maxlength="400" required minlength="3" /></div>
+                <div class="actions"><button type="submit" class="secondary">Stage exclusion</button></div>
+            </form>
+        }
+        <p class="hint" data-claim-change-hint>To change a rule, use the buttons on its claim in the table above: turn it off, move every asset it claims to another tier, or put a moved rule back. A claim no rule made -- your tag, a manual pin -- has no button: it is changed where it was set.</p>
+    }
+</div>

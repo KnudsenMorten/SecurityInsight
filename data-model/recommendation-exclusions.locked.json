@@ -1,0 +1,6 @@
+{
+  "$comment": "Known false positives of a provider's recommendation in a STATED situation, suppressed by a default rule with its reason -- never by disabling the report (SI-RecommendationExclusions.ps1). A rule names the recommendation ids (the Risk Analysis row's ConfigurationId) it covers, optionally the reports, and a condition over the finding's CI (SI fields only, the condition language of the data model -- e.g. si_identity_origin eq synced); a finding whose CI meets it is left out and counted per rule in the run log. Only production rules apply. A finding whose CI is not known is never suppressed. Customer changes: Pro = one override per rule on the settings database ('recommendation-exclusions:<id>' -- override, disable or add); Community = recommendation-exclusions.custom.json, per rule id. Shipped rules: none yet -- a rule is shipped only for a case verified against the provider's own documentation and real rows.",
+  "kind": "recommendation-exclusion",
+  "version": "1.0.0",
+  "rules": []
+}

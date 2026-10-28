@@ -1,0 +1,58 @@
+@page
+@model SI.Management.Web.Pages.Reports.CustomModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Custom reports";
+    var edit = Model.CanEdit;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/Custom")" />
+<p class="lede">A report from your own query: write it, test it read-only against this workspace, then save it as your own report and link it into report templates.</p>
+<partial name="_Notices" model="Model" />
+
+@if (Model.State is { } st)
+{
+    <section class="card" aria-labelledby="h-mine">
+        <h2 id="h-mine">Your reports</h2>
+        @if (!Model.Mine.Any()) { <p class="hint" data-no-custom>None yet.</p> }
+        else
+        {
+            <ul data-custom-list>@foreach (var r in Model.Mine) { <li><a href="/Reports/Custom?name=@Uri.EscapeDataString(r.Name)" data-custom="@r.Name">@r.Name</a> <span class="hint">@ReportBody.Text(r.Json, "SecurityDomain")</span></li> }</ul>
+        }
+        @if (edit) { <p><a class="button secondary" href="/Reports/Custom" data-new-report>New report from a query</a></p> }
+    </section>
+    <partial name="_Contract" />
+    <form method="post" data-custom-form>
+        <section class="card" aria-labelledby="h-edit">
+            <h2 id="h-edit">@(Model.Existing is null ? "New report" : "Report " + Model.Existing.Name)</h2>
+            <fieldset disabled="@(!edit)">
+                <div class="filters">
+                    <div><label for="cr-name">Name</label><input id="cr-name" type="text" name="Name" value="@Model.Name" maxlength="100" pattern="[A-Za-z0-9_]{1,100}" placeholder="My_Report_Detailed" readonly="@(Model.Existing is not null)" data-field="name" /></div>
+                    <div><label for="cr-domain">Security domain</label><select id="cr-domain" name="Domain" data-field="domain"><option value="">choose</option>@foreach (var d in ReportVocabulary.Domains) { <option value="@d" selected="@(Model.Domain == d)">@d</option> }</select></div>
+                    <div class="wide"><label for="cr-purpose">Purpose</label><input id="cr-purpose" type="text" name="Purpose" value="@Model.Purpose" maxlength="1000" data-field="purpose" /></div>
+                </div>
+                <label for="cr-query">Query (KQL, read-only)</label>
+                <textarea id="cr-query" name="Query" class="code" rows="18" spellcheck="false" data-kql data-field="query">@Model.Query</textarea>
+                <div class="filters">
+                    <fieldset><legend>Severity scope</legend>@foreach (var s in ReportVocabulary.Severities) { <label><input type="checkbox" name="Severities" value="@s" checked="@Model.Severities.Contains(s)" /> @s</label> }</fieldset>
+                    <fieldset><legend>Tier scope</legend>@foreach (var t in ReportVocabulary.Tiers) { <label><input type="checkbox" name="Tiers" value="@t" checked="@Model.Tiers.Contains(t)" /> @t</label> }</fieldset>
+                    <fieldset data-link-to><legend>Link into report templates</legend>@foreach (var t in st.Templates.Where(t => t.Enabled)) { <label><input type="checkbox" name="LinkTo" value="@t.Name" checked="@Model.LinkTo.Contains(t.Name)" data-link="@t.Name" /> @t.Name</label> }</fieldset>
+                </div>
+            </fieldset>
+            @if (edit)
+            {
+                <div class="filters">
+                    <div class="wide"><label for="cr-reason">Reason (recorded with the change)</label><input id="cr-reason" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                </div>
+                <div class="actions">
+                    <button type="submit" asp-page-handler="Test" class="secondary" data-test>Test (read-only)</button>
+                    <button type="submit" asp-page-handler="Save" data-save>Save as my report (stage)</button>
+                    @if (Model.Existing is not null) { <button type="submit" asp-page-handler="Remove" class="danger" data-remove-report>Remove</button> }
+                </div>
+                @if (!Model.Runnable) { <p class="hint" data-not-runnable>@SI.Management.Web.Reports.NotConfiguredReportQueryRunner.Why</p> }
+            }
+            else { <p class="hint">Read-only: only an Admin creates reports.</p> }
+        </section>
+    </form>
+    @if (Model.Test is { } tr) { <partial name="_TestResult" model="tr" /> }
+}

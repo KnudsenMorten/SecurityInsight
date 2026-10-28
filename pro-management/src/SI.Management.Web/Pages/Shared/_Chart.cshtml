@@ -1,0 +1,31 @@
+@model ChartSpec
+@{
+    var spec = new
+    {
+        type = Model.Type,
+        labels = Model.Labels,
+        yLabel = Model.YLabel,
+        timeLabels = Model.TimeLabels,
+        series = Model.Series.Select(s => new { name = s.Name, data = s.Data, slot = s.Slot }),
+    };
+}
+@if (Model.Labels.Count == 0)
+{
+    <p class="hint">No data for this period.</p>
+}
+else
+{
+    <div class="chart-box">
+        <canvas data-chart="@Model.Id" role="img" aria-label="@(Model.AriaLabel ?? string.Join(", ", Model.Series.Select(s => s.Name)))"></canvas>
+    </div>
+    <script type="application/json" id="@Model.Id">@Json.Serialize(spec)</script>
+    @if (Model.Series.Count >= 2)
+    {
+        <ul class="legend">
+            @foreach (var s in Model.Series)
+            {
+                <li><i class="s@(s.Slot)"></i>@s.Name</li>
+            }
+        </ul>
+    }
+}

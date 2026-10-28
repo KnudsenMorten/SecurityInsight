@@ -1,0 +1,455 @@
+#Requires -Version 5.1
+<#
+    RISK ANALYSIS ON CIs (V3-DATA-MODEL part 2, P4 / M4) -- the CI context of every finding row, BEFORE it is scored.
+
+    Operator, 2026-10-08: "risk analyzes needs refinement, but that is all about switching to more static si fields whre
+    appropriate". The reports keep their queries; what changes is that every row is tied to its CI and takes the CI's
+    SI fields, so one asset has ONE tier, ONE set of CMDB values, ONE criticality factor and ONE set of asset risk factors
+    in every report:
+
+      * si_ci_id                     the row's CI (SI_CI_CL), found through any id the row carries -- the provider's own id
+                                     (Defender device, Entra object, Azure resource, Exposure Graph node), SI_AssetId with
+                                     its prefix removed -- and, only when no id is known, a name that exactly one CI has
+      * CriticalityTier / -Level     the CI's tier (the enrichment rules' MIN, with its trace on the CI)
+      * cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity   the owning CMDB's values, where the row has none
+      * RiskFactor_Weight            the CI's criticality factor (x100), unless the report's own weighting set one
+      * RiskFactor_*_Detailed        the CI's asset risk factors (risk-factors.json) are added as tokens -- a factor the
+                                     report already computed (same name, any spelling) is not added twice
+
+    SI_RA_CiContext = off switches it off (the rows are then scored as before). No SI_CI_CL yet = nothing changes.
+    PowerShell 5.1: no ?. / ??, no ternary, no Set-StrictMode.
+#>
+
+function Get-RADataModelMode {
+    <#
+        PURE. Which data model Risk Analysis scores on: 'ci' (M4 -- the CI decides tier, asset risk factors and the
+        criticality factor) or 'legacy' (today: the CI context is added on top of the report's own values). Set by
+        SI_DataModel; ring customers move to 'ci' at M6 (operator: the current v3 keeps releasing until the new model is
+        complete).
+    #>
+    param($Setting = $global:SI_DataModel)
+    if (([string]$Setting).Trim().ToLowerInvariant() -eq 'ci') { return 'ci' }
+    return 'legacy'
+}
+
+function Get-RAStaleDays {
+    <# PURE. SI_ActiveStaleDays (default 30): a CI not seen in any source for this many days is stale, and the CI's
+       latest FULL row is looked for within the same days (operator: "device must look back 30 days before being stale"). #>
+    param($Setting = $global:SI_ActiveStaleDays)
+    $d = 0
+    if ([int]::TryParse(([string]$Setting).Trim(), [ref]$d) -and $d -gt 0) { return $d }
+    return 30
+}
+
+function Get-RACiIndexKql {
+    <#
+        The current CIs and their properties (#501, V3-DATA-MODEL 2.21) -- ONE query for both data models (the SQL CI
+        build's SI_CI_CL contract). The CI build posts a SLIM 'seen' row for every CI every build and a FULL row only when
+        a CI's content changed (plus a weekly full refresh), so:
+          * the SET of CIs = the rows of the newest build (si_collection_time == its max; a full row also counts as seen)
+          * a CI's PROPERTIES = its latest full row within SI_ActiveStaleDays (default 30) -- operator 2026-10-09: "a device
+            can be off for 1 week, how do we find its latest data if you filter per day"
+          * si_stale_ = the newest seen row says no source saw the CI within the same days
+        Rows written before the row kinds (no si_row_kind) count as both. One setting, never a second number. -Mode is
+        kept for the callers; the data model changes what a finding TAKES from its CI (Add-RACiContext), not which CIs exist.
+    #>
+    param([ValidateSet('legacy', 'ci')][string]$Mode = 'legacy', [Alias('LookbackDays')][int]$StaleDays = 0)
+    $LookbackDays = $StaleDays
+    if ($LookbackDays -le 0) { $LookbackDays = 30; if ($global:SI_ActiveStaleDays -and [int]$global:SI_ActiveStaleDays -gt 0) { $LookbackDays = [int]$global:SI_ActiveStaleDays } }
+    @"
+let ci_ = SI_CI_CL
+| where TimeGenerated > ago($($LookbackDays)d)
+| extend si_k_ = tostring(si_ci_id), si_t_ = todatetime(si_collection_time), si_kind_ = tostring(column_ifexists('si_row_kind', ''))
+| where isnotempty(si_k_);
+let build_ = toscalar(ci_ | summarize max(si_t_));
+let set_ = ci_ | where si_t_ == build_ | summarize si_seen_ = max(todatetime(column_ifexists('si_last_seen', datetime(null)))) by si_k_;
+ci_
+| where si_kind_ in ('full', '')
+| summarize arg_max(si_t_, *) by si_k_
+| join kind=inner set_ on si_k_
+| extend si_ci_id = si_k_, si_last_seen = si_seen_
+| extend si_stale_ = isnotnull(si_seen_) and si_seen_ < ago($($LookbackDays)d)
+| project si_ci_id, si_class, si_asset_name, si_tier, si_tier_set_by, si_tier_reason = column_ifexists('si_tier_reason', ''),
+          si_cmdb_id, si_cmdb_name, si_cmdb_criticality, si_cmdb_data_sensitivity, si_criticality_factor,
+          si_criticality_source = column_ifexists('si_criticality_source', dynamic(null)), si_risk_factors, si_linked_objects,
+          si_link_mde, si_link_entra, si_link_azure, si_link_eg, si_link_ad, si_link_intune, si_last_seen, si_stale_,
+          si_identity_origin = tostring(column_ifexists('si_identity_origin', '')), si_rf_unknown = column_ifexists('si_rf_unknown', dynamic(null)),
+          si_unknown_fields = column_ifexists('si_unknown_fields', dynamic(null)),
+          si_device_category = tostring(column_ifexists('si_device_category', '')), si_os_platform = tostring(column_ifexists('si_os_platform', '')),
+          si_os_name = tostring(column_ifexists('si_os_name', ''))$(Get-RACiContextProjectionKql)
+"@
+}
+
+# RICH CONTEXT ON EVERY REPORT ROW (owner 2026-10-11: "rich context, single overview through si, ability to prioritize"):
+# the context a finding row takes from its CI besides tier and CMDB id -- ids AND names side by side, who owns and
+# supports the asset, where it runs, and the facts a person prioritises on. name -> the type SI_CI_CL stores it as.
+# A row keeps a value its own report already set; a CI without the value adds no column.
+function Get-RACiContextFieldTypes {
+    return [ordered]@{
+    si_azure_subscription_id = 'string'; si_azure_subscription_name = 'string'; si_azure_resource_group = 'string'
+    si_azure_tenant_id = 'string'; si_azure_tenant_name = 'string'
+    si_management_group_id = 'string'; si_management_group_name = 'string'; si_management_group_path = 'string'
+    si_owner = 'string'; si_environment = 'string'; si_cost_center = 'string'; si_app_name = 'string'
+    si_cmdb_owner = 'string'; si_cmdb_environment = 'string'; si_cmdb_support_group = 'string'; si_cmdb_support_group_id = 'string'
+    si_service_owner = 'string'; si_service_department = 'string'; si_service_environment = 'string'
+    si_service_support_group = 'string'; si_service_support_group_id = 'string'
+    si_service_assignment_group = 'string'; si_service_assignment_group_id = 'string'
+    si_backup_protected = 'bool'; si_pending_critical_patches = 'long'; si_defender_plan_tier = 'string'; si_mde_extension = 'bool'
+    si_attached_resource_id = 'string'; si_attached_resource_name = 'string'
+    si_is_encrypted = 'bool'; si_primary_user_upn = 'string'; si_intune_last_sync = 'datetime'
+    }
+}
+
+function Get-RACiContextProjectionKql {
+    <# PURE. The context fields as the tail of the CI index query's projection: each read with column_ifexists, so a
+       workspace whose SI_CI_CL does not hold a column yet (a build from before it) still answers. No comment lines. #>
+    $cols = New-Object System.Collections.Generic.List[string]
+    $types = Get-RACiContextFieldTypes
+    foreach ($k in $types.Keys) {
+        $t = [string]$types[$k]
+        if ($t -eq 'string') { $cols.Add(("{0} = tostring(column_ifexists('{0}', ''))" -f $k)) }
+        else { $cols.Add(("{0} = column_ifexists('{0}', {1}(null))" -f $k, $t)) }
+    }
+    return (",`n          " + ($cols.ToArray() -join ",`n          "))
+}
+
+function Add-RACiContextFields {
+    <# PURE. The CI's context fields onto one finding row: only a value the CI has, only where the row has none of its own. #>
+    param($Row, $Ci)
+    if ($null -eq $Row -or $null -eq $Ci) { return }
+    foreach ($k in (Get-RACiContextFieldTypes).Keys) {
+        $v = $Ci.PSObject.Properties[$k]
+        if (-not $v -or $null -eq $v.Value) { continue }
+        $val = $v.Value
+        if ($val -is [string] -and [string]::IsNullOrWhiteSpace($val)) { continue }
+        if ($val -is [System.DBNull]) { continue }
+        $cur = $Row.PSObject.Properties[$k]
+        if ($cur -and $null -ne $cur.Value -and -not ($cur.Value -is [string] -and [string]::IsNullOrWhiteSpace([string]$cur.Value))) { continue }
+        Set-RARowValue $Row $k $val
+    }
+}
+
+function ConvertTo-RACiIdKey {
+    <# PURE. An id as the CI index keys it: lower-case, SI's own prefixes removed (az:, eg:az:, eg:dev:, mde:, entra-user: ...). #>
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    $s = ([string]$Value).Trim().ToLowerInvariant()
+    if (-not $s) { return '' }
+    $s = $s -replace '^(eg:az:|eg:dev:|eg:|az:|mde:|entra-user:|entra-sp:|entra-device:|aad:)', ''
+    return $s
+}
+
+function New-RACiIndex {
+    <# PURE. CI rows -> @{ ById = id -> CI; ByName = unique name -> CI; Count }. #>
+    param([AllowEmptyCollection()][object[]]$Cis = @())
+    $byId = @{}; $nameCount = @{}; $byName = @{}
+    foreach ($c in $Cis) {
+        if ($null -eq $c -or -not $c.si_ci_id) { continue }
+        $ids = New-Object System.Collections.Generic.List[string]
+        foreach ($f in 'si_ci_id', 'si_link_mde', 'si_link_entra', 'si_link_azure', 'si_link_eg', 'si_link_ad', 'si_link_intune') {
+            $v = $c.PSObject.Properties[$f]; if ($v -and $v.Value) { $ids.Add([string]$v.Value) }
+        }
+        $lo = $c.PSObject.Properties['si_linked_objects']
+        if ($lo -and $lo.Value) {
+            $arr = $lo.Value
+            if ($arr -is [string]) { try { $arr = $arr | ConvertFrom-Json } catch { $arr = @() } }
+            foreach ($l in @($arr)) { if ($l -and $l.id) { $ids.Add([string]$l.id) } }
+        }
+        foreach ($i in $ids) { $k = ConvertTo-RACiIdKey $i; if ($k -and -not $byId.ContainsKey($k)) { $byId[$k] = $c } }
+        $n = ([string]$c.si_asset_name).Trim().ToLowerInvariant()
+        if ($n) { if ($nameCount.ContainsKey($n)) { $nameCount[$n]++ } else { $nameCount[$n] = 1; $byName[$n] = $c } }
+    }
+    foreach ($n in @($nameCount.Keys)) { if ($nameCount[$n] -gt 1) { $byName.Remove($n) } }   # a shared name identifies nothing
+    return @{ ById = $byId; ByName = $byName; Count = @($Cis).Count }
+}
+
+function Test-RACiBuildHere {
+    <#
+        Does THIS Risk Analysis run build the CIs? (D2, operator 2026-10-08: CIs in both editions.) In Pro the correlation
+        job builds them before Risk Analysis runs; where that job does not run (Community -- the 'correlation' feature is
+        not available) Risk Analysis builds them at its start. SI_RA_BuildCis = on | off overrides; default auto.
+    #>
+    param([scriptblock]$FeatureAvailable)
+    $s = ([string]$global:SI_RA_BuildCis).Trim().ToLowerInvariant()
+    if ($s -in 'on', 'true', '1') { return $true }
+    if ($s -in 'off', 'false', '0') { return $false }
+    try {
+        if (-not $FeatureAvailable) {
+            if (-not (Get-Command -Name Test-SIFeatureAvailable -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'SI-FeatureCatalog.ps1') }
+            $FeatureAvailable = { param($f) [bool](Test-SIFeatureAvailable -Feature $f).Allowed }
+        }
+        return (-not (& $FeatureAvailable 'correlation'))
+    } catch { return $true }      # cannot tell: build -- the ledger keeps the ids stable either way
+}
+
+function Get-RACiIndex {
+    <#
+        The run's CI index, built once (cached for every report of the run). Where this run builds the CIs
+        (Test-RACiBuildHere) they are indexed straight from the build -- no wait for SI_CI_CL to ingest; else read from
+        SI_CI_CL. Empty when there are no CIs yet.
+    #>
+    param([scriptblock]$Build)
+    if ($null -ne $global:RA_CiIndex) { return $global:RA_CiIndex }
+    $global:RA_CiIndexProblem = $null
+    $cis = @()
+    if ($Build -or (Test-RACiBuildHere)) {
+        try {
+            if (-not $Build) {
+                if (-not (Get-Command -Name Invoke-SICiBuild -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data-model\SI-CiBuildRun.ps1') }
+                $Build = { Invoke-SICiBuild -ReturnCis -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host $m } } }
+            }
+            $res = & $Build
+            if ($res -and $res.Cis) {
+                $global:RA_CiIndex = New-RACiIndex -Cis @(@($res.Cis) | ForEach-Object { [pscustomobject]$_ })
+                return $global:RA_CiIndex
+            }
+        } catch { Write-Warning ('CI context: the CIs could not be built in this run ({0}) -- reading the stored ones.' -f $_.Exception.Message) }
+    }
+    try {
+        if ($global:SI_WorkspaceResourceId -and (Get-Command -Name Invoke-LogAnalyticsKqlQuery -ErrorAction SilentlyContinue)) {
+            $cis = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId ([string]$global:SI_WorkspaceResourceId) -Query (Get-RACiIndexKql -Mode (Get-RADataModelMode) -StaleDays (Get-RAStaleDays)) -TimeoutSec 300
+        }
+    } catch {
+        # #639 (working rule 4): never only verbose -- every finding of this run is scored WITHOUT its CI's context (tier,
+        # criticality, exposure), so the run is a WARNING: said in the log and on the run's END record (a partial run --
+        # the data sync marks its collection and the close-loop closes nothing on it)
+        $why = ('CI context: SI_CI_CL could not be read ({0}) -- the findings of this run are scored WITHOUT their CI context (tier, criticality, exposure)' -f $_.Exception.Message)
+        Write-Warning $why
+        $pf = Get-Variable -Name _RAPublishFailures -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if ($null -ne $pf) { try { [void]$pf.Add($why) } catch { } }
+        $global:RA_CiIndexProblem = $why
+        $cis = @()
+    }
+    $global:RA_CiIndex = New-RACiIndex -Cis @($cis)
+    return $global:RA_CiIndex
+}
+
+function Find-RACiForRow {
+    <# PURE. The CI of one finding row: by any id it carries, else by a name exactly one CI has. @{ Ci; By } or $null. #>
+    param($Row, [Parameter(Mandatory)][hashtable]$Index)
+    foreach ($col in 'si_ci_id', 'SI_CorrelationId', 'SI_AssetId', 'MdeDeviceId', 'DeviceId', 'AadDeviceId', 'AzureResourceId', 'ResourceId', 'EntraObjectId', 'EntraAccountObjectId', 'AccountObjectId', 'ObjectId', 'EgNodeId', 'NodeId', 'PrimaryEntityId', 'AssetId') {
+        $p = $Row.PSObject.Properties[$col]
+        if (-not $p -or -not $p.Value) { continue }
+        $k = ConvertTo-RACiIdKey ([string]$p.Value)
+        if ($k -and $Index.ById.ContainsKey($k)) { return @{ Ci = $Index.ById[$k]; By = $col } }
+    }
+    foreach ($col in 'SI_AssetName', 'AssetName', 'DeviceName') {
+        $p = $Row.PSObject.Properties[$col]
+        if (-not $p -or -not $p.Value) { continue }
+        $n = ([string]$p.Value).Trim().ToLowerInvariant()
+        if ($Index.ByName.ContainsKey($n)) { return @{ Ci = $Index.ByName[$n]; By = 'name' } }
+    }
+    return $null
+}
+
+function ConvertTo-RATokenKey {
+    <#
+        A risk-factor token compared by the FACTOR it names: RF_P_InternetExposed == Internet-Exposed == internet_exposed,
+        and -- through the catalog's legacy tokens (RA-FactorKeys.ps1) -- LegacyEndOfSupport == unsupported_os. Letters
+        only when the catalog keys are not loaded. One factor is counted once.
+    #>
+    param([string]$Token)
+    if ($null -eq $script:RACiHasFactorKeys) { $script:RACiHasFactorKeys = [bool](Get-Command -Name ConvertTo-RAFactorKey -ErrorAction SilentlyContinue) }
+    if ($script:RACiHasFactorKeys) { return (ConvertTo-RAFactorKey -Token $Token) }
+    (([string]$Token) -replace '^(?i)RF_[PC]_', '' -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
+}
+
+function New-RAFactorCatalog {
+    <#
+        PURE. The risk-factor catalog as Risk Analysis needs it: @{ AssetKeys = token key -> factor id (every factor the
+        catalog evaluates on the ASSET -- its id, its catalog name and its legacyTokens); Display = factor id -> the token a
+        report shows: the catalog's display NAME (owner 2026-10-10 -- a customer renames a factor once, in the catalog), else
+        its first legacy token, else the id }. Finding factors and
+        report-scoped factors are NOT asset keys -- they stay the report's.
+    #>
+    param([AllowEmptyCollection()][object[]]$Factors = @())
+    $keys = @{}; $display = @{}; $axis = @{}
+    foreach ($f in $Factors) {
+        if ($null -eq $f -or -not $f.id) { continue }
+        $id = [string]$f.id
+        $axis[$id] = [string]$f.axis
+        $first = @(@($f.legacyTokens) | Where-Object { $_ })
+        $name = ''; if ($f.PSObject.Properties['name']) { $name = ([string]$f.name).Trim() }
+        # #558 / #559: reports show the SHORT name (InternetExposed); the description (name) is the GUI's
+        $short = ''; if ($f.PSObject.Properties['shortName']) { $short = ([string]$f.shortName).Trim() }
+        if ($short) { $display[$id] = $short } elseif ($name) { $display[$id] = $name } elseif ($first.Count -gt 0) { $display[$id] = [string]$first[0] } else { $display[$id] = $id }
+        if ([string]$f.appliesTo -ne 'asset' -or ([string]$f.evaluatedBy -and [string]$f.evaluatedBy -ne 'catalog')) { continue }
+        $alias = @(@($id) + $first); if ($name) { $alias += $name }; if ($short) { $alias += $short }
+        foreach ($t in $alias) { $k = ConvertTo-RATokenKey ([string]$t); if ($k -and -not $keys.ContainsKey($k)) { $keys[$k] = $id } }
+    }
+    return @{ AssetKeys = $keys; Display = $display; Axis = $axis }
+}
+
+function Get-RAFactorCatalog {
+    <# The run's factor catalog (cached): the data model's risk-factors (with the customer's overlay) when it loads, else
+       the shipped data-model/risk-factors.locked.json. #>
+    if ($null -ne $global:RA_FactorCatalog) { return $global:RA_FactorCatalog }
+    $factors = @()
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    try {
+        if (-not (Get-Command -Name Get-SIDataModel -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine\data-model\SI-DataModelTemplates.ps1') }
+        $m = Get-SIDataModel -OverlayRoot $global:SI_DataModelOverlayRoot
+        $factors = @($m['risk-factors'].factors)
+    } catch {
+        try { $factors = @((Get-Content -LiteralPath (Join-Path $siRoot 'data-model\risk-factors.locked.json') -Raw | ConvertFrom-Json).factors) } catch { $factors = @() }
+    }
+    $global:RA_FactorCatalog = New-RAFactorCatalog -Factors $factors
+    return $global:RA_FactorCatalog
+}
+
+function Select-RACiModeTokens {
+    <#
+        PURE. Data model 'ci': a row's tokens with every ASSET-catalog token removed except those the CI set (the CI
+        decides the asset factors -- one definition, never the report's provider columns, never counted twice). Finding
+        and report-scoped tokens stay. One factor is kept once: a second token naming the same factor (InternetExposureSignal
+        after RF_P_InternetExposed) is dropped. Returns the kept tokens (input order).
+    #>
+    param([AllowEmptyCollection()][string[]]$Tokens = @(), [Parameter(Mandatory)][hashtable]$Catalog, [AllowEmptyCollection()][string[]]$CiTokens = @())
+    $ci = @{}; foreach ($t in $CiTokens) { $k = ConvertTo-RATokenKey $t; if ($k) { $ci[$k] = $true } }
+    $out = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    foreach ($t in $Tokens) {
+        if (-not $t) { continue }
+        $k = ConvertTo-RATokenKey $t
+        if ($k -and $Catalog.AssetKeys.ContainsKey($k) -and -not $ci.ContainsKey($k)) { continue }
+        if ($k) { if ($seen.ContainsKey($k)) { continue }; $seen[$k] = $true }
+        $out.Add($t)
+    }
+    return $out.ToArray()      # unrolled: callers wrap in @()
+}
+
+function Set-RARowValue {
+    param($Row, [string]$Name, $Value)
+    if ($Row.PSObject.Properties[$Name]) { $Row.$Name = $Value } else { Add-Member -InputObject $Row -MemberType NoteProperty -Name $Name -Value $Value -Force }
+}
+
+function Add-RACiContext {
+    <#
+    .SYNOPSIS  Ties every finding row to its CI and takes the CI's SI fields (see the header). Returns the rows.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [hashtable]$Index,
+          # 'legacy' (default: the CI context on top of the report's own values) or 'ci' (M4: the CI decides) -- SI_DataModel
+          [ValidateSet('legacy', 'ci')][string]$Mode = (Get-RADataModelMode),
+          # the risk-factor catalog (test seam); default the run's (Get-RAFactorCatalog)
+          [hashtable]$Catalog,
+          # #541: the report's factor set (RA-ScopePreamble.ps1, Get-RAReportFactorSet) -- a CI factor outside it never
+          # reaches this report (no network factor on an identity report). Empty = every factor.
+          [AllowEmptyCollection()][string[]]$FactorSet = @())
+    if ($global:SI_RA_CiContext -and ([string]$global:SI_RA_CiContext).Trim().ToLowerInvariant() -in 'off', 'false', '0') { return , @($Rows) }
+    if ($null -eq $Index) { $Index = Get-RACiIndex }
+    if ($null -eq $Index -or $Index.Count -eq 0) { return , @($Rows) }
+    $mode = $Mode
+    $catalog = $Catalog
+    if ($mode -eq 'ci' -and $null -eq $catalog) { $catalog = Get-RAFactorCatalog }
+    # the tokens this adds show the catalog's display names in both modes (legacy too)
+    if ($null -eq $catalog) { try { $catalog = Get-RAFactorCatalog } catch { $catalog = $null } }
+    $fsSet = @{}; foreach ($x in @($FactorSet)) { if ($x) { $fsSet[[string]$x] = $true } }
+    $labels = @{ 0 = 'Critical - tier 0'; 1 = 'High - tier 1'; 2 = 'Medium - tier 2'; 3 = 'Low - tier 3' }
+    foreach ($r in $Rows) {
+        if ($null -eq $r) { continue }
+        $hit = Find-RACiForRow -Row $r -Index $Index
+        if ($null -eq $hit) { continue }
+        $ci = $hit.Ci
+        Set-RARowValue $r 'si_ci_id' ([string]$ci.si_ci_id)
+        Set-RARowValue $r 'si_ci_match' ([string]$hit.By)
+        # #559 the asset class the risk index keys on (device_server / device_client / identity / cloud_resource / public_ip):
+        # the CI's class, a device split by its category / OS (Get-SIRiskIndexAssetClass, RA-RiskIndexSi.ps1)
+        if ($ci.PSObject.Properties['si_class'] -and $ci.si_class) {
+            Set-RARowValue $r 'si_class' ([string]$ci.si_class)
+            if (Get-Command -Name Get-SIRiskIndexAssetClass -ErrorAction SilentlyContinue) {
+                $acDc = $null; $acOp = $null; $acOn = $null
+                if ($ci.PSObject.Properties['si_device_category']) { $acDc = [string]$ci.si_device_category }
+                if ($ci.PSObject.Properties['si_os_platform']) { $acOp = [string]$ci.si_os_platform }
+                if ($ci.PSObject.Properties['si_os_name']) { $acOn = [string]$ci.si_os_name }
+                Set-RARowValue $r 'si_asset_class' (Get-SIRiskIndexAssetClass -Class ([string]$ci.si_class) -DeviceCategory $acDc -OsPlatform $acOp -OsName $acOn)
+            }
+        }
+        # one tier per asset: the CI's
+        $t = $null
+        if ($null -ne $ci.si_tier -and "$($ci.si_tier)" -ne '') { $t = [int](ConvertTo-SINumberOrNullRA $ci.si_tier) }
+        if ($null -ne $t -and $labels.ContainsKey($t)) {
+            Set-RARowValue $r 'CriticalityTier' $t
+            Set-RARowValue $r 'CriticalityTierLevel' $labels[$t]
+        }
+        # the owning CMDB's values where the report has none
+        foreach ($pair in @(@('cmdbId', 'si_cmdb_id'), @('cmdbName', 'si_cmdb_name'), @('cmdbCriticality', 'si_cmdb_criticality'), @('cmdbDataSensitivity', 'si_cmdb_data_sensitivity'))) {
+            $cur = $r.PSObject.Properties[$pair[0]]
+            $v = $ci.PSObject.Properties[$pair[1]]
+            # 'ci': the owning CMDB's value on the CI wins; 'legacy': only where the report has none
+            if ($v -and $v.Value -and ($mode -eq 'ci' -or -not $cur -or [string]::IsNullOrWhiteSpace([string]$cur.Value))) { Set-RARowValue $r $pair[0] ([string]$v.Value) }
+        }
+        # rich context: subscription / tenant / management group (ids and names), owner, environment, support group, backup,
+        # pending updates ... from the CI, where the row has none of its own
+        Add-RACiContextFields -Row $r -Ci $ci
+        $factors = $ci.si_risk_factors
+        if ($factors -is [string]) { try { $factors = $factors | ConvertFrom-Json } catch { $factors = @() } }
+        $f = ConvertTo-SINumberOrNullRA $ci.si_criticality_factor
+        if ($mode -eq 'ci') {
+            # M4 (V3-DATA-MODEL 2.21): the CI decides. Weight = the CI's criticality factor (over the report's own
+            # weighting); the asset risk factors = the CI's production factors, REPLACING every asset-catalog token the
+            # report computed from provider columns (one definition, never twice); finding / report-scoped tokens stay.
+            Set-RARowValue $r 'si_data_model' 'ci'
+            $stale = $ci.PSObject.Properties['si_stale_']
+            if ($stale) { Set-RARowValue $r 'si_ci_stale' ([string]$stale.Value -in 'true', 'True', '1') }
+            if ($null -ne $f -and $f -gt 0) { Set-RARowValue $r 'RiskFactor_Weight' ([int][Math]::Round($f * 100)) }
+            $ciAll = New-Object System.Collections.Generic.List[string]
+            foreach ($axis in 'probability', 'consequence') {
+                $col = 'RiskFactor_Probability_Detailed'; if ($axis -eq 'consequence') { $col = 'RiskFactor_Consequence_Detailed' }
+                $ciTokens = New-Object System.Collections.Generic.List[string]
+                foreach ($fa in @($factors)) {
+                    if ($null -eq $fa -or [string]$fa.axis -ne $axis) { continue }
+                    if ($fsSet.Count -and -not $fsSet.ContainsKey([string]$fa.id)) { continue }
+                    if ($fa.PSObject.Properties['stage'] -and [string]$fa.stage -and [string]$fa.stage -ne 'production') { continue }
+                    if ((ConvertTo-SINumberOrNullRA $fa.impact) -le 0) { continue }
+                    $tok = [string]$fa.id; if ($catalog.Display.ContainsKey($tok)) { $tok = [string]$catalog.Display[$tok] }
+                    if (-not $ciTokens.Contains($tok)) { $ciTokens.Add($tok) }
+                }
+                $existing = @(([string]$(if ($r.PSObject.Properties[$col]) { $r.$col } else { '' })) -split '\s*;\s*' | Where-Object { $_ })
+                $kept = @(Select-RACiModeTokens -Tokens $existing -Catalog $catalog -CiTokens @())
+                $have = @{}; foreach ($e in $kept) { $have[(ConvertTo-RATokenKey $e)] = $true }
+                $merged = New-Object System.Collections.Generic.List[string]
+                foreach ($e in $kept) { $merged.Add($e) }
+                foreach ($tok in $ciTokens) { $k = ConvertTo-RATokenKey $tok; if (-not $have.ContainsKey($k)) { $merged.Add($tok); $have[$k] = $true }; $ciAll.Add($tok) }
+                Set-RARowValue $r $col ($merged.ToArray() -join ';')
+            }
+            Set-RARowValue $r 'si_ci_factor_tokens' ($ciAll.ToArray() -join ';')
+            continue
+        }
+        # the criticality factor -- unless the report's own weighting already set one
+        $w = $r.PSObject.Properties['RiskFactor_Weight']
+        $wv = $null; if ($w) { $wv = ConvertTo-SINumberOrNullRA $w.Value }
+        if ($null -ne $f -and $f -gt 0 -and ($null -eq $wv -or $wv -eq 100 -or $wv -le 0)) { Set-RARowValue $r 'RiskFactor_Weight' ([int][Math]::Round($f * 100)) }
+        # the CI's asset risk factors as tokens, once
+        # the tokens added here are marked (si_ci_factor_tokens) so the score adds them ON TOP of a report that gives its
+        # probability as a number only, instead of replacing that number (Calculate-RiskScore; removed from the row there)
+        $added = New-Object System.Collections.Generic.List[string]
+        foreach ($axis in 'probability', 'consequence') {
+            $col = 'RiskFactor_Probability_Detailed'; if ($axis -eq 'consequence') { $col = 'RiskFactor_Consequence_Detailed' }
+            $existing = @(([string]$(if ($r.PSObject.Properties[$col]) { $r.$col } else { '' })) -split '\s*;\s*' | Where-Object { $_ })
+            $have = @{}; foreach ($e in $existing) { $have[(ConvertTo-RATokenKey $e)] = $true }
+            $add = New-Object System.Collections.Generic.List[string]
+            foreach ($fa in @($factors)) {
+                if ($null -eq $fa -or [string]$fa.axis -ne $axis) { continue }
+                if ($fsSet.Count -and -not $fsSet.ContainsKey([string]$fa.id)) { continue }
+                if ((ConvertTo-SINumberOrNullRA $fa.impact) -le 0) { continue }      # testing factors count 0
+                $keys = @((ConvertTo-RATokenKey $fa.id)) + @(@($fa.tokens) | ForEach-Object { ConvertTo-RATokenKey $_ })
+                $dup = $false; foreach ($k in $keys) { if ($k -and $have.ContainsKey($k)) { $dup = $true } }
+                if ($dup) { continue }
+                $tok = [string]$fa.id
+                if ($catalog -and $catalog.Display -and $catalog.Display.ContainsKey($tok)) { $tok = [string]$catalog.Display[$tok] }
+                $add.Add($tok); $have[(ConvertTo-RATokenKey $tok)] = $true; $have[(ConvertTo-RATokenKey $fa.id)] = $true
+            }
+            if ($add.Count -gt 0) { Set-RARowValue $r $col (@($existing + $add.ToArray()) -join ';'); $added.AddRange($add) }
+        }
+        if ($added.Count -gt 0) { Set-RARowValue $r 'si_ci_factor_tokens' ($added.ToArray() -join ';') }
+    }
+    return , @($Rows)
+}
+
+function ConvertTo-SINumberOrNullRA {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) { return [double]$Value }
+    $d = 0.0
+    if ([double]::TryParse(([string]$Value).Trim(), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $d }
+    return $null
+}

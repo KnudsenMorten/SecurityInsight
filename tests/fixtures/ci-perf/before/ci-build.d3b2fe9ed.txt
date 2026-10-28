@@ -1,0 +1,2218 @@
+# The CI build's functions as they were at d3b2fe9ed (released 3.0.0.202610170817), before the speed-up of
+# tests\pester\SIv3-CiBuildSpeed.Tests.ps1 -- the reference the new ones are compared with, CI for CI. Text, never
+# dot-sourced as it is: the suite loads it under other names (New-CiPerfBeforeWorld). Do not edit.
+
+# ---- SI-CiBuild.ps1 :: Resolve-SICiField
+function Resolve-SICiField {
+    <#
+    .SYNOPSIS  One SI field resolved from a CI's records by its catalog policy.
+    .PARAMETER Origin  #546 the identity's origin (Get-SICiIdentityOrigin): a field with resolution.byOrigin takes that
+                       origin's policy and authority, and ONLY the providers in it may supply the value (Entra never
+                       decides a synchronised account's password age).
+    .OUTPUTS   $null (no record carries it) or @{ Value; Provider; Record; ObservedAt; Stale }
+    #>
+    param([Parameter(Mandatory)]$Field, [Parameter(Mandatory)][object[]]$Candidates, [datetime]$Now, [string]$CmdbOwner = 'cmdb', [string]$Origin = '')
+    $policy = [string]$Field.resolution.policy
+    $rawAuth = @($Field.resolution.authority)
+    $originRule = Get-SIFieldOriginRule -Field $Field -Origin $Origin
+    if ($null -ne $originRule -and -not $originRule.Unknown) {
+        $policy = $originRule.Policy
+        $rawAuth = @($originRule.Authority)
+        $allowed = $originRule.Authority
+        $Candidates = @($Candidates | Where-Object { $_ -and $allowed -contains [string]$_.Provider })
+        if ($Candidates.Count -eq 0) { return $null }
+    }
+    # #463 the catalog's 'cmdb_owner' token is the tenant's ONE CMDB owner; a field whose authority is ONLY the owner
+    # (si_cmdb_*) takes no value from any other provider -- a non-owner CMDB never decides (2.8.1, D11)
+    $authority = @($rawAuth | ForEach-Object { if ([string]$_ -eq 'cmdb_owner') { $CmdbOwner } else { $_ } })
+    $ownerOnly = ($rawAuth.Count -gt 0 -and @($rawAuth | Where-Object { [string]$_ -ne 'cmdb_owner' }).Count -eq 0)
+    if ($ownerOnly) { $Candidates = @($Candidates | Where-Object { [string]$_.Provider -eq $CmdbOwner }); if ($Candidates.Count -eq 0) { return $null } }
+    $staleDays = 30
+    if ($null -ne $Field.resolution.staleDays) { $staleDays = [double]$Field.resolution.staleDays }
+    $cands = New-Object System.Collections.Generic.List[object]
+    foreach ($c in $Candidates) {
+        $v = Get-SIItemValue $c.Record ([string]$Field.name)
+        if (Test-SIValueEmpty $v) { if (-not ($v -is [bool])) { continue } }
+        $seen = ConvertTo-SIUtcOrNull (Get-SIItemValue $c.Record 'si_source_last_seen')
+        $fresh = ($c.State -in 'active', 'frozen') -and ($null -ne $seen) -and ((($Now - $seen).TotalDays) -le $staleDays)
+        $rank = [array]::IndexOf($authority, [string]$c.Provider)
+        if ($rank -lt 0) { $rank = 999 }
+        $cands.Add([pscustomobject]@{ Value = $v; Provider = $c.Provider; Record = $c.Key; ObservedAt = $seen; Fresh = $fresh; Rank = $rank })
+    }
+    if ($cands.Count -eq 0) { return $null }
+    # plain arrays only: assigning @(<the generic list>) inside this branch threw "Argument types do not match" on both
+    # hosts (measured on the test VM) -- the candidates are copied out once with ToArray()
+    $candArr = $cands.ToArray()
+    $freshArr = @($candArr | Where-Object { $_.Fresh })
+    $stale = ($freshArr.Count -eq 0)
+    $pool = @(if ($stale) { $candArr } else { $freshArr })
+    $newest = { param($xs) @($xs | Sort-Object @{ Expression = { if ($_.ObservedAt) { $_.ObservedAt } else { [datetime]::MinValue } }; Descending = $true }, @{ Expression = { $_.Rank } })[0] }
+    switch ($policy) {
+        'any_true' {
+            $t = @($pool | Where-Object { (ConvertTo-SIBoolOrNull $_.Value) -eq $true })
+            # Providers: EVERY provider that said true -- the evidence of a risk factor names them all (#464)
+            if ($t.Count -gt 0) { $w = & $newest $t; return @{ Value = $true; Provider = $w.Provider; Record = $w.Record; ObservedAt = $w.ObservedAt; Stale = $stale; Providers = @($t | ForEach-Object { [string]$_.Provider } | Select-Object -Unique) } }
+            $f = @($pool | Where-Object { (ConvertTo-SIBoolOrNull $_.Value) -eq $false })
+            if ($f.Count -gt 0) { $w = & $newest $f; return @{ Value = $false; Provider = $w.Provider; Record = $w.Record; ObservedAt = $w.ObservedAt; Stale = $stale } }
+            return $null
+        }
+        'union' {
+            $list = New-Object System.Collections.Generic.List[object]
+            $seenKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($c in ($pool | Sort-Object Rank)) {
+                foreach ($x in (Get-SIValueList $c.Value)) {
+                    $k = if ($x -is [string] -or $x -is [ValueType]) { [string]$x } else { ($x | ConvertTo-Json -Compress -Depth 6) }
+                    if ($seenKeys.Add($k)) { $list.Add($x) }
+                }
+            }
+            $w = & $newest $pool
+            return @{ Value = $list.ToArray(); Provider = (@($pool | Select-Object -ExpandProperty Provider -Unique) -join ','); Record = $w.Record; ObservedAt = $w.ObservedAt; Stale = $stale }
+        }
+        { $_ -in 'min', 'max' } {
+            # compared by the catalog TYPE: values read back from Log Analytics are text, so the value cannot tell
+            $isDate = ([string]$Field.type -eq 'datetime')
+            $best = $null; $bestV = $null
+            foreach ($c in $cands) {
+                $x = $null
+                if ($isDate) { $x = ConvertTo-SIUtcOrNull $c.Value } else { $x = ConvertTo-SINumberOrNull $c.Value }
+                if ($null -eq $x) { continue }
+                if ($null -eq $best -or ($policy -eq 'max' -and $x -gt $bestV) -or ($policy -eq 'min' -and $x -lt $bestV)) { $best = $c; $bestV = $x }
+            }
+            if ($null -eq $best) { return $null }
+            return @{ Value = $best.Value; Provider = $best.Provider; Record = $best.Record; ObservedAt = $best.ObservedAt; Stale = $false }
+        }
+        default {
+            # authority (and anything else that reaches a CI from records): best authority rank, then newest
+            $w = @($pool | Sort-Object @{ Expression = { $_.Rank } }, @{ Expression = { if ($_.ObservedAt) { $_.ObservedAt } else { [datetime]::MinValue } }; Descending = $true })[0]
+            if ($stale) { $w = & $newest $pool }
+            return @{ Value = $w.Value; Provider = $w.Provider; Record = $w.Record; ObservedAt = $w.ObservedAt; Stale = $stale }
+        }
+    }
+}
+
+# ---- SI-CiBuild.ps1 :: New-SICiDocument
+function New-SICiDocument {
+    <#
+    .SYNOPSIS  One CI from its records: id, class, links, lifecycle and every resolved SI field.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$CiId,
+        [Parameter(Mandatory)][object[]]$Records,
+        [Parameter(Mandatory)]$Catalog,
+        [Parameter(Mandatory)][hashtable]$FeedLatest,
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$RunId = '',
+        # #463 the tenant's one CMDB owner (cmdb | servicenow) -- the catalog's cmdb_owner authority
+        [string]$CmdbOwner = 'cmdb',
+        # the catalog's resolved fields, read once for a whole set of CIs (Get-SICiFieldPlan -Catalog <the same catalog>);
+        # not given, it is read here -- the same result
+        [AllowNull()][object[]]$FieldPlan
+    )
+    $ci = [ordered]@{ si_ci_id = $CiId }
+    $class = 'identity'; $bestRank = 99
+    $cands = New-Object System.Collections.Generic.List[object]
+    $links = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $Records) {
+        $rc = [string](Get-SIItemValue $r 'si_class')
+        $rk = Get-SICiClassRank $rc
+        if ($rk -lt $bestRank) { $bestRank = $rk; $class = $rc }
+        $state = Get-SIRecordLinkState -Record $r -FeedLatest $FeedLatest
+        $p = [string](Get-SIItemValue $r 'si_provider')
+        $key = [string](Get-SIItemValue $r 'si_record_key')
+        $native = $key; $i = $key.IndexOf(':'); if ($i -ge 0) { $native = $key.Substring($i + 1) }
+        $links.Add([pscustomobject][ordered]@{
+                provider = $p; type = [string](Get-SIItemValue $r 'si_record_type'); id = $native; record_key = $key
+                primary = $false; state = $state; last_seen = (ConvertTo-SIUtcOrNull (Get-SIItemValue $r 'si_source_last_seen'))
+            })
+        $cands.Add([pscustomobject]@{ Record = $r; Provider = $p; Key = $key; State = $state })
+    }
+    # primary link per provider: active first, then the newest
+    foreach ($grp in ($links | Group-Object provider)) {
+        $pick = @($grp.Group | Sort-Object @{ Expression = { if ($_.state -in 'active', 'frozen') { 0 } else { 1 } } }, @{ Expression = { if ($_.last_seen) { $_.last_seen } else { [datetime]::MinValue } }; Descending = $true })[0]
+        $pick.primary = $true
+    }
+    $ci['si_class'] = $class
+    $ci['si_collection_time'] = $Now.ToUniversalTime()
+    if ($RunId) { $ci['si_run_id'] = $RunId }
+    # #546 field authority by identity origin: synchronised from AD vs cloud-only decides which provider is authoritative
+    # for the on-premises facts (password age, on-premises sign-in); a field that cannot be decided is listed as unknown
+    $candArr = $cands.ToArray()
+    $origin = ''
+    if ($class -eq 'identity') { $origin = Get-SICiIdentityOrigin -Candidates $candArr; if ($origin) { $ci['si_identity_origin'] = $origin } }
+    $unknownFields = New-Object System.Collections.Generic.List[string]
+    $resolvedSources = [ordered]@{}
+    # THE FIELDS THE RECORDS CARRY AT ALL. A field no record of this CI carries resolves to nothing -- Resolve-SICiField
+    # only ever reads the candidates' own value of the field -- so it is not asked for: the catalog has several hundred
+    # fields, a CI's records carry a few dozen, and asking for every one was most of the CI build's time on a large tenant
+    # (2026-10-12). A name is looked up the way Get-SIItemValue finds it: without case on an object's properties and on a
+    # dictionary's keys, and through the dictionary's own Contains.
+    $carried = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $dictRecords = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $Records) {
+        if ($null -eq $r) { continue }
+        if ($r -is [System.Collections.IDictionary]) { $dictRecords.Add($r); foreach ($k in $r.Keys) { [void]$carried.Add([string]$k) } }
+        else { foreach ($p in $r.PSObject.Properties) { [void]$carried.Add([string]$p.Name) } }
+    }
+    # a COMPUTED field (si_class, si_collection_time, si_run_id ...) is SecurityInsight's own on the CI -- never
+    # resolved from the records, or a record's value would overwrite what the CI build decided (Get-SICiFieldPlan)
+    if ($null -eq $FieldPlan) { $FieldPlan = @(Get-SICiFieldPlan -Catalog $Catalog) }
+    foreach ($fp in $FieldPlan) {
+        $f = $fp.Field
+        $fOrigin = ''
+        if ($class -eq 'identity' -and $fp.Identity) {
+            $fOrigin = $origin
+            # (a field without an origin-specific authority is never unknown: Test-SICiFieldUnknown answers false for it)
+            if ($fp.ByOrigin -and (Test-SICiFieldUnknown -Field $f -Origin $origin -Candidates $candArr)) { $unknownFields.Add([string]$f.name) }
+        }
+        $has = $carried.Contains($fp.Name)
+        if (-not $has) { foreach ($d in $dictRecords) { if ($d.Contains($fp.Name)) { $has = $true; break } } }
+        if (-not $has) { continue }
+        $res = Resolve-SICiField -Field $f -Candidates $candArr -Now $Now -CmdbOwner $CmdbOwner -Origin $fOrigin
+        if ($null -eq $res) { continue }
+        $ci[[string]$f.name] = $res.Value
+        $resolvedSources[[string]$f.name] = [ordered]@{ provider = $res.Provider; record = $res.Record; observed_at = $res.ObservedAt; stale = [bool]$res.Stale }
+        if ($fOrigin -and $null -ne (Get-SIFieldOriginRule -Field $f -Origin $fOrigin)) { $resolvedSources[[string]$f.name]['origin'] = $fOrigin }
+        if ($unknownFields.Contains([string]$f.name)) { $resolvedSources[[string]$f.name]['unknown'] = $true }
+        if ($res.Providers -and @($res.Providers).Count -gt 1) { $resolvedSources[[string]$f.name]['providers'] = @($res.Providers) }
+        $conf = Get-SICiFieldConflicts -Field $f -Candidates $candArr -Resolved $res -Now $Now
+        if ($conf.Count -gt 0) { $resolvedSources[[string]$f.name]['conflicts'] = $conf }
+    }
+    if ($unknownFields.Count -gt 0) { $ci['si_unknown_fields'] = $unknownFields.ToArray() }
+    $recordLinks = $links.ToArray()
+    # AZURE CHILD RESOURCES (owner 2026-10-11, SI-AzureChildren.ps1): every child resource a record of this CI lists
+    # (si_child_resources -- a VM extension, a disk, a network interface, a SQL database ...) is a LINKED OBJECT of this CI, so
+    # its id leads here (a finding reported on the child lands on its parent CI); a child is never a CI of its own. A child
+    # link has no record of its own (record_key '') and takes the state of the record that lists it. In id order.
+    $childLinks = New-Object System.Collections.Generic.List[object]
+    $childSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($c in $candArr) {
+        foreach ($ch in (Get-SIValueList (Get-SIItemValue $c.Record 'si_child_resources'))) {
+            $chId = ([string](Get-SIItemValue $ch 'id')).Trim().ToLowerInvariant()
+            if (-not $chId -or -not $childSeen.Add($chId)) { continue }
+            $childLinks.Add([pscustomobject][ordered]@{
+                    provider = [string]$c.Provider; type = 'child_resource'; id = $chId; record_key = ''; primary = $false; state = [string]$c.State
+                    last_seen = (ConvertTo-SIUtcOrNull (Get-SIItemValue $c.Record 'si_source_last_seen')); resource_type = [string](Get-SIItemValue $ch 'type')
+                })
+        }
+    }
+    $linkArr = @($recordLinks) + @($childLinks.ToArray() | Sort-Object { $_.id })
+    $ci['si_linked_objects'] = $linkArr
+    $ci['si_link_count'] = $linkArr.Count
+    $linkField = @{ mde = 'si_link_mde'; entra = 'si_link_entra'; intune = 'si_link_intune'; azure = 'si_link_azure'; eg = 'si_link_eg'; ad = 'si_link_ad'; mdi = 'si_link_mdi'; shodan = 'si_link_shodan'; cmdb = 'si_link_cmdb'; servicenow = 'si_link_servicenow' }
+    foreach ($l in $recordLinks) { if ($l.primary -and $linkField.ContainsKey($l.provider)) { $ci[$linkField[$l.provider]] = $l.id } }
+    # the lifecycle follows the CI's own records (a child link carries its parent record's state)
+    $states = @($recordLinks | ForEach-Object { $_.state })
+    if (@($states | Where-Object { $_ -in 'active', 'frozen' }).Count -gt 0) { $ci['si_lifecycle'] = 'active' }
+    elseif (@($states | Where-Object { $_ -ne 'gone' }).Count -gt 0) { $ci['si_lifecycle'] = 'not_seen' }
+    else { $ci['si_lifecycle'] = 'retired' }
+    # #642 A CLOUD RESOURCE'S LAST SEEN. Azure Resource Graph has no "last seen" of a resource (data-model/mappings/azure has no
+    # si_last_seen) and the exposure graph gives one only for some nodes, so sidata.Ci.LastSeen stayed empty for every cloud
+    # CI (found at a ring 1 install 2026-10-13). A resource is seen when its source lists it: the newest source time of its
+    # current (active / frozen) records -- else of any record. Only for cloud resources: an identity or a device keeps the
+    # last-seen its source reports (a sign-in, a check-in), never the collection time, or an account that never signs in would
+    # look active.
+    if ($class -eq 'cloud_resource' -and -not ($ci.Contains('si_last_seen') -and $ci['si_last_seen'])) {
+        $pick = $null; $pickT = $null; $pickCur = $false
+        foreach ($c in $candArr) {
+            $st = ConvertTo-SIUtcOrNull (Get-SIItemValue $c.Record 'si_source_last_seen')
+            if ($null -eq $st) { continue }
+            $cur = ([string]$c.State -in 'active', 'frozen')
+            if ($null -eq $pick -or ($cur -and -not $pickCur) -or ($cur -eq $pickCur -and $st -gt $pickT)) { $pick = $c; $pickT = $st; $pickCur = $cur }
+        }
+        if ($null -ne $pick) {
+            $ci['si_last_seen'] = $pickT
+            $resolvedSources['si_last_seen'] = [ordered]@{ provider = [string]$pick.Provider; record = [string]$pick.Key; observed_at = $pickT; stale = (-not $pickCur); from = 'listed_by_source' }
+        }
+    }
+    if ($ci.Contains('si_last_seen') -and $ci['si_last_seen']) {
+        $ls = ConvertTo-SIUtcOrNull $ci['si_last_seen']
+        if ($ls) { $ci['si_days_inactive'] = [int][Math]::Floor(($Now - $ls).TotalDays) }
+    }
+    $ci['si_field_sources'] = $resolvedSources
+    return $ci
+}
+
+# ---- SI-CiBuildRun.ps1 :: Invoke-SICiBuild
+function Invoke-SICiBuild {
+    <#
+    .SYNOPSIS  Records (SQL) -> CIs (SQL + the SI_CI_CL copy). Returns a summary; never throws.
+    .PARAMETER Records    OFFLINE seam (tests): records already in hand -- grouped in memory, nothing read
+    .PARAMETER SqlInvoke  the install database seam { param($Sql, $Params, $Mode) } (tests); default: SI_ProSqlServer / Database
+    .PARAMETER Post       the Log Analytics post seam { param($Rows) } -> rows accepted (tests); default: Send-SIObjectMapRows SI_CI
+    #>
+    param(
+        # the records the build reads: those collected within this many days. 0 = SI_ActiveStaleDays (default 30) -- the
+        # one staleness setting: a device off for a week is still a CI, with its latest data
+        [int]$LookbackDays = 0,
+        [object[]]$Records,
+        [string]$RunId = '',
+        [switch]$DryRun,
+        [scriptblock]$Log,
+        # test seam: CI rules already converted (skips loading the rule files)
+        [object[]]$Rules,
+        # test seam: the CMDB index already built (skips reading the CMDB cache)
+        [hashtable]$CmdbIndex,
+        # test seam: the manual CI override rows (sidata.CiOverride shape) -- else read from the database (SQL path)
+        [object[]]$OverrideRows,
+        [scriptblock]$SqlInvoke,
+        # test seam: the ledger provider (@{ Kind = sql|blob; Connection|Store }) -- else Get-SIObjectLedgerProvider
+        $LedgerProvider,
+        [scriptblock]$Post,
+        [int]$BatchCis = 2000,
+        # a full SI_CI_CL refresh when the last one is older than this (Risk Analysis reads the newest full row per CI)
+        [int]$FullPostDays = 7,
+        # the CI workbook (Excel) is written up to this many CIs -- beyond it the CIs are in the database (said)
+        [int]$WorkbookMaxCis = 50000,
+        # Risk Analysis building the CIs in its own run (Community) indexes them straight from the build: return every CI's
+        # SI_CI_CL row (the RA columns only). Off: memory stays one batch.
+        [switch]$ReturnCis,
+        # the grouping stops (said plainly) when it runs longer than this -- a database tier too small for the tenant
+        [int]$GroupingBudgetSeconds = 2400,
+        # #534 rebuild every group this run (support), whatever the incremental build would decide
+        [switch]$FullReconcile,
+        # #534 a full reconcile when the last full build is this many days old; -1 = SI_CiBuild_FullReconcileDays (default
+        # 7); 0 = a full build every run
+        [int]$FullReconcileDays = -1,
+        # test seam: the service index already built (#496; skips reading the CMDB services and the service model)
+        [hashtable]$ServiceIndex,
+        # the SI_CIRelation_CL post seam { param($Rows) } -> rows accepted (tests). Not given while -Post is (a test of the
+        # CI rows): the relations are resolved in SQL but not posted.
+        [scriptblock]$PostRelations,
+        # ONE CI BUILD AT A TIME: the connection the build's lock lives on, { } -> an open connection (tests). Not given:
+        # one to this install's database (Get-SICiBuildLockOpen) -- and none with -SqlInvoke, which is a test's own database
+        [scriptblock]$LockOpen
+    )
+    if (-not $Log) { $Log = { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host ('[' + $l + '] ' + $m) } } }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    # #639: what the build caught and went on from -- @{ Level = WARNING | FAILED; Text } (SI-RunOutcome.ps1), returned as
+    # Issues: the correlation job fails on a FAILED one (rows short in SI_CI_CL) and says every WARNING
+    $buildIssues = New-Object System.Collections.Generic.List[object]
+    $phase = [ordered]@{}
+    $mark = { param($name) $phase[$name] = [Math]::Round($sw.Elapsed.TotalSeconds, 1); $sw.Restart() }
+    $stateRunning = $false; $sql = $null
+    # the build's lock: taken by this build ($lockOwned: released at its end), or already held by this process (the
+    # correlation job takes it before it writes the identity ledger); $lockLost: the build stops and writes no state
+    $locked = $false; $lockOwned = $false; $lockLost = $false
+    # the watch of the batches (Start-SICiWatch, SI-CiEnrich.ps1): a batch whose CIs take long says which CI it is working on
+    $ciWatch = $null
+    # asked before every write of a batch and before the build's own state is written (dot-sourced: it stops the build)
+    $holdLock = {
+        if ($locked) {
+            $lockNow = Test-SICiBuildLock -Log $Log
+            if (-not $lockNow.Held) { $lockLost = $true; throw [string]$lockNow.Why }
+        }
+    }
+    try {
+        if ($global:SI_DataModelCi -and ([string]$global:SI_DataModelCi).Trim().ToLowerInvariant() -in 'off', 'false', '0') { & $Log 'INFO' 'CIs: switched off (SI_DataModelCi = off).'; return $null }
+        $model = Get-SIDataModel -OverlayRoot $global:SI_DataModelOverlayRoot
+        $types = @{}; foreach ($f in @($model['field-catalog'].fields)) { $types[[string]$f.name] = [string]$f.type }
+        $now = [datetime]::UtcNow
+
+        # ---- the OFFLINE seam: records in hand, one in-memory pass through the same core ----
+        if ($null -ne $Records) {
+            if (@($Records).Count -eq 0) { & $Log 'INFO' 'CIs: no records -- not built.'; return $null }
+            $feeds = Get-SIFeedLatest -Records @($Records)
+            # members in ORDINAL record-key order -- the order the SQL build reads a group in (same decisions on both paths)
+            # (an INDEX array: PowerShell hands [Array]::Sort a copy of an object[] -- the records would stay unsorted)
+            $inHand = @($Records | Where-Object { $_ })
+            [string[]]$rk = @($inHand | ForEach-Object { [string](Get-SIItemValue $_ 'si_record_key') }); [int[]]$ix = @(0..($inHand.Count - 1))
+            [Array]::Sort($rk, $ix, [StringComparer]::Ordinal)
+            $sorted = @(foreach ($i in $ix) { $inHand[$i] })
+            $g = Get-SICiGroups -Records $sorted
+            # #533 (b): disabled accounts and devices left out by SI_DisabledAssets_Correlate (said in one line)
+            $gDis = Select-SICiGroupsEnabled -Groups @($g.Groups)
+            if ($gDis.Line) { & $Log 'INFO' $gDis.Line }
+            # CIs follow the collection scope: an asset the scope settings leave out keeps its last build
+            $gScope = Select-SICiGroupsInScope -Groups @($gDis.Kept)
+            if ($gScope.Line) { & $Log 'INFO' $gScope.Line }
+            $g['Groups'] = @($gScope.Kept)
+            $prov = $null
+            try { if ($null -ne $LedgerProvider) { $prov = $LedgerProvider } else { $prov = Get-SIObjectLedgerProvider } } catch { & $Log 'WARN' ("CIs: the identity ledger could not be opened ({0}) -- no CIs this run." -f $_.Exception.Message); return $null }
+            if ($null -eq $prov) { & $Log 'WARN' 'CIs: no identity ledger is configured (SQL or storage account) -- no CIs this run: an id that is not remembered moves.'; return $null }
+            $read = Read-SIObjectLedger -Provider $prov
+            if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
+            $ovIdx = ConvertTo-SICiOverrideIndex -Rows @($OverrideRows) -Now $now
+            if ($null -eq $CmdbIndex) { $CmdbIndex = Get-SICiCmdbIndexForOwner -Log $Log }
+            # #496 the business services without a database: the service model's rules and the CIs' own CMDB values -- the
+            # same CI fields the SQL build sets
+            if ($null -eq $ServiceIndex) { $ServiceIndex = Get-SICiServiceIndex -Log $Log }
+            $core = Invoke-SICiCore -Groups @($g.Groups) -FeedLatest $feeds -Ledger $read.Ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex
+            # a CI whose rules took too long is kept out until it is fully evaluated (nothing is stored here: it is left out)
+            $held = Get-SICiHeld -Docs $core.Docs -Incomplete $core.Incomplete
+            $docs = @($held.Docs)
+            foreach ($ic in @($held.LeftOut)) { & $Log 'INFO' (Format-SICiIncompleteLine -Item $ic -Budget (Get-SICiRulesBudgetSeconds)) }
+            if (@($held.LeftOut).Count -gt 0) { & $Log 'WARN' (Format-SICiIncompleteSummary -Count @($held.LeftOut).Count -LeftOut @($held.LeftOut).Count -Budget (Get-SICiRulesBudgetSeconds)) }
+            # identities before devices: every identity CI is in hand, so a device / resource links to them in this pass too
+            $null = Set-SICiIdentityLinks -Docs $docs -Index (ConvertTo-SICiIdentityIndex -Rows @(Get-SICiIdentityDocKeys -Docs $docs))
+            if (-not $DryRun) { $null = Write-SIObjectLedger -Provider $prov -Decisions $core.Decisions -Superseded $core.Superseded -Now $now -IfMatchETag $read.ETag -CurrentLedger $read.Ledger }
+            try { Close-SIObjectLedgerProvider -Provider $prov } catch { }
+            & $Log 'OK' ("CIs: {0} record(s) -> {1} CI(s); {2} new, {3} merged{4}" -f @($Records).Count, $docs.Count, $core.Minted, $core.Merged, $(if ($DryRun) { ' -- DRY RUN, nothing written' } else { '' }))
+            # #642 the identity ledger's wrong merges split off, and ids several groups still share (built as one CI)
+            $sharedGroups = 0; foreach ($cc in @($core.Collisions)) { $sharedGroups += [int]$cc.Groups }
+            foreach ($wl in @(Format-SICiWrongMergeLines -Split ([int]$core.WrongMergeSplit) -SplitIds @(@($core.WrongMerges) | ForEach-Object { '{0} -> {1}' -f $_.CorrelationId, $_.NewId }) -SharedGroups $sharedGroups -SharedIds @(@($core.Collisions) | ForEach-Object { [string]$_.CiId }))) { & $Log 'WARN' $wl }
+            return [pscustomobject]@{ Records = @($Records).Count; Cis = $docs; CiCount = $docs.Count; Minted = $core.Minted; Merged = $core.Merged; Unkeyable = @($g.Unkeyable).Count; Posted = 0; Failed = $false
+                Incomplete = @($held.LeftOut).Count; IncompleteCis = @(@($held.LeftOut) | ForEach-Object { [string]$_.Label })
+                WrongMergeSplit = [int]$core.WrongMergeSplit; SharedIdGroups = $sharedGroups }
+        }
+
+        # ---- SQL ONLY ----
+        if ($LookbackDays -le 0) { $LookbackDays = 30; if ($global:SI_ActiveStaleDays -and [int]$global:SI_ActiveStaleDays -gt 0) { $LookbackDays = [int]$global:SI_ActiveStaleDays } }
+        $sql = $SqlInvoke
+        if ($null -eq $sql) { $sql = New-SIRecordSqlInvoke }
+        if ($null -eq $sql) {
+            & $Log 'WARN' 'CIs were NOT built: no database is configured (SI_ProSqlServer / SI_ProSqlDatabase). The CIs are built in SQL only -- every v3 install needs its database.'
+            return [pscustomobject]@{ Failed = $true; Reason = 'no-database'; CiCount = 0; Cis = @() }
+        }
+
+        # 0. the tables and columns the build needs, on a database set up by an older release (additive, idempotent)
+        # (read-only: the engine never changes the schema -- the updater applies sql\si-data-schema.sql)
+        $missing = @(Get-SIRecordSchemaMissing -Sql $sql)
+        if ($missing.Count -gt 0) {
+            & $Log 'WARN' ("CIs were NOT built: the database is not updated yet (missing {0}) -- run the updater." -f ($missing -join ', '))
+            return [pscustomobject]@{ Failed = $true; Reason = 'the database is not updated yet'; Missing = $missing; CiCount = 0; Cis = @() }
+        }
+
+        # 0b. ONE CI BUILD AT A TIME (SI-RecordSql.ps1, Enter-SICiBuildLock): the build holds the database's lock from here
+        # to its end. A build that finds another one running waits for it, then builds what is left -- and reads the
+        # build's state (below) only now, so a build that is running is never taken for a stopped one (Test-SICiCarryOn).
+        if ($null -eq $LockOpen -and $null -eq $SqlInvoke) { $LockOpen = Get-SICiBuildLockOpen }
+        if ($LockOpen) {
+            $lk = Enter-SICiBuildLock -Open $LockOpen -RunId $RunId -Log $Log
+            if (-not $lk.Held) { $lockLost = $true; throw [string]$lk.Why }
+            $locked = $true; $lockOwned = [bool]$lk.Owned
+            # it waited: the build starts now, not when it was asked for
+            if ($lk.Waited) { $now = [datetime]::UtcNow; $phase['wait'] = [Math]::Round($sw.Elapsed.TotalSeconds, 1); $sw.Restart() }
+        }
+
+        # 1. grouping, in SQL
+        $gr = Invoke-SICiGrouping -Sql $sql -LookbackDays $LookbackDays -BatchCis $BatchCis -BudgetSeconds $GroupingBudgetSeconds -Log $Log
+        & $mark 'group'
+        # the statement always answers ONE row (Rounds >= 1): no row is a failure, never "no records" (customer H 2026-10-09)
+        if ($null -eq $gr -or $null -eq (Get-SIItemValue $gr 'Rounds')) {
+            & $Log 'WARN' ("CIs were NOT built: the grouping statement answered no result after {0} s -- the database did not complete it." -f $phase['group'])
+            return [pscustomobject]@{ Failed = $true; Reason = 'the grouping statement answered no result'; CiCount = 0; Cis = @() }
+        }
+        $nRec = [int](Get-SIItemValue $gr 'Records'); $nGroups = [int](Get-SIItemValue $gr 'Groups'); $nBatches = [int](Get-SIItemValue $gr 'Batches')
+        $largest = [int](Get-SIItemValue $gr 'Largest'); $unkeyable = [int](Get-SIItemValue $gr 'Unkeyable')
+        & $Log 'INFO' ("CIs: grouped {0} record(s) into {1} CI(s) in {2} s ({3} round(s), largest {4} record(s)); {5} record(s) without a strong identifier" -f $nRec, $nGroups, $phase['group'], (Get-SIItemValue $gr 'Rounds'), $largest, $unkeyable)
+        if ($nRec -eq 0) { & $Log 'INFO' 'CIs: no records in the lookback -- not built.'; return [pscustomobject]@{ Failed = $false; Records = 0; CiCount = 0; Cis = @() } }
+        $fusionAt = [Math]::Max(10, [int]([Math]::Ceiling($nRec * 0.05)))
+        if ($largest -ge $fusionAt) { & $Log 'WARN' ("CIs: one CI holds {0} records -- check for a shared identifier that fuses different assets (the CIs are built; this is a warning)." -f $largest) }
+
+        # 2. feeds, in SQL
+        $feeds = ConvertTo-SICiFeedLatest -Rows @(& $sql (Get-SICiFeedLatestSql -LookbackDays $LookbackDays) @{} 'rows')
+        & $mark 'feeds'
+
+        # 3. the ledger, the rules, the CMDB, the post state
+        $prov = $null
+        try { if ($null -ne $LedgerProvider) { $prov = $LedgerProvider } else { $prov = Get-SIObjectLedgerProvider } } catch { & $Log 'WARN' ("CIs were NOT built: the identity ledger could not be opened ({0})." -f $_.Exception.Message); return [pscustomobject]@{ Failed = $true; Reason = 'ledger'; CiCount = 0; Cis = @() } }
+        if ($null -eq $prov) { & $Log 'WARN' 'CIs were NOT built: no identity ledger is configured (SQL or storage account) -- an id that is not remembered moves.'; return [pscustomobject]@{ Failed = $true; Reason = 'no-ledger'; CiCount = 0; Cis = @() } }
+        $whole = $null
+        if ([string]$prov.Kind -ne 'sql') { $whole = Read-SIObjectLedger -Provider $prov }
+        if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
+        # #462 the manual CI overrides in force (sidata.CiOverride; a database without the table has none)
+        if ($null -eq $OverrideRows) { try { $OverrideRows = @(& $sql (Get-SICiOverrideReadSql) @{} 'rows') } catch { & $Log 'WARN' ("CIs: the manual CI overrides could not be read ({0}) -- the rules decide this run." -f $_.Exception.Message); $OverrideRows = @() } }
+        $ovIdx = ConvertTo-SICiOverrideIndex -Rows @($OverrideRows) -Now $now
+        if ($ovIdx.Count -gt 0) { & $Log 'INFO' ("CIs: {0} CI(s) carry a manual override" -f $ovIdx.Count) }
+        if ($null -eq $CmdbIndex) { $CmdbIndex = Get-SICiCmdbIndexForOwner -Sql $sql -Log $Log }
+        # #496 the business services: the CMDB page's links and the service catalog (Pro), the service model's binding rules
+        if ($null -eq $ServiceIndex) { $ServiceIndex = Get-SICiServiceIndex -Sql $sql -Log $Log }
+        & $Log 'INFO' ("CIs: {0} business service(s), {1} CI(s) linked to a service on the CMDB page, {2} service model rule(s)" -f $ServiceIndex.Services.Count, $ServiceIndex.Links.Count, @($ServiceIndex.Bindings).Count)
+        # #493 the relations the data model declares (stage production)
+        $relRules = @(Get-SICiRelationRules -Model $model)
+        # the build's state (sidata.CiBuildState): the last full SI_CI_CL refresh, and (#534) the last full build, its
+        # fingerprint, how the last build ended and when it started
+        $state = @{}
+        try { foreach ($sr in @(& $sql (Get-SICiStateAllSql) @{} 'rows')) { $state[[string](Get-SIItemValue $sr 'Name')] = [string](Get-SIItemValue $sr 'Value') } } catch { & $Log 'WARN' ("CIs: the build state could not be read ({0}) -- this build is full." -f $_.Exception.Message) }
+        $lastFull = $state['LastFullPost']
+        $full = Test-SICiFullPostDue -Last $lastFull -Now $now -Days $FullPostDays
+        # 🔴 THE SI_CI_CL COLUMN CONTRACT CHANGED, OR A BUILD POSTED INTO COLUMNS AZURE WAS NOT STORING YET: every CI's full
+        # row is posted again. A full row is posted only when its content changes, so the values a release's NEW columns
+        # carried on their first build -- dropped while Azure was still adding the columns (~45 minutes) -- stayed missing
+        # until the CI changed or the weekly refresh came round: ring 1 lost the classification (si_components), the app id,
+        # the credential expiry and the unknown fields of every CI for a week (Risk Analysis read them as empty).
+        $postContract = Get-SICiPostContractHash
+        if (-not $full -and [string]$state['PostContract'] -ne $postContract) {
+            $full = $true
+            & $Log 'INFO' 'CIs: every CI''s full row is posted to SI_CI_CL this build -- its columns changed (or the last build posted into columns Azure was not storing yet).'
+        }
+        if (-not $Post -and -not $DryRun -and -not (Get-Command -Name Send-SIObjectMapRows -ErrorAction SilentlyContinue)) {
+            . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-LogIngest.ps1')
+        }
+
+        # #534 FULL or INCREMENTAL: the fingerprint of what the CIs are built from, compared with the last build's
+        $thresholds = @(Get-SICiTimeThresholds -Model $model -Rules @($Rules))
+        $fingerprint = ''
+        try {
+            # the CMDB OWNER is in it, its items are not (they dirty only the groups that use them); the build VERSION is in it,
+            # the build's code is not (a release that does not change what a CI looks like is incremental). #496 the service
+            # model's binding rules ride with the CI rules: a rule can place any CI, so a changed rule rebuilds every CI once (the
+            # CMDB page's links and the services dirty only the CIs that use them -- Get-SICiServiceKeyHashes)
+            $fingerprint = Get-SICiBuildFingerprint -Model $model -Rules (@($Rules) + @($ServiceIndex.Bindings)) -CmdbOwner (Get-SICmdbOwner) -Thresholds $thresholds -LookbackDays $LookbackDays `
+                -BuildVersion $script:SICiBuildVersion -ExposedRanges ((@($global:SI_InternetExposedRanges) | Where-Object { $_ } | ForEach-Object { [string]$_ }) -join ',')
+        } catch { & $Log 'WARN' ("CIs: the build fingerprint could not be computed ({0}) -- this build is full." -f $_.Exception.Message) }
+        if ($FullReconcileDays -lt 0) { $FullReconcileDays = Get-SICiFullReconcileDays }
+        $decision = Get-SICiFullReconcileDecision -State $state -Fingerprint $fingerprint -Now $now -Days $FullReconcileDays -Force:([bool]$FullReconcile) -FullPostDue:$full
+        $fullBuild = [bool]$decision.Full
+        $reasons = New-Object System.Collections.Generic.List[string]; foreach ($x in @($decision.Reasons)) { $reasons.Add([string]$x) }
+        if (-not $fingerprint) { $fullBuild = $true; $reasons.Add('the build fingerprint could not be computed') }
+        # Risk Analysis building the CIs in its own run reads a skipped CI back from its stored document (PowerShell 6+)
+        if (-not $fullBuild -and $ReturnCis -and $PSVersionTable.PSVersion.Major -lt 6) { $fullBuild = $true; $reasons.Add('every CI is returned and this PowerShell cannot read a stored CI back') }
+        # CARRY ON (SI-CiBuildSql.ps1, Test-SICiCarryOn): a rebuild of every CI that was stopped before it finished is not
+        # started again -- the batches it finished are kept, and this build does what is left (and what changed since)
+        $carry = Test-SICiCarryOn -State $state -Fingerprint $fingerprint -PostContract $postContract -FullBuild $fullBuild -FullPost ([bool]$full) -Force:([bool]$FullReconcile)
+        $carryOn = [bool]$carry.CarryOn
+        if ($carryOn -and $ReturnCis -and $PSVersionTable.PSVersion.Major -lt 6) { $carryOn = $false }
+        # the identity ledger's anchors written since the last build started (a new or re-pointed anchor can move a CI id)
+        $since = [string]$state['LastBuildStart']
+        $lchg = [pscustomobject]@{ Keys = @(); CiIds = @() }
+        if ((-not $fullBuild -or $carryOn) -and $since) {
+            try {
+                if ([string]$prov.Kind -eq 'sql') {
+                    $lchg = ConvertTo-SICiLedgerChanges -Rows @(Invoke-SIObjectLedgerSql -Connection $prov.Connection -Sql (Get-SICiLedgerChangedSql) -Params @{ sinceText = $since })
+                } else {
+                    $sinceT = ConvertTo-SIUtcOrNull $since
+                    $lchg = ConvertTo-SICiLedgerChanges -Rows @(foreach ($lk in @($whole.Ledger.Keys)) {
+                            $le = $whole.Ledger[$lk]
+                            $fs = $null; if ($le -and $le.FirstSeen) { $fs = ConvertTo-SIUtcOrNull $le.FirstSeen }
+                            if ($fs -and $sinceT -and $fs -gt $sinceT.AddSeconds(1)) { $ix = ([string]$lk).IndexOf('|'); if ($ix -gt 0) { [pscustomobject]@{ T = ([string]$lk).Substring(0, $ix); V = ([string]$lk).Substring($ix + 1); C = [string]$le.CorrelationId } } }
+                        })
+                }
+            } catch { & $Log 'WARN' ("CIs: the identity ledger's changes since the last build could not be read ({0}) -- this build is full." -f $_.Exception.Message); $fullBuild = $true; $carryOn = $false; $reasons.Add('the identity ledger''s changes could not be read') }
+        }
+        if ($carry.Stopped -and -not $carryOn -and $carry.Why) { & $Log 'INFO' ("CIs: the previous build was stopped before it finished, and {0} -- this build starts again with every CI." -f $carry.Why) }
+        # every group is read and built (a full build that does not carry on); else only the dirty ones
+        $buildAll = ($fullBuild -and -not $carryOn)
+        # a full build keeps every batch it finishes (their records' built marks, at once): stopped later, it is carried on.
+        # Only with the identity ledger in SQL, which is written with every batch -- a blob ledger is written once, at the
+        # end, so a stopped build's new ids are not remembered and its batches must not count as finished.
+        $markBatches = ($fullBuild -and -not $DryRun -and [bool]$fingerprint -and [string]$prov.Kind -eq 'sql')
+        & $mark 'prepare'
+
+        # #534 the DIRTY groups, in SQL (every build: a full build compares what it rebuilds with what an incremental one would)
+        # the owning CMDB's lookup keys and the hash of the item behind each, compared in SQL with the last build's
+        $cmdbKeys = @(Get-SICiCmdbKeyHashes -Index $CmdbIndex)
+        # #496 the business services ride the same mechanism: a changed link, service or service model rule dirties only the
+        # CIs that used it (their refs are written with the CMDB refs, Get-SICiCmdbRefKeys)
+        $cmdbKeys = @(@($cmdbKeys) + @(Get-SICiServiceKeyHashes -Index $ServiceIndex))
+        $cmdbKeysJson = ConvertTo-SIJsonArray $cmdbKeys -Depth 3
+        $dirty = $null; $batchDirty = @{}; $batchGroups = @{}
+        $global:SISqlLastRead = $null
+        $dg = @(& $sql (Get-SICiDirtySql -LookbackDays $LookbackDays -Thresholds $thresholds) @{ nowText = $now.ToString('o'); sinceText = $since; lk = (ConvertTo-SIJsonArray @($lchg.Keys)); lc = (ConvertTo-SIJsonArray @($lchg.CiIds)); ck = $cmdbKeysJson; ckOn = '1'; carry = $(if ($carryOn) { '1' } else { '0' }) } 'rows')
+        foreach ($dr in $dg) {
+            $kind = [string](Get-SIItemValue $dr 'Kind')
+            if ($kind -eq 'summary') { $dirty = $dr }
+            elseif ($kind -eq 'batch') { $bn = [int](Get-SIItemValue $dr 'BatchNo'); $batchDirty[$bn] = [int](Get-SIItemValue $dr 'DirtyGroups'); $batchGroups[$bn] = [int](Get-SIItemValue $dr 'Groups') }
+        }
+        if ($null -eq $dirty) { throw ('the dirty-group statement answered no result ({0})' -f (Get-SISqlLastReadText -Answered $dg.Count)) }
+        & $mark 'dirty'
+        # CARRY ON: say what the stopped build left done, and stamp the groups this build keeps with its own start -- BEFORE
+        # the state below moves the start: stopped between the two, the next build still reads the same picture
+        $carrySince = $now.ToString('o')
+        if (-not $DryRun) { . $holdLock }
+        if ($carryOn) {
+            if ([string]$state['CarryOnSince']) { $carrySince = [string]$state['CarryOnSince'] } else { $carrySince = $since }
+            & $Log 'INFO' (Format-SICiCarryOnLine -Groups ([int](Get-SIItemValue $dirty 'Groups')) -ToBuild ([int](Get-SIItemValue $dirty 'DirtyGroups')) -NotRebuilt ([int](Get-SIItemValue $dirty 'NotRebuilt')) -Since $carrySince)
+            if (-not $DryRun) { $null = & $sql (Get-SICiCarryOnKeepSql) @{ nowText = $now.ToString('o') } 'rows' }
+        } elseif ($markBatches) {
+            & $Log 'INFO' ("CIs: every CI is rebuilt in this build ({0} batch(es)). Each finished batch is kept -- if the build is stopped before the end, the next build carries on with the rest." -f $nBatches)
+        }
+        # the build is running: a build that never finishes leaves 'running', and the next build is full -- or, when this
+        # one rebuilds every CI, carries on with what it is building with (the CarryOn* values, Test-SICiCarryOn)
+        $stateRunning = $false
+        if (-not $DryRun) {
+            $null = & $sql (Get-SICiStateSetSql) @{ j = (ConvertTo-SIJsonArray @([ordered]@{ n = 'LastBuildStatus'; v = 'running' }, [ordered]@{ n = 'LastBuildStart'; v = $now.ToString('o') },
+                        [ordered]@{ n = 'CarryOnFingerprint'; v = $(if ($markBatches) { $fingerprint } else { '' }) }, [ordered]@{ n = 'CarryOnPostContract'; v = $postContract },
+                        [ordered]@{ n = 'CarryOnFullPost'; v = $(if ($full) { '1' } else { '0' }) }, [ordered]@{ n = 'CarryOnSince'; v = $carrySince })) } 'rows'
+            $stateRunning = $true
+        }
+
+        # 4. the batches
+        $t = [ordered]@{ Cis = 0; Changed = 0; LastSeenOnly = 0; Links = 0; RecordCi = 0; Daily = 0; Anchors = 0; Superseded = 0; PostedFull = 0; PostedSeen = 0; Bytes = [long]0; Minted = 0; Merged = 0; PostFailed = 0; Slim = 0; Resent = 0; Touched = 0; Marked = 0; IdentityLinked = 0; Incomplete = 0; IncompleteKept = 0; IncompleteLeftOut = 0; WrongMergeSplit = 0; Collisions = 0; Duplicates = 0 }
+        # #642 the ledger ids this build found holding several objects: split off (proven) and still shared (not proven); the first 20 of each
+        $wrongIds = New-Object System.Collections.Generic.List[string]; $collIds = New-Object System.Collections.Generic.List[string]
+        # KEEP IT OUT UNTIL FULLY EVALUATED: the records of the CIs the rules' time limit stopped in this build (their built
+        # marks are taken off, so the next build takes them up again) and the CIs' names (name and kind) for the build's state
+        $heldRecords = New-Object System.Collections.Generic.List[string]
+        $heldNames = New-Object System.Collections.Generic.List[string]
+        $unknownFactorCounts = @{}
+        # #515 the CIs a batch posted in full, marked (PostedHash) by the next batch's write statement
+        $pendingMarks = New-Object System.Collections.Generic.List[object]
+        $times = [ordered]@{ read = 0.0; core = 0.0; write = 0.0; ledger = 0.0; post = 0.0 }
+        $raCis = New-Object System.Collections.Generic.List[object]
+        $wbDocs = New-Object System.Collections.Generic.List[object]
+        $blobDecisions = New-Object System.Collections.Generic.List[object]; $blobSuperseded = New-Object System.Collections.Generic.List[object]
+        $bw = [System.Diagnostics.Stopwatch]::new()
+        $step = [Math]::Max(1, [int][Math]::Ceiling($nBatches / 10))
+        $disabledPolicy = Get-SIDisabledAssetPolicy; $disabledLeftOut = 0; $scopeLeftOut = 0
+        # #534 groups built this run; on a full build, the CIs that changed although their group was clean (a defect)
+        $built = 0
+        # #493 / #496 the graph: written once before (else this build records no history), the database carries it
+        $graphSeeded = ([string]$state['GraphSeeded'] -eq '1'); $graphMissing = $false
+        $gt = [ordered]@{ Services = 0; Claims = 0; ServiceChanges = 0; Cis = 0 }
+        $idIndex = $null
+        $mismatch = New-Object System.Collections.Generic.List[string]
+        # CARRY ON: the batches this build kept as finished; said once when Azure adding columns stops that
+        $batchesKept = 0; $marksOff = $false
+        # A BUILD THAT STANDS STILL SAYS WHERE (2026-10-12: a first run went silent for 68 minutes in the middle of its
+        # batches, and the log could not say in which batch or step). Every batch says when it starts and when its CIs
+        # are about to be built; every other step says that it starts when this loop has said nothing for two minutes.
+        $said = @{ At = [datetime]::UtcNow }
+        $sayStep = {
+            param([string]$What)
+            if (([datetime]::UtcNow - $said.At).TotalSeconds -ge 120) { & $Log 'INFO' ("CIs: batch {0} of {1} -- {2}" -f $b, $nBatches, $What); $said.At = [datetime]::UtcNow }
+        }
+        $ciWatch = Start-SICiWatch
+        for ($b = 1; $b -le $nBatches; $b++) {
+            # an incremental build -- and a build that carries on a stopped rebuild -- reads only the batches that hold a
+            # dirty group, and of them only the dirty groups. In batch order: the identity batches first, and the batches a
+            # stopped build finished hold nothing to read, so what is left is done first.
+            if (-not $buildAll -and -not ($batchDirty[$b] -gt 0)) { continue }
+            $bw.Restart()
+            & $Log 'INFO' ("CIs: batch {0} of {1} started -- reading its records ({2} CI(s) built so far)" -f $b, $nBatches, $t.Cis); $said.At = [datetime]::UtcNow
+            $batchRows = @(& $sql (Get-SICiBatchSql) @{ b = [string]$b; only = $(if ($buildAll) { '0' } else { '1' }) } 'rows')
+            $dirtyRec = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+            foreach ($row in $batchRows) { if ($null -ne $row -and [bool](Get-SIItemValue $row 'Dirty')) { [void]$dirtyRec.Add([string](Get-SIItemValue $row 'RecordKey')) } }
+            $bg = ConvertTo-SICiBatchGroups -Rows $batchRows -Types $types
+            # #533 (b): disabled accounts and devices left out by SI_DisabledAssets_Correlate (counted, said once below)
+            $bgDis = Select-SICiGroupsEnabled -Groups @($bg.Groups) -Policy $disabledPolicy
+            $disabledLeftOut += $bgDis.Count
+            # CIs follow the collection scope (counted, said once below)
+            $bgScope = Select-SICiGroupsInScope -Groups @($bgDis.Kept); $scopeLeftOut += $bgScope.Count
+            $bg = [pscustomobject]@{ Groups = @($bgScope.Kept); Records = $bg.Records }
+            $built += @($bg.Groups).Count
+            # #515 what the last build left for these records (read in the same statement): unchanged CIs go slim
+            $stored = Get-SICiBatchStored -Rows $batchRows
+            $batchRows = $null
+            $times.read += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            $ledger = $null
+            & $sayStep 'looking up the ids its assets already have'
+            if ([string]$prov.Kind -eq 'sql') { $ledger = Get-SIObjectLedgerSubset -Connection $prov.Connection -Keys @(Get-SICiGroupLedgerKeys -Groups $bg.Groups) }
+            else { $ledger = $whole.Ledger }
+            $times.ledger += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            # always said: this step works in memory only -- no database and no Azure call shows that it is running
+            & $Log 'INFO' ("CIs: batch {0} of {1} -- building {2} CI(s) from {3} record(s)" -f $b, $nBatches, @($bg.Groups).Count, [int]$bg.Records); $said.At = [datetime]::UtcNow
+            if ($ciWatch) { $ciWatch.What = ('batch {0} of {1} -- ' -f $b, $nBatches) }
+            $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -Watch $ciWatch
+            Set-SICiWatchPhase -Watch $ciWatch -Phase 'linking its CIs to their owners and users, and preparing them for the database'
+            # KEEP IT OUT UNTIL FULLY EVALUATED (Get-SICiHeld): a CI whose rules took too long got only part of the rules, so
+            # nothing of this run's result of it is written, posted, linked or handed on -- $docs are the complete CIs of the
+            # batch. One that was evaluated completely before keeps that row and is only SEEN in this run ($held.Kept); a new
+            # one is left out ($held.LeftOut). Each is named (the first 50), counted, and built again in the next run.
+            $held = Get-SICiHeld -Docs $core.Docs -Incomplete $core.Incomplete -Stored $stored
+            $docs = @($held.Docs)
+            $t.Minted += $core.Minted; $t.Merged += $core.Merged; $t.Cis += $docs.Count + @($held.Kept).Count
+            foreach ($ic in @(@($held.Kept) + @($held.LeftOut))) {
+                $t.Incomplete++; if ($ic.Kept) { $t.IncompleteKept++ } else { $t.IncompleteLeftOut++ }
+                if ($t.Incomplete -le 50) { $heldNames.Add([string]$ic.Label); & $Log 'INFO' (Format-SICiIncompleteLine -Item $ic -Budget (Get-SICiRulesBudgetSeconds) -Kept ([bool]$ic.Kept)) }
+            }
+            foreach ($rk in @($held.RecordKeys)) { $heldRecords.Add([string]$rk) }
+            # #546 the factors these CIs could not decide (unknown is never a finding -- it is counted)
+            try { $null = Add-SICiUnknownFactorCounts -Counts $unknownFactorCounts -Cis $docs } catch { }
+            # IDENTITIES BEFORE DEVICES: the identity batches come first (the grouping numbers them so) and are written before
+            # this point; a device / resource CI links to the identity CIs its owner and users name, in this run
+            $idLinks = $null
+            if (@($docs | Where-Object { [string]$_['si_class'] -ne 'identity' } | Select-Object -First 1).Count -gt 0) {
+                if ($null -eq $idIndex) { $idIndex = ConvertTo-SICiIdentityIndex -Rows @(& $sql (Get-SICiIdentityIndexSql) @{} 'rows') }
+                $idLinks = Set-SICiIdentityLinks -Docs $docs -Index $idIndex
+                $t.IdentityLinked += [int]$idLinks.Linked
+            }
+            # an identity CI built after the index was read (it never is: identity batches come first) still links
+            if ($null -ne $idIndex) { $null = ConvertTo-SICiIdentityIndex -Rows @(Get-SICiIdentityDocKeys -Docs $docs) -Into $idIndex }
+            $items = ConvertTo-SICiSqlItems -Cis $docs -Stored $stored
+            $t.Slim += [int]$items.Unchanged
+            # #534 the full reconcile: a CI whose content differs from what was stored although no input of its group changed
+            if ($buildAll -and -not $decision.FingerprintChanged) { foreach ($x in @(Get-SICiReconcileMismatch -Items $items.Cis -Docs $docs -DirtyRecords $dirtyRec -Stored $stored)) { $mismatch.Add([string]$x) } }
+            # #642 a wrong merge split off, and ids several groups still share (built once from all their records): counted, said once at the end
+            $t.WrongMergeSplit += [int]$core.WrongMergeSplit; foreach ($w in @($core.WrongMerges)) { if ($wrongIds.Count -lt 20) { $wrongIds.Add(('{0} -> {1}' -f $w.CorrelationId, $w.NewId)) } }
+            foreach ($cc in @($core.Collisions)) { $t.Collisions += [int]$cc.Groups; if ($collIds.Count -lt 20) { $collIds.Add([string]$cc.CiId) } }
+            # (Invoke-SICiCore builds one CI per id, so two items for one id is a defect of the build itself -- never data to drop silently)
+            if (@($items.Duplicates).Count -gt 0) { $t.Duplicates += @($items.Duplicates).Count; & $Log 'WARN' ("CIs: {0} CI(s) of batch {1} came out twice under one id ({2}) -- a defect of the build: the first is written." -f @($items.Duplicates).Count, $b, ((@($items.Duplicates) | Select-Object -First 3) -join ', ')) }
+            if ($ReturnCis) { foreach ($p in $items.Post) { $raCis.Add($p.Row) } }
+            if ($wbDocs.Count -lt $WorkbookMaxCis) { foreach ($d in $docs) { if ($wbDocs.Count -lt $WorkbookMaxCis) { $wbDocs.Add($d) } } }
+            Set-SICiWatchPhase -Watch $ciWatch
+            $times.core += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            # the batch is finished when everything of it is written and its rows reached SI_CI_CL
+            $batchDone = $true
+            if (-not $DryRun -and $core.Docs.Count -gt 0) {
+                # still the one build that writes (a lost lock stops the build here, before this batch is written)
+                . $holdLock
+                # the ledger first: a CI is never written under an id the ledger does not hold
+                & $sayStep 'its CIs are built; writing their ids'
+                if ([string]$prov.Kind -eq 'sql') {
+                    $lw = Save-SIObjectLedgerSet -Connection $prov.Connection -Decisions $core.Decisions -Superseded $core.Superseded -Now $now
+                    $t.Anchors += [int]$lw.AnchorsWritten; $t.Superseded += [int]$lw.SupersededWritten
+                } else {
+                    foreach ($d in $core.Decisions) { if ($d.CorrelationId) { $blobDecisions.Add([pscustomobject]@{ CorrelationId = $d.CorrelationId; Action = $d.Action; NewIdentifiers = @($d.NewIdentifiers) }) } }
+                    foreach ($s in $core.Superseded) { $blobSuperseded.Add($s) }
+                }
+                $times.ledger += $bw.Elapsed.TotalSeconds; $bw.Restart()
+                # ONE statement: this batch's CIs + the previous batch's posted marks (#515)
+                & $sayStep 'writing its CIs to the database'
+                # (with them, the slim items of the CIs kept as they were: nothing of them is rewritten, they are seen)
+                $w = @(& $sql (Get-SICiWriteSql) @{ j = (ConvertTo-SIJsonArray (@($items.Cis) + @($held.Items)) -Depth 14); l = (ConvertTo-SIJsonArray $items.Links); m = (ConvertTo-SIJsonArray $items.Map); p = (ConvertTo-SIJsonArray $pendingMarks.ToArray()) } 'rows')
+                $pendingMarks.Clear()
+                $posted = @{}
+                $resend = New-Object System.Collections.Generic.List[string]
+                $readW = {
+                    param($Rows)
+                    foreach ($r in $Rows) {
+                        $kind = [string](Get-SIItemValue $r 'Kind')
+                        if ($kind -eq 'summary') {
+                            $t.Changed += [int](Get-SIItemValue $r 'Changed'); $t.LastSeenOnly += [int](Get-SIItemValue $r 'LastSeenOnly'); $t.Links += [int](Get-SIItemValue $r 'Links')
+                            $t.RecordCi += [int](Get-SIItemValue $r 'Records'); $t.Daily += [int](Get-SIItemValue $r 'Daily')
+                        } elseif ($kind -eq 'resend') { $rid = [string](Get-SIItemValue $r 'CiId'); if (-not $held.KeptIds.Contains($rid)) { $resend.Add($rid) } }
+                        else { $posted[[string](Get-SIItemValue $r 'CiId')] = [string](Get-SIItemValue $r 'PostedHash') }
+                    }
+                }
+                & $readW $w
+                if ($resend.Count -gt 0) {
+                    # a CI sent slim whose stored hash moved after the batch was read: sent whole now (rare)
+                    $rs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase); foreach ($x in $resend) { [void]$rs.Add($x) }
+                    $whole2 = ConvertTo-SICiSqlItems -Cis @($docs | Where-Object { $rs.Contains([string]$_['si_ci_id']) })
+                    $t.Slim -= $resend.Count; $t.Resent += $resend.Count
+                    $resend.Clear()
+                    & $readW @(& $sql (Get-SICiWriteSql) @{ j = (ConvertTo-SIJsonArray $whole2.Cis -Depth 14); l = (ConvertTo-SIJsonArray $whole2.Links); m = (ConvertTo-SIJsonArray $whole2.Map); p = '[]' } 'rows')
+                }
+                # the owner / user values the batch's device / resource records named (a dirty identity dirties them next run)
+                if ($null -ne $idLinks) { $null = & $sql (Get-SICiIdentityRefWriteSql) @{ rk = (ConvertTo-SIJsonArray @($idLinks.RecordKeys)); r = (ConvertTo-SIJsonArray @($idLinks.Refs)) } 'rows' }
+                # the CMDB lookup keys the batch's CIs used (a changed CMDB item dirties exactly those groups next run)
+                $cr = Get-SICiCmdbRefs -Docs $docs
+                $null = & $sql (Get-SICiCmdbRefWriteSql) @{ rk = (ConvertTo-SIJsonArray @($cr.RecordKeys)); r = (ConvertTo-SIJsonArray @($cr.Refs)) } 'rows'
+                # #493 / #496 the graph of the CIs this batch rewrote: their services and relation claims are replaced. A full
+                # build replaces every built CI's (a changed relation or service model reaches the unchanged CIs too); an
+                # incremental build only the CIs whose content changed (the services and claims are part of the content)
+                if (-not $graphMissing) {
+                    $only = $null
+                    if (-not $fullBuild) {
+                        $only = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                        foreach ($ci in @($items.Cis)) { if ($null -ne $ci -and $null -ne $ci['DocJson']) { [void]$only.Add([string]$ci['CiId']) } }
+                    }
+                    $gi = ConvertTo-SICiGraphItems -Docs $docs -Rules $relRules -Only $only
+                    if (@($gi.CiIds).Count -gt 0) {
+                        $gw = @(& $sql (Get-SICiGraphWriteSql) @{ ids = (ConvertTo-SIJsonArray @($gi.CiIds)); s = (ConvertTo-SIJsonArray @($gi.Services)); c = (ConvertTo-SIJsonArray @($gi.Claims))
+                                                                 now = $now.ToString('o'); seeded = $(if ($graphSeeded) { '1' } else { '0' }); run = $RunId } 'rows') | Select-Object -First 1
+                        if ($gw -and [int](Get-SIItemValue $gw 'Skipped') -eq 1) {
+                            $graphMissing = $true
+                            & $Log 'INFO' 'CIs: the services and relations of the CIs were not written -- the database is not updated yet (run the updater).'
+                        } elseif ($gw) {
+                            $gt.Services += [int](Get-SIItemValue $gw 'Services'); $gt.Claims += [int](Get-SIItemValue $gw 'Claims'); $gt.ServiceChanges += [int](Get-SIItemValue $gw 'ServiceChanges'); $gt.Cis += @($gi.CiIds).Count
+                        }
+                    }
+                }
+                $times.write += $bw.Elapsed.TotalSeconds; $bw.Restart()
+                # SI_CI_CL: every CI's slim seen row + the full rows whose posted content changed (all of them on a full refresh)
+                $sel = @(Select-SICiPostRows -Post $items.Post -PostedHash $posted -Full:$full)
+                $rows = New-Object System.Collections.Generic.List[object]
+                foreach ($p in $items.Post) { $rows.Add($p.Seen) }
+                foreach ($p in $sel) { $rows.Add($p.Row) }
+                # the CIs kept as they were: SEEN in this run (the slim row, with the hash of the full row SI_CI_CL already
+                # holds) -- Risk Analysis and the views read them from their last complete evaluation, and none looks gone.
+                # Their stored document is handed on where the build hands every CI on, and posted again as it is when every
+                # CI's full row is posted in this build (so it stays within what Risk Analysis looks back on).
+                $keptSeen = 0
+                if (@($held.Kept).Count -gt 0) {
+                    $keptDocs = @{}
+                    try {
+                        foreach ($dr in @(& $sql (Get-SICiHeldDocSql) @{ ids = (ConvertTo-SIJsonArray @(@($held.Kept) | ForEach-Object { [string]$_.CiId })) } 'rows')) {
+                            $js = [string](Get-SIItemValue $dr 'DocJson'); if (-not $js) { continue }
+                            $h = $null; try { $h = ConvertFrom-Json -InputObject $js -AsHashtable } catch { continue }
+                            if ($null -ne $h) { $keptDocs[[string](Get-SIItemValue $dr 'CiId')] = $h }
+                        }
+                    } catch { & $Log 'INFO' ("CIs: the stored result of {0} CI(s) kept from their last complete evaluation could not be read back ({1}) -- they are still kept and seen." -f @($held.Kept).Count, $_.Exception.Message) }
+                    foreach ($k in @($held.Kept)) {
+                        $ph = [string]$posted[[string]$k.CiId]
+                        if ($ph) { $rows.Add([pscustomobject][ordered]@{ si_ci_id = [string]$k.CiId; si_row_kind = 'seen'; si_collection_time = $k.CollectionTime; si_content_hash = $ph; si_last_seen = $k.LastSeen }); $keptSeen++ }
+                        $h = $keptDocs[[string]$k.CiId]
+                        if ($null -eq $h) { continue }
+                        $h['si_collection_time'] = $now.ToUniversalTime()
+                        if ($null -ne $k.LastSeenValue) { $h['si_last_seen'] = $k.LastSeenValue }
+                        if ($wbDocs.Count -lt $WorkbookMaxCis) { $wbDocs.Add($h) }
+                        if ($ReturnCis -or ($full -and $ph)) {
+                            $pr = ConvertTo-SICiPostRow -Ci $h
+                            $pr | Add-Member -NotePropertyName 'si_row_kind' -NotePropertyValue 'full'
+                            $pr | Add-Member -NotePropertyName 'si_content_hash' -NotePropertyValue (Get-SIContentHash -Item $pr -Exclude @('si_collection_time', 'si_last_seen', 'si_row_kind'))
+                            if ($ReturnCis) { $raCis.Add($pr) }
+                            if ($full -and $ph) { $rows.Add($pr) }
+                        }
+                    }
+                }
+                # the payload size, measured once per batch (#515: one serialisation per row cost as much as the post itself)
+                if ($rows.Count -gt 0) { $t.Bytes += (ConvertTo-Json -InputObject $rows.ToArray() -Compress -Depth 8).Length }
+                $sent = 0
+                & $sayStep ('sending {0} row(s) to SI_CI_CL' -f $rows.Count)
+                try {
+                    if ($Post) { $sent = [int](& $Post $rows.ToArray()) }
+                    else { $sent = [int](Send-SIObjectMapRows -Rows $rows.ToArray() -TableName 'SI_CI' -DcrName $(if ($global:SI_CI_DcrName) { [string]$global:SI_CI_DcrName } else { 'dcr-si-ci' })) }
+                } catch { & $Log 'WARN' ("CIs: batch {0}'s rows could not be posted to SI_CI_CL -- {1}. They are posted again on the next build." -f $b, $_.Exception.Message); $sent = 0 }
+                if ($sent -ge $rows.Count) {
+                    $t.PostedSeen += $items.Post.Count + $keptSeen; $t.PostedFull += $sel.Count
+                    # marked by the NEXT batch's write statement (one round trip per batch); the last batch's after the loop
+                    foreach ($x in $sel) { $pendingMarks.Add([ordered]@{ CiId = $x.CiId; Hash = $x.Hash }) }
+                } else { $t.PostFailed++; $batchDone = $false }
+                $times.post += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            }
+            # CARRY ON: a finished batch of a build that rebuilds every CI is kept at once -- its records remember what they
+            # were built from (the same marks the end of the build writes), so a build that is stopped later is carried on
+            # from here. Not while Azure is adding columns to SI_CI_CL in this run: a full row posted then can
+            # lack their values, so those batches are built (and posted) again.
+            if ($markBatches -and $batchDone) {
+                if (Test-SICiPostGainedColumns) {
+                    if (-not $marksOff) { $marksOff = $true; & $Log 'INFO' 'CIs: SI_CI_CL gained columns in this build, so its batches are not kept as finished -- if this build is stopped, the next one starts again with every CI.' }
+                } else {
+                    # with the batch's posted marks (else they ride in the next batch's write): a kept batch leaves nothing open
+                    & $sayStep 'its rows are sent; keeping the batch as finished'
+                    # (not the records of a CI kept out until it is fully evaluated: @h takes their marks off again)
+                    $null = & $sql (Get-SICiMarkBatchBuiltSql -Thresholds $thresholds) @{ nowText = $now.ToString('o'); all = $(if ($buildAll) { '1' } else { '0' }); b = [string]$b
+                                                                                         p = (ConvertTo-SIJsonArray $pendingMarks.ToArray()); h = (ConvertTo-SIJsonArray @($held.RecordKeys)) } 'rows'
+                    $pendingMarks.Clear()
+                    $batchesKept++
+                }
+                $times.write += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            }
+            if ($b -eq $nBatches -or ($b % $step) -eq 0) {
+                & $Log 'INFO' ("CIs: batch {0} of {1} -- {2} CI(s) built so far, {3} changed ({4:N0} s)" -f $b, $nBatches, $t.Cis, $t.Changed, ($times.read + $times.ledger + $times.core + $times.write + $times.post))
+            }
+        }
+        # the batches are done: the watch ends here (a build that fails ends it where the failure is caught)
+        Stop-SICiWatch -Watch $ciWatch; $ciWatch = $null
+        if ($disabledLeftOut -gt 0) { & $Log 'INFO' (Format-SIDisabledStageLine -Stage Correlate -Count $disabledLeftOut -Where 'CI correlation') }
+        if ($scopeLeftOut -gt 0) { & $Log 'INFO' (Format-SICiScopeLine -Count $scopeLeftOut) }
+        if ($t.Incomplete -gt 0) { & $Log 'WARN' (Format-SICiIncompleteSummary -Count $t.Incomplete -Kept $t.IncompleteKept -LeftOut $t.IncompleteLeftOut -Budget (Get-SICiRulesBudgetSeconds)) }
+        # the last batch's posted marks (the only separate mark statement of the build)
+        if (-not $DryRun -and $pendingMarks.Count -gt 0) {
+            $bw.Restart()
+            $null = & $sql (Get-SICiMarkPostedSql) @{ p = (ConvertTo-SIJsonArray $pendingMarks.ToArray()) } 'scalar'
+            $pendingMarks.Clear()
+            $times.post += $bw.Elapsed.TotalSeconds
+        }
+        $workSeconds = $times.read + $times.ledger + $times.core + $times.write + $times.post
+        # the end of the build writes too (the unchanged CIs' seen marks, the relations, the retired CIs, the build's state)
+        if (-not $DryRun) { . $holdLock }
+
+        # #534 the CIs of the CLEAN groups (incremental): their collection time and today's trend row in ONE statement, and
+        # the slim SI_CI_CL 'seen' row every CI gets every build (#515) -- nothing else of them changes (rule 4)
+        $skippedCis = 0
+        if (-not $buildAll -and -not $DryRun) {
+            $bw.Restart()
+            $seenRows = New-Object System.Collections.Generic.List[object]
+            $utcNow = ConvertTo-SILogValue $now
+            foreach ($sr in @(& $sql (Get-SICiSeenSql) @{ nowText = $now.ToString('o') } 'rows')) {
+                $kind = [string](Get-SIItemValue $sr 'Kind')
+                if ($kind -eq 'summary') { $t.Touched += [int](Get-SIItemValue $sr 'Touched'); $t.Daily += [int](Get-SIItemValue $sr 'Daily'); continue }
+                if ($kind -ne 'seen') { continue }
+                $ls = Get-SIItemValue $sr 'LastSeen'
+                if ($ls -is [datetime]) { $ls = [datetime]::SpecifyKind($ls, [DateTimeKind]::Utc) }
+                $seenRows.Add([pscustomobject][ordered]@{ si_ci_id = [string](Get-SIItemValue $sr 'CiId'); si_row_kind = 'seen'; si_collection_time = $utcNow
+                        si_content_hash = [string](Get-SIItemValue $sr 'PostHash'); si_last_seen = (ConvertTo-SILogValue $ls) })
+            }
+            $skippedCis = $seenRows.Count
+            $t.Cis += $skippedCis; $t.Slim += $skippedCis
+            $times.write += $bw.Elapsed.TotalSeconds; $bw.Restart()
+            for ($i = 0; $i -lt $seenRows.Count; $i += 5000) {
+                $chunk = $seenRows.GetRange($i, [Math]::Min(5000, $seenRows.Count - $i)).ToArray()
+                $t.Bytes += (ConvertTo-Json -InputObject $chunk -Compress -Depth 4).Length
+                $sent = 0
+                try {
+                    if ($Post) { $sent = [int](& $Post $chunk) }
+                    else { $sent = [int](Send-SIObjectMapRows -Rows $chunk -TableName 'SI_CI' -DcrName $(if ($global:SI_CI_DcrName) { [string]$global:SI_CI_DcrName } else { 'dcr-si-ci' })) }
+                } catch { & $Log 'WARN' ("CIs: the seen rows of the unchanged CIs could not be posted to SI_CI_CL -- {0}. They are posted again on the next build." -f $_.Exception.Message); $sent = 0 }
+                if ($sent -ge $chunk.Count) { $t.PostedSeen += $chunk.Count } else { $t.PostFailed++ }
+            }
+            $times.post += $bw.Elapsed.TotalSeconds
+        }
+
+        # #534 a skipped CI handed on as the last build wrote it: Risk Analysis building the CIs in its own run (every CI's
+        # SI_CI_CL row) and the CI workbook (up to its limit)
+        $wbWanted = (-not $DryRun -and $WorkbookMaxCis -gt 0 -and -not ($global:SI_CiWorkbook -and ([string]$global:SI_CiWorkbook).Trim().ToLowerInvariant() -in 'off', 'false', '0'))
+        if (-not $buildAll -and ($ReturnCis -or ($wbWanted -and $wbDocs.Count -lt $WorkbookMaxCis))) {
+            $bw.Restart()
+            for ($b = 1; $b -le $nBatches; $b++) {
+                if (-not ($batchGroups[$b] -gt $batchDirty[$b])) { continue }
+                if (-not $ReturnCis -and $wbDocs.Count -ge $WorkbookMaxCis) { break }
+                foreach ($dr in @(& $sql (Get-SICiCleanDocSql) @{ b = [string]$b } 'rows')) {
+                    $js = [string](Get-SIItemValue $dr 'DocJson'); if (-not $js) { continue }
+                    $h = $null; try { $h = ConvertFrom-Json -InputObject $js -AsHashtable } catch { continue }
+                    if ($null -eq $h) { continue }
+                    $h['si_collection_time'] = $now.ToUniversalTime()
+                    if ($ReturnCis) {
+                        $pr = ConvertTo-SICiPostRow -Ci $h
+                        $pr | Add-Member -NotePropertyName 'si_row_kind' -NotePropertyValue 'full'
+                        $pr | Add-Member -NotePropertyName 'si_content_hash' -NotePropertyValue (Get-SIContentHash -Item $pr -Exclude @('si_collection_time', 'si_last_seen', 'si_row_kind'))
+                        $raCis.Add($pr)
+                    }
+                    if ($wbWanted -and $wbDocs.Count -lt $WorkbookMaxCis) { $wbDocs.Add($h) }
+                }
+            }
+            $times.read += $bw.Elapsed.TotalSeconds
+        }
+        foreach ($k in $times.Keys) { $phase[$k] = [Math]::Round($times[$k], 1) }
+        $sw.Restart()
+        if (-not $DryRun -and [string]$prov.Kind -ne 'sql' -and $blobDecisions.Count -gt 0) {
+            $lw = Write-SIObjectLedger -Provider $prov -Decisions $blobDecisions.ToArray() -Superseded $blobSuperseded.ToArray() -Now $now -IfMatchETag $whole.ETag -CurrentLedger $whole.Ledger
+            if ($lw) { $t.Anchors += [int]$lw.AnchorsWritten; $t.Superseded += [int]$lw.SupersededWritten }
+        }
+        try { Close-SIObjectLedgerProvider -Provider $prov } catch { }
+        # #493 the relations: the claims resolved into sidata.CiRelation (both ways), the changes posted to SI_CIRelation_CL
+        # (every active relation with the weekly full refresh, or when the last post did not land)
+        $rel = $null
+        if (-not $DryRun -and -not $graphMissing) {
+            $relFull = ($full -or [string]$state['RelationFullPostDue'] -eq '1')
+            $relArgs = @{ Sql = $sql; Now = $now; Full = [bool]$relFull; Seeded = [bool]$graphSeeded; RunId = $RunId; Log = $Log }
+            if ($PostRelations) { $relArgs['Post'] = $PostRelations } elseif ($Post) { $relArgs['NoPost'] = $true }
+            $rel = Invoke-SICiRelationStep @relArgs
+            if ($gt.Cis -gt 0) { & $Log 'INFO' ("CIs: services and relation claims written for {0} CI(s) -- {1} service membership(s), {2} claim(s), {3} membership change(s) recorded" -f $gt.Cis, $gt.Services, $gt.Claims, $gt.ServiceChanges) }
+        }
+
+        # the CIs no current record builds any more (records aged out of the lookback, or none at all) are RETIRED once unseen
+        # longer than the retire brake -- never deleted; recorded again, they are rebuilt active (Get-SICiRetireSql)
+        $retired = $null
+        if (-not $DryRun) {
+            try {
+                $retired = @(& $sql (Get-SICiRetireSql -FloorDays (Get-SICiRetireDays)) @{ run = [string]$RunId } 'rows') | Select-Object -First 1
+                if ($retired -and [int](Get-SIItemValue $retired 'Retired') -gt 0) {
+                    & $Log 'INFO' ("CIs: {0} CI(s) retired -- no source records them any more (not seen for longer than {1} day(s){2}); retired, never deleted -- recorded again, a CI is active again." -f [int](Get-SIItemValue $retired 'Retired'), (Get-SICiRetireDays), $(if ([int](Get-SIItemValue $retired 'Orphans') -gt 0) { ('; {0} of them had no record at all' -f [int](Get-SIItemValue $retired 'Orphans')) } else { '' }))
+                }
+            } catch {
+                & $Log 'WARN' ("CIs: the CIs no source records any more could not be retired this build ({0}) -- tried again on the next build." -f $_.Exception.Message)
+                $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the CIs no source records any more were not retired this build ({0}) -- every CI is stored; they are retired by the next build' -f $_.Exception.Message) })
+            }
+        }
+
+        # THE CI VIEWS' STORED COLUMNS ARE CURRENT WHEN THE BUILD ENDS (Pro): the columns the web app's CI views filter and
+        # sort on are filled from the documents of the CIs this build changed -- set-based, in batches, still inside the
+        # build's lock. Until now only the data sync did it, so the views read those CIs from their document from here to
+        # the next data sync. The fill lives with the data sync (engine\pro-data, not part of the free edition): it is
+        # loaded only when it is there, and it never fails the build.
+        $viewColumns = $null
+        if (-not $DryRun) {
+            try {
+                $fillScript = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'pro-data', '_shared', 'SI-DataCi.ps1')
+                if (-not (Get-Command -Name Invoke-SIDataCiStoredColumns -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $fillScript)) { . $fillScript }
+                if (Get-Command -Name Invoke-SIDataCiStoredColumns -ErrorAction SilentlyContinue) { $viewColumns = Invoke-SIDataCiStoredColumns -Invoke $sql -Log $Log }
+            # INFO, never WARN: a warning of the build is an alert, and the build and its CIs are fine -- the data sync fills them
+            } catch { & $Log 'INFO' ("CIs: the columns the CI views read were not filled at the end of this build ({0}) -- the data sync fills them." -f $_.Exception.Message) }
+        }
+
+        # #534 the records of the built groups remember what they were built from; the build's state. A build whose rows did
+        # not all reach SI_CI_CL is 'partial' -- the next build is full.
+        if (-not $DryRun) {
+            # (@h: the records of the CIs kept out until they are fully evaluated lose their marks -- the next build, whatever
+            # kind it is, finds their groups changed and builds them again with every rule)
+            $mk = @(& $sql (Get-SICiMarkBuiltSql -Thresholds $thresholds) @{ nowText = $now.ToString('o'); all = $(if ($buildAll) { '1' } else { '0' }); h = (ConvertTo-SIJsonArray $heldRecords.ToArray()) } 'rows')
+            if ($mk.Count -gt 0) { $t.Marked = [int](Get-SIItemValue $mk[0] 'Marked') }
+            $sv = New-Object System.Collections.Generic.List[object]
+            $sv.Add([ordered]@{ n = 'LastBuildStatus'; v = $(if ($t.PostFailed -eq 0) { 'ok' } else { 'partial' }) })
+            if ($fingerprint) { $sv.Add([ordered]@{ n = 'BuildFingerprint'; v = $fingerprint }) }
+            if ($fullBuild) { $sv.Add([ordered]@{ n = 'LastFullBuild'; v = $now.ToString('o') }) }
+            # (a build that carried on compared nothing: the count of the last whole reconcile stays)
+            if ($buildAll) { $sv.Add([ordered]@{ n = 'LastReconcileCorrected'; v = [string]$mismatch.Count }) }
+            # the CIs this build could not fully evaluate (0 when there is none): what the web app and support read to say
+            # "N asset(s) not fully evaluated in the last run", with their names (name and kind, the first of them)
+            $sv.Add([ordered]@{ n = 'NotFullyEvaluated'; v = [string]$t.Incomplete })
+            $sv.Add([ordered]@{ n = 'NotFullyEvaluatedCis'; v = (Format-SICiIncompleteNames -Labels $heldNames.ToArray() -Total $t.Incomplete) })
+            # #642 the run record of the identity ledger's wrong merges: split off in this build, and ids groups still share
+            $sv.Add([ordered]@{ n = 'WrongMergesSplit'; v = [string]$t.WrongMergeSplit })
+            $sv.Add([ordered]@{ n = 'WrongMergesSplitIds'; v = ($wrongIds.ToArray() -join '; ') })
+            $sv.Add([ordered]@{ n = 'SharedIdGroups'; v = [string]$t.Collisions })
+            $sv.Add([ordered]@{ n = 'SharedIds'; v = ($collIds.ToArray() -join '; ') })
+            # the build finished: there is nothing to carry on
+            $sv.Add([ordered]@{ n = 'CarryOnFingerprint'; v = '' })
+            if ($full -and $t.PostFailed -eq 0) { $sv.Add([ordered]@{ n = 'LastFullPost'; v = $now.ToString('o') }) }
+            # the column contract the posted rows are complete for: kept when this build posted into no NEW column; a build
+            # that added columns to SI_CI_CL clears it, so the next build posts every full row again (into stored columns)
+            $gained = Test-SICiPostGainedColumns
+            if ($gained) { $sv.Add([ordered]@{ n = 'PostContract'; v = '' }); & $Log 'INFO' 'CIs: SI_CI_CL gained columns in this build -- the next build posts every CI''s full row again, so the values Azure was not yet storing arrive.' }
+            elseif ($t.PostFailed -eq 0 -and ($full -or [string]$state['PostContract'] -eq $postContract)) { $sv.Add([ordered]@{ n = 'PostContract'; v = $postContract }) }
+            # #493 / #496 the graph is written from now on (history is recorded); the relations' post landed or is due again
+            if (-not $graphMissing -and $gt.Cis -gt 0) { $sv.Add([ordered]@{ n = 'GraphSeeded'; v = '1' }) }
+            if ($null -ne $rel -and -not $rel.Skipped) { $sv.Add([ordered]@{ n = 'RelationFullPostDue'; v = $(if ($rel.PostFailed) { '1' } else { '0' }) }) }
+            $null = & $sql (Get-SICiStateSetSql) @{ j = (ConvertTo-SIJsonArray $sv.ToArray()) } 'rows'
+            $stateRunning = $false
+            # the owning CMDB as this build saw it (the next build compares its items with these)
+            $null = & $sql (Get-SICiCmdbKeySaveSql) @{ ck = $cmdbKeysJson } 'rows'
+        }
+        & $mark 'finish'
+
+        # #534 the run log: incremental or full, groups built / skipped, why a full ran -- and what the full reconcile corrected
+        & $Log 'INFO' (Format-SICiBuildModeLine -Full $fullBuild -Reasons $reasons.ToArray() -Groups $nGroups -Built $built -Dirty $dirty -WorkSeconds $workSeconds)
+        if ($fullBuild) {
+            if ($carryOn) {
+                & $Log 'INFO' ("CIs: the rebuild of every CI that a stopped build started is complete -- {0} CI(s) changed in this build." -f $t.Changed)
+            } elseif ($decision.FingerprintChanged) {
+                & $Log 'INFO' ("CIs: what the CIs are built from changed -- every CI was rebuilt; {0} of them changed." -f $t.Changed)
+            } elseif ($mismatch.Count -gt 0) {
+                # owner 2026-10-10: "no need to send alerts, if full reconcile fixes things" -- one plain INFO line (the count is
+                # also kept in sidata.CiBuildState LastReconcileCorrected); it never changes the run outcome
+                & $Log 'INFO' ("CIs: the weekly full rebuild brought {0} CI(s) up to date (first: {1})." -f $mismatch.Count, ((@($mismatch) | Select-Object -First 5) -join ', '))
+            } else {
+                & $Log 'INFO' 'CIs: the full reconcile found every CI as the incremental builds left it -- nothing to correct.'
+            }
+        }
+
+        # the CI workbook (Excel) through its output map in force (data-model/outputs/excel-ci + the customer's column
+        # changes) -- a listed data-out connector (config/data-out.locked.json, data-out-excel-ci): its run and each CI
+        # written, changed (column before / now) or no longer in it are recorded. Never fails the build.
+        if ($wbWanted -and $wbDocs.Count -gt 0) {
+            try {
+                if (-not (Get-Command -Name Invoke-SIDataOutWriter -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'data-out', 'SI-DataOut.ps1')) }
+                $wbCatalog = Get-SIDataOutCatalog   # one list (return , @()): filter the variable, never the call's pipeline
+                $wbEntry = @($wbCatalog | Where-Object { [string]$_.output -eq 'excel-ci' })[0]
+                $wbStore = $null; try { $wbStore = New-SIConnectorRegistryStore } catch { }
+                # SI_DisabledAssets_Connectors (the workbook is data out): a disabled account's CI is left out of it, frozen
+                $wbSel = Select-SIDataOutEnabledItems -Grain 'ci' -Items $wbDocs.ToArray() -Include (Test-SIDisabledIncluded -Stage Connectors -Policy $disabledPolicy)
+                $wr = Invoke-SIDataOutWriter -Entry $wbEntry -Map $model.Outputs['excel-ci'] -Items @($wbSel.Kept) -ValueMaps $model['value-maps'].maps -Store $wbStore -RunId $RunId -Log $Log -FrozenKeys ([string[]]@($wbSel.FrozenKeys))
+                if ($t.Cis -gt $wbDocs.Count) { & $Log 'INFO' ("CIs: {0} of {1} CI(s) in the workbook (a workbook holds up to {2}; every CI is in the database)" -f $wr.Rows, $t.Cis, $WorkbookMaxCis) }
+                # #639: a WARNING of the build (every CI is whole in the database and the web app; only the file is missing)
+                if ($wr -and [string]$wr.Outcome -in 'failed', 'partial') { $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the CI workbook was not written ({0}) -- every CI is in the database and the web app' -f [string]$wr.Why) }) }
+            } catch {
+                & $Log 'WARN' ("CIs: the CI workbook could not be written -- {0}" -f $_.Exception.Message)
+                $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the CI workbook was not written ({0}) -- every CI is in the database and the web app' -f $_.Exception.Message) })
+            }
+        }
+        & $mark 'workbook'
+
+        $phaseText = (@($phase.Keys | ForEach-Object { '{0} {1} s' -f $_, $phase[$_] }) -join ', ')
+        if ($DryRun) {
+            & $Log 'OK' ("CIs: {0} record(s) -> {1} CI(s); {2} new, {3} merged -- DRY RUN, nothing written. Times: {4}" -f $nRec, $t.Cis, $t.Minted, $t.Merged, $phaseText)
+        } else {
+            & $Log 'OK' ("CIs: {0} record(s) -> {1} CI(s) ({2} changed, {3} new, {4} merged); SQL: {5} CI row(s), {6} link row(s), {7} record link(s), {8} daily row(s), {9} ledger anchor(s); SI_CI_CL: {10} seen + {11} full row(s), ~{12:N0} KB{13}. Times: {14}" -f `
+                $nRec, $t.Cis, $t.Changed, $t.Minted, $t.Merged, ($t.Changed + $t.LastSeenOnly), $t.Links, $t.RecordCi, $t.Daily, $t.Anchors, $t.PostedSeen, $t.PostedFull, ($t.Bytes / 1KB), $(if ($full) { ' (weekly full refresh)' } else { '' }), $phaseText)
+            if ($t.PostFailed -gt 0) {
+                & $Log 'WARN' ("CIs: {0} batch(es) could not be posted to SI_CI_CL; the next build posts them." -f $t.PostFailed)
+                # #639 FAILED: Risk Analysis reads its CI context from SI_CI_CL, and this build's rows of those batches are not there
+                $buildIssues.Add([pscustomobject]@{ Level = 'FAILED'; Text = ('{0} batch(es) of CIs did not reach SI_CI_CL -- Risk Analysis would read those CIs from an older build or not at all; the next build posts every CI''s row again' -f $t.PostFailed) })
+            }
+            & $Log 'INFO' ("CIs: {0} of {1} CI(s) unchanged since the last build -- sent without their document{2}" -f $t.Slim, $t.Cis, $(if ($t.Resent -gt 0) { ("; {0} found changed by the database and sent whole" -f $t.Resent) } else { '' }))
+        }
+        # #642 the identity ledger's wrong merges (sidata.CiBuildState WrongMergesSplit / SharedIdGroups keep the counts)
+        foreach ($wl in @(Format-SICiWrongMergeLines -Split $t.WrongMergeSplit -SplitIds $wrongIds.ToArray() -SharedGroups $t.Collisions -SharedIds $collIds.ToArray())) { & $Log 'WARN' $wl }
+        # #546 (counted over the CIs this build evaluated -- an incremental build evaluates only the CIs whose records changed)
+        $unkLine = ''; try { $unkLine = Format-SICiUnknownFactorLine -Counts $unknownFactorCounts } catch { }
+        if ($unkLine) { & $Log 'INFO' $unkLine }
+        return [pscustomobject]@{ Failed = $false; Records = $nRec; CiCount = $t.Cis; Cis = $raCis.ToArray(); Changed = $t.Changed; Minted = $t.Minted; Merged = $t.Merged; Unkeyable = $unkeyable; Slim = $t.Slim; Resent = $t.Resent
+            PostedSeen = $t.PostedSeen; PostedFull = $t.PostedFull; Bytes = $t.Bytes; SqlRows = ($t.Changed + $t.LastSeenOnly + $t.Links + $t.RecordCi + $t.Daily + $t.Anchors); Full = [bool]$full; Phases = $phase
+            # #534 the build's mode and what it did
+            BuildMode = $(if ($fullBuild) { 'full' } else { 'incremental' }); FullBuild = [bool]$fullBuild; FullReasons = $reasons.ToArray(); GroupsBuilt = $built
+            # a rebuild of every CI that was stopped, carried on by this build; the batches this build kept as finished
+            CarryOn = [bool]$carryOn; BatchesKept = $batchesKept
+            GroupsSkipped = [Math]::Max(0, $nGroups - $built); SkippedCis = $skippedCis; Touched = $t.Touched; Marked = $t.Marked; Dirty = $dirty
+            # the CIs whose rules took too long: kept out until fully evaluated (Kept = their last complete evaluation stays in
+            # force, LeftOut = new and not written), built again in the next run; their names (name and kind, the first 50)
+            Incomplete = $t.Incomplete; IncompleteKept = $t.IncompleteKept; IncompleteLeftOut = $t.IncompleteLeftOut; IncompleteCis = $heldNames.ToArray()
+            ReconcileCorrected = $mismatch.Count; ReconcileCorrectedIds = $mismatch.ToArray(); Fingerprint = $fingerprint; IdentityLinked = $t.IdentityLinked
+            # #642 the identity ledger's wrong merges this build split off, and the groups that still share an id (built as one CI)
+            WrongMergeSplit = $t.WrongMergeSplit; WrongMergeSplitIds = $wrongIds.ToArray(); SharedIdGroups = $t.Collisions; SharedIds = $collIds.ToArray(); DuplicateCis = $t.Duplicates
+            # #493 / #496 the graph
+            GraphCis = $gt.Cis; ServiceMemberships = $gt.Services; RelationClaims = $gt.Claims; ServiceChanges = $gt.ServiceChanges; GraphMissing = $graphMissing; Relations = $rel
+            # the CIs no source records any more, retired this build
+            Retired = $(if ($retired) { [int](Get-SIItemValue $retired 'Retired') } else { 0 })
+            # the CI views' stored columns filled at the end of this build ($null: not this edition, or a dry run)
+            ViewColumns = $viewColumns
+            # #639 what the build caught and went on from (WARNING / FAILED, one plain line each)
+            Issues = $buildIssues.ToArray() }
+    } catch {
+        Stop-SICiWatch -Watch $ciWatch
+        # an unreachable database lands here too (the first statement is the grouping): a plain failure with its reason --
+        # never a Log Analytics fallback
+        & $Log 'WARN' ("CIs could not be built this run -- {0}. The correlation map is unaffected; the next build tries again." -f $_.Exception.Message)
+        # #534 the next build is full (best effort: the database may be what failed). Not after a lost lock: the build's
+        # state may be another build's by now, and a stopped build is carried on by the next one as it is
+        if ($stateRunning -and $sql -and -not $lockLost) { try { $null = & $sql (Get-SICiStateSetSql) @{ j = (ConvertTo-SIJsonArray @([ordered]@{ n = 'LastBuildStatus'; v = 'failed' })) } 'rows' } catch { } }
+        return [pscustomobject]@{ Failed = $true; Reason = $_.Exception.Message; CiCount = 0; Cis = @() }
+    } finally {
+        # the lock this build took is released whatever happened (a killed process: the server frees it with the connection)
+        if ($lockOwned) { Exit-SICiBuildLock }
+    }
+}
+
+# ---- SI-CiBuildSql.ps1 :: ConvertTo-SICiPostRow
+function ConvertTo-SICiPostRow {
+    <# PURE. A CI document -> the SI_CI_CL full row Risk Analysis reads (the column contract only, $script:SICiPostFields: no
+       run id and nothing else that changes every build; the lifecycle IS posted -- it changes only when the CI's linked
+       objects do; linked objects as { provider, id }, risk factors as { id, axis, impact, stage }). #>
+    param([Parameter(Mandatory)]$Ci)
+    $r = [ordered]@{}
+    foreach ($f in $script:SICiPostFields) {
+        if (-not $Ci.Contains($f)) { continue }
+        $v = $Ci[$f]
+        if ($f -eq 'si_linked_objects') { $v = @(@($v) | Where-Object { $_ } | ForEach-Object { [ordered]@{ provider = $_.provider; id = $_.id } }) }
+        elseif ($f -eq 'si_risk_factors') {
+            # each factor's providers ('by', #464) ride along; the full evidence stays in the sidata.Ci document
+            $v = @(@($v) | Where-Object { $_ } | ForEach-Object {
+                    # #559: shortName / side / state ride along; axis + stage stay for the reports' CI blocks (si_rf_p / si_rf_c)
+                    $o = [ordered]@{ id = $_.id; shortName = (Get-SIItemValue $_ 'shortName'); side = (Get-SIItemValue $_ 'side'); axis = $_.axis; impact = $_.impact; state = (Get-SIItemValue $_ 'state'); stage = $_.stage }
+                    $by = Get-SIItemValue $_ 'by'; if ($null -ne $by -and @($by).Count -gt 0) { $o['by'] = @($by) }
+                    $o })
+        }
+        elseif ($f -eq 'si_tier' -and $null -ne $v -and "$v" -ne '') { $v = [int]$v }
+        elseif ($f -eq 'si_tier_claims') {
+            $v = @(@($v) | Where-Object { $null -ne $_ -and $null -ne (Get-SIItemValue $_ 'tier') -and "$(Get-SIItemValue $_ 'tier')" -ne '' } | ForEach-Object {
+                    [ordered]@{ rule = (Get-SIItemValue $_ 'rule'); label = (Get-SIItemValue $_ 'label'); kind = (Get-SIItemValue $_ 'kind'); tier = [int](Get-SIItemValue $_ 'tier')
+                        admissible = [bool](Get-SIItemValue $_ 'admissible'); winner = [bool](Get-SIItemValue $_ 'winner'); reason = (Get-SIItemValue $_ 'reason')
+                        matched = @(@(Get-SIItemValue $_ 'matched') | Where-Object { $_ } | ForEach-Object { [string]$_ }) } })
+        }
+        $r[$f] = ConvertTo-SILogValue $v
+    }
+    # #464: the catalog's per-CI factor columns -- si_rf_<id> (true / false) and si_rf_count -- when the CI build set them
+    foreach ($k in @($Ci.Keys)) { if ([string]$k -like 'si_rf_*') { $r[[string]$k] = ConvertTo-SILogValue $Ci[$k] } }
+    $r['si_collection_time'] = ConvertTo-SILogValue $Ci['si_collection_time']
+    $r['si_last_seen'] = ConvertTo-SILogValue $Ci['si_last_seen']
+    [pscustomobject]$r
+}
+
+# ---- SI-CiBuildSql.ps1 :: ConvertTo-SICiSqlItems
+function ConvertTo-SICiSqlItems {
+    <#
+        PURE. A batch's CI documents -> the sidata.Ci items (grid columns, the whole document, its content hash), the
+        sidata.CiLink items, the record -> CI map and the SI_CI_CL rows with their posted-content hash.
+        #515 -Stored (Get-SICiBatchStored: what the last build left): a CI whose content hash equals its stored one goes as a
+        SLIM item (id, last seen, collection time, hash -- no document, no grid columns, no links: the database keeps them and
+        only moves its last seen), and a record -> CI link that did not move is not sent. Unchanged = how many went slim.
+        Without -Stored every CI goes whole (the first build, a resend).
+    #>
+    param([AllowEmptyCollection()][object[]]$Cis = @(), $Stored)
+    $storedHash = if ($Stored -and $Stored.Hash) { $Stored.Hash } else { @{} }
+    $storedRec = if ($Stored -and $Stored.RecordCi) { $Stored.RecordCi } else { @{} }
+    $unchanged = 0
+    $iso = { param($v) $x = $v; if ($x -isnot [datetime]) { $x = ConvertTo-SIUtcOrNull $x }; if ($x) { $x.ToUniversalTime().ToString('o') } else { $null } }
+    $ciItems = New-Object System.Collections.Generic.List[object]
+    $links = New-Object System.Collections.Generic.List[object]
+    $map = New-Object System.Collections.Generic.List[object]
+    $post = New-Object System.Collections.Generic.List[object]
+    # one item per CI id: two groups that resolve to one id (a ledger collision) would break the batch's write -- the
+    # first is kept and the others are counted (Duplicates), never written twice
+    $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase); $dup = New-Object System.Collections.Generic.List[string]
+    foreach ($c in $Cis) {
+        if ($null -eq $c) { continue }
+        $id = [string]$c['si_ci_id']; if (-not $id) { continue }
+        if (-not $ids.Add($id)) { $dup.Add($id); continue }
+        $rf = @(@($c['si_risk_factors']) | Where-Object { $_ -and $_.impact -gt 0 } | ForEach-Object { [string]$_.id })
+        $tier = $c['si_tier']; $ie = $c['si_internet_exposed']
+        $hashIn = [ordered]@{}
+        foreach ($k in $c.Keys) {
+            if ($script:SICiVolatileFields -contains $k) { continue }
+            if ($k -eq 'si_linked_objects') { $hashIn[$k] = @(@($c[$k]) | Where-Object { $_ } | ForEach-Object { [ordered]@{ provider = $_.provider; type = $_.type; id = $_.id; record_key = $_.record_key; primary = [bool]$_.primary; state = $_.state } }); continue }
+            $hashIn[$k] = $c[$k]
+        }
+        $hash = Get-SIContentHash -Item $hashIn
+        # the SI_CI_CL full row and its posted-content hash, first: the CI item carries that hash too (#534 PostRowHash -- a CI
+        # whose last full row did not reach SI_CI_CL is rebuilt by the next incremental build)
+        $pr = ConvertTo-SICiPostRow -Ci $c
+        $ph = Get-SIContentHash -Item $pr -Exclude @('si_collection_time', 'si_last_seen')
+        $was = [string]$storedHash[$id]
+        if ($was -and $was.ToUpperInvariant() -eq $hash.ToUpperInvariant()) {
+            # #515 the content did not change: no document is serialised or sent, no link rows
+            $unchanged++
+            $ciItems.Add([ordered]@{ CiId = $id; LastSeen = (& $iso $c['si_last_seen']); CollectionTime = (& $iso $c['si_collection_time']); Hash = $hash; DocJson = $null; PostHash = $ph })
+            foreach ($l in @($c['si_linked_objects'])) {
+                if ($null -eq $l -or -not $l.id -or -not $l.record_key) { continue }
+                if ([string]$storedRec[[string]$l.record_key] -ne $id) { $map.Add([ordered]@{ RecordKey = [string]$l.record_key; CiId = $id }) }
+            }
+        } else {
+        $ciItems.Add([ordered]@{
+                CiId = $id; Class = [string]$c['si_class']; Name = [string]$c['si_asset_name']; AssetType = [string]$c['si_asset_type']
+                Tier = $(if ($null -ne $tier -and "$tier" -ne '') { [int]$tier } else { $null }); TierSetBy = [string]$c['si_tier_set_by']
+                TierReason = [string]$c['si_tier_reason']; Lifecycle = [string]$c['si_lifecycle']
+                InternetExposed = $(if ($null -eq $ie) { $null } elseif ((ConvertTo-SIBoolOrNull $ie) -eq $true) { 1 } elseif ((ConvertTo-SIBoolOrNull $ie) -eq $false) { 0 } else { $null })
+                CmdbId = [string]$c['si_cmdb_id']; CmdbName = [string]$c['si_cmdb_name']; CmdbCriticality = [string]$c['si_cmdb_criticality']
+                CriticalityFactor = $c['si_criticality_factor']; RiskFactors = ($rf -join ';'); LinkCount = $c['si_link_count']
+                LastSeen = (& $iso $c['si_last_seen']); CollectionTime = (& $iso $c['si_collection_time'])
+                Hash = $hash; PostHash = $ph
+                DocJson = (ConvertTo-Json -InputObject $c -Compress -Depth 12)
+            })
+        foreach ($l in @($c['si_linked_objects'])) {
+            if ($null -eq $l -or -not $l.id) { continue }
+            $links.Add([ordered]@{ CiId = $id; Provider = [string]$l.provider; RecordType = [string]$l.type; NativeId = [string]$l.id; IsPrimary = $(if ($l.primary -eq $true) { 1 } else { 0 }); State = [string]$l.state; LastSeen = (& $iso $l.last_seen) })
+            if ($l.record_key -and [string]$storedRec[[string]$l.record_key] -ne $id) { $map.Add([ordered]@{ RecordKey = [string]$l.record_key; CiId = $id }) }
+        }
+        }
+        $pr | Add-Member -NotePropertyName 'si_row_kind' -NotePropertyValue 'full'
+        $pr | Add-Member -NotePropertyName 'si_content_hash' -NotePropertyValue $ph
+        # the SLIM row every CI gets every build (operator: "a device can be off for 1 week, how do we find its latest data if
+        # you filter per day"): today's set of CIs = today's seen rows; a CI's properties = its latest FULL row
+        $seen = [pscustomobject][ordered]@{ si_ci_id = $id; si_row_kind = 'seen'; si_collection_time = $pr.si_collection_time; si_content_hash = $ph
+            si_last_seen = $pr.si_last_seen }
+        $post.Add([pscustomobject]@{ CiId = $id; Row = $pr; Seen = $seen; Hash = $ph })
+    }
+    [pscustomobject]@{ Cis = $ciItems.ToArray(); Links = $links.ToArray(); Map = $map.ToArray(); Post = $post.ToArray(); Duplicates = $dup.ToArray(); Unchanged = $unchanged }
+}
+
+# ---- SI-CiEnrich.ps1 :: Get-SICiConditionMatches
+function Get-SICiConditionMatches {
+    <#
+        PURE. What made a condition true on an item: one entry per leaf that matched -- { field; values } with the VALUES of the
+        field that satisfy the leaf (the tag, the software, the name), not the whole field. An 'any' group gives the leaves that
+        matched, an 'all' group every leaf. Feeds the tier explanation (si_tier_explanation, #579).
+    #>
+    param($Condition, $Item, [hashtable]$Context)
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Condition) { return }
+    foreach ($k in 'all', 'any') {
+        $has = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains($k)) -or ($Condition -isnot [System.Collections.IDictionary] -and $Condition.PSObject.Properties[$k])
+        if (-not $has) { continue }
+        foreach ($c in (Get-SIValueList (Get-SIItemValue $Condition $k))) {
+            $ok = $false; try { $ok = Test-SICondition -Condition $c -Item $Item -Context $Context } catch { $ok = $false }
+            if ($ok) { foreach ($m in @(Get-SICiConditionMatches -Condition $c -Item $Item -Context $Context)) { $out.Add($m) } }
+        }
+        return $out.ToArray()   # unrolled: the caller collects with @()
+    }
+    $field = [string](Get-SIItemValue $Condition 'field'); if (-not $field) { return }
+    $op = [string](Get-SIItemValue $Condition 'op')
+    $actual = Get-SIItemValue $Item $field
+    $vals = New-Object System.Collections.Generic.List[object]
+    if (@('matches', 'like', 'contains', 'eq', 'in', 'contains_any', 'in_ranges', 'in_list') -contains $op) {
+        foreach ($v in (Get-SIValueList $actual)) {
+            $one = @{}; $one[$field] = $v
+            $ok = $false; try { $ok = Test-SICondition -Condition $Condition -Item $one -Context $Context } catch { $ok = $false }
+            if ($ok) { $vals.Add($v) }
+        }
+    }
+    if ($vals.Count -eq 0) { foreach ($v in (Get-SIValueList $actual)) { $vals.Add($v) } }
+    $out.Add([ordered]@{ field = $field; values = $vals.ToArray() })
+    return $out.ToArray()
+}
+
+# ---- SI-CiEnrich.ps1 :: Invoke-SICiRiskFactors
+function Invoke-SICiRiskFactors {
+    <# Asset risk factors + CI-level coverage checks on one CI -> si_risk_factors, si_coverage_gaps. #>
+    param([Parameter(Mandatory)]$Ci, [Parameter(Mandatory)]$Factors, $Checks, [hashtable]$Context)
+    $out = New-Object System.Collections.Generic.List[object]
+    $byId = @{}
+    foreach ($f in @($Factors.factors)) { $byId[[string]$f.id] = $f }
+    # #546 UNKNOWN IS NEVER A FINDING: a factor whose value the CI cannot decide (a field in si_unknown_fields, or an age /
+    # number that was never read) is listed in si_rf_unknown and counted -- never raised
+    $unknownFields = @(@($Ci['si_unknown_fields']) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $unknownFactors = New-Object System.Collections.Generic.List[string]
+    # #559 risk factor model v2: an ENABLED factor is evaluated and counts its impact (1..5) on its side of the score; a
+    # disabled one is not evaluated (a built-in factor is always enabled). Each entry keeps 'axis' (the report column its
+    # short name is listed in -- the reports' CI blocks read si_rf_p / si_rf_c by it) and 'stage' = production (what the
+    # pre-v2 readers and the shipped CI blocks filter on), and adds shortName / side / state.
+    foreach ($f in @($Factors.factors)) {
+        if ([string]$f.appliesTo -ne 'asset' -or [string]$f.evaluatedBy -ne 'catalog' -or -not (Test-SIRiskFactorEnabled $f)) { continue }
+        $hit = $false
+        try { $hit = Test-SIConditionTri -Condition $f.when -Item $Ci -Context $Context -UnknownFields $unknownFields } catch { $hit = $false }
+        if ($null -eq $hit) { $unknownFactors.Add([string]$f.id); continue }
+        if ($hit -ne $true) { continue }
+        $out.Add([ordered]@{ id = [string]$f.id; shortName = (Get-SIRiskFactorShortName $f); name = [string]$f.name; axis = [string]$f.axis; side = 'asset'; impact = (Get-SIRiskFactorImpact $f); state = 'enabled'; stage = 'production'; tokens = @($f.legacyTokens) })
+    }
+    $gaps = New-Object System.Collections.Generic.List[object]
+    foreach ($ck in @($Checks.checks)) {
+        if ([string]$ck.scope -ne 'ci' -or $null -eq $ck.fail) { continue }
+        $failed = $false
+        try { $failed = Test-SICondition -Condition $ck.fail -Item $Ci -Context $Context } catch { $failed = $false }
+        if (-not $failed) { continue }
+        $gaps.Add([ordered]@{ id = [string]$ck.id; name = [string]$ck.name })
+        $fid = [string]$ck.riskFactor
+        if ($fid -and $byId.ContainsKey($fid) -and -not @($out | Where-Object { $_.id -eq $fid }).Count -and (Test-SIRiskFactorEnabled $byId[$fid])) {
+            $f = $byId[$fid]
+            $out.Add([ordered]@{ id = $fid; shortName = (Get-SIRiskFactorShortName $f); name = [string]$f.name; axis = [string]$f.axis; side = (Get-SIRiskFactorSide $f); impact = (Get-SIRiskFactorImpact $f); state = 'enabled'; stage = 'production'; tokens = @($f.legacyTokens); coverage = [string]$ck.id })
+        }
+    }
+    $Ci['si_risk_factors'] = $out.ToArray()
+    if ($gaps.Count -gt 0) { $Ci['si_coverage_gaps'] = $gaps.ToArray() }
+    # a factor a coverage check raised is decided, not unknown
+    foreach ($e in $out) { if ($unknownFactors.Contains([string]$e.id)) { $null = $unknownFactors.Remove([string]$e.id) } }
+    if ($unknownFactors.Count -gt 0) { $Ci['si_rf_unknown'] = $unknownFactors.ToArray() } elseif ($Ci.Contains('si_rf_unknown')) { $Ci.Remove('si_rf_unknown') }
+    # #464: each factor's evidence (which provider / field proves it), si_rf_<id> + si_rf_count (SI-RiskFactorCatalog.ps1)
+    $lists = @{}; if ($Context -and $Context.Lists) { $lists = $Context.Lists }
+    $null = Add-SICiRiskFactorEvidence -Ci $Ci -Factors $Factors -Lists $lists
+    return $Ci
+}
+
+# ---- SI-CiEnrich.ps1 :: Invoke-SICiEnrichment
+function Invoke-SICiEnrichment {
+    <#
+    .SYNOPSIS  P3 over a set of CIs: rules (tier, purpose, category, CMDB values, tags), risk factors + coverage, criticality.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Cis,
+        [Parameter(Mandatory)]$Model,
+        [AllowEmptyCollection()][object[]]$Rules = @(),
+        [string]$CmdbOwner = 'cmdb',
+        # the owning CMDB's services / CIs (New-SICiCmdbIndex); none = only what the rules set
+        [hashtable]$CmdbIndex,
+        [datetime]$Now = [datetime]::UtcNow,
+        # #462 manual CI overrides in force (ConvertTo-SICiOverrideIndex): CiId -> overrides, applied over the rules
+        [hashtable]$Overrides,
+        # #496 the business services (New-SICiServiceIndex): which services own each CI and what it inherits; none = not set
+        [hashtable]$ServiceIndex,
+        # the build's watch (Start-SICiWatch): where the step stands, so a step that takes long says which CI it is working on
+        $Watch
+    )
+    . (Join-Path $PSScriptRoot 'SI-DataModelTemplates.ps1')
+    # the customer's exposed network ranges (SI_InternetExposedRanges) join the internet_exposed_ranges list (#458)
+    $ctx = @{ Lists = (Merge-SIRiskFactorRanges -Lists (Get-SIDataModelListContext $Model)); Now = $Now }
+    $trust = Get-SICiTrustIndex $Model['trust']
+    $byClass = Get-SICiRulesByClass -Rules $Rules
+    # #496 the environments, strictest first (the list service_environment_order)
+    $envOrder = [string[]]@()
+    if ($ServiceIndex) { $el = $ctx.Lists['service_environment_order']; if ($el) { $envOrder = [string[]]@(@($el.values) | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
+    # PowerShell 7 with more than one CPU: the CIs in chunks on parallel threads (each its own runspace with these files
+    # loaded and its own field cache; a CI is only ever touched by one thread). 5.1 / one CPU: the loop below.
+    $budget = Get-SICiRulesBudgetSeconds
+    $threads = Get-SICiParallelism -Count @($Cis).Count
+    Set-SICiWatchPhase -Watch $Watch -Phase 'applying the rules, the services and the risk factors' -Total @($Cis).Count
+    if ($threads -gt 1) {
+        $size = [int][Math]::Ceiling(@($Cis).Count / ($threads * 4))
+        $chunks = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $Cis.Count; $i += $size) { $chunks.Add(@($Cis[$i..([Math]::Min($i + $size, $Cis.Count) - 1)])) }
+        $dir = $PSScriptRoot
+        # built from text: PowerShell 5.1 never parses a using-variable block it cannot run
+        $body = [scriptblock]::Create(@'
+try {
+    . (Join-Path $using:dir 'SI-CiEnrich.ps1')
+    . (Join-Path $using:dir 'SI-DataModelTemplates.ps1')
+    $fc = @{}
+    $w = $using:Watch; $slot = [guid]::NewGuid().ToString('N'); $n = 0
+    foreach ($ci in $_) {
+        if ($w) { $w.Slots[$slot] = @((Get-SICiWatchLabel $ci), [datetime]::UtcNow.Ticks, $n) }
+        $null = Set-SICiBreakGlass -Ci $ci -Context $using:ctx
+        $null = Invoke-SICiRules -Ci $ci -Rules $using:Rules -Trust $using:trust -Context $using:ctx -Now $using:Now -RulesByClass $using:byClass -FieldCache $fc -BudgetSeconds $using:budget
+        if ($using:Overrides) { $null = Set-SICiOverrides -Ci $ci -Index $using:Overrides }
+        if ($using:CmdbIndex) { $null = Set-SICiCmdb -Ci $ci -Index $using:CmdbIndex -CmdbOwner $using:CmdbOwner }
+        if ($using:ServiceIndex) { $null = Set-SICiServices -Ci $ci -Index $using:ServiceIndex -Mapping ($using:Model)['criticality-mapping'] -EnvironmentOrder $using:envOrder -CmdbOwner $using:CmdbOwner }
+        $null = Set-SICiCriticality -Ci $ci -Mapping ($using:Model)['criticality-mapping'] -CmdbOwner $using:CmdbOwner
+        $null = Invoke-SICiRiskFactors -Ci $ci -Factors ($using:Model)['risk-factors'] -Checks ($using:Model)['coverage-checks'] -Context $using:ctx
+        $n++
+    }
+    if ($w) { $w.Slots[$slot] = @('', [datetime]::UtcNow.Ticks, $n) }
+} catch { [pscustomobject]@{ SIEnrichError = ('{0} (at {1})' -f $_.Exception.Message, ((([string]$_.ScriptStackTrace) -split "`n")[0]).Trim()) } }
+'@)
+        $failed = @($chunks | ForEach-Object -ThrottleLimit $threads -Parallel $body | Where-Object { $_ -and $_.PSObject.Properties['SIEnrichError'] })
+        if ($failed.Count -gt 0) { throw ('CI enrichment failed on {0} of {1} chunk(s): {2}' -f $failed.Count, $chunks.Count, $failed[0].SIEnrichError) }
+        return , $Cis
+    }
+    $fieldCache = @{}
+    $n = 0
+    foreach ($ci in $Cis) {
+        if ($Watch) { $Watch.Slots['main'] = @((Get-SICiWatchLabel $ci), [datetime]::UtcNow.Ticks, $n) }
+        $n++
+        $null = Set-SICiBreakGlass -Ci $ci -Context $ctx
+        $null = Invoke-SICiRules -Ci $ci -Rules $Rules -Trust $trust -Context $ctx -Now $Now -RulesByClass $byClass -FieldCache $fieldCache -BudgetSeconds $budget
+        if ($Overrides) { $null = Set-SICiOverrides -Ci $ci -Index $Overrides }
+        if ($CmdbIndex) { $null = Set-SICiCmdb -Ci $ci -Index $CmdbIndex -CmdbOwner $CmdbOwner }
+        if ($ServiceIndex) { $null = Set-SICiServices -Ci $ci -Index $ServiceIndex -Mapping $Model['criticality-mapping'] -EnvironmentOrder $envOrder -CmdbOwner $CmdbOwner }
+        $null = Set-SICiCriticality -Ci $ci -Mapping $Model['criticality-mapping'] -CmdbOwner $CmdbOwner
+        $null = Invoke-SICiRiskFactors -Ci $ci -Factors $Model['risk-factors'] -Checks $Model['coverage-checks'] -Context $ctx
+    }
+    return , $Cis
+}
+
+# ---- SI-FieldResolution.ps1 :: Get-SICiFieldConflicts
+function Get-SICiFieldConflicts {
+    <#
+    .SYNOPSIS  PURE. The fresh candidates of a single-value (authority) field that disagree with the resolved value.
+    .PARAMETER Candidates  as Resolve-SICiField takes them: @{ Record; Provider; Key; State }
+    .PARAMETER Resolved    Resolve-SICiField's result (@{ Value; Provider; Record; Stale })
+    .OUTPUTS   [ [ordered]@{ provider; record; value; observed_at } ] -- at most 5, freshest first; empty when the field
+               is not an authority field, the value is stale (nothing fresh to disagree with) or every source agrees.
+    #>
+    param([Parameter(Mandatory)]$Field, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidates, $Resolved, [datetime]$Now = [datetime]::UtcNow)
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Resolved -or [bool]$Resolved.Stale) { return , $out.ToArray() }
+    if ([string]$Field.resolution.policy -ne 'authority') { return , $out.ToArray() }
+    $staleDays = 30
+    if ($null -ne $Field.resolution.staleDays) { $staleDays = [double]$Field.resolution.staleDays }
+    $win = ConvertTo-SIFieldCompareText $Resolved.Value
+    $seenText = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($c in $Candidates) {
+        if ($null -eq $c -or [string]$c.Key -eq [string]$Resolved.Record) { continue }
+        $v = Get-SIItemValue $c.Record ([string]$Field.name)
+        if (Test-SIValueEmpty $v) { if (-not ($v -is [bool])) { continue } }
+        $seen = ConvertTo-SIUtcOrNull (Get-SIItemValue $c.Record 'si_source_last_seen')
+        $fresh = ($c.State -in 'active', 'frozen') -and ($null -ne $seen) -and ((($Now - $seen).TotalDays) -le $staleDays)
+        if (-not $fresh) { continue }
+        $t = ConvertTo-SIFieldCompareText $v
+        if ($t -eq $win) { continue }
+        $rows.Add([pscustomobject]@{ Seen = $seen; Text = $t; Entry = [ordered]@{ provider = [string]$c.Provider; record = [string]$c.Key; value = $v; observed_at = $seen } })
+    }
+    foreach ($r in @($rows.ToArray() | Sort-Object -Property @{ Expression = { $_.Seen }; Descending = $true })) {
+        if ($out.Count -ge $script:SIFieldConflictMax) { break }
+        if (-not $seenText.Add(('{0}|{1}' -f $r.Entry.provider, $r.Text))) { continue }
+        $out.Add($r.Entry)
+    }
+    return , $out.ToArray()
+}
+
+# ---- SI-Conditions.ps1 :: Test-SICondition
+function Test-SICondition {
+    <#
+    .SYNOPSIS  Evaluates a condition (leaf or all/any group) against an item. Returns $true / $false.
+    #>
+    param([Parameter(Mandatory)]$Condition, $Item, [hashtable]$Context)
+    if ($null -eq $Condition) { return $true }
+    $all = Get-SIItemValue $Condition 'all'
+    $any = Get-SIItemValue $Condition 'any'
+    $hasAll = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains('all')) -or ($Condition.PSObject.Properties['all'])
+    $hasAny = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains('any')) -or ($Condition.PSObject.Properties['any'])
+    if ($hasAll) {
+        foreach ($c in (Get-SIValueList $all)) { if (-not (Test-SICondition -Condition $c -Item $Item -Context $Context)) { return $false } }
+        return $true
+    }
+    if ($hasAny) {
+        foreach ($c in (Get-SIValueList $any)) { if (Test-SICondition -Condition $c -Item $Item -Context $Context) { return $true } }
+        return $false
+    }
+
+    $field = [string](Get-SIItemValue $Condition 'field')
+    $op = [string](Get-SIItemValue $Condition 'op')
+    $expected = Get-SIItemValue $Condition 'value'
+    if ([string]::IsNullOrEmpty($field)) { throw "condition without a field: $($Condition | ConvertTo-Json -Compress -Depth 5)" }
+    $actual = Get-SIItemValue $Item $field
+
+    switch ($op) {
+        'eq' { foreach ($v in (Get-SIValueList $actual)) { if (Test-SIScalarEqual $v $expected) { return $true } }; return $false }
+        'ne' { foreach ($v in (Get-SIValueList $actual)) { if (Test-SIScalarEqual $v $expected) { return $false } }; return (-not (Test-SIValueEmpty $actual)) }
+        'in' {
+            $set = Resolve-SIListValues $expected $Context
+            foreach ($v in (Get-SIValueList $actual)) { foreach ($e in $set) { if (Test-SIScalarEqual $v $e) { return $true } } }
+            return $false
+        }
+        'not_in' {
+            if (Test-SIValueEmpty $actual) { return $false }
+            $set = Resolve-SIListValues $expected $Context
+            foreach ($v in (Get-SIValueList $actual)) { foreach ($e in $set) { if (Test-SIScalarEqual $v $e) { return $false } } }
+            return $true
+        }
+        'is_true' { return ((ConvertTo-SIBoolOrNull $actual) -eq $true) }
+        'is_false' { $b = ConvertTo-SIBoolOrNull $actual; return ($null -ne $b -and $b -eq $false) }
+        'is_empty' { return (Test-SIValueEmpty $actual) }
+        'not_empty' { return (-not (Test-SIValueEmpty $actual)) }
+        { $_ -in 'gt', 'gte', 'lt', 'lte' } {
+            $e = ConvertTo-SINumberOrNull $expected
+            if ($null -eq $e) { throw "condition '$field $op' needs a number, got '$expected'" }
+            foreach ($v in (Get-SIValueList $actual)) {
+                $n = ConvertTo-SINumberOrNull $v
+                if ($null -eq $n) { continue }
+                $ok = switch ($op) { 'gt' { $n -gt $e } 'gte' { $n -ge $e } 'lt' { $n -lt $e } 'lte' { $n -le $e } }
+                if ($ok) { return $true }
+            }
+            return $false
+        }
+        'contains' {
+            if ($actual -is [string]) { return ($actual.IndexOf([string]$expected, [StringComparison]::OrdinalIgnoreCase) -ge 0) }
+            foreach ($v in (Get-SIValueList $actual)) {
+                if (Test-SIScalarEqual $v $expected) { return $true }
+                $vn = Get-SIItemValue $v 'name'; $vv = Get-SIItemValue $v 'value'          # si_tags entries {source, name, value}
+                if ($null -ne $vn -and ((Test-SIScalarEqual $vn $expected) -or (Test-SIScalarEqual $vv $expected) -or (Test-SIScalarEqual ("{0}={1}" -f $vn, $vv) $expected))) { return $true }
+            }
+            return $false
+        }
+        'contains_any' {
+            $set = Resolve-SIListValues $expected $Context
+            foreach ($v in (Get-SIValueList $actual)) { foreach ($e in $set) { if (Test-SIScalarEqual $v $e) { return $true } } }
+            return $false
+        }
+        'matches' {
+            # bounded: a pathological pattern times out instead of hanging the run. value = one pattern or a list (any).
+            # A tag entry {source, name, value} is matched as "name=value", as its name and as its value.
+            # A pattern is built once and kept; a long list's match texts are made once per item (Get-SIMatchTextList).
+            $tl = Get-SIMatchTextList $field $actual
+            foreach ($pat in (Get-SIValueList $expected)) {
+                $rx = Get-SIConditionRegex ([string]$pat)
+                if ($null -ne $tl) { foreach ($s in $tl.Texts) { if ($rx.IsMatch($s)) { return $true } } }
+                else { foreach ($v in (Get-SIValueList $actual)) { foreach ($s in (Get-SIMatchTexts $v)) { if ($rx.IsMatch($s)) { return $true } } } }
+            }
+            return $false
+        }
+        'like' {
+            # PowerShell wildcards (* ? [ab]), case-insensitive; value = one pattern or a list (any). Tag entries as in matches.
+            # A pattern is built once and kept. A long list (a device's installed software) is matched ONCE per pattern: a
+            # wildcard of plain text and '*' by one search over the list's texts joined together, any other wildcard text
+            # by text -- never value by value through a function call (see the block above Get-SIConditionRegex).
+            $tl = Get-SIMatchTextList $field $actual
+            foreach ($pat in (Get-SIValueList $expected)) {
+                $p = [string]$pat
+                if ($null -ne $tl) {
+                    if ($tl.Texts.Length -eq 0) { continue }
+                    if ($null -ne $tl.Joined) {
+                        $line = Get-SIWildcardLineRegex $p
+                        if ($null -ne $line) {
+                            $found = $null
+                            try { $found = $line.IsMatch($tl.Joined) } catch { $found = $null }
+                            if ($found -eq $true) { return $true }
+                            if ($found -eq $false) { continue }
+                        }
+                    }
+                    $wc = Get-SIConditionWildcard $p
+                    foreach ($s in $tl.Texts) { if ($wc.IsMatch($s)) { return $true } }
+                    continue
+                }
+                $wc = Get-SIConditionWildcard $p
+                foreach ($v in (Get-SIValueList $actual)) { foreach ($s in (Get-SIMatchTexts $v)) { if ($wc.IsMatch($s)) { return $true } } }
+            }
+            return $false
+        }
+        { $_ -in 'older_than_days', 'newer_than_days' } {
+            $days = ConvertTo-SINumberOrNull $expected
+            if ($null -eq $days) { throw "condition '$field $op' needs a number of days, got '$expected'" }
+            $now = [datetime]::UtcNow
+            if ($Context -and $Context.Now) { $now = ([datetime]$Context.Now).ToUniversalTime() }
+            $t = ConvertTo-SIUtcOrNull $actual
+            if ($null -eq $t) { return $false }
+            $age = ($now - $t).TotalDays
+            if ($op -eq 'older_than_days') { return ($age -gt $days) }
+            return ($age -le $days)
+        }
+        'in_ranges' {
+            $ranges = Resolve-SIListValues $expected $Context
+            foreach ($ip in (Get-SIValueList $actual)) { foreach ($r in $ranges) { if (Test-SIIpInCidr ([string]$ip) ([string]$r)) { return $true } } }
+            return $false
+        }
+        'in_list' {
+            $id = [string]$expected
+            if (-not ($Context -and $Context.Lists -and $Context.Lists.ContainsKey($id))) { throw "condition '$field in_list $id': no such list" }
+            $l = $Context.Lists[$id]
+            $type = [string](Get-SIItemValue $l 'type')
+            if ($type -eq 'conditions') {
+                foreach ($entry in (Get-SIValueList (Get-SIItemValue $l 'entries'))) {
+                    if (Test-SICondition -Condition (Get-SIItemValue $entry 'when') -Item $Item -Context $Context) { return $true }
+                }
+                return $false
+            }
+            foreach ($v in (Get-SIValueList $actual)) { foreach ($e in (Get-SIValueList (Get-SIItemValue $l 'values'))) { if (Test-SIScalarEqual $v $e) { return $true } } }
+            return $false
+        }
+        default { throw "unknown condition operation '$op' (field '$field')" }
+    }
+}
+
+# ---- SI-Conditions.ps1 :: Test-SIConditionTri
+function Test-SIConditionTri {
+    <#
+    .SYNOPSIS  #546 UNKNOWN IS NEVER A FINDING. A condition evaluated in THREE states: $true, $false, or $null = unknown.
+               A leaf is unknown when
+                 * its field is in -UnknownFields (the CI build could not decide the field: the provider that decides it for
+                   this identity's origin is not linked -- si_unknown_fields), or
+                 * it compares a date or a number (older_than_days, newer_than_days, gt, gte, lt, lte) and the value is empty:
+                   an age that was never read is not "older than 365 days".
+               Every other leaf is Test-SICondition (so an empty value in a population leaf -- in, eq -- stays false: the
+               item is simply not in the population). all: any false -> false, else any unknown -> unknown, else true.
+               any: any true -> true, else any unknown -> unknown, else false.
+               A caller counts a finding ONLY on $true; $null is counted as unknown.
+    #>
+    param([Parameter(Mandatory)]$Condition, $Item, [hashtable]$Context, [string[]]$UnknownFields = @())
+    if ($null -eq $Condition) { return $true }
+    $hasAll = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains('all')) -or ($Condition.PSObject.Properties['all'])
+    $hasAny = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains('any')) -or ($Condition.PSObject.Properties['any'])
+    if ($hasAll) {
+        $unknown = $false
+        foreach ($c in (Get-SIValueList (Get-SIItemValue $Condition 'all'))) {
+            $r = Test-SIConditionTri -Condition $c -Item $Item -Context $Context -UnknownFields $UnknownFields
+            if ($r -eq $false) { return $false }
+            if ($null -eq $r) { $unknown = $true }
+        }
+        if ($unknown) { return $null }
+        return $true
+    }
+    if ($hasAny) {
+        $unknown = $false
+        foreach ($c in (Get-SIValueList (Get-SIItemValue $Condition 'any'))) {
+            $r = Test-SIConditionTri -Condition $c -Item $Item -Context $Context -UnknownFields $UnknownFields
+            if ($r -eq $true) { return $true }
+            if ($null -eq $r) { $unknown = $true }
+        }
+        if ($unknown) { return $null }
+        return $false
+    }
+    $field = [string](Get-SIItemValue $Condition 'field')
+    $op = [string](Get-SIItemValue $Condition 'op')
+    foreach ($u in @($UnknownFields)) { if ($u -and [string]::Equals([string]$u, $field, [StringComparison]::OrdinalIgnoreCase)) { return $null } }
+    if ($op -in 'older_than_days', 'newer_than_days', 'gt', 'gte', 'lt', 'lte') {
+        if (Test-SIValueEmpty (Get-SIItemValue $Item $field)) { return $null }
+    }
+    return [bool](Test-SICondition -Condition $Condition -Item $Item -Context $Context)
+}
+
+# ---- SI-CiGraph.ps1 :: Get-SICiRelationClaims
+function Get-SICiRelationClaims {
+    <#
+        PURE. The relation claims of one CI: per relation of -Rules whose 'from' holds the CI's class, per value of its field:
+        OwnerCiId (the CI whose build made the claim), RelationId, Kind, FromCiId, ToType (ci | the identifier type | the
+        node type), ToValue, Detail, Source, Confidence. An identifier or a node is lower case (the record identifiers are);
+        a reversed relation runs from the value's CI to this one; a CI is never related to itself.
+    #>
+    param([Parameter(Mandatory)]$Ci, [AllowEmptyCollection()][object[]]$Rules = @())
+    $out = New-Object System.Collections.Generic.List[object]
+    $id = ([string](Get-SIItemValue $Ci 'si_ci_id')).Trim(); $cls = [string](Get-SIItemValue $Ci 'si_class')
+    if (-not $id) { return }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($r in @($Rules)) {
+        if ($null -eq $r) { continue }
+        if (@($r.from | ForEach-Object { [string]$_ }) -notcontains $cls) { continue }
+        $raw = Get-SIItemValue $Ci ([string]$r.field)
+        if (Test-SIValueEmpty $raw) { continue }
+        $vp = [string[]]@(@(Get-SIItemValue $r 'valuePath') | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        $dp = [string[]]@(@(Get-SIItemValue $r 'detailPath') | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        $qual = ''
+        $qf = [string](Get-SIItemValue $r 'qualifyWith'); if ($qf) { $qual = ([string](Get-SIItemValue $Ci $qf)).Trim().ToLowerInvariant() }
+        foreach ($v in (Get-SICiRelationValues -Value $raw -ValuePath $vp -DetailPath $dp)) {
+            $from = $id; $toType = ''; $toValue = ''
+            switch ([string]$r.target) {
+                'ci' { $toType = 'ci'; $toValue = $v.Value }
+                'id' { $toType = [string]$r.idType; $toValue = $v.Value.ToLowerInvariant() }
+                'node' {
+                    $toType = [string]$r.nodeType; $toValue = $v.Value.ToLowerInvariant()
+                    if ($qual) { $toValue = $qual + '/' + $toValue; if ($toValue.Length -gt 400) { $toValue = $toValue.Substring(0, 400) } }
+                }
+            }
+            # an unknown target (Test-SIDataModel refuses one) makes no claim
+            if (-not $toType) { continue }
+            if ((Get-SIItemValue $r 'reverse') -eq $true) { $from = $v.Value; $toType = 'ci'; $toValue = $id }
+            if ($toType -eq 'ci' -and ($from.Length -gt 64 -or $toValue.Length -gt 64)) { continue }
+            if ($toType -eq 'ci' -and [string]::Equals($from, $toValue, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $sig = '{0}|{1}|{2}|{3}' -f $from, [string]$r.kind, $toType, $toValue
+            if (-not $seen.Add($sig)) { continue }
+            $out.Add([ordered]@{ OwnerCiId = $id; RelationId = [string]$r.id; Kind = [string]$r.kind; FromCiId = $from; ToType = $toType; ToValue = $toValue
+                    Detail = $v.Detail; Source = [string]$r.source; Confidence = [string]$r.confidence })
+        }
+    }
+    # the claims as items: @(Get-SICiRelationClaims ...) and a pipeline filter see each claim, never one array
+    $out.ToArray()
+}
+
+# ---- SI-Classification.ps1 :: New-SIClassificationIndex
+function New-SIClassificationIndex {
+    <#
+    .SYNOPSIS  PURE. The merged templates -> what the evaluators walk: the targets in header order, each with its dimension's
+               values and its rows (enabled and valid only), highest priority first (file order breaks a tie), each row's
+               condition compiled once.
+    #>
+    param($Dimensions, $Classification)
+    $dims = @{}
+    foreach ($d in @(Get-SIItemValue $Dimensions 'dimensions')) { if ($null -ne $d -and @(Test-SIDimensionItem -Dimension $d).Count -eq 0) { $dims[[string]$d.id] = $d } }
+    $targets = [System.Collections.Generic.List[object]]::new()
+    $byField = @{}
+    foreach ($t in @(Get-SIItemValue $Classification 'targets')) {
+        if ($null -eq $t -or @(Test-SIClassificationTarget -Target $t -Dimensions $dims).Count -gt 0) { continue }
+        $d = $dims[[string]$t.dimension]
+        $e = [pscustomobject]@{ Field = [string]$t.field; Dimension = [string]$t.dimension; AppliesTo = [string]$t.appliesTo
+                                Multi = ((ConvertTo-SIBoolOrNull (Get-SIItemValue $t 'multi')) -eq $true); Fallback = [string]$t.fallback
+                                FallbackEmpty = [string](Get-SIItemValue $t 'fallbackEmpty'); KeepSourceIn = [string](Get-SIItemValue $t 'keepSourceIn')
+                                Values = @(@($d.values) | ForEach-Object { [string]$_ }); Rules = ([System.Collections.Generic.List[object]]::new()) }
+        $targets.Add($e); $byField[$e.Field] = $e
+    }
+    $tgDocs = @{}; foreach ($t in @(Get-SIItemValue $Classification 'targets')) { if ($t) { $tgDocs[[string]$t.field] = $t } }
+    $n = 0
+    foreach ($r in @(Get-SIItemValue $Classification 'rules')) {
+        if ($null -eq $r) { continue }
+        $n++
+        if ([string](Get-SIItemValue $r 'state') -eq 'disabled') { continue }
+        if (@(Test-SIClassificationRule -Rule $r -Targets $tgDocs -Dimensions $dims).Count -gt 0) { continue }
+        $e = $byField[[string]$r.target]; if ($null -eq $e) { continue }
+        $f = [string]$r.field
+        $e.Rules.Add([pscustomobject]@{ Id = [string]$r.id; Value = [string]$r.set; Priority = [double](ConvertTo-SINumberOrNull $r.priority); Order = $n
+                                        SourcePath = $(if (Test-SIClassificationSiField $f) { '' } else { $f }); Condition = (ConvertTo-SIClassificationCondition -Rule $r) })
+    }
+    foreach ($e in $targets) {
+        $sorted = @($e.Rules.ToArray() | Sort-Object -Property @{ Expression = { $_.Priority }; Descending = $true }, @{ Expression = { $_.Order }; Descending = $false })
+        $e.Rules.Clear(); foreach ($x in $sorted) { $e.Rules.Add($x) }
+    }
+    # .ToArray(), never @() around a List[object] held in an object: pwsh 7 throws "Argument types do not match"
+    $hasPath = (@($targets.ToArray() | ForEach-Object { $_.Rules.ToArray() } | Where-Object { $_.SourcePath }).Count -gt 0)
+    [pscustomobject]@{ Targets = $targets.ToArray(); HasSourcePath = $hasPath; Cache = @{} }
+}
+
+# ---- SI-Classification.ps1 :: Get-SIClassificationValue
+function Get-SIClassificationValue {
+    <#
+    .SYNOPSIS  PURE. One target over one item: @{ Values (the value, or for multi every value); Rules (the deciding row ids);
+               Unknown (rows whose condition could not be decided) }. Values is empty when no row matched -- the caller
+               applies the fallback.
+    #>
+    param([Parameter(Mandatory)]$Target, $Item, [hashtable]$Context, [string[]]$UnknownFields = @())
+    $vals = [System.Collections.Generic.List[string]]::new()
+    $ids = [System.Collections.Generic.List[string]]::new()
+    $unknown = [System.Collections.Generic.List[string]]::new()
+    foreach ($r in $Target.Rules) {
+        if ($Target.Multi -and $vals.Contains($r.Value)) { continue }
+        $subject = $Item
+        if ($r.SourcePath) {
+            # a source-path row: the path's values become '$value' of a view that also carries the item's SI fields (for 'when')
+            $view = @{}
+            if ($Item -is [System.Collections.IDictionary]) { foreach ($k in @($Item.Keys)) { $view[[string]$k] = $Item[$k] } }
+            elseif ($null -ne $Item) { foreach ($pp in $Item.PSObject.Properties) { $view[$pp.Name] = $pp.Value } }
+            $view['$value'] = @(Resolve-SIClassificationPath -Item $Item -Path $r.SourcePath)
+            $subject = $view
+        }
+        $hit = $false
+        try { $hit = Test-SIConditionTri -Condition $r.Condition -Item $subject -Context $Context -UnknownFields $UnknownFields } catch { $hit = $false }
+        if ($null -eq $hit) { $unknown.Add($r.Id); continue }
+        if ($hit -ne $true) { continue }
+        $vals.Add($r.Value); $ids.Add($r.Id)
+        if (-not $Target.Multi) { break }
+    }
+    if ($Target.Multi -and $vals.Count -gt 1) {
+        # the dimension's own value order, so the same asset always reads the same way
+        $ordered = @($Target.Values | Where-Object { $vals -contains $_ })
+        $vals.Clear(); foreach ($v in $ordered) { $vals.Add($v) }
+    }
+    @{ Values = $vals.ToArray(); Rules = $ids.ToArray(); Unknown = $unknown.ToArray() }
+}
+
+# ---- SI-Classification.ps1 :: Invoke-SIAssetClassification
+function Invoke-SIAssetClassification {
+    <#
+    .SYNOPSIS  PURE. Every asset target on ONE CI (an ordered dictionary): writes the target field (and keepSourceIn), and
+               si_classified_by (target field -> the row ids that decided, or 'fallback').
+    #>
+    param([Parameter(Mandatory)]$Ci, [Parameter(Mandatory)]$Index, [hashtable]$Context)
+    $unknownFields = @(@(Get-SIItemValue $Ci 'si_unknown_fields') | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $by = [ordered]@{}
+    foreach ($t in @($Index.Targets)) {
+        if ($t.AppliesTo -ne 'asset') { continue }
+        $src = Get-SIItemValue $Ci $t.Field
+        if ($t.KeepSourceIn) {
+            # the value the sources gave, kept once: a CI classified before (an incremental build) keeps its source value
+            $prev = Get-SIItemValue $Ci $t.KeepSourceIn
+            if (-not (Test-SIValueEmpty $prev)) { $src = $prev } else { $Ci[$t.KeepSourceIn] = $src }
+        }
+        $r = Get-SIClassificationValue -Target $t -Item $Ci -Context $Context -UnknownFields $unknownFields
+        $vals = @($r.Values); $decided = @($r.Rules)
+        if ($vals.Count -eq 0) {
+            if ($t.Fallback -eq '$keep') {
+                $sv = @((Get-SIValueList $src).ToArray() | Where-Object { -not (Test-SIValueEmpty $_) })
+                if ($sv.Count) { $vals = @([string]$sv[0]) } else { $vals = @($t.FallbackEmpty) }
+            } else { $vals = @($t.Fallback) }
+            $decided = @('fallback')
+        }
+        if ($t.Multi) { $Ci[$t.Field] = [string[]]$vals } else { $Ci[$t.Field] = [string]$vals[0] }
+        $by[$t.Field] = $decided
+    }
+    $Ci['si_classified_by'] = $by
+    $Ci
+}
+
+# ---- SI-RiskFactorCatalog.ps1 :: Get-SIRiskFactorConditionLeaves
+function Get-SIRiskFactorConditionLeaves {
+    <# PURE. Every leaf condition (field / op / value) of a condition group. #>
+    param($Condition)
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Condition) { return , $out }
+    foreach ($k in 'all', 'any') {
+        $hasK = ($Condition -is [System.Collections.IDictionary] -and $Condition.Contains($k)) -or ($Condition.PSObject.Properties[$k])
+        if ($hasK) { foreach ($c in (Get-SIValueList (Get-SIItemValue $Condition $k))) { foreach ($l in (Get-SIRiskFactorConditionLeaves $c)) { $out.Add($l) } }; return , $out }
+    }
+    if (Get-SIItemValue $Condition 'field') { $out.Add($Condition) }
+    return , $out
+}
+
+# ---- SI-RiskFactorCatalog.ps1 :: Get-SIRiskFactorCiColumns
+function Get-SIRiskFactorCiColumns {
+    <# PURE. The factors that get their own SI_CI_CL column (si_rf_<id>): catalog asset factors marked ciColumn. #>
+    param([Parameter(Mandatory)]$Factors)
+    @(@($Factors.factors) | Where-Object { $_ -and [string]$_.appliesTo -eq 'asset' -and [string]$_.evaluatedBy -eq 'catalog' -and (ConvertTo-SIBoolOrNull (Get-SIItemValue $_ 'ciColumn')) -eq $true } | ForEach-Object { [string]$_.id })
+}
+
+# ---- SI-RiskFactorCatalog.ps1 :: Add-SICiRiskFactorEvidence
+function Add-SICiRiskFactorEvidence {
+    <#
+    .SYNOPSIS  PURE. #464 -- the catalog's factors PER CI, with their evidence, after Invoke-SICiRiskFactors evaluated them:
+                 * every si_risk_factors entry gets 'evidence' (one item per provider that proves it: provider, SI field,
+                   the provider fields of its mapping, the record, stale) and 'by' (those providers)
+                 * de-duplicated across providers: ONE entry per factor, however many providers prove it
+                 * si_rf_<id> = true / false for every factor the catalog marks ciColumn, si_rf_count = the factors that
+                   count (production, impact > 0) -- the SI_CI_CL columns Risk Analysis can read without parsing JSON
+               Evidence comes from si_field_sources (the CI build's source of truth per field); for a risk boolean resolved
+               any-true it lists EVERY provider that said true (si_field_sources.<field>.providers). A computed field (si_tier)
+               names what computed it; an address in a network range names the range list.
+    #>
+    param([Parameter(Mandatory)]$Ci, [Parameter(Mandatory)]$Factors, [hashtable]$Lists = @{})
+    $byId = @{}; foreach ($f in @($Factors.factors)) { if ($f) { $byId[[string]$f.id] = $f } }
+    $src = Get-SIItemValue $Ci 'si_field_sources'
+    $count = 0
+    $present = @{}
+    foreach ($e in @($Ci['si_risk_factors'])) {
+        if ($null -eq $e) { continue }
+        $id = [string](Get-SIItemValue $e 'id')
+        $f = $byId[$id]
+        $ev = New-Object System.Collections.Generic.List[object]
+        if ($f) {
+            $provBlock = Get-SIItemValue $f 'providers'
+            # an ANY factor: only the fields whose own condition holds are its evidence (an address outside every range
+            # proves nothing); fields read through a conditions list always count
+            $isAny = (($f.when -is [System.Collections.IDictionary] -and $f.when.Contains('any')) -or $f.when.PSObject.Properties['any'])
+            $holds = @{}; $leafFields = @{}
+            foreach ($leaf in (Get-SIRiskFactorConditionLeaves $f.when)) {
+                $lf = [string]$leaf.field; $leafFields[$lf] = $true
+                if ([string](Get-SIItemValue $leaf 'op') -eq 'in_list') { continue }
+                $ok = $false; try { $ok = Test-SICondition -Condition $leaf -Item $Ci -Context @{ Lists = $Lists } } catch { $ok = $false }
+                if ($ok) { $holds[$lf] = $true }
+            }
+            foreach ($field in (Get-SIRiskFactorProofFields -Factor $f -Lists $Lists)) {
+                if ($isAny -and $leafFields.ContainsKey($field) -and -not $holds.ContainsKey($field)) { continue }
+                $s = Get-SIItemValue $src $field
+                $val = Get-SIItemValue $Ci $field
+                if ($null -eq $s -and (Test-SIValueEmpty $val) -and -not ($val -is [bool])) { continue }
+                $provs = @()
+                if ($s) { $provs = (Get-SIValueList (Get-SIItemValue $s 'providers')).ToArray(); if ($provs.Count -eq 0 -and (Get-SIItemValue $s 'provider')) { $provs = @(([string](Get-SIItemValue $s 'provider')) -split ',' | Where-Object { $_ }) } }
+                if ($provs.Count -eq 0) {
+                    $why = ''; if ($field -eq 'si_tier') { $why = [string](Get-SIItemValue $Ci 'si_tier_reason') }
+                    $ev.Add([ordered]@{ provider = 'computed'; field = $field; reason = $why }); continue
+                }
+                foreach ($pv in $provs) {
+                    $pfs = @()
+                    if ($provBlock) { foreach ($it in (Get-SIValueList (Get-SIItemValue $provBlock ([string]$pv)))) { if ([string](Get-SIItemValue $it 'siField') -eq $field) { $pfs += (Get-SIValueList (Get-SIItemValue $it 'sources')).ToArray() } } }
+                    $rec = $null; if ($s -and [string](Get-SIItemValue $s 'provider') -eq [string]$pv) { $rec = Get-SIItemValue $s 'record' }
+                    # no observed_at: it moves every build and would make every CI "changed" (the build sends only changed CIs)
+                    $ev.Add([ordered]@{ provider = [string]$pv; field = $field; providerFields = @($pfs | Select-Object -Unique); record = $rec; stale = $(if ($s) { [bool](Get-SIItemValue $s 'stale') } else { $false }) })
+                }
+            }
+            foreach ($leaf in (Get-SIRiskFactorConditionLeaves $f.when)) {
+                if ([string](Get-SIItemValue $leaf 'op') -ne 'in_ranges') { continue }
+                $one = [ordered]@{ field = [string]$leaf.field; op = 'in_ranges'; value = $leaf.value }
+                $hit = $false; try { $hit = Test-SICondition -Condition $one -Item $Ci -Context @{ Lists = $Lists } } catch { $hit = $false }
+                if ($hit) { $ev.Add([ordered]@{ provider = 'network'; field = [string]$leaf.field; list = [string]$leaf.value }) }
+            }
+        }
+        if ($e -is [System.Collections.IDictionary]) { $e['evidence'] = $ev.ToArray(); $e['by'] = @($ev | ForEach-Object { $_.provider } | Select-Object -Unique) }
+        else { $e | Add-Member -NotePropertyName evidence -NotePropertyValue $ev.ToArray() -Force; $e | Add-Member -NotePropertyName by -NotePropertyValue @($ev | ForEach-Object { $_.provider } | Select-Object -Unique) -Force }
+        $imp = ConvertTo-SINumberOrNull (Get-SIItemValue $e 'impact')
+        if ($null -ne $imp -and $imp -gt 0) { $count++; $present[$id] = $true }
+    }
+    # #546 a factor the CI could not decide (si_rf_unknown) is NULL in its column -- unknown, never false, never true
+    $unk = @(@(Get-SIItemValue $Ci 'si_rf_unknown') | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    foreach ($cid in (Get-SIRiskFactorCiColumns -Factors $Factors)) {
+        if ($unk -contains $cid -and -not $present.ContainsKey($cid)) { $Ci['si_rf_' + $cid] = $null } else { $Ci['si_rf_' + $cid] = [bool]$present.ContainsKey($cid) }
+    }
+    $Ci['si_rf_count'] = $count
+    return $Ci
+}
+
+# ---- SI-BreakGlass.ps1 :: Test-SIBreakGlassName
+function Test-SIBreakGlassName {
+    <# PURE. $true when -Text matches any glob pattern (case-insensitive, the whole text). #>
+    param([AllowNull()][AllowEmptyString()][string]$Text, [string[]]$Patterns = @())
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    foreach ($p in $Patterns) {
+        $wc = New-Object System.Management.Automation.WildcardPattern($p, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+        if ($wc.IsMatch($Text.Trim())) { return $true }
+    }
+    return $false
+}
+
+# ---- identity/SI-ObjectIdentity.ps1 :: Get-SILedgerKey
+function Get-SILedgerKey {
+    <# The ledger's lookup key. Canonicalised and lower-cased, so one fact cannot have two spellings. #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Type,
+          [Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    '{0}|{1}' -f (Get-SICanonicalIdType -Type $Type).ToLowerInvariant(), ([string]$Value).ToLowerInvariant()
+}
+
+# ---- identity/SI-ObjectIdentity.ps1 :: Resolve-SIObjectIdentity
+function Resolve-SIObjectIdentity {
+    <#
+        Decide each group's SI_CorrelationId against the existing ledger, and say what the ledger must
+        become. Returns decisions; it does not write anything.
+
+        Ledger is a hashtable: "type|value" -> @{ CorrelationId; FirstSeen }.
+        Absent or empty means a first run, in which case everything mints -- which is correct, and is
+        also the disaster-recovery path.
+
+          MINT   no identifier is known         -> derive a v5 id from the birth anchor
+          REUSE  all known identifiers agree    -> take the existing id, record any new identifiers
+          MERGE  identifiers name 2+ ids        -> keep the OLDEST, supersede the rest, emit old->new
+
+        🔒 THE OLDEST SURVIVES, not the "best". Any other rule (lowest tier, most members, newest) makes
+        the surviving id depend on this run's data, which is the exact property being removed. FirstSeen
+        decides; an ordinal id compare breaks ties so two hosts never disagree.
+
+        ◻ SPLIT DETECTION IS DEFERRED, AND DELIBERATELY NOT GUESSED. A genuine split -- one object whose
+        identifiers stop co-occurring -- cannot be told apart from "a source failed and half the
+        identifiers are missing this run" by looking at one run. Getting that wrong RETIRES A LIVE CI,
+        which is worse than a late one. It needs either two consecutive runs agreeing or an explicit
+        operator action, and that is a separate decision. What this DOES do is report the shrink
+        (`ShrunkObjects`) so it is visible rather than silent.
+        🔑 THE ONE EXCEPTION, #642: a group that PROVABLY is another object than the rest of its id (Test-SILedgerWrongMerge
+        -- two or more types an object holds once, each with another value written in the same run) is split off: a source
+        that failed cannot produce that, a fused group can. The object the id was minted from keeps it (Action 'split',
+        Splits Kind 'wrong-merge', counted in WrongMergeSplit).
+
+        🔴 -AmbiguousIdKeys (#61.4, added 2026-08-20 after a LIVE failure). Ledger keys carried by more
+        than one object this run, which happens only when an operator never-merge kept two groups
+        apart. Such a key identifies NEITHER group any more, so it is excluded from three places --
+        and ALL THREE are required, or the fix does not survive to the next run:
+
+          1. the `$known` LOOKUP   -- or the shared anchor drags both halves back onto one id
+          2. the BIRTH ANCHOR      -- or both halves mint the SAME v5 id from the shared value
+          3. the ledger WRITE-BACK -- or the re-minted half claims the shared anchor, and next run the
+                                      other half follows it and they MERGE again
+
+        Measured before the fix: `distinct durable ids: 1 for 2 objects`. The derived seed was already
+        correct by then, so the published map looked right while the LEDGER re-fused them -- and a
+        durable id is exactly the one a connector is permitted to create CIs from.
+    #>
+    param(
+        # AllowNull as well as AllowEmptyCollection: a caller flattening several sources can hand us an
+        # array with a null element, and binding must not refuse it. The loop skips nulls itself.
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Groups,
+        [Parameter()][hashtable]$Ledger,
+        [Parameter()][datetime]$Now = ([datetime]'2000-01-01T00:00:00Z'),
+        [Parameter()][AllowNull()][hashtable]$AmbiguousIdKeys
+    )
+
+    if ($null -eq $Ledger) { $Ledger = @{} }
+    $hasAmbiguous = ($null -ne $AmbiguousIdKeys -and $AmbiguousIdKeys.Keys.Count -gt 0)
+
+    $decisions   = New-Object System.Collections.Generic.List[object]
+    $superseded  = New-Object System.Collections.Generic.List[object]
+    $shrunk      = New-Object System.Collections.Generic.List[object]
+    $splits      = New-Object System.Collections.Generic.List[object]
+    $unkeyable   = 0
+    $keysById    = $null   # the ledger's keys by id, built when the first object that is not new needs it
+    $keeperKeys  = @{}      # #642 per ledger id: the key of the anchor whose object keeps the id
+
+    foreach ($g in @($Groups)) {
+        if ($null -eq $g) { continue }
+
+        # Every identifier the group carries, across all members, canonicalised.
+        $idsAll = New-Object System.Collections.Generic.List[object]
+        foreach ($m in @($g.Members)) {
+            foreach ($id in (Get-SIMemberIdentifiers -Member $m)) {
+                [void]$idsAll.Add([pscustomobject]@{
+                    Type  = (Get-SICanonicalIdType -Type ([string]$id.Type))
+                    Value = ([string]$id.Value).ToLowerInvariant()
+                })
+            }
+        }
+
+        # Identity is decided on the UNAMBIGUOUS subset. A group whose ONLY anchors are contested falls
+        # back to the full set rather than being declared unkeyable -- it still needs an id, and the
+        # collision pass below reports what could not be separated.
+        $ids = $idsAll
+        if ($hasAmbiguous) {
+            $filtered = New-Object System.Collections.Generic.List[object]
+            foreach ($id in $idsAll) {
+                if (-not $AmbiguousIdKeys.ContainsKey((Get-SILedgerKey -Type $id.Type -Value $id.Value))) {
+                    [void]$filtered.Add($id)
+                }
+            }
+            if ($filtered.Count -gt 0) { $ids = $filtered }
+        }
+
+        if ($ids.Count -eq 0) {
+            # No anchor at all -- nothing to remember it by, so it cannot be given a durable identity.
+            # Counted, never invented: minting for an unkeyable object would create a new id every run.
+            $unkeyable++
+            [void]$decisions.Add([pscustomobject]@{
+                Group = $g; CorrelationId = $null; Action = 'unkeyable'
+                BirthAnchor = $null; NewIdentifiers = @(); PriorIds = @()
+            })
+            continue
+        }
+
+        # Which existing ids do this group's identifiers already point at?
+        $known = @{}
+        foreach ($id in $ids) {
+            # (a value longer than the ledger's column is held under its short form -- Get-SILedgerEntryKey finds both)
+            $k = Get-SILedgerEntryKey -Ledger $Ledger -Type $id.Type -Value $id.Value
+            if ($null -ne $k) {
+                $e = $Ledger[$k]
+                $cid = [string]$e.CorrelationId
+                if (-not [string]::IsNullOrWhiteSpace($cid) -and -not $known.ContainsKey($cid)) {
+                    $known[$cid] = $e.FirstSeen
+                }
+            }
+        }
+
+        $anchor = Get-SIObjectBirthAnchor -Identifiers $ids.ToArray()
+        $action = ''
+        $cid    = $null
+        $priors = @()
+
+        if ($known.Keys.Count -eq 0) {
+            $action = 'mint'
+            $cid = (New-SIObjectUuidV5 -Name (Get-SILedgerKey -Type $anchor.Type -Value $anchor.Value)).ToString()
+        }
+        elseif ($known.Keys.Count -eq 1) {
+            $action = 'reuse'
+            $cid = @($known.Keys)[0]
+        }
+        else {
+            # MERGE. Oldest FirstSeen wins; ordinal id compare breaks a tie deterministically.
+            $action = 'merge'
+            $ordered = @($known.Keys) | Sort-Object @{ Expression = { $known[$_] } }, @{ Expression = { $_ } }
+            $oldest  = $null
+            $oldestT = $null
+            foreach ($k in @($known.Keys)) {
+                $t = $known[$k]
+                if ($null -eq $oldestT -or $t -lt $oldestT -or
+                    ($t -eq $oldestT -and (@(Sort-SIOrdinal -Value @($k, $oldest))[0]) -eq $k)) {
+                    $oldest = $k; $oldestT = $t
+                }
+            }
+            $cid = $oldest
+            $priors = @(@($known.Keys) | Where-Object { $_ -ne $cid })
+            foreach ($old in $priors) {
+                [void]$superseded.Add([pscustomobject]@{ OldId = $old; NewId = $cid; At = $Now })
+            }
+        }
+
+        # Identifiers this object did not previously have under this id -- the ledger rows to add.
+        $newIds = New-Object System.Collections.Generic.List[object]
+        foreach ($id in $ids) {
+            $k = Get-SILedgerEntryKey -Ledger $Ledger -Type $id.Type -Value $id.Value
+            if ($null -eq $k -or [string]$Ledger[$k].CorrelationId -ne $cid) {
+                [void]$newIds.Add([pscustomobject]@{ Type = $id.Type; Value = $id.Value; CorrelationId = $cid })
+            }
+        }
+
+        # #642 A WRONG MERGE IN THE LEDGER: this group resolved to an id that, by proof, also holds ANOTHER object (two or
+        # more identifier types an object holds once, each with another value written in the same run -- Test-SILedgerWrongMerge).
+        # The object the id was minted from (else the oldest) keeps it; this group becomes its own object, minted from its
+        # own birth anchor, and its anchors are re-pointed -- so the next run reuses the new id and nothing splits again.
+        # Decided per group from the ledger alone: a CI build batch that holds one of the objects decides exactly what a
+        # batch holding all of them would.
+        $idKeys = $null
+        if ($action -eq 'reuse') {
+            if ($null -eq $keysById) { $keysById = Get-SILedgerKeysById -Ledger $Ledger }
+            $idKeys = @(Get-SILedgerKeysOfId -Index $keysById -Ledger $Ledger -CorrelationId $cid)
+            $wm = Test-SILedgerWrongMerge -Ids $ids.ToArray() -Ledger $Ledger -AnchorKeys $idKeys
+            if ($wm.Proven) {
+                if (-not $keeperKeys.ContainsKey($cid)) { $keeperKeys[$cid] = Get-SILedgerIdKeeperKey -CorrelationId $cid -Ledger $Ledger -AnchorKeys $idKeys }
+                $keeperKey = [string]$keeperKeys[$cid]
+                $holdsKeeper = $false
+                foreach ($id in $ids) {
+                    if ((Get-SILedgerEntryKey -Ledger $Ledger -Type $id.Type -Value $id.Value) -eq $keeperKey) { $holdsKeeper = $true; break }
+                }
+                $newCid = (New-SIObjectUuidV5 -Name (Get-SILedgerKey -Type $anchor.Type -Value $anchor.Value)).ToString()
+                if (-not $holdsKeeper -and $newCid -ne $cid) {
+                    $rewritten = New-Object System.Collections.Generic.List[object]
+                    foreach ($id in $ids) { [void]$rewritten.Add([pscustomobject]@{ Type = $id.Type; Value = $id.Value; CorrelationId = $newCid }) }
+                    [void]$splits.Add([pscustomobject]@{
+                        CorrelationId = $cid; NewId = $newCid; Objects = 2; Resolved = $true; Kind = 'wrong-merge'
+                        KeptBy = $keeperKey; Types = @($wm.Types)
+                        Reason = ('the ledger id held another object as well ({0} differ, written in the same run) -- the object it was minted from keeps the id and this one is its own object' -f (@($wm.Types) -join ', '))
+                    })
+                    [void]$decisions.Add([pscustomobject]@{
+                        Group = $g; CorrelationId = $newCid; Action = 'split'
+                        BirthAnchor = $anchor; NewIdentifiers = $rewritten.ToArray(); PriorIds = @($cid)
+                        Identifiers = $ids.ToArray()
+                    })
+                    continue
+                }
+            }
+        }
+
+        # Anchors the ledger holds for this id that did NOT appear this run. Reported, never acted on --
+        # see the split note in the docblock.
+        if ($action -ne 'mint') {
+            $present = @{}
+            foreach ($id in $ids) {
+                $present[(Get-SILedgerKey -Type $id.Type -Value $id.Value)] = $true
+                # a long value is in the ledger under its short form: it appeared this run all the same
+                if (([string]$id.Value).Length -gt 256) { $present[(Get-SILedgerKey -Type $id.Type -Value (ConvertTo-SILedgerStoredValue -Value ([string]$id.Value)))] = $true }
+            }
+            # 🔴 THE LEDGER'S KEYS BY THE ID THEY POINT AT, built once (Get-SILedgerKeysById). This report used to read
+            # EVERY ledger key for EVERY object: 28,822 objects against a ledger of well over 100,000 anchors was more
+            # than an hour of one correlation run (2026-10-12), and the same again in every batch of the CI build.
+            # The same keys are found, in the same order.
+            if ($null -eq $keysById) { $keysById = Get-SILedgerKeysById -Ledger $Ledger }
+            $missing = New-Object System.Collections.Generic.List[object]
+            if ($null -eq $idKeys) { $idKeys = @(Get-SILedgerKeysOfId -Index $keysById -Ledger $Ledger -CorrelationId $cid) }
+            foreach ($k in $idKeys) {
+                if (-not $present.ContainsKey($k)) { [void]$missing.Add($k) }
+            }
+            if ($missing.Count -gt 0) {
+                [void]$shrunk.Add([pscustomobject]@{ CorrelationId = $cid; MissingAnchors = $missing.ToArray() })
+            }
+        }
+
+        [void]$decisions.Add([pscustomobject]@{
+            Group = $g; CorrelationId = $cid; Action = $action
+            BirthAnchor = $anchor; NewIdentifiers = $newIds.ToArray(); PriorIds = $priors
+            Identifiers = $ids.ToArray()
+        })
+    }
+
+    # ---- ONE LEDGER ID CLAIMED BY TWO OBJECTS -------------------------------------------------------
+    #
+    # 🔴 THIS IS THE OTHER HALF OF THE 2026-08-20 LIVE FAILURE, and excluding the contested anchor above
+    # does NOT on its own fix it. Before a split every anchor of the original object points at that
+    # object's id, so on the FIRST run after an operator separates it, BOTH halves still resolve to the
+    # same id through their own perfectly unambiguous anchors. Measured: `1 distinct id for 2 objects`.
+    #
+    # 🔑 WHY IT IS SAFE TO ACT HERE AND NOWHERE ELSE. The docblock above refuses to auto-detect splits
+    # because one run cannot tell "this object split" from "a source failed". That reasoning is intact:
+    # this pass only reassigns when an OPERATOR never-merge produced the separation, which is exactly
+    # the missing fact. Two groups that collide WITHOUT one are reported and left alone -- the deferred
+    # case, now at least visible instead of silently sharing an id.
+    $byId = @{}
+    foreach ($d in $decisions) {
+        if ([string]::IsNullOrWhiteSpace([string]$d.CorrelationId)) { continue }
+        $k = [string]$d.CorrelationId
+        if (-not $byId.ContainsKey($k)) { $byId[$k] = New-Object System.Collections.Generic.List[object] }
+        [void]$byId[$k].Add($d)
+    }
+
+    foreach ($k in @($byId.Keys)) {
+        # 🪤 .ToArray(), NOT @(...). On PS 5.1 wrapping a List[object] of PSCustomObjects in @() throws
+        # "Argument types do not match" -- and it threw here on the very first call, before any
+        # collision existed, so it would have taken down every correlation run.
+        $claimants = $byId[$k].ToArray()
+        if ($claimants.Count -lt 2) { continue }
+
+        $separated = @($claimants | Where-Object { $_.Group -and $_.Group.PSObject.Properties['SeparatedByDecision'] -and $_.Group.SeparatedByDecision })
+        if ($separated.Count -lt 2) {
+            # Not operator-separated: the deferred split/reassign case. Report, never act.
+            [void]$splits.Add([pscustomobject]@{
+                CorrelationId = $k; Objects = $claimants.Count; Resolved = $false; Kind = 'collision'
+                Reason = 'two or more objects resolve to one ledger id and no operator decision separated them -- reported, not acted on (see V3-ARCHITECTURE 2.3a)'
+            })
+            continue
+        }
+
+        # WHICH HALF KEEPS THE EXISTING ID. Ordinal compare of each half's own birth-anchor ledger key.
+        #
+        # 🔑 It is a TIEBREAK, not a claim about which half is "really" the original -- nothing in one
+        # run can establish that. What it must be is DETERMINISTIC and STABLE: a rule that flipped
+        # between runs would move the CI back and forth, which is worse than either choice. Ordinal
+        # (never culture-sensitive) so two hosts cannot disagree.
+        # 📌 The operator overrides it with `pin-id`, which is precisely what that kind is for.
+        # 🪤 ORDINAL SCAN, not Sort-Object, and NO `u ESCAPE.
+        # Two host traps in one line, both found on a LIVE pwsh 7 run while the PS 5.1 Pester suite
+        # stayed green (framework finding HOST-1: the suites run on 5.1, the engines on 7):
+        #   * "`uffff" is a pwsh 7 escape. On 5.1 it is the literal text "uffff" and parses fine; on
+        #     pwsh 7 it is a PARSE ERROR, which took the whole ledger block down to
+        #     "identity ledger unavailable -- publishing with DERIVED, PROVISIONAL ids".
+        #   * Sort-Object is culture-sensitive, and this choice decides which CI keeps its identity.
+        #     A da-DK host must not keep a different half than an en-US one.
+        $keeper    = $null
+        $keeperKey = $null
+        foreach ($d in $claimants) {
+            if (-not $d.BirthAnchor) { continue }
+            $dk = Get-SILedgerKey -Type $d.BirthAnchor.Type -Value $d.BirthAnchor.Value
+            if ($null -eq $keeperKey -or [string]::CompareOrdinal($dk, $keeperKey) -lt 0) {
+                $keeper = $d; $keeperKey = $dk
+            }
+        }
+        # Every claimant lacks a birth anchor: nothing to re-mint from, so leave them reported.
+        if ($null -eq $keeper) {
+            [void]$splits.Add([pscustomobject]@{
+                CorrelationId = $k; Objects = $claimants.Count; Resolved = $false; Kind = 'operator'
+                Reason = 'operator-separated, but no half carries an unambiguous anchor to mint a new id from -- reported, not acted on'
+            })
+            continue
+        }
+        $ranked = $claimants
+
+        foreach ($d in $ranked) {
+            if ($d -eq $keeper) { continue }
+            if (-not $d.BirthAnchor) { continue }   # nothing of its own to mint from; leave it reported
+            $newCid = (New-SIObjectUuidV5 -Name (Get-SILedgerKey -Type $d.BirthAnchor.Type -Value $d.BirthAnchor.Value)).ToString()
+            if ($newCid -eq $k) { continue }
+
+            # Re-point this half's OWN anchors at the new id. The contested anchor is already absent
+            # from $d.Identifiers, so it stays with the keeper -- which is what stops the two halves
+            # merging again on the next run.
+            $rewritten = New-Object System.Collections.Generic.List[object]
+            foreach ($id in @($d.Identifiers)) {
+                [void]$rewritten.Add([pscustomobject]@{ Type = $id.Type; Value = $id.Value; CorrelationId = $newCid })
+            }
+            $d.NewIdentifiers = $rewritten.ToArray()
+            $d.CorrelationId  = $newCid
+            $d.Action         = 'split'
+
+            [void]$splits.Add([pscustomobject]@{
+                CorrelationId = $k; NewId = $newCid; Objects = $claimants.Count; Resolved = $true
+                KeptBy = $keeper.CorrelationId; Kind = 'operator'
+                Reason = 'an operator never-merge separated this object; the other half keeps the existing id and this half is a NEW object'
+            })
+        }
+    }
+
+    [pscustomobject]@{
+        Decisions     = $decisions.ToArray()
+        Superseded    = $superseded.ToArray()
+        ShrunkObjects = $shrunk.ToArray()
+        Splits        = $splits.ToArray()
+        Minted        = @($decisions | Where-Object { $_.Action -eq 'mint'  }).Count
+        Reused        = @($decisions | Where-Object { $_.Action -eq 'reuse' }).Count
+        Merged        = @($decisions | Where-Object { $_.Action -eq 'merge' }).Count
+        Split         = @($decisions | Where-Object { $_.Action -eq 'split' }).Count
+        # #642 of them: the objects split off a ledger id that held another object as well (a wrong merge, repaired)
+        WrongMergeSplit = @($splits | Where-Object { [string]$_.Kind -eq 'wrong-merge' }).Count
+        Unkeyable     = $unkeyable
+    }
+}
+
+# ---- identity/SI-ObjectLedgerStore.ps1 :: Save-SIObjectLedger
+function Save-SIObjectLedger {
+    <#
+        Persist one run's decisions: new anchors, and any merge supersessions.
+
+        🔒 ONE TRANSACTION. A half-written merge is the worst possible state -- anchors re-pointed at a
+        survivor while the superseded row is missing means the connector never learns old -> new and
+        orphans a CI, which is precisely the failure the ledger exists to prevent. All or nothing.
+
+        Anchors are UPSERTed by (type, value), never blind-inserted: an anchor already present under
+        the same id is the normal case on every run after the first, and must be a no-op rather than a
+        primary-key violation.
+    #>
+    param(
+        [Parameter(Mandatory)]$Connection,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Decisions,
+        [Parameter()][AllowEmptyCollection()][object[]]$Superseded,
+        [Parameter()][datetime]$Now = ([datetime]::UtcNow)
+    )
+
+    # EVERY ROW IS MADE READY AND CHECKED BEFORE THE FIRST ONE IS WRITTEN: a value longer than the column goes in as its
+    # short form (ConvertTo-SILedgerStoredValue), and a row the table cannot hold is refused here, in a moment -- not by
+    # the database after minutes of writes that are then all undone.
+    $anchors = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @($Decisions)) {
+        if ($null -eq $d -or [string]::IsNullOrWhiteSpace([string]$d.CorrelationId)) { continue }
+        foreach ($n in @($d.NewIdentifiers)) {
+            if ($null -eq $n) { continue }
+            $anchors.Add([pscustomobject]@{ Type = [string]$n.Type; Value = (ConvertTo-SILedgerStoredValue -Value ([string]$n.Value)); CorrelationId = [string]$n.CorrelationId })
+        }
+    }
+    Assert-SILedgerRowsFit -Rows $anchors.ToArray()
+
+    $tx = $Connection.BeginTransaction()
+    try {
+        $written = 0
+        foreach ($n in $anchors) {
+            $c = $Connection.CreateCommand(); $c.Transaction = $tx; $c.CommandTimeout = 120
+            $c.CommandText = @'
+MERGE si.ObjectIdentity AS t
+USING (SELECT @ty AS IdentifierType, @va AS IdentifierValue) AS s
+   ON t.IdentifierType = s.IdentifierType AND t.IdentifierValue = s.IdentifierValue
+WHEN MATCHED THEN UPDATE SET SI_CorrelationId = @cid, LastSeen = @now
+WHEN NOT MATCHED THEN INSERT (IdentifierType, IdentifierValue, SI_CorrelationId, FirstSeen, LastSeen)
+     VALUES (@ty, @va, @cid, @now, @now);
+'@
+            [void]$c.Parameters.AddWithValue('@ty',  [string]$n.Type)
+            [void]$c.Parameters.AddWithValue('@va',  [string]$n.Value)
+            [void]$c.Parameters.AddWithValue('@cid', [string]$n.CorrelationId)
+            [void]$c.Parameters.AddWithValue('@now', $Now)
+            [void]$c.ExecuteNonQuery()
+            $written++
+        }
+
+        $sup = 0
+        foreach ($s in @($Superseded)) {
+            if ($null -eq $s) { continue }
+            $c = $Connection.CreateCommand(); $c.Transaction = $tx; $c.CommandTimeout = 120
+            $c.CommandText = @'
+IF NOT EXISTS (SELECT 1 FROM si.ObjectIdentitySuperseded WHERE OldId = @old)
+INSERT INTO si.ObjectIdentitySuperseded (OldId, NewId, SupersededAt, Reason)
+VALUES (@old, @new, @now, @why);
+'@
+            [void]$c.Parameters.AddWithValue('@old', [string]$s.OldId)
+            [void]$c.Parameters.AddWithValue('@new', [string]$s.NewId)
+            [void]$c.Parameters.AddWithValue('@now', $Now)
+            [void]$c.Parameters.AddWithValue('@why', 'merge: anchors resolved to two ids')
+            [void]$c.ExecuteNonQuery()
+            $sup++
+        }
+
+        $tx.Commit()
+        [pscustomobject]@{ AnchorsWritten = $written; SupersededWritten = $sup }
+    } catch {
+        try { $tx.Rollback() } catch {}
+        throw
+    }
+}

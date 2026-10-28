@@ -1,0 +1,173 @@
+@page
+@model SI.Management.Web.Pages.Cmdb.IndexModel
+@using SI.Management.Web.Cmdb
+@{
+    ViewData["Title"] = "CMDB";
+    var isAdmin = User.IsAdmin();
+}
+<h1>CMDB</h1>
+<p class="lede">Your business services and their assets: every view that groups by service, the risk weighting and the departments read the <strong>authoritative</strong> CMDB below.</p>
+<details class="help">
+    <summary>How the CMDB works</summary>
+    <p><strong>SecurityInsight can own your CMDB</strong> (SI-homed): you add services here -- each gets a number (SVC-0001, SVC-0002, ...) that is never reused -- and link assets to them on the <a href="/Cmdb/Map">service map</a>. A service is <em>retired</em>, never deleted, so its history stays. <strong>Or an external CMDB is authoritative</strong>: a CSV in the CMDB.csv format (uploaded here, or read from a path on a schedule), or ServiceNow through the connector. Then this page and the map show the services and links read-only, and changes are made in the source; they arrive with its next import.</p>
+    <p>One source is authoritative at a time. The other sources' services stay stored but unused -- switching on the <a href="/Cmdb/Source">CMDB source</a> page never copies or merges anything.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+<section class="card" aria-labelledby="h-src">
+    <div class="split">
+        <h2 id="h-src">Source: @CmdbSources.Label(Model.Source)</h2>
+        <span>
+            <a class="button secondary" href="/Cmdb/Map">Service map</a>
+            <a class="button secondary" href="/Cmdb/NotSeen">Not seen anymore</a>
+            @if (isAdmin) { <a class="button secondary" href="/Cmdb/Source">Change the CMDB source</a> }
+        </span>
+    </div>
+    @if (Model.ReadOnly)
+    {
+        <p class="notice" role="status" data-readonly>This CMDB is read-only in SecurityInsight. Services and links are edited in @(Model.Source == CmdbSources.ExternalCsv ? "the CSV file (upload a new version below, or let the scheduled import read it)" : "ServiceNow; the scheduled connector import brings the changes here").</p>
+    }
+</section>
+
+@if (Model.FileErrors.Count > 0)
+{
+    <section class="card" aria-labelledby="h-ferr" data-file-errors>
+        <h2 id="h-ferr">The file was not imported</h2>
+        <p>Nothing was written. Fix these lines and upload the file again.</p>
+        <div class="table-wrap"><table data-sortable data-file-error-lines><thead><tr><th>Line</th><th>Problem</th></tr></thead>
+            <tbody>@foreach (var e in Model.FileErrors) { <tr><td data-value="@(e.Line > 0 ? Fmt.Raw(e.Line) : null)">@(e.Line > 0 ? Fmt.Int(e.Line) : "")</td><td>@e.Message</td></tr> }</tbody></table></div>
+    </section>
+}
+@if (Model.FileWarnings.Count > 0)
+{
+    <section class="card" aria-labelledby="h-fwarn">
+        <h2 id="h-fwarn">Warnings</h2>
+        <ul class="warnings">@foreach (var w in Model.FileWarnings) { <li>@w</li> }</ul>
+    </section>
+}
+@if (Model.Result is { } res)
+{
+    <section class="card" aria-labelledby="h-res" data-import-result>
+        <h2 id="h-res">@(res.Imported ? "Imported" : "Not imported")</h2>
+        @if (!res.Imported) { <p class="notice error">@res.Message</p> }
+        else
+        {
+            <dl class="kv">
+                <dt>Services added</dt><dd>@res.ServicesAdded</dd>
+                <dt>Services changed</dt><dd>@res.ServicesUpdated</dd>
+                <dt>Services retired (not in the file)</dt><dd>@res.ServicesRetired</dd>
+                <dt>Already imported (skipped)</dt><dd>@res.ServicesSkipped</dd>
+                <dt>Links added</dt><dd>@res.LinksAdded</dd>
+                <dt>Links removed</dt><dd>@res.LinksRemoved</dd>
+                <dt>Links not imported</dt><dd>@res.LinksRejected</dd>
+            </dl>
+            @if (!string.IsNullOrWhiteSpace(res.RejectedJson)) { <details><summary>Links not imported, and why</summary><pre><code>@res.RejectedJson</code></pre></details> }
+        }
+    </section>
+}
+
+<section class="card" aria-labelledby="h-svc">
+    <div class="split">
+        <h2 id="h-svc">@Fmt.Int(Model.Services.Count(s => !s.Retired)) service(s)</h2>
+        <a href="/Cmdb?retired=@(Model.Retired ? "false" : "true")">@(Model.Retired ? "Hide retired services" : "Show retired services")</a>
+    </div>
+    @if (Model.Services.Count == 0)
+    {
+        <p class="hint">No service yet. @(Model.ReadOnly ? "They arrive with the first import of the source." : isAdmin ? "Add the first one below, or import your v2.2 CMDB.csv." : "")</p>
+    }
+    else if (Model.TableView("services") is { } sv)
+    {
+        @* #589: every field of the service (and every column of the source file), the chooser, the all-rows exports *@
+        <partial name="~/Pages/Shared/_DataTable.cshtml" model="sv" />
+    }
+</section>
+
+@if (isAdmin && Model.Schema.HasCmdb && !Model.ReadOnly)
+{
+    <div class="grid-2">
+        <form method="post" asp-page-handler="Add" class="card stack" aria-labelledby="h-add">
+            <h2 id="h-add">Add a service</h2>
+            <p class="hint">It gets the next free number. Link assets to it on the <a href="/Cmdb/Map">service map</a>.</p>
+            <div><label for="a-name">Name</label><input id="a-name" name="Name" required maxlength="256" /></div>
+            <div><label for="a-desc">Description</label><input id="a-desc" name="Description" maxlength="2000" /></div>
+            <div><label for="a-owner">Owner</label><input id="a-owner" name="Owner" maxlength="256" /></div>
+            <div><label for="a-mail">Owner e-mail</label><input id="a-mail" name="OwnerMail" type="email" maxlength="256" /></div>
+            <div><label for="a-crit">Criticality</label><select id="a-crit" name="Criticality"><option value="">(not set)</option>@foreach (var c in CmdbVocabulary.Criticalities) { <option>@c</option> }</select></div>
+            <div><label for="a-sens">Data sensitivity</label><select id="a-sens" name="DataSensitivity"><option value="">(not set)</option>@foreach (var c in CmdbVocabulary.Sensitivities) { <option>@c</option> }</select></div>
+            <div><label for="a-env">Environment</label><input id="a-env" name="Environment" maxlength="64" placeholder="Production" /></div>
+            <div><label for="a-dept">Department</label><input id="a-dept" name="Department" maxlength="128" /></div>
+            <div><label for="a-reason">Reason (audited)</label><input id="a-reason" name="Reason" maxlength="400" /></div>
+            <div class="actions"><button type="submit">Add service</button></div>
+        </form>
+        @if (!Model.Migrated)
+        {
+            <form method="post" asp-page-handler="Migrate" enctype="multipart/form-data" class="card stack" aria-labelledby="h-mig" data-confirm-title="Import the CMDB.csv" data-confirm="Every service in the file is added to SecurityInsight's CMDB with a new SVC number (its cmdbID is kept). This import runs once.">
+                <h2 id="h-mig">Import your v2.2 CMDB.csv (once)</h2>
+                <p class="hint">Brings the services of a SecurityInsight 2.2 CMDB.csv into this CMDB: each gets a new number, its cmdbID is kept. Optionally a second file links assets (columns cmdbID;AssetName or cmdbID;AssetKey). The file is checked line by line first; nothing is written if a line is wrong.</p>
+                <div><label for="m-file">CMDB.csv</label><input id="m-file" type="file" name="ServicesFile" accept=".csv,text/csv" required /></div>
+                <div><label for="m-mem">Memberships (optional)</label><input id="m-mem" type="file" name="MembersFile" accept=".csv,text/csv" /></div>
+                <div class="actions"><button type="submit" class="secondary">Import</button></div>
+            </form>
+        }
+    </div>
+}
+@if (isAdmin && Model.Schema.HasCmdb && Model.Source == CmdbSources.ExternalCsv)
+{
+    <form method="post" asp-page-handler="Upload" enctype="multipart/form-data" class="card stack" aria-labelledby="h-up" data-confirm-title="Import this CMDB.csv" data-confirm="The file becomes the CMDB: services not in it are retired (kept as history); with a memberships file, links not in it are removed.">
+        <h2 id="h-up">Upload a new version of the CMDB.csv</h2>
+        <p class="hint">The same columns as CMDB.csv (cmdbID;cmdbName;DataSensitivity;Criticality;Owner;OwnerMail, plus Environment, Description, Department and any of your own). The file is checked line by line; nothing is written if a line is wrong. A scheduled import can read the file from a path instead.</p>
+        <div><label for="u-file">CMDB.csv</label><input id="u-file" type="file" name="ServicesFile" accept=".csv,text/csv" required /></div>
+        <div><label for="u-mem">Memberships (optional: cmdbID;AssetName or cmdbID;AssetKey)</label><input id="u-mem" type="file" name="MembersFile" accept=".csv,text/csv" /></div>
+        <div class="actions"><button type="submit">Import</button></div>
+    </form>
+}
+@if (Model.Source == CmdbSources.ExternalConnector)
+{
+    <section class="card" aria-labelledby="h-conn">
+        <h2 id="h-conn">ServiceNow</h2>
+        <p>Services and their members are pulled from ServiceNow by the scheduled CMDB import through the ServiceNow connector. An incomplete read is never imported, so a service is retired here only when ServiceNow no longer has it.</p>
+    </section>
+}
+
+<section class="card" aria-labelledby="h-citable" data-ci-table>
+    <h2 id="h-citable">SQL CI table</h2>
+    <p class="hint">Every asset SecurityInsight knows, one row per CI, written by the CMDB connector (SQL) into the Pro database for reporting and Power BI (view <code>cmdbsync.vConfigurationItem</code>). A CI that is gone is retired after several complete runs, never deleted; a run on an incomplete snapshot changes nothing.</p>
+    @if (Model.CiTableError is not null) { <p class="notice error" role="alert">@Model.CiTableError</p> }
+    else if (!Model.CiTable.HasTable)
+    {
+        <p class="notice" role="status" data-ci-table-missing>The CI table is not set up in this database yet. Run setup\Initialize-SIDataSql.ps1 once; the CMDB connector (SQL) job fills it on its next run.</p>
+    }
+    else
+    {
+        var t = Model.CiTable;
+        <dl class="kv">
+            <dt>Last run</dt><dd data-ci-last-run data-utc>@(t.LastRunAt is null ? "not run yet" : Fmt.When(t.LastRunAt))@if (t.LastOutcome is not null) { <text> -- </text><span class="badge @(t.LastOutcome == "applied" ? "good" : "")">@t.LastOutcome</span> }</dd>
+            @if (t.LastOutcome is not null && t.LastOutcome != "applied" && t.LastReason is not null) { <dt>Why</dt><dd data-ci-reason>@t.LastReason</dd> }
+            <dt>Last written</dt><dd data-utc>@(t.LastAppliedAt is null ? "never" : Fmt.When(t.LastAppliedAt))</dd>
+            <dt>CIs</dt><dd data-ci-counts>@Fmt.Int(t.ActiveCis) active, @Fmt.Int(t.RetiredCis) retired</dd>
+            <dt>Last written run</dt><dd data-ci-run-counts>@Fmt.Int(t.Created) created, @Fmt.Int(t.Updated) updated, @Fmt.Int(t.Unchanged) unchanged, @Fmt.Int(t.Absent) absent, @Fmt.Int(t.Retired) retired, @Fmt.Int(t.Reactivated) reactivated, @Fmt.Int(t.Held) held</dd>
+        </dl>
+    }
+    <partial name="_Query" model='QueryInfo.Sql(SqlCmdbSqlSyncReader.StateSql, "SQL CI table: last run")' />
+    <partial name="_Query" model='QueryInfo.Sql(SqlCmdbSqlSyncReader.ViewSql, "SQL CI table: the reporting view")' />
+</section>
+
+@if (Model.Imports.Count > 0)
+{
+    <section class="card" aria-labelledby="h-imp">
+        <h2 id="h-imp">Imports</h2>
+        <div class="table-wrap">
+            <table data-sortable data-imports>
+                <thead><tr><th>When</th><th>Source</th><th>How</th><th>From</th><th>By</th><th>Outcome</th><th>Services +/~/-</th><th>Links +/-</th><th class="num">Not imported</th></tr></thead>
+                <tbody>
+                    @foreach (var i in Model.Imports)
+                    {
+                        <tr><td>@Fmt.Time(i.ImportedAt)</td><td>@CmdbSources.Label(i.Source)</td><td>@i.Kind</td><td>@i.Origin</td><td>@i.ImportedBy</td>
+                            <td>@i.Outcome@if (i.Outcome != "Imported" && i.Message is not null) { <br /><span class="muted">@i.Message</span> }</td>
+                            <td>@Fmt.Int(i.ServicesAdded) / @Fmt.Int(i.ServicesUpdated) / @Fmt.Int(i.ServicesRetired)</td><td>@Fmt.Int(i.LinksAdded) / @Fmt.Int(i.LinksRemoved)</td><td class="num" data-value="@Fmt.Raw(i.LinksRejected)">@Fmt.Int(i.LinksRejected)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}

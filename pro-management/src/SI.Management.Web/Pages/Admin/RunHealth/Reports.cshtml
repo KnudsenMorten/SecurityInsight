@@ -1,0 +1,104 @@
+@page "{runId?}"
+@using SI.Management.Core.Holds
+@model SI.Management.Web.Pages.Admin.RunHealth.ReportsModel
+@{
+    ViewData["Title"] = "Risk Analysis reports";
+    var v = Model.View;
+    var admin = User.IsAdmin();
+}
+<h1>Risk Analysis reports</h1>
+<p class="lede">Every report of a Risk Analysis run: how many rows the source says it holds, how many the run retrieved and stored, and whether the report is complete. A report that is <strong>not complete</strong> may miss findings: what it missed is unknown for that run, not resolved, and nothing is closed on it. A report that is <strong>held</strong> was kept at its last complete result on purpose (for example, a source it reads returned no rows): that result is shown and nothing of it is closed.</p>
+<p class="hint"><a href="/Admin/RunHealth">Back to Run health</a></p>
+@foreach (var p in Model.Problems) { <div class="notice error" role="alert" data-problem>@p</div> }
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTable) { <div class="notice" role="status" data-no-table>This database has no report verdicts yet. The next update applies the table; the next Risk Analysis run fills it.</div> }
+else if (!v.RunFound) { <div class="notice" role="status" data-no-run>No Risk Analysis run with this id has report verdicts.</div> }
+else if (v.Rows.Count == 0) { <div class="notice" role="status" data-no-rows>No report verdicts yet.</div> }
+else
+{
+    <section class="card" aria-labelledby="h-reports" data-run-reports>
+        <h2 id="h-reports">Reports (@Fmt.Int((long)v.Rows.Count)) -- @Fmt.Int((long)v.Incomplete) not complete@(v.Held > 0 ? ", " + Fmt.Int((long)v.Held) + " held" : "")</h2>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Run</th><th>When</th><th>Report</th><th class="num">Source holds</th><th class="num">Retrieved</th><th class="num">Stored</th><th>State</th><th>Reason</th></tr></thead>
+                <tbody>
+                    @foreach (var r in v.Rows)
+                    {
+                        <tr data-report="@r.Report" data-state="@(r.Escalated ? "HeldTooLong" : r.Held ? "Held" : r.State)">
+                            <td>@r.Grain</td><td>@Fmt.Time(DateTime.SpecifyKind(r.CollectionTime, DateTimeKind.Utc))</td><td>@r.Report</td>
+                            <td class="num">@Fmt.Int(r.Expected)</td><td class="num">@Fmt.Int(r.Retrieved)</td><td class="num">@Fmt.Int(r.Stored)</td>
+                            @if (r.Escalated)
+                            {
+                                <td><span class="badge bad" data-held-too-long>Held @r.HeldRuns runs in a row</span></td>
+                            }
+                            else if (r.Held)
+                            {
+                                <td><span class="badge warn" data-held>Held: last good result kept</span></td>
+                            }
+                            else
+                            {
+                                <td>@(r.NotComplete ? "Not complete" : r.Unverified ? "Not verified" : "Complete")</td>
+                            }
+                            @if (r.Held)
+                            {
+                                <td>
+                                    @if (r.HoldTitle is { } title) { <strong data-hold-title>@title.</strong> }
+                                    <span>@r.Reason</span>
+                                    <br /><span class="hint" data-kept>@(r.KeptResultAt is { } k ? "Kept result from " + Fmt.Time(DateTime.SpecifyKind(k, DateTimeKind.Utc)) + " (" + r.KeptAge(Model.NowUtc) + ")." : "No earlier complete result -- nothing of the report is shown.")</span>
+                                    @if (r.Escalated) { <br /><span data-held-support>SecurityInsight support has been told and is looking into it. Nothing of the report was closed.</span> }
+                                    @if (r.HoldCode is { } code) { <br /><a href="@HoldKindList.CodeUrl(code)" data-hold-code>@code</a> }
+                                    @if (admin && r.MayAcceptEmpty)
+                                    {
+                                        foreach (var t in r.HoldNameList.Where(t => !Model.Accepts.Any(a => a.Report == r.Report && a.Table == t)))
+                                        {
+                                            <form method="post" asp-page-handler="Accept" class="inline-form" data-accept-form="@t">
+                                                <input type="hidden" name="Report" value="@r.Report" /><input type="hidden" name="Table" value="@t" />
+                                                <label>Why <input name="Reason" required minlength="3" /></label>
+                                                <button type="submit" title="Only if @t is empty for good (the feature was turned off). From the next run the report shows empty and complete; its findings close as 'Report changed', not as fixed. This ends by itself when @t has rows again.">Accept @t as empty</button>
+                                            </form>
+                                        }
+                                    }
+                                </td>
+                            }
+                            else
+                            {
+                                <td>@r.Reason</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="hint">Not verified: the source could not count the report's rows in one query, so the run could not check it. Held: SecurityInsight kept the report's last complete result on purpose; held for 3 Detailed runs in a row, SecurityInsight support is told.</p>
+    </section>
+}
+@if (Model.Accepts.Count > 0)
+{
+    <section class="card" aria-labelledby="h-accepts" data-source-accepts>
+        <h2 id="h-accepts">Sources accepted as empty (@Fmt.Int((long)Model.Accepts.Count))</h2>
+        <p class="hint">An Admin accepted that these sources are empty for good for these reports: the reports show empty and complete. An acceptance ends by itself when its source has rows again.</p>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Report</th><th>Source</th><th>Accepted by</th><th>When</th><th>Why</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var a in Model.Accepts)
+                    {
+                        <tr data-accept="@a.Id">
+                            <td>@a.Report</td><td>@a.Table</td><td>@a.By</td><td>@Fmt.Time(DateTime.SpecifyKind(a.AcceptedUtc, DateTimeKind.Utc))</td><td>@a.Reason</td>
+                            <td>
+                                @if (admin)
+                                {
+                                    <form method="post" asp-page-handler="UndoAccept" class="inline-form" data-undo-accept-form>
+                                        <input type="hidden" name="AcceptId" value="@a.Id" />
+                                        <label>Why <input name="Reason" required minlength="3" /></label>
+                                        <button type="submit">Undo</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}

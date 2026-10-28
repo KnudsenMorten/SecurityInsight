@@ -1,0 +1,40 @@
+@* #360: a row of the weighted risk page expanded in place -- a service's assets (or an asset's services), the first
+   few, with the same measures and a link to all of them. Fetched by js/app/weighted.js, inserted under the row. *@
+@model SI.Management.Web.Pages.Collection.WeightedRiskModel
+@using SI.Management.Web.Pages.Collection
+@{
+    var plan = Model.ExpandPlan!;
+    var page = Model.ExpandPage!;
+    var cols = CollectionPageModel.Visible(plan.Spec);
+}
+<div class="expand-body" data-expand-body="@plan.Spec.Name">
+    @if (page.Rows.Count == 0)
+    {
+        <p class="hint">Nothing to show for this collection.</p>
+    }
+    else
+    {
+        <table class="findings nested" data-static="a short preview inside a grid row; the full list, sorted and filtered, is one click away">
+            <thead><tr>@foreach (var c in cols) { <th scope="col" class="@(c.Type == SI.Management.Core.ProData.GridType.Number ? "num" : "")">@c.Label</th> }</tr></thead>
+            <tbody>
+                @foreach (var row in page.Rows)
+                {
+                    <tr>
+                        @foreach (var c in cols)
+                        {
+                            var text = Model.CellText(c, row);
+                            var href = text.Length == 0 ? null : Model.CellLink(c.Key, row);
+                            var tone = text.Length == 0 ? null : Model.CellTone(c.Key, row);
+                            <td class="@(c.Type == SI.Management.Core.ProData.GridType.Number ? "num" : "wrap")" data-col="@c.Key">
+                                @if (c.Type == SI.Management.Core.ProData.GridType.Tier && text.Length > 0) { <span class="tierdot t@(CollectionPageModel.Cell0(row, c.Key))"></span> }
+                                @if (tone is not null) { <span class="badge @tone">@text</span> }
+                                else if (href is not null) { <a href="@href">@text</a> } else { @text }
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    <p class="hint"><a href="@Model.ExpandAllLink" data-expand-all>@(page.Total > page.Rows.Count ? $"All {Fmt.Int(page.Total)}" : "Open") &rarr;</a></p>
+</div>

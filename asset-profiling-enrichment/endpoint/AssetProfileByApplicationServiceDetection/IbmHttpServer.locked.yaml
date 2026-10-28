@@ -1,0 +1,21 @@
+id:        IbmHttpServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'IBM HTTP Server'
+category:  'Web Server'
+description: ''
+displayNames:
+  - 'IBM HTTP Server'
+
+detections:
+  - id: IbmHttpServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'http_server*'
+    set:
+      Tier:     2
+      Purpose:  'Web Server'
+      Category: 'Web Server'

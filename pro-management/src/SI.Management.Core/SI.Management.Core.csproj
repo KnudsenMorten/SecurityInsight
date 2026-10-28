@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SI.Management.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Monitor.Query" Version="1.7.1" />
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.7" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+  </ItemGroup>
+
+  <!-- The CI grid's columns (ProData/CiColumns.cs): copies of data-model\field-catalog.locked.json and
+       data-model\outputs\excel-ci.locked.json, embedded so the image builds from pro-management alone. A test holds each
+       copy to its original (CiColumnCatalogTests), so a catalog change fails the build until the copy follows. -->
+  <ItemGroup>
+    <EmbeddedResource Include="ProData\DataModel\*.json" LogicalName="DataModel/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SI.Management.Core.Tests" />
+    <InternalsVisibleTo Include="SI.Management.Web.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,3261 @@
+{
+  "$comment": "Classification rows (REQUIREMENTS #561, #562): ONE generic mechanism for every classification -- asset type, asset subtype, the component of findings and assets, and every later dimension (dimensions.locked.json holds only each dimension's values). A row = source (the provider whose naming it normalises) + field (an SI field, or a source path) + match (equals | in -> values; prefix | pattern -> pattern, a glob) -> target (the SI field it sets) = set, with a priority (an integer 0..10000, higher wins) and a state (enabled | disabled); an optional when (SI fields only) must also hold. Evaluated with the condition engine of the risk factors (engine/data-model/SI-Classification.ps1, tri-state: an undecided field never matches). targets: per target field its dimension, whether it is on assets or findings, multi (an asset carries every matching value) and the fallback when no row matches -- never blank ($keep = the value the sources gave). verify = true: the source spelling the row matches is still to be confirmed on live rows. Customer changes: Pro = one cfg.ItemOverride per row (classification:<row id> -- override, disable or add); Community = classification.custom.json, per id.",
+  "kind": "classification",
+  "version": "1.0.0",
+  "targets": [
+    {
+      "field": "si_asset_type",
+      "dimension": "asset_type",
+      "appliesTo": "asset",
+      "fallback": "$keep",
+      "fallbackEmpty": "Other",
+      "keepSourceIn": "si_asset_type_source"
+    },
+    {
+      "field": "si_os_family",
+      "dimension": "os_family",
+      "appliesTo": "asset",
+      "fallback": "Unknown"
+    },
+    {
+      "field": "si_asset_subtype",
+      "dimension": "asset_subtype",
+      "appliesTo": "asset",
+      "fallback": "General"
+    },
+    {
+      "field": "si_components",
+      "dimension": "component",
+      "appliesTo": "asset",
+      "multi": true,
+      "fallback": "Other"
+    },
+    {
+      "field": "si_component",
+      "dimension": "component",
+      "appliesTo": "finding",
+      "fallback": "Other"
+    },
+    {
+      "field": "si_servicenow_subci",
+      "dimension": "servicenow_subci",
+      "appliesTo": "finding",
+      "fallback": "Other"
+    },
+    {
+      "field": "si_patch_cycle",
+      "dimension": "patch_cycle",
+      "appliesTo": "finding",
+      "fallback": "Unknown"
+    }
+  ],
+  "rules": [
+    {
+      "id": "asset-type-public-ip",
+      "source": "azure",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "public_ip"
+      ],
+      "target": "si_asset_type",
+      "set": "Public IP",
+      "priority": 1000,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-sql",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.sql/servers",
+        "microsoft.sql/servers/databases",
+        "microsoft.sql/managedinstances",
+        "microsoft.sql/managedinstances/databases"
+      ],
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 900,
+      "state": "enabled",
+      "note": "Azure SQL (logical server, database, managed instance); Exposure Graph fills si_azure_resource_type for the same resources."
+    },
+    {
+      "id": "asset-type-azure-sql-vm",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.sqlvirtualmachine/sqlvirtualmachines"
+      ],
+      "target": "si_asset_type",
+      "set": "Server",
+      "priority": 900,
+      "state": "enabled",
+      "note": "The SQL IaaS registration of a VM (#562: Server / SQL Server)."
+    },
+    {
+      "id": "asset-type-azure-postgresql",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.dbforpostgresql/",
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-mysql",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.dbformysql/",
+        "microsoft.dbformariadb/"
+      ],
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-cosmos",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.documentdb/",
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-storage",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.storage/",
+        "microsoft.storagesync/",
+        "microsoft.netapp/",
+        "microsoft.elasticsan/"
+      ],
+      "target": "si_asset_type",
+      "set": "Storage",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-web",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.web/",
+      "target": "si_asset_type",
+      "set": "Web app",
+      "priority": 900,
+      "state": "enabled",
+      "note": "Every App Service resource (sites, slots, plans, certificates, static sites); API connections are Integration (asset-type-azure-api-connection)."
+    },
+    {
+      "id": "asset-type-azure-keyvault",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.keyvault/vaults",
+        "microsoft.keyvault/managedhsms"
+      ],
+      "target": "si_asset_type",
+      "set": "Key vault",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-network",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.network/",
+      "target": "si_asset_type",
+      "set": "Network",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-container",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.containerservice/",
+        "microsoft.containerregistry/",
+        "microsoft.containerinstance/",
+        "microsoft.app/"
+      ],
+      "target": "si_asset_type",
+      "set": "Container",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-public-ip",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/publicipaddresses"
+      ],
+      "target": "si_asset_type",
+      "set": "Public IP",
+      "priority": 950,
+      "state": "enabled",
+      "note": "A public IP address resource is a Public IP, like the public IPs SI profiles itself (above the generic Network row)."
+    },
+    {
+      "id": "asset-type-azure-sql-other",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.sql/",
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 850,
+      "state": "enabled",
+      "note": "Any other Azure SQL resource (firewall rules, elastic pools, ...) -- below the specific SQL rows."
+    },
+    {
+      "id": "asset-type-azure-database-other",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.cache/",
+        "microsoft.kusto/"
+      ],
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 880,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-api-connection",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.web/connections"
+      ],
+      "target": "si_asset_type",
+      "set": "Integration",
+      "priority": 950,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-managed-identity",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.managedidentity/",
+      "target": "si_asset_type",
+      "set": "Managed identity",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-monitoring",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.insights/",
+        "microsoft.operationalinsights/",
+        "microsoft.alertsmanagement/",
+        "microsoft.operationsmanagement/",
+        "microsoft.monitor/",
+        "microsoft.dashboard/",
+        "microsoft.portal/"
+      ],
+      "target": "si_asset_type",
+      "set": "Monitoring",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-ai",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.cognitiveservices/",
+        "microsoft.machinelearningservices/",
+        "microsoft.search/",
+        "microsoft.botservice/"
+      ],
+      "target": "si_asset_type",
+      "set": "AI",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-integration",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.logic/",
+        "microsoft.eventgrid/",
+        "microsoft.servicebus/",
+        "microsoft.eventhub/",
+        "microsoft.relay/",
+        "microsoft.apimanagement/",
+        "microsoft.communication/",
+        "microsoft.notificationhubs/",
+        "microsoft.signalrservice/",
+        "microsoft.datafactory/"
+      ],
+      "target": "si_asset_type",
+      "set": "Integration",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-backup",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.recoveryservices/",
+        "microsoft.dataprotection/",
+        "microsoft.compute/restorepointcollections"
+      ],
+      "target": "si_asset_type",
+      "set": "Backup",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-security",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.security/",
+        "microsoft.securityinsights/",
+        "microsoft.sentinelplatformservices/",
+        "microsoft.purview/",
+        "microsoft.codesigning/",
+        "microsoft.attestation/"
+      ],
+      "target": "si_asset_type",
+      "set": "Security",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-management",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.maintenance/",
+        "microsoft.devtestlab/",
+        "microsoft.automation/",
+        "microsoft.resources/",
+        "microsoft.guestconfiguration/",
+        "microsoft.policyinsights/",
+        "microsoft.costmanagement/",
+        "microsoft.managedservices/"
+      ],
+      "target": "si_asset_type",
+      "set": "Management",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-azure-compute",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.compute/",
+        "microsoft.hybridcompute/",
+        "microsoft.desktopvirtualization/",
+        "microsoft.batch/",
+        "microsoft.avs/"
+      ],
+      "target": "si_asset_type",
+      "set": "Compute",
+      "priority": 400,
+      "state": "enabled",
+      "note": "Disks, extensions, availability sets, scale sets, images ... -- BELOW the virtual machine row (500), so a VM stays a Server."
+    },
+    {
+      "id": "asset-type-azure-other",
+      "source": "azure",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "cloud_resource"
+      ],
+      "target": "si_asset_type",
+      "set": "Other",
+      "priority": 1,
+      "state": "enabled",
+      "note": "An Azure resource no row names is Other -- never the raw ARM type: that stays in si_azure_resource_type (and si_asset_type_source)."
+    },
+    {
+      "id": "asset-type-mde-workstation",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "workstation"
+      ],
+      "target": "si_asset_type",
+      "set": "Workstation",
+      "priority": 800,
+      "state": "enabled",
+      "note": "Defender for Endpoint / Exposure Graph deviceType (value map device_type)."
+    },
+    {
+      "id": "asset-type-mde-server",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "server"
+      ],
+      "target": "si_asset_type",
+      "set": "Server",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-mde-mobile",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "mobile"
+      ],
+      "target": "si_asset_type",
+      "set": "Mobile",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-mde-network-device",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "network_device"
+      ],
+      "target": "si_asset_type",
+      "set": "Network device",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-mde-iot",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "iot"
+      ],
+      "target": "si_asset_type",
+      "set": "IoT",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-mde-printer",
+      "source": "mde",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "printer"
+      ],
+      "target": "si_asset_type",
+      "set": "Printer",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-device-category-network",
+      "source": "mde",
+      "field": "si_device_category",
+      "match": "equals",
+      "values": [
+        "network_device"
+      ],
+      "target": "si_asset_type",
+      "set": "Network device",
+      "priority": 700,
+      "state": "enabled",
+      "note": "Defender / Exposure Graph device category, when the device type says nothing."
+    },
+    {
+      "id": "asset-type-device-category-iot",
+      "source": "mde",
+      "field": "si_device_category",
+      "match": "equals",
+      "values": [
+        "iot"
+      ],
+      "target": "si_asset_type",
+      "set": "IoT",
+      "priority": 690,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-device-os-server",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "windows_server"
+      ],
+      "target": "si_asset_type",
+      "set": "Server",
+      "priority": 300,
+      "state": "enabled",
+      "when": {
+        "value": "device",
+        "field": "si_class",
+        "op": "eq"
+      },
+      "note": "The operating system, when Defender gives no device type (a discovered, not onboarded device)."
+    },
+    {
+      "id": "asset-type-device-os-client",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "in",
+      "values": [
+        "windows",
+        "macos"
+      ],
+      "target": "si_asset_type",
+      "set": "Workstation",
+      "priority": 300,
+      "state": "enabled",
+      "when": {
+        "value": "device",
+        "field": "si_class",
+        "op": "eq"
+      }
+    },
+    {
+      "id": "asset-type-device-os-mobile",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "in",
+      "values": [
+        "ios",
+        "android"
+      ],
+      "target": "si_asset_type",
+      "set": "Mobile",
+      "priority": 300,
+      "state": "enabled",
+      "when": {
+        "value": "device",
+        "field": "si_class",
+        "op": "eq"
+      }
+    },
+    {
+      "id": "asset-type-device-unknown",
+      "source": "mde",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "device"
+      ],
+      "target": "si_asset_type",
+      "set": "Unknown",
+      "priority": 1,
+      "state": "enabled",
+      "note": "A device the sources say nothing about (no device type, category or known operating system) -- Unknown, never a guess."
+    },
+    {
+      "id": "asset-type-entra-user",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "user"
+      ],
+      "target": "si_asset_type",
+      "set": "User",
+      "priority": 800,
+      "state": "enabled",
+      "note": "Entra userType (value map identity_type_user)."
+    },
+    {
+      "id": "asset-type-entra-guest",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "guest"
+      ],
+      "target": "si_asset_type",
+      "set": "Guest",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-entra-service-principal",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "service_principal"
+      ],
+      "target": "si_asset_type",
+      "set": "Service principal",
+      "priority": 800,
+      "state": "enabled",
+      "note": "Entra servicePrincipalType (value map identity_type_sp)."
+    },
+    {
+      "id": "asset-type-entra-managed-identity",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "managed_identity"
+      ],
+      "target": "si_asset_type",
+      "set": "Managed identity",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-type-identity-group",
+      "source": "eg",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "group"
+      ],
+      "target": "si_asset_type",
+      "set": "Group",
+      "priority": 800,
+      "state": "enabled",
+      "when": {
+        "value": "identity",
+        "field": "si_class",
+        "op": "eq"
+      },
+      "note": "A directory group (the Exposure Graph's group nodes; value map identity_type_eg) -- a group is an identity of its own kind, never Other. Identities only: an Azure resource whose type name ends in 'group' is not a directory group."
+    },
+    {
+      "id": "asset-type-identity-other",
+      "source": "entra",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "identity"
+      ],
+      "target": "si_asset_type",
+      "set": "Other",
+      "priority": 1,
+      "state": "enabled",
+      "note": "An identity of a kind no row names (a group, a service account, a computer object) is Other -- its source kind stays in si_asset_type_source."
+    },
+    {
+      "id": "asset-type-azure-vm",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/virtualmachines",
+        "microsoft.hybridcompute/machines"
+      ],
+      "target": "si_asset_type",
+      "set": "Server",
+      "priority": 500,
+      "state": "enabled",
+      "note": "Below the Defender device type: a VM Defender reports as a workstation (a virtual desktop) stays Workstation."
+    },
+    {
+      "id": "asset-type-servicenow-db",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "prefix",
+      "pattern": "cmdb_ci_db_",
+      "target": "si_asset_type",
+      "set": "Database",
+      "priority": 450,
+      "state": "enabled",
+      "verify": true,
+      "note": "ServiceNow database classes (cmdb_ci_db_mssql_instance, ...). Below every collected type: a machine Defender sees stays a Server."
+    },
+    {
+      "id": "asset-type-servicenow-server",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "in",
+      "values": [
+        "cmdb_ci_server",
+        "cmdb_ci_win_server",
+        "cmdb_ci_linux_server",
+        "cmdb_ci_unix_server",
+        "cmdb_ci_esx_server"
+      ],
+      "target": "si_asset_type",
+      "set": "Server",
+      "priority": 450,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-type-servicenow-computer",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "equals",
+      "values": [
+        "cmdb_ci_computer"
+      ],
+      "target": "si_asset_type",
+      "set": "Workstation",
+      "priority": 450,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-type-servicenow-network",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "prefix",
+      "pattern": [
+        "cmdb_ci_netgear",
+        "cmdb_ci_ip_router",
+        "cmdb_ci_ip_switch",
+        "cmdb_ci_ip_firewall"
+      ],
+      "target": "si_asset_type",
+      "set": "Network device",
+      "priority": 450,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-azure-sql-database",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.sql/servers/databases",
+        "microsoft.sql/managedinstances/databases"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Database",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-sql-server",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.sql/servers"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL logical server",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-sql-mi",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.sql/managedinstances"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Managed Instance",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-sql-firewall-rule",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.sql/firewallrules",
+        "microsoft.sql/servers/firewallrules",
+        "microsoft.sql/managedinstances/firewallrules"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL firewall rule",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-sql-vm",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.sqlvirtualmachine/sqlvirtualmachines"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Server",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-postgresql",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.dbforpostgresql/",
+      "target": "si_asset_subtype",
+      "set": "PostgreSQL",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-mysql",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.dbformysql/",
+      "target": "si_asset_subtype",
+      "set": "MySQL",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-mariadb",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.dbformariadb/",
+      "target": "si_asset_subtype",
+      "set": "MariaDB",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-cosmos",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.documentdb/",
+      "target": "si_asset_subtype",
+      "set": "Cosmos DB",
+      "priority": 900,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-sql-iaas",
+      "source": "azure",
+      "field": "si_sql_iaas",
+      "match": "equals",
+      "values": [
+        true
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Server",
+      "priority": 880,
+      "state": "enabled",
+      "note": "A VM registered with the SQL IaaS extension (its microsoft.sqlvirtualmachine resource names the VM)."
+    },
+    {
+      "id": "asset-subtype-mde-sql-software",
+      "source": "mde",
+      "field": "si_installed_software",
+      "match": "pattern",
+      "pattern": [
+        "microsoft/sql_server",
+        "microsoft/sql_server_2*",
+        "microsoft/sql_server_express*",
+        "microsoft/sql_server_20*"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Server",
+      "priority": 870,
+      "state": "enabled",
+      "when": {
+        "value": "server",
+        "field": "si_asset_type_source",
+        "op": "eq"
+      },
+      "verify": true,
+      "note": "Defender for Endpoint: a server whose software inventory shows SQL Server (vendor/product, e.g. microsoft/sql_server_2019). Management Studio and the drivers alone do not count. The product spelling is to be confirmed on live rows."
+    },
+    {
+      "id": "asset-subtype-eg-sql-role",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "sql_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Server",
+      "priority": 860,
+      "state": "enabled",
+      "verify": true,
+      "note": "Exposure Graph deviceRole (value map eg_device_roles: SqlServer / SQL -> sql_server)."
+    },
+    {
+      "id": "asset-subtype-servicenow-mssql-instance",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "equals",
+      "values": [
+        "cmdb_ci_db_mssql_instance"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Server instance",
+      "priority": 850,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-servicenow-mssql-database",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "equals",
+      "values": [
+        "cmdb_ci_db_mssql_database"
+      ],
+      "target": "si_asset_subtype",
+      "set": "SQL Database",
+      "priority": 850,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-servicenow-postgresql",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "prefix",
+      "pattern": "cmdb_ci_db_postgresql",
+      "target": "si_asset_subtype",
+      "set": "PostgreSQL",
+      "priority": 850,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-servicenow-mysql",
+      "source": "servicenow",
+      "field": "si_cmdb_class",
+      "match": "prefix",
+      "pattern": "cmdb_ci_db_mysql",
+      "target": "si_asset_subtype",
+      "set": "MySQL",
+      "priority": 850,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-azure-vm",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.compute/virtualmachines"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Virtual machine",
+      "priority": 200,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-arc-machine",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.hybridcompute/machines"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Arc machine",
+      "priority": 200,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-vm-extension",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/virtualmachines/extensions",
+        "microsoft.hybridcompute/machines/extensions"
+      ],
+      "target": "si_asset_subtype",
+      "set": "VM extension",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-disk",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/disks"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Disk",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-snapshot",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/snapshots"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Snapshot",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-availability-set",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/availabilitysets"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Availability set",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-scale-set",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.compute/virtualmachinescalesets"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Scale set",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-image",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.compute/images",
+        "microsoft.compute/galleries"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Image",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-restore-points",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.compute/restorepointcollections",
+      "target": "si_asset_subtype",
+      "set": "Restore points",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-storage-account",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.storage/storageaccounts"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Storage account",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-app-service",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.web/sites",
+      "target": "si_asset_subtype",
+      "set": "App Service",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-app-service-plan",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.web/serverfarms"
+      ],
+      "target": "si_asset_subtype",
+      "set": "App Service plan",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-static-web-app",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.web/staticsites",
+      "target": "si_asset_subtype",
+      "set": "Static web app",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-web-certificate",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.web/certificates"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Certificate",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-api-connection",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.web/connections"
+      ],
+      "target": "si_asset_subtype",
+      "set": "API connection",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-key-vault",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.keyvault/vaults"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Key vault",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-managed-hsm",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.keyvault/managedhsms"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Managed HSM",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-redis",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.cache/",
+      "target": "si_asset_subtype",
+      "set": "Redis cache",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-vnet",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/virtualnetworks"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Virtual network",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-subnet",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/virtualnetworks/subnets"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Subnet",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-nsg",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/networksecuritygroups"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Network security group",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-nic",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/networkinterfaces"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Network interface",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-load-balancer",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/loadbalancers"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Load balancer",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-app-gateway",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/applicationgateways"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Application gateway",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-firewall",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.network/azurefirewalls",
+        "microsoft.network/firewallpolicies"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Firewall",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-vpn-gateway",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.network/virtualnetworkgateways",
+        "microsoft.network/vpngateways"
+      ],
+      "target": "si_asset_subtype",
+      "set": "VPN gateway",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-local-gateway",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/localnetworkgateways"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Local network gateway",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-vpn-connection",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/connections"
+      ],
+      "target": "si_asset_subtype",
+      "set": "VPN connection",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-nat-gateway",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/natgateways"
+      ],
+      "target": "si_asset_subtype",
+      "set": "NAT gateway",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-private-dns",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.network/privatednszones",
+      "target": "si_asset_subtype",
+      "set": "Private DNS zone",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-dns-zone",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/dnszones"
+      ],
+      "target": "si_asset_subtype",
+      "set": "DNS zone",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-private-endpoint",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/privateendpoints"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Private endpoint",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-network-watcher",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.network/networkwatchers",
+      "target": "si_asset_subtype",
+      "set": "Network watcher",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-bastion",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/bastionhosts"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Bastion",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-public-ip",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.network/publicipaddresses"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Public IP address",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-public-ip",
+      "source": "shodan",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "public_ip"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Public IP address",
+      "priority": 400,
+      "state": "enabled",
+      "note": "A public IP SI profiles itself reads like the Azure public IP address resource."
+    },
+    {
+      "id": "asset-subtype-azure-front-door",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.network/frontdoors",
+        "microsoft.cdn/profiles"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Front Door",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-container-app",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.app/containerapps"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Container app",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-container-app-job",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.app/jobs"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Container app job",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-container-environment",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.app/managedenvironments",
+        "microsoft.app/connectedenvironments"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Container apps environment",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-container-registry",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.containerregistry/registries"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Container registry",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-kubernetes",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.containerservice/managedclusters"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Kubernetes cluster",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-container-instance",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.containerinstance/containergroups"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Container instance",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-log-analytics",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.operationalinsights/workspaces"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Log Analytics workspace",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-dcr",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.insights/datacollectionrules"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Data collection rule",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-dce",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.insights/datacollectionendpoints"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Data collection endpoint",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-app-insights",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.insights/components"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Application Insights",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-alert-rule",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.insights/metricalerts",
+        "microsoft.insights/scheduledqueryrules",
+        "microsoft.insights/activitylogalerts",
+        "microsoft.alertsmanagement/smartdetectoralertrules",
+        "microsoft.alertsmanagement/prometheusrulegroups"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Alert rule",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-action-group",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.insights/actiongroups"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Action group",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-web-test",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.insights/webtests"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Availability test",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-workbook",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.insights/workbooks",
+        "microsoft.insights/workbooktemplates"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Workbook",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-dashboard",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.portal/dashboards",
+        "microsoft.dashboard/grafana"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Dashboard",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-monitoring-solution",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.operationsmanagement/solutions"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Monitoring solution",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-ai-service",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.cognitiveservices/accounts"
+      ],
+      "target": "si_asset_subtype",
+      "set": "AI service",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-ai-project",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.cognitiveservices/accounts/projects",
+        "microsoft.cognitiveservices/accounts/project"
+      ],
+      "target": "si_asset_subtype",
+      "set": "AI project",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-ai-deployment",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.cognitiveservices/accounts/deployments"
+      ],
+      "target": "si_asset_subtype",
+      "set": "AI deployment",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-ml-workspace",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.machinelearningservices/workspaces",
+      "target": "si_asset_subtype",
+      "set": "Machine learning workspace",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-ai-search",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.search/",
+      "target": "si_asset_subtype",
+      "set": "AI Search",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-logic-app",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.logic/workflows"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Logic app",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-event-grid",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.eventgrid/",
+      "target": "si_asset_subtype",
+      "set": "Event Grid",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-service-bus",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.servicebus/",
+      "target": "si_asset_subtype",
+      "set": "Service Bus",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-event-hubs",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.eventhub/",
+      "target": "si_asset_subtype",
+      "set": "Event Hubs",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-api-management",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.apimanagement/",
+      "target": "si_asset_subtype",
+      "set": "API Management",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-communication",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.communication/",
+      "target": "si_asset_subtype",
+      "set": "Communication service",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-recovery-vault",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.recoveryservices/vaults"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Recovery Services vault",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-backup-vault",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.dataprotection/backupvaults"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Backup vault",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-maintenance",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.maintenance/",
+      "target": "si_asset_subtype",
+      "set": "Maintenance configuration",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-schedule",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.devtestlab/schedules",
+      "target": "si_asset_subtype",
+      "set": "Schedule",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-automation",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.automation/",
+      "target": "si_asset_subtype",
+      "set": "Automation account",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-purview",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.purview/",
+      "target": "si_asset_subtype",
+      "set": "Purview account",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-code-signing",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.codesigning/",
+      "target": "si_asset_subtype",
+      "set": "Code signing account",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-security-automation",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.security/automations",
+      "target": "si_asset_subtype",
+      "set": "Security automation",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-sentinel",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": [
+        "microsoft.securityinsights/",
+        "microsoft.sentinelplatformservices/"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Sentinel",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-azure-user-assigned-identity",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "equals",
+      "values": [
+        "microsoft.managedidentity/userassignedidentities"
+      ],
+      "target": "si_asset_subtype",
+      "set": "User-assigned identity",
+      "priority": 400,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-domain-controller",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "domain_controller"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Domain controller",
+      "priority": 700,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-exchange",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "exchange"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Exchange",
+      "priority": 690,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-adfs",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "adfs"
+      ],
+      "target": "si_asset_subtype",
+      "set": "ADFS",
+      "priority": 690,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-certificate-authority",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "certificate_authority"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Certificate authority",
+      "priority": 690,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-entra-connect",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "entra_connect"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Entra Connect",
+      "priority": 690,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-role-web-server",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "web_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Web server",
+      "priority": 600,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-role-file-server",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "file_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "File server",
+      "priority": 600,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-role-dns-server",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "dns_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "DNS server",
+      "priority": 600,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-role-dhcp-server",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "dhcp_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "DHCP server",
+      "priority": 600,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "asset-subtype-entra-member",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "user"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Member",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-entra-guest",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "guest"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Guest",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-entra-application",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "service_principal"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Application",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-entra-managed-identity",
+      "source": "entra",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "managed_identity"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Managed identity",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-identity-group",
+      "source": "eg",
+      "field": "si_asset_type_source",
+      "match": "equals",
+      "values": [
+        "group"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Group",
+      "priority": 500,
+      "state": "enabled",
+      "when": {
+        "value": "identity",
+        "field": "si_class",
+        "op": "eq"
+      }
+    },
+    {
+      "id": "asset-subtype-device-switch",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Switch"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Switch",
+      "priority": 500,
+      "state": "enabled",
+      "note": "Defender / Exposure Graph device subtype."
+    },
+    {
+      "id": "asset-subtype-device-router",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Router"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Router",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-firewall",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Firewall"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Firewall",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-access-point",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "WLANAccessPoint",
+        "AccessPoint",
+        "WirelessAccessPoint"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Wireless access point",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-printer",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Printer"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Printer",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-multifunction-printer",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "AllInOne",
+        "MultifunctionPrinter"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Multifunction printer",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-smart-tv",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "SmartTV"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Smart TV",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-speaker",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Speaker",
+        "SmartSpeaker"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Speaker",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-streamer",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Streamer",
+        "MediaStreamer"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Media streamer",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-smart-home",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "SmartHome"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Smart home device",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-device-camera",
+      "source": "mde",
+      "field": "si_device_subtype",
+      "match": "in",
+      "values": [
+        "Camera",
+        "IPCamera",
+        "Surveillance"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Camera",
+      "priority": 500,
+      "state": "enabled"
+    },
+    {
+      "id": "asset-subtype-os-windows-server",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "windows_server"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Windows Server",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      },
+      "note": "The operating system family, when no role names the device (servers, workstations, mobiles only)."
+    },
+    {
+      "id": "asset-subtype-os-windows",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "windows"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Windows",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      }
+    },
+    {
+      "id": "asset-subtype-os-macos",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "macos"
+      ],
+      "target": "si_asset_subtype",
+      "set": "macOS",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      }
+    },
+    {
+      "id": "asset-subtype-os-linux",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "linux"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Linux",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      }
+    },
+    {
+      "id": "asset-subtype-os-ios",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "ios"
+      ],
+      "target": "si_asset_subtype",
+      "set": "iOS",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      }
+    },
+    {
+      "id": "asset-subtype-os-android",
+      "source": "mde",
+      "field": "si_os_platform",
+      "match": "equals",
+      "values": [
+        "android"
+      ],
+      "target": "si_asset_subtype",
+      "set": "Android",
+      "priority": 200,
+      "state": "enabled",
+      "when": {
+        "value": [
+          "Server",
+          "Workstation",
+          "Mobile"
+        ],
+        "field": "si_asset_type",
+        "op": "in"
+      }
+    },
+    {
+      "id": "component-asset-sql-subtype",
+      "field": "si_asset_subtype",
+      "match": "pattern",
+      "pattern": "*sql*",
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "note": "A SQL subtype gives the asset the SQL component (#562). PostgreSQL / MySQL count as SQL: they are SQL databases; a customer who wants them apart overrides this row."
+    },
+    {
+      "id": "component-asset-sql-azure",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.sql/servers",
+        "microsoft.sql/servers/databases",
+        "microsoft.sql/managedinstances",
+        "microsoft.sql/managedinstances/databases",
+        "microsoft.sqlvirtualmachine/sqlvirtualmachines",
+        "microsoft.dbforpostgresql/servers",
+        "microsoft.dbforpostgresql/flexibleservers",
+        "microsoft.dbformysql/servers",
+        "microsoft.dbformysql/flexibleservers",
+        "microsoft.dbformariadb/servers"
+      ],
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled"
+    },
+    {
+      "id": "component-asset-sql-azure-any",
+      "source": "azure",
+      "field": "si_azure_resource_type",
+      "match": "prefix",
+      "pattern": "microsoft.sql/",
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "note": "Every other Azure SQL resource (firewall rules, elastic pools, ...) is SQL too."
+    },
+    {
+      "id": "component-asset-sql-iaas",
+      "source": "azure",
+      "field": "si_sql_iaas",
+      "match": "equals",
+      "values": [
+        true
+      ],
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled"
+    },
+    {
+      "id": "component-asset-sql-software",
+      "source": "mde",
+      "field": "si_installed_software",
+      "match": "pattern",
+      "pattern": [
+        "microsoft/sql_server",
+        "microsoft/sql_server_2*",
+        "microsoft/sql_server_express*",
+        "microsoft/sql_server_20*"
+      ],
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "verify": true,
+      "note": "SQL Server installed (Defender software inventory, vendor/product). Management Studio and the ODBC / OLE DB drivers alone do not make an asset SQL."
+    },
+    {
+      "id": "component-asset-sql-role",
+      "source": "eg",
+      "field": "si_device_roles",
+      "match": "in",
+      "values": [
+        "sql_server"
+      ],
+      "target": "si_components",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-asset-os-device",
+      "field": "si_class",
+      "match": "equals",
+      "values": [
+        "device"
+      ],
+      "target": "si_components",
+      "set": "OS",
+      "priority": 900,
+      "state": "enabled",
+      "note": "Every device has an operating system."
+    },
+    {
+      "id": "component-asset-os-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": "*",
+      "target": "si_components",
+      "set": "OS",
+      "priority": 900,
+      "state": "enabled",
+      "note": "Every asset that reports an operating system (an Azure VM)."
+    },
+    {
+      "id": "component-asset-network",
+      "field": "si_asset_type",
+      "match": "in",
+      "values": [
+        "Network device",
+        "Network",
+        "Public IP"
+      ],
+      "target": "si_components",
+      "set": "Network",
+      "priority": 800,
+      "state": "enabled"
+    },
+    {
+      "id": "component-asset-browser",
+      "source": "mde",
+      "field": "si_installed_software",
+      "match": "pattern",
+      "pattern": [
+        "google/chrome*",
+        "microsoft/edge*",
+        "mozilla/firefox*",
+        "apple/safari*",
+        "opera/opera*",
+        "brave/brave*"
+      ],
+      "target": "si_components",
+      "set": "Browser",
+      "priority": 700,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-asset-office",
+      "source": "mde",
+      "field": "si_installed_software",
+      "match": "pattern",
+      "pattern": [
+        "microsoft/office*",
+        "microsoft/365_apps*",
+        "microsoft/microsoft_365_apps*",
+        "microsoft/outlook*",
+        "microsoft/visio*",
+        "microsoft/project*"
+      ],
+      "target": "si_components",
+      "set": "Office",
+      "priority": 700,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-asset-application",
+      "field": "si_asset_type",
+      "match": "in",
+      "values": [
+        "Web app",
+        "Container"
+      ],
+      "target": "si_components",
+      "set": "Application",
+      "priority": 600,
+      "state": "enabled"
+    },
+    {
+      "id": "component-finding-sql-product",
+      "source": "mde",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": [
+        "*sql_server*",
+        "*sql server*",
+        "sqlserver*",
+        "*ssms*",
+        "*msodbcsql*",
+        "*msoledbsql*",
+        "*sqlncli*",
+        "*reporting_services*",
+        "*analysis_services*",
+        "*integration_services*"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "verify": true,
+      "note": "Defender vulnerability management SoftwareName (and Exposure Graph / Shodan product names): SQL Server, Management Studio, Native Client, ODBC / OLE DB drivers, Reporting / Analysis / Integration Services."
+    },
+    {
+      "id": "component-finding-sql-cpe",
+      "field": "si_affected_cpe",
+      "match": "pattern",
+      "pattern": [
+        "cpe:2.3:a:microsoft:*sql*",
+        "cpe:/a:microsoft:*sql*"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 1000,
+      "state": "enabled",
+      "verify": true,
+      "note": "A CPE naming a Microsoft SQL product (cpe:2.3:a:microsoft:sql_server...)."
+    },
+    {
+      "id": "component-finding-hardware-product",
+      "source": "mde",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": [
+        "*firmware*",
+        "*bios*",
+        "*uefi*",
+        "*microcode*",
+        "*management_engine*",
+        "*tpm*",
+        "*thunderbolt*",
+        "*idrac*"
+      ],
+      "target": "si_component",
+      "set": "Hardware",
+      "priority": 950,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-browser-product",
+      "source": "mde",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": [
+        "chrome*",
+        "*chromium*",
+        "edge",
+        "edge_chromium*",
+        "firefox*",
+        "safari*",
+        "internet_explorer*",
+        "opera*",
+        "brave*"
+      ],
+      "target": "si_component",
+      "set": "Browser",
+      "priority": 940,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-office-product",
+      "source": "mde",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": [
+        "office*",
+        "*365_apps*",
+        "outlook*",
+        "word*",
+        "excel*",
+        "powerpoint*",
+        "visio*",
+        "project*",
+        "onenote*",
+        "access*",
+        "publisher*"
+      ],
+      "target": "si_component",
+      "set": "Office",
+      "priority": 930,
+      "state": "enabled",
+      "when": {
+        "value": "microsoft",
+        "field": "si_affected_vendor",
+        "op": "eq"
+      },
+      "verify": true,
+      "note": "Microsoft Office / Microsoft 365 Apps products (vendor microsoft)."
+    },
+    {
+      "id": "component-finding-os-product",
+      "source": "mde",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": [
+        "windows",
+        "windows_*",
+        "linux",
+        "linux_kernel*",
+        "kernel",
+        "macos*",
+        "mac_os_x*",
+        "ios",
+        "ipados",
+        "android",
+        "ubuntu*",
+        "debian*",
+        "rhel*",
+        "red_hat_enterprise_linux*",
+        "centos*",
+        "suse*",
+        "oracle_linux*",
+        "amazon_linux*"
+      ],
+      "target": "si_component",
+      "set": "OS",
+      "priority": 900,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-sql-category",
+      "field": "si_category",
+      "match": "pattern",
+      "pattern": [
+        "sql",
+        "sql *",
+        "* sql",
+        "* sql *",
+        "*sql server*",
+        "*sql database*",
+        "*sql managed instance*",
+        "*defender for sql*",
+        "*sql servers*",
+        "*sql databases*"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 800,
+      "state": "enabled",
+      "verify": true,
+      "note": "A recommendation whose category is SQL (Defender configuration ConfigurationCategory, Defender for Cloud category, Defender for SQL)."
+    },
+    {
+      "id": "component-finding-sql-subcategory",
+      "field": "si_subcategory",
+      "match": "pattern",
+      "pattern": [
+        "sql",
+        "sql *",
+        "* sql",
+        "* sql *",
+        "*sql server*",
+        "*sql database*",
+        "*sql managed instance*",
+        "*defender for sql*",
+        "*sql servers*",
+        "*sql databases*"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 800,
+      "state": "enabled",
+      "verify": true,
+      "note": "A recommendation whose subcategory is SQL (Defender configuration ConfigurationSubcategory, Defender for Cloud security issue)."
+    },
+    {
+      "id": "component-finding-sql-title",
+      "field": "si_title",
+      "match": "pattern",
+      "pattern": [
+        "sql",
+        "sql *",
+        "* sql",
+        "* sql *",
+        "*sql server*",
+        "*sql database*",
+        "*sql managed instance*",
+        "*defender for sql*",
+        "*sql servers*",
+        "*sql databases*"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 700,
+      "state": "enabled",
+      "verify": true,
+      "note": "A recommendation whose name is about SQL (e.g. Defender for Cloud \"SQL servers should have an Azure Active Directory administrator provisioned\")."
+    },
+    {
+      "id": "component-finding-sql-resource",
+      "source": "mdc",
+      "field": "si_azure_resource_type",
+      "match": "in",
+      "values": [
+        "microsoft.sql/servers",
+        "microsoft.sql/servers/databases",
+        "microsoft.sql/managedinstances",
+        "microsoft.sql/managedinstances/databases",
+        "microsoft.sqlvirtualmachine/sqlvirtualmachines",
+        "microsoft.dbforpostgresql/servers",
+        "microsoft.dbforpostgresql/flexibleservers",
+        "microsoft.dbformysql/servers",
+        "microsoft.dbformysql/flexibleservers",
+        "microsoft.dbformariadb/servers"
+      ],
+      "target": "si_component",
+      "set": "SQL",
+      "priority": 650,
+      "state": "enabled",
+      "note": "A finding on an Azure SQL resource concerns SQL. A VM with SQL Server installed is NOT here: its OS findings stay OS."
+    },
+    {
+      "id": "component-finding-hardware-category",
+      "field": "si_category",
+      "match": "pattern",
+      "pattern": [
+        "*firmware*",
+        "*hardware*",
+        "*bios*"
+      ],
+      "target": "si_component",
+      "set": "Hardware",
+      "priority": 600,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-os-category",
+      "source": "mde",
+      "field": "si_category",
+      "match": "in",
+      "values": [
+        "OS",
+        "Operating system",
+        "Operating systems"
+      ],
+      "target": "si_component",
+      "set": "OS",
+      "priority": 500,
+      "state": "enabled",
+      "verify": true,
+      "note": "Defender configuration ConfigurationCategory OS."
+    },
+    {
+      "id": "component-finding-network-category",
+      "field": "si_category",
+      "match": "in",
+      "values": [
+        "Network",
+        "Networking",
+        "Network security"
+      ],
+      "target": "si_component",
+      "set": "Network",
+      "priority": 500,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-application-category",
+      "source": "mde",
+      "field": "si_category",
+      "match": "in",
+      "values": [
+        "Application",
+        "Applications"
+      ],
+      "target": "si_component",
+      "set": "Application",
+      "priority": 500,
+      "state": "enabled",
+      "verify": true
+    },
+    {
+      "id": "component-finding-network-public-ip",
+      "source": "shodan",
+      "field": "si_security_domain",
+      "match": "equals",
+      "values": [
+        "PublicIp"
+      ],
+      "target": "si_component",
+      "set": "Network",
+      "priority": 450,
+      "state": "enabled",
+      "note": "A finding on a public IP (open ports, exposed services)."
+    },
+    {
+      "id": "component-finding-any-product",
+      "field": "si_affected_product",
+      "match": "pattern",
+      "pattern": "*",
+      "target": "si_component",
+      "set": "Application",
+      "priority": 100,
+      "state": "enabled",
+      "note": "Any other affected software."
+    },
+    {
+      "id": "servicenow-subci-component-os",
+      "field": "si_component",
+      "match": "equals",
+      "values": [
+        "OS"
+      ],
+      "target": "si_servicenow_subci",
+      "set": "OS",
+      "priority": 100,
+      "state": "enabled",
+      "note": "#772 the ServiceNow sub-CI: an OS finding goes under the CI's OS sub-CI. Evaluated after si_component (the targets' order), so it reads the finding's own component."
+    },
+    {
+      "id": "servicenow-subci-component-sql",
+      "field": "si_component",
+      "match": "equals",
+      "values": [
+        "SQL"
+      ],
+      "target": "si_servicenow_subci",
+      "set": "SQL",
+      "priority": 100,
+      "state": "enabled",
+      "note": "#772 the ServiceNow sub-CI: a SQL finding goes under the CI's SQL sub-CI. Every other component goes to the fallback bucket (the dimension's default, Other)."
+    },
+    {
+      "id": "patch-cycle-no-fix",
+      "field": "si_patch_fix",
+      "match": "equals",
+      "values": [
+        "none"
+      ],
+      "target": "si_patch_cycle",
+      "set": "No fix available",
+      "priority": 300,
+      "state": "enabled",
+      "note": "#772 the source says no fix exists (si_fix_available false, or a fix text such as No fix). #906: also a finding that names no recommended update (no update name, no update id) and has no date to age it by (no fix release, no first-seen) -- no single update, the same rule as the key figures; Unknown is left only for an update whose month cannot be read."
+    },
+    {
+      "id": "patch-cycle-catch-up",
+      "field": "si_patch_age",
+      "match": "equals",
+      "values": [
+        "over"
+      ],
+      "target": "si_patch_cycle",
+      "set": "Catch-up (older than 1 month)",
+      "priority": 200,
+      "state": "enabled",
+      "note": "#772 the fix was released (or, without one dated update, the finding was first detected) longer than SI_PatchCycle_CatchUpDays (default 30) before the collection."
+    },
+    {
+      "id": "patch-cycle-monthly",
+      "field": "si_patch_age",
+      "match": "equals",
+      "values": [
+        "within"
+      ],
+      "target": "si_patch_cycle",
+      "set": "In monthly cycle",
+      "priority": 200,
+      "state": "enabled",
+      "note": "#772 within SI_PatchCycle_CatchUpDays of the collection (exactly the threshold included): fixed in the monthly cycle."
+    },
+    {
+      "id": "os-family-network-device",
+      "field": "si_device_category",
+      "match": "in",
+      "values": [
+        "NetworkDevice",
+        "Network device",
+        "Network Device"
+      ],
+      "target": "si_os_family",
+      "set": "Network OS",
+      "priority": 9000,
+      "state": "enabled",
+      "note": "#772 a network device (Defender device category) runs a network OS."
+    },
+    {
+      "id": "os-family-network-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "*Cisco IOS*",
+        "IOS XE*",
+        "IOS-XE*",
+        "*IOS XR*",
+        "*IOS-XR*",
+        "*NX-OS*",
+        "NXOS*",
+        "*FortiOS*",
+        "*PAN-OS*",
+        "PANOS*",
+        "*JunOS*",
+        "*ArubaOS*",
+        "*RouterOS*",
+        "*Arista EOS*",
+        "*Comware*",
+        "*ExtremeXOS*"
+      ],
+      "target": "si_os_family",
+      "set": "Network OS",
+      "priority": 8990,
+      "state": "enabled",
+      "note": "#772 the Network OS OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-network-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "*Cisco IOS*",
+        "IOS XE*",
+        "IOS-XE*",
+        "*IOS XR*",
+        "*IOS-XR*",
+        "*NX-OS*",
+        "NXOS*",
+        "*FortiOS*",
+        "*PAN-OS*",
+        "PANOS*",
+        "*JunOS*",
+        "*ArubaOS*",
+        "*RouterOS*",
+        "*Arista EOS*",
+        "*Comware*",
+        "*ExtremeXOS*"
+      ],
+      "target": "si_os_family",
+      "set": "Network OS",
+      "priority": 8980,
+      "state": "enabled",
+      "note": "#772 the Network OS OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-windows-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "*Windows*",
+        "Win1*",
+        "Win7*",
+        "Win8*",
+        "WinServer*"
+      ],
+      "target": "si_os_family",
+      "set": "Windows",
+      "priority": 8970,
+      "state": "enabled",
+      "note": "#772 the Windows OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-windows-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "*Windows*",
+        "Win1*",
+        "Win7*",
+        "Win8*",
+        "WinServer*"
+      ],
+      "target": "si_os_family",
+      "set": "Windows",
+      "priority": 8960,
+      "state": "enabled",
+      "note": "#772 the Windows OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-macos-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "*macOS*",
+        "*Mac OS*",
+        "*MacOSX*",
+        "*OS X*"
+      ],
+      "target": "si_os_family",
+      "set": "macOS",
+      "priority": 8950,
+      "state": "enabled",
+      "note": "#772 the macOS OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-macos-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "*macOS*",
+        "*Mac OS*",
+        "*MacOSX*",
+        "*OS X*"
+      ],
+      "target": "si_os_family",
+      "set": "macOS",
+      "priority": 8940,
+      "state": "enabled",
+      "note": "#772 the macOS OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-ios-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "iOS*",
+        "iPadOS*",
+        "*iPadOS*",
+        "iPhone*",
+        "iPad*"
+      ],
+      "target": "si_os_family",
+      "set": "iOS",
+      "priority": 8930,
+      "state": "enabled",
+      "note": "#772 the iOS OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-ios-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "iOS*",
+        "iPadOS*",
+        "*iPadOS*",
+        "iPhone*",
+        "iPad*"
+      ],
+      "target": "si_os_family",
+      "set": "iOS",
+      "priority": 8920,
+      "state": "enabled",
+      "note": "#772 the iOS OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-android-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "*Android*"
+      ],
+      "target": "si_os_family",
+      "set": "Android",
+      "priority": 8910,
+      "state": "enabled",
+      "note": "#772 the Android OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-android-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "*Android*"
+      ],
+      "target": "si_os_family",
+      "set": "Android",
+      "priority": 8900,
+      "state": "enabled",
+      "note": "#772 the Android OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-linux-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "*Linux*",
+        "*Ubuntu*",
+        "*RHEL*",
+        "*Red Hat*",
+        "*RedHat*",
+        "*Debian*",
+        "*CentOS*",
+        "*SUSE*",
+        "*SLES*",
+        "*Fedora*",
+        "*Rocky*",
+        "*AlmaLinux*",
+        "*Raspbian*",
+        "*Kali*",
+        "*Mariner*"
+      ],
+      "target": "si_os_family",
+      "set": "Linux",
+      "priority": 8890,
+      "state": "enabled",
+      "note": "#772 the Linux OS family by the OS platform the sources give."
+    },
+    {
+      "id": "os-family-linux-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "*Linux*",
+        "*Ubuntu*",
+        "*RHEL*",
+        "*Red Hat*",
+        "*RedHat*",
+        "*Debian*",
+        "*CentOS*",
+        "*SUSE*",
+        "*SLES*",
+        "*Fedora*",
+        "*Rocky*",
+        "*AlmaLinux*",
+        "*Raspbian*",
+        "*Kali*",
+        "*Mariner*"
+      ],
+      "target": "si_os_family",
+      "set": "Linux",
+      "priority": 8880,
+      "state": "enabled",
+      "note": "#772 the Linux OS family by the OS name the sources give."
+    },
+    {
+      "id": "os-family-unknown-platform",
+      "field": "si_os_platform",
+      "match": "in",
+      "values": [
+        "Unknown",
+        "n/a",
+        "na",
+        "none",
+        "-",
+        "null",
+        "Other"
+      ],
+      "target": "si_os_family",
+      "set": "Unknown",
+      "priority": 8870,
+      "state": "enabled",
+      "note": "#772 a source that says it does not know the OS (Unknown, n/a, Other) is not a known OS -- Unknown, never Other."
+    },
+    {
+      "id": "os-family-unknown-name",
+      "field": "si_os_name",
+      "match": "in",
+      "values": [
+        "Unknown",
+        "n/a",
+        "na",
+        "none",
+        "-",
+        "null",
+        "Other"
+      ],
+      "target": "si_os_family",
+      "set": "Unknown",
+      "priority": 8860,
+      "state": "enabled",
+      "note": "#772 a source that says it does not know the OS (Unknown, n/a, Other) is not a known OS -- Unknown, never Other."
+    },
+    {
+      "id": "os-family-other-platform",
+      "field": "si_os_platform",
+      "match": "pattern",
+      "pattern": [
+        "?*"
+      ],
+      "target": "si_os_family",
+      "set": "Other",
+      "priority": 8850,
+      "state": "enabled",
+      "note": "#772 any other OS a source names: Other (no OS at all: Unknown, the fallback)."
+    },
+    {
+      "id": "os-family-other-name",
+      "field": "si_os_name",
+      "match": "pattern",
+      "pattern": [
+        "?*"
+      ],
+      "target": "si_os_family",
+      "set": "Other",
+      "priority": 8840,
+      "state": "enabled",
+      "note": "#772 any other OS a source names: Other (no OS at all: Unknown, the fallback)."
+    }
+  ]
+}

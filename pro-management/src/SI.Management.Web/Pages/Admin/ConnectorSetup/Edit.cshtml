@@ -1,0 +1,132 @@
+@page
+@model SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel
+@{
+    ViewData["Title"] = "Connector " + Model.Name;
+}
+<p><a href="/Admin/ConnectorSetup">&larr; Connectors</a></p>
+<h1 class="name">Connector @Model.Name</h1>
+@if (Model.NameProblem is not null)
+{
+    <div class="notice error" role="alert">@Model.NameProblem</div>
+}
+else
+{
+    <p class="lede" data-utc>@(Model.Current is null ? "Not in the database yet. The definition below is a starting point -- it starts disabled and in whatif." : $"Last changed by {Model.Current.UpdatedBy}, {Fmt.When(Model.Current.UpdatedAt)}.")</p>
+    @if (Model.Checked && Model.Problems.Count == 0) { <div class="notice ok" role="status">The close-loop would accept this connector.</div> }
+    @if (Model.Problems.Count > 0)
+    {
+        <div class="notice error" role="alert"><strong>Not accepted:</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+    }
+    <form method="post" class="stack">
+        <input type="hidden" name="Name" value="@Model.Name" />
+        <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+        <div class="filterbar">
+            <div>
+                <label for="kind">Kind</label>
+                <select id="kind" name="Kind">
+                    @foreach (var k in SI.Management.Web.Changes.ConnectorRepository.Kinds) { <option value="@k" selected="@(k == Model.Kind)">@k</option> }
+                </select>
+            </div>
+            <div>
+                <label for="direction">Direction</label>
+                <select id="direction" name="Direction">
+                    @foreach (var d in SI.Management.Web.Changes.ConnectorRepository.Directions) { <option value="@d" selected="@(d == Model.Direction)">@d</option> }
+                </select>
+            </div>
+            <div>
+                <label for="mode">Mode</label>
+                <select id="mode" name="Mode">
+                    @if (!SI.Management.Web.Changes.ConnectorRepository.IsOwnSqlTarget(Model.Kind, Model.Direction) && !Model.IsDataOut)
+                    {
+                        <option value="whatif" selected="@(Model.Mode == "whatif")">whatif -- plan and log, send nothing</option>
+                    }
+                    <option value="apply" selected="@(Model.Mode == "apply" || SI.Management.Web.Changes.ConnectorRepository.IsOwnSqlTarget(Model.Kind, Model.Direction) || Model.IsDataOut)">apply -- send</option>
+                </select>
+            </div>
+        </div>
+        @if (SI.Management.Web.Changes.ConnectorRepository.IsOwnSqlTarget(Model.Kind, Model.Direction))
+        {
+            <p class="notice attn" id="own-sql-always-on" data-own-sql-always-on>@(SI.Management.Web.Changes.ConnectorRepository.OwnSqlTargetNote + (Model.Current is { Mode: "whatif" } ? " It is in test mode now -- it records nothing until you save it (it saves as apply)." : ""))</p>
+        }
+        @if (Model.IsDataOut)
+        {
+            <p class="notice attn" data-data-out-note>The ServiceNow data-out connector: switched on, it SENDS both ServiceNow outputs (the CIs and the vulnerable items, each to its own Import Set table) to this instance -- there is no test mode. Only one data-out connector can be switched on; the vulnerability close-loop never runs it. To look first, export the rows below.</p>
+        }
+        <fieldset>
+            <legend>Allowed</legend>
+            <label><input type="checkbox" name="Enabled" value="true" checked="@Model.Enabled" /> @(Model.IsDataOut ? "Enabled -- the ServiceNow data out sends through this connector" : "Enabled -- the close-loop runs this connector")</label>
+            <label><input type="checkbox" name="AllowCreate" value="true" checked="@Model.AllowCreate" /> Create (and reopen) items</label>
+            <label><input type="checkbox" name="AllowClose" value="true" checked="@Model.AllowClose" /> Close items</label>
+        </fieldset>
+        <div>
+            <label for="settings">Settings (JSON, no secrets)</label>
+            <textarea id="settings" name="SettingsJson" rows="6" spellcheck="false" class="mono">@Model.SettingsJson</textarea>
+            <p class="hint">sql: <code>server</code>, <code>database</code> (both directions; cmdb also takes <code>changeGuardPercent</code>, default 10, and <code>keepBatches</code>, default 3) · servicenow: <code>table</code> (and optionally <code>instance</code>, <code>reasonField</code>) · rest: any values the mapping uses as <code>{{settings.&lt;name&gt;}}</code>.</p>
+            <p class="hint" id="sql-cmdb-hint">sql + cmdb: @SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel.SqlCmdbExplanation <a href="#servicenow-side">How to set up the ServiceNow side</a> · <a href="#servicenow-samples">Sample data for your ServiceNow team</a>.</p>
+            <details class="help" id="servicenow-side">
+                <summary>The ServiceNow side of a sql + cmdb connector (done by your ServiceNow team; SecurityInsight writes nothing in ServiceNow)</summary>
+                <ol>
+                    @foreach (var step in SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel.SqlCmdbServiceNowSteps) { <li>@step</li> }
+                </ol>
+            </details>
+        </div>
+        <div>
+            <label for="refs">Secret references (JSON: name &rarr; Key Vault secret NAME)</label>
+            <textarea id="refs" name="SecretRefsJson" rows="5" spellcheck="false" class="mono">@Model.SecretRefsJson</textarea>
+            <p class="hint">Only the <strong>names</strong> of secrets in the install's Key Vault -- never a password, token or key. The job reads them at run time with its own identity. A value that looks like a secret is refused.</p>
+        </div>
+        <div>
+            <label for="mapping">Mapping (JSON, rest connectors)</label>
+            <textarea id="mapping" name="MappingJson" rows="18" spellcheck="false" class="mono">@Model.MappingJson</textarea>
+            <p class="hint">auth (none, bearer, basic, oauth-client-credentials, apikey-header -- secrets as <code>secretRef</code> / <code>passwordRef</code> / <code>clientSecretRef</code>), and per operation (listOpen, create, update, close, reopen): method, url, body, idPath, successCodes. Fields: @string.Join(", ", SI.Management.Web.Changes.ConnectorRepository.Tokens.Select(t => "{{" + t + "}}")).</p>
+        </div>
+        <div><label for="reason">Reason (audited)</label><input id="reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" /></div>
+        <div class="actions">
+            <button type="submit" asp-page-handler="Check" class="secondary">Check</button>
+            <button type="submit" asp-page-handler="Stage">Stage change</button>
+            @if (Model.Current is not null)
+            {
+                <button type="submit" asp-page-handler="Remove" class="secondary">Stage removal</button>
+            }
+        </div>
+        <p class="hint">Nothing is written here. A staged change is written on <a href="/Changes">Review &amp; commit</a> and takes effect from the next close-loop run.</p>
+    </form>
+
+    @if (Model.IsSnow)
+    {
+        <partial name="_ServiceNowGuide" model="Model" />
+    }
+
+    @if (Model.ShowServiceNowSamples)
+    {
+        <partial name="_ServiceNowSamples" model="Model" />
+    }
+
+    <section class="card" aria-labelledby="h-runs">
+        <h2 id="h-runs">Last runs</h2>
+        @if (Model.Runs.Count == 0) { <p class="hint">This connector has not run yet.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Started</th><th>Mode</th><th>Outcome</th><th class="num">Planned open / close</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Reopened</th><th class="num">Errors</th><th>Why</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in Model.Runs)
+                        {
+                            <tr>
+                                <td>@Fmt.Time(r.StartedAt)</td><td>@r.Mode</td>
+                                <td><span class="@(r.Outcome is "success" or "whatif" ? "state ok" : "state bad")">@r.Outcome</span></td>
+                                <td class="num">@Fmt.Int(r.PlanOpen) / @Fmt.Int(r.PlanClose)</td><td class="num">@Fmt.Int(r.Opened)</td><td class="num">@Fmt.Int(r.Closed)</td>
+                                <td class="num">@Fmt.Int(r.Reopened)</td><td class="num">@Fmt.Int(r.Errors)</td><td class="wrap">@(r.HaltReason ?? r.Error)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+    @if (Model.Current is not null)
+    {
+        <p class="hint"><a href="/Admin/History?name=@Uri.EscapeDataString("connector/" + Model.Name)">Change history of this connector</a></p>
+    }
+}

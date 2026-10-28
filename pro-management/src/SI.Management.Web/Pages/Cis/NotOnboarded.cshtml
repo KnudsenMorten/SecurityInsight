@@ -1,0 +1,86 @@
+@page
+@model SI.Management.Web.Pages.Cis.NotOnboardedModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Cis
+@{
+    ViewData["Title"] = "Active devices not onboarded in Defender";
+    var d = Model.Data;
+}
+<div class="split"><h1>Active devices not onboarded in Defender</h1></div>
+<p class="lede">Active devices Defender for Endpoint found on your network but that do not run it, and Azure machines Defender for Cloud lists without the Defender agent. They are real devices that are not protected, so they count as assets -- but only while they are active. Defender has no vulnerability data for them: a device here with 0 missing patches is <strong>not measured</strong>, not patched.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-not-onboarded-error>@Model.Error</div> }
+else
+{
+    <partial name="~/Pages/Shared/_ViewScope.cshtml" model="Model.Scope" />
+}
+@if (d is { Ready: false })
+{
+    <div class="notice" role="status" data-not-loaded>@IndexModel.NotLoadedText</div>
+}
+@if (d is { Ready: true })
+{
+    <section class="card" aria-labelledby="h-status" data-not-onboarded-counts>
+        <h2 id="h-status">By status</h2>
+        <div class="table-wrap">
+            <table class="grid" data-sortable>
+                <thead><tr><th scope="col">Status</th><th scope="col" class="num">Devices</th><th scope="col">What it means</th><th scope="col"></th></tr></thead>
+                <tbody>
+                    @foreach (var s in NotOnboarded.Statuses)
+                    {
+                        var n = d.Of(s.Value);
+                        <tr data-status="@s.Value" data-actionable="@(s.Actionable ? "1" : "0")">
+                            <td>@if (n > 0) { <a href="@Model.Link(status: s.Value)">@s.Label</a> } else { @s.Label }@if (s.Actionable) { <text> </text><span class="badge warn">actionable</span> }</td>
+                            <td class="num" data-count="@n">@Fmt.Int(n)</td>
+                            <td class="wrap">@s.Meaning</td>
+                            <td>@if (n > 0 && NotOnboardedModel.CiListLink(s.Value) is { } list) { <a href="@list" data-ci-list-link>Open in the CI list</a> }</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot><tr><th scope="row">Every status</th><td class="num" data-count-all="@d.Devices">@Fmt.Int(d.Devices)</td><td colspan="2">@if (d.Status is not null) { <a href="@Model.Link(allStatuses: true)">Show every status</a> }</td></tr></tfoot>
+            </table>
+        </div>
+    </section>
+
+    <h2 id="nob-h" data-not-onboarded-total="@d.Total">@Fmt.Int(d.Total) device@(d.Total == 1 ? "" : "s")@(d.Status is { } st ? " -- " + NotOnboarded.Of(st).Label.ToLowerInvariant() : "")</h2>
+    @if (d.Rows.Count == 0)
+    {
+        <p data-not-onboarded-none>No active device is waiting to be onboarded@(d.Status is null ? "" : " in this status").</p>
+    }
+    else
+    {
+        var pages = (int)Math.Max(1, (d.Total + d.Size - 1) / d.Size);
+        // the pager and the rows per page in the shared grid toolbar, above the table (GridToolbarStructureTests)
+        var toolbar = new SI.Management.Web.Pages.GridToolbar
+        {
+            Id = "nob-tools", Total = d.Total, Skip = (long)(d.Page - 1) * d.Size, Count = d.Rows.Count, Noun = "device(s)", Page = d.Page, Pages = pages,
+            PageLink = n => Model.Link(page: n), Size = d.Size, SizeLink = n => Model.Link(size: n),
+        };
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+        <div class="table-wrap">
+            <table class="grid" data-grid="notonboarded" aria-labelledby="nob-h" data-sortable>
+                <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">IP address</th><th scope="col">MAC address</th><th scope="col">OS</th><th scope="col">First seen</th><th scope="col">Last seen</th><th scope="col">Source</th></tr></thead>
+                <tbody>
+                    @foreach (var r in d.Rows)
+                    {
+                        var noName = r.NameFallback;
+                        <tr data-ci="@r.CiId" data-status="@r.Status">
+                            <td class="wrap">
+                                <a href="/Cis/Detail?id=@Uri.EscapeDataString(r.CiId)">@if (noName is not null) { <span class="@CiDisplayName.CssClass" title="@noName.Title" data-name-fallback="@noName.Kind">@noName.Value</span> <span class="hint">@noName.Hint</span> } else { @r.Name }</a>
+                            </td>
+                            <td>@NotOnboarded.Of(r.Status).Label</td>
+                            <td class="mono">@r.Ip</td>
+                            <td class="mono wrap">@string.Join(", ", r.MacAddresses.Take(3))</td>
+                            <td class="wrap">@(r.OsName ?? r.OsPlatform)</td>
+                            <td data-value="@LocalTime.Iso(r.FirstSeen)">@Fmt.Time(r.FirstSeen, "date")</td>
+                            <td data-value="@LocalTime.Iso(r.LastSeen)">@Fmt.Time(r.LastSeen)</td>
+                            <td class="wrap">@string.Join("; ", r.Sources)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    }
+    <p class="hint">Every number and rule behind this view is on <nav-ref page="/Admin/Settings/Assumptions" />: what counts as an asset, the seen window and how to exclude a device by tag.</p>
+}
+@if (Model.Query is { } q) { <partial name="_Query" model="q" /> }

@@ -1,0 +1,28 @@
+@page
+@model SI.Management.Web.Pages.Actions.ApplyModel
+@using SI.Management.Web.Actions
+@{
+    ViewData["Title"] = Model.Action?.Label ?? "Actions on findings";
+}
+<h1>@(Model.Action?.Label ?? "Actions on findings")</h1>
+@if (Model.Action is not null) { <p class="lede">@Model.Action.Hint</p> }
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-action-error>@Model.Error</div> }
+@if (Model.Message is not null) { <div class="notice" role="status" data-action-message>@Model.Message</div> }
+
+@if (Model.Results.Count > 0)
+{
+    <section class="card" aria-labelledby="h-res">
+        <h2 id="h-res"><span data-action-done>@Fmt.Int(Model.Results.Count(r => r.Done))</span> done · <span data-action-refused>@Fmt.Int(Model.Results.Count(r => !r.Done))</span> refused</h2>
+        <div class="table-wrap">
+            <table class="findings" data-sortable data-action-results-table>
+                <thead><tr><th scope="col">Asset</th><th scope="col">Finding</th><th scope="col">Result</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.Results)
+                    {
+                        <tr data-finding="@r.FindingId" data-done="@(r.Done ? "1" : "0")"><td class="wrap">@r.AssetName</td><td class="wrap">@(r.Title ?? r.FindingId)</td><td class="wrap">@(r.Done ? "done" : "refused") @(r.Why is null ? "" : "-- " + r.Why)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}

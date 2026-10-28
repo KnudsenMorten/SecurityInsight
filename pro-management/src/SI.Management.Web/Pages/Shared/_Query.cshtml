@@ -1,0 +1,5 @@
+@model QueryInfo
+@* Renders NOTHING here: it records the query for the page. The layout lists every query the page ran ONCE, at the
+   bottom, in one "The query behind this" disclosure, each labelled with the section it feeds (PageQueries).
+   Label: QueryInfo.Label, else ViewData["QueryLabel"], else the page title. *@
+@{ PageQueries.For(Context).Add(Model, ViewData["QueryLabel"] as string ?? ViewData["Title"] as string); }

@@ -1,0 +1,50 @@
+@page
+@model SI.Management.Web.Pages.Exemptions.IndexModel
+@using SI.Management.Web.Exemptions
+@{
+    ViewData["Title"] = "Exemptions";
+    string Label(string v) => v switch
+    {
+        "decide" => "Waiting for my decision", "mine" => "My requests", "requests" => "All requests", "active" => "Active", "expiring" => "Expiring soon",
+        "expired" => "Expired", "overdue" => "Review overdue", "ended" => "Ended", _ => "All exemptions",
+    };
+    string Link(string v) => "/Exemptions?view=" + v + (Model.Dom is null ? "" : "&dom=" + Uri.EscapeDataString(Model.Dom));
+}
+<h1>Exemptions</h1>
+<p class="lede">An exemption is requested, then approved or rejected by the owners of its category (or of its security domain), and reviewed every month; only an approved one applies.</p>
+<details class="help">
+    <summary>How exemptions work</summary>
+    <p>Request one from <nav-ref page="/Collection/Rows" /> or another collection view: select rows, or take every row matching the filter, and give a reason and a period (3 months, 6 months, 1 year or a custom end date). The most specific owners get a mail and decide on this page -- a Category Owner for a finding in their category, else the Domain Owners (a Domain Owner may always decide too; one approval is enough); the requester gets the decision. Owners at both levels get one review mail each month for everything they own, and an expiry warning; an exemption nobody reviewed for @Model.Settings.ReviewOverdueDays days is flagged <span class="badge warn">review overdue</span>. Owners are set on <nav-ref page="/Admin/DomainRoles" />.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+<div class="tiles">
+    <a class="tile" href="@Link("decide")"><div class="label">Waiting for my decision</div><div class="value" data-count="decide">@Fmt.Int(Model.ToDecide.Count)</div></a>
+    <a class="tile" href="@Link("mine")"><div class="label">My requests</div><div class="value" data-count="mine">@Fmt.Int(Model.Mine.Count)</div></a>
+    <a class="tile" href="@Link("active")"><div class="label">Active</div><div class="value" data-count="active">@Fmt.Int(Model.Active)</div></a>
+    <a class="tile" href="@Link("expiring")"><div class="label">Expiring within @Math.Max(Model.Settings.ExpiryWarningDays, 1) days</div><div class="value" data-count="expiring">@Fmt.Int(Model.Expiring)</div></a>
+    <a class="tile" href="@Link("expired")"><div class="label">Expired</div><div class="value" data-count="expired">@Fmt.Int(Model.Expired)</div></a>
+    <a class="tile" href="@Link("overdue")"><div class="label">Review overdue</div><div class="value" data-count="overdue">@Fmt.Int(Model.Overdue)</div></a>
+</div>
+
+<nav class="tabs" aria-label="Exemption views">
+    @foreach (var v in SI.Management.Web.Pages.Exemptions.IndexModel.Views) { <a href="@Link(v)" aria-current="@(v == Model.Current ? "page" : "false")">@Label(v)</a> }
+    @if (Model.MayReviewAny) { <a class="button small" href="/Exemptions/Review@(Model.Dom is null ? "" : "?domain=" + Uri.EscapeDataString(Model.Dom))">Review what I own</a> }
+</nav>
+
+@* #589: the list is the shared data table -- every column (the CI, its identifiers, what was exempted and its context),
+   the chooser, the all-rows exports with the chosen columns, Export all columns *@
+@if (Model.ShowsRequests)
+{
+    <section class="card" aria-labelledby="h-req">
+        <h2 id="h-req">@Label(Model.Current) (@Fmt.Int(Model.ShownRequests.Count))</h2>
+        @if (Model.TableView("requests") is { } rv) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="rv" /> }
+    </section>
+}
+else
+{
+    <section class="card" aria-labelledby="h-ex">
+        <h2 id="h-ex">@Label(Model.Current) (@Fmt.Int(Model.ShownExemptions.Count))</h2>
+        @if (Model.TableView("exemptions") is { } ev) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="ev" /> }
+    </section>
+}

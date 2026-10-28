@@ -1,0 +1,75 @@
+@*
+    The chat panel: an "Ask about this page" button that opens the chat beside the page, already knowing what is on
+    screen. ONE partial. _Layout includes it for every Security posture and Management view listed below; any other
+    view gets it by including it itself:  <partial name="_ChatPanel" />  (optionally ViewData["ChatView"] = "my-view").
+    It renders at most once per request, only for Admin / Viewer (never Wallboard, never a one-page link session), and
+    never on the full Chat page. The context travels as structured JSON in a data attribute -- never as page HTML.
+*@
+@using System.Text.Json
+@{
+    const string Rendered = "si-chat-panel-rendered";
+    var route = ViewContext.RouteData.Values["page"] as string ?? "";
+    var fromLayout = ViewData["ChatPanelHost"] as string == "layout";
+    // route -> (view, title): the Security posture and Management views (the wall board is a kiosk page: excluded)
+    var views = new Dictionary<string, (string View, string Title)>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/Findings/Index"] = ("findings", "Findings"),
+        ["/Findings/Detail"] = ("finding-detail", "Finding"),
+        ["/Tiers/Index"] = ("tier-board", "Tier board"),
+        ["/Management/Closure"] = ("vulnerability-closure", "Vulnerabilities over time"),
+        ["/Management/Trends"] = ("trend-analytics", "Trends"),
+        ["/Management/Index"] = ("risk-score", "Risk trend"),
+        ["/Management/Domains"] = ("domains", "Domains"),
+        ["/Management/Tier0"] = ("tier0-exposure", "Tier-0 exposure"),
+        ["/Templates/Index"] = ("template-conformance", "Template conformance"),
+        ["/Templates/Releases"] = ("template-releases", "Template releases"),
+    };
+    string? view = ViewData["ChatView"] as string;
+    string? title = ViewData["ChatTitle"] as string ?? ViewData["Title"] as string;
+    if (view is null && views.TryGetValue(route, out var known)) { view = known.View; title = known.Title; }
+    // included by a view itself: the view is named after its route ("/Collections/Devices" -> "collections/devices")
+    if (view is null && !fromLayout && route.Length > 1) view = route.Trim('/').Replace("/Index", "", StringComparison.OrdinalIgnoreCase).ToLowerInvariant();
+    var show = view is not null
+        && !route.Equals("/Chat", StringComparison.OrdinalIgnoreCase) && !route.Equals("/Wallboard", StringComparison.OrdinalIgnoreCase)
+        && User.IsReader()
+        && !Context.Items.ContainsKey(Rendered);
+    ChatPageContext? pageContext = null;
+    if (show)
+    {
+        pageContext = ChatPageContext.FromQuery(view!, title, Context.Request.Query.Select(kv => new KeyValuePair<string, string?>(kv.Key, kv.Value.ToString())));
+        if (pageContext is null) show = false; else Context.Items[Rendered] = true;
+    }
+}
+@if (show && pageContext is not null)
+{
+    var ctxJson = JsonSerializer.Serialize(pageContext, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    <link rel="stylesheet" href="~/css/chat-panel.css" asp-append-version="true" />
+    <button type="button" class="chat-fab" data-chat-open aria-controls="chat-panel" aria-expanded="false">Ask about this page</button>
+    <aside id="chat-panel" class="chat-panel" data-chat-panel data-chat-context="@ctxJson" hidden aria-label="Chat about this page">
+        <header class="chat-panel-head">
+            <div>
+                <h2>Ask about this page</h2>
+                <p class="chat-panel-about" data-chat-about>
+                    <span class="badge">@(pageContext.Title ?? pageContext.View)</span>
+                    @if (pageContext.CollectionId is not null) { <span class="badge">collection @pageContext.CollectionId</span> }
+                    @foreach (var f in pageContext.Filters) { <span class="badge">@f.Key: @f.Value</span> }
+                    @if (pageContext.SelectedAsset is not null) { <span class="badge" data-chat-selected>asset @pageContext.SelectedAsset</span> }
+                    @if (pageContext.SelectedFinding is not null) { <span class="badge">finding @pageContext.SelectedFinding</span> }
+                </p>
+            </div>
+            <button type="button" class="icon-button" data-chat-close aria-label="Close the chat">&times;</button>
+        </header>
+        <div class="chat-log chat-panel-log" data-chat-log aria-live="polite"></div>
+        <form class="chat-panel-form" data-chat-form>
+            @Html.AntiForgeryToken()
+            <label for="chat-panel-q">Your question</label>
+            <textarea id="chat-panel-q" name="Question" maxlength="@ChatModel.MaxQuestion" rows="3" placeholder="e.g. Top 3 here? Explain this. Why is this Tier 0?"></textarea>
+            <div class="actions">
+                <button type="submit" data-chat-ask>Ask</button>
+                <a class="button secondary" href="@Url.Page("/Chat")">Open the full chat</a>
+            </div>
+            <p class="hint">Answers come only from SecurityInsight's read-only tools; the queries behind each answer are one click away.@if (!User.IsAdmin()) { <text> The settings history is for Admins only.</text> }</p>
+        </form>
+    </aside>
+    <script type="module" src="~/js/app/chat-panel.js" asp-append-version="true"></script>
+}

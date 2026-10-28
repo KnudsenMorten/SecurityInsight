@@ -1,0 +1,60 @@
+@model SI.Management.Web.RiskExec.ReportBlock
+@using SI.Management.Web.RiskExec
+@* #636: one block of the key figures (the Executive report, its PDF, a topic of the Executive overview): its lines (value,
+   change since the last report, a link to the view behind the number) and small tables (a bar per row as a <meter>: no
+   inline style, CSP). The same model feeds the management mail (MgmtSummaryComposer.KeyFigures). *@
+<section class="card kf-block" aria-labelledby="kf-@Model.Key" data-kf-block="@Model.Key">
+    <h2 id="kf-@Model.Key">@Model.Title</h2>
+    @if (Model.Unavailable is not null)
+    {
+        <p class="hint" data-kf-unavailable>@Model.Unavailable</p>
+    }
+    else
+    {
+        @if (Model.Lines.Count > 0)
+        {
+            <dl class="kf-lines">
+                @foreach (var l in Model.Lines)
+                {
+                    <div data-kf-line="@l.Key" data-value="@Fmt.Raw(l.Raw)">
+                        <dt>@l.Label</dt>
+                        <dd>@if (l.Href is not null) { <a href="@l.Href">@l.Value</a> } else { @l.Value }
+                            @if (l.Change is { } ch) { <partial name="_ChangeSince" model="ch" /> }
+                            @if (l.Note is not null) { <span class="muted kf-note"> -- @l.Note</span> }
+                        </dd>
+                    </div>
+                }
+            </dl>
+        }
+        @foreach (var t in Model.Tables)
+        {
+            <h3 class="kf-table-h">@t.Title</h3>
+            @if (t.Rows.Count == 0)
+            {
+                <p class="hint" data-kf-empty="@t.Key">@(t.Note ?? "No data in this collection.")</p>
+                continue;
+            }
+            var max = t.Bars is { Count: > 0 } bars ? bars.Max() : 0;
+            <div class="table-wrap">
+                <table class="kf-table" data-kf-table="@t.Key" data-sortable>
+                    <thead><tr>@foreach (var h in t.Headers) { <th>@h</th> }@if (max > 0) { <th><span class="sr-only">Share</span></th> }</tr></thead>
+                    <tbody>
+                        @for (var i = 0; i < t.Rows.Count; i++)
+                        {
+                            var row = t.Rows[i];
+                            var href = t.Hrefs is { } hs && i < hs.Count ? hs[i] : null;
+                            <tr>
+                                @for (var j = 0; j < row.Count; j++)
+                                {
+                                    <td class="@(j >= 1 && row[j].Length > 0 && (char.IsDigit(row[j][0]) || row[j] == "–") ? "num" : "")">@if (j == 0 && href is not null) { <a href="@href">@row[j]</a> } else { @row[j] }</td>
+                                }
+                                @if (max > 0) { <td><meter min="0" max="@Fmt.Raw(max)" value="@Fmt.Raw(t.Bars![i])"></meter></td> }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (t.Note is not null) { <p class="hint">@t.Note</p> }
+        }
+    }
+</section>

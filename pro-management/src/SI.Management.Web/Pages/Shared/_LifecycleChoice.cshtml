@@ -1,0 +1,10 @@
+@* #855 the lifecycle choice of a view (LifecycleChoice.cs): Active (the default) | Not seen | Retired | All, the shared segmented
+   control; each choice is a link to the same page with lifecycle=<value> (the default has no parameter). *@
+@model SI.Management.Web.Pages.LifecycleChoice
+<div class="seg lifecycle-choice" role="group" aria-label="Lifecycle" data-lifecycle-choice-group data-lifecycle-in-force="@Model.Current.Key">
+    <span class="seg-label">Lifecycle:</span>
+    @foreach (var o in Model.Options)
+    {
+        <a href="@o.Href" data-lifecycle-choice="@o.Value" aria-current="@(o.Chosen ? "true" : "false")">@o.Label@(o.Value == "active" ? " (default)" : "")</a>
+    }
+</div>

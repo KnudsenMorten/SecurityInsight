@@ -1,0 +1,158 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "servicenow-ci",
+  "version": "1.1.0",
+  "description": "ServiceNow CMDB hand-off: the import-set view snowstage.vImportCi and the data-out push (#914 one contract: u_action, u_row_hash, u_si_batch_id on every row). The column NAMES are a contract with the customer's transform map; a new column is only ever appended.",
+  "grain": "ci",
+  "columns": [
+    {
+      "target": "u_si_correlation_id",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "u_id_source",
+      "from": "$const:ledger"
+    },
+    {
+      "target": "u_class_hint",
+      "from": "si_class",
+      "op": "enum:servicenow_class_hint"
+    },
+    {
+      "target": "u_proposed_class",
+      "from": "si_asset_type_source",
+      "op": "enum:servicenow_class"
+    },
+    {
+      "target": "u_name",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "u_fqdn",
+      "from": "si_fqdn"
+    },
+    {
+      "target": "u_dns_domain",
+      "from": "si_fqdn",
+      "op": "domain_part"
+    },
+    {
+      "target": "u_serial_number",
+      "from": "si_serial_number"
+    },
+    {
+      "target": "u_mac_address",
+      "from": "si_mac_addresses",
+      "op": "first"
+    },
+    {
+      "target": "u_object_id",
+      "from": "si_link_azure"
+    },
+    {
+      "target": "u_azure_resource_id",
+      "from": "si_link_azure"
+    },
+    {
+      "target": "u_aad_device_id",
+      "from": "si_link_entra",
+      "op": "if_class:device"
+    },
+    {
+      "target": "u_mde_device_id",
+      "from": "si_link_mde"
+    },
+    {
+      "target": "u_entra_object_id",
+      "from": "si_link_entra",
+      "op": "if_class:identity"
+    },
+    {
+      "target": "u_tier",
+      "from": "si_tier"
+    },
+    {
+      "target": "u_tier_reason",
+      "from": "si_tier_reason"
+    },
+    {
+      "target": "u_criticality",
+      "from": "si_cmdb_criticality"
+    },
+    {
+      "target": "u_exposed_internet",
+      "from": "si_internet_exposed"
+    },
+    {
+      "target": "u_last_seen",
+      "from": "si_last_seen"
+    },
+    {
+      "target": "u_source_run",
+      "from": "$run_id"
+    },
+    {
+      "target": "u_run_time",
+      "from": "$run_time"
+    },
+    {
+      "target": "u_discovery_source",
+      "from": "$const:SecurityInsight"
+    },
+    {
+      "target": "u_row_hash",
+      "from": "$row_hash"
+    },
+    {
+      "target": "u_changed_at",
+      "from": "$changed_at"
+    },
+    {
+      "target": "u_data_sensitivity",
+      "from": "si_cmdb_data_sensitivity"
+    },
+    {
+      "target": "u_si_state",
+      "from": "si_lifecycle",
+      "op": "enum:servicenow_ci_state"
+    },
+    {
+      "target": "u_si_asset_type",
+      "from": "si_asset_type"
+    },
+    {
+      "target": "u_si_asset_subtype",
+      "from": "si_asset_subtype"
+    },
+    {
+      "target": "u_action",
+      "from": "$action"
+    },
+    {
+      "target": "u_si_batch_id",
+      "from": "$batch_id"
+    },
+    {
+      "target": "u_si_cleared",
+      "from": "$cleared"
+    },
+    {
+      "target": "u_si_reason",
+      "from": "$reason"
+    },
+    {
+      "target": "u_si_replaces",
+      "from": "$replaces"
+    }
+  ],
+  "filter": {
+    "si_class": [
+      "device",
+      "cloud_resource",
+      "identity"
+    ]
+  },
+  "contract": "snowstage.vImportCi",
+  "deltaOn": "$row_hash"
+}

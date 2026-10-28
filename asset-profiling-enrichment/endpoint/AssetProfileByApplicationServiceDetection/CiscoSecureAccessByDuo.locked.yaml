@@ -1,0 +1,21 @@
+id:        CiscoSecureAccessByDuo
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Cisco Secure Access by Duo'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Cisco Secure Access by Duo'
+
+detections:
+  - id: CiscoSecureAccessByDuo
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'secure_access_by_duo*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

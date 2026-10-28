@@ -1,0 +1,11 @@
+@model string
+@* Export PDF on a report page (framework MAIL-2 items 3 and 7): one button, the print stylesheet (A4, page numbers, no
+   menu) and a print-only header with the logo, the page's title and the date -- the browser's print dialog saves the PDF. *@
+@{ var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(Context.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, Context.RequestAborted); }
+<link rel="stylesheet" href="~/css/report.css" asp-append-version="true" />
+<div class="print-bar no-print" data-export-pdf><button type="button" class="secondary" data-print>Export PDF</button></div>
+<div class="print-only" data-print-header>
+    <img src="@brand.LightLogo" alt="@brand.LogoAlt" class="report-logo" data-edition="@(brand.Pro ? "pro" : "community")" />
+    <p><strong>@Model</strong> -- printed @Fmt.Time(DateTime.UtcNow) -- Confidential</p>
+</div>
+<script src="~/js/print.js" asp-append-version="true"></script>

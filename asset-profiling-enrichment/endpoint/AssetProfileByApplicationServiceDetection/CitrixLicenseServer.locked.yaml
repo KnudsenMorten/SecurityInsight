@@ -1,0 +1,21 @@
+id:        CitrixLicenseServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Citrix License Server'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix License Server'
+
+detections:
+  - id: CitrixLicenseServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'license_server*'
+    set:
+      Tier:     2
+      Purpose:  'VDI'
+      Category: 'VDI'

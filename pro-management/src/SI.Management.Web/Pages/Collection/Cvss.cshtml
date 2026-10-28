@@ -1,0 +1,6 @@
+@page
+@model SI.Management.Web.Pages.Collection.CvssModel
+<partial name="_Header" model="Model" />
+@if (Model.Bands is not null) { <partial name="_FacetTable" model="Model.Bands" /> }
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

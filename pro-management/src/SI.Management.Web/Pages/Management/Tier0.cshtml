@@ -1,0 +1,54 @@
+@page
+@model SI.Management.Web.Pages.Management.Tier0Model
+@using SI.Management.Web.Pages.Management
+@{
+    ViewData["Title"] = "Tier-0 exposure";
+    var t = Model.Trend!;
+    var pts = t.Data.OrderBy(p => p.Day).ToList();
+    var now = pts.LastOrDefault();
+    var first = pts.FirstOrDefault();
+    var all = Model.Tier0Risks.Count;
+}
+<h1>Tier-0 exposure</h1>
+<partial name="_ExportPdf" model="@("Tier-0 exposure")" />
+<p class="lede">Tier-0 assets (the ones that control the estate) that carry findings, and where each one stands among all the estate's assets.</p>
+<partial name="_NotConfigured" model="t.Source" />
+@await Html.PartialAsync("_Range", new RangeInfo(Model.Days, new[] { 30, 90, 180, 365 }, "days", "days"))
+
+<div class="tiles">
+    <div class="tile" data-tile="tier0-with-findings">
+        <div class="label">Tier-0 assets with findings</div>
+        <div class="value">@Fmt.Int(all)</div>
+        @if (now is not null && first is not null && now.Day != first.Day)
+        {
+            var d = now.Tier0Exposed - first.Tier0Exposed;
+            <div class="delta"><span class="@(d > 0 ? "up" : d < 0 ? "down" : "")">@Fmt.Signed(d, 0)</span> per day since @Fmt.Day(first.Day)</div>
+        }
+    </div>
+    <div class="tile" data-tile="tier0-in-top">
+        <div class="label">...of which among the estate's @Tier0Model.TopN riskiest assets</div>
+        <div class="value">@Fmt.Int(Model.Tier0InTop) <span class="muted">of @Fmt.Int(all)</span></div>
+    </div>
+    <div class="tile"><div class="label">Peak in period (per day)</div><div class="value">@(pts.Count == 0 ? "–" : Fmt.Int(pts.Max(p => p.Tier0Exposed)))</div></div>
+</div>
+<p class="hint" data-tile-hint>"Tier-0 assets with findings" counts every Tier-0 asset with at least one finding in the newest collection -- all of them are listed below. "Among the estate's @Tier0Model.TopN riskiest assets" counts how many of those are among the @Tier0Model.TopN highest-ranked assets of the estate by weighted risk; the rest still have findings, they rank lower. The chart counts Tier-0 assets with findings per day from the daily summary.</p>
+
+<section class="card" aria-labelledby="h-t0">
+    <h2 id="h-t0">Tier-0 assets with findings, per day, last @Model.Days days</h2>
+    <partial name="_Chart" model="Model.Chart" />
+    <partial name="_Query" model='QueryInfo.From(t, "Tier-0 assets with findings, per day")' />
+</section>
+
+<section class="card" aria-labelledby="h-t0list">
+    <h2 id="h-t0list">Every Tier-0 asset with findings (@Fmt.Int(all)), by estate rank</h2>
+    @if (all == 0)
+    {
+        <p class="hint">No Tier-0 asset has a finding in the newest collection.</p>
+    }
+    else if (Model.TableView("tier0") is { } tv)
+    {
+        @* #589: each asset's CI with its identifiers and context -- the chooser and the all-rows exports *@
+        <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" />
+    }
+    <partial name="_Query" model='QueryInfo.From(Model.Risks!, "Every Tier-0 asset with findings")' />
+</section>

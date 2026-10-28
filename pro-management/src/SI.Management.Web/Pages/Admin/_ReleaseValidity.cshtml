@@ -1,0 +1,12 @@
+@model long
+@* GUARD-1.6 (#404): a release lasts for the next run only, or until a time of at most 24 hours -- then it ends by itself. *@
+<fieldset class="release-validity" data-release-validity>
+    <legend>How long the release lasts</legend>
+    <label><input type="radio" name="Valid" value="run" checked /> The next run only</label>
+    <label><input type="radio" name="Valid" value="hours" /> Until</label>
+    <label for="rh-@Model" class="sr-only">Hours</label>
+    <select id="rh-@Model" name="Hours">
+        @foreach (var h in new[] { 1, 2, 4, 8, 12, 24 }) { <option value="@h" selected="@(h == 24)">@h @(h == 1 ? "hour" : "hours") from now</option> }
+    </select>
+    <p class="hint">It ends by itself. A release never changes a setting: to turn a safety check off or change its limit, use Control on this page.</p>
+</fieldset>

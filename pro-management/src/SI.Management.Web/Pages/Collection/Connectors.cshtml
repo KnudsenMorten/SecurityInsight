@@ -1,0 +1,39 @@
+@page
+@model SI.Management.Web.Pages.Collection.ConnectorsModel
+@{
+    var (from, to) = Model.Window;
+}
+<partial name="_Header" model="Model" />
+@if (Model.Current is not null)
+{
+    <section class="card" aria-labelledby="h-tot">
+        <h2 id="h-tot" data-utc>Between @Fmt.Time(from) and @(Model.Current.NextTime is null ? "now" : Fmt.When(to))</h2>
+        @if (Model.Totals.Count == 0) { <p class="hint">No connector is registered on this install.</p> }
+        else
+        {
+            <p class="hint">Every connector that changes something outside SecurityInsight is listed -- also one that did not run in this window. "Items changed" shows each item: when, which object, which target record, which field, before and now.</p>
+            <div class="table-wrap">
+                <table data-sortable data-connector-totals>
+                    <thead><tr><th scope="col">Connector</th><th scope="col">What it changes, and where</th><th scope="col" class="num">Runs</th><th scope="col" class="num">Opened</th><th scope="col" class="num">Reopened</th><th scope="col" class="num">Updated</th><th scope="col" class="num">Closed</th><th scope="col" class="num">Errors</th><th scope="col">Last run</th></tr></thead>
+                    <tbody>@foreach (var t in Model.Totals)
+                    {
+                        <tr data-connector="@t.Connector">
+                            <td class="mono">@t.Connector</td>
+                            <td class="wrap">@t.What
+                                @if (t.Status.Length > 0) { <br /><span class="hint" data-connector-status>@t.Status</span> if (t.LastRunEver is { } ev) { <span class="hint"> -- last run @Fmt.Time(ev)</span> } }
+                                @if (!string.IsNullOrWhiteSpace(t.LastWhy)) { <br /><span class="hint">Last run: @t.LastWhy</span> }
+                            </td>
+                            <td class="num">@Fmt.Int(t.Runs)</td><td class="num">@Fmt.Int(t.Opened)</td><td class="num">@Fmt.Int(t.Reopened)</td><td class="num">@Fmt.Int(t.Updated)</td><td class="num">@Fmt.Int(t.Closed)</td><td class="num">@Fmt.Int(t.Errors)</td><td>@Fmt.Time(t.LastRun)</td>
+                        </tr>
+                    }</tbody>
+                </table>
+            </div>
+        }
+    </section>
+    <ul class="tabs" aria-label="Show">
+        <li><a href="@Model.ViewLink("/Collection/Connectors")" aria-current="@(!Model.ItemsMode ? "true" : "false")">Runs</a></li>
+        <li><a href="@Model.ViewLink("/Collection/Connectors", ("show", "items"))" aria-current="@(Model.ItemsMode ? "true" : "false")">Items changed</a></li>
+    </ul>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

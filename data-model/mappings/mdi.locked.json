@@ -1,0 +1,293 @@
+{
+  "$comment": "Field mapping for provider 'mdi': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/mdi.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "mdi",
+  "version": "1.0.0",
+  "description": "Defender for Identity: identity records from IdentityInfo (advanced hunting) and the identity API.",
+  "objects": [
+    {
+      "recordType": "user",
+      "class": "identity",
+      "parts": {
+        "identity": "the IdentityInfo row the identity discovery already reads (Log Analytics: IdentityInfo | summarize arg_max(TimeGenerated, *) by AccountObjectId, Get-SIIdentityInfoByObjectId), captured for every user the Entra collection holds",
+        "logon": "30 days of IdentityLogonEvents summarised per account in the hunting query (discovery/Get-SIEntraContext.ps1): OnPremLastLogon, CleartextLdap, NtlmLogons"
+      },
+      "key": "identity.AccountObjectId",
+      "timestamp": "identity.Timestamp"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "entra_object_id",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.AccountObjectId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "ad_object_guid",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.OnPremObjectId",
+        "identity.OnPremisesAccountObjectId",
+        "identity.objectGuid"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "ad_sid",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.OnPremSid",
+        "identity.AccountSID"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_upn",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.AccountUpn"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_sam_account_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.AccountName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.AccountUpn",
+        "identity.AccountDisplayName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.IsAccountEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_is_sensitive_account",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.sensitivity.isSensitive",
+        "identity.IsSensitive"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "combine": "any_true"
+    },
+    {
+      "field": "si_mdi_risk_state",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.riskState",
+        "identity.RiskStatus",
+        "identity.RiskLevel"
+      ],
+      "normalize": [
+        "enum:mdi_risk_state"
+      ]
+    },
+    {
+      "field": "si_mdi_blast_radius",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.BlastRadius",
+        "identity.blastRadius"
+      ],
+      "normalize": [
+        "enum:mdi_state"
+      ]
+    },
+    {
+      "field": "si_last_sign_in",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.lastSeenActivity"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_ad_critical_groups",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.criticalGroups[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_is_service_account",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.IsServiceAccount",
+        "identity.isServiceAccount"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_mdi_investigation_priority_pct",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.InvestigationPriorityPercentile",
+        "identity.investigationPriorityPercentile"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_mdi_tags",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.Tags[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_is_honeytoken",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.Tags[*]"
+      ],
+      "normalize": [
+        "require_contains:Honeytoken",
+        "present"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_manager_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.Manager"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_onprem_last_logon",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "logon.OnPremLastLogon"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cleartext_ldap",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "logon.CleartextLdap"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ntlm_logons",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "logon.NtlmLogons"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ad_distinguished_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "identity.OnPremisesDistinguishedName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    }
+  ]
+}

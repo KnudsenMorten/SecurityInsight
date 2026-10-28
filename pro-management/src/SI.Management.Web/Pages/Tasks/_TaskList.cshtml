@@ -1,0 +1,73 @@
+@model SI.Management.Web.Pages.Tasks.TaskListPage
+@using SI.Management.Web.Tasks
+@* The task lists (#265): one server-side grid -- the "show" choice, a department, a search, sortable columns and the page
+   are in the URL and applied in SQL (BRAND-2.7); the header row stays put while the rows scroll. *@
+@{
+    var r = Model.Results;
+    var q = Model.Query;
+    var today = Model.Today;
+    var all = Model.View == TaskQuery.ViewAll;
+}
+<h1>@Model.Heading</h1>
+<p class="lede">@Model.Lede</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@if (Model.Counts is { } c)
+{
+    <div class="stat-row" data-task-counts>
+        <a class="stat" href="@Model.Link(("show", null))"><div class="n" data-count="open">@Fmt.Int(c.Open)</div><div class="l">open</div></a>
+        <a class="stat" href="@Model.Link(("show", "overdue"))"><div class="n" data-count="overdue">@Fmt.Int(c.Overdue)</div><div class="l">overdue</div></a>
+        <a class="stat" href="@Model.Link(("show", "soon"))"><div class="n" data-count="soon">@Fmt.Int(c.DueSoon)</div><div class="l">due within @TaskDue.SoonDays days</div></a>
+    </div>
+}
+<nav class="tabs" aria-label="Which tasks">
+    @foreach (var (s, label) in SI.Management.Web.Pages.Tasks.TaskListPage.ShowChoices)
+    {
+        <a href="@Model.Link(("show", s == "open" ? null : s))" aria-current="@(q.Show == s ? "true" : "false")" data-show="@s">@label</a>
+    }
+</nav>
+<form method="get" action="@Model.PagePath" class="filterbar" data-autosubmit aria-label="Filters">
+    <input type="hidden" name="show" value="@(q.Show == "open" ? null : q.Show)" />
+    <input type="hidden" name="sort" value="@(q.Sort == "due" ? null : q.Sort)" /><input type="hidden" name="dir" value="@(q.Descending ? "desc" : null)" />
+    <div class="wide"><label for="tq">Search</label><input id="tq" type="search" name="q" value="@q.Text" maxlength="200" placeholder="task, asset, finding, person" /></div>
+    @if (Model.Departments.Count > 0 || all)
+    {
+        // THE shared filter (MultiFilter): several departments at once, none ticked = every department (owner 2026-10-19)
+        var deptChoices = (all ? new[] { new SI.Management.Web.Pages.FilterChoice("0", "Unassigned") } : Array.Empty<SI.Management.Web.Pages.FilterChoice>())
+            .Concat(Model.Departments.Select(d => new SI.Management.Web.Pages.FilterChoice(SI.Management.Web.Pages.MultiFilter.Key(d.DepartmentId), d.Name))).ToList();
+        var deptFilter = new SI.Management.Web.Pages.MultiFilter
+        {
+            Id = "tdept", Name = "dept", Label = "Department", Choices = deptChoices,
+            Chosen = q.AllDepartmentIds.Select(SI.Management.Web.Pages.MultiFilter.Key).ToList(),
+        };
+        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="deptFilter" /></div>
+    }
+    @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+    <input type="hidden" name="size" value="@q.Size" />
+    <div class="actions"><button type="submit" class="secondary">Apply</button></div>
+</form>
+@if (r is not null)
+{
+    <section class="card" aria-labelledby="h-tasks">
+        <h2 id="h-tasks"><span data-task-total>@Fmt.Int(r.Total)</span> task(s)</h2>
+        @if (r.Rows.Count == 0)
+        {
+            <p class="hint" data-tasks-none>No task matches.</p>
+        }
+        else
+        {
+            // #282: the pager above the table, in the shared grid toolbar
+            var toolbar = new GridToolbar
+            {
+                Id = "tasks-tools", Total = r.Total, Skip = (long)(r.Page - 1) * r.Size, Count = r.Rows.Count, Noun = "task(s)", Page = r.Page, Pages = r.Pages,
+                PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))),
+                Size = r.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+            };
+            <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+            @* #589: the CI and the finding of each task with their context, every field, the chooser; the all-rows exports
+               take every task matching the choices (every page) *@
+            @if (Model.TableView("tasks") is { } tv) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" /> }
+            <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+        }
+    </section>
+}

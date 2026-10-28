@@ -1,0 +1,331 @@
+#######################################################################################################
+#  SecurityInsight - Risk Analysis engine
+#  Excel workbook rendering: sheet sections, worksheet export and the risk index.
+#
+#  Everything that turns scored rows into the .xlsx deliverable. Kept together because the index sheet
+#  and the per-report worksheets share formatting conventions.
+#
+#  AUDIT #16: moved VERBATIM out of Invoke-RiskAnalysis.ps1 on 2026-08-05. Dot-sourced back in at
+#  exactly the position it occupied, so load order is unchanged. Every function body is
+#  byte-identical to before the move - verified with tests/Get-EngineFunctionInventory.ps1,
+#  which compares a SHA-256 of each function's source text before and after.
+#
+#  Do NOT add $PSScriptRoot-dependent code here: in this file it resolves to _shared/, one level
+#  deeper than the engine root the main script derives $siRoot from.
+#######################################################################################################
+
+# SI's own .xlsx writer (no ImportExcel / EPPlus). A sibling in _shared/, so $PSScriptRoot is the right
+# base for it -- the warning above is about paths derived from the ENGINE root.
+. (Join-Path $PSScriptRoot 'RA-XlsxWriter.ps1')
+# One type per column (#242): the decision made over the whole column before the sheet is written.
+. (Join-Path $PSScriptRoot 'RA-ExcelColumnTypes.ps1')
+
+function Write-Section($text) {
+  Write-Host ""
+  Write-Host "==== $text ====" -ForegroundColor Cyan
+}
+
+function Get-RAColumnUnion {
+  <#
+    AUDIT #26 -- the export column list must be the UNION of every row's properties, never
+    the first row's.
+
+    Advanced-Hunting rows are rebuilt from the Graph additional-properties bag
+    (RA-GraphHunting.ps1:448, `foreach ($k in $r.AdditionalProperties.Keys)`) and that bag
+    OMITS null-valued columns. So two rows of the same report genuinely carry different
+    property sets, and a column that merely happens to be empty on row 1 was absent from the
+    discovery, never entered $DesiredColumns, and was then dropped by Select-Object -- out
+    of the xlsx, the JSON sibling AND the Log Analytics ingest, for the whole report.
+
+    A column declared in the YAML OutputPropertyOrder is protected because it is added
+    regardless. RemediationOptions / RecommendedAction were declared NOWHERE when this was
+    written, so they depended entirely on first-row luck -- which is why "remediation data
+    is missing" was intermittent rather than total.
+
+    ⚠️ That example is now HISTORICAL: #26 part 2 (commit 5904f0f6) declared both in
+    Device_Recommendations_Detailed's OutputPropertyOrder, and a catalog-wide sweep on
+    2026-08-07 found NO report emitting an undeclared remediation column. The union below
+    is still required -- it protects every OTHER undeclared column, and declaring all of
+    them by hand is exactly the guarantee this function exists to stop depending on.
+
+    Order is FIRST-SEEN, so the shape stays stable and human-readable rather than sorted.
+    One pass over the rows: ~0.3s for the largest real report set (2,677 rows), ~19s at a
+    deliberately pessimistic 200,000. Deliberately NOT capped -- a cap would silently
+    reintroduce exactly the data loss this exists to stop.
+  #>
+  param([Parameter(Mandatory=$false)][object]$Rows)
+
+  $ordered = New-Object 'System.Collections.Generic.List[string]'
+  $seen    = New-Object 'System.Collections.Generic.HashSet[string]'
+  if ($null -eq $Rows) { return @() }
+
+  foreach ($row in $Rows) {
+    if ($null -eq $row) { continue }
+    foreach ($prop in $row.PSObject.Properties) {
+      if ($prop.MemberType -ne 'NoteProperty') { continue }
+      if ($seen.Add($prop.Name)) { [void]$ordered.Add($prop.Name) }
+    }
+  }
+  return $ordered.ToArray()
+}
+
+# exporter (single-write workflow; a sheet of the same name is replaced, other sheets are kept)
+# v3 -- the workbook is written by SI's own .xlsx writer (RA-XlsxWriter.ps1), not ImportExcel/EPPlus.
+# The output contract is unchanged: same file, same sheets, same columns in the same order, a table
+# with banding + autofilter, a bold frozen header, measured widths, wrap + top alignment on the
+# narrative columns, numbers as numbers, dates as dates.
+
+# The narrative columns that carry embedded line breaks (\r\n built by the MoreDetails post-process;
+# IssueList / RiskFactor_*_Detailed / ImpactedAssetsList aggregations). v2.2.226: without WrapText the
+# cell shows one long string and operators read "MoreDetails doesn't separate multiple entries".
+# v2.2.448: wrap and TOP alignment go together, on these columns only -- top alignment is only
+# visible once wrap makes a row tall, and styling every column of a ~85%-empty cross-report union
+# used to cost 3.6x the file size.
+$script:RAExcelWrapColumns = @(
+  'MoreDetails'
+  'IssueList'
+  'RiskFactor_Probability_Detailed'
+  'RiskFactor_Consequence_Detailed'
+  'ImpactedAssetsList'
+  'AssetDetectedInReportName'
+  'CVSSDesc'
+)
+# Every column is capped at 50 characters wide; long-narrative columns get more. 50 clipped CVSSDesc to
+# ~1 sentence, which forced operators to widen it by hand after opening; 90 fits most CVSS
+# descriptions in 2-3 wrapped lines.
+$script:RAExcelWidthCaps = @{ 'CVSSDesc' = 90 }
+
+function Export-Worksheet {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$SheetName,
+    [Parameter(Mandatory)]$Rows,
+    [string]$SortColumn,
+    [switch]$SortDescending,
+    [string[]]$DesiredColumns,
+    [string[]]$ColumnsToFlatten = @(),
+    [string]$TableStyle = 'Medium9'
+  )
+
+  function Convert-CellValue {
+    param(
+      [Parameter()][AllowNull()]$Value,
+      [string]$JoinChar = ', '
+    )
+
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [string] -or
+        $Value -is [int] -or $Value -is [long] -or
+        $Value -is [double] -or $Value -is [decimal] -or
+        $Value -is [datetime] -or $Value -is [bool] -or
+        $Value -is [guid]) {
+      return $Value
+    }
+
+    if ($Value -is [pscustomobject] -or $Value -is [hashtable] -or $Value -is [System.Collections.IDictionary]) {
+      try { return ($Value | ConvertTo-Json -Compress -Depth 12) } catch { return ($Value | Out-String).Trim() }
+    }
+
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+      $items = @()
+      foreach ($i in $Value) {
+        if ($null -eq $i) { continue }
+        if ($i -is [string] -or $i.GetType().IsPrimitive) {
+          $items += [string]$i
+        } else {
+          try { $items += ($i | ConvertTo-Json -Compress -Depth 12) }
+          catch { $items += ([string]($i | Out-String).Trim()) }
+        }
+      }
+      return ($items -join $JoinChar)
+    }
+
+    return [string]$Value
+  }
+
+  $safeSheet = Get-SIXlsxSafeSheetName $SheetName
+  $tableName = ($safeSheet -replace '\W','_')
+  $_fullPath = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).Path $Path }
+
+  if (-not $Rows -or $Rows.Count -eq 0) {
+    # A placeholder sheet, so the mail attachment and the JSON sibling still line up with an empty run.
+    Write-SIXlsxWorksheet -Path $_fullPath -SheetName $safeSheet -Header @('Info') -Rows @(,[object[]]@('No rows returned')) `
+      -WrapColumns $script:RAExcelWrapColumns -MaxColumnWidth 50 -WidthCaps $script:RAExcelWidthCaps `
+      -TableName $tableName -TableStyle $TableStyle
+    $script:_sheetWritten[$safeSheet] = $true
+    return
+  }
+
+  # 🔒 EXCEL'S CEILING -- ENFORCED HERE, AND LOUDLY (operator instruction, v2.2.441).
+  # A worksheet holds 1,048,576 rows INCLUDING the header. The cut is made here, deliberately, and
+  # reported -- never a workbook silently missing the overflow.
+  # 📌 The cap is a round 1,000,000 rather than the technical maximum of 1,048,575 -- operator's call.
+  # 🔑 The caller sorts by the weighted risk score DESCENDING before export (and -SortColumn sorts
+  # again), so the rows that survive the cut are the HIGHEST-risk ones.
+  # 🔒 NOTHING IS LOST FROM THE RUN -- only from the .xlsx. The JSON sibling and the LA ingest carry the
+  # full set, and the warning names the JSON so the overflow is findable.
+  $_xlMaxDataRows = if ($global:SI_ExcelMaxDataRows -gt 0) { [int]$global:SI_ExcelMaxDataRows } else { 1000000 }
+  $_rowsTotal = @($Rows).Count
+  if ($_rowsTotal -gt $_xlMaxDataRows) {
+    Write-Warning ("Export-Worksheet [{0}]: {1} rows exceed Excel's worksheet limit. Writing the TOP {2} by {3} and leaving {4} row(s) out of the .xlsx. Nothing is lost from the run -- the .json sibling and the Log Analytics ingest both carry all {1} rows. (Override with `$global:SI_ExcelMaxDataRows.)" -f `
+        $safeSheet, $_rowsTotal, $_xlMaxDataRows, $(if ($SortColumn) { $SortColumn } else { 'input order' }), ($_rowsTotal - $_xlMaxDataRows))
+  }
+
+  $Data = $Rows
+  # 🔒 THIS EXPORT MUST NEVER BE THE THING THAT DESTROYS A COMPLETED RUN (v2.2.439).
+  # A column list carrying both 'OsPlatform' and 'OSPlatform' once threw at the FINAL WRITE of a
+  # ~26-minute customer run and lost all 2600 rows. Duplicate (case-insensitive) and blank names are
+  # dropped here, first spelling kept, and reported -- the producer was fixed too, but this layer stays
+  # because the trade is one-sided: dropping a duplicate name costs nothing, throwing costs the run.
+  $_useCols = $null
+  if ($DesiredColumns) {
+    $_seenCol = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $_useCols = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($c in $DesiredColumns) {
+      if ([string]::IsNullOrWhiteSpace($c)) { continue }
+      if ($_seenCol.Add($c)) { [void]$_useCols.Add($c) }
+    }
+    $_dropped = @($DesiredColumns).Count - $_useCols.Count
+    if ($_dropped -gt 0) {
+      # Loud, not silent: a collision means two reports disagree about how to spell one column, and
+      # that is worth fixing at the source even though the export now survives it.
+      Write-Warning ("Export-Worksheet [{0}]: {1} duplicate/blank column name(s) removed from the export list (case-insensitive; first spelling kept). Two reports likely spell one column differently -- the sheet is complete, but fix the source." -f $safeSheet, $_dropped)
+    }
+  }
+
+  # -ColumnsToFlatten is kept as part of the signature (callers pass it, it documents intent), but it is
+  # not the mechanism: EVERY array / hashtable / custom-object cell is flattened below, which is a strict
+  # superset of the listed columns (v2.2.445).
+
+  if ($SortColumn) {
+    $Data = $Data | Sort-Object -Property $SortColumn -Descending:$SortDescending.IsPresent
+  }
+
+  # The Excel-ceiling cut, applied AFTER the sort so the rows kept are the top-ranked ones.
+  if ($_rowsTotal -gt $_xlMaxDataRows) {
+    $Data = $Data | Select-Object -First $_xlMaxDataRows
+  }
+  $Data = @($Data)
+
+  # 🔑 THE COLUMN LIST. With -DesiredColumns it is that list, in that order -- a desired column no row
+  # carries is still written, empty, exactly as Select-Object used to produce it. Without, the names
+  # are UNIONED across every row: audit #26's lesson, never take row 1's shape as the truth for the set.
+  if ($_useCols -and $_useCols.Count -gt 0) { $_names = $_useCols.ToArray() }
+  else { $_names = Get-SIXlsxColumnUnion -InputObject $Data }
+  if (@($_names).Count -eq 0) {
+    # Rows with no properties at all: nothing to tabulate, so the same placeholder as an empty run.
+    Export-Worksheet -Path $_fullPath -SheetName $safeSheet -Rows @() -TableStyle $TableStyle
+    return
+  }
+
+  # 🔴 ONE PASS, IN .NET, PRODUCES THE CELL GRID (v3). The 5h34m export (121,111 rows x 291 columns,
+  # v2.2.445) was ImportExcel writing ~0.55 ms per cell from PowerShell; the EPPlus bulk load that
+  # replaced it still left a PowerShell scrub-and-measure loop measured at ~87 us per cell on PS 5.1.
+  # The writer's compiled helper now fetches, flattens, scrubs, measures and writes each cell -- see
+  # RA-XlsxWriter.ps1. Arrays of strings/numbers are joined with ', ' there; anything richer (a
+  # hashtable, a custom object, a list of objects) comes back here, to Convert-CellValue, because its
+  # JSON form is PowerShell's to produce. Without that flatten a cell would read "System.Object[]".
+  # 🔒 Every string is scrubbed by the writer (control characters, lone surrogates, the 32,767-char
+  # cell limit) -- the v2.1.206 "Repaired Records" fix, applied to every cell regardless of caller.
+  # 🔒 InvariantCulture for the duration, as before: the writer formats numbers invariant anyway, but
+  # Convert-CellValue's string conversions must not pick up a comma-decimal host locale either.
+  $_savedCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+  try {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+    $_grid = ConvertTo-SIXlsxRows -InputObject $Data -Columns $_names
+    $_def  = $_grid.Deferred
+    for ($k = 0; $k -lt $_def.Count; $k += 2) {
+      $_cellRow = $_grid.Rows[$_def[$k]]
+      $_cellRow[$_def[$k + 1]] = Convert-CellValue -Value $_cellRow[$_def[$k + 1]]
+    }
+
+    # ONE TYPE PER COLUMN (#242). Log Analytics hands every cell over as text, Advanced Hunting and
+    # the engine's own scores are real numbers, and 'Details' unions both -- so CriticalityTier was 1 in
+    # one row and "1" in the next. Decided per column over the whole grid (RA-ExcelColumnTypes.ps1);
+    # only the grid changes, never the rows the JSON sibling and the ingest use. Never fails the export.
+    try {
+      $_kqlTypes = $null
+      if (Get-Variable -Name RA_KqlColumnTypes -Scope Global -ErrorAction SilentlyContinue) { $_kqlTypes = $global:RA_KqlColumnTypes }
+      $_typed = Set-RAExcelColumnTypes -Rows $_grid.Rows -Columns $_names -KqlTypes $_kqlTypes
+      Write-Verbose ("[xlsx] one type per column: {0} column(s) numeric, {1} text, {2} cell(s) converted" -f @($_typed.Numeric).Count, @($_typed.Text).Count, $_typed.Cells)
+    } catch {
+      Write-Verbose ("[xlsx] column typing skipped: {0}" -f $_.Exception.Message)
+    }
+
+    # Widths are measured from the values themselves (header included): widest + 2 for the filter
+    # arrow, floor 8, capped per $script:RAExcelWidthCaps. No GDI+ text measuring, so a Linux container
+    # produces the same workbook as Windows.
+    Write-SIXlsxWorksheet -Path $_fullPath -SheetName $safeSheet -Header $_names -Rows $_grid.Rows `
+      -WrapColumns $script:RAExcelWrapColumns -MaxColumnWidth 50 -WidthCaps $script:RAExcelWidthCaps `
+      -TableName $tableName -TableStyle $TableStyle
+  } finally {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = $_savedCulture
+  }
+
+  $script:_sheetWritten[$safeSheet] = $true
+}
+
+
+function New-RiskIndex {
+    <#
+        The risk index Calculate-RiskScore looks its two bases up in -- #559: KEYED BY THE SI GENERIC FIELDS
+        (si_finding_type, si_category, si_subcategory, si_component, si_finding_key, asset_class + si_tier for the ASSET
+        base, si_severity for the VULNERABILITY base), FIRST MATCH WINS in Precedence order (RA-RiskIndexSi.ps1 holds the
+        rule; RA-RiskIndexOrder.ps1 the 3.0 order and the v2.2 ladder).
+        -CsvRows (the shipped index) and -OverlayRows (the customer's own rows, walked FIRST, #398) may each be SI-keyed or
+        written with the 2.2 columns: 2.2-keyed rows are put in first-match form (a file without Precedence by the v2.2
+        ladder) and translated row for row (riskscore.index.translation.locked.json), so every 2.2 base value is kept.
+        The -Col* parameters name a caller's own 2.2 column names (they are renamed to the index's before translating);
+        an SI-keyed file needs none of them.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][object[]] $CsvRows,
+        [string] $ColSecurityDomain = 'SecurityDomain',
+        [string] $ColCategory = 'Category',
+        [string] $ColSubCategory = 'SubCategory',
+        [string] $ColConfigId = 'ConfigurationId',
+        [string] $ColSevValue = 'SecuritySeverity',
+        [string] $ColTierValue = 'CriticalityTierLevel',
+        [string] $ColConseqScore = 'RiskConsequenceScore_SecuritySeverity',
+        [string] $ColProbScore = 'RiskProbablityScore_CriticialityTierLevel',
+        [AllowEmptyCollection()][object[]] $OverlayRows = @()
+    )
+    $CsvRows = @($CsvRows | Where-Object { $null -ne $_ })
+    if ($CsvRows.Count -eq 0) { throw "Risk definitions CSV is empty." }
+    if (-not (Get-Command -Name New-SIRiskIndexSi -ErrorAction SilentlyContinue)) { throw 'the risk index needs _shared/RA-RiskIndexSi.ps1 (dot-source it before New-RiskIndex)' }
+
+    # a 2.2-keyed file under the caller's own column names -> the index's 2.2 names (then translated)
+    $map = [ordered]@{
+        SecurityDomain = $ColSecurityDomain; Category = $ColCategory; SubCategory = $ColSubCategory; ConfigurationId = $ColConfigId
+        SecuritySeverity = $ColSevValue; RiskConsequenceScore_SecuritySeverity = $ColConseqScore
+        CriticalityTierLevel = $ColTierValue; RiskProbablityScore_CriticialityTierLevel = $ColProbScore
+    }
+    $prepare = {
+        param([object[]]$Src, [string]$What)
+        $Src = @($Src | Where-Object { $null -ne $_ })
+        if ($Src.Count -eq 0) { return @() }
+        $cols = @($Src[0].PSObject.Properties.Name)
+        $isSi = ($cols -contains 'AssetBase') -or ($cols -contains 'VulnerabilityBase')
+        if ($isSi) {
+            $miss = @(@('AssetBase', 'VulnerabilityBase', 'si_tier', 'si_severity') | Where-Object { $cols -notcontains $_ })
+            if ($miss.Count) { throw "$What is missing columns: $($miss -join ', ')" }
+            return $Src
+        }
+        $required = @($ColCategory, $ColSubCategory, $ColConfigId, $ColSevValue, $ColTierValue, $ColConseqScore, $ColProbScore)
+        $miss = @($required | Where-Object { $cols -notcontains $_ })
+        if ($miss.Count) { throw "$What is missing columns: $($miss -join ', ')" }
+        $hasP = $cols -contains 'Precedence'
+        @(foreach ($r in $Src) {
+            $o = [ordered]@{}
+            foreach ($k in $map.Keys) { $p = $r.PSObject.Properties[$map[$k]]; $o[$k] = $(if ($p -and $null -ne $p.Value) { [string]$p.Value } else { '' }) }
+            $pc = $r.PSObject.Properties['Comments']; $o['Comments'] = $(if ($pc -and $null -ne $pc.Value) { [string]$pc.Value } else { '' })
+            if ($hasP) { $o['Precedence'] = [string]$r.Precedence }
+            [pscustomobject]$o
+        })
+    }
+    $rows = & $prepare $CsvRows 'the risk index (riskscore.index.locked.csv)'
+    $ov = @(); if (@($OverlayRows | Where-Object { $null -ne $_ }).Count) { $ov = & $prepare $OverlayRows 'your own risk index rows (riskscore.index.custom.csv)' }
+    New-SIRiskIndexSi -Rows $rows -OverlayRows $ov
+}

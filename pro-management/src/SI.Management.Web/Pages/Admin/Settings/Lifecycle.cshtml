@@ -1,0 +1,32 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.LifecycleModel
+@{
+    ViewData["Title"] = "Lifecycle and deadlines";
+}
+<h1>Lifecycle and deadlines</h1>
+<p class="lede">The lifecycles SecurityInsight counts with, in one place: how long a finding may exist before the Protection Score counts it, how long a finding has to be fixed, and how long an unseen asset is kept. Change a value with its Change link -- you review it and give a reason before it is saved, and every change is on the audit trail.</p>
+@if (Model.Error is not null) { <div class="notice warn" role="status" data-lifecycle-error>@Model.Error</div> }
+@foreach (var (sec, lines) in Model.View)
+{
+    <section class="card" aria-labelledby="h-@sec.Id" data-lifecycle-section="@sec.Id">
+        <h2 id="h-@sec.Id">@sec.Title</h2>
+        <p>@sec.Lede</p>
+        <div class="table-wrap">
+            <table class="grid" data-sortable>
+                <thead><tr><th scope="col">What</th><th scope="col">Value</th><th scope="col">Set by</th><th scope="col"></th></tr></thead>
+                <tbody>
+                    @foreach (var l in lines)
+                    {
+                        <tr data-setting="@l.Setting.Name" data-default="@(l.IsDefault ? "1" : "0")">
+                            <td class="wrap" title="@l.Setting.PurposeText">@l.Setting.Title</td>
+                            <td><strong>@l.Value</strong>@if (l.IsDefault) { <span class="hint"> (default)</span> }</td>
+                            <td>@if (!l.IsDefault) { <span>@l.UpdatedBy</span> if (l.UpdatedAt is { } at) { <span class="hint"> @Fmt.Time(at)</span> } }</td>
+                            <td><a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(l.Setting.Name)" data-lifecycle-change="@l.Setting.Name">Change</a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+<p class="hint">The risk rating's thresholds (which score is Critical, High, Moderate or Low) are on the <a href="/Admin/Settings/RiskRating">Risk rating</a> tab.</p>

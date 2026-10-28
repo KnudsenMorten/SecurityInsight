@@ -1,0 +1,130 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "excel-ci",
+  "version": "1.0.0",
+  "description": "The CI sheet (Excel) and the CIs grid (Pro web app): one row per CI.",
+  "grain": "ci",
+  "columns": [
+    {
+      "target": "CI",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "Name",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "Class",
+      "from": "si_class"
+    },
+    {
+      "target": "Type",
+      "from": "si_asset_type"
+    },
+    {
+      "target": "Subtype",
+      "from": "si_asset_subtype"
+    },
+    {
+      "target": "Components",
+      "from": "si_components",
+      "op": "join:;"
+    },
+    {
+      "target": "Tier",
+      "from": "si_tier"
+    },
+    {
+      "target": "Tier set by",
+      "from": "si_tier_set_by"
+    },
+    {
+      "target": "Tier reason",
+      "from": "si_tier_reason"
+    },
+    {
+      "target": "Tier explanation",
+      "from": "si_tier_explanation"
+    },
+    {
+      "target": "Asset risk score",
+      "from": "si_ci_risk_score",
+      "op": "round:1"
+    },
+    {
+      "target": "Weighted asset risk score",
+      "from": "si_ci_weighted_risk_score",
+      "op": "round:1"
+    },
+    {
+      "target": "Open findings",
+      "from": "si_open_findings"
+    },
+    {
+      "target": "Risk factors",
+      "from": "si_risk_factors",
+      "op": "join_ids:;"
+    },
+    {
+      "target": "Internet exposed",
+      "from": "si_internet_exposed"
+    },
+    {
+      "target": "OS",
+      "from": "si_os_name"
+    },
+    {
+      "target": "OS family",
+      "from": "si_os_family"
+    },
+    {
+      "target": "Onboarding",
+      "from": "si_onboarding_status"
+    },
+    {
+      "target": "CMDB id",
+      "from": "si_cmdb_id"
+    },
+    {
+      "target": "CMDB name",
+      "from": "si_cmdb_name"
+    },
+    {
+      "target": "Business criticality",
+      "from": "si_cmdb_criticality"
+    },
+    {
+      "target": "Criticality factor",
+      "from": "si_criticality_factor",
+      "op": "round:2"
+    },
+    {
+      "target": "Owner",
+      "from": "si_owner"
+    },
+    {
+      "target": "Department",
+      "from": "si_department"
+    },
+    {
+      "target": "Lifecycle",
+      "from": "si_lifecycle"
+    },
+    {
+      "target": "Last seen",
+      "from": "si_last_seen",
+      "op": "format_date"
+    },
+    {
+      "target": "Linked objects",
+      "from": "si_linked_objects",
+      "op": "render:provider:id"
+    },
+    {
+      "target": "Sources",
+      "from": "si_link_count"
+    }
+  ],
+  "gridDefault": true
+}

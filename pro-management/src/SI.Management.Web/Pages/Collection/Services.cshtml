@@ -1,0 +1,28 @@
+@page
+@model SI.Management.Web.Pages.Collection.ServicesModel
+@using SI.Management.Web.Pages.Collection
+<partial name="_Header" model="Model" />
+@if (Model.DrillDown)
+{
+    <p><a href="@Model.ViewLink(Model.PagePath)">&larr; Every service</a></p>
+    @if (Model.Service is { } s)
+    {
+        <section class="card" aria-label="This service" data-service="@s.ServiceKey">
+            <dl class="kv">
+                <dt>Weighted risk</dt><dd>@SI.Management.Core.ProData.ScoreFormat.Whole(s.WeightedTotal)</dd>
+                <dt>Per asset</dt><dd>@SI.Management.Core.ProData.ScoreFormat.Whole(s.WeightedPerAsset)</dd>
+                <dt>Assets</dt><dd>@Fmt.Int(s.Assets)@(s.SharedAssets > 0 ? $" ({Fmt.Int(s.SharedAssets)} also in another service)" : "")</dd>
+                <dt>Findings</dt><dd>@Fmt.Int(s.Findings): @Fmt.Int(s.Critical) Very High, @Fmt.Int(s.High) high, @Fmt.Int(s.Medium) medium, @Fmt.Int(s.Low) low</dd>
+                <dt>By tier</dt><dd>tier 0: @Fmt.Int(s.Tier0), tier 1: @Fmt.Int(s.Tier1), tier 2: @Fmt.Int(s.Tier2), tier 3: @Fmt.Int(s.Tier3), @if (s.TierUnclassified > 0) { <a class="tier-link" href="@SI.Management.Web.Pages.Tiers.TierLinks.Unclassified" title="@SI.Management.Web.Pages.Tiers.TierLinks.Title">unclassified</a><text>: @Fmt.Int(s.TierUnclassified)</text> } else { <text>unclassified: @Fmt.Int(s.TierUnclassified)</text> }</dd>
+                @if (!s.IsNoService) { <dt>Service id</dt><dd>@s.ServiceKey</dd> }
+                @if (s.Sources is not null) { <dt>Placed by</dt><dd>@s.Sources</dd> }
+            </dl>
+        </section>
+    }
+}
+else if (Model.State is { } st && st.DerivedAt is not null)
+{
+    <p class="hint" data-services-summary>@Fmt.Int(st.Services) service(s) in this collection; @Fmt.Int(st.UnplacedAssets) asset(s) with findings are in no service.</p>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

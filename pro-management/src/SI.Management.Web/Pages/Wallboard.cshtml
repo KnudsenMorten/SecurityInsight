@@ -1,0 +1,103 @@
+@page
+@model SI.Management.Web.Pages.WallboardModel
+@using SI.Management.Core.ProData
+@{
+    // #415: the home page of every role that may see it -- with the menu; the kiosk account (or ?kiosk=1) full screen
+    Layout = Model.FullScreen ? "_WallboardLayout" : "_Layout";
+    ViewData["Title"] = "Wall board";
+    ViewData["Refresh"] = Model.RefreshSeconds;
+    ViewData["RefreshSeconds"] = Model.RefreshSeconds;
+    var k = Model.Kpis;
+}
+<div class="wallboard-page@(Model.FullScreen ? " full" : "")" data-wallboard>
+@if (Model.MailBanner is not null) { <partial name="_MailBanner" model="Model.MailBanner" /> }
+<div class="wb-head">
+    <h1>Security posture</h1>
+    <p class="muted" data-utc>Data from @(k?.CollectionTime is { } t ? Fmt.When(t) : "–") · page @Fmt.Time(Model.At) · refreshes every @(Model.RefreshSeconds / 60 + " min")@if (!Model.FullScreen) { <text> · </text><a href="/Wallboard?kiosk=1" data-wb-kiosk>Full screen (for a wall screen)</a> }</p>
+</div>
+@{
+    // owner 2026-10-19: what the board shows -- the run its numbers are from, and what it does with the CIs' lifecycle
+    var wbRules = await ((SI.Management.Core.ProData.ICiLifecycleRulesReader)ViewContext.HttpContext.RequestServices.GetService(typeof(SI.Management.Core.ProData.ICiLifecycleRulesReader))!).ReadAsync(ViewContext.HttpContext.RequestAborted);
+    var wbScope = new SI.Management.Web.Pages.ViewScope
+    {
+        RunTime = k?.CollectionTime,
+        // #855: the finding counts and the top Tier-0 assets count the chosen CI lifecycle -- active CIs by default
+        Lifecycle = "the Protection score over the active CIs (seen by a source within the last " + SI.Management.Core.ProData.CiLifecycleRules.Days(wbRules.SeenWithinDays) + ", as the CI list and the tier board); the finding counts and the top Tier-0 assets: " + Model.Lifecycle.Words(wbRules, "findings"),
+        LifecycleDefaulted = Model.Lifecycle.IsDefault,
+        Definitions = wbRules.Definitions,
+    };
+}
+@if (!Model.FullScreen) { <partial name="~/Pages/Shared/_ViewScope.cshtml" model="wbScope" /><partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(ViewContext.HttpContext.Request, Model.Lifecycle)" /> }
+@foreach (var e in Model.Errors) { <div class="notice warn" role="status">@e</div> }
+@{
+    // owner 2026-10-20: the two tiles stay in place (never swapped); the chosen view is highlighted and drives the table below;
+    // each value carries its band's words and colour (ProtectionBands -- a score, not a risk)
+    var pv = Model.ViewKey;
+    var pKiosk = Model.FullScreen && Model.Kiosk is not null ? "kiosk=1&" : "";
+}
+<section class="wb-kpis wb-protection" aria-label="Protection Score" data-wb-protection data-view="@pv">
+    @foreach (var (code, _) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews)
+    {
+        var p = Model.Protection.Headline("protection_" + code);
+        var band = SI.Management.Core.ProData.ProtectionBands.Of(p.Raw);
+        @* owner 2026-10-20: the headline readable from the back of the room, the value balanced with it (app.css .wb-score);
+           the accepted lifecycle's actual values under its score *@
+        <a class="wb-kpi wb-score@(code == pv ? " chosen" : "")" href="/Wallboard?@(pKiosk)view=@code" data-protection-view="@code" data-band="@band.Tone" aria-current="@(code == pv ? "true" : "false")"><div class="label ps-cap">@p.Label</div><div class="value ps-value band-@band.Tone">@p.Value</div>@if (p.Change is { } c1) { <partial name="_ChangeSince" model="c1" /> }@if (code == "lifecycle") { <div class="ps-explain" data-lifecycle-line>@Model.Protection.Lifecycle.Line</div> }</a>
+    }
+    @* #860 (owner 2026-10-21: "we have a risk with no first seen date"): its own count beside the score, never hidden *@
+    @if (Model.Protection.Get("protection", "agebasis", "no date (counted)") is { Available: true } nd)
+    {
+        <div class="wb-kpi @(nd.Value > 0 ? "bad" : "")" data-wb-nodate><div class="label">@SI.Management.Web.RiskExec.ExecutiveFigures.NoDateLabel</div><div class="value">@Fmt.Int((long)Math.Round(nd.Value ?? 0))</div></div>
+    }
+    <div class="wb-kpi"><div class="label">The table below shows</div><div class="value seg" role="group">@foreach (var (code, label) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews) { <a href="/Wallboard?@(pKiosk)view=@code" data-view="@code" aria-current="@(code == pv ? "true" : "false")">@label</a> }</div></div>
+</section>
+<partial name="_RiskScorePanel" model="Model.RiskScore" />
+<div class="wb-kpis">
+    <div class="wb-kpi"><div class="label">Findings</div><div class="value">@(k is null ? "–" : Fmt.Int(k.Findings))</div></div>
+    <div class="wb-kpi @(k is { Tier0Findings: > 0 } ? "bad" : "")"><div class="label">Findings on Tier-0 assets</div><div class="value">@(k is null ? "–" : Fmt.Int(k.Tier0Findings))</div></div>
+    <div class="wb-kpi @(k is { VeryHigh: > 0 } ? "bad" : "")"><div class="label">Very High</div><div class="value">@(k is null ? "–" : Fmt.Int(k.VeryHigh))</div></div>
+    <div class="wb-kpi"><div class="label">High</div><div class="value">@(k is null ? "–" : Fmt.Int(k.High))</div></div>
+    <div class="wb-kpi"><div class="label">Average risk score per finding (lower is better)</div><div class="value">@(k is null ? "–" : Fmt.Score(k.AverageRiskScore))</div></div>
+    <div class="wb-kpi"><div class="label">Highest risk score</div><div class="value">@(k is null ? "–" : Fmt.Score(k.HighestRiskScore))</div></div>
+    <div class="wb-kpi"><div class="label">Open vulnerabilities</div><div class="value">@(Model.OpenNow is { } o ? Fmt.Int(o) : "–")</div></div>
+    <div class="wb-kpi"><div class="label">New, last 7 days</div><div class="value">@Fmt.Int(Model.Opened7)</div></div>
+    <div class="wb-kpi good"><div class="label">Fixed, last 7 days</div><div class="value">@Fmt.Int(Model.Closed7)</div></div>
+</div>
+<section class="card" aria-labelledby="h-t0" data-wb-tier0>
+    <h2 id="h-t0">Top 10 Tier-0 assets -- by Very High, then High vulnerabilities</h2>
+    <p class="muted">Vulnerabilities = distinct CVEs per asset, in the run shown. Total risk score = the sum of the risk scores of all findings on the asset.</p>
+    @if (Model.Tier0Prepared is not true)
+    {
+        <p class="muted" data-tier0-preparing>@(Model.Tier0Prepared is null
+            ? "The top Tier-0 assets need the database update that adds their table: the updater adds it, and the next data sync fills it."
+            : "The top Tier-0 assets of this run are being prepared: the data sync works them out once per run. They appear after it has finished.")</p>
+    }
+    else if (Model.Tier0.Count == 0)
+    {
+        <p class="muted">No Tier-0 asset has findings in the newest collection.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="wb-table" data-static="the wall board is a kiosk screen: no one sorts or filters it">
+                <thead><tr><th class="num">#</th><th>Asset</th><th>Kind</th><th class="num">Very High</th><th class="num">High</th><th class="num" title="sum of the risk scores of all findings on this asset">Total risk score</th></tr></thead>
+                <tbody>
+                    @{ var i = 0; }
+                    @foreach (var a in Model.Tier0)
+                    {
+                        i++;
+                        <tr data-asset="@a.AssetKey">
+                            <td class="num">@Fmt.Int(i)</td>
+                            <td class="wrap"><a href="/Collection/Asset?key=@Uri.EscapeDataString(a.AssetKey)">@(a.AssetName.Length > 0 ? a.AssetName : a.AssetKey)</a></td>
+                            <td>@a.AssetKind</td>
+                            <td class="num @(a.VeryHigh > 0 ? "vh" : "")">@Fmt.Int(a.VeryHigh)</td>
+                            <td class="num">@Fmt.Int(a.High)</td>
+                            <td class="num">@Fmt.Score(a.RiskTotal)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+</div>

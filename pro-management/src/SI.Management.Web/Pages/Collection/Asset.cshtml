@@ -1,0 +1,306 @@
+@page
+@model SI.Management.Web.Pages.Collection.AssetModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@{
+    var a = Model.Asset;
+}
+<p class="split"><a href="@Model.ViewLink("/Collection/Assets")">&larr; Assets (CIs) at risk</a></p>
+<partial name="_Header" model="Model" />
+@if (string.IsNullOrWhiteSpace(Model.Key))
+{
+    <form method="get" action="/Collection/Assets" class="gridbar" role="search">
+        @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
+        <label for="ci-q">Find a CI</label>
+        <input id="ci-q" type="search" name="q" maxlength="200" placeholder="name or key" data-search />
+        <button type="submit">Search</button>
+    </form>
+}
+else
+{
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-ci">
+            <h2 id="h-ci">The CI</h2>
+            <dl class="kv" data-ci="@Model.Key">
+                <dt>Name</dt><dd>@(a?.AssetName ?? "")</dd>
+                <dt>Kind</dt><dd>@(a?.AssetKind ?? "")</dd>
+                <dt>Tier</dt><dd>@if (a is not null) { <span class="tierdot t@(a.Tier)"></span>@SI.Management.Web.Pages.Tiers.TierLinks.AssetLabel(a.Tier, a.AssetKey) }</dd>
+                <dt>CI key</dt><dd class="mono">@Model.Key</dd>
+                <dt>Key kind</dt><dd>@(a?.KeySource == "ledger" ? "durable (identity ledger)" : a?.KeySource == "asset" ? "the asset's own id (no ledger id yet)" : "")</dd>
+                <dt>First seen</dt><dd>@Fmt.Time(a?.FirstSeen)</dd>
+                <dt>Last seen</dt><dd>@Fmt.Time(a?.LastSeen)</dd>
+                <dt>Linked objects</dt><dd>@Fmt.Int(Model.Members.Count)</dd>
+            </dl>
+            <p class="hint"><a href="/Tiers?q=@Uri.EscapeDataString(a?.AssetName ?? Model.Key!)">On the tier board</a></p>
+        </section>
+        <section class="card" aria-labelledby="h-links">
+            <h2 id="h-links">Linked objects and identifiers</h2>
+            @if (Model.Identifiers.Count == 0) { <p class="hint">No identifiers are recorded for this CI.</p> }
+            else
+            {
+                <p class="hint">Each linked object is one asset a source system reports; the correlation joined them into this CI by the identifiers below.</p>
+                <dl class="kv" data-linked>
+                    @foreach (var m in Model.Members) { <dt>Linked object</dt><dd class="mono">@m.Value <span class="muted">seen @Fmt.Time(m.LastSeen)</span></dd> }
+                    @foreach (var grp in Model.IdentifierGroups)
+                    {
+                        <dt>@grp.Key</dt>
+                        <dd class="mono">@string.Join(", ", grp.Select(i => i.Value))</dd>
+                    }
+                </dl>
+            }
+        </section>
+    </div>
+
+    <section class="card" aria-labelledby="h-evidence" data-evidence>
+        <h2 id="h-evidence">Evidence: why these records are one CI</h2>
+        @if (Model.MovedTo.Count > 0)
+        {
+            <div class="notice warn" role="status" data-moved>
+                @foreach (var m in Model.MovedTo)
+                {
+                    <p>@EvidenceText.History(m, Model.Key!) <a href="@Model.ViewLink("/Collection/Asset", ("key", m.AssetKey))">Open the CI it belongs to now</a> (@Fmt.Time(m.DetectedAt)).</p>
+                }
+            </div>
+        }
+        <dl class="kv" data-stable-id>
+            <dt>SecurityInsight asset id</dt><dd class="mono">@Model.Key</dd>
+            <dt>Is it stable?</dt><dd>@(a?.KeySource == "ledger" ? "Yes: a durable id from the identity ledger. It stays the same while the source records change." : a?.KeySource == "asset" ? "Not yet: the id of the asset's own source record. It can change when the correlation finds a durable id for it." : "Unknown")</dd>
+            @if (Model.Correlation is { } cor)
+            {
+                <dt>Seen by</dt><dd data-sources="@cor.SourceCount">@(cor.Sources ?? "") <span class="muted">(@Fmt.Int(cor.SourceCount) source(s), @Fmt.Int(cor.Records) source record(s))</span></dd>
+                <dt>Correlation</dt><dd><span class="badge @AssetModel.ConfidenceClass(cor.Confidence)" data-ci-confidence="@cor.Confidence">@cor.Confidence</span> @(cor.JoinRule switch { "exact-id" => "joined by an id the records share", "graph-link" => "joined through the Exposure Graph", "single-record" => "one source record", "unresolved" => "no source record matched", _ => cor.JoinRule })</dd>
+                @if (cor.CmdbState is not null)
+                {
+                    <dt>CMDB</dt><dd data-cmdb="@cor.CmdbState">@(cor.CmdbState switch { "matched" => "matched to CI " + (cor.CmdbId ?? ""), "si-only" => "not in the CMDB (seen only by SecurityInsight)", "stale" => "not judged: the CMDB copy was too old", _ => cor.CmdbState })@(cor.CmdbSource is null ? "" : " · " + (cor.CmdbSource == "servicenow" ? "ServiceNow" : "CMDB file"))</dd>
+                }
+            }
+        </dl>
+        @if (Model.EvidenceNote is not null)
+        {
+            <p class="hint" data-evidence-note>@Model.EvidenceNote</p>
+        }
+        else
+        {
+            <p class="hint">Every source record behind this CI, by the system that reported it. A key marked "joins" is the one two records share; that is what made them one CI. Confidence: exact (an id both records carry), strong (linked through the Exposure Graph or a CMDB rule), weak (by name only, or not matched at all).</p>
+            @foreach (var grp in Model.CurrentEvidence)
+            {
+                <h3>@grp.Key</h3>
+                <div class="table-wrap">
+                    <table data-sortable data-evidence-source="@grp.Key">
+                        <thead><tr><th scope="col">What SecurityInsight saw</th><th scope="col">Key</th><th scope="col">Value</th><th scope="col">Confidence</th><th scope="col">Last seen</th></tr></thead>
+                        <tbody>
+                            @foreach (var e in grp)
+                            {
+                                <tr data-rule="@e.MatchRule" data-confidence="@e.Confidence">
+                                    <td class="wrap">@EvidenceText.Sentence(e) @if (e.IsJoinKey) { <span class="badge good" data-join-key>joins</span> }</td>
+                                    <td>@e.KeyType</td>
+                                    <td class="mono wrap" title="@e.KeyValue">@e.KeyValue</td>
+                                    <td><span class="badge @AssetModel.ConfidenceClass(e.Confidence)">@e.Confidence</span></td>
+                                    <td data-utc>@(e.SourceLastSeen is { } sl ? Fmt.When(sl) : e.RecordSeenAt is { } rs ? "read " + Fmt.When(rs) : "") <span class="muted mono" title="the source record">@EvidenceText.Short("", e.MemberAssetId)</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (Model.EarlierEvidence.Count > 0)
+            {
+                <details data-earlier-evidence>
+                    <summary>@Fmt.Int(Model.EarlierEvidence.Count) earlier key(s) no longer reported</summary>
+                    <ul>@foreach (var e in Model.EarlierEvidence) { <li>@EvidenceText.Sentence(e) <span class="muted">-- no longer reported since @Fmt.Time(e.LastSeen)</span></li> }</ul>
+                </details>
+            }
+        }
+
+        <h3>Id history</h3>
+        @{ var own = Model.IdHistory.Where(h => h.AssetKey == Model.Key).ToList(); }
+        @if (own.Count == 0) { <p class="hint" data-id-history="0">No id change recorded for this CI.</p> }
+        else
+        {
+            <ul data-id-history="@own.Count">
+                @foreach (var h in own) { <li data-event="@h.EventType">@Fmt.Time(h.DetectedAt): @EvidenceText.History(h, Model.Key!)</li> }
+            </ul>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-conflicts" data-conflicts="@Model.CurrentConflicts.Count">
+        <h2 id="h-conflicts">Where the sources disagree</h2>
+        @if (Model.CurrentConflicts.Count == 0 && Model.PossibleDuplicates.Count == 0) { <p class="hint">The sources agree on this CI's name, operating system, domain and CMDB CI.</p> }
+        @if (Model.CurrentConflicts.Count > 0)
+        {
+            <div class="table-wrap">
+                <table data-sortable data-conflict-table>
+                    <thead><tr><th scope="col">Value</th><th scope="col">Source</th><th scope="col">Says</th><th scope="col">Record</th></tr></thead>
+                    <tbody>@foreach (var c in Model.CurrentConflicts.OrderBy(c => c.Field)) { <tr data-field="@c.Field"><td>@c.Field</td><td>@c.Source</td><td class="wrap">@c.Value</td><td class="mono" title="@c.MemberAssetId">@EvidenceText.Short("", c.MemberAssetId)</td></tr> }</tbody>
+                </table>
+            </div>
+        }
+        @if (Model.PossibleDuplicates.Count > 0)
+        {
+            <p data-possible-duplicates>Possibly the same asset as:
+                @foreach (var d in Model.PossibleDuplicates) { <a href="@Model.ViewLink("/Collection/Asset", ("key", d.MemberAssetId))">@d.Value</a> }
+                <span class="muted">(same name, no shared id -- check before merging)</span></p>
+        }
+        @if (Model.ResolvedConflicts.Count > 0)
+        {
+            <details><summary>@Fmt.Int(Model.ResolvedConflicts.Count) earlier disagreement(s), since resolved</summary>
+                <ul>@foreach (var c in Model.ResolvedConflicts) { <li>@c.Field: @c.Source said "@c.Value" <span class="muted">until @Fmt.Time(c.LastSeen)</span></li> }</ul>
+            </details>
+        }
+    </section>
+
+    @if (Model.Properties.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-props" data-security-profile>
+            <h2 id="h-props">Security profile</h2>
+            <p class="hint">What SecurityInsight records for risk: the tier, who set it and why.</p>
+            <div class="grid-2">
+                @foreach (var (src, props) in Model.Properties)
+                {
+                    <div>
+                        <h3>@src</h3>
+                        <dl class="kv">@foreach (var (n, v) in props) { <dt>@n</dt><dd>@v</dd> }</dl>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+
+    <section class="card" aria-labelledby="h-meta" id="full-metadata" data-full-metadata="@(Model.MetadataFull ? "on" : "off")">
+        <h2 id="h-meta">Full metadata</h2>
+        @if (Model.MetadataNote is not null)
+        {
+            <p class="hint" data-metadata-note>@Model.MetadataNote
+                @if (!Model.MetadataFull) { <a href="/Admin/Settings?q=SI_AssetProperties">Open Settings</a> }</p>
+        }
+        else
+        {
+            <p class="hint">Every property each source system reports about this CI, as the source reported it. Lists stay lists; a list of objects opens as a table. Search filters the property paths and values. Kept @Fmt.Int(Model.MetadataState?.RetentionDays ?? 3) day(s): History lists every snapshot kept, newest first, with what changed between them.</p>
+            var bySource = Model.MetadataBySource;
+            @foreach (var grp in bySource)
+            {
+                var first = grp.Key == bySource[0].Key;
+                <details class="meta-source" data-meta-source="@grp.Key" open="@(first ? "open" : null)">
+                    <summary><strong>@AssetMetadataText.Label(grp.Key)</strong> <span class="muted">@Fmt.Int(grp.Count()) object(s) · collected</span> @Fmt.Time(grp.Max(o => o.CollectionTime))</summary>
+                    @foreach (var o in grp)
+                    {
+                        var rows = MetadataTree.Flatten(o.PropertiesJson);
+                        <div class="meta-object" data-meta-object="@o.MemberAssetId">
+                            <dl class="kv">
+                                @if (o.ItemName.Length > 0) { <dt>Item</dt><dd>@o.ItemName</dd> }
+                                <dt>Source record</dt><dd class="mono" title="@o.MemberAssetId">@EvidenceText.Short("", o.MemberAssetId)</dd>
+                                <dt>Collected</dt><dd>@Fmt.Time(o.CollectionTime)</dd>
+                                @if (o.SerialNumber is not null) { <dt>Serial number</dt><dd class="mono">@o.SerialNumber</dd> }
+                                @if (o.MacAddress is not null) { <dt>MAC address</dt><dd class="mono">@o.MacAddress</dd> }
+                                @if (o.ParentResourceId is not null) { <dt>Belongs to</dt><dd class="mono wrap">@o.ParentResourceId</dd> }
+                                @if (o.PropertyCount is { } pc) { <dt>Properties</dt><dd>@Fmt.Int(pc)</dd> }
+                            </dl>
+                            @if (o.HandoffHeld) { <p class="notice warn" role="status" data-meta-held>This source changed too much since the previous run, so the previous collection is shown (<nav-ref page="/Admin/Guards" />).</p> }
+                            @if (o.Dropped) { <p class="hint" data-meta-dropped>This object was larger than the collection's size budget, so it was not stored; what was measured is shown below.</p> }
+                            @if (rows.Count == 0) { <p class="hint">The source reported no properties.</p> }
+                            else
+                            {
+                                <div class="table-wrap">
+                                    <table data-sortable data-default-sort="off" data-meta-rows="@rows.Count" class="meta-props">
+                                        <thead><tr><th scope="col">Property</th><th scope="col">Value</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var r in rows)
+                                            {
+                                                <tr data-path="@r.Path"><td class="mono wrap">@r.Path</td><td class="wrap" data-sort="@MetadataTree.Plain(r.Value)"><partial name="_MetaValue" model="r.Value" /></td></tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                                @if (rows.Count >= MetadataTree.MaxRows) { <p class="hint">Only the first @Fmt.Int(MetadataTree.MaxRows) properties are shown.</p> }
+                            }
+                            @{ var hist = Model.HistoryOf(o); }
+                            @if (hist is not null)
+                            {
+                                <details class="meta-history" data-meta-history="@hist.Snapshots.Count">
+                                    <summary>History -- @Fmt.Int(hist.Snapshots.Count) snapshot(s) kept, newest first</summary>
+                                    <ol class="meta-snapshots">
+                                        @foreach (var snap in hist.Snapshots)
+                                        {
+                                            <li data-meta-snapshot>
+                                                <strong>@Fmt.Time(snap.Object.CollectionTime)</strong>
+                                                @if (snap.Changes is null) { <span class="muted" data-meta-oldest>-- the oldest snapshot kept; nothing older to compare with.</span> }
+                                                else if (snap.Changes.Count == 0) { <span class="muted" data-meta-unchanged>-- no change since the snapshot before.</span> }
+                                                else
+                                                {
+                                                    <span class="muted">-- @Fmt.Int(snap.Changes.Count) change(s) since the snapshot before</span>
+                                                    <div class="table-wrap">
+                                                        <table data-sortable data-default-sort="off" data-meta-changes="@snap.Changes.Count">
+                                                            <thead><tr><th scope="col">Property</th><th scope="col">Change</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+                                                            <tbody>
+                                                                @foreach (var c in snap.Changes)
+                                                                {
+                                                                    <tr data-change="@c.Kind" data-path="@c.Path"><td class="mono wrap">@c.Path</td><td>@c.Kind</td><td class="wrap">@(c.Before ?? "")</td><td class="wrap">@(c.After ?? "")</td></tr>
+                                                                }
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                }
+                                            </li>
+                                        }
+                                    </ol>
+                                </details>
+                            }
+                        </div>
+                    }
+                </details>
+            }
+        }
+    </section>
+
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-hist">
+            <h2 id="h-hist">History</h2>
+            @if (Model.History.Count == 0) { <p class="hint">No finding of this CI in any loaded collection.</p> }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-history>
+                        <thead><tr><th scope="col">Collection</th><th scope="col" class="num">Findings</th><th scope="col" class="num">Total risk</th><th scope="col" class="num">Highest</th></tr></thead>
+                        <tbody>
+                            @foreach (var h in Model.History)
+                            {
+                                <tr><td><a href="/Collection/Asset?c=@Uri.EscapeDataString(h.CollectionId)&key=@Uri.EscapeDataString(Model.Key!)" aria-current="@(h.CollectionId == Model.Current?.CollectionId ? "true" : "false")">@Fmt.Time(h.CollectionTime)</a></td>
+                                    <td class="num" data-value="@Fmt.Raw(h.Findings)">@Fmt.Int(h.Findings)</td><td class="num" data-value="@Fmt.Raw(h.TotalRisk)">@Fmt.Score(h.TotalRisk)</td><td class="num" data-value="@Fmt.Raw(h.MaxRisk)">@Fmt.Score(h.MaxRisk)</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+        <section class="card" aria-labelledby="h-vi">
+            <h2 id="h-vi">In the vulnerability close-loop</h2>
+            @if (Model.VulnNote is not null) { <p class="hint">@Model.VulnNote</p> }
+            else if (Model.VulnItems.Count == 0) { <p class="hint">The close-loop holds no item for this CI.</p> }
+            else
+            {
+                <p class="hint">@Fmt.Int(Model.VulnItems.Count(v => v.State == "Open")) open, @Fmt.Int(Model.VulnItems.Count(v => v.State != "Open")) closed.</p>
+                <div class="table-wrap">
+                    <table data-sortable data-vuln-items>
+                        <thead><tr><th scope="col">CVE</th><th scope="col">Severity</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Closed</th></tr></thead>
+                        <tbody>@foreach (var v in Model.VulnItems.Take(100)) { <tr><td>@v.Cve</td><td>@v.Severity</td><td>@v.State</td><td>@Fmt.Time(v.FirstSeen)</td><td>@Fmt.Time(v.ClosedAt) <span class="muted">@v.CloseReason</span></td></tr> }</tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+
+    @if (Model.Recommendations.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-rec">
+            <h2 id="h-rec">Defender for Cloud recommendations at this collection</h2>
+            <ul>@foreach (var r in Model.Recommendations) { <li>@r.Name <span class="muted">@r.Severity</span></li> }</ul>
+        </section>
+    }
+
+    @if (Model.Grid is not null)
+    {
+        <h2>Its findings in this collection</h2>
+        <partial name="_Grid" model="Model" />
+    }
+}
+<partial name="_Queries" model="Model" />

@@ -1,0 +1,1298 @@
+{
+  "$comment": "SecurityInsight severity model (REQUIREMENTS #690 (15), owner 2026-10-15: \"all security findings must have severity\" / \"it comes from different metrics, often impact score or directly from the source\" / \"report can easily have a model for mapping the impact score into severity\" / \"unknown is not supported in any report\" / \"field must be normalized\"). ONE model: every report declares an ORDERED list of metric kinds; the first kind whose metric the row carries decides the severity, owner_defined is always last, so every row ends with exactly one of the five SI values in scale. source_severity = the provider's own severity word through sourceMap; cvss / epss / secure_score_impact / attack_path_priority = an impact score through its bands (first band whose min the score reaches; a missing score = the next kind); tier = the asset tier; owner_defined = the report's own severity (pre-filled with the severity each report declared before this model, so nothing changed; validated false = waiting for the owner's weekly validation). The model is loaded and validated (SI-DataModelTemplates.ps1: Get-SISeverityModel / Resolve-SISeverity / Test-SISeverityModel); the reports' queries do not read it yet -- the generated severity block is the next step. Pro: overridden per report like every data-model item (cfg.ItemOverride datamodel severity-model:<report>).",
+  "kind": "severity-model",
+  "version": "1.0.0",
+  "scale": [
+    "Very High",
+    "High",
+    "Medium-High",
+    "Medium",
+    "Low"
+  ],
+  "models": [
+    {
+      "id": "source_severity",
+      "type": "map",
+      "description": "the provider's own severity word or level (Defender vulnerability management, Defender for Cloud, Defender for Identity, Entra)",
+      "map": {
+        "critical": "Very High",
+        "very high": "Very High",
+        "high": "High",
+        "medium-high": "Medium-High",
+        "medium": "Medium",
+        "moderate": "Medium",
+        "low": "Low"
+      }
+    },
+    {
+      "id": "cvss",
+      "type": "bands",
+      "description": "CVSS base score 0-10 (owner 2026-10-15: >=9 Very High, >=7 High, >=4 Medium, >0 Low)",
+      "bands": [
+        {
+          "min": 9,
+          "severity": "Very High"
+        },
+        {
+          "min": 7,
+          "severity": "High"
+        },
+        {
+          "min": 4,
+          "severity": "Medium"
+        },
+        {
+          "min": 0.1,
+          "severity": "Low"
+        }
+      ]
+    },
+    {
+      "id": "epss",
+      "type": "bands",
+      "description": "EPSS exploit probability 0-1 -- PROPOSED bands, waiting for the owner",
+      "validated": false,
+      "bands": [
+        {
+          "min": 0.5,
+          "severity": "Very High"
+        },
+        {
+          "min": 0.1,
+          "severity": "High"
+        },
+        {
+          "min": 0.01,
+          "severity": "Medium"
+        },
+        {
+          "min": 1E-06,
+          "severity": "Low"
+        }
+      ]
+    },
+    {
+      "id": "secure_score_impact",
+      "type": "bands",
+      "description": "Defender secure-configuration impact 0-10 (the bands the device reports use today: 10 Very High, 9 High, 8 Medium-High, >=5 Medium, else Low)",
+      "bands": [
+        {
+          "min": 10,
+          "severity": "Very High"
+        },
+        {
+          "min": 9,
+          "severity": "High"
+        },
+        {
+          "min": 8,
+          "severity": "Medium-High"
+        },
+        {
+          "min": 5,
+          "severity": "Medium"
+        },
+        {
+          "min": 0,
+          "severity": "Low"
+        }
+      ]
+    },
+    {
+      "id": "attack_path_priority",
+      "type": "bands",
+      "description": "the attack path's own priority score (the bands the attack-path reports use today: >=90 Very High, >=60 High, >=30 Medium-High, >=15 Medium, else Low)",
+      "bands": [
+        {
+          "min": 90,
+          "severity": "Very High"
+        },
+        {
+          "min": 60,
+          "severity": "High"
+        },
+        {
+          "min": 30,
+          "severity": "Medium-High"
+        },
+        {
+          "min": 15,
+          "severity": "Medium"
+        },
+        {
+          "min": 0,
+          "severity": "Low"
+        }
+      ]
+    },
+    {
+      "id": "tier",
+      "type": "map",
+      "description": "the asset tier (owner 2026-10-15: 0 Very High, 1 High, 2 Medium, 3 Low)",
+      "map": {
+        "0": "Very High",
+        "1": "High",
+        "2": "Medium",
+        "3": "Low"
+      }
+    },
+    {
+      "id": "owner_defined",
+      "type": "fixed",
+      "description": "the report's own severity (ownerDefined), always last -- every row gets a severity"
+    }
+  ],
+  "reports": [
+    {
+      "id": "Device_Missing_CVEs_Summary",
+      "order": [
+        "source_severity",
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_Missing_CVEs_Detailed",
+      "order": [
+        "source_severity",
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_Recommendations_Summary",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_Recommendations_Detailed",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_EndOfSupport_Software_Summary",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_EndOfSupport_Software_Detailed",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_Certificates_Summary",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_Certificates_Detailed",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_BrowserExtensions_Summary",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Device_BrowserExtensions_Detailed",
+      "order": [
+        "secure_score_impact",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Azure_Recommendations_Summary",
+      "order": [
+        "source_severity",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Azure_Recommendations_Detailed",
+      "order": [
+        "source_severity",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Azure_DefenderRecommendations_Summary",
+      "order": [
+        "source_severity",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Azure_DefenderRecommendations_Detailed",
+      "order": [
+        "source_severity",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Github_to_Azure_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Github_to_Azure_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Credential_Based_Lateral_Movement",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure",
+      "order": [
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure",
+      "order": [
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Credential_Based_Lateral_Movement",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_ServicePrincipal_Impersonates_Users",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_ServicePrincipal_Impersonates_Users",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Workload_ManagedIdentity_to_Azure_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Workload_ManagedIdentity_to_Azure_Resources",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_SignIn_Entitlement_to_Tier0_Servers",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_SignIn_Entitlement_to_Tier0_Servers",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Summary_Owner_to_Privileged_Service_Principal",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Attack_Paths_Detailed_Owner_to_Privileged_Service_Principal",
+      "order": [
+        "attack_path_priority",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_NoMFA_Summary",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_StaleUser_NoLogin180Days_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_StaleUser_NoLogin180Days_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_StaleGuest_NoLogin90Days_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedSPN_NoLogin180Days_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedSPN_NoLogin180Days_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_ExpiringCredentials_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_Orphan_NoOwner_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PermanentPrivilegedRole_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ShadowAdmin_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_PasswordNeverExpires_Privileged_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_MultiTenant_HighPermission_SPN_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ExternalUser_PrivilegedRole_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_StalePassword_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_MailboxAccess_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighValueTarget_MDIRisk_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_SignIn_NonTrustedLocation_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_SignIn_NonTrustedLocation_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ServiceAccount_SignIn_NonTrustedLocation_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_BreakGlass_SignIn_Detected_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_RoleManagementWrite_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_AppRoleAssignmentWrite_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_PrivilegedAccessWrite_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_UnverifiedPublisher_HighPermission_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_NewAccount_ImmediateTier0Role_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledAccount_ActivePIMAssignment_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ServiceAccount_InteractiveSignIn_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighMDIInvestigationPriority_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdminAccount_OnPremSynced_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdminAccount_NeverUsed_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_TooManyGlobalAdmins_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_BreakGlass_Anomaly_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PIM_EligibleNeverActivated_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_PIM_DuplicateRoleAssignment_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OverCredentialed_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_VulnerableDevice_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_VulnerableDevice_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_InternetExposedDevice_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_LowTierDevice_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_EligibleAdmin_LogonTo_ExploitableDevice_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdminAccount_NeverUsed_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdminAccount_OnPremSynced_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_InternetExposedDevice_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_Admin_LogonTo_LowTierDevice_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_NoMFA_Detailed",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_BreakGlass_Anomaly_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_BreakGlass_SignIn_Detected_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledAccount_ActivePIMAssignment_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_EligibleAdmin_LogonTo_ExploitableDevice_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ExternalUser_PrivilegedRole_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighMDIInvestigationPriority_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighValueTarget_MDIRisk_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_MultiTenant_HighPermission_SPN_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_NewAccount_ImmediateTier0Role_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PIM_DuplicateRoleAssignment_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PIM_EligibleNeverActivated_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_PasswordNeverExpires_Privileged_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PermanentPrivilegedRole_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_StalePassword_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_AppRoleAssignmentWrite_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_ExpiringCredentials_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_MailboxAccess_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_Orphan_NoOwner_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OverCredentialed_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_PrivilegedAccessWrite_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_RoleManagementWrite_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Very High",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_UnverifiedPublisher_HighPermission_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ServiceAccount_InteractiveSignIn_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium-High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ServiceAccount_SignIn_NonTrustedLocation_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "High",
+      "validated": false
+    },
+    {
+      "id": "Identity_ShadowAdmin_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_StaleGuest_NoLogin90Days_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_TooManyGlobalAdmins_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "PublicIP_OpenPorts_Summary",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "PublicIP_OpenPorts_Detailed",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "PublicIP_Vulnerabilities_Summary",
+      "order": [
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "PublicIP_Vulnerabilities_Detailed",
+      "order": [
+        "cvss",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ActiveCompromise_Detected_Summary",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ActiveCompromise_Detected_Detailed",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Medium",
+      "validated": false
+    },
+    {
+      "id": "Identity_Departed_AccountStillEnabled_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledPrivilegedUser_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledUser_StillInCriticalGroup_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_GuestWithPrivilegedRole_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedRole_PermanentNotEligible_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_NoConditionalAccess_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_MailboxImpersonation_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OwnerMismatch_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OwnsResourcePublicAccess_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdNestedCriticalGroup_NoEntraRole_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighRiskFactorComposite4Plus_Detailed",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_Departed_AccountStillEnabled_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledPrivilegedUser_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_DisabledUser_StillInCriticalGroup_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_GuestWithPrivilegedRole_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedRole_PermanentNotEligible_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_PrivilegedUser_NoConditionalAccess_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_MailboxImpersonation_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OwnerMismatch_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_SPN_OwnsResourcePublicAccess_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_AdNestedCriticalGroup_NoEntraRole_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Identity_HighRiskFactorComposite4Plus_Summary",
+      "order": [
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ExcludedAssets_Detailed",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ExcludedAssets_Summary",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ConflictingTierTags_Detailed",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    },
+    {
+      "id": "Endpoint_ConflictingTierTags_Summary",
+      "order": [
+        "tier",
+        "owner_defined"
+      ],
+      "ownerDefined": "Low",
+      "validated": false
+    }
+  ]
+}

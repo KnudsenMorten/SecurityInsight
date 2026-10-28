@@ -1,0 +1,21 @@
+id:        CyrusImap
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Cyrus IMAP'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Cyrus IMAP'
+
+detections:
+  - id: CyrusImap
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'imap*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

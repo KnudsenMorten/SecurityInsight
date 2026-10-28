@@ -1,0 +1,286 @@
+@page
+@model SI.Management.Web.Pages.Admin.DataQualityModel
+@using SI.Management.Web.DataQuality
+@using SI.Management.Web.Pages.Admin
+@{
+    ViewData["Title"] = "Data quality";
+    var v = Model.View;
+    var c = Model.Culture;
+    var isAdmin = User.IsAdmin();
+    var trail = Model.CanOpenAuditTrail;
+    var changes = Model.TableView("changes");
+    var numbers = Model.TableView("numbers");
+    var runs = Model.TableView("runs");
+}
+<h1>Data quality</h1>
+<p class="lede">Each pipeline run's key numbers -- assets per source and per class, rows per Risk Analysis report, how many rows carry the key values, how many records of each source carry each field, CIs per tier, active CIs and CIs to retire -- compared with the median of the 3 runs before. A number far off its range is a warning here and in Run health, and a mail says so when the numbers outside their range change. It is a warning only: nothing is blocked.</p>
+<details class="help">
+    <summary>The rules</summary>
+    <p>Assets (per source, active CIs) down 30 % or more; a report at 0 rows or down 50 % or more; a fill down 30 points or more (a key column of the findings, or a field of one source); a tier or an asset class moving 20 % or more of all active CIs (and CIs to retire rising by as much). With fewer than 3 earlier runs there is no expected range yet: the values are shown, nothing is compared. The limits: Settings &gt; Guards (safety checks) &gt; Data-quality warnings.</p>
+    <p>When one source fills many fields less in the same run, that is one warning for the source, with the fields listed inside it -- not one warning per field. Each field stays a key number of the run below.</p>
+    <p>The mail goes out only when the numbers outside their range change: a new warning, or one that is back within its range (when all are back, one mail says "back to normal"). The same warnings day after day send no new mail, and there is at most one mail a day. Every run says below whether its mail went out and, if not, why.</p>
+    <p>The likely cause is the settings changed between the last run without a warning and this one (who, which setting, when), the ones that concern the number first. Correct the setting, then use <strong>Re-run from here</strong> on the warning: the pipeline runs again from the step that produces the number (the same as on <nav-ref page="/Admin/Jobs" />). When the change is expected, nothing needs doing: the range follows the new numbers after three runs.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database is from before the data-quality measurements existed: it has no data-quality tables yet. Run the Pro schema (setup or the updater) once; the data sync measures the key numbers from its next run.</div> }
+else if (v.Latest is null) { <div class="notice" role="status" data-no-run>No run has been measured yet. The data sync measures the key numbers at the end of every pipeline run; the first measurement appears here after the next run.</div> }
+else if (v.Selected is null)
+{
+    <div class="notice" role="status" data-no-such-run>That run is not in the database (any more). <a href="@Model.Link(null, null)">Show the latest run</a>.</div>
+    @if (runs is not null)
+    {
+        <section class="card" aria-labelledby="h-history" data-dq-history>
+            <h2 id="h-history">Earlier runs</h2>
+            <partial name="~/Pages/Shared/_DataTable.cshtml" model="runs" />
+        </section>
+    }
+}
+else
+{
+    var run = v.Selected;
+    var isLatest = v.Latest.RunId == run.RunId;
+    var top = v.Detail.Anomalies.FirstOrDefault();
+    var state = run.Learning ? "learning" : run.Anomalies == 0 ? "ok" : "anomalies";
+    var earlierKnown = run.EarlierRuns ?? 0;
+    // a warning about one source stands for its fields: the verdict counts key numbers, and says how many warnings they are
+    var outside = v.Detail.Anomalies.Count > 0 ? v.Detail.NumbersOutside : run.Anomalies;
+    var grouped = outside != run.Anomalies;
+    var warningWords = Fmt.Int(run.Anomalies) + (run.Anomalies == 1 ? " warning" : " warnings");
+    // the sentence names a time: the element that shows it (data-dq-mail, below) is marked data-utc, so the viewer reads it in their own zone
+    var mailWhy = DataQualityText.MailWhy(run, v.MailOf, t => Fmt.When(t));
+
+    <section class="card" aria-labelledby="h-verdict" data-dq-verdict data-dq-latest data-run="@run.RunId" data-state="@state" data-anomalies="@run.Anomalies">
+        <div class="split">
+            <h2 id="h-verdict">@(isLatest ? "Latest run" : "An earlier run")</h2>
+            <form method="get" action="/Admin/DataQuality" class="inline-form" data-autosubmit data-dq-pick>
+                <label>Run
+                    <select name="run">
+                        @if (!v.Recent.Any(r => r.RunId == run.RunId)) { <option value="@run.RunId" selected data-utc>@Fmt.When(run.ComputedAt) -- @DataQualityText.Verdict(run, c)</option> }
+                        @foreach (var r in v.Recent)
+                        {
+                            <option value="@r.RunId" selected="@(r.RunId == run.RunId)" data-utc>@Fmt.When(r.ComputedAt) -- @DataQualityText.Verdict(r, c)</option>
+                        }
+                    </select>
+                </label>
+                @if (Model.History != DataQualityModel.HistoryChoices[0]) { <input type="hidden" name="history" value="@Model.History" /> }
+                @if (Model.ShowNeverFilled) { <input type="hidden" name="never" value="true" /> }
+                <noscript><button type="submit" class="small secondary">Show</button></noscript>
+            </form>
+        </div>
+        <p class="muted">Measured @Fmt.Time(run.ComputedAt)@if (run.CollectionTime is { } ct) { <text> -- Risk Analysis collection @Fmt.Time(ct)</text> }@if (!isLatest) { <text> -- <a href="@Model.Link(null, Model.ActiveGroup)">show the latest run</a></text> }</p>
+
+        <div class="stat-row" data-dq-summary>
+            <div class="stat" data-dq-stat="anomaly"><div class="n">@(run.Learning ? "–" : run.Anomalies > 0 ? "Yes" : "No")</div><div class="l">Anomaly detected</div></div>
+            <div class="stat" data-dq-stat="outside"><div class="n">@(run.Learning ? "–" : Fmt.Int(outside))</div><div class="l">of @Fmt.Int(run.Metrics) key numbers outside the range@(grouped ? " (" + warningWords + ")" : "")</div></div>
+            <div class="stat" data-dq-stat="largest"><div class="n">@(top is not null ? DataQualityText.Change(top, c) : "–")</div><div class="l">@(top is not null ? "Largest change vs the expected range: " + top.Label : "Largest change vs the expected range")</div></div>
+            <div class="stat" data-dq-stat="compared"><div class="n">@(run.Learning ? Fmt.Int(earlierKnown) + " of 3" : "3")</div><div class="l">earlier runs compared with (their median)</div></div>
+        </div>
+
+        @if (run.Learning)
+        {
+            <p class="hint" data-dq-learning>No expected range yet: @Fmt.Int(earlierKnown) earlier run(s) -- 3 are needed before the numbers are compared, so this run could not warn. The @Fmt.Int(run.Metrics) key numbers it measured are listed below with the values so far.@if (run.Anomalies > 0) { <text> The classification check needs no earlier run: its @Fmt.Int(run.Anomalies) warning(s) are below.</text> }</p>
+        }
+        else if (run.Anomalies == 0)
+        {
+            <p class="hint" data-dq-ok><strong>Anomaly detected: no.</strong> All @Fmt.Int(run.Metrics) key numbers are within the expected range from the 3 runs before.</p>
+        }
+        else
+        {
+            <p data-dq-verdict-text><strong>Anomaly detected: yes.</strong> @Fmt.Int(outside) of @Fmt.Int(run.Metrics) key numbers are outside the expected range from the 3 runs before@(grouped ? ", in " + warningWords + " (the fields of one source are one warning)" : "")@(top is not null ? "; the largest change is " + DataQualityText.Change(top, c) + " (" + top.Label + ")" : ""). Please review recent changes. Nothing was blocked.</p>
+        }
+        @if (mailWhy.Length > 0)
+        {
+            <p class="hint" data-utc data-dq-mail="@(string.IsNullOrWhiteSpace(run.MailState) ? "none" : run.MailState)">@(mailWhy)@if (v.MailOf is { } mailRun) { <text> <a href="@Model.Link(mailRun.RunId, Model.ActiveGroup)" data-dq-mail-of="@mailRun.RunId">Show that run</a>.</text> }</p>
+        }
+    </section>
+
+    @if (run.Anomalies > 0)
+    {
+        <section class="card" aria-labelledby="h-changes" data-dq-changes>
+            <h2 id="h-changes">Most significant changes</h2>
+            @if (changes is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="changes" /> }
+            else { <p class="hint" data-dq-changes-missing>The run says @Fmt.Int(run.Anomalies) key number(s) are outside the range, but their rows are not in the database.</p> }
+        </section>
+
+        <section class="card" aria-labelledby="h-warnings" data-dq-warnings>
+            <h2 id="h-warnings">The warnings</h2>
+            @foreach (var a in v.Detail.Anomalies)
+            {
+                var (cause, concerning) = DataQualityMath.CauseOf(a, v.Detail);
+                var stepLabel = DataQualityText.Step(a.Step);
+                var fields = v.Detail.FieldsOf(a);
+                var subject = a.IsSource ? "this source" : "this number";
+                <article class="card" id="w-@DataQualityModel.Anchor(a.MetricKey)" data-dq-warning="@a.MetricKey" data-rule="@a.Rule" data-direction="@a.Direction">
+                    <h3>@a.Label <span class="badge warn">@DataQualityText.Change(a, c)</span></h3>
+                    <p data-dq-what><strong>What changed.</strong> @DataQualityText.WhatChanged(a, c)</p>
+                    @if (a.IsClassification)
+                    {
+                        <div data-dq-classification="@fields.Count">
+                            @if (fields.Count == 0)
+                            {
+                                <p class="hint" data-dq-classification-missing>The groups of this warning are not stored in this database.</p>
+                            }
+                            else
+                            {
+                                <div class="table-wrap">
+                                    <table data-dq-classification-groups data-sortable data-default-sort="off">
+                                        <thead><tr><th>What and why</th><th class="num">How many</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var f in fields)
+                                            {
+                                                <tr data-group="@f.FieldKey">
+                                                    <td>@f.Label</td>
+                                                    <td class="num"><strong>@DataQualityText.Number(f.Now, "classgap", c)</strong></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                    <div class="table-wrap">
+                        <table data-dq-values data-static="one row: this warning's own numbers side by side, nothing to sort or filter">
+                            @if (a.IsSource) { <caption>The average fill of the fields below</caption> }
+                            <thead><tr><th>3 runs before</th><th>2 runs before</th><th>The run before</th><th>Expected (median)</th><th class="num">This run</th><th class="num">Change</th></tr></thead>
+                            <tbody>
+                                <tr>
+                                    <td class="num">@DataQualityText.Number(a.Earlier3, a.Kind, c)</td>
+                                    <td class="num">@DataQualityText.Number(a.Earlier2, a.Kind, c)</td>
+                                    <td class="num">@DataQualityText.Number(a.Earlier1, a.Kind, c)</td>
+                                    <td class="num">@DataQualityText.Number(a.Expected, a.Kind, c)</td>
+                                    <td class="num"><strong>@DataQualityText.Number(a.Now, a.Kind, c)</strong></td>
+                                    <td class="num"><span class="@(a.Direction == "drop" ? "down" : "up")">@DataQualityText.Change(a, c)</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    }
+                    @if (a.IsSource)
+                    {
+                        <div data-dq-fields="@fields.Count">
+                            @if (fields.Count == 0)
+                            {
+                                <p class="hint" data-dq-fields-missing>The list of fields of this warning is not stored in this database. The fields are among the key numbers below, in the group @DataQualityText.GroupFieldFill.</p>
+                            }
+                            else
+                            {
+                                <p><strong>The fields.</strong> @Fmt.Int(fields.Count) fields of this source are filled less than in the 3 runs before -- the largest drop first.</p>
+                                <div class="table-wrap">
+                                    <table data-dq-field-values data-sortable data-default-sort="off">
+                                        <thead><tr><th>Field</th><th class="num">3 runs before</th><th class="num">2 runs before</th><th class="num">The run before</th><th class="num">Expected (median)</th><th class="num">This run</th><th class="num">Change</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var f in fields)
+                                            {
+                                                <tr data-field="@f.FieldKey">
+                                                    <td title="@f.Label">@f.Name</td>
+                                                    <td class="num">@DataQualityText.Number(f.Earlier3, "fill", c)</td>
+                                                    <td class="num">@DataQualityText.Number(f.Earlier2, "fill", c)</td>
+                                                    <td class="num">@DataQualityText.Number(f.Earlier1, "fill", c)</td>
+                                                    <td class="num">@DataQualityText.Number(f.Expected, "fill", c)</td>
+                                                    <td class="num"><strong>@DataQualityText.Number(f.Now, "fill", c)</strong></td>
+                                                    <td class="num"><span class="down">@DataQualityText.Change("fill", f.ChangePct, c)</span></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <div data-dq-cause>
+                        <p><strong>Likely cause.</strong>
+                            @if (cause.Count == 0) { <span data-cause-text>@(string.IsNullOrWhiteSpace(a.Cause) ? "Not known." : a.Cause)</span> }
+                            else if (concerning) { <span>Settings that concern @subject were changed between the last run without a warning and this one:</span> }
+                            else { <span>No changed setting names @subject directly. These settings were changed between the last run without a warning and this one:</span> }
+                        </p>
+                        @if (cause.Count > 0)
+                        {
+                            <ul data-cause-changes>
+                                @foreach (var ch in cause)
+                                {
+                                    <li data-change="@ch.ChangeId">
+                                        @if (trail) { <a href="@DataQualityText.ChangeLink(ch)" data-cause-link>@ch.Name</a> } else { <strong>@ch.Name</strong> }@if (!string.IsNullOrWhiteSpace(ch.Scope) && ch.Scope != "solution") { <text> (@ch.Scope)</text> }
+                                        @if (!string.IsNullOrWhiteSpace(ch.ChangedBy)) { <text>changed by @ch.ChangedBy</text> } @Fmt.Time(ch.ChangedAt)
+                                    </li>
+                                }
+                            </ul>
+                            @if (!trail) { <p class="muted small">The change itself (before and after) is on the audit trail, which an Admin can open.</p> }
+                        }
+                    </div>
+                    <p data-dq-fix><strong>What to do.</strong> @DataQualityText.Fix(a.Rule) If the change is expected, nothing needs doing: the range follows the new numbers after three runs.</p>
+                    <div class="actions" data-dq-action>
+                        @if (string.IsNullOrWhiteSpace(a.Step))
+                        {
+                            <span class="muted">@(a.IsSource ? "This source" : "This number") has no single step to re-run from: run the pipeline from <nav-ref page="/Admin/Jobs" />.</span>
+                        }
+                        else if (isAdmin)
+                        {
+                            <form method="post" asp-page-handler="Rerun" asp-route-run="@run.RunId" class="inline-form" data-dq-rerun data-step="@a.Step"
+                                  data-confirm-title="Re-run the pipeline from @stepLabel?" data-confirm="The pipeline runs from this step on; the steps before it do not run. When another run is going it waits in the queue. The numbers are measured again at the end.">
+                                <input type="hidden" name="Step" value="@a.Step" />
+                                <button type="submit" class="small">Re-run from here</button>
+                            </form>
+                            <span class="muted">from <strong>@stepLabel</strong> -- <a href="/Admin/Jobs" data-rerun-link data-step="@a.Step">the pipeline</a></span>
+                        }
+                        else
+                        {
+                            <span class="muted" data-dq-admin-only>Re-run from here: from <strong>@stepLabel</strong> -- an Admin re-runs (<nav-ref page="/Admin/Jobs" />).</span>
+                        }
+                    </div>
+                </article>
+            }
+        </section>
+    }
+
+    <section class="card" aria-labelledby="h-numbers" data-dq-numbers-card>
+        <h2 id="h-numbers">Key numbers of this run</h2>
+        @if (Model.Numbers.Count == 0)
+        {
+            <p class="hint" data-dq-no-numbers>The key numbers of this run are not in the database (the run was measured before they were kept, or its rows are not written yet).</p>
+        }
+        else
+        {
+            <p class="hint">Every number the run measured, with the values of the 3 runs before it, their median (the expected value) and the trend over the last @DataQualityModel.TrendRuns runs. A number with fewer than 3 earlier values has no range yet.</p>
+            <ul class="tabs" aria-label="Group of key numbers" data-dq-groups>
+                <li><a href="@Model.Link(isLatest ? null : run.RunId, null)" aria-current="@(Model.ActiveGroup is null ? "true" : "false")">All (@DataQualityModel.CountWords(Model.VisibleCount, Model.Numbers.Count))</a></li>
+                @foreach (var g in Model.GroupCounts)
+                {
+                    <li><a href="@Model.Link(isLatest ? null : run.RunId, g.Group)" aria-current="@(Model.ActiveGroup == g.Group ? "true" : "false")" data-dq-group="@g.Group">@g.Group (@DataQualityModel.CountWords(g.Shown, g.Count)@(g.Outside > 0 ? ", " + Fmt.Int(g.Outside) + " outside" : ""))</a></li>
+                }
+            </ul>
+            @if (Model.NeverFilledCount > 0)
+            {
+                var neverCount = Model.NeverFilledCount;
+                <p class="hint" data-dq-never="@neverCount" data-dq-never-shown="@(Model.ShowNeverFilled ? "1" : "0")">
+                    @Fmt.Int(neverCount) @(neverCount == 1 ? "field is" : "fields are") never filled: 0 % in this run and in every earlier run -- a field the source does not deliver here. They never warn.
+                    @if (Model.ShowNeverFilled)
+                    {
+                        <a href="@Model.Link(isLatest ? null : run.RunId, Model.ActiveGroup, null, false)" data-dq-never-switch="off">Hide fields that are never filled</a>
+                    }
+                    else
+                    {
+                        <a href="@Model.Link(isLatest ? null : run.RunId, Model.ActiveGroup, null, true)" data-dq-never-switch="on">Show fields that are never filled</a>
+                    }
+                </p>
+            }
+            @if (numbers is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="numbers" /> }
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-history" data-dq-history data-dq-recent>
+        <div class="split">
+            <h2 id="h-history">History of runs</h2>
+            <span class="muted">Show the last
+                @foreach (var h in DataQualityModel.HistoryChoices)
+                {
+                    <a href="@Model.Link(isLatest ? null : run.RunId, Model.ActiveGroup, h)" aria-current="@(Model.History == h ? "true" : "false")" data-dq-history-choice="@h">@Fmt.Int(h)</a>
+                }
+                runs</span>
+        </div>
+        <p class="hint">Pick a run to see what it warned about and its numbers.</p>
+        @if (runs is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="runs" /> }
+    </section>
+}

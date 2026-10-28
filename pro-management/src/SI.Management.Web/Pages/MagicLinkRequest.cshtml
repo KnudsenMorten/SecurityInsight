@@ -1,0 +1,24 @@
+@page
+@model SI.Management.Web.Pages.MagicLinkRequestModel
+@using SI.Management.Web.Advisors
+@{
+    ViewData["Title"] = "Sign-in link";
+}
+<h1>Get a sign-in link</h1>
+@if (Model.Sent)
+{
+    <div class="notice ok" role="status" data-link-requested>If this address belongs to an advisor or a person of the department, a personal sign-in link is on its way to it. It works once and for a short time.</div>
+    <p class="hint">Nothing arrived? Ask the department's owner to check that your address is listed.</p>
+}
+else
+{
+    <p class="lede">For advisors and department people without an account in this organisation. Type the mail address the department has for you: a personal link that signs you in to the department's page is mailed to it.</p>
+    <form method="post" class="stack" data-link-request>
+        <input type="hidden" name="D" value="@Model.D" />
+        <input type="hidden" name="F" value="@Model.F" />
+        <label for="r-mail">Your mail address</label>
+        <input id="r-mail" name="mail" type="email" required maxlength="256" autocomplete="email" />
+        <button type="submit">Mail me a sign-in link</button>
+    </form>
+    <p><a href="@(DepartmentSignInService.DefaultTarget(Model.D))">Sign in with your work account instead</a></p>
+}

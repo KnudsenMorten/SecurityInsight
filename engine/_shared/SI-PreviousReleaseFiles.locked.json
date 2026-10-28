@@ -1,0 +1,514 @@
+{
+  "schema": 1,
+  "_comment": "Files that SecurityInsight 2.2.x releases shipped and this release no longer has, each with the SHA-256 of every shipped version (CRLF read as LF). The first update by the signed channel removes such a file only when it is byte for byte one of these versions (a changed copy is kept) and never a customer file. Generated from the release history; tests/pester/SI-UpdateChannelClient.Tests.ps1 checks it.",
+  "files": {
+    "analyzer-web/.gitignore": [
+      "f22babb138af7c0f9c609743497a19f1c7d338f090bd614e0b53e5a171da9aa4"
+    ],
+    "analyzer-web/deploy/Deploy-SIAnalyzer.ps1": [
+      "2a4a9401e84ed10339bde588c40a1314ed26c3da24f84e97a66a4347b26cca1d",
+      "64bf6fd981165ed2ba68807f5df2ca56b80f7d87c47f5aad623ab1865e68e08b",
+      "399b9f5ba2b93417cb960de21753a95a4d8ece2412991e8c1cc437618b771466",
+      "51c64b0cc79bc848460210841b7e34aac974795938f261d257b95bf99dd78077",
+      "d94c9898e9d5d750b2b13ecaebd5af2be4fd6157e1216a1f6868654b31857baf",
+      "0468f34c5f7481fc7875cf0cf7902a7636171b9b6933d22b05dac012d468ea1d",
+      "0283178e3f69f6974ee0d624847f0af39caca416629e49f839f18978de11cfe2",
+      "7c204b9f85a7a1280f437434653ff34909743f79117c69a9a688abff34ed7e60"
+    ],
+    "analyzer-web/deploy/Dockerfile": [
+      "dfc5e2f18be18ffe162a9dbeedf613e9ab9281c8b003f9564c436e1fadd39cdd",
+      "77b39456105d37b88ced0ee592ffc5815a5049d8c9c8e0954d06076350abd1b6",
+      "2a4621fd3f1c2ac9583b572c344b3fca5395f333fd0d97967fee77b46581631b",
+      "d4102ad269d85520cefec70bb6ce28a7a9ce72e4b2e19a440838e959412cf324"
+    ],
+    "analyzer-web/deploy/Install-SIAnalyzerEnvironment.ps1": [
+      "240db9edf780588e0e18d1249deb1442a05e95cd7d4eab4294aa8e4826cfd3e4",
+      "65e35bcaa0b8de955147f08ce70688c09a6f0e93b6b2463f0f01f826fc41b8b7"
+    ],
+    "analyzer-web/Directory.Build.props": [
+      "f5885da02081cfe5d977f2ee619ea722e2c3b522cd08d4f6c0560e525449e16f",
+      "c7eee6e7c0ebe6fcfea04be77abe2c6b442d64e4e2c9aacc209aa5de7dfae631"
+    ],
+    "analyzer-web/preview/board-deck.html": [
+      "864874f14486fdda124605895a3ac1a9df664d7316222728207c62f04ac48047",
+      "dfde371330523596d1c8a6a65240ba21f385eeb9c8fa3e18ad05aa4d77139943",
+      "4d6fef993b9de84962db6a893f652fb73b3672131d2b92710af79cf5e360ad2e"
+    ],
+    "analyzer-web/preview/exec-dashboard.html": [
+      "ea728113a55649de342cfd6c56f5b2303270eeabb68beade60c41b4b2aa860a9",
+      "24970318faf4d009c3ebf19f2f319f98db44df5c3d0fdd7c1bc958165b74bc33",
+      "4b892a6e5da5da76ef622b5b629ad0e1d28734cf87f77ae52c6eb98a2a556f15",
+      "78260d906b0953b39b513d04b701a4066904622949588e9f7cfc26f7116c72fd",
+      "2ed1a94be481ac2f1fe0ac0587edd413c6184403f9f0ad0ec33dd895c529b6e3",
+      "9bf95b09b68d2b29db87d5bed58217f8ec9009205be7bc3cbf387bcadb7c2f94",
+      "12fa740673b7e68178ea9f03d7ba26eb530196f5179a4d51685c623594a64010",
+      "6dcc852d424001ae92b84935bddcd49621399e990a485c0db4477a19adbbf2a2",
+      "d6fc81a9dd82103425f9deedb61c789f756e8d170603cae7e71bbd5988be4355",
+      "c3f607c9068f8c40c0a7acab7310cfb1045e7b9e1e39b04c9d683eb2eb5a85eb",
+      "0c859f9475a179670fdee010a654a3bb00de9f2fbde85ead1bcf4eb391b087af"
+    ],
+    "analyzer-web/SIAnalyzer.sln": [
+      "fd2b8af5d39c5ae40852d83e93e8bfc9c0c1e7d71f642b786592438242326916"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Ai/GroundedPrompt.cs": [
+      "99fdb2d554407379071a1faa3869b2b8fccfec0e91c1f771f48aeb4990160ecb",
+      "752e830cd337a1c2c70f62e43337473f7949638e864b9b03de8566ab5fa93239"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Analysis/PeriodComparison.cs": [
+      "85c117de93bc1557861ac98b22268fd3c6b2a1a274c3815743820893f92c795a"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Analysis/SnapshotDiff.cs": [
+      "a313ede0de15198b796c0566ffab311521ae2fe9bbef24c3bbd844a78fa8d482"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Configuration/WorkspaceResolver.cs": [
+      "ca6b2fc8e84a659c27f253720b484bc873d759e1150df889349556ebc598f1f3"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/DataAccess/DemoData.cs": [
+      "5971e4694e3ea39657dab72ff24e18b6a9d572e5c0d3fcde3082c977dbd46677"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/AgingAnalysis.cs": [
+      "18c3087966d6514f232d0ecd2b7d0ddabb84a5399a16f0a12032b4b557c29281"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/BusinessImpact.cs": [
+      "0f3a4dc5a4ecafce11b0c3034b15049938b8c228605c947d579ab2e7dd8233ff"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/Drilldown.cs": [
+      "be76f284e459db22f7edfcff2c2ff32a0e1d8c89238854b2cb27e247062c9d7b"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/EmailCadence.cs": [
+      "7ac6783aa6ff7b4d3766930d921de1572215d21ad0615c09dfe9bd6a24c96169"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/ExecDashboard.cs": [
+      "f57f4f44f2ac63048568eb9ab107637bc1dfa8554f4548bb8283de8afa55c4b7"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/ExecEmail.cs": [
+      "42b3404e69372f4b7a3bf5e3283080f9f8b78f98da42b4fb65f016c7ee776607",
+      "f3661521dfcbd20ce0be59a8043f9919e4034a02b8f4262049c9ecf0668031ec"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/ExecHeadline.cs": [
+      "8551d74089fc0859d3095116c3c4a9f4d7b6f99ccc63e953b9033df826501d5f"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/FrameworkLens.cs": [
+      "9775c70b1dc16e9e6e397aa796af74fe794bca14d79ed6d415ee0e8cdfad77b3"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/Glossary.cs": [
+      "29393d867f2d722c6232566a2d7b5ef2799f9f4899f888e9e4752c1b214b61fc"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/MaturityScorecard.cs": [
+      "29dcebde8933fbbf2648558ccc2d400cddf23e00dcba25b7d208c7c4e1a61742"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/OrgCoaching.cs": [
+      "8bb122a2d70efc5c8d7580e68f5ef77e751d0f4343488a45cd3b402d3a67b397"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/RemediationPlan.cs": [
+      "f7e3b1516d86b38c8457ddee3d06635b09476330765e08553e55032a18c7c178"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/RiskConcentration.cs": [
+      "9dd5d9bd93fbe7726b78b40950c82a6f623b64ba1d876f5d9946ef54555736a1"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Exec/TopMovers.cs": [
+      "ec7c6abb3ec6a1ddac078bc079373264e6592c377fd933054010f1737135d24b"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Governance/GovernanceCapabilities.cs": [
+      "38b5fa385a5f84440166185441c20d8309f50654b672a6e162141d5418ee1719"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Governance/GovernanceModel.cs": [
+      "a017bd83cb43ff1498374be632a530344e11f81546a392cf7c0e933651d6caa7",
+      "a8de9387bef022ed89c3aacd0b0cda94b6b2ab862701fa55929e3180b344d7fc"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Governance/GovernanceStore.cs": [
+      "ef2f66593af68c7193972c571a4deacf3688afcf2765d8ad4601b09b3f26a0eb",
+      "01ed26c0bca6d4c102495846c85ebb2e6844595dd761ceda05325f6e65cc5a0f",
+      "7fc4b1c79dfaa0b5b7bdfc3a7e732cd599628f6a643fa8fc6756830beeda8348"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Governance/IGovernancePersistence.cs": [
+      "9bc0614a95928a255b3faaea90271d5b992f29cb6bfe49b54994d1d88b9351e3"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Kql/KqlBuilders.cs": [
+      "7e468b085848aede1d272b5ecf7666fca8f4081c8a817cb681a72c67af441cc4",
+      "9492a3e27af6d38e3bc957b226b66d6452e2f36bf9785ae76e45e6548a94be83"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Kql/KqlGuardrail.cs": [
+      "8d619fea4c27d5ea0863096067ffa2c91d8f8bf1103bc1f201654b42a1814080",
+      "6d52914b6f8b0fc7bedc7201de874f18f3aa10f3a8f3359ae2ab700caac07eb6"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Kql/PrestagedLibrary.cs": [
+      "684bcb645bc727be7ed7589fc2ece37a07086e25dd0ec8a4267799c7bfe1d9ed"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Kql/SiTables.cs": [
+      "dda87983ce0c66bea97e7b2c22419ae1c4eb512eb223f413f2c88a7c8640b50c",
+      "f7bdc2dd22170c6f2d9988189a2d8ebd5db19041ed26503e36e9cf3e1eb05613"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Model/RiskRow.cs": [
+      "5db926e6d5b176aaa71dbbd9c2b17de76e9fd414c3f99925d65d55d0bd4aa811"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Model/RiskRowMapper.cs": [
+      "6b8fbbb1e54902f60589ffed45e324fbaed9fbbc9d082ed379e0ad4140478352"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/Scheduling/ISendMarkerStore.cs": [
+      "802d7fd6772e51aa536efcba119119e79fbf762dcd6d397b3923c08d3bb5d38c"
+    ],
+    "analyzer-web/src/SIAnalyzer.Core/SIAnalyzer.Core.csproj": [
+      "5d1ba025eab01fa2f264c91aa3dc709fd416a2c8f3c60db4c34b4e593919cd0c"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/appsettings.Development.json": [
+      "649f12c9d2fdd68d92406ce59adb29a9cb93da2a9ba4d11ca3f9b3d804c470a6"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/appsettings.json": [
+      "abacadc8d0dc4c8ba80b1bfe6959fae055c1f8f3c8a8814647134a4e3d4b7ef9"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Auth/ClientPrincipal.cs": [
+      "357de48b76fced6fc125487ab99196274e0ee842343f3925e7c138a8ed44534f"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Auth/EasyAuth.cs": [
+      "342674694be9a86a5d28b5bf23e9ae48b2b63cada234d0f1ec97491be54febf7"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Auth/EasyAuthOptions.cs": [
+      "f4c79678f1b1f6f49d36a88452298666ad3ce0c0447c2861fed98799258b3ee4",
+      "d1c74a2b2dba90b319476a35d968f2b93d10e680dec9113088b9902271d4698a"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Mcp/McpServer.cs": [
+      "d551844b23bc3e3cbd0124a4406e8519b861beec826380dd86c4063f8fafbeec",
+      "00b6c8b8aec9bd3fc9d1ede6737aa2d2e92f0ecf80220b9f78b039944fd1cfed"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Analyst.cshtml": [
+      "56ec2bb4df050bf49532666c1b5a63d324f88affdb1e229adfa2b5b699e0c1dc",
+      "4aa93d12f3db3df5e15e012a77c98cd59e51a9738f5fcf15db67a3f38291f1d8",
+      "9b21d8ecfbcc23449529cacb13a2eb3320f806da92b0953dc627af18c3eec504",
+      "7eba472cbf03aec7cd0fcfa9b5508232aea36ad6836f65fb2e6c34d1fdf6f0a4"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Analyst.cshtml.cs": [
+      "16c8f4b6f6b18ffc2296ceabc69de215eea459038d0c87d6108f1cc1fc69060a",
+      "1b4e9e40196dd154fd65e5be9be2a36b3acbaa94b1b4415790e61006552c9afe"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Board.cshtml": [
+      "db42232cd4b8708ae94e2ceacac7468b826311572813a9f47f96ada5436b5d07",
+      "583120879964c63b685edc277806228a0505c3a977a27d41b9ef8f5ee79e3579"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Board.cshtml.cs": [
+      "a73b7508bc87c6bf4ecd439d9d98a925f2d39845354744f268d19607c9f5b40f"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Exec.cshtml": [
+      "bc81d0b3c426d0e9262af32c70462e3364b33a446acc4bd53dd22f5a6e4b474a",
+      "4b4c870a7537e84a195181d4694afb20a0be05155f55ca972be76eb408d3d7d0"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Exec.cshtml.cs": [
+      "3c9ba94fc6dab59efe5938c821aa6255b446e6787efcb50d9111778ae6e35759"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Governance.cshtml": [
+      "babaa9d9f4608cac2cbd61ad60f4e3a8828fa8e232e915d2b03fdf7de9f9fd39",
+      "4f740d535332126be5c8e782591003099260156dbea5fa31be89ac83465b8172"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Pages/Governance.cshtml.cs": [
+      "f049d55c0bce8924a106d7d9042d2bc5999504560d7c92539c14706f06ddc004"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Program.cs": [
+      "44428e1ffcc1f68ce97a2502453f1a53ad4a300701895f2aa8b80549075f8c8f",
+      "96480acb83c6cff093233cef0179a34553f5507e6fc2f6245bb87e6489e4aa78",
+      "abeafe403ed405eb10510170662e8a061e4bf93e89b11ded809d0dbd242ac916",
+      "380d9906b30bb374bd1292ae41aef29434052beeb56d16d2d9d3992704f1211a",
+      "b26b813bfde059c0b8ce3e167a3e4262e3ab5d61c7fa1c00308dbc09049fd5ca",
+      "7882a20b489c9f5e76f98b7846eaefc2571c6d9915fd2437d4f0b2239768c645",
+      "c3e79bf522b6a9504ffa197cb7b23a2fe5c5879bc5831f2bddcaf217777daf81",
+      "f0c79f9e621db60adaaf0683682b9a2177ee41dba70544c583cc50e732e9dd64"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Rendering/BoardDeckRenderer.cs": [
+      "de556168b90bdd544da7b691e24ee99623e51c726e8ebc1ff3a56e38da0aab2d",
+      "214d0ef21414b4503482d122d02fe68ede43761de0c701fbf76ad299246a208f",
+      "4f8dfad1aec5e9d50427393f6437279cf91f6640c3d33e8ff5016339d16c5914"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Rendering/ExecHtmlRenderer.cs": [
+      "78a9b1a7bdf35ccfc663ecb8d7c8d9be6c6afb063a0ba13a0265710e03db9e6d",
+      "c6c52647a4d1f68a1ae8816766c011c525d1b9a02b68bbcb299b6b8d3a30d763",
+      "cf7b39cb0ed993d4d4f062e44346ce642248d7e22e42bc0c55adde89fbe6b78d"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Rendering/GovernanceRenderer.cs": [
+      "15b8183af96ee40901684b5aa665d2625699c4e89af7a7f970edce021d0fad39",
+      "8acd013796973f297983227af972ee4e09bbe7740d7bc647cbe5a192206300dd",
+      "126611a228b9889a7091b0052c1b1b4c2270d15a023880f2ece14b4c3060e817"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Security/CsrfGuard.cs": [
+      "e2a584fc36c7e9975a4203fbeb70af5505b57c4bb6cb87394dbdf493e36f12fd"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Security/SecurityHeaders.cs": [
+      "d6aabdf3cf37f8a1a4f006e61eac31a889fe3fa6d598c52a30c867cf977e712c"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/AiNarrativeService.cs": [
+      "5cb5252454965eb55caa7f492fd932a10de66a72ac125c67425de7d00a596547",
+      "dcd5125c61a542b00bb4b788c6c228dcb8f68104de7dad1beac5868c4d84f72d"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/AnalyzerService.cs": [
+      "ec91ffacb7cf2d321c19aa137a178c7be86ba35b1d0ff19648a0af9acccd5b12",
+      "134c37111a5be29c7cd75ec0cc71478c31d3d20a0e19d14c76c71f85ec817bb3",
+      "7dc96ebe9484b9b032f84e49924bc80651366a543696007642e94047eb699837"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/CachedRiskDataSource.cs": [
+      "c12895771991a6f0da98a25aae6fd97f58a14d8feab221c5affd709efc72d3d8"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/DemoRiskDataSource.cs": [
+      "dedfb302a9721c53ce6d911b8d4d56f6cae40244060a64f108e15abac965284c",
+      "d51e5d8a0f6ea449d9dc606171d4cd41bfe7b6cd820fc9a19c5524a3bbd80dcf"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/EmailScheduleOptions.cs": [
+      "65b7611cef5a4abd6e0a0caabafc9298ca71eb009289922803be13019dc5ed13"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/ExecEmailSender.cs": [
+      "97cac756c77080cfd550c38a5e8775810be1b6ada84c6d68f9c5dafa6fa847ed"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/ExecEmailService.cs": [
+      "f6caeee1dc97a8eb405fc476c7867154e3a23404e9e71da68f6610e7b4fe6e3e",
+      "a2780c91f688c9dd51545afa238142881b7d58664f8e247576a87c4ebc689cd6"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/GovernanceExpirySweepService.cs": [
+      "951096f5d26b8f57ee2c20b48e5b7b87e6bf0253c276c6b4b28127866c4193ee"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/GovernanceOptions.cs": [
+      "b38774c192d71a25c6a7a6454bd81ff12190fb16ddc71c8de4bb64828a27cd00",
+      "2ab83dd023853986e19fd1b3353b26089092d35754b9059b3811135cad418677"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/IRiskDataSource.cs": [
+      "c54dadc4f91e9a0b5e5cd27683043a180c105630ee18f547e75f07ab39f785a4",
+      "7db53996e6934d3319f072535537b613ca54d2c5b10730f621a8282c8afc7b5d"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/LogAnalyticsRiskDataSource.cs": [
+      "8be55bf9c7e98146bbb02b35099b05010633d1511b4b221b0c762dd4364758cd",
+      "ce03840212de24036053eeca7edc2ccef1220892c6c5ab0b007d3129de8a146e"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/McpOptions.cs": [
+      "f5fbc31539556e76a9ba7504a04841d93ed76e382e4cf950f46c859813e98b29"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/ScheduledExecEmailHostedService.cs": [
+      "7edde1c7a0150a48ea87040a2f5dd92a4f6888bbea1eafe555b6382383edf28c",
+      "79a73618516573504487ddef83232dbebb4a75e3e1b1ba8fb80f1f0af25ef805"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/ScheduleStorageOptions.cs": [
+      "7ec59a30a3d2b0b790c67091cb5bd7f27cdae6f6ed2ca17d226f8d4d4223f30d"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/SIAnalyzerOptions.cs": [
+      "83671ef7657448d8f49d95811e6f1a69d5f2d342a78913ebf586857c33b44d33",
+      "b2633ff715a9bdd30e7b3471e1860666ce52081db83a166c1283ab1862ada72a",
+      "75a27c368b740ed162f25b854c927703046e2da0994e40655e529e09d753c1ec"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/TableGovernancePersistence.cs": [
+      "80939a140def0d6685a8520b621e8741bcd53667efa2964f45a5ee370f41617b"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/Services/TableSendMarkerStore.cs": [
+      "9c5894aa2e9137be7068368a463ee05a44e3a736b743dea5846f11748b8e1fca"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/SIAnalyzer.Web.csproj": [
+      "ebdee4186b748b5ac229df27881f4adfbb9f232f9f36ec14937bd03bd74c17c4",
+      "6b3d74f16ce5a43ec95ff93b7e6b3b96e8cb7414ae7171a0b96abbd712c6c09e"
+    ],
+    "analyzer-web/src/SIAnalyzer.Web/wwwroot/lib/chart.umd.js": [
+      "6e708cb2c2b41604db1f5dec01724856ec53ac867899a1e4e2cfb8f0ace6bed9"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/AiCallBudgetTests.cs": [
+      "53a47b5677859bc8ad732ff7ec3ce740576db7eba3e006941dbd9ece915bb622"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/AnalysisTests.cs": [
+      "cfa0ea56cc0034d2e02796851a064da474fbebeb86de9203d7457bafaf62f22a"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/AuthTests.cs": [
+      "cca9f8859a55bb9d25757878b374a199a3911a7a611fed46f0cbbfbd06b828bc"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/BoardDeckTests.cs": [
+      "053fd77b791f7c82a3dfe68727b82ba50728c6458631a006a9c0db6c11f3a855"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/BusinessImpactAndDrilldownTests.cs": [
+      "133d3aef0b461819b407db46ff0d5c085e28a49210b8473d073dbd2cc54f47d0"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/ConsistencyDefectTests.cs": [
+      "c90c471f2f36f96132ef7f5a7042ad042654a31c488d3f058ca737af08c18521"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/CsrfGuardTests.cs": [
+      "c6cf71ee72302d3c1eb215e8add3d02914db46de79b20db5faabbf85e28c6eb9"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/DefaultDenyAuthTests.cs": [
+      "58b7c440d686442365c4937b53ee1ec4f1295e73b441363199753689cf777826",
+      "fbc01f793b7114ef7721cfc216664183ab6ebc0f81fd359905f7477cbb65ec05"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/ExecEmailTests.cs": [
+      "27665b528aee10903f02da3f7a13e123704bbee60f1deb83631a1c6741a6885c"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/ExecEnhancementsTests.cs": [
+      "6cc13c05c3b3a53f48fa54c8a1f15ee7d247d3c23692e6cc540656669486d711"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/ExecHeadlineTests.cs": [
+      "bafa0b308df540d0cd589a08278cdca9ec44fb923a0b7e0266f16a34b26b164f"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/GlossaryTests.cs": [
+      "1b9abcb50f087227c45c9bd510fc99f603165495706a336d6302bb8d1ce82e68"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/GovernanceDurabilityTests.cs": [
+      "4342424e6456d69c97a5fadcf8947e0fc70af1d2d1baeaf5e798b5732fc2abcd"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/GovernanceTests.cs": [
+      "ae59dd117f19472ed1e2bbe9e10499d16bbee8b64baecdd471189d875048ddfe",
+      "527a291553c1ace810a33fb837a0c74e716d0be0c26a65cdd51e9f793d415999"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/GroundingAndConfigTests.cs": [
+      "0ca1205a2dde4656fc8d7e8751f092f77047036da3e2151d1b17f9a58b17c866"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/GuardrailTests.cs": [
+      "08b48f6c7aa463aeb64321059bc7608f4172d45855c32dd3444ff659eaad3e28",
+      "60be1e177519f4e983fcdddcd06710e4160187d61b0b8adfbb565ba7c37d193a"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/HttpHelpers.cs": [
+      "19e2eb3298852fc348d3a3244a36de5f2376cca4f181e2d0f91cc7cf6cfc1f4c",
+      "224556746fdb64f54f1a6bc7894bacef45585bb397a9dd8c6afc0f01e1eb85b1"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/KqlSourceWhitelistTests.cs": [
+      "5f1353a160ab8ebdaca18ef9830932fe2cdf99b9332bd86e55b0f3d66e570a0e"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/MaturityScorecardTests.cs": [
+      "226807bf88e3c7cb84397ae422752355debc920c90fb46a7f0e46c7808d1b950"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/McpSideEffectTests.cs": [
+      "59bda845ba2f287d073cc75aeef4ebe441bd6401c4af12994c2a279142fac16a"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/McpTests.cs": [
+      "e49bfdae106476f413d489b69fbfeb135c61eabe6902f9a272520e01c0ee3a58",
+      "fc245e38629574c98c82fb3f5abc2311f133550ee2278d1947c54ecc6f085e37"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/OrgCoachingTests.cs": [
+      "b35d57092f39c7ab8ccf92a0c412341d879279044112035d396192348a23c3a1"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/PartialDataAndCacheTests.cs": [
+      "55ef8b209ab649865fc5cb1efea7e36538b19f15e567e74c407e48b8f887de44"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/PeriodAndConcentrationTests.cs": [
+      "d71522828b638617837bd50f7999cac319b9d1b11beb9f290b0446d9c3a54048"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/RealSchemaTests.cs": [
+      "6aa8b057ba871f012d0e52ae5acfafbc716818ee2c4961e3ca773c034202eb20"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/RemediationPlanTests.cs": [
+      "d5a18f500cd8664e8039fdd705453aa5eba32d5ded07323319c52f627bd0faea"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/ScheduledSendMarkerTests.cs": [
+      "3bd5b3fbc9eab345026c76f4245eef33a0668689218da64327bf921ee9c1e6a2"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/SecurityHeadersTests.cs": [
+      "ebe7fcab80043f146f439af6d018a7b7e45481a891979a481af2a29d69a5126f"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/SIAnalyzer.Tests.csproj": [
+      "115c810af58ad0d47e3c907c1a29a3399a51c059dce98645f1f9a68b28aaf599"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/TestData.cs": [
+      "bc057b500e72b1228f84d643b1f2d35304a9bf99c6f2687e3904e203fa391df7"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/TopMoversTests.cs": [
+      "e97cfaeca40cc0dd05da0a0b228325f1e40de973884495694e058b1a9c601e49"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/UiThemeTests.cs": [
+      "45d199e743edeadc07c0a390758896af16a42bb7a53289c76b0f0c38f23a0291"
+    ],
+    "analyzer-web/tests/SIAnalyzer.Tests/WebIntegrationTests.cs": [
+      "32bbb122a079a253061cf615bee60c2df5e0576ffe1428dc5e4c1d180c74a18d",
+      "fc74a59d079e1028421c96aa92c019b14d6e606facea4f0aa6b7e71abb03133f"
+    ],
+    "analyzer-web/tools/SIAnalyzer.Preview/Program.cs": [
+      "2681afd53239ef945bcd5476f10678360f0defce59aa86e35d58082940ab5553"
+    ],
+    "analyzer-web/tools/SIAnalyzer.Preview/SIAnalyzer.Preview.csproj": [
+      "47d3b926942aa44949e206dd0b70b48483241952f7158baa4d9ebdac856d6870"
+    ],
+    "analyzer/seed/demo-snapshot.json": [
+      "c6e74a9987acf3a0e7525d05acc7fc3e67dab25d6561db8b448e42cd63ad18d2",
+      "5b55c21982ab4456cbc8392b414556c811563f3a97327edad40b3ea5db999e1e"
+    ],
+    "container/Sync-ContainerModules.ps1": [
+      "72bb1335f02c31c58561fec0f812dc10492675dbbb84d6de1f1ac56723633ea0"
+    ],
+    "engine/asset-tagging/_shared/Ensure-Module.ps1": [
+      "95ea51f9f6db26d5225d76fd9b789813bef86d0a69b14865fe93130a8479b229",
+      "ed7bb5dd9d9605d60a5a5bc720353b5412cea75c507ae220e82726d52bf81b36",
+      "360e5f38f45546bb1af0d5f9affae5da6bcb263de4c8f411df5d8a397318f8b6",
+      "3e8b313c051f6a914402010811a9eafc5e90916bfc21d60c192e75a95c6ebf20",
+      "a797af4c4bff9e5670f1e00913652771a8650c110464f5bf8eefb936e628b2c6",
+      "3c4c184711cdad367f538fee97120735aa48dd137d964531331373f0a7c162e6",
+      "1d2024b6d56a841e754cdcaae8c9571f46786068f8bd552d63eb23f7b7c1aac1",
+      "39e635566490b0eebf866a68562797fb8c944a74fdc20f11cdcde4c1df761719",
+      "84e29b42046d8fc29139f6e367db32167933e826d9d2e57b391aa8e15efcc216"
+    ],
+    "engine/privilege-tier-classifier/_shared/Ensure-Module.ps1": [
+      "95ea51f9f6db26d5225d76fd9b789813bef86d0a69b14865fe93130a8479b229",
+      "ed7bb5dd9d9605d60a5a5bc720353b5412cea75c507ae220e82726d52bf81b36",
+      "360e5f38f45546bb1af0d5f9affae5da6bcb263de4c8f411df5d8a397318f8b6",
+      "3e8b313c051f6a914402010811a9eafc5e90916bfc21d60c192e75a95c6ebf20",
+      "a797af4c4bff9e5670f1e00913652771a8650c110464f5bf8eefb936e628b2c6",
+      "3c4c184711cdad367f538fee97120735aa48dd137d964531331373f0a7c162e6",
+      "1d2024b6d56a841e754cdcaae8c9571f46786068f8bd552d63eb23f7b7c1aac1",
+      "39e635566490b0eebf866a68562797fb8c944a74fdc20f11cdcde4c1df761719",
+      "84e29b42046d8fc29139f6e367db32167933e826d9d2e57b391aa8e15efcc216"
+    ],
+    "engine/risk-analysis/_shared/Ensure-Module.ps1": [
+      "95ea51f9f6db26d5225d76fd9b789813bef86d0a69b14865fe93130a8479b229",
+      "ed7bb5dd9d9605d60a5a5bc720353b5412cea75c507ae220e82726d52bf81b36",
+      "360e5f38f45546bb1af0d5f9affae5da6bcb263de4c8f411df5d8a397318f8b6",
+      "3e8b313c051f6a914402010811a9eafc5e90916bfc21d60c192e75a95c6ebf20",
+      "a797af4c4bff9e5670f1e00913652771a8650c110464f5bf8eefb936e628b2c6",
+      "3c4c184711cdad367f538fee97120735aa48dd137d964531331373f0a7c162e6",
+      "1d2024b6d56a841e754cdcaae8c9571f46786068f8bd552d63eb23f7b7c1aac1",
+      "39e635566490b0eebf866a68562797fb8c944a74fdc20f11cdcde4c1df761719",
+      "84e29b42046d8fc29139f6e367db32167933e826d9d2e57b391aa8e15efcc216"
+    ],
+    "preview/PowerBI/measures.dax": [
+      "ec76cccd361bc39a8d554e3ba88cc902f6e04dcc9bfe8c3f51bb225cbe8564cd"
+    ],
+    "preview/PowerBI/queries/01-RiskAnalysis-Summary-LatestRun.kql": [
+      "49a25b919a2b1e3ec45d1036cb2f00196a922a0c61fe78e039fbb82f6597835e"
+    ],
+    "preview/PowerBI/queries/02-RiskAnalysis-Summary-Trend.kql": [
+      "f411b8eebbcd0650f981030bc4035559ec11334583cca590a6680bb98c122b78"
+    ],
+    "preview/PowerBI/queries/03-RiskAnalysis-NewVsResolved-PerRun.kql": [
+      "a5696472990ffa126138bdac11d7038b689f2a3cdefef5d1dce1993eb92e537f"
+    ],
+    "preview/PowerBI/queries/04-RiskAnalysis-TopN-CurrentRun.kql": [
+      "3ec3cd60e0082014fc50fef2e54fca5dfcebcf2ecdd8f15f1831dbccb0f7668c"
+    ],
+    "preview/PowerBI/queries/05-RiskAnalysis-StaleFindings.kql": [
+      "8faae797897825a1c3672e13540a9eeb7ea246bfcf6c64437b7b793bf502fd8b"
+    ],
+    "preview/PowerBI/queries/06-RiskAnalysis-RiskScoreTrend-Aggregated.kql": [
+      "912de27368133ae3c4d320c8cbca5fb818d85612288f475a2ced31683b80bad1"
+    ],
+    "preview/PowerBI/queries/07-RiskAnalysis-BySecurityDomain-Trend.kql": [
+      "355b8a21885df5b8316a6aaca8ba16e904fc2b78550eb89cac9904f9fe662d15"
+    ],
+    "preview/PowerBI/queries/08-IdentityAssets-LatestCollection.kql": [
+      "dd8cb09b05d6baee1fa8c652c3c9e78419ace1188caa806a66b0efac7c38adb0"
+    ],
+    "setup/_shared/Ensure-Module.ps1": [
+      "84e29b42046d8fc29139f6e367db32167933e826d9d2e57b391aa8e15efcc216"
+    ],
+    "setup/_shared/Ensure-SecurityInsightInfra.ps1": [
+      "c2b5dce0f9b8362291fabdddd125920e2cd865ff687dfc23b4a09cc4e3685e9e"
+    ],
+    "setup/_shared/Send-SecurityInsightExportFile.ps1": [
+      "76422d4220935692eb40954c39d3ccf7e192d843741795510b07dd98f265788b"
+    ],
+    "setup/Deploy-SIPowerBI.ps1": [
+      "fc808f2c33e21f42c855ee6983dccf989ce27dc27186407d847139b2220fe5cd"
+    ],
+    "tests/pester/SIA-Container.Tests.ps1": [
+      "c420c3c49cf91a9a1d4d32764635a0ca1d17d94d475ca1297f66cb1a03379476"
+    ],
+    "tests/pester/SIA-InstallEnvironment.Tests.ps1": [
+      "7f3568515e8b7871554ebfa59d7e12227a7203fb2e3fecd6eb4d38d5cec1827c"
+    ],
+    "viewer/README.md": [
+      "2942170b412bd3040f281d55d044774bbf452c99c6f2eb6fd40a9d8a4dd102f8",
+      "ab3096b3c3fcac3dd0e5f38d0dae9aabc7390140a8288d152e45880bc2aee740"
+    ],
+    "viewer/Start-SIViewer.ps1": [
+      "a80d05662ca0c99338ca7b58c00dc32692c9f8652e61cc7f082f3c290a107ee6"
+    ],
+    "viewer/web/index.html": [
+      "d6892ca426519e2bd9f76b532f7ae58d89b8d7bdfc4dbb719aa82575c457c6b2",
+      "345546fed5ada53c0108c6b836fa1b59dc8315a58b456d344c4f1b6dc66deeae",
+      "d9b230343638dd819655736b8911b3ce8e34f158a24bde80a18c9d9e66037528"
+    ]
+  }
+}

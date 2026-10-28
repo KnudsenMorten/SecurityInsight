@@ -1,0 +1,52 @@
+@* The notice of a collection whose run did not finish completely (SI.Management.Web.Collection.PartialNotice). Per report
+   (owner 2026-10-19: "can we optimize the msg here as it raises questions"): ONE plain line -- how many reports, the date
+   their data is from (in the viewer's own format), their names as a person reads them. Never hidden that data is older
+   (no silent data loss); the technical cause only behind "Details", for Admins and support. *@
+@model SI.Management.Web.Collection.PartialNotice
+@{
+    var mark = Model.Mark;
+    var reports = Model.Reports;
+    var perReport = mark.PerReport && reports.Count > 0;
+    var line = perReport ? Model.Line() : default;
+}
+<div class="notice warn" role="status" data-partial-collection="@mark.CollectionId"><span class="badge warn">@mark.Badge</span>
+@if (!perReport)
+{
+    <text>@mark.Text</text>
+    if (mark.PerReport && Model.Details && !string.IsNullOrWhiteSpace(mark.Reason))
+    {
+        <details class="help" data-partial-details><summary>Details</summary><p class="wrap">@mark.Reason</p></details>
+    }
+}
+else
+{
+    <span data-partial-line>@(line.Lead)@if (line.Date is { } d) {<text> @Fmt.Time(d, "date") @line.Tail</text>}</span>
+    if (line.Items)
+    {
+        <ul data-partial-reports>
+            @foreach (var r in reports)
+            {
+                if (r.FromUtc is { } f) { <li>@r.DisplayName (data from @Fmt.Time(f, "date"))</li> }
+                else { <li>@r.DisplayName (only what this run found)</li> }
+            }
+        </ul>
+    }
+    if (Model.Details)
+    {
+        <details class="help" data-partial-details>
+            <summary>Details</summary>
+            <p>What is shown is kept as it was: nothing in these reports is closed or marked fixed until a run finishes them. Every other report is current. <a href="/Admin/RunHealth/Reports">Run health &gt; Reports</a> lists every report of the run.</p>
+            <ul>
+                @foreach (var r in reports)
+                {
+                    <li class="wrap" data-partial-report="@r.ReportName"><strong>@r.DisplayName</strong> (<code>@r.ReportName</code>):
+                        @if (r.FromUtc is { } f2) {<text> @Fmt.Int(r.CarriedRows) finding(s) from the run of @Fmt.Time(f2), @Fmt.Int(r.ThisRunRows) found by this run.</text>}
+                        else {<text> no complete earlier result -- the @Fmt.Int(r.ThisRunRows) finding(s) this run found are shown.</text>}
+                        @if (!string.IsNullOrWhiteSpace(r.Reason)) {<br /><span class="muted">Why this run could not finish it: @r.Reason</span>}
+                    </li>
+                }
+            </ul>
+        </details>
+    }
+}
+</div>

@@ -1,0 +1,112 @@
+SecurityInsight Pro -- proprietary components
+Copyright (c) 2026 Morten Knudsen. All rights reserved.
+
+The components below, and the tests that exercise them, are SecurityInsight Pro components. They are NOT
+covered by LICENSE (PolyForm Shield 1.0.0). They are licensed only under a separate commercial
+agreement with the licensor (a SecurityInsight Pro licence). You may not enable or use them, or bypass,
+remove or change their licence check, without such an agreement.
+
+Licences: https://invardia.com/pricing/ (buy: https://invardia.com/order/) -- delivered by mail and in https://portal.invardia.com/ > Licences.
+Support for licensed customers: support@invardia.com (a ticket per mail) or https://portal.invardia.com/ > Support. Contact: info@invardia.com.
+Invardia is a brand owned and operated by 2LINKIT, a company founded and owned by Morten Knudsen.
+All agreements, licences and invoices for SecurityInsight and PIM Manager are issued by 2LINKIT, Strandvejen 21A, 6000 Kolding, Denmark (VAT no. DK39208032).
+
+PART 1 -- PRO COMPONENTS THAT SHIP IN THE COMMUNITY EDITION, SWITCHED OFF BY THE LICENCE
+
+The web app (pro-management) ships as one file set in both editions. The paid pages, actions and services
+below are part of that file set, but they are SecurityInsight Pro components: without a valid Pro licence
+recorded for the installation they refuse every request ("part of SecurityInsight Pro"). Their copyright
+notice and these terms travel with every copy. The list of record is
+pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs.
+
+  Web pages (every page under each path):
+  /Exemptions
+  /Departments
+  /Tasks
+  /Admin/Tasks
+  /Admin/Departments
+  /Admin/DomainRoles
+  /Cmdb
+  /Collection/Services
+  /Collection/Connectors
+  /Admin/Connectors
+  /Admin/ConnectorSetup
+  /Admin/CloseLoop
+  /Admin/Resend
+  /Connectors
+  /Admin/Settings/Reports
+  /Admin/Settings/Notifications
+  /Admin/Access
+  /Admin/History
+  /Templates
+  /Admin/Deviations
+  /Chat
+
+  Finding actions of the shared action bar: exemption-request, comment, status, task, escalate-vendor, assign-department
+
+  Services:
+  pro-management/src/SI.Management.Mcp (the MCP server; it answers only with a Pro licence)
+  the licence request to Invardia (Get Started's licence step)
+
+PART 2 -- PRO COMPONENTS THAT ARE NOT IN THE COMMUNITY EDITION
+
+These paths are delivered only to licensed customers through the private AutomateIT sync.
+
+  engine/asset-cmdb (every file except _shared/SI-VulnDesired.ps1, _shared/SI-VulnRelease.ps1, _shared/SI-VulnTarget.ps1 and _shared/SI-ReconcileGuards.ps1)
+  engine/pro-data/Invoke-SIDepartmentReport.ps1
+  engine/pro-data/Invoke-SIGovernanceMail.ps1
+  engine/pro-data/Invoke-SITaskDigest.ps1
+  engine/pro-data/_shared/SI-DepartmentReport.ps1
+  engine/pro-data/_shared/SI-GovernanceMail.ps1
+  engine/pro-data/_shared/SI-TaskDigest.ps1
+  launcher/asset-cmdb
+  setup/Set-SIServiceNowCredential.ps1
+  config/cmdb-source-ownership.custom.sample.json
+  config/cmdb-source-ownership.locked.json
+  config/service-model.locked.json
+  diagnostics/Measure-SICmdbMatchRate.ps1
+  diagnostics/New-SICmdbSimulationSeed.ps1
+  diagnostics/New-SISnowVulnSimulationTables.ps1
+  diagnostics/Set-SICmdbSchemaExtension.ps1
+  diagnostics/Test-SISnowClientLive.ps1
+  diagnostics/Test-SIVulnSyncSqlLive.ps1
+  diagnostics/Test-SIVulnSyncSnowLive.ps1
+  diagnostics/_SIGuardedTestDelete.ps1
+  setup/_shared/SI-ReleasePayload.ps1
+  setup/_shared/SI-ReleaseSbom.ps1
+  setup/Set-SILicense.ps1
+  setup/Request-SILicense.ps1
+  setup/Import-SIProductDocs.ps1
+  setup/New-SITemplatePack.ps1
+  setup/Get-SITemplateReleases.ps1
+  engine/heartbeat
+  engine/_shared/SI-HeartbeatJob.ps1
+  engine/_shared/SI-SupportSqlAccess.ps1
+  engine/_shared/SI-HeartbeatFields.ps1
+  engine/_shared/SI-PerfSample.ps1
+  engine/_shared/SI-UpdateNowSignal.ps1
+  setup/_shared/SI-GuidedInstallPro.ps1
+  config/connector-risk-register.sample.json
+  config/connector-jira-issues.sample.json
+  engine/_shared/SI-InvardiaUpdate.ps1
+  engine/_shared/SI-InvardiaUpdateKeys.json
+  container/updater/_shared/SI-UpdaterInvardia.ps1
+  setup/Grant-SISupportAppDatabase.ps1
+  setup/_shared/SI-SupportAppDatabase.ps1
+  setup/Invoke-SISupportSqlAccessJob.ps1
+  setup/_shared/SI-SupportSqlJob.ps1
+  setup/_shared/SI-MissingJobs.ps1
+  setup/Publish-SIRelease.ps1
+  setup/Publish-SICommunityRelease.ps1
+  setup/Release-SI.ps1
+  setup/Get-SIFixRequests.ps1
+  ops/support-worker
+  ops/report-certification
+  ops/context-discovery
+  setup/_shared/SI-InvardiaPublisher.ps1
+  setup/Import-SICmdbCsv.ps1
+  setup/New-SIServiceNowTestPack.ps1
+  setup/Clear-SIGuardEvents.ps1
+  setup/Invoke-SIGuardAcceptEverywhere.ps1
+  setup/Compare-SISummaryGroupings.ps1
+  setup/Get-SIFindingFoldPreview.ps1

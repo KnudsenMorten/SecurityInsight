@@ -1,0 +1,59 @@
+@page
+@model SI.Management.Web.Pages.Admin.Departments.EditModel
+@using SI.Management.Web.Departments
+@{
+    ViewData["Title"] = Model.Department?.Name ?? "Department";
+    var d = Model.Department;
+    var search = Url.Page(null, "People", new { id = Model.Id }) ?? "";
+}
+<h1>@(d?.Name ?? "Department")</h1>
+<p class="lede"><a href="/Admin/Departments">All departments</a> · <a href="/Departments/Detail?id=@Model.Id">Open the department page</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Refusal is not null) { <div class="notice error" role="alert" data-refusal>@Model.Refusal</div> }
+@if (d is not null)
+{
+    @if (d.Retired) { <div class="notice warn" role="status">This department is retired: it takes part in no resolution. Findings already stamped with it keep their history.</div> }
+    <section class="card" aria-labelledby="f-h">
+        <h2 id="f-h">Department</h2>
+        <form method="post" asp-page-handler="Save" asp-route-id="@Model.Id" class="stack">
+            <label for="e-name">Name</label>
+            <input id="e-name" name="name" value="@d.Name" required maxlength="128" />
+            <label for="e-mail">Shared mailbox</label>
+            <input id="e-mail" name="mail" type="email" value="@d.Mail" maxlength="256" />
+            <label for="e-desc">Description</label>
+            <input id="e-desc" name="description" value="@d.Description" maxlength="400" />
+            <label for="e-match">Also matches</label>
+            <input id="e-match" name="matchValues" value="@d.MatchValues" maxlength="1000" placeholder="values a tag may carry for this department, separated by ;" />
+            <label for="e-mw">Maintenance windows (JSON; times in UTC, day Mon..Sun or daily -- the remediation flow "Auto" plans fixes into the next one)</label>
+            <textarea id="e-mw" name="maintenanceWindows" rows="3" placeholder='[{"day":"Sat","from":"22:00","to":"04:00"}]'>@d.MaintenanceWindowsJson</textarea>
+            <button type="submit" disabled="@d.Retired">Save department</button>
+        </form>
+    </section>
+    <section class="card" aria-labelledby="p-h">
+        <h2 id="p-h">People</h2>
+        @if (d.Retired)
+        {
+            <ul>@foreach (var p in Model.People) { <li>@p.DisplayName -- @DepartmentRoles.Label(p.Role)</li> }</ul>
+        }
+        else
+        {
+            <form method="post" asp-page-handler="People" asp-route-id="@Model.Id" data-people-form>
+                <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new SI.Management.Web.Pages.Admin.Departments.PeopleTableModel(Model.Rows, Model.People, search, Model.DirectoryOn)" />
+                <button type="submit">Save people</button>
+            </form>
+        }
+    </section>
+    @if (!d.Retired)
+    {
+        var panel = new SI.Management.Web.Pages.Admin.Departments.AdvisorPanel(Model.Id, "/Admin/Departments/Edit?id=" + Model.Id);
+        <partial name="~/Pages/Admin/Departments/_Advisors.cshtml" model="panel" />
+        <details class="retire" data-retire>
+            <summary>Retire department…</summary>
+            <form method="post" asp-page-handler="Retire" asp-route-id="@Model.Id" class="row-actions" data-confirm="@d.Name takes part in no resolution from the next data sync on. Findings already stamped with it keep their history." data-confirm-title="Retire @d.Name?" data-confirm-ok="Retire">
+                <label for="r-why">Why</label>
+                <input id="r-why" type="text" name="reason" required minlength="3" maxlength="400" />
+                <button type="submit" class="secondary">Retire department</button>
+            </form>
+        </details>
+    }
+}

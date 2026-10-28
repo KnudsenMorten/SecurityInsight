@@ -1,0 +1,132 @@
+@* The output scope of ONE area (OutputsModel.Area): the workbooks on Configuration > Reports, every connector on
+   Configuration > Connectors (owner 2026-10-19) -- one store, two views. Every filter is THE shared filter (MultiFilter:
+   checkboxes with the counts of the newest collection, OR within a filter, AND across); "+ Add filter" holds the other
+   fields (risk rating, class, component, patch cycle, OS family, ServiceNow sub-CI, any si_* field of the finding). *@
+@model SI.Management.Web.Pages.Reports.OutputsModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Reports
+@{
+    var edit = Model.CanEdit;
+    string Counts(string col) => Model.Request.Path + "?handler=ValueCounts&col=" + Uri.EscapeDataString(col);
+    SI.Management.Web.Pages.MultiFilter Mf(string dest, string name, string label, IEnumerable<string> values, IEnumerable<string> chosen, Func<string, string>? words = null, bool counts = true) => new()
+    {
+        Id = "sc-" + dest + "-" + System.Text.RegularExpressions.Regex.Replace(name, "[^A-Za-z0-9_-]", "-"), Name = name, Label = label,
+        Choices = SI.Management.Web.Pages.MultiFilter.Plain(values, words), Chosen = chosen.ToList(), CountsUrl = counts ? Counts(name) : null, Apply = "Done", ApplyCloses = true,
+    };
+}
+<partial name="~/Pages/Reports/_Notices.cshtml" model="Model" />
+@if (Model.Preview?.Note is { } note) { <p class="hint" data-preview-note>Preview: @note</p> }
+else if (Model.Preview?.CollectionTime is { } ctime) { <p class="hint">Preview counts from the newest collection, @Fmt.Time(ctime), by the same rule the engines use.</p> }
+
+@if (Model.State is { } st)
+{
+    foreach (var d in Model.Destinations)
+    {
+        var s = Model.ScopeShown(d.Key);
+        var inForce = st.ScopeOf(d.Key);
+        var filterOf = s.Filters.ToDictionary(f => f.Field, f => f.Values, StringComparer.Ordinal);
+        IReadOnlyList<string> Chosen(string field) => filterOf.TryGetValue(field, out var v) ? v : Array.Empty<string>();
+        <section class="card" aria-labelledby="h-@d.Key" data-destination="@d.Key">
+            <h2 id="h-@d.Key">@d.Label @if (Model.Count(s) is { } c) { <span class="badge" data-preview-count="@d.Key">@c</span> }</h2>
+            <p class="hint">@d.Help</p>
+            <p data-scope-now="@d.Key">In force: @inForce.Describe()</p>
+            @if (Model.Posted.ContainsKey(d.Key)) { <p class="notice info" role="status" data-scope-posted="@d.Key">Counted with the filters below (not staged): @s.Describe()</p> }
+            @if (Model.Modes.TryGetValue(d.Key, out var mode))
+            {
+                <p class="hint" data-connector-mode="@d.Key">Connector: @mode.Words</p>
+                @if (d.Key == "vuln-servicenow")
+                {
+                    @* owner 2026-10-20 ("count of rows that will be send with current filter and rows in excel format and csv format"
+                       -- "so servicenow can test"): always offered, test mode or live; every row with its values exactly as sent *@
+                    <p class="actions" data-scope-export="@d.Key">
+                        <a class="button secondary" href="@Model.ExportLink(d.Key, false)" data-scope-export-xlsx>Export what would be sent (Excel)</a>
+                        <a class="button secondary" href="@Model.ExportLink(d.Key, true)" data-scope-export-csv>Export (CSV)</a>
+                    </p>
+                    <p class="hint" data-scope-export-filter="@d.Key">@(Model.Posted.ContainsKey(d.Key) ? "The export applies the filters counted above (not staged)." : "The export applies the scope in force.") Every row the scope lets through, not only what changed, with the values exactly as the connector sends them.</p>
+                }
+                else if (mode.TestMode)
+                {
+                    @* owner 2026-10-19: before the connector sends -- every row it would send, the scope applied, the Fields-sent columns *@
+                    <p class="actions" data-scope-export="@d.Key">
+                        <a class="button secondary" href="@(Model.Request.Path)?handler=Export&amp;destination=@d.Key" data-scope-export-xlsx>Export what would be sent (Excel)</a>
+                        <a class="button secondary" href="@(Model.Request.Path)?handler=Export&amp;destination=@d.Key&amp;format=csv" data-scope-export-csv>CSV</a>
+                    </p>
+                }
+            }
+            <form method="post" asp-page-handler="Stage" data-scope-form="@d.Key">
+                <input type="hidden" name="Destination" value="@d.Key" />
+                <fieldset class="filters" disabled="@(!edit)">
+                    @if (!d.Asset)
+                    {
+                        @* #817 (owner 2026-10-20): the scope is the CORRELATED data -- what the finding is (domain, category,
+                           risk rating, severity, tier ...), never which report template produced it. The source report is an
+                           advanced filter, open when a stored scope already uses it (a stored template / report scope still applies). *@
+                        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="Mf(d.Key, OutputsModel.FilterParam(ScopeFilters.Fields[0].Field), ScopeFilters.Fields[0].Label, ScopeFilters.Fields[0].Values, Chosen(ScopeFilters.Fields[0].Field))" /></div>
+                        var sevFilter = Mf(d.Key, "Severities", "Severity", ReportVocabulary.Severities, s.Severities);
+                        var domFilter = Mf(d.Key, "Domains", "Security domain", ReportVocabulary.Domains, s.Domains);
+                        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="sevFilter" /></div>
+                        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="domFilter" /></div>
+                    }
+                    else
+                    {
+                        @* #817 (owner 2026-10-20: "i should see all asset kinds incl. public ip + identity ... dont limit
+                           options"): every kind is offered; nothing ticked = every kind. A kind the connector cannot
+                           send yet says so beside its checkbox, and ticking it shows the hint (js/app/scope-editor.js) *@
+                        var kindFilter = Mf(d.Key, "AssetKinds", "Asset kind", ReportVocabulary.AssetKinds, s.AssetKinds.Select(k => k.ToLowerInvariant()), OutputsModel.AssetKindChoiceWords, counts: false);
+                        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="kindFilter" /></div>
+                        <p class="notice warn" data-scope-unsent-hint="@string.Join("|", OutputsModel.UnsentKinds)" hidden="@(OutputsModel.UnsentTicked(s).Count == 0)">@OutputsModel.UnsentHint</p>
+                    }
+                    @{ var tierFilter = Mf(d.Key, "Tiers", "Tier", new[] { "0", "1", "2", "3" }, s.Tiers.Select(SI.Management.Web.Pages.MultiFilter.Key), t => ReportVocabulary.Tiers[int.Parse(t)], counts: !d.Asset); }
+                    <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="tierFilter" /></div>
+                    @if (!d.Asset)
+                    {
+                        @* the quick choices (owner 2026-10-19): one click -- never a shipped default *@
+                        <div class="scope-quick" data-scope-quick-for="@d.Key">
+                            @foreach (var (field, words, values) in ScopeFilters.QuickChoices)
+                            {
+                                <button type="button" class="secondary small" data-scope-quick="@OutputsModel.FilterParam(field)" data-values="@string.Join("|", values)">@words</button>
+                            }
+                            <button type="button" class="secondary small" data-scope-quick="Domains" data-values="Endpoint|Azure">Devices and Azure only</button>
+                        </div>
+                        <details class="add-filter" data-scope-add-filter="@d.Key" open="@(s.Filters.Any(f => f.Field != ScopeFilters.Fields[0].Field) || s.Templates.Count + s.Reports.Count > 0)">
+                            <summary>+ Add filter</summary>
+                            @foreach (var f in ScopeFilters.Fields.Skip(1))
+                            {
+                                if (f.Values.Count > 0)
+                                {
+                                    <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="Mf(d.Key, OutputsModel.FilterParam(f.Field), f.Label, f.Values, Chosen(f.Field), counts: f.FindingColumn is not null)" /></div>
+                                }
+                                else
+                                {
+                                    <div><label for="sc-@d.Key-@f.Field">@f.Label (values separated by |)</label><input id="sc-@d.Key-@f.Field" type="text" name="@OutputsModel.FilterParam(f.Field)" value="@string.Join("|", Chosen(f.Field))" maxlength="1000" data-scope-filter="@f.Field" /></div>
+                                }
+                            }
+                            @foreach (var other in s.Filters.Where(f => ScopeFilters.Find(f.Field) is null))
+                            {
+                                <div><label for="sc-@d.Key-@other.Field">@ScopeFilters.Label(other.Field) (values separated by |)</label><input id="sc-@d.Key-@other.Field" type="text" name="@OutputsModel.FilterParam(other.Field)" value="@string.Join("|", other.Values)" maxlength="1000" data-scope-filter="@other.Field" /></div>
+                            }
+                            <div><label for="sc-@d.Key-other">Another SI field of the finding (si_...)</label><input id="sc-@d.Key-other" type="text" name="OtherField" maxlength="84" pattern="si_[a-z0-9_]{1,80}" placeholder="si_environment" /></div>
+                            <div><label for="sc-@d.Key-otherv">Its values (separated by |)</label><input id="sc-@d.Key-otherv" type="text" name="OtherValues" maxlength="1000" /></div>
+                            <details class="advanced" data-scope-source-report="@d.Key" open="@(s.Templates.Count + s.Reports.Count > 0)">
+                                <summary>Advanced: source report (@(s.Templates.Count + s.Reports.Count) chosen)</summary>
+                                <p class="hint">Only findings that came from these Risk Analysis report templates or reports. Rarely needed: the filters above say what a finding is.</p>
+                                <fieldset><legend>Report templates</legend>@foreach (var t in st.Templates.Where(t => t.Enabled)) { <label><input type="checkbox" name="Templates" value="@t.Name" checked="@s.Templates.Contains(t.Name)" /> @t.Name</label> }</fieldset>
+                                <fieldset class="scroll-list"><legend>Single reports</legend>@foreach (var r in st.Reports) { <label><input type="checkbox" name="Reports" value="@r.Name" checked="@s.Reports.Contains(r.Name)" /> @r.Name</label> }</fieldset>
+                            </details>
+                            <p class="hint">A finding passes a filter when one of its values is ticked (several ticked = any of them); every filter must pass. A finding without a value for a field does not pass a filter on it -- SecurityInsight raises such a finding as "Classification incomplete". Severity, tier and domain keep their rule: a finding without one passes.</p>
+                        </details>
+                    }
+                </fieldset>
+                <div class="filters">
+                    @if (!d.Asset) { <div class="actions"><button type="submit" asp-page-handler="Count" class="secondary" data-scope-count="@d.Key">Count with these filters</button></div> }
+                    @if (edit)
+                    {
+                        <div class="wide"><label for="r-@d.Key">Reason (recorded with the change)</label><input id="r-@d.Key" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                        <div class="actions"><button type="submit" data-stage-scope="@d.Key">Stage for Review &amp; commit</button></div>
+                    }
+                </div>
+            </form>
+        </section>
+    }
+    if (!edit) { <p class="hint">Read-only: an Admin sets the output scopes.</p> }
+}

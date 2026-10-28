@@ -1,0 +1,22 @@
+id:        MicrosoftRoutingAndRemoteAccess
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft Routing and Remote Access'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Microsoft Routing and Remote Access'
+  - 'RRAS'
+
+detections:
+  - id: MicrosoftRoutingAndRemoteAccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'routing_and_remote_access*'
+    set:
+      Tier:     1
+      Purpose:  'VPN'
+      Category: 'VPN'

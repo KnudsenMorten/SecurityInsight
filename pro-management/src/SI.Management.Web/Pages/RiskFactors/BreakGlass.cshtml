@@ -1,0 +1,168 @@
+@page
+@model SI.Management.Web.Pages.RiskFactors.BreakGlassModel
+@using SI.Management.Web.Changes
+@{
+    ViewData["Title"] = "Break glass accounts";
+    var isAdmin = User.IsAdmin();
+    var validEntries = Model.AttributeEntries.Where(x => x.Parsed is not null).Select(x => x.Parsed!).ToList();
+}
+<div class="split"><h1>Break glass accounts</h1></div>
+<p class="lede">The rules that mark an account as break glass (emergency access), and the accounts they mark.</p>
+<details class="help" data-breakglass-help>
+    <summary>How break glass is decided</summary>
+    <p><strong>Not a risk factor.</strong> Break glass is a classification: it feeds the account's tier and its own reports. SecurityInsight detects it from the platform (a permanent Tier 0 account excluded from all Conditional Access policies, the emergency-access group), from the naming patterns and from the extension attribute you define here.</p>
+    <p><strong>Patterns.</strong> A pattern matches the account name, ignoring upper and lower case. <code>*</code> stands for any run of characters, <code>?</code> for one character -- for example <code>breakglass*</code> or <code>*-bg-??@@*</code>. Only letters, digits, space, <code>. _ @@ -</code> and the two wildcards are allowed, and a pattern needs at least one letter or digit.</p>
+    <p><strong>Extension attribute.</strong> An account that carries the attribute and value you define is a break glass account. The attribute is <code>extensionAttribute1</code> to <code>extensionAttribute15</code>, or the name of a directory extension (<code>extension_</code>, the application id without dashes, <code>_</code> and the name). The value is compared whole, ignoring upper and lower case. Nothing is defined until you add an entry.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "Edit, clear or add rows and stage the list. Nothing is written here: the change goes on Review & commit and is written in your name." : "An Admin changes the rules.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RiskFactorStore.MissingSchemaMessage</div> }
+@if (Model.List is null && !Model.SchemaMissing) { <div class="notice" role="status" data-breakglass-none>SecurityInsight ships no naming patterns in this version yet; the patterns you stage here are your own list.</div> }
+
+<h2>Patterns</h2>
+@if (isAdmin)
+{
+    <form method="post" asp-page-handler="Stage" data-breakglass-form>
+        <table class="grid" data-breakglass-patterns data-sortable>
+            <thead><tr><th>Pattern</th></tr></thead>
+            <tbody>
+            @foreach (var p in Model.Patterns) { <tr><td><input name="pattern" value="@p" maxlength="@BreakGlassPatterns.MaxLength" pattern="[A-Za-z0-9 ._@@\-*?]+" aria-label="Pattern" data-pattern /></td></tr> }
+            @for (var i = 0; i < BreakGlassModel.BlankRows; i++) { <tr><td><input name="pattern" maxlength="@BreakGlassPatterns.MaxLength" pattern="[A-Za-z0-9 ._@@\-*?]+" placeholder="new pattern" aria-label="New pattern" data-pattern-new /></td></tr> }
+            </tbody>
+        </table>
+        <p class="hint">Clear a row to remove that pattern.</p>
+        <label>Reason<input name="reason" maxlength="400" /></label>
+        <div class="actions"><button type="submit" data-stage-breakglass>Stage these patterns</button></div>
+    </form>
+}
+else
+{
+    @if (Model.Patterns.Count == 0) { <p data-breakglass-empty>No naming pattern: only what the platform says counts.</p> }
+    else
+    {
+        <table class="grid" data-breakglass-patterns data-sortable>
+            <thead><tr><th>Pattern</th></tr></thead>
+            <tbody>@foreach (var p in Model.Patterns) { <tr><td class="mono">@p</td></tr> }</tbody>
+        </table>
+    }
+}
+
+<h2>Try a name</h2>
+<form method="get" data-breakglass-try>
+    <label>Account name<input name="try" value="@Model.Try" maxlength="256" /></label>
+    <div class="actions"><button type="submit" class="secondary">Check</button></div>
+</form>
+@if (!string.IsNullOrWhiteSpace(Model.Try))
+{
+    @if (Model.TryHits.Count == 0) { <p data-try-none>No pattern in force matches this name.</p> }
+    else { <p data-try-hit>Matched by: @foreach (var h in Model.TryHits) { <code>@h</code> }</p> }
+}
+
+<h2>Extension attribute</h2>
+<p class="hint" data-breakglass-attribute-rule>An account that carries this attribute and value is a break glass account. The value is read with the account on the next identity collection, so a new or changed entry shows its accounts after that collection and the data sync that follows it.</p>
+@if (Model.AttributeEntries.Count == 0) { <p data-breakglass-attribute-empty>No entry defined yet: no account is break glass because of an extension attribute.</p> }
+@if (isAdmin)
+{
+    var row = 0;
+    <form method="post" asp-page-handler="StageAttribute" data-breakglass-attribute-form>
+        <datalist id="bg-attributes">@foreach (var a in BreakGlassAttribute.OnPremAttributes) { <option value="@a"></option> }</datalist>
+        <table class="grid" data-breakglass-attributes data-sortable>
+            <thead><tr><th>Attribute</th><th>Value</th><th>Accounts that carry it now</th></tr></thead>
+            <tbody>
+            @foreach (var e in Model.AttributeEntries)
+            {
+                <tr data-breakglass-attribute-row="@e.Text">
+                    @if (e.Parsed is { } entry)
+                    {
+                        var carrying = Model.Carrying(entry);
+                        <td><input name="Entry[@(row)].Attribute" value="@entry.Attribute" maxlength="180" list="bg-attributes" autocomplete="off" aria-label="Attribute" data-attribute /></td>
+                        <td><input name="Entry[@(row)].Value" value="@entry.Value" maxlength="@BreakGlassAttribute.MaxValueLength" autocomplete="off" aria-label="Value" data-attribute-value /></td>
+                        <td data-attribute-accounts="@carrying.Count">
+                            @if (Model.Accounts is null) { <span class="hint">not known yet</span> }
+                            else if (carrying.Count == 0) { <span>None in the last collection.</span> }
+                            else { foreach (var a in carrying) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(a.CiId)">@(a.Upn.Length > 0 ? a.Upn : a.Name)</a> <text> </text> } }
+                        </td>
+                    }
+                    else
+                    {
+                        // a stored entry the rule does not accept: shown in the two fields as far as it splits, to correct or clear
+                        var cut = e.Text.IndexOf('=');
+                        var badAttribute = cut < 0 ? e.Text : e.Text[..cut];
+                        var badValue = cut < 0 ? "" : e.Text[(cut + 1)..];
+                        <td><input name="Entry[@(row)].Attribute" value="@badAttribute" maxlength="180" list="bg-attributes" autocomplete="off" aria-label="Attribute" data-attribute /></td>
+                        <td><input name="Entry[@(row)].Value" value="@badValue" maxlength="@BreakGlassAttribute.MaxValueLength" autocomplete="off" aria-label="Value" data-attribute-value /></td>
+                        <td data-attribute-invalid>Not a valid entry: SecurityInsight ignores it. Correct it or clear both fields.</td>
+                    }
+                </tr>
+                row++;
+            }
+            @for (var i = 0; i < BreakGlassModel.BlankAttributeRows; i++)
+            {
+                <tr>
+                    <td><input name="Entry[@(row)].Attribute" maxlength="180" list="bg-attributes" autocomplete="off" placeholder="extensionAttribute6" aria-label="New attribute" data-attribute-new /></td>
+                    <td><input name="Entry[@(row)].Value" maxlength="@BreakGlassAttribute.MaxValueLength" autocomplete="off" placeholder="the value that marks the account" aria-label="New value" data-attribute-value-new /></td>
+                    <td></td>
+                </tr>
+                row++;
+            }
+            </tbody>
+        </table>
+        <p class="hint">Clear both fields of a row to remove that entry. Several entries are allowed: an account that carries any one of them is break glass.</p>
+        <label>Reason<input name="reason" maxlength="400" /></label>
+        <div class="actions"><button type="submit" data-stage-breakglass-attribute>Stage these entries</button></div>
+    </form>
+}
+else if (Model.AttributeEntries.Count > 0)
+{
+    <table class="grid" data-breakglass-attributes data-sortable>
+        <thead><tr><th>Attribute</th><th>Value</th><th>Accounts that carry it now</th></tr></thead>
+        <tbody>
+        @foreach (var e in Model.AttributeEntries)
+        {
+            <tr data-breakglass-attribute-row="@e.Text">
+                @if (e.Parsed is { } entry)
+                {
+                    var carrying = Model.Carrying(entry);
+                    <td class="mono">@entry.Attribute</td>
+                    <td class="mono">@entry.Value</td>
+                    <td data-attribute-accounts="@carrying.Count">
+                        @if (Model.Accounts is null) { <span class="hint">not known yet</span> }
+                        else if (carrying.Count == 0) { <span>None in the last collection.</span> }
+                        else { foreach (var a in carrying) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(a.CiId)">@(a.Upn.Length > 0 ? a.Upn : a.Name)</a> <text> </text> } }
+                    </td>
+                }
+                else
+                {
+                    <td class="mono" colspan="2">@e.Text</td>
+                    <td data-attribute-invalid>Not a valid entry: SecurityInsight ignores it.</td>
+                }
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<h2>Break glass accounts now</h2>
+<p class="hint" data-breakglass-accounts-rule>Every account SecurityInsight classifies as break glass, as of the last data sync, with the rule that made it so.</p>
+@if (Model.AccountsError is not null) { <div class="notice error" role="alert" data-breakglass-accounts-error>@Model.AccountsError</div> }
+else if (Model.Accounts is null) { <div class="notice" role="status" data-breakglass-accounts-preparing>The accounts are listed here after the next update of the Pro data and the data sync that follows it.</div> }
+else if (Model.Accounts.Count == 0) { <p data-breakglass-accounts-empty>No account is classified break glass in the last collection.</p> }
+else
+{
+    <table class="grid" data-breakglass-accounts data-sortable>
+        <thead><tr><th>Account</th><th>Sign-in name</th><th>Tier</th><th>Why it is break glass</th>@if (validEntries.Count > 0) { <th>Attribute it carries</th> }</tr></thead>
+        <tbody>
+        @foreach (var a in Model.Accounts)
+        {
+            <tr data-breakglass-account="@a.CiId">
+                <td><a href="/Cis/Detail?id=@Uri.EscapeDataString(a.CiId)">@(a.Name.Length > 0 ? a.Name : a.CiId)</a></td>
+                <td>@a.Upn</td>
+                <td data-value="@(a.Tier ?? 9)">@a.TierText</td>
+                <td class="wrap" data-breakglass-reason>@a.Reason</td>
+                @if (validEntries.Count > 0) { <td class="mono">@(validEntries.Any(v => BreakGlassAttribute.Carries(v, a.Attribute)) ? a.Attribute : "")</td> }
+            </tr>
+        }
+        </tbody>
+    </table>
+    if (Model.MoreAccounts) { <p class="hint" data-breakglass-accounts-more>The first @RiskFactorStore.BreakGlassTop accounts are shown; there are more.</p> }
+}

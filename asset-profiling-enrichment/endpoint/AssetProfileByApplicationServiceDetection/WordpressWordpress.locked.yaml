@@ -1,0 +1,21 @@
+id:        WordpressWordpress
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'WordPress'
+category:  'CMS'
+description: ''
+displayNames:
+  - 'WordPress'
+
+detections:
+  - id: WordpressWordpress
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'wordpress*'
+    set:
+      Tier:     2
+      Purpose:  'CMS'
+      Category: 'CMS'

@@ -1,0 +1,17 @@
+@model IReadOnlyList<SI.Management.Web.Changes.ContentChange>
+<div class="table-wrap">
+    <table data-sortable>
+        <thead><tr><th>Where</th><th>Change</th><th>Before</th><th>After</th></tr></thead>
+        <tbody>
+            @foreach (var c in Model)
+            {
+                <tr data-change="@c.Path">
+                    <td class="wrap mono">@c.Path</td>
+                    <td><span class="badge @(c.Change == "removed" ? "bad" : c.Change == "added" ? "good" : "warn")">@c.Change</span></td>
+                    <td class="wrap"><code>@(c.Old ?? "")</code></td>
+                    <td class="wrap"><code>@(c.New ?? "")</code></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>

@@ -1,0 +1,57 @@
+@page
+@model SI.Management.Web.Pages.Reports.ReportModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Report " + Model.Name;
+    var it = Model.Item;
+    var o = it?.Json;
+    var edit = Model.CanEdit && it is not null;
+    var sev = ReportBody.List(o, "SecuritySeverityScope");
+    var tiers = ReportBody.List(o, "CriticalityTierLevelScope");
+}
+<h1>Report @Model.Name</h1>
+<partial name="_Tabs" model="@("/Reports")" />
+<partial name="_Notices" model="Model" />
+@if (it is not null)
+{
+    var origin = SI.Management.Web.Pages.Reports.ReportsPage.OriginLabel(it.Origin);
+    <section class="card" aria-labelledby="h-r">
+        <h2 id="h-r">@it.Name <span class="badge @(origin == "vendor" ? "good" : origin == "changed" ? "warn" : "")" data-origin="@origin">@origin</span> @if (!it.Enabled) { <span class="badge bad" data-off>switched off</span> }</h2>
+        <p>@ReportBody.Text(o, "ReportPurpose")</p>
+        <dl class="facts">
+            <dt>Domain</dt><dd>@ReportBody.Text(o, "SecurityDomain")</dd>
+            <dt>Source tables</dt><dd>@string.Join(", ", ReportBody.Tables(ReportBody.Query(o)))</dd>
+        </dl>
+        <form method="post" data-report-form>
+            <input type="hidden" name="Name" value="@it.Name" />
+            <fieldset class="filters" disabled="@(!edit)">
+                <legend>Severity scope -- the severities this report reports</legend>
+                @foreach (var s in ReportVocabulary.Severities) { <label><input type="checkbox" name="Severities" value="@s" checked="@sev.Contains(s)" data-sev="@s" /> @s</label> }
+            </fieldset>
+            <fieldset class="filters" disabled="@(!edit)">
+                <legend>Tier scope -- the asset tiers this report reports</legend>
+                @foreach (var t in ReportVocabulary.Tiers) { <label><input type="checkbox" name="Tiers" value="@t" checked="@tiers.Contains(t)" data-tier="@t" /> @t</label> }
+            </fieldset>
+            <fieldset class="filters" disabled="@(!edit)">
+                <legend>Switched on</legend>
+                <label><input type="checkbox" name="Enabled" value="true" checked="@it.Enabled" data-enabled /> Report it (off = left out of every report template)</label>
+                <input type="hidden" name="Enabled" value="false" />
+            </fieldset>
+            @if (edit)
+            {
+                <div class="filters">
+                    <div class="wide"><label for="rr">Reason (recorded with the change)</label><input id="rr" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                    <div class="actions">
+                        <button type="submit" asp-page-handler="Stage" data-stage-button>Stage for Review &amp; commit</button>
+                        @if (it.TemplateBody is not null && it.Origin != ReportOrigin.Vendor) { <button type="submit" asp-page-handler="Reset" class="secondary" data-reset>Back to the vendor's</button> }
+                        <button type="submit" asp-page-handler="Test" class="secondary" data-test>Test the query (read-only)</button>
+                    </div>
+                </div>
+            }
+            else { <p class="hint">Read-only: an Admin changes report scopes.</p> }
+        </form>
+    </section>
+    <partial name="_Contract" />
+    @if (Model.Test is { } tr) { <partial name="_TestResult" model="tr" /> }
+    <details class="card"><summary>The query</summary><pre class="code" data-query>@ReportBody.Query(o)</pre></details>
+}

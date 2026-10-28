@@ -1,0 +1,21 @@
+id:        PortainerPortainer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Portainer'
+category:  'Containers'
+description: ''
+displayNames:
+  - 'Portainer'
+
+detections:
+  - id: PortainerPortainer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'portainer*'
+    set:
+      Tier:     2
+      Purpose:  'Containers'
+      Category: 'Containers'

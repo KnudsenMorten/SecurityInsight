@@ -1,0 +1,20 @@
+@* #285: the light sub-bar at the right of the navigation (BRAND-2, PIM's "mode: ... | you: ... | numbers: [...]"): where the
+   data comes from, the signed-in role, and THE number-format choice (the one place it is set -- it moved here from the
+   user menu; Preferences shows the same choice). Choosing submits at once and comes back to the same page. *@
+@model (SI.Management.Web.Pages.HeaderInfo? Hdr, string Role, string NumberChoice, string Here)
+<div class="ctxbar" data-ctxbar>
+    @if (Model.Hdr?.DataSource is { } src) { <span data-ctx-source>data: <b>@src</b></span><span class="sep" aria-hidden="true">|</span> }
+    <span data-ctx-role>you: <b>@Model.Role</b></span>
+    <span class="sep" aria-hidden="true">|</span>
+    <form method="post" asp-page="/Preferences" class="ctx-numbers" data-autosubmit>
+        <label for="nav-number-format" title="How numbers are shown for you (dates stay ISO; exports stay machine format)">numbers:</label>
+        <select id="nav-number-format" name="numberFormat" data-number-format>
+            @foreach (var c in DisplayCulture.Choices)
+            {
+                <option value="@c.Value" selected="@(c.Value == Model.NumberChoice)">@c.Label</option>
+            }
+        </select>
+        <input type="hidden" name="returnUrl" value="@Model.Here" />
+        <noscript><button type="submit" class="small">Apply</button></noscript>
+    </form>
+</div>

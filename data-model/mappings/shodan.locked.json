@@ -1,0 +1,529 @@
+{
+  "$comment": "Field mapping for provider 'shodan': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/shodan.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "shodan",
+  "version": "1.0.0",
+  "description": "Shodan host look-up for the public IP addresses SecurityInsight found.",
+  "objects": [
+    {
+      "recordType": "public_ip",
+      "class": "public_ip",
+      "parts": {
+        "host": "GET api.shodan.io/shodan/host/{ip}",
+        "derived": "computed when the record is assembled (engine/data-model/SI-RecordDerived.ps1) from the host part -- the cached answer, no extra request: services, web answers, TLS certificates, tags, operating system, domains, cloud, the times of the scan answers"
+      },
+      "key": "host.ip_str",
+      "timestamp": "host.last_update"
+    },
+    {
+      "recordType": "vulnerability",
+      "class": "finding",
+      "parts": {
+        "vuln": "one object per CVE of a host: host.data[*].vulns.<CVE> = { cvss, summary, references[], verified } with the banner it came from (product, version, cpe23[])",
+        "host": "the host (ip_str, last_update)"
+      },
+      "key": "vuln.cve",
+      "timestamp": "host.last_update",
+      "note": "#560 the generic SI finding fields of a Shodan vulnerability. The Shodan collector does not build these objects yet; every path is to be confirmed (verify)."
+    }
+  ],
+  "mappings": [
+    {
+      "field": "si_ip_address",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.ip_str"
+      ],
+      "normalize": [
+        "ip"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.ip_str"
+      ],
+      "normalize": [
+        "ip"
+      ]
+    },
+    {
+      "field": "si_open_ports",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.ports[*]"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_open_port_count",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.ports"
+      ],
+      "normalize": [
+        "count"
+      ]
+    },
+    {
+      "field": "si_isp",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.isp"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_asn",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.asn"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_org_name",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.org"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_geo_country",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.country_code"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_hostnames",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.hostnames[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_max_cvss",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.data[*].vulns[*].cvss"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "combine": "max"
+    },
+    {
+      "field": "si_internet_exposed",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.ports"
+      ],
+      "normalize": [
+        "present"
+      ]
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.last_update"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_vulns",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "host.vulns[*]"
+      ],
+      "normalize": [
+        "upper",
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.cve"
+      ],
+      "normalize": [
+        "upper"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cve",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.cve"
+      ],
+      "normalize": [
+        "upper"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_title",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.cve"
+      ],
+      "normalize": [
+        "upper"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_description",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.summary"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cvss",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.cvss"
+      ],
+      "normalize": [
+        "number"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_exploit_verified",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.verified"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_reference_url",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.references[*]"
+      ],
+      "normalize": [
+        "first"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_product",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.product"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_version",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.version"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_cpe",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "vuln.cpe23[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "vulnerability"
+      ],
+      "sources": [
+        "host.last_update"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_exposed_services",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.exposedServices"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_http_titles",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.httpTitles"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_http_servers",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.httpServers"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_tls_certificates",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tlsCertificates"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_tls_cert_expired",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tlsCertExpired"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_tls_self_signed",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tlsSelfSigned"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_tls_earliest_expiry",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tlsEarliestExpiry"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_tls_legacy_versions",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tlsLegacyVersions"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_shodan_tags",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.shodanTags"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_exposed_os",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.exposedOs"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_domains",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.domains"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_exposed_cloud_provider",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.cloudProvider"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_exposed_cloud_region",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.cloudRegion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_exposed_cloud_service",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.cloudService"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_banner_first_seen",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.bannerFirstSeen"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_banner_last_seen",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.bannerLastSeen"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    }
+  ]
+}

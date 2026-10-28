@@ -1,0 +1,71 @@
+# =====================================================================================================
+# SAMPLE ONLY -- this file is never read. Copy it to 'correlation-decisions.custom.yaml' in this
+# folder, or to <SI_EnrichmentDataRoot>\correlation-decisions.custom.yaml if you keep operator data
+# outside the code tree. Both locations are read.
+#
+# WHAT THIS FILE IS FOR
+# ---------------------
+# SI decides which rows describe ONE asset by joining on globally-unique identifiers. That is right
+# almost always, and when it is wrong it is wrong for a reason no run can see: two machines share an
+# AadDeviceId because one was re-imaged without AAD cleanup, or one machine appears twice because a
+# source rotated its id. SI deliberately REFUSES to guess in those cases -- guessing wrong retires a
+# live CI, which is worse than a late one. This file is how you tell it the answer.
+#
+# THREE KINDS, and each states a FACT:
+#
+#   never-merge   these anchors are NOT one object, however much they look like it
+#   force-merge   these anchors ARE one object, even though nothing joins them
+#   pin-id        this object's SI_CorrelationId is fixed to a value you supply
+#
+# ANCHORS are written '<IdentifierType>:<value>'. The type and value split on the FIRST colon, so an
+# ARM path is fine. Find the anchors you need in SI_ObjectMap_CL, or in the profiler warning that sent
+# you here ("N merge(s) refused on conflicting AadDeviceIds" names the assets).
+#
+# 'by' AND 'at' ARE MANDATORY on every entry. An unattributed assertion that two machines are one is
+# indistinguishable from the corrupt record it was written to overrule. An entry without them is
+# refused and named in the run output.
+#
+# THERE IS NO 'expires'. These are corrections of fact, not time-boxed deviations -- two machines are
+# two machines whether or not a year has passed. (Contrast asset-decisions.custom.yaml, where an
+# exception or exemption MUST expire.) An entry carrying 'expires' is refused, so that nobody believes
+# a review date exists that does not. Delete the entry when it stops being true.
+#
+# EVERYTHING THAT WILL NOT APPLY IS NAMED IN THE RUN OUTPUT -- a refused entry, an unreadable file, a
+# file configured and missing. A decision you wrote and the engine ignored is worse than one you never
+# wrote, so silence is never the answer here.
+# =====================================================================================================
+
+# --- never-merge -------------------------------------------------------------------------------------
+# Two physically different servers whose MDE records disagree about AadDeviceId, so they would fuse
+# into one object and their tiers, logons and findings would be wrong for both.
+- kind: never-merge
+  anchors:
+    - "MdeDeviceId:1111aaaa-2222-bbbb-3333-cccccccccccc"
+    - "MdeDeviceId:4444dddd-5555-eeee-6666-ffffffffffff"
+  reason: "SRV-A and SRV-B: SRV-B was re-imaged from SRV-A's template and kept its AadDeviceId. Two hosts."
+  by: <operator>
+  at: 2026-08-20
+
+# --- force-merge -------------------------------------------------------------------------------------
+# One machine that appears twice because a source rotated its identifier and nothing links the old
+# record to the new one.
+- kind: force-merge
+  anchors:
+    - "AadDeviceId:7777aaaa-8888-bbbb-9999-cccccccccccc"
+    - "AadDeviceId:0000dddd-1111-eeee-2222-ffffffffffff"
+  reason: "Same physical host re-enrolled 2026-07-14; the old Entra device object was never cleaned up."
+  by: <operator>
+  at: 2026-08-20
+
+# --- pin-id ------------------------------------------------------------------------------------------
+# Exactly ONE anchor, and an id. Use this when a CI already exists in the CMDB under an id SI must keep
+# using -- pinning is how you adopt an existing CI instead of creating a duplicate beside it.
+# To pin several anchors as one object, force-merge them first and then pin one of them; pinning a list
+# could not say whether they are one object or several sharing an id.
+- kind: pin-id
+  anchors:
+    - "AadDeviceId:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+  reason: "CI already exists in the CMDB under this correlation id; keep it rather than creating a second."
+  by: <operator>
+  at: 2026-08-20

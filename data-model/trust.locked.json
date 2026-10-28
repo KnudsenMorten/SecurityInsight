@@ -1,0 +1,79 @@
+{
+  "$comment": "Source trust (V3-ARCHITECTURE 3.4a, V3-DATA-MODEL 2.19.2). An ordered list of evidence MECHANISMS: position decides who wins a contradiction; trusted = may it decide at all; maxAgeDays = it stops deciding when its evidence is older. A mechanism that is not trusted or too old is still collected and recorded as a claim -- it only cannot change the tier, CMDB values or the score. Applies to enrichment rules now and to risk factors from milestone M7. Customer overrides: trust.custom.json -- a DELTA by id (silence = inherit the shipped entry and its position).",
+  "kind": "trust",
+  "version": "1.0.0",
+  "mode": "trusted-then-min",
+  "order": [
+    {
+      "id": "eg.graph_field",
+      "trusted": true,
+      "description": "A field Exposure Graph computed (roles, criticality, exposure)."
+    },
+    {
+      "id": "mde.detection",
+      "trusted": true,
+      "description": "A Defender detection or an advanced-hunting query result."
+    },
+    {
+      "id": "mde.installed_software",
+      "trusted": true,
+      "description": "Installed software inventory."
+    },
+    {
+      "id": "mde.logon_user",
+      "trusted": true,
+      "description": "Observed logons (the most frequent user's tier)."
+    },
+    {
+      "id": "entra.directory",
+      "trusted": true,
+      "description": "Directory facts: roles, permissions, group membership."
+    },
+    {
+      "id": "privilege_catalog",
+      "trusted": true,
+      "description": "The privilege tier catalog (roles and permissions to tier)."
+    },
+    {
+      "id": "azure.resource_tag",
+      "trusted": true,
+      "description": "Azure resource tags."
+    },
+    {
+      "id": "network.ip_range",
+      "trusted": true,
+      "description": "The address is in a configured network range."
+    },
+    {
+      "id": "cmdb.field",
+      "trusted": true,
+      "maxAgeDays": 730,
+      "description": "A value from the owning CMDB record."
+    },
+    {
+      "id": "entra.extension_attribute",
+      "trusted": true,
+      "description": "Entra extension attributes / custom security attributes."
+    },
+    {
+      "id": "mde.machine_tag",
+      "trusted": true,
+      "description": "Defender machine tags (often set by hand)."
+    },
+    {
+      "id": "name.pattern",
+      "trusted": true,
+      "description": "A name pattern (weakest: names are chosen by people)."
+    },
+    {
+      "id": "port.risk",
+      "trusted": false,
+      "description": "Open-port risk (advisory: logged, never decides)."
+    },
+    {
+      "id": "operator.tier_tag",
+      "trusted": true,
+      "description": "The operator's tier tag on a device (e.g. EmployeeWorkstations--tier2--SI). LAST on purpose (owner: tags must continue to be used, just low prio): its rules are asserted, so it sets the tier only when no observed rule claims one."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+@model SI.Management.Web.RiskExec.ExecutiveFigures
+@using SI.Management.Web.RiskExec
+@* #636: the headline figures on top of BOTH the Executive overview and the Executive report -- the same stored rows, the
+   same partial, so the two can never show different numbers (a test compares them). Each opens its topic.
+   owner 2026-10-20: a Protection Score tile has its headline larger and its value smaller (balanced, app.css .ps-tile), and
+   the accepted lifecycle's actual values under the "within Accepted Lifecycle" score. *@
+<div class="tiles kf-headline" data-kf-headline>
+    @foreach (var h in ExecutiveFigures.Headlines)
+    {
+        var l = Model.Headline(h.Key);
+        var ps = h.Key.StartsWith("protection_", StringComparison.Ordinal);
+        <a class="tile@(ps ? " ps-tile" : "")" href="@l.Href" data-headline="@h.Key" data-value="@Fmt.Raw(l.Raw)">
+            <div class="label@(ps ? " ps-cap" : "")">@l.Label</div>
+            <div class="value@(ps ? " ps-value" : "")">@l.Value</div>
+            @if (l.Change is { } ch) { <partial name="_ChangeSince" model="ch" /> }
+            @if (l.Note is not null) { <div class="delta muted">@l.Note</div> }
+            @if (h.Key == "protection_lifecycle") { <div class="ps-explain" data-lifecycle-line>@Model.Lifecycle.Line</div> }
+        </a>
+    }
+</div>

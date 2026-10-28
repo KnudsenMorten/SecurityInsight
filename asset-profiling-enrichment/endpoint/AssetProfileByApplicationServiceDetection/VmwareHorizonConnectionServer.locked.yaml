@@ -1,0 +1,21 @@
+id:        VmwareHorizonConnectionServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'VMware Horizon Connection Server'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'VMware Horizon Connection Server'
+
+detections:
+  - id: VmwareHorizonConnectionServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'horizon_connection_server*'
+    set:
+      Tier:     1
+      Purpose:  'VDI'
+      Category: 'VDI'

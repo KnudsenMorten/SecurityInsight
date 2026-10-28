@@ -1,0 +1,46 @@
+@model SI.Management.Web.RiskExec.RiskScorePanel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.RiskExec
+@* The domain x severity panel for the wall board / home page (#415). OWNER 2026-10-20: the Protection Score view drives it --
+   the counts of the chosen view from the stored per-collection figures (RiskScorePanel); a run without them: Actual Risks shows
+   the kept Risk Analysis table (every finding of the run), within Accepted Lifecycle keeps the table with "–" cells and says
+   when its counts come (owner 2026-10-20: "the table also dissapears when i use the toggle") -- never another view's numbers.
+   No inline style (CSP). Severity colours: ONE warm scale, no green -- every severity is a risk (app.css --rs-*). *@
+@{
+    var m = Model;
+    var show = m.Stored || m.FromKpi || m.Pending;
+}
+<section class="rs-panel" aria-labelledby="h-rs" data-risk-score-panel data-grain="@m.Grain" data-view="@m.View" data-source="@m.Source">
+    <div class="rs-card rs-domains">
+        <h2 class="rs-cap" id="h-rs">By domain and severity &middot; <span data-rs-view>@m.ViewName</span></h2>
+        @if (!show)
+        {
+            <p class="rs-empty" data-rs-empty>No domain figures yet. They appear after the next Risk Analysis run and the data sync that follows it.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="rs-table" data-rs-table data-static="four domains and the Total row, of the Protection Score view shown">
+                    <thead><tr><th scope="col">Domain</th>@foreach (var c in RiskScorePanel.Columns) { <th scope="col" class="num @(c == "Total" ? "tot" : "sev-" + c.ToLowerInvariant())">@(c == "Total" ? c : ExecKpi.SeverityLabel(c))</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var (key, label) in ExecKpi.Domains)
+                        {
+                            <tr data-domain="@key"><th scope="row">@label</th>@foreach (var c in RiskScorePanel.Columns) { var n = m.Pending ? 0 : m.Count(key, c); <td class="num @(c == "Total" ? "tot" : "sev-" + c.ToLowerInvariant())@(n == 0 ? " zero" : "")">@m.Cell(key, c)</td> }</tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr class="rs-total" data-domain="Total"><th scope="row">Total</th>@foreach (var c in RiskScorePanel.Columns) { <td class="num @(c == "Total" ? "tot" : "sev-" + c.ToLowerInvariant())">@m.TotalCell(c)</td> }</tr>
+                    </tfoot>
+                </table>
+            </div>
+            @if (m.Pending)
+            {
+                <p class="rs-note" data-rs-note data-rs-pending>@m.ViewName: @RiskScorePanel.PendingNote</p>
+            }
+            else
+            {
+                <p class="rs-note" data-rs-note>@m.ViewName: counts @m.Counts@if (m.FromKpi) { <text> (the Risk Analysis table of the run -- the per-view counts come with the next data sync)</text> } &middot; @m.Grain report, run @if (m.GeneratedAt is { } g) { @Fmt.Time(g) }</p>
+            }
+        }
+    </div>
+</section>

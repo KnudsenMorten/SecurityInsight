@@ -1,0 +1,27 @@
+@model SI.Management.Web.Actions.ActionFormModel
+@inject SI.Management.Core.ProData.IDepartmentViews Departments
+@{
+    IReadOnlyList<SI.Management.Core.ProData.DepartmentName> names = Array.Empty<SI.Management.Core.ProData.DepartmentName>();
+    try { names = (await Departments.NamesAsync(Context.RequestAborted)).Data.Where(n => !n.Retired).ToList(); }
+    catch (Exception ex) when (ex is not OperationCanceledException) { }
+    var byAsset = Model.Targets is not { Count: > 0 } t || SI.Management.Web.Actions.AssignDepartmentAction.DefaultScope(t) == "asset";
+}
+@if (names.Count == 0)
+{
+    <p class="notice warn">There is no department yet -- define one under <nav-ref page="/Admin/Departments/Index" /> first.</p>
+}
+else
+{
+    <label for="@Model.Id("dept")">Department</label>
+    <select id="@Model.Id("dept")" name="a.departmentId" required>
+        @foreach (var d in names) { <option value="@d.DepartmentId">@d.Name</option> }
+    </select>
+}
+<fieldset>
+    <legend>Assign by</legend>
+    @* #330: opens on what the selection is (the script sets it from the count's preview; the no-script page here) *@
+    <label><input type="radio" name="a.scope" value="asset" checked="@(byAsset)" data-assign-scope /> the asset (every finding on it)</label>
+    <label><input type="radio" name="a.scope" value="recommendation" checked="@(!byAsset)" data-assign-scope /> the recommendation (this issue on every asset)</label>
+</fieldset>
+<label for="@Model.Id("reason")">Reason (shown in the change history)</label>
+<input id="@Model.Id("reason")" type="text" name="a.reason" required minlength="3" maxlength="400" placeholder="why these belong there" />

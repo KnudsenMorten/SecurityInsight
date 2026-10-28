@@ -1,0 +1,20 @@
+{
+  "_": "#757 -- the approximate monthly LIST prices of the sizes Operations > Performance offers (pay-as-you-go, one month = 730 hours, before any discount, reservation, Azure Hybrid Benefit or the Container Apps monthly free grant). Approximate, and the page says so. Update the numbers and asOf together.",
+  "asOf": "2026-10-18",
+  "currency": "USD",
+  "note": "Approximate list prices, before discounts. Your Azure price may differ by region and agreement.",
+  "database": {
+    "S1": 30,
+    "S2": 75,
+    "S3": 150,
+    "S4": 300,
+    "S6": 600,
+    "S7": 1200,
+    "S9": 2400,
+    "S12": 4500
+  },
+  "webapp": {
+    "perCpuMonth": 63,
+    "perGiBMonth": 8
+  }
+}

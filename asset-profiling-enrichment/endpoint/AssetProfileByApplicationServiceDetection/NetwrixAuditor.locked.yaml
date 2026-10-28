@@ -1,0 +1,21 @@
+id:        NetwrixAuditor
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Netwrix Auditor'
+category:  'Identity Audit'
+description: ''
+displayNames:
+  - 'Netwrix Auditor'
+
+detections:
+  - id: NetwrixAuditor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'auditor*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Audit'
+      Category: 'Identity Audit'

@@ -1,0 +1,198 @@
+@model SI.Management.Web.Cis.ColumnChooser
+@* THE column chooser of every data view (owner 2026-10-11: "i decided what to view, not you"): the columns shown now
+   (ticked, in order -- dragged, moved by button, by position or Alt + Up / Down: js/app/column-chooser.js), then
+   everything else the view offers, per group -- This view, Finding, Risk, Asset / CI, ServiceNow / CMDB, one group per
+   source -- each column by its words with its technical name small under them, and a search box that narrows every list
+   at once, so a list of hundreds stays usable. Posts to the shared /Columns page (Save / Reset) with the view key; a
+   person saves their own, an Admin also the tenant default.
+   After it, THE view bar of every data view (owner 2026-10-11: "any user can finetune each view ... it must be saved per
+   user"): the Layout box (the person's named layouts and the ones an Admin published), "Clear" for the remembered sort and
+   filters, and -- for the page's script (js/app/view-tools.js) -- what the table header's move left / right buttons, the
+   drag of a header and the drag of a column edge save with. Everything is the signed-in person's own, per view. *@
+@{
+    var shown = new HashSet<string>(Model.Layout, StringComparer.OrdinalIgnoreCase);
+    var total = Model.Choices.Count;
+    var active = Model.Active;
+    var mine = Model.Named.Where(n => !n.Shared).ToList();
+    var forAll = Model.Named.Where(n => n.Shared).ToList();
+    var eid = Model.ElementId;
+    // a published layout is changed by an Admin only (the server checks again)
+    var activeIsMine = active is not null && (!active.Shared || Model.IsAdmin);
+    var shownCount = Model.Layout.Count(k => Model.Find(k) is not null);
+}
+@* owner 2026-10-19: the Columns button comes first and is easy to see ("⚙ Columns · 61 shown"), the Layout box after it --
+   in the one toolbar row of the view (Search · Filters · Columns · Layout · Export). The panel opens under the toolbar. *@
+<details class="colchooser tool-menu" data-column-chooser data-view="@Model.View">
+    <summary class="tool-button colchooser-button" aria-label="Columns: @Fmt.Int(shownCount) of @Fmt.Int(total) shown. Choose and order the columns"><span aria-hidden="true">⚙</span> Columns · <span data-colchooser-count>@Fmt.Int(shownCount)</span> shown</summary>
+    <div class="tool-panel colchooser-panel">
+    <p class="hint" data-colchooser-source>Showing @Model.Words: @Fmt.Int(shownCount) of @Fmt.Int(total) columns.</p>
+    @if (Model.ExtrasPending) { <p class="hint" data-colchooser-pending>@SI.Management.Web.Cis.ColumnChooser.PendingText</p> }
+    @if (!Model.StoreReady) { <p class="hint" data-layout-missing>Column choices cannot be saved yet: the Pro database does not have the column layouts table. The next settings update adds it.</p> }
+    <form method="post" asp-page="/Columns" asp-page-handler="Save" class="stack">
+        <input type="hidden" name="View" value="@Model.View" />
+        <input type="hidden" name="Return" value="@Model.Return" />
+        <label class="colchooser-find">Find a column <input type="search" data-colchooser-search placeholder="name, source or identifier" maxlength="100" autocomplete="off" /></label>
+        <fieldset data-colgroup="shown" class="colshown">
+            <legend>Shown now, in this order</legend>
+            <p class="hint" id="@eid-order-hint">Drag a column by its handle (mouse or touch), use the buttons, type a position, or press Alt + Up / Alt + Down on a column.</p>
+            <ol class="colshown-list" data-colshown-list>
+            @foreach (var k in Model.Layout)
+            {
+                var c = Model.Find(k);
+                if (c is null) { continue; }
+                var tech = SI.Management.Web.Cis.ColumnChooser.Technical(c);
+                <li class="colshown-item" data-col-item>
+                    <label title="@c.Description" data-col-choice aria-describedby="@eid-order-hint"><input type="checkbox" name="Columns" value="@c.Key" checked /> <span class="col-words">@c.Label</span>@if (tech is not null) { <small class="col-tech">@tech</small> }</label>
+                </li>
+            }
+            </ol>
+        </fieldset>
+        @foreach (var grp in Model.AddGroups(shown))
+        {
+            var rest = grp.ToList();
+            <details class="colgroup" data-colgroup="@grp.Key" open="@(grp.Key == SI.Management.Core.ProData.DataColumnKeys.GroupView)">
+                <summary>Add: @grp.Key.Replace('_', ' ') <span class="muted">(@Fmt.Int(rest.Count))</span></summary>
+                <fieldset>
+                    <legend class="sr-only">@grp.Key</legend>
+                    @foreach (var c in rest)
+                    {
+                        var tech = SI.Management.Web.Cis.ColumnChooser.Technical(c);
+                        <label title="@(c.Description ?? c.Key)" data-col-choice><input type="checkbox" name="Columns" value="@c.Key" /> <span class="col-words">@c.Label</span>@if (tech is not null) { <small class="col-tech">@tech</small> }</label>
+                    }
+                </fieldset>
+            </details>
+        }
+        <p class="hint" data-colchooser-none hidden>No column matches.</p>
+        <p class="hint" data-colchooser-order>New columns are added after the ones shown now. "Save for me" keeps your columns and their order on this view for the next time you sign in@(Model.IsAdmin ? "; \"Save as the tenant default\" gives them to everyone without columns of their own" : ""). Every export of this view (this page, the selected rows or all rows) carries exactly the columns shown, in this order.</p>
+        <p class="hint" data-colchooser-header>On the table itself: the small arrows in a column's header (or dragging the header) move the column, and dragging a header's right edge changes its width (double-click sets it back). Both are saved for you at once.</p>
+        <div class="actions">
+            <button type="submit" name="Scope" value="user">Save for me</button>
+            @if (Model.IsAdmin) { <button type="submit" name="Scope" value="tenant" class="secondary" data-save-tenant>Save as the tenant default</button> }
+        </div>
+        @if (Model.MoreReady)
+        {
+            <div class="collayouts" data-layout-save>
+                <p class="hint">A layout keeps the ticked columns in their order, the sort and filters shown now and your column widths under a name -- to switch between with the Layout box above the table.</p>
+                <label for="@eid-name">Name of the layout</label>
+                <input id="@eid-name" type="text" name="Name" maxlength="80" placeholder="e.g. Patch planning" autocomplete="off" data-layout-name />
+                <button type="submit" asp-page="/Columns" asp-page-handler="LayoutSave" class="secondary" data-layout-save-new>Save as a layout</button>
+                @if (Model.IsAdmin) { <button type="submit" asp-page="/Columns" asp-page-handler="LayoutSave" name="Publish" value="1" class="secondary" data-layout-save-shared>Save as a layout for everyone</button> }
+                @if (activeIsMine) { <button type="submit" asp-page="/Columns" asp-page-handler="LayoutSave" name="LayoutId" value="@(active!.Id)" class="secondary" data-layout-update>Save the changes to "@(active!.Name)"</button> }
+            </div>
+        }
+    </form>
+    <form method="post" asp-page="/Columns" asp-page-handler="Reset" class="actions">
+        <input type="hidden" name="View" value="@Model.View" />
+        <input type="hidden" name="Return" value="@Model.Return" />
+        <button type="submit" name="Scope" value="user" class="secondary small" data-reset-user title="Show the tenant default columns again (your own choice is removed)">Reset to default</button>
+        @if (Model.IsAdmin) { <button type="submit" name="Scope" value="tenant" class="secondary small" data-reset-tenant>Set the tenant default back to the standard columns</button> }
+    </form>
+    @if (Model.MoreReady && Model.Named.Count > 0)
+    {
+        <div class="collayouts" data-layout-list>
+            <p><strong>Saved layouts of this view</strong></p>
+            <ul>
+                @foreach (var n in Model.Named)
+                {
+                    var changeable = !n.Shared || Model.IsAdmin;
+                    <li data-layout="@n.Id">
+                        <span class="collayout-name">@n.Name</span>
+                        @if (n.Shared) { <span class="badge info">for everyone</span> }
+                        @if (n.Id == Model.ActiveId) { <span class="muted">in use</span> }
+                        @if (n.PinnedMine) { <span class="badge" data-layout-pinned="mine">in My views</span> }
+                        @if (n.PinnedForAll) { <span class="badge info" data-layout-pinned="all">in everyone's menu</span> }
+                        @* owner 2026-10-19: pinned views to the menu -- anyone pins a layout to their own "My views"; an Admin pins
+                           a published layout for everyone. Both are recorded in the audit trail. *@
+                        <form method="post" asp-page="/Columns" asp-page-handler="@(n.PinnedMine ? "LayoutUnpin" : "LayoutPin")" class="inline-form">
+                            <input type="hidden" name="View" value="@Model.View" />
+                            <input type="hidden" name="Return" value="@Model.Return" />
+                            <input type="hidden" name="LayoutId" value="@n.Id" />
+                            <button type="submit" class="secondary small" data-layout-pin="@(n.PinnedMine ? "unpin" : "pin")">@(n.PinnedMine ? "Take off My views" : "Pin to My views")</button>
+                        </form>
+                        @if (n.Shared && Model.IsAdmin)
+                        {
+                            <form method="post" asp-page="/Columns" asp-page-handler="@(n.PinnedForAll ? "LayoutUnpin" : "LayoutPin")" class="inline-form">
+                                <input type="hidden" name="View" value="@Model.View" />
+                                <input type="hidden" name="Return" value="@Model.Return" />
+                                <input type="hidden" name="LayoutId" value="@n.Id" />
+                                <input type="hidden" name="ForAll" value="1" />
+                                <button type="submit" class="secondary small" data-layout-pin-all="@(n.PinnedForAll ? "unpin" : "pin")">@(n.PinnedForAll ? "Take off everyone's menu" : "Pin to everyone's menu")</button>
+                            </form>
+                        }
+                        @if (changeable)
+                        {
+                            <form method="post" asp-page="/Columns" asp-page-handler="LayoutRename" class="inline-form">
+                                <input type="hidden" name="View" value="@Model.View" />
+                                <input type="hidden" name="Return" value="@Model.Return" />
+                                <input type="hidden" name="LayoutId" value="@n.Id" />
+                                <label class="sr-only" for="@eid-rename-@n.Id">New name of the layout @n.Name</label>
+                                <input id="@eid-rename-@n.Id" type="text" name="Name" value="@n.Name" maxlength="80" autocomplete="off" />
+                                <button type="submit" class="secondary small" data-layout-rename>Rename</button>
+                            </form>
+                            @if (!n.Shared && Model.IsAdmin)
+                            {
+                                <form method="post" asp-page="/Columns" asp-page-handler="LayoutPublish" class="inline-form"
+                                      data-confirm="Everyone will see this layout in the Layout box of this view. Afterwards only an Admin can change or delete it." data-confirm-title="Publish the layout &quot;@n.Name&quot; for everyone?" data-confirm-ok="Publish">
+                                    <input type="hidden" name="View" value="@Model.View" />
+                                    <input type="hidden" name="Return" value="@Model.Return" />
+                                    <input type="hidden" name="LayoutId" value="@n.Id" />
+                                    <button type="submit" class="secondary small" data-layout-publish>Publish for everyone</button>
+                                </form>
+                            }
+                            <form method="post" asp-page="/Columns" asp-page-handler="LayoutDelete" class="inline-form"
+                                  data-confirm="@(n.Shared ? "Nobody can choose this layout any more. Whoever uses it keeps the columns they see now." : "The columns you see now stay as they are.")" data-confirm-title="Delete the layout &quot;@n.Name&quot;?" data-confirm-ok="Delete">
+                                <input type="hidden" name="View" value="@Model.View" />
+                                <input type="hidden" name="Return" value="@Model.Return" />
+                                <input type="hidden" name="LayoutId" value="@n.Id" />
+                                <button type="submit" class="secondary small" data-layout-delete>Delete</button>
+                            </form>
+                        }
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+    </div>
+</details>
+<div class="viewbar" data-view-tools data-view="@Model.View" data-store-ready="@(Model.StoreReady ? "1" : "0")" data-more-ready="@(Model.MoreReady ? "1" : "0")"
+     data-state-mode="@Model.StateMode" data-state="@Model.State" data-state-keys="@Model.StateKeys" data-widths="@Model.Widths">
+    @* what the header controls and the remembered sort and filters are sent with (nothing to see) *@
+    <form method="post" asp-page="/Columns" asp-page-handler="Save" data-view-post hidden>
+        <input type="hidden" name="View" value="@Model.View" />
+    </form>
+    @if (Model.MoreReady)
+    {
+        <form method="post" asp-page="/Columns" asp-page-handler="LayoutApply" class="viewbar-item" data-autosubmit data-layout-form>
+            <input type="hidden" name="View" value="@Model.View" />
+            <input type="hidden" name="Return" value="@Model.Return" />
+            <label for="@eid-layout">Layout</label>
+            <select id="@eid-layout" name="LayoutId" data-layout-select disabled="@(Model.Named.Count == 0)"
+                    title="@(Model.Named.Count == 0 ? "Open Columns to save the columns, sort, filters and widths shown now under a name" : "Switch between your saved layouts of this view")">
+                @if (Model.Named.Count == 0) { <option value="">No saved layouts yet</option> }
+                else if (active is null) { <option value="">Choose a layout</option> }
+                @if (mine.Count > 0)
+                {
+                    <optgroup label="Your layouts">
+                        @foreach (var n in mine) { <option value="@n.Id" selected="@(n.Id == Model.ActiveId)">@n.Name@(n.Id == Model.ActiveId && Model.ActiveChanged ? " (changed)" : "")</option> }
+                    </optgroup>
+                }
+                @if (forAll.Count > 0)
+                {
+                    <optgroup label="For everyone">
+                        @foreach (var n in forAll) { <option value="@n.Id" selected="@(n.Id == Model.ActiveId)">@n.Name@(n.Id == Model.ActiveId && Model.ActiveChanged ? " (changed)" : "")</option> }
+                    </optgroup>
+                }
+            </select>
+            <button type="submit" class="secondary small" disabled="@(Model.Named.Count == 0)" data-layout-show>@(active is not null && Model.ActiveChanged ? "Show as saved" : "Show")</button>
+        </form>
+        @if (Model.HasState)
+        {
+            <form method="post" asp-page="/Columns" asp-page-handler="ClearState" class="viewbar-item" data-state-clear>
+                <input type="hidden" name="View" value="@Model.View" />
+                <input type="hidden" name="Return" value="@Model.Return" />
+                <span class="muted">Your last sort and filters on this view are remembered.</span>
+                <button type="submit" class="secondary small" title="Show this view with its standard sort and filters again">Clear</button>
+            </form>
+        }
+    }
+</div>

@@ -1,0 +1,7 @@
+u_si_correlation_id,u_key,u_value,u_source,u_state,u_changed_at,u_batch_id,u_batch_time,u_si_batch_id
+mdedeviceid:0000000000000000000000000000000000000142,Finance,,mde-tag,present,2026-10-06 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006
+mdedeviceid:0000000000000000000000000000000000000a01,Payroll,,mde-tag,present,2026-09-15 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006
+azureresourceid:/subscriptions/aaaaaaaa-0000-0000-0000-000000000001/resourcegroups/rg-demo-app/providers/microsoft.compute/virtualmachines/vm-demo-app01,env,prod,azure-tag,present,2026-09-28 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006
+azureresourceid:/subscriptions/aaaaaaaa-0000-0000-0000-000000000001/resourcegroups/rg-demo-app/providers/microsoft.compute/virtualmachines/vm-demo-app01,owner,app-team,azure-tag,present,2026-09-28 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006
+azureresourceid:/subscriptions/aaaaaaaa-0000-0000-0000-000000000001/resourcegroups/rg-demo-sec/providers/microsoft.keyvault/vaults/kv-demo-secrets,env,prod,azure-tag,present,2026-10-06 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006
+azureresourceid:/subscriptions/aaaaaaaa-0000-0000-0000-000000000001/resourcegroups/rg-demo-app/providers/microsoft.compute/virtualmachines/vm-demo-app01,costcenter,cc-4711,azure-tag,removed,2026-10-06 05:00:00.000,demo-run-20261006,2026-10-06 05:03:00.000,demo-run-20261006

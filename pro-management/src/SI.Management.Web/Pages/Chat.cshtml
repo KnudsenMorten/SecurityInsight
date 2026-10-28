@@ -1,0 +1,51 @@
+@page
+@model SI.Management.Web.Pages.ChatModel
+@{
+    ViewData["Title"] = "Chat";
+}
+<link rel="stylesheet" href="~/css/chat-panel.css" asp-append-version="true" />
+<h1>Ask about your estate <span class="muted">(SecurityInsight AI MCP server)</span></h1>
+<p class="lede">Answers come only from the SecurityInsight AI MCP server: curated, read-only tools. @(Model.ShowToolCalls
+    ? "Under every answer, the tool calls and the queries behind it are one click away."
+    : "Open \"How was this answered?\" under an answer to see the tool calls and the queries behind it.")</p>
+
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+
+<div class="chat-log" aria-live="polite">
+    @foreach (var e in Model.Transcript)
+    {
+        if (e.Role == "assistant")
+        {
+            <partial name="_ChatAnswer" model="ChatModel.View(e, Model.ShowToolCalls)" />
+        }
+        else
+        {
+            <div class="msg user">
+                <div class="who">You</div>
+                <div class="text">@e.Content</div>
+            </div>
+        }
+    }
+</div>
+
+<form method="post" class="stack card">
+    <div>
+        <label for="q">Your question</label>
+        <textarea id="q" name="Question" maxlength="@ChatModel.MaxQuestion" placeholder="e.g. What changed in the risk score this week?">@Model.Question</textarea>
+        @if (!User.IsAdmin())
+        {
+            <p class="hint">The settings history is available to the chat for Admins only.</p>
+        }
+    </div>
+    <input type="hidden" name="TranscriptJson" value="@Model.TranscriptJson" />
+    <div class="actions">
+        <button type="submit">Ask</button>
+        @if (Model.Transcript.Count > 0)
+        {
+            <a class="button secondary" href="@Url.Page("/Chat")">New conversation</a>
+        }
+    </div>
+</form>

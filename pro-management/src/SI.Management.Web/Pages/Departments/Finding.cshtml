@@ -1,0 +1,69 @@
+@page
+@model SI.Management.Web.Pages.Departments.FindingModel
+@using SI.Management.Core.ProData
+@{
+    var t = Model.Target;
+    ViewData["Title"] = t is null ? "Finding governance" : (string.IsNullOrEmpty(t.Finding.Title) ? "Finding" : t.Finding.Title);
+}
+<p class="split"><a href="@(Model.DepartmentLink ?? "/Departments")">&larr; @(t?.DepartmentName ?? "Departments")</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (t is not null)
+{
+    var f = t.Finding;
+    <h1>@(string.IsNullOrEmpty(f.Title) ? "(untitled finding)" : f.Title)</h1>
+    <p class="lede">@f.AssetName · @f.Severity · @(f.Tier == ProDataFilters.Unclassified ? "Unclassified" : "Tier " + f.Tier) · @(t.DepartmentName ?? "Unassigned")</p>
+
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-f">
+            <h2 id="h-f">The finding</h2>
+            <dl class="kv">
+                <dt>Asset</dt><dd>@f.AssetName <span class="kind-tag">@f.AssetKind</span></dd>
+                <dt>Category</dt><dd>@f.SecurityDomain</dd>
+                <dt>Subcategory</dt><dd>@f.ReportName</dd>
+                @if (f.Cve.Length > 0) { <dt>CVE</dt><dd>@f.Cve</dd> }
+                @if (f.ConfigurationId.Length > 0) { <dt>Configuration</dt><dd class="mono">@f.ConfigurationId</dd> }
+                <dt>Collection</dt><dd>@Fmt.Time(f.CollectionTime) <span class="muted">@f.CollectionId</span></dd>
+                @if (User.IsReader()) { <dt>All details</dt><dd><a href="/Findings/Detail?c=@Uri.EscapeDataString(f.CollectionId)&amp;id=@Uri.EscapeDataString(f.FindingId)">Open the finding</a></dd> }
+            </dl>
+        </section>
+        <section class="card" aria-labelledby="h-s">
+            <h2 id="h-s">Status</h2>
+            <p data-governance-status class="value">@GovernanceStatuses.Label(Model.State?.Status)</p>
+            @if (Model.State?.ScheduledFor is { } when) { <p data-scheduled>Planned for the maintenance window starting @Fmt.Time(when).@(when < DateTime.UtcNow ? " The window has passed: the next collections show whether it was fixed." : "")</p> }
+            @if (Model.State is { } st) { <p class="hint" data-utc>Last set by @st.UpdatedBy@(st.UpdatedAt is { } u ? ", " + Fmt.When(u) : "").</p> }
+            <h3>Remediation flow</h3>
+            @if (Model.Flow is { } fl)
+            {
+                <p data-flow="@fl.Action"><strong>@RemediationActions.Label(fl.Action)</strong> <span class="hint">-- @RemediationActions.Purpose(fl.Action)</span></p>
+                @if (fl.VendorMail is not null) { <p class="hint">Vendor contact: @(fl.VendorName ?? fl.VendorMail) (@fl.VendorMail)</p> }
+                @if (fl.Note is not null) { <p class="hint">@fl.Note</p> }
+            }
+            else { <p class="hint" data-flow="">No remediation flow covers this category for the department: it is handled by hand (<nav-ref page="/Admin/Departments/Flows" /> defines them).</p> }
+        </section>
+    </div>
+
+    @if (Model.MayWrite)
+    {
+        <div class="grid-2">
+            <section class="card" aria-labelledby="h-a">
+                <h2 id="h-a">Remediation</h2>
+                <form method="post" asp-page-handler="Apply" asp-route-c="@Model.C" asp-route-id="@Model.Id" class="stack" data-governance-apply>
+                    <label for="g-action">Action</label>
+                    <select id="g-action" name="action">
+                        @foreach (var a in RemediationActions.All)
+                        {
+                            if (a == RemediationActions.EscalateVendor && Model.Flow?.VendorMail is null) { continue; }
+                            <option value="@a" selected="@(Model.Flow?.Action == a)">@RemediationActions.Label(a)</option>
+                        }
+                    </select>
+                    <label for="g-note">Note (the vendor's request, or the reason a risk is accepted)</label>
+                    <textarea id="g-note" name="comment" rows="3" maxlength="2000"></textarea>
+                    <button type="submit">Apply</button>
+                    <p class="hint">Nothing is pushed to Defender, Intune, Entra or Azure: "Auto" plans the fix for the department's next maintenance window and logs it; accepting a risk raises an exemption request an approver decides.</p>
+                </form>
+            </section>
+        </div>
+    }
+    @* #265: the ONE thread of this finding -- governance log, comments / recommendations / approvals, follow-up tasks *@
+    @if (Model.Thread is { } th) { <partial name="_FindingThread" model="th" /> }
+}

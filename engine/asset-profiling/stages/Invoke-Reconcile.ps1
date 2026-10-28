@@ -1,0 +1,352 @@
+#Requires -Version 5.1
+<#
+    Invoke-Reconcile.ps1
+
+    RECONCILE phase (ARCHITECTURE.md § 13). Runs AFTER all per-asset
+    engines have produced profile rows. Two outputs:
+
+      1. CmdbMatchState field on every profile row (forward direction):
+         matched-pinned | matched-exact | matched-rule | matched-fuzzy
+         | orphan-discovered | stale-cache
+
+      2. Reconciliation_Gap_CL table (reverse direction): one row per
+         CMDB CI that did not match any discovered asset.
+
+    Match priority chain (per § 13):
+      1. Pin              -> matched-pinned
+      2. Direct CMDB rel  -> matched-exact   (cmdbmembership table)
+      3. Identity match   -> matched-exact   (azure_resource_id / entra_object_id / fqdn)
+      4. Custom rule      -> matched-rule    (rules-custom/shared/cmdb-membership.yaml)
+      5. Fuzzy            -> matched-fuzzy   (name + env heuristic, conf >= 0.8)
+      6. No match         -> orphan-discovered
+
+    ships the scaffold + match priorities 1, 3, 6 (the simplest).
+    Pin file (cmdb-pins.yaml), direct membership (cmdbmembership table is
+    empty in sample-CSV mode), custom grouping rules, and fuzzy matching
+    are stubbed with TODOs.
+
+    Stage Profile writes Verdict + cmdbId to records first.
+    Reconcile bolts on CmdbMatchState and overwrites cmdbId only when match
+    priority 1-5 produced a stronger match.
+
+    Untested in tenant.
+#>
+
+function Invoke-SIReconcile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$RunContext
+    )
+
+    # opt-in flag dropped. Reconcile always runs. CMDB cache may
+    # be empty (state='never'); the per-asset loop below handles that gracefully
+    # by tagging every row 'orphan-discovered' without failing the stage.
+    $engine = $RunContext.Engine
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    . (Join-Path $siRoot 'engine\asset-profiling\storage\StagingBlob.ps1')
+    . (Join-Path $siRoot 'engine\asset-profiling\storage\CmdbCache.ps1')
+    . (Join-Path $siRoot 'engine\asset-profiling\shared\CmdbFieldPrecedence.ps1')
+
+    # ensure cache tables exist before any read. Without this, the
+    # first engine run on a new tenant emits doubled "Can not find table
+    # 'sicmdbservices'" warnings (one from Get-SICmdbCacheAge, one from
+    # Get-SICmdbServices). Initialize is idempotent -- safe on every run.
+    try { Initialize-SICmdbCacheTables -Context $RunContext.StorageContext | Out-Null }
+    catch { Write-Warning ("Initialize-SICmdbCacheTables failed: {0}. Continuing -- empty-cache path will fire." -f $_.Exception.Message) }
+
+    # AUDIT #58.3 -- which CMDB source answered this run. Stage Schedule resolves it once and stamps
+    # it on the RunContext; this is the ONLY consumer, so the two stages cannot disagree.
+    # 🪤 Re-resolve rather than leave it blank when the property is absent (Reconcile run standalone,
+    # or an older RunContext). A silently empty CmdbSource on every row is indistinguishable from the
+    # column-loss defect #57.1(d) exists to catch -- do not manufacture the shape we now guard for.
+    $__cmdbSourceForRun = $null
+    if ($RunContext.PSObject.Properties['CmdbSource']) { $__cmdbSourceForRun = [string]$RunContext.CmdbSource }
+    if ([string]::IsNullOrWhiteSpace($__cmdbSourceForRun)) {
+        . (Join-Path $siRoot 'engine\asset-profiling\shared\CmdbSource.ps1')
+        $__pick = Resolve-SICmdbSource -Available (Get-SICmdbSourceAvailability `
+                        -SolutionRoot $siRoot `
+                        -EnableCmdbProvider   $global:SI_EnableCmdbProvider `
+                        -EnableServiceNowCmdb $global:SI_EnableServiceNowCmdb)
+        $__cmdbSourceForRun = [string]$__pick.Source
+        Write-Warning ("CmdbSource was not stamped by Stage Schedule -- re-resolved here as '{0}'. Rows stay labelled rather than blank." -f $__cmdbSourceForRun)
+    }
+    Write-SIInfo ("CMDB source for this run: {0}" -f $__cmdbSourceForRun)
+
+    # Cache freshness gate
+    $age = Get-SICmdbCacheAge -Context $RunContext.StorageContext
+    if ($age.State -eq 'critical') {
+        Write-Warning ('CMDB cache is {0}h old (>7d). Tagging every row stale-cache; gap report suppressed.' -f $age.HoursOld)
+    } elseif ($age.State -eq 'stale') {
+        Write-Warning ('CMDB cache is {0}h old (warning threshold 24h). Proceeding.' -f $age.HoursOld)
+    } elseif ($age.State -eq 'never' -and $__cmdbSourceForRun -eq 'none') {
+        # #399: no CMDB is configured (always so in Community) -- an empty cache is expected, not a warning on every run
+        Write-SIInfo 'No CMDB is configured: every row is orphan-discovered.'
+    } elseif ($age.State -eq 'never') {
+        Write-Warning 'CMDB cache is empty (no sync run yet). Every row will be orphan-discovered.'
+    } else {
+        Write-SIInfo ('CMDB cache age: {0}h (fresh)' -f $age.HoursOld)
+    }
+
+    # Load assets from staging (Stage Profile writes to Stage='Classify')
+    # Same key as Classify/Profile: shard 0 of THIS replica. Without -ReplicaIndex a sharded container
+    # run read every replica's records, and the re-write below then landed under replica 0.
+    $records = @(Read-SIStageShards -Context $RunContext.StorageContext `
+                                    -ContainerName $RunContext.StagingContainer `
+                                    -RunId $RunContext.RunId `
+                                    -Stage 'Classify' `
+                                    -ReplicaIndex ([int]$RunContext.ShardIndex))
+    Write-SIInfo ("{0} records read from staging" -f $records.Count)
+
+    $cis      = @(Get-SICmdbCIs      -Context $RunContext.StorageContext)
+    $services = @(Get-SICmdbServices -Context $RunContext.StorageContext)
+    Write-SIInfo ("CMDB cache: {0} services, {1} CIs" -f $services.Count, $cis.Count)
+    # #891 part 3: a cache that could not be read TO THE END is INCOMPLETE, never "complete with fewer rows": every row is
+    # tagged stale-cache and the gap report is suppressed (the same handling as a cache too old to trust) -- a warning,
+    # and no row is called a CMDB orphan because its CI was on a page that was not read
+    if ((Get-Command -Name Test-SICmdbCacheReadComplete -ErrorAction SilentlyContinue) -and -not (Test-SICmdbCacheReadComplete)) {
+        Write-Warning ('CMDB cache INCOMPLETE ({0}) -- every row is tagged stale-cache this run and the gap report is suppressed; nothing is called a CMDB orphan.' -f ((Get-SICmdbCacheReadIssues) -join '; '))
+        $age = @{ HoursOld = $age.HoursOld; State = 'critical'; LastSync = $age.LastSync }
+    }
+
+    # Build CI lookup indexes for priority-3 (identity match)
+    $byArmId  = @{}
+    $byEntra  = @{}
+    $byFqdn   = @{}
+    foreach ($c in $cis) {
+        if ($c.azure_resource_id) { $byArmId[([string]$c.azure_resource_id).ToLower()] = $c }
+        if ($c.entra_object_id)   { $byEntra[([string]$c.entra_object_id).ToLower()]   = $c }
+        if ($c.fqdn)              { $byFqdn[([string]$c.fqdn).ToLower()]               = $c }
+    }
+    # services lookup by id -- Stage Profile stamps cmdbId from rule
+    # matches (rules-custom/<engine>/AssetProfileBy*.yaml set.cmdbId). Reconcile
+    # then folds the FULL service record (all CSV columns surfaced by Refresh-
+    # CmdbCache.ps1) onto $Record.Metadata.CMDB_*.
+    $byServiceId = @{}
+    foreach ($s in $services) {
+        if ($s.id)   { $byServiceId[([string]$s.id).ToLower()]   = $s }
+        elseif ($s.RowKey) { $byServiceId[([string]$s.RowKey).ToLower()] = $s }
+    }
+    $matchedCiIds = New-Object System.Collections.Generic.HashSet[string]
+
+    # explicit two-phase mapping (per user direction):
+    #   Phase 1 -- "1:1 mapping based on rules"
+    #              Stage Profile evaluated YAML rules and may have stamped
+    #              `$r.cmdbId` from a `set.cmdbId` clause in a matched rule.
+    #              When set, Phase 1 wins; we DO NOT run identity-match.
+    #   Phase 2 -- "mapping of resources (gaps)"
+    #              For rows Phase 1 didn't touch, attempt direct CMDB CI
+    #              identity match (azure_resource_id / entra_object_id / fqdn).
+    # CmdbMatchPhase column makes the source visible: 'rule' | 'identity' | 'orphan'
+    # | 'stale-cache'. CmdbMatchRule keeps the previous semantics (rule-id when
+    # rule-matched, 'identity-match' when CI-matched, 'no-match' otherwise).
+    $stats = @{ rulePhase=0; identityPhase=0; orphan=0; staleCache=0 }
+    foreach ($r in $records) {
+        $CmdbMatchPhase = $null
+        $CmdbMatchState = $null
+        $CmdbMatchRule  = $null
+        $confidence = 1.0
+        $matchedCi  = $null
+
+        # Has Phase 1 already mapped this row? Profile sets $r.cmdbId from
+        # a YAML rule's `set.cmdbId`. SI_RuleMatches[] records WHICH rule.
+        $rulecmdbId = if ($r.PSObject.Properties['cmdbId']) { [string]$r.cmdbId } else { '' }
+        $ruleMatchSource = $null
+        if ($rulecmdbId -and $r.PSObject.Properties['Verdict'] -and $r.Verdict.PSObject.Properties['SI_RuleMatches']) {
+            $hit = @($r.Verdict.SI_RuleMatches) | Where-Object { [string]$_.cmdbId -eq $rulecmdbId } | Select-Object -First 1
+            if ($hit) { $ruleMatchSource = [string]$hit.RuleId }
+        }
+
+        if ($age.State -eq 'critical') {
+            $CmdbMatchPhase = 'stale-cache'; $CmdbMatchState = 'stale-cache'
+            $stats.staleCache++
+        } elseif ($rulecmdbId) {
+            # ---- Phase 1: rule-driven (1:1) ----
+            $CmdbMatchPhase = 'rule'
+            $CmdbMatchState = 'matched-by-rule'
+            $CmdbMatchRule  = if ($ruleMatchSource) { $ruleMatchSource } else { 'rule-cmdbid' }
+            # Try to also locate a CI by cmdbId so MatchedCi-derived columns fill
+            # too (LastSeenInCmdb, cmdbCriticality, etc).
+            foreach ($c in $cis) {
+                if ([string]$c.id -eq $rulecmdbId) { $matchedCi = $c; [void]$matchedCiIds.Add(([string]$c.id).ToLower()); break }
+            }
+            $stats.rulePhase++
+        } else {
+            # ---- Phase 2: identity-match gap mapping ----
+            $armId = [string]$r.AZ_ResourceId
+            if (-not $armId -and $r.PSObject.Properties['Metadata']) { $armId = [string]$r.Metadata.AZ_ResourceId }
+            $entId = [string]$r.PrimaryEntityId
+            $fqdn  = [string]$r.Fqdn
+            $candidate = $null
+            if ($armId -and $byArmId.ContainsKey($armId.ToLower())) { $candidate = $byArmId[$armId.ToLower()] }
+            elseif ($entId -and $byEntra.ContainsKey($entId.ToLower())) { $candidate = $byEntra[$entId.ToLower()] }
+            elseif ($fqdn  -and $byFqdn.ContainsKey($fqdn.ToLower()))   { $candidate = $byFqdn[$fqdn.ToLower()] }
+
+            if ($candidate) {
+                $CmdbMatchPhase = 'identity'
+                $CmdbMatchState = 'matched-by-identity'
+                $CmdbMatchRule  = 'identity-match'
+                [void]$matchedCiIds.Add(([string]$candidate.id).ToLower())
+                $matchedCi = $candidate
+                $stats.identityPhase++
+            } else {
+                $CmdbMatchPhase = 'orphan'
+                $CmdbMatchState = 'orphan-discovered'
+                $CmdbMatchRule  = 'no-match'
+                $confidence = 0.0
+                $stats.orphan++
+            }
+        }
+
+        $reconcileFields = @{
+            CmdbMatchPhase      = $CmdbMatchPhase
+            CmdbMatchState      = $CmdbMatchState
+            CmdbMatchRule       = $CmdbMatchRule
+            CmdbMatchConfidence = $confidence
+            LastSeenInCmdb  = if ($matchedCi) { [string]$matchedCi.last_seen } else { $null }
+            # AUDIT #58.3 -- WHICH CMDB answered, in the DATA and not only in the log. "Where did this
+            # cmdbCriticality come from?" must be answerable from the export, on a machine the analyst
+            # has, without log archaeology. Resolved once in Stage Schedule and carried on the
+            # RunContext so the two stages can never disagree about the source.
+            CmdbSource      = $__cmdbSourceForRun
+        }
+        # Bolt onto record
+        foreach ($k in $reconcileFields.Keys) {
+            if ($r.PSObject.Properties[$k]) { $r.$k = $reconcileFields[$k] }
+            else { Add-Member -InputObject $r -MemberType NoteProperty -Name $k -Value $reconcileFields[$k] -Force }
+        }
+        # Inherit cmdb* fields from matched CI -- only what Stage Profile left empty: a rule's override wins over the CMDB
+        # record, field by field (operator, 2026-10-05), and the source of each value is recorded beside it.
+        if ($matchedCi) {
+            $val = [string]$matchedCi.id
+            if ($val) {
+                if ($r.PSObject.Properties['cmdbId']) {
+                    if ([string]::IsNullOrWhiteSpace([string]$r.cmdbId)) { $r.cmdbId = $val }
+                }
+                else { Add-Member -InputObject $r -MemberType NoteProperty -Name 'cmdbId' -Value $val -Force }
+            }
+            foreach ($f in @('cmdbName','cmdbCriticality','cmdbDataSensitivity')) {
+                $sourceKey = switch ($f) {
+                    'cmdbName'           { 'name' }
+                    'cmdbCriticality'    { 'criticality' }
+                    'cmdbDataSensitivity'{ 'dataSensitivity' }
+                }
+                [void](Merge-SICmdbRecordField -Record $r -Field $f -CmdbValue ([string]$matchedCi.$sourceKey))
+            }
+        }
+
+        # services lookup by cmdbId (Stage Profile stamped this from a
+        # rule match). Folds the FULL service record onto $r.Metadata.CMDB_* so all
+        # CSV columns Refresh-CmdbCache.ps1 surfaced (Owner, OwnerMail, plus any
+        # custom columns) reach Properties.collect.cmdb in the row builders.
+        $serviceId = if ($r.PSObject.Properties['cmdbId']) { [string]$r.cmdbId } else { '' }
+        if ($serviceId) {
+            $svc = $byServiceId[$serviceId.ToLower()]
+            if ($svc) {
+                # 2026-05-02: stamp canonical cmdb* columns directly on the row from the
+                # matched service record. Without this, rule-driven Phase 1 leaves the
+                # row with only cmdbId (the service's "1") populated -- cmdbName /
+                # cmdbCriticality / cmdbDataSensitivity stay empty in SI_*_Profile_CL,
+                # because Phase 1's CI fallback (line 137-139) only matches CIs whose
+                # `id` equals the SERVICE id, which they never do. Service-row enrichment
+                # must do this directly. Mirror the CI inheritance map (line 183-188).
+                $svcGet = {
+                    param($Obj, $Name)
+                    if ($Obj -is [System.Collections.IDictionary]) {
+                        if ($Obj.Contains($Name)) { return $Obj[$Name] }
+                        return $null
+                    }
+                    if ($Obj.PSObject.Properties[$Name]) { return $Obj.PSObject.Properties[$Name].Value }
+                    return $null
+                }
+                $svcFieldMap = @{
+                    cmdbName            = 'name'
+                    cmdbCriticality     = 'criticality'
+                    cmdbDataSensitivity = 'dataSensitivity'
+                }
+                # rule override > CMDB record > nothing, per field; the source is recorded (shared\CmdbFieldPrecedence.ps1)
+                foreach ($f in $svcFieldMap.Keys) {
+                    $sourceKey = $svcFieldMap[$f]
+                    [void](Merge-SICmdbRecordField -Record $r -Field $f -CmdbValue ([string](& $svcGet $svc $sourceKey)))
+                }
+
+                # Folds the FULL service record onto $r.Metadata.CMDB_* so
+                # all CSV columns Refresh-CmdbCache.ps1 surfaced (Owner, OwnerMail, plus
+                # any custom columns) reach Properties.collect.cmdb in the row builders.
+                $meta = $r.Metadata
+                if ($null -eq $meta) {
+                    $meta = @{}
+                    if ($r.PSObject.Properties['Metadata']) { $r.Metadata = $meta }
+                    else { Add-Member -InputObject $r -MemberType NoteProperty -Name 'Metadata' -Value $meta -Force }
+                }
+                $skip = @('PartitionKey','RowKey','Etag','TableTimestamp','TableName')
+                $cols = if ($svc -is [System.Collections.IDictionary]) { @($svc.Keys) } else { @($svc.PSObject.Properties.Name) }
+                foreach ($k in $cols) {
+                    if ($k -in $skip) { continue }
+                    $val = if ($svc -is [System.Collections.IDictionary]) { $svc[$k] } else { $svc.$k }
+                    if ($null -eq $val -or [string]::IsNullOrWhiteSpace([string]$val)) { continue }
+                    $cmdbKey = 'CMDB_' + $k
+                    if ($meta -is [System.Collections.IDictionary]) { $meta[$cmdbKey] = $val }
+                    else {
+                        if ($meta.PSObject.Properties[$cmdbKey]) { $meta.$cmdbKey = $val }
+                        else { Add-Member -InputObject $meta -MemberType NoteProperty -Name $cmdbKey -Value $val -Force }
+                    }
+                }
+            }
+        }
+    }
+
+    # Re-write enriched records back to staging. Skip when there were no records
+    # to enrich (legitimate state when Phase 3 cadence-skipped every asset --
+    # nothing to re-write, and Write-SIStageShard rejects empty arrays).
+    if ($records -and @($records).Count -gt 0) {
+        Write-SIStageShard -Context $RunContext.StorageContext `
+                           -ContainerName $RunContext.StagingContainer `
+                           -RunId $RunContext.RunId `
+                           -Stage 'Classify' `
+                           -ShardIndex 0 `
+                           -ReplicaIndex ([int]$RunContext.ShardIndex) `
+                           -Records $records | Out-Null
+    }
+
+    # Reverse direction: gap rows (CMDB CIs nothing discovered)
+    $gapRows = New-Object System.Collections.ArrayList
+    if ($age.State -ne 'critical') {
+        foreach ($c in $cis) {
+            $cid = ([string]$c.id).ToLower()
+            if (-not $matchedCiIds.Contains($cid)) {
+                [void]$gapRows.Add([pscustomobject]@{
+                    CollectionTime  = $RunContext.CollectionTime
+                    cmdbId          = [string]$c.id
+                    cmdbName        = [string]$c.name
+                    cmdbCriticality = [string]$c.criticality
+                    ExpectedEngine  = if ($c.azure_resource_id) { 'azure' } elseif ($c.entra_object_id) { 'identity' } else { 'endpoint' }
+                    LastSeenInCmdb  = [string]$c.last_seen
+                    Reason          = 'never-seen-in-discovery'
+                })
+            }
+        }
+    }
+    Write-SIInfo ("gap rows: {0}" -f $gapRows.Count)
+
+    # NOTE: gap-row LA ingest not yet shipped (Reconciliation_Gap_CL table
+    # creation lands in ). returns the rows in
+    # StageResult so a custom launcher can dispatch them manually.
+
+    Write-SIInfo ('phase summary: rule={0} identity={1} orphan={2} stale-cache={3} gap-cis={4}' -f `
+        $stats.rulePhase, $stats.identityPhase, $stats.orphan, $stats.staleCache, $gapRows.Count)
+
+    return [pscustomobject]@{
+        Stage          = 'Reconcile'
+        Engine         = $engine
+        AssetsScanned  = $records.Count
+        RulePhaseCount = $stats.rulePhase
+        IdentityPhase  = $stats.identityPhase
+        OrphanCount    = $stats.orphan
+        StaleCacheRows = $stats.staleCache
+        GapRowCount    = $gapRows.Count
+        GapRows        = $gapRows.ToArray()
+        CacheState     = $age.State
+        CacheHoursOld  = $age.HoursOld
+        Summary        = ('rule={0} identity={1} orphan={2} gap={3} cache={4}' -f $stats.rulePhase, $stats.identityPhase, $stats.orphan, $gapRows.Count, $age.State)
+    }
+}

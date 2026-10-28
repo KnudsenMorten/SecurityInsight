@@ -1,0 +1,51 @@
+@* Title, what the view shows, the collection picker and the page's notices -- the top of every collection view. *@
+@model SI.Management.Web.Pages.Collection.CollectionPageModel
+@inject SI.Management.Web.Collection.IPartialCollections PartialMarks
+@inject SI.Management.Web.Collection.ISourceNotes SourceNotes
+@{
+    ViewData["Title"] = Model.Heading;
+    // a collection an Admin released although its run was incomplete is MARKED PARTIAL wherever it is shown
+    var marks = await PartialMarks.MarksAsync(default);
+    var currentMark = Model.Current is { } cur && marks.TryGetValue(cur.CollectionId, out var cm) ? cm : null;
+    // per report (owner 2026-10-19): only on a page that shows one of those reports, in plain words; the cause for Admins only
+    var partialNotice = SI.Management.Web.Collection.PartialNotice.For(currentMark, Model.PagePath, User.IsAdmin());
+    // a collection calculated while a source was on its last good collection says so -- unless the page's own banner (the
+    // state of the sources NOW, in the layout) already says the same of the newest collection
+    var srcNow = await SourceNotes.CurrentAsync(default);
+    var srcOf = Model.Current is { } srcCur && (await SourceNotes.ByCollectionAsync(default)).TryGetValue(srcCur.CollectionId, out var srcList) ? srcList : null;
+    var srcNewest = Model.Current is not null && Model.Collections.Count > 0 && Model.Collections[0].CollectionId == Model.Current.CollectionId;
+    var srcShow = srcOf is null ? new List<SI.Management.Web.Collection.SourceNote>() : srcOf.Where(n => !(srcNewest && srcNow.Any(x => x.Source == n.Source))).ToList();
+}
+<h1>@Model.Heading</h1>
+@* #636 the tight frame: title + view picker, one filter line, then the table -- a page that opts in keeps its explanation one click away *@
+@if (Model.Picker is { } picker) { <partial name="~/Pages/Shared/_ViewPicker.cshtml" model="picker" /> }
+@if (Model.CompactFrame) { <details class="about" data-about><summary>About this page</summary><p class="lede">@Model.Lede</p></details> }
+else { <p class="lede">@Model.Lede</p> }
+@* owner 2026-10-19: what the view shows, from its real state -- the run, the lifecycle, the defaults, the filters as chips *@
+@if (Model.Current is not null) { <partial name="~/Pages/Shared/_ViewScope.cshtml" model="await Model.ScopeAsync(ViewContext.HttpContext.RequestAborted)" /> }
+@* #855 the grid's CI lifecycle: Active (the default) | Not seen | Retired | All -- only where the grid counts it *@
+@if (Model.LifecycleChoiceModel is { } lifeChoice) { <partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="lifeChoice" /> }
+@if (Model.Collections.Count > 0)
+{
+    <form method="get" action="@Model.PagePath" class="picker" data-autosubmit aria-label="Collection">
+        @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
+        <div>
+            <label for="pick-c">Collection</label>
+            <select id="pick-c" name="c">
+                @foreach (var c in Model.Collections)
+                {
+                    <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(c == Model.Collections[0] ? " · newest" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && pm.ShowsOn(Model.PagePath) ? " · " + pm.Badge : "")</option>
+                }
+            </select>
+        </div>
+        <noscript><button type="submit">Open</button></noscript>
+    </form>
+}
+@if (Model.Error is not null)
+{
+    @* #284: a failed or timed-out read says so in the page, with the reference that finds it in the log *@
+    <div class="notice error" role="alert" data-view-error="@(Model.TimedOut ? "timeout" : "failed")" data-ref="@Model.ErrorRef">@Model.Error@if (Model.TimedOut) { <text> </text><a href="@Model.Link()">Try again</a> }</div>
+}
+@if (partialNotice is not null) { <partial name="~/Pages/Shared/_PartialNotice.cshtml" model="partialNotice" /> }
+@foreach (var srcNote in srcShow) { <div class="notice warn" role="status" data-utc data-collection-source="@srcNote.Source">When this collection was calculated: @(srcNote.Text(t => Fmt.When(t)))</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }

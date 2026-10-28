@@ -1,0 +1,105 @@
+@page
+@model SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel
+@{
+    ViewData["Title"] = "Connectors";
+}
+<div class="split"><h1>Connectors</h1><partial name="_ExportExcel" /></div>
+<p class="lede">Where the vulnerability close-loop sends its results: a SQL table, ServiceNow, or any third-party risk or ticketing system through a REST mapping. Each connector has its own mode and its own permission to create and to close. Every change is staged and written on <a href="/Changes">Review &amp; commit</a>.</p>
+<details class="help">
+    <summary>How connectors behave</summary>
+    <p><strong>Mode whatif</strong> plans and logs what would be sent, and sends nothing. <strong>Apply</strong> sends. <strong>Create</strong> and <strong>close</strong> are allowed separately, so a new connector can record findings long before it is trusted to close them. Every close still passes the close-loop's guards (a complete snapshot, a live asset, the close ceiling).</p>
+    <p>A REST connector only changes items it created itself: it keeps the other system's id of every item it opened, and never touches anything else there. Secrets are never stored here -- only the <em>names</em> of Key Vault secrets, read at run time by the job's identity.</p>
+    <p>With no connector at all, the close-loop runs the target set in the settings (SI_VulnSync_*), as before.</p>
+</details>
+@foreach (var e in Model.Errors) { <div class="notice error" role="alert">@e</div> }
+<section class="card" aria-labelledby="h-snow-route" id="servicenow-one-route">
+    <h2 id="h-snow-route">ServiceNow: one route</h2>
+    <p>@SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel.OneRouteText</p>
+    <p class="hint">@SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel.RequestText</p>
+    <p><a class="btn" href="@SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel.RequestLink("resync")">Full resync...</a> <a class="btn" href="@SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel.RequestLink("test")">Send a test batch...</a></p>
+</section>
+<section class="card" aria-labelledby="h-outputs" id="optional-outputs">
+    <h2 id="h-outputs">Optional outputs to Log Analytics</h2>
+    <p class="hint">Extra copies Risk Analysis can write to Log Analytics besides its own results in the database, for your own workbooks, Sentinel or KQL. SecurityInsight itself reads neither. Each is off until you turn it on.</p>
+    <div class="table-wrap">
+        <table data-sortable>
+            <thead><tr><th>Output</th><th>State</th><th>What it does</th><th data-sort="off"><span class="sr-only">Change</span></th></tr></thead>
+            <tbody>
+                @foreach (var o in Model.Outputs)
+                {
+                    <tr data-output-setting="@o.Name">
+                        <td><strong>@o.Title</strong><br /><span class="mono hint">@o.Name</span></td>
+                        <td>@if (o.On) { <span class="state ok">@o.ValueText</span> } else { <span class="state">@o.ValueText</span> }</td>
+                        <td class="wrap">@o.Text</td>
+                        <td><a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(o.Name)">@(o.On ? "Turn off" : "Turn on")</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+@if (Model.TableMissing)
+{
+    <div class="notice warn" role="status">This database has no connector table yet. Apply the Pro settings schema (sql\si-pro-settings.sql) -- setup\Import-SIProSettings.ps1 -CreateSchema does it -- and reload.</div>
+}
+else
+{
+    <section class="card" aria-labelledby="h-new">
+        <h2 id="h-new">Add a connector</h2>
+        <form method="get" action="/Admin/ConnectorSetup/Edit" class="filterbar">
+            <div class="wide">
+                <label for="n-name">Name</label>
+                <input id="n-name" type="text" name="name" placeholder="risk-register" maxlength="63" required />
+            </div>
+            <div>
+                <label for="n-kind">Kind</label>
+                <select id="n-kind" name="kind">
+                    @foreach (var k in SI.Management.Web.Changes.ConnectorRepository.Kinds) { <option value="@k">@k</option> }
+                </select>
+            </div>
+            <div class="actions"><button type="submit">Open</button></div>
+        </form>
+        <p class="hint">Lower-case letters, digits and dashes. Sample REST mappings ship with SecurityInsight Pro in config\connector-*.sample.json (a generic risk register and a Jira-style issue API).</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-list">
+        <h2 id="h-list">Connectors <span class="badge">@Fmt.Int(Model.Connectors.Count)</span></h2>
+        @if (Model.DataOutProblem is { } twoOn) { <div class="notice error" role="alert" data-data-out-two-on>@twoOn</div> }
+        @if (Model.Connectors.Count == 0) { <p class="hint">No connector yet -- the close-loop runs the target from the settings (SI_VulnSync_*), if one is set.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Name</th><th>Kind</th><th>State</th><th>Mode</th><th>Create</th><th>Close</th><th>Last run</th><th>Changed</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var c in Model.Connectors)
+                        {
+                            Model.LastRun.TryGetValue(c.Name, out var run);
+                            <tr>
+                                <td class="mono"><a href="/Admin/ConnectorSetup/Edit?name=@Uri.EscapeDataString(c.Name)">@c.Name</a></td>
+                                <td>@c.Kind@(c.Direction == "vulnerability" ? "" : " (" + c.Direction + ")")</td>
+                                <td>@if (c.Enabled) { <span class="state ok">enabled</span> } else { <span class="state">disabled</span> }</td>
+                                <td>@if (c.Mode == "apply" || SI.Management.Web.Changes.ServiceNowDataOut.Is(c)) { <span class="badge warn">apply</span> } else { <span class="badge">whatif</span> }</td>
+                                <td>@(c.AllowCreate ? "yes" : "no")</td>
+                                <td>@(c.AllowClose ? "yes" : "no")</td>
+                                <td class="wrap">@if (run is null) { <span class="hint">never</span> } else { <span class="@(run.Outcome is "success" or "whatif" ? "state ok" : "state bad")">@run.Outcome</span> @Fmt.Time(run.StartedAt) }</td>
+                                <td class="wrap">@c.UpdatedBy, @Fmt.Time(c.UpdatedAt)</td>
+                                <td>
+                                    <form method="post" asp-page-handler="Toggle" class="row-actions">
+                                        <input type="hidden" name="Name" value="@c.Name" />
+                                        <input type="hidden" name="ReadVersion" value="@SI.Management.Web.Pages.Admin.ConnectorSetup.IndexModel.VersionText(c.Version)" />
+                                        <input type="hidden" name="Enable" value="@(c.Enabled ? "false" : "true")" />
+                                        <button type="submit" class="small secondary">@(c.Enabled ? "Stage disable" : SI.Management.Web.Changes.ServiceNowDataOut.Is(c) ? "Stage switch on (both ServiceNow outputs)" : "Stage enable")</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <p class="hint">What each run planned and wrote: <a href="/Admin/Connectors">Connector status</a>.</p>
+    </section>
+}
+<partial name="_Query" model='QueryInfo.Sql(SI.Management.Web.Changes.ConnectorRepository.ListSql, "Connectors")' />
+<partial name="_Query" model='QueryInfo.Sql(SI.Management.Web.Changes.ConnectorRepository.RunsSql, "Connectors: last run")' />

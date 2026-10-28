@@ -1,0 +1,21 @@
+id:        YubicoAuthenticator
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Yubico Authenticator'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Yubico Authenticator'
+
+detections:
+  - id: YubicoAuthenticator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'authenticator*'
+    set:
+      Tier:     2
+      Purpose:  'Authentication'
+      Category: 'Authentication'

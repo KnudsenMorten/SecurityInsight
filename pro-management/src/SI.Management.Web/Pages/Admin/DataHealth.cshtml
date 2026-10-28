@@ -1,0 +1,162 @@
+@page
+@model SI.Management.Web.Pages.Admin.DataHealthModel
+@using SI.Management.Web.DataHealth
+@{
+    ViewData["Title"] = "Data health";
+    var isSuperAdmin = User.IsSuperAdmin();
+    var v = Model.View;
+    var st = v.State;
+    var shown = v.Cycles.FirstOrDefault(c => c.Id == Model.Cycle) ?? v.Cycles.FirstOrDefault(c => c.FinishedAt is not null);
+}
+<h1>Data health</h1>
+<p class="lede">Every day SecurityInsight checks its own data: a random 10% of each source's records (at least 50) are read from the source and looked up in the newest collection, and a random 10% of the devices with vulnerability findings are asked again from Defender and compared with the stored findings. The check only reads.</p>
+<details class="help">
+    <summary>How the state works</summary>
+    <p>A source or report is <strong>anomalous</strong> when more of the checked records are missing or different than its margin allows (Settings: Guards, Data health). After <strong>three anomalous days in a row</strong> the data is <strong>Unhealthy</strong>; after <strong>one good day</strong> it is Healthy again. A source that could not be read is <strong>not checked</strong>, with the reason -- it never counts as good.</p>
+    <p>While the data is Unhealthy nothing is sent out: the vulnerability connectors, the ServiceNow CMDB, the CMDB hand-off, asset tagging and the data-out outputs plan and report only. A SuperAdmin can let one channel through, with a reason, when the organisation accepts it; it lasts until the data is Healthy again. Every choice is on the audit trail.</p>
+</details>
+@if (Model.ServiceNowWarnings.Count > 0)
+{
+    @* owner 2026-10-20 ("verify table schema matches + get alerts"): the ServiceNow outputs whose newest check is not ok *@
+    <section class="card" aria-labelledby="h-snow-checks" data-data-health-servicenow>
+        <h2 id="h-snow-checks">ServiceNow</h2>
+        @foreach (var c in Model.ServiceNowWarnings)
+        {
+            var label = SI.Management.Web.Outputs.ServiceNowOutputs.Of(c.Output)?.Label ?? c.Output;
+            <div class="notice @(c.Outcome == "failed" ? "error" : "warn")" role="status" data-snow-warning="@c.Output" data-snow-outcome="@c.Outcome">
+                <strong>@label</strong> -- @(c.Outcome == "failed" ? "the check failed: nothing is sent to ServiceNow until it is fixed (no row is lost; they go on the next run)." : "the check has a warning.")
+                @c.Summary
+                <div class="hint">Checked @Fmt.Time(c.CheckedAt)@if (c.NotOkSince is { } s) {<text>; not ok since </text>@Fmt.Time(s)}. @if (c.Connector is { Length: > 0 } cn) { <a href="/Admin/ConnectorSetup/Edit?name=@Uri.EscapeDataString(cn)">Open the connector to see the check and verify again</a> } else { <a href="/Admin/ConnectorSetup/Index">Set up the ServiceNow connector</a> }</div>
+            </div>
+        }
+    </section>
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database has no data health tables yet. The next update adds them; the verification job then runs the check every day.</div> }
+else
+{
+    <section class="card" aria-labelledby="h-state" data-data-health-state="@(st.Recorded ? st.State : "none")">
+        <h2 id="h-state">State</h2>
+        @if (!st.Recorded)
+        {
+            <p class="hint">No check has finished yet. The verification job runs it every day.</p>
+        }
+        else if (st.IsUnhealthy)
+        {
+            <div class="notice error" role="status">Unhealthy since @DataHealthRules.When(st.Since) (@st.ConsecutiveAnomalous anomalous day(s) in a row). Nothing is sent out unless a channel is let through below. One good day makes the data Healthy again.</div>
+        }
+        else
+        {
+            <p>Healthy since @DataHealthRules.When(st.Since)@(st.ConsecutiveAnomalous > 0 ? $" -- {st.ConsecutiveAnomalous} anomalous day(s) in a row; three make it Unhealthy" : "").</p>
+        }
+    </section>
+
+    @if (st.IsUnhealthy)
+    {
+        <section class="card" aria-labelledby="h-channels" data-data-health-channels>
+            <h2 id="h-channels">Data-out channels</h2>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Channel</th><th>Now</th><th>Let through by</th>@if (isSuperAdmin) { <th>Change</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var (ch, i) in v.Channels.Select((x, n) => (x, n)))
+                        {
+                            var ov = v.Overrides.FirstOrDefault(o => string.Equals(o.Channel, ch, StringComparison.OrdinalIgnoreCase));
+                            <tr data-channel="@ch" data-held="@(ov is null ? "true" : "false")">
+                                <td class="mono">@ch</td>
+                                <td>@(ov is null ? "Held -- plans only" : "Sends (let through)")</td>
+                                <td>@(ov is null ? "--" : $"{ov.By} ({ov.Role}), {DataHealthRules.When(ov.SinceUtc)}: {ov.Reason}")</td>
+                                @if (isSuperAdmin)
+                                {
+                                    <td>
+                                        @if (ov is null)
+                                        {
+                                            <form method="post" asp-page-handler="Override" class="stack-form" data-override-form>
+                                                <input type="hidden" name="Channel" value="@ch" />
+                                                <label for="dr-@i" class="sr-only">Why (audited)</label>
+                                                <input id="dr-@i" name="Reason" required minlength="@DataHealthRules.ReasonMin" maxlength="1000" placeholder="Why the organisation accepts it (audited)" />
+                                                <button type="submit" class="secondary">Let through</button>
+                                            </form>
+                                        }
+                                        else
+                                        {
+                                            <form method="post" asp-page-handler="Clear" data-clear-form data-confirm-title="Hold this channel again?" data-confirm="It plans only again until the data is Healthy.">
+                                                <input type="hidden" name="Channel" value="@ch" />
+                                                <button type="submit" class="link">Hold again</button>
+                                            </form>
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+
+    <section class="card" aria-labelledby="h-results" data-data-health-results>
+        <div class="split">
+            <h2 id="h-results">Results</h2>
+            <form method="get" class="filters">
+                <label>Day
+                    <select name="cycle">
+                        @foreach (var c in v.Cycles)
+                        {
+                            <option value="@c.Id" selected="@(shown?.Id == c.Id)">@DataHealthRules.When(c.FinishedAt ?? c.StartedAt) -- @(c.FinishedAt is null ? "did not finish" : c.Anomalous == true ? "anomalous" : c.Complete == true ? "good" : "not everything checked")</option>
+                        }
+                    </select>
+                </label>
+                <button type="submit" class="secondary">Show</button>
+            </form>
+        </div>
+        @if (v.Results.Count == 0)
+        {
+            <p class="hint">No result for this day.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Source / report</th><th class="num">Checked</th><th class="num">Found</th><th class="num">Missing</th><th class="num">Different</th><th class="num">Allowed</th><th>Verdict</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in v.Results)
+                        {
+                            <tr data-kind="@r.Kind" data-name="@r.Name" data-verdict="@r.Verdict">
+                                <td>@r.Label@if (r.Kind == "report") { <br /><span class="muted">Risk Analysis report</span> }</td>
+                                <td class="num">@Fmt.Int(r.Sampled)</td>
+                                <td class="num">@Fmt.Int(r.Found)</td>
+                                <td class="num">@Fmt.Int(r.Missing)</td>
+                                <td class="num" title="@(r.Kind == "report" ? "findings Defender no longer reports" : "records whose key fields differ from the source")">@Fmt.Int(r.FieldMismatches)</td>
+                                <td class="num" title="@($"{r.MarginPercent}% of those checked, at least {r.MarginMinimum}")">@(r.Allowed is { } a ? Fmt.Int(a) : "--")</td>
+                                <td>@DataHealthRules.VerdictLabel(r.Verdict)@if (r.Reason is { Length: > 0 } why) { <br /><span class="muted">@why</span> }</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-missing" data-data-health-missing>
+        <h2 id="h-missing">Records that did not match (@Fmt.Int(v.Missing.Count))</h2>
+        @if (v.Missing.Count == 0)
+        {
+            <p class="hint">Every checked record was found as the source has it.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Source</th><th>Record</th><th>Problem</th></tr></thead>
+                    <tbody>
+                        @foreach (var m in v.Missing)
+                        {
+                            <tr><td>@m.Name</td><td>@(string.IsNullOrWhiteSpace(m.RecordName) ? m.RecordKey : m.RecordName)<br /><span class="muted mono">@m.RecordKey</span></td><td>@m.Problem</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}

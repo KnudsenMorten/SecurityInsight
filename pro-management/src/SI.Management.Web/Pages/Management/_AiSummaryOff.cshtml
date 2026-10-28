@@ -1,0 +1,8 @@
+@model string
+@* #863 (owner 2026-10-21: "maybe make a note that ai support is turned off so report is not working"): wherever a part of the
+   Risk Analysis view depends on the AI summary and the run had it off, say so plainly -- and what turns it on -- never "Top 0"
+   as if there were no risk. The model is what this page shows instead (e.g. "the list below is built from the database"). *@
+<div class="notice attn" role="status" data-ai-summary-off>
+    <p><strong>@SI.Management.Web.RiskExec.AiSummaryNote.Off</strong> @Model</p>
+    <p class="hint">@SI.Management.Web.RiskExec.AiSummaryNote.HowToTurnOn <a href="/Admin/GetStarted?step=ai">Get Started: AI integration</a> · <a href="/Admin/Settings?q=OpenAI">Settings: OpenAI</a></p>
+</div>

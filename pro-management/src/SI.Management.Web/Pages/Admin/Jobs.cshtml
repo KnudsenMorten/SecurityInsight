@@ -1,0 +1,437 @@
+@page
+@model SI.Management.Web.Pages.Admin.JobsModel
+@using SI.Management.Web.Jobs
+@{
+    ViewData["Title"] = "Jobs";
+    var sel = Model.List.FirstOrDefault(j => j.Name == Model.Job);
+}
+<div class="split"><h1>Jobs</h1>@if (Model.Configured) { <partial name="_ExportExcel" /> }</div>
+<p class="lede">The engines run as one pipeline -- <strong>@JobFlow.StageTitle("collect")</strong>, then <strong>@JobFlow.StageTitle("correlate")</strong>, then <strong>@JobFlow.StageTitle("deliver")</strong>, each step when the one before it has finished -- or each job on its own timer, as the switch below says.</p>
+<details class="help">
+    <summary>How this page works</summary>
+    <p><strong>The pipeline</strong> has one start time in your time zone (or "every N hours after it finishes") and three stages of ordered steps. A stage starts only when the stage before it has finished and succeeded: nothing is delivered from a collection that did not complete. Inside Deliver every target is independent -- a failed vulnerability connector does not stop the data sync or the mails. A step starts when the step above it has finished; "start together with the step above" makes a group that starts at once. When a step fails, by default only the steps that need it are skipped (or the pipeline stops, or carries on -- per step). A job in the pipeline has no timer of its own; taking it out gives it its own schedule back (the one it had) or leaves it manual.</p>
+    <p><strong>Run now</strong> works on the whole pipeline, on one stage or on one step. Nothing ever runs over anything else: a run that finds another one going waits in the <strong>queue</strong> (shown below, and it can be taken out again) and starts as soon as the install is free; the same request is kept once. A scheduled start that comes while a run is going waits in the queue too, and runs once. <strong>Cancel this run</strong> (beside the last run while it is going) ends the run on purpose: it is never resumed, the jobs it is running are stopped, and the next run in the queue starts on the pipeline's next wake-up. A run that started on an earlier version is cancelled the same way by the update, so it never finishes on the wrong version. A job stopped from outside the pipeline (in Azure) ends the run too -- it is not started again as if Azure had failed.</p>
+    <p><strong>Disable</strong> switches a job to manual start and remembers its schedule; <strong>Enable</strong> restores it. <strong>Edit schedule</strong> sets how often a job runs and its start time (UTC; your own time is shown beside it); a cron expression is still possible under "Custom". Every change asks first, runs with the web app's managed identity, and is recorded in the change history. The log is the console output of the job's containers in the SecurityInsight workspace (it can lag a few minutes).</p>
+</details>
+@if (!Model.Configured)
+{
+    <div class="notice warn" role="status">@NotConfiguredJobsClient.Why Set them in the app's configuration (Jobs__SubscriptionId, Jobs__ResourceGroup); the deploy script does when given -JobsResourceGroup.</div>
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+@if (Model.Configured && Model.Error is null)
+{
+    var fnow = DateTimeOffset.UtcNow;
+    var canEdit = User.IsAdmin();
+    var isFlow = Model.FlowMode == "flow";
+    var lastRun = Model.LastFlowRun;
+    var stepRun = lastRun?.Steps.ToDictionary(s => s.Job, s => s) ?? new Dictionary<string, FlowStepRun>();
+    var installed = Model.List.Select(j => JobSchedule.Key(j.Name)).ToHashSet();
+    var next = JobFlow.NextRun(Model.Flow, lastRun, fnow);
+    var ed = Model.Flow;
+    var stages = Model.Flow.StageList;
+    var ordered = JobFlow.Ordered(Model.Flow);
+    // each step's newest record: from the last run when it was part of it, else from its newest run (any scope)
+    FlowStepRun? Rec(string job) => stepRun.TryGetValue(job, out var a) ? a : Model.LastSteps.TryGetValue(job, out var b) ? b : null;
+    string Chip(string state) => state switch { "succeeded" => "ok", "failed" => "bad", "running" => "run", "skipped" => "warn", "throttled" => "warn", _ => "" };
+    var runDur = lastRun?.EndedUtc is { } lre ? JobFlow.DurationText(lre - lastRun.StartedUtc) : null;
+    @* ---- #306: the pipeline's header card -- what it is, when it runs, how the last run went, Run now ---- *@
+    <section class="card pipeline-header" aria-labelledby="h-flow" data-flow data-pipeline>
+        <div class="split">
+            <div>
+                <h2 id="h-flow">@Model.Flow.Name @if (!isFlow) { <span class="badge">off -- the jobs run on their own timers</span> }</h2>
+                <p class="lede" data-pipeline-schedule><strong>@JobFlow.ScheduleWords(Model.Flow)</strong>@if (Model.Flow.Cadence != "interval" && JobFlow.NextSlot(Model.Flow, fnow) is { } ns) { <span class="muted small"> · @Fmt.Time(ns)</span> }
+                    <br /><span class="muted small" data-pipeline-stages>@(string.Join(" → ", stages.Select((stage, at) => $"Stage {at + 1} {JobFlow.StageTitle(stage)}"))) -- each stage starts when the one before it has finished and succeeded.</span></p>
+            </div>
+            @if (canEdit && isFlow && Model.FlowJobPresent)
+            {
+                <form method="post" asp-page-handler="FlowRun" class="inline-form" data-confirm-title="Run the whole pipeline now?" data-confirm="Collect, Correlate and Deliver run now, next to the schedule. When another run is going it waits in the queue and starts when that has finished.">
+                    <button type="submit">Run pipeline now</button>
+                </form>
+            }
+        </div>
+        @if (Model.Flow.Migrated) { <div class="notice" role="status" data-flow-migrated>The stored pipeline was brought up to date as it was read; it is shown (and runs) so: @string.Join(" · ", Model.Flow.MigrationNotes.Take(3)) Saving any change stores it so.</div> }
+        <dl class="kv" data-flow-trigger>
+            <dt>Last run</dt><dd data-flow-status>@if (lastRun is null) { <span class="muted">none yet</span> } else { <span class="state @(JobFlow.ThrottledOnly(lastRun) ? "warn" : lastRun.State switch { "Succeeded" => "ok", "Failed" or "Stopped" => "bad", "Cancelled" => "warn", _ => "run" })" title="@(JobFlow.ThrottledOnly(lastRun) ? JobFlow.ThrottledText : "")">@JobFlow.StatusText(Model.Flow, lastRun)</span> <span class="muted small">@Fmt.Time(lastRun.StartedUtc)@if (runDur is not null) { <text> · took @runDur</text> }@if (!string.IsNullOrEmpty(lastRun.RequestedBy)) { <text> · run now by @lastRun.RequestedBy</text> }@if (!string.IsNullOrEmpty(lastRun.Version)) { <text> · version @lastRun.Version</text> }</span> @if (canEdit && !lastRun.Finished && Model.FlowJobPresent) { <form method="post" asp-page-handler="RunCancel" class="inline-form" data-flow-run-cancel data-confirm-title="Cancel the running pipeline run?" data-confirm="The run stops now and is never resumed: the jobs it is running are stopped, and the next run can start at once. Say why -- it is kept with the run and in the change history."><input type="hidden" name="FlowRunId" value="@lastRun.FlowRunId" /><label class="sr-only" for="cancel-run-reason">Why the run is cancelled</label><input id="cancel-run-reason" name="CancelReason" required maxlength="400" placeholder="Why (required)" /> <button type="submit" class="small danger">Cancel this run</button></form> } @if (!string.IsNullOrEmpty(lastRun.Note)) { <br /><span class="muted small">@lastRun.Note</span> } @if (!string.IsNullOrEmpty(lastRun.StopReason)) { <br /><span class="muted small">@lastRun.StopReason</span> } }</dd>
+            <dt>Next run</dt><dd data-flow-next data-utc>@if (!isFlow) { <span class="muted">-- the pipeline is off (timers per job)</span> } else { @next.Text @if (next.When is { } nw) { <span class="muted small"> · @Fmt.Time(nw)</span> } }</dd>
+            <dt>Schedule in detail</dt><dd class="small">@JobFlow.CadenceText(Model.Flow, fnow)</dd>
+        </dl>
+        @if (Model.Lock is not null || Model.Queue.Count > 0)
+        {
+            <h3 id="h-queue">Queue</h3>
+            @if (Model.Lock is { } lk) { <p class="hint" data-flow-lock>Running now: <strong>@(lk.What ?? "a run")</strong>@if (lk.HeartbeatUtc is { } hb) { <span class="muted small"> · alive @Fmt.Time(hb)</span> }. Anything else waits below and starts when it has finished.</p> }
+            @if (Model.Queue.Count > 0)
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-flow-queue data-default-sort="off">
+                        <thead><tr><th class="num">#</th><th>What</th><th>Asked by</th><th>Since</th><th>State</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                        <tbody>
+                            @foreach (var q in Model.Queue)
+                            {
+                                <tr data-request="@q.Id">
+                                    <td class="num">@q.Id</td>
+                                    <td>@JobFlow.RequestText(q.Scope, q.Target)@if (q.Trigger is "schedule" or "catch-up") { <br /><span class="muted small">the schedule</span> }</td>
+                                    <td>@(q.RequestedBy ?? "")</td>
+                                    <td>@if (q.RequestedUtc is { } qt) { @Fmt.Time(qt) }</td>
+                                    <td><span class="state @(q.State == "Running" ? "run" : "")">@(q.State == "Running" ? "running" : "waiting")</span></td>
+                                    <td>@if (canEdit && q.State == "Queued") { <form method="post" asp-page-handler="QueueCancel" class="inline-form" data-confirm-title="Take this request out of the queue?" data-confirm="@JobFlow.RequestText(q.Scope, q.Target) does not run."><input type="hidden" name="RequestId" value="@q.Id" /><button type="submit" class="small secondary">Cancel</button></form> }</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+        @if (canEdit && Model.FlowTable)
+        {
+            <details class="help"><summary>Change when the pipeline runs</summary>
+                <form method="post" asp-page-handler="FlowCadence" class="filterbar schedule-editor" data-schedule-editor data-confirm-title="Change when the pipeline runs?" data-confirm="The pipeline runs at the new time from its next start. It never starts while a run is still going.">
+                    <div><label for="fcad">How often</label>
+                        <select id="fcad" name="FlowCadence" data-often>
+                            <option value="daily" selected="@(ed.Cadence == "daily")">Every day</option>
+                            <option value="weekdays" selected="@(ed.Cadence == "weekdays")">Weekdays (Monday-Friday)</option>
+                            <option value="weekly" selected="@(ed.Cadence == "weekly")">Once a week</option>
+                            <option value="interval" selected="@(ed.Cadence == "interval")">Every N hours, counted from when the previous run finishes</option>
+                        </select></div>
+                    <div data-show="daily weekdays weekly"><label for="fstart">Start time</label>
+                        <input id="fstart" type="time" name="FlowStartTime" value="@ed.StartTime" step="300" /></div>
+                    <div data-show="daily weekdays weekly"><label for="ftz">Time zone</label>
+                        <input id="ftz" type="text" name="FlowTimeZone" value="@ed.TimeZone" list="tz-list" maxlength="64" required pattern="[A-Za-z0-9_/+\- ]{1,64}" />
+                        <datalist id="tz-list">@foreach (var z in new[] { "Europe/Copenhagen", "Europe/Oslo", "Europe/Stockholm", "Europe/Helsinki", "Europe/Berlin", "Europe/Amsterdam", "Europe/London", "Europe/Paris", "America/New_York", "America/Chicago", "America/Los_Angeles", "Asia/Singapore", "Australia/Sydney", "UTC" }) { <option value="@z"></option> }</datalist>
+                        <span class="muted small">the start time stays the same local time all year (summer time included)</span></div>
+                    <div data-show="weekly"><label for="fwd">On</label>
+                        <select id="fwd" name="FlowWeekday">@foreach (var (v, n) in new[] { (1, "Monday"), (2, "Tuesday"), (3, "Wednesday"), (4, "Thursday"), (5, "Friday"), (6, "Saturday"), (0, "Sunday") }) { <option value="@v" selected="@(ed.Weekday == v)">@n</option> }</select></div>
+                    <div data-show="interval"><label for="fiv">Every</label>
+                        <select id="fiv" name="FlowIntervalHours">@foreach (var n in new[] { 1, 2, 3, 4, 6, 8, 12, 24 }) { <option value="@n" selected="@(ed.IntervalMinutes == n * 60)">@n hour@(n == 1 ? "" : "s")</option> }</select>
+                        <span class="muted small">after the previous run finishes</span></div>
+                    <div class="actions"><button type="submit">Save</button></div>
+                </form>
+            </details>
+        }
+    </section>
+
+    @* ---- #306: one section per stage, numbered, each with its status, duration, Run stage, and its steps ---- *@
+    <div data-flow-steps>
+    @{ var si = 0; }
+    @foreach (var stg in stages)
+    {
+        si++;
+        var mine = ordered.Where(o => (string.IsNullOrEmpty(o.Step.Stage) ? "collect" : o.Step.Stage) == stg.Id).ToList();
+        var sum = JobFlow.StageSummary(mine.Where(o => o.Step.Enabled).Select(o => Rec(o.Step.Job)));
+        <section class="card stage" aria-labelledby="h-stage-@stg.Id" data-stage="@stg.Id">
+            <div class="split">
+                <h2 id="h-stage-@stg.Id">Stage @si of @stages.Count: @JobFlow.StageTitle(stg)
+                    <span class="state @Chip(sum.State)" data-stage-state="@sum.State">@sum.State</span>@if (sum.Duration is { } sd) { <span class="muted small" data-stage-duration> · @JobFlow.DurationText(sd)</span> }</h2>
+                @if (canEdit && isFlow && Model.FlowJobPresent && mine.Count > 0)
+                {
+                    <form method="post" asp-page-handler="StageRun" class="inline-form" data-confirm-title="Run @stg.Name now?" data-confirm="Only the steps of @stg.Name run, in their order. When another run is going it waits in the queue."><input type="hidden" name="Stage" value="@stg.Id" /><button type="submit" class="small">Run @stg.Name now</button></form>
+                }
+            </div>
+            <p class="hint small">@(stg.Id switch { "collect" => "Data in: the tier catalog, the profilers and Risk Analysis.", "correlate" => "One asset, many sources: correlation and the asset properties that read it.", "deliver" => "Data out: the SQL data, ServiceNow, the vulnerability connectors and the mails -- each target independent of the others.", _ => "" })
+            @if (si > 1)
+            {
+                <text>@(stg.RunIfPreviousFailed ? "Starts even when the stage before it did not succeed" + (stg.Id == "deliver" ? " (never after a Collect in which nothing was collected)." : ".") : "Starts only when the stage before it succeeded. One failed collection does not stop the run: it goes on with that source's last good collection.")</text>
+                @if (canEdit && Model.FlowTable)
+                {
+                    <form method="post" asp-page-handler="StageSettings" class="inline-form" data-confirm-title="Change @stg.Name?" data-confirm="@(stg.RunIfPreviousFailed ? stg.Name + " will start only when the stage before it succeeded." : stg.Name + " will start even when the stage before it did not succeed" + (stg.Id == "deliver" ? " -- never after a Collect that did not succeed." : "."))"><input type="hidden" name="Stage" value="@stg.Id" /><input type="hidden" name="StageRunIfPreviousFailed" value="@(stg.RunIfPreviousFailed ? "false" : "true")" /><button type="submit" class="small secondary">@(stg.RunIfPreviousFailed ? "Only after success" : "Run even after a failure")</button></form>
+                }
+            }</p>
+            @if (mine.Count == 0) { <p class="hint">No steps in this stage.</p> }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-default-sort="off">
+                        <thead><tr><th class="num">Step</th><th>Job</th><th>Status</th><th>Started</th><th class="num">Duration</th><th>Outcome</th><th data-sort="off">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var (grp, order, s) in mine)
+                            {
+                                var jobName = JobFlow.JobName(s.Job);
+                                var sr = Rec(s.Job);
+                                var st = !s.Enabled ? "Disabled" : JobFlow.IsThrottled(sr) ? "Throttled" : sr?.State switch { "Success" => "Success", "Failed" or "TimedOut" or "Interrupted" => "Failed", "Running" or "Starting" => "Running", "Skipped" => "Skipped", "Disabled" => "Disabled", _ => "Waiting" };
+                                var firstOfStage = order == mine[0].Order;
+                                var lastOfStage = order == mine[^1].Order;
+                                var job = Model.List.FirstOrDefault(x => x.Name == jobName);
+                                <tr data-step="@s.Job" data-job="@jobName">
+                                    <td class="num">@(si + "." + (order - mine[0].Order + 1))@if (s.WithPrevious && !firstOfStage) { <br /><span class="muted small" title="starts together with the step above">with the step above</span> }</td>
+                                    <td class="wrap"><a href="?job=@jobName">@JobSchedule.Label(s.Job)</a>@if (!installed.Contains(s.Job)) { <br /><span class="badge warn">not installed</span> }<br /><span class="muted small">@(JobSchedule.Role(s.Job)?.Does ?? "")</span><br /><span class="muted small">In the pipeline, step @order -- no timer of its own</span></td>
+                                    <td><span class="state @(st switch { "Success" => "ok", "Failed" => "bad", "Running" => "run", "Throttled" => "warn", _ => "" })" title="@(sr?.Error ?? "")" data-step-state="@st">@st</span>@if (sr?.State is "TimedOut" or "Interrupted") { <br /><span class="muted small">@sr.State.ToLowerInvariant()</span> }</td>
+                                    <td>@if (sr?.StartedUtc is { } ss) { @Fmt.Time(ss) }</td>
+                                    <td class="num">@(sr?.StartedUtc is { } a1 && sr.EndedUtc is { } b1 ? JobFlow.DurationText(b1 - a1) : "")</td>
+                                    <td class="wrap small">@if (JobFlow.SilentStep(sr) is { } quiet) { <span data-step-silent><span class="badge warn">@quiet.Headline</span> <span class="muted small">-- @(JobFlow.SilentWarning.Rest)@if (quiet.NoticedUtc is { } qn) { <text> · noticed @Fmt.Time(qn)</text> }</span></span><br /> }@if (!string.IsNullOrEmpty(sr?.Error)) { <span>@sr!.Error</span> }@if (JobFlow.AttemptText(sr) is { } attempts) { <br /><span class="muted small" data-step-attempts="@sr!.Attempts" title="@(sr.RetryReason ?? "")">@attempts</span>@if (!string.IsNullOrEmpty(sr.RetryReason)) { <br /><span class="muted small">@sr.RetryReason</span> } }<br /><span class="muted">on failure: @(s.OnFailure switch { "stop" => "stop the pipeline", "continue" => "carry on", _ => "skip what needs it" }) · timeout @s.TimeoutMinutes min</span></td>
+                                    <td>
+                                        <div class="row-actions">
+                                            @if (sr?.Execution is { Length: > 0 } ex && !ex.Contains('@')) { <a class="button small secondary" href="?job=@jobName&execution=@ex">log</a> }
+                                            @if (canEdit)
+                                            {
+                                                @if (isFlow && Model.FlowJobPresent)
+                                                {
+                                                    <form method="post" asp-page-handler="StepRun" class="inline-form" data-confirm-title="Run @JobSchedule.Label(s.Job) now?" data-confirm="Only this step runs. When another run is going it waits in the queue."><input type="hidden" name="Step" value="@s.Job" /><button type="submit" class="small">Run step</button></form>
+                                                }
+                                                <details class="inline-details"><summary class="button small secondary">More</summary>
+                                                    @if (isFlow && Model.FlowJobPresent)
+                                                    {
+                                                        <form method="post" asp-page-handler="FlowRerun" class="inline-form" data-confirm-title="Re-run the pipeline from @JobSchedule.Label(s.Job)?" data-confirm="The pipeline runs from step @order on; the steps above it do not run."><input type="hidden" name="Step" value="@s.Job" /><button type="submit" class="small secondary">Re-run from here</button></form>
+                                                    }
+                                                    <form method="post" asp-page-handler="FlowMove" class="inline-form"><input type="hidden" name="Step" value="@s.Job" /><input type="hidden" name="Direction" value="up" /><button type="submit" class="small secondary" disabled="@(order == 1)" aria-label="Move @JobSchedule.Label(s.Job) up@(firstOfStage ? " (into the stage above)" : "")">&uarr; up</button></form>
+                                                    <form method="post" asp-page-handler="FlowMove" class="inline-form"><input type="hidden" name="Step" value="@s.Job" /><input type="hidden" name="Direction" value="down" /><button type="submit" class="small secondary" disabled="@(order == ordered.Count && si == stages.Count)" aria-label="Move @JobSchedule.Label(s.Job) down@(lastOfStage ? " (into the stage below)" : "")">&darr; down</button></form>
+                                                    <form method="post" asp-page-handler="FlowStep" class="filterbar" data-confirm-title="Save @JobSchedule.Label(s.Job)?" data-confirm="The step runs this way from the pipeline's next run.">
+                                                        <input type="hidden" name="Step" value="@s.Job" />
+                                                        <div><label><input type="checkbox" name="StepEnabled" value="true" checked="@s.Enabled" /><input type="hidden" name="StepEnabled" value="false" /> Runs</label></div>
+                                                        <div><label><input type="checkbox" name="StepWithPrevious" value="true" checked="@s.WithPrevious" disabled="@firstOfStage" /><input type="hidden" name="StepWithPrevious" value="false" /> Start together with the step above</label></div>
+                                                        <div><label for="of-@s.Job">On failure</label>
+                                                            <select id="of-@s.Job" name="StepOnFailure">
+                                                                <option value="skip-dependents" selected="@(s.OnFailure == "skip-dependents")">Skip the steps that need it</option>
+                                                                <option value="stop" selected="@(s.OnFailure == "stop")">Stop the pipeline</option>
+                                                                <option value="continue" selected="@(s.OnFailure == "continue")">Carry on</option>
+                                                            </select></div>
+                                                        <div><label for="to-@s.Job">Timeout (min)</label><input id="to-@s.Job" type="number" name="StepTimeout" min="5" max="@JobFlow.MaxStepTimeoutMinutes" value="@s.TimeoutMinutes" title="A step is never stopped before its job's own run limit, which follows how long the job really takes. This timeout applies only when it is the longer of the two." /></div>
+                                                        <div class="actions"><button type="submit" class="small">Save step</button></div>
+                                                    </form>
+                                                    <form method="post" asp-page-handler="FlowStage" class="filterbar" data-confirm-title="Move @JobSchedule.Label(s.Job) to another stage?" data-confirm="It becomes the last step of that stage from the pipeline's next run.">
+                                                        <input type="hidden" name="Step" value="@s.Job" />
+                                                        <div><label for="ts-@s.Job">Stage</label>
+                                                            <select id="ts-@s.Job" name="ToStage">@foreach (var o in stages) { <option value="@o.Id" selected="@(o.Id == stg.Id)">@JobFlow.StageTitle(o)</option> }</select></div>
+                                                        <div class="actions"><button type="submit" class="small secondary">Move to stage</button></div>
+                                                    </form>
+                                                    @if (job is not null && Model.FlowTable)
+                                                    {
+                                                        <form method="post" asp-page-handler="FlowRemove" class="inline-form" data-confirm-title="Take @JobSchedule.Label(s.Job) out of the pipeline?" data-confirm="It no longer runs with the pipeline. Choose whether it gets its own timer again or only runs when started.">
+                                                            <input type="hidden" name="job" value="@jobName" />
+                                                            <select name="LeaveAs" aria-label="After leaving the pipeline" class="small"><option value="schedule">own timer @(job.DisabledCron is { Length: > 0 } rc ? "(" + JobSchedule.Describe(rc, fnow).Cadence + ")" : "(default)")</option><option value="manual">only when started</option></select>
+                                                            <button type="submit" class="small secondary">Take out of the pipeline</button>
+                                                        </form>
+                                                    }
+                                                </details>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+    </div>
+
+    <section class="card" aria-labelledby="h-mode" data-flow-mode="@Model.FlowMode">
+        <h2 id="h-mode">How the jobs run</h2>
+        <div class="split">
+            <p>@if (isFlow) { <strong>As one pipeline</strong> <span class="badge ok">recommended</span> <span class="muted small">-- one start, each job when the one before it has finished</span> }
+               else { <strong>Each job on its own timer</strong> <span class="muted small">-- the jobs do not wait for each other; a job can read yesterday's data when the one before it runs long</span> }</p>
+            @if (canEdit)
+            {
+                <a class="button small @(isFlow ? "secondary" : "")" href="?preview=@(isFlow ? "schedules" : "flow")#h-mode">@(isFlow ? "Switch to timers per job..." : "Switch to the pipeline (recommended)...")</a>
+            }
+        </div>
+        @if (!Model.FlowTable) { <div class="notice warn" role="status">The Pro database has no pipeline tables yet (cfg.JobFlow) -- apply the Pro database schema again (it only adds). Until then the pipeline runs its default order and cannot be edited here.</div> }
+        @if (!Model.FlowJobPresent) { <div class="notice warn" role="status">This installation has no @JobFlow.FlowJob job yet. Run setup (Bootstrap) once; it creates it (waiting, until you switch to the pipeline).</div> }
+        @if (Model.PreviewRows.Count > 0 && Model.Preview is { } pv)
+        {
+            <h3 id="h-preview">Preview: switch to @(pv == "flow" ? "the pipeline" : "timers per job")</h3>
+            <p class="hint">Nothing has changed yet. @(pv == "flow" ? "Each job of the pipeline loses its own timer (it is remembered -- switching back restores it) and the pipeline's runner starts the pipeline when it is due." : "Each job of the pipeline gets its own timer back: the one it had, or the default in dependency order. The pipeline waits.")</p>
+            <div class="table-wrap">
+                <table data-sortable data-flow-preview>
+                    <thead><tr><th>Job</th><th>Change</th><th>Timer</th><th>Why</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in Model.PreviewRows)
+                        {
+                            <tr><td>@JobSchedule.Label(p.Job)<br /><span class="muted small mono">@p.Job</span></td>
+                                <td>@(p.Action switch { "to-manual" => "own timer off (remembered)", "to-schedule" => "own timer on", _ => "no change" })</td>
+                                <td class="wrap">@(p.Cron is { } pc ? JobSchedule.Describe(pc, fnow).Cadence : "")</td><td class="wrap small">@p.Why</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (canEdit)
+            {
+                <form method="post" asp-page-handler="FlowMode" class="inline-form" data-confirm-title="Switch to @(pv == "flow" ? "the pipeline" : "timers per job")?" data-confirm="@Model.PreviewRows.Count(p => p.Action != "keep") job(s) change as previewed. It can be switched back the same way.">
+                    <input type="hidden" name="SwitchTo" value="@pv" /><button type="submit">Switch now</button> <a class="button secondary" href="?">Cancel</a>
+                </form>
+            }
+        }
+    </section>
+}
+
+@{
+    // #306: in pipeline mode the steps are shown in their stages above; this list has the jobs OUTSIDE the pipeline only
+    var pipelineMode = Model.Configured && Model.Error is null && Model.FlowMode == "flow";
+    var listed = pipelineMode ? Model.List.Where(x => Model.StepOf(x.Name) is null).ToList() : Model.List.ToList();
+}
+@if (listed.Count > 0)
+{
+    <section class="card" aria-labelledby="h-jobs" data-other-jobs="@(pipelineMode ? "true" : "false")">
+        <h2 id="h-jobs">@(pipelineMode ? "Other jobs" : Fmt.Int(Model.List.Count) + " job(s)")</h2>
+        @if (pipelineMode) { <p class="hint">Jobs that are not a step of the pipeline: the pipeline's runner, jobs started on demand, and jobs on their own timer. Each can be added to the pipeline -- except the updater, which runs on its own daily schedule.</p> }
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Job</th><th>What it does</th><th>Needs first</th><th>State</th><th>When</th><th>Next run</th><th data-sort="off">Actions</th></tr></thead>
+                <tbody>
+                    @{
+                        var now = DateTimeOffset.UtcNow;
+                        var described = Model.List.ToDictionary(j => j.Name, j => JobSchedule.Describe(j.Cron ?? j.DisabledCron, now));
+                        var sortByKey = new Dictionary<string, int?>();
+                        foreach (var j in Model.List) { sortByKey[JobSchedule.Key(j.Name)] = described[j.Name].SortMinute; }
+                        var labelByKey = Model.List.ToDictionary(j => JobSchedule.Key(j.Name), j => JobSchedule.Label(j.Name));
+                    }
+                    @* the day's sequence, top to bottom: scheduled jobs by time of day, then the rest *@
+                    @foreach (var j in listed.OrderBy(x => (Model.FlowMode == "flow" ? Model.StepOf(x.Name) : null) ?? 100000).ThenBy(x => described[x.Name].SortMinute ?? int.MaxValue).ThenBy(x => JobSchedule.Label(x.Name)))
+                    {
+                        var d = described[j.Name];
+                        var role = JobSchedule.Role(j.Name);
+                        // #269: a job of the pipeline (flow mode) has no timer of its own -- its row says which step it is; the
+                        // flow's own order is checked in the pipeline (a step before a job it needs is said there)
+                        var flowStep = Model.FlowMode == "flow" ? Model.StepOf(j.Name) : null;
+                        var isRunner = j.Name == JobFlow.FlowJob;
+                        var early = flowStep is null && !isRunner ? JobSchedule.RunsBeforeItsInputs(j.Name, sortByKey) : Array.Empty<string>();
+                        var canJoin = Model.FlowMode == "flow" && flowStep is null && !JobFlow.NeverInFlow(JobSchedule.Key(j.Name)) && !j.TriggerType.Equals("Event", StringComparison.OrdinalIgnoreCase) && User.IsAdmin() && Model.FlowTable;
+                        <tr data-job="@j.Name">
+                            <td class="wrap"><a href="?job=@j.Name" aria-current="@(j.Name == Model.Job ? "true" : "false")">@JobSchedule.Label(j.Name)</a><br /><span class="muted small mono">@j.Name</span></td>
+                            <td class="wrap small">@(role?.Does ?? "")@if (role is not null) { <br /><span class="muted">Produces: @role.Produces</span> }</td>
+                            <td class="wrap small">
+                                @if (role is null || role.Needs.Length == 0) { <span class="muted">nothing</span> }
+                                else
+                                {
+                                    @string.Join(", ", role.Needs.Select(n => labelByKey.TryGetValue(n, out var l) ? l : JobSchedule.Label("caj-si-" + n)))
+                                    @if (early.Length > 0)
+                                    {
+                                        <br /><span class="badge warn" title="It is scheduled before a job it reads, so it uses that job's output from the day before.">runs before @string.Join(", ", early.Select(n => labelByKey.TryGetValue(n, out var l) ? l : n)) -- uses yesterday's data</span>
+                                    }
+                                }
+                            </td>
+                            <td>@if (flowStep is { } fs) { <span class="state ok">in the pipeline</span> } else if (j.Enabled) { <span class="state ok">enabled</span> } else if (j.Disabled) { <span class="state bad">disabled</span> } else { <span class="state run">@j.TriggerType.ToLowerInvariant()</span> }</td>
+                            <td class="wrap" title="@(j.Cron ?? j.DisabledCron ?? "")" data-value="@(flowStep is { } fsv ? fsv - 100000 : d.SortMinute ?? 99999)">@if (flowStep is { } fs2) { <span>In the pipeline, step @fs2</span><br /><span class="muted small">no timer of its own -- @(fs2 == 1 ? "the pipeline's first step: it starts when the pipeline starts" : "it starts when step " + Fmt.Int(fs2 - 1) + " has finished")</span> } else if (isRunner) { <span>Wakes every 5 minutes</span><br /><span class="muted small">and starts the pipeline when it is due -- see "The pipeline" above</span> } else { @((JobFlow.OwnSchedule(j.Name) ? JobFlow.UpdaterCadenceText(j.Cron, j.NightlySchedule, j.NightlyRegion) : null) ?? d.Cadence)@if (j.Disabled) { <br /><span class="muted small">(while enabled)</span> } @if (JobFlow.OwnSchedule(j.Name)) { <br /><span class="muted small" data-own-schedule>its own daily schedule -- never a step of the pipeline; an update waits while the pipeline runs, and the pipeline waits while an update runs@(j.Enabled ? "" : j.DisabledCron is { Length: > 0 } ? " (Enable gives it back its timer)" : " (it has no timer: setup\\Install-SIUpdaterJob.ps1 gives it its daily schedule, 18:30 in the local time of the install's Azure region)")</span> } }</td>
+                            <td class="wrap" data-value="@(j.Enabled && d.NextUtc is { } nv ? nv.ToUnixTimeSeconds() : long.MaxValue)">
+                                @if (flowStep is not null) { <span class="muted">with the pipeline</span> }
+                                else if (j.Enabled && d.NextUtc is { } next)
+                                {
+                                    <span>@JobSchedule.Until(next, now)</span><br /><span class="muted small">@Fmt.Time(next)</span>
+                                }
+                                else { <span class="muted">–</span> }
+                            </td>
+                            <td>
+                                <div class="row-actions">
+                                    <form method="post" asp-page-handler="Run" class="inline-form" data-confirm-title="Run @j.Name now?" data-confirm="A new execution of @j.Name starts now, next to its schedule.">
+                                        <input type="hidden" name="job" value="@j.Name" /><button type="submit" class="small">Run now</button>
+                                    </form>
+                                    @if (flowStep is not null && User.IsAdmin() && Model.FlowTable)
+                                    {
+                                        <form method="post" asp-page-handler="FlowRemove" class="inline-form" data-confirm-title="Take @JobSchedule.Label(j.Name) out of the pipeline?" data-confirm="It no longer runs with the pipeline. Choose whether it gets its own timer again or only runs when started.">
+                                            <input type="hidden" name="job" value="@j.Name" />
+                                            <select name="LeaveAs" aria-label="After leaving the pipeline" class="small"><option value="schedule">own timer @(j.DisabledCron is { Length: > 0 } rc ? "(" + JobSchedule.Describe(rc, now).Cadence + ")" : "(default)")</option><option value="manual">only when started</option></select>
+                                            <button type="submit" class="small secondary">Take out of the pipeline</button>
+                                        </form>
+                                    }
+                                    else if (canJoin)
+                                    {
+                                        <form method="post" asp-page-handler="FlowInclude" class="inline-form" data-confirm-title="Add @JobSchedule.Label(j.Name) to the pipeline?" data-confirm="It becomes a step of the pipeline at its place in the dependency order, and loses its own timer (remembered -- taking it out restores it).">
+                                            <input type="hidden" name="job" value="@j.Name" /><button type="submit" class="small secondary">Add to the pipeline</button>
+                                        </form>
+                                    }
+                                    @if (flowStep is not null || isRunner) { }
+                                    else if (j.Enabled)
+                                    {
+                                        <a class="button small secondary" href="?job=@Uri.EscapeDataString(j.Name)#schedule">Edit schedule</a>
+                                        <form method="post" asp-page-handler="Disable" class="inline-form" data-confirm-title="Disable @j.Name?" data-confirm="@j.Name stops running on its schedule (@j.Cron) until it is enabled again. The schedule is remembered.">
+                                            <input type="hidden" name="job" value="@j.Name" /><button type="submit" class="small secondary">Disable</button>
+                                        </form>
+                                    }
+                                    else if (j.Disabled)
+                                    {
+                                        <form method="post" asp-page-handler="Enable" class="inline-form" data-confirm-title="Enable @j.Name?" data-confirm="@j.Name runs on its schedule (@j.DisabledCron) again.">
+                                            <input type="hidden" name="job" value="@j.Name" /><button type="submit" class="small secondary">Enable</button>
+                                        </form>
+                                    }
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+
+@if (sel is not null)
+{
+    <section class="card" aria-labelledby="h-sel">
+        <h2 id="h-sel">@JobSchedule.Label(sel.Name) <span class="muted small mono">@sel.Name</span></h2>@if (JobSchedule.Role(sel.Name) is { } selRole) { <p>@selRole.Does</p> }
+        <dl class="kv">
+            <dt>Trigger</dt><dd>@sel.TriggerType</dd>
+            <dt>Image</dt><dd class="mono">@sel.Image</dd>
+            <dt>Provisioning</dt><dd>@sel.ProvisioningState</dd>
+        </dl>
+        @if (sel.Enabled && !(Model.FlowMode == "flow" && Model.StepOf(sel.Name) is not null))
+        {
+            var ed = JobSchedule.ToEditor(sel.Cron);
+            var selLabel = JobSchedule.Label(sel.Name);
+            <h3 id="schedule">Schedule</h3>
+            <p class="hint">Now: @JobSchedule.Describe(sel.Cron, DateTimeOffset.UtcNow).Cadence. Times are UTC; your own time is shown beside the start time.</p>
+            <form method="post" asp-page-handler="Cron" class="filterbar schedule-editor" data-schedule-editor data-confirm-title="Change when @selLabel runs?" data-confirm="The job runs on the new schedule from its next start. Jobs that need this job's output may then run before it -- the list warns when they do.">
+                <input type="hidden" name="job" value="@sel.Name" />
+                <div><label for="often">How often</label>
+                    <select id="often" name="Often" data-often>
+                        <option value="daily" selected="@(ed.Often == "daily")">Daily</option>
+                        <option value="weekdays" selected="@(ed.Often == "weekdays")">Weekdays (Monday-Friday)</option>
+                        <option value="weekly" selected="@(ed.Often == "weekly")">Once a week</option>
+                        <option value="monthly" selected="@(ed.Often == "monthly")">Once a month</option>
+                        <option value="hours" selected="@(ed.Often == "hours")">Every few hours, on the clock (skipped while a run is still going -- for "after it finishes", put the job in the pipeline)</option>
+                        <option value="custom" selected="@(ed.Often == "custom")">Custom (cron, advanced)</option>
+                    </select></div>
+                <div data-show="daily weekdays weekly monthly hours"><label for="starttime">Start time (UTC)</label>
+                    <input id="starttime" type="time" name="StartTime" value="@ed.Time" step="300" data-start-time />
+                    <span class="muted small" data-start-local></span></div>
+                <div data-show="weekly"><label for="weekday">On</label>
+                    <select id="weekday" name="Weekday">
+                        @foreach (var (v, n) in new[] { (1, "Monday"), (2, "Tuesday"), (3, "Wednesday"), (4, "Thursday"), (5, "Friday"), (6, "Saturday"), (0, "Sunday") })
+                        { <option value="@v" selected="@(ed.Weekday == v)">@n</option> }
+                    </select></div>
+                <div data-show="monthly"><label for="dom">On day</label>
+                    <input id="dom" type="number" name="DayOfMonth" min="1" max="28" value="@ed.DayOfMonth" /> <span class="muted small">1-28, so no month is skipped</span></div>
+                <div data-show="hours"><label for="everyh">Every</label>
+                    <select id="everyh" name="EveryHours">@foreach (var n in new[] { 1, 2, 3, 4, 6, 8, 12 }) { <option value="@n" selected="@(ed.EveryHours == n)">@n hour@(n == 1 ? "" : "s")</option> }</select>
+                    <span class="muted small">(from the start time's minute)</span></div>
+                <div class="wide" data-show="custom"><label for="cron">Cron (minute hour day month weekday, UTC)</label>
+                    <input id="cron" type="text" name="Cron" value="@ed.Custom" pattern="[0-9*/,\-]+( [0-9*/,\-]+){4}" maxlength="100" /></div>
+                <div class="actions"><button type="submit">Save schedule</button></div>
+            </form>
+        }
+        <h3>Last executions</h3>
+        @if (Model.Executions.Count == 0) { <p class="hint">No execution recorded.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Execution</th><th>Status</th><th>Started</th><th>Ended</th><th class="num">Duration</th><th data-sort="off"><span class="sr-only">Log</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var e in Model.Executions)
+                        {
+                            <tr>
+                                <td class="mono">@e.Name</td><td><span class="state @JobsModel.StateClass(e.Status)">@e.Status</span></td>
+                                <td>@Fmt.Time(e.StartTime)</td><td>@Fmt.Time(e.EndTime)</td>
+                                <td class="num" data-value="@(e.StartTime is { } a0 && e.EndTime is { } b0 ? Fmt.Raw((b0 - a0).TotalMinutes) : "")">@(e.StartTime is { } a && e.EndTime is { } b ? Fmt.Num((b - a).TotalMinutes) + " min" : "")</td>
+                                <td><a href="?job=@sel.Name&execution=@e.Name">log</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (Model.Log is { } log)
+        {
+            <h3>Console log @(Model.Execution ?? (Model.Executions.Count > 0 ? Model.Executions[0].Name : ""))</h3>
+            <form method="get" class="filterbar">
+                <input type="hidden" name="job" value="@sel.Name" /><input type="hidden" name="execution" value="@Model.Execution" />
+                <div class="wide"><label for="contains">Only lines containing</label><input id="contains" type="search" name="contains" value="@Model.Contains" maxlength="100" placeholder="ERROR, HALTED, plan" data-search /></div>
+                <div class="actions"><button type="submit">Filter</button></div>
+            </form>
+            @if (log.Data.Count == 0) { <p class="hint">No log lines (yet) -- the workspace receives them a few minutes after the run.</p> }
+            else
+            {
+                <pre class="log"><code>@foreach (var l in log.Data.Reverse()) { if (l.At is { } at) {@Fmt.Time(at, "time", seconds: true)@("  ")}@(l.Text + "\n")}</code></pre>
+            }
+            <partial name="_Query" model='QueryInfo.From(log, "Console log")' />
+        }
+    </section>
+}

@@ -1,0 +1,96 @@
+@page
+@model SI.Management.Web.Pages.Cis.OverridesModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Cis
+@{
+    ViewData["Title"] = "Manual overrides";
+    var isAdmin = User.IsAdmin();
+    var ed = Model.Editing;
+    var formCi = ed?.CiId ?? Model.Ci ?? "";
+}
+<div class="split"><h1>Manual overrides</h1></div>
+<p class="lede">A value an Admin set by hand on a CI -- it wins over the rules until it is removed or expires.</p>
+<details class="help" data-overrides-help>
+    <summary>How manual overrides work</summary>
+    <p><strong>What can be overridden.</strong> Tier, purpose, category, department and the CMDB fields of one CI. Risk factors, lifecycle and the provider evidence cannot: they are facts, not decisions.</p>
+    <p><strong>Who, why, until.</strong> Every override carries the name of the Admin who set it, a reason and, if you want, an end date. The CI shows all three, and the tier reads as set by an override.</p>
+    <p><strong>Expiry.</strong> On its end date an override stops winning: the next CI build lets the rules decide again. It stays listed here as expired until you remove it.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "A new override for a field replaces the one in force. Removing one keeps it in the history (who removed it and when). Nothing is written here: each change goes on Review & commit and is written in your name." : "An Admin sets, changes and removes overrides.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.TableMissing) { <div class="notice warn" role="status" data-preparing>@CiOverrideStore.MissingTableMessage</div> }
+
+<form method="get" class="filters" data-overrides-filter>
+    <label>CI<input name="ci" value="@Model.Ci" maxlength="64" placeholder="CI id" /></label>
+    <button type="submit" class="secondary">Show</button>
+    @if (!string.IsNullOrEmpty(Model.Ci)) { <a class="button secondary" href="/Cis/Overrides">Show all</a> <a class="button secondary" href="/Cis/Detail?id=@Uri.EscapeDataString(Model.Ci)">Open the CI</a> }
+</form>
+
+@if (isAdmin && !Model.TableMissing)
+{
+    <section class="card" data-override-form>
+        <h2>@(ed is null ? "Set an override" : "Change the override of " + OverridesModel.FieldText(ed.Field) + " on " + ed.CiId)</h2>
+        <form method="post" asp-page-handler="Set">
+            <label>CI<input name="ci" value="@formCi" maxlength="64" required /></label>
+            <label>Field
+                <select name="field" data-override-field>
+                    @foreach (var f in CiOverrideValidator.Offered)
+                    {
+                        if (ed?.Field == f) { <option value="@f" selected>@OverridesModel.FieldText(f)</option> }
+                        else { <option value="@f">@OverridesModel.FieldText(f)</option> }
+                    }
+                </select>
+            </label>
+            <label>Value<input name="value" value="@ed?.Value" maxlength="400" required data-override-value /></label>
+            <label>Reason<input name="reason" value="@ed?.Reason" maxlength="1000" required data-override-reason /></label>
+            <label>Ends (optional)<input type="date" name="expires" value="@(ed?.ExpiresAt?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))" data-override-expires /></label>
+            <div class="actions">
+                <button type="submit" data-stage-override>Stage this override</button>
+                @if (ed is not null) { <a class="button secondary" href="/Cis/Overrides?ci=@Uri.EscapeDataString(ed.CiId)">Cancel</a> }
+            </div>
+            <p class="hint">A tier is 0, 1, 2 or 3. The override reaches the CI on the next CI build after you commit it.</p>
+        </form>
+    </section>
+}
+
+<h2>Overrides</h2>
+@if (!Model.TableMissing && Model.Rows.Count == 0) { <p data-overrides-none>No manual override@(string.IsNullOrEmpty(Model.Ci) ? "" : " on this CI"): the rules decide every field.</p> }
+else if (Model.Rows.Count > 0)
+{
+    <div class="table-wrap">
+        <table class="grid" data-overrides data-sortable>
+            <thead><tr><th>CI</th><th>Field</th><th>Value</th><th>Reason</th><th>Set by</th><th>Set</th><th>Until</th><th>State</th>@if (isAdmin) { <th></th> }</tr></thead>
+            <tbody>
+            @foreach (var r in Model.Rows)
+            {
+                var st = r.StateText(Model.NowUtc);
+                <tr data-override="@r.Id" data-state="@st">
+                    <td><a href="/Cis/Detail?id=@Uri.EscapeDataString(r.CiId)">@r.CiId</a></td>
+                    <td>@OverridesModel.FieldText(r.Field)<br /><span class="muted mono">@r.Field</span></td>
+                    <td>@r.Value</td>
+                    <td class="wrap">@r.Reason</td>
+                    <td>@r.SetBy</td>
+                    <td data-value="@LocalTime.Iso(r.SetAt)">@Fmt.Time(r.SetAt)</td>
+                    <td data-value="@LocalTime.Iso(r.ExpiresAt)">@Fmt.Time(r.ExpiresAt, "date", empty: "no end")</td>
+                    <td><span class="badge @OverridesModel.Badge(st)">@st</span>@if (r.Removed) { <div class="hint">by @r.RemovedBy, @Fmt.Time(r.RemovedAt)</div> }</td>
+                    @if (isAdmin)
+                    {
+                        <td>
+                            @if (!r.Removed)
+                            {
+                                <a class="button secondary" href="/Cis/Overrides?ci=@Uri.EscapeDataString(r.CiId)&amp;edit=@r.Id" data-edit-override>Change</a>
+                                <form method="post" asp-page-handler="Remove" class="inline">
+                                    <input type="hidden" name="id" value="@r.Id" />
+                                    <input type="hidden" name="ci" value="@Model.Ci" />
+                                    <input name="reason" maxlength="1000" placeholder="Why remove it" required />
+                                    <button type="submit" class="secondary" data-stage-remove>Remove</button>
+                                </form>
+                            }
+                        </td>
+                    }
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}

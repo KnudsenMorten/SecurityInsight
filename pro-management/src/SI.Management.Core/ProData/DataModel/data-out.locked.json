@@ -1,0 +1,77 @@
+{
+  "_": "THE DATA-OUT CONNECTORS (V3-DATA-MODEL 2.12, P5). Every output SecurityInsight writes through an output map (data-model/outputs/<id>.locked.json) is listed here as a connector: the connector name its runs are recorded under (cfg.ConnectorRun, and each item it wrote, changed or stopped sending with its values before and now in cfg.ConnectorChange -- Configuration > Connectors > Runs), what kind of destination it is, and whether it is on when nothing is chosen. An output map without an entry here fails a test (no hidden connector). 'writtenBy': the output is written by another registered connector, which keeps its own column contract ('fixedColumns': the columns are the target table's -- a customer cannot change them). 'editions': where the writer runs. 'default': on when the setting SI_DataOut_Outputs is empty; 'defaultEditions': the editions where it is on when that setting is empty although 'default' is false (every Excel output is off by default in Pro and can be switched on; the Community edition keeps its CI workbook). 'step': where it is written -- 'ci-build' (the CI build writes it, in both editions) or, when absent, the data-out step at the end of the data sync. Read by engine/data-out/SI-DataOut.ps1 and the web app (embedded copy, held to this file by a test).",
+  "schema": 1,
+  "outputs": [
+    {
+      "output": "excel-ci",
+      "connector": "data-out-excel-ci",
+      "label": "CI workbook",
+      "kind": "excel",
+      "file": "SecurityInsight_CIs.xlsx",
+      "sheet": "CIs",
+      "step": "ci-build",
+      "editions": [ "community", "pro" ],
+      "default": false,
+      "defaultEditions": [ "community" ]
+    },
+    {
+      "output": "excel-findings-detailed",
+      "connector": "data-out-excel-findings-detailed",
+      "label": "Findings workbook, one row per CI and finding",
+      "kind": "excel",
+      "file": "SecurityInsight_Findings.xlsx",
+      "sheet": "Detailed",
+      "editions": [ "pro" ],
+      "default": false
+    },
+    {
+      "output": "excel-findings-summary",
+      "connector": "data-out-excel-findings-summary",
+      "label": "Findings workbook, one row per finding, tier, severity and CMDB group",
+      "kind": "excel",
+      "file": "SecurityInsight_Findings.xlsx",
+      "sheet": "Summary",
+      "editions": [ "pro" ],
+      "default": false
+    },
+    {
+      "output": "excel-records",
+      "connector": "data-out-excel-records",
+      "label": "Records workbook, what each source reported",
+      "kind": "excel",
+      "file": "SecurityInsight_Records.xlsx",
+      "sheet": "Records",
+      "editions": [ "pro" ],
+      "default": false
+    },
+    {
+      "output": "servicenow-ci",
+      "connector": "data-out-servicenow-ci",
+      "label": "ServiceNow CI hand-off (Import Set)",
+      "kind": "servicenow-importset",
+      "tableSetting": "SI_DataOut_ServiceNowCiTable",
+      "editions": [ "pro" ],
+      "default": false
+    },
+    {
+      "output": "servicenow-vulnerable-item",
+      "connector": "data-out-servicenow-vulnerable-item",
+      "label": "ServiceNow vulnerable items (Import Set)",
+      "kind": "servicenow-importset",
+      "tableSetting": "SI_DataOut_ServiceNowVulnTable",
+      "editions": [ "pro" ],
+      "default": false
+    },
+    {
+      "output": "sql-vulnerability-target",
+      "connector": "asset-vulnerabilities",
+      "label": "SQL vulnerability target",
+      "kind": "fixed",
+      "writtenBy": "asset-vulnerabilities",
+      "fixedColumns": true,
+      "reason": "Written by the vulnerability connector, which opens, updates and closes the rows of its target table. The columns are that table's, so they cannot be renamed, removed or added.",
+      "editions": [ "pro" ],
+      "default": false
+    }
+  ]
+}

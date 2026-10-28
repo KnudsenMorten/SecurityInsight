@@ -1,0 +1,102 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.RiskRatingModel
+@using SI.Management.Web.Changes
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Risk rating";
+    string T(RiskRatingBands b) => RiskRatingThresholds.Text(b);
+    string Range(RiskRatingBands b, string r) => r switch
+    {
+        "Critical" => Fmt.Num(b.Critical, 0) + " and up",
+        "High" => Fmt.Num(b.High, 0) + " to below " + Fmt.Num(b.Critical, 0),
+        "Moderate" => Fmt.Num(b.Moderate, 0) + " to below " + Fmt.Num(b.High, 0),
+        "Low" => "below " + Fmt.Num(b.Moderate, 0),
+        _ => "not scored yet",
+    };
+    long N(IReadOnlyDictionary<string, long>? d, string k) => d is not null && d.TryGetValue(k, out var v) ? v : 0;
+}
+<h1>Risk rating</h1>
+<p class="lede">The thresholds of the risk rating are yours: what Critical, High, Moderate and Low mean differs per organisation. A finding scoring at least the Critical threshold is Critical, at least the High threshold High, at least the Moderate threshold Moderate, below that Low. SecurityInsight ships @T(Model.Shipped); the next Risk Analysis run scores with the values you commit.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-riskrating-error>@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RiskFactorStore.MissingSchemaMessage</div> }
+@if (Model.OverrideInvalid) { <div class="notice warn" role="status" data-riskrating-invalid>Your stored thresholds are not three whole numbers above 0, highest first, so the built-in @T(RiskRatingBands.Default) are used. Enter valid values and stage them, or reset to the default.</div> }
+
+<section class="card" id="@RiskRatingModel.Anchor" aria-labelledby="rr-h" data-riskrating>
+    <h2 id="rr-h">Thresholds</h2>
+    <table class="grid" data-sortable data-riskrating-values>
+        <thead><tr><th scope="col">Rating</th><th scope="col">In force</th><th scope="col">Shipped default</th></tr></thead>
+        <tbody>
+            <tr data-band="Critical"><td>Critical</td><td data-inforce>@Fmt.Num(Model.InForce.Critical, 0)</td><td data-shipped>@Fmt.Num(Model.Shipped.Critical, 0)</td></tr>
+            <tr data-band="High"><td>High</td><td data-inforce>@Fmt.Num(Model.InForce.High, 0)</td><td data-shipped>@Fmt.Num(Model.Shipped.High, 0)</td></tr>
+            <tr data-band="Moderate"><td>Moderate</td><td data-inforce>@Fmt.Num(Model.InForce.Moderate, 0)</td><td data-shipped>@Fmt.Num(Model.Shipped.Moderate, 0)</td></tr>
+            @* owner 2026-10-21 ("where is low ?"): Low has no threshold of its own -- every score below Moderate -- but it is a
+               rating like the others, so it is a row too, saying what it means *@
+            <tr data-band="Low"><td>Low</td><td data-inforce>less than @Fmt.Num(Model.InForce.Moderate, 0)</td><td data-shipped>less than @Fmt.Num(Model.Shipped.Moderate, 0)</td></tr>
+        </tbody>
+    </table>
+    <p class="hint" data-riskrating-state>@(Model.Overridden ? "Your own thresholds are in force." : "The shipped default is in force.")
+        @if (Model.Conformance is not null) { <span>Template conformance: <span class="badge" data-conformance>@Model.Conformance</span>@if (Model.Conformance == TemplateConformance.UpgradeAvailable) { <text> -- SecurityInsight ships a newer version of this list: <a href="/Templates/Index?kind=@DataModelItemValidator.Kind&amp;key=@Uri.EscapeDataString(RiskRatingBands.ItemKey)&amp;state=UpgradeAvailable">compare and decide</a>.</text> }</span> }
+    </p>
+
+    @if (Model.CanEdit)
+    {
+        <form method="post" class="stack" data-riskrating-form novalidate>
+            <div class="form-grid">
+                <div><label for="rr-c">Critical (at least)</label><input id="rr-c" name="Critical" type="number" min="1" step="1" inputmode="numeric" value="@Model.Critical" required data-threshold="Critical" /></div>
+                <div><label for="rr-h2">High (at least)</label><input id="rr-h2" name="High" type="number" min="1" step="1" inputmode="numeric" value="@Model.High" required data-threshold="High" /></div>
+                <div><label for="rr-m">Moderate (at least)</label><input id="rr-m" name="Moderate" type="number" min="1" step="1" inputmode="numeric" value="@Model.Moderate" required data-threshold="Moderate" /></div>
+                @* owner 2026-10-21 ("it is confusing it is not shown. maybe show less than"): Low shown beside the three -- it
+                   has no value of its own, it follows Moderate (site.js keeps it in step while Moderate is typed) *@
+                <div><label for="rr-l">Low (less than)</label><input id="rr-l" type="number" value="@Model.Moderate" readonly tabindex="-1" aria-describedby="rr-l-hint" data-threshold-low /><small id="rr-l-hint" class="hint">follows Moderate</small></div>
+            </div>
+            <p class="hint">Three whole numbers above 0, highest first. A finding scoring less than the Moderate threshold is Low.</p>
+            <div><label for="rr-reason">Reason (audited)</label><input id="rr-reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" /></div>
+            @if (Model.Problems.Count > 0)
+            {
+                <div class="notice error" role="alert" data-riskrating-problems><strong>Not accepted:</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+            }
+            <div class="actions">
+                <button type="submit" asp-page-handler="Preview" class="secondary" data-riskrating-preview>Preview</button>
+                <button type="submit" asp-page-handler="Stage" data-riskrating-stage>Stage these thresholds</button>
+                @if (Model.Overridden)
+                {
+                    <button type="submit" asp-page-handler="Reset" class="secondary" data-riskrating-reset>Reset to default (@T(Model.Shipped))</button>
+                }
+            </div>
+            <p class="hint">Nothing is written here. A staged change is written on <a href="/Changes">Review &amp; commit</a> in your name, and takes effect from the next Risk Analysis run.</p>
+        </form>
+    }
+    else
+    {
+        <p class="hint" data-riskrating-readonly>An Admin changes the thresholds.</p>
+    }
+</section>
+
+<section class="card" aria-labelledby="rrp-h" data-riskrating-preview-table>
+    <h2 id="rrp-h">Findings per rating</h2>
+    @if (Model.PreviewNotice is not null)
+    {
+        <p class="hint" data-riskrating-preview-notice>@Model.PreviewNotice</p>
+    }
+    else if (Model.InForceCounts is not null)
+    {
+        <p class="hint">The newest collection (@Fmt.Time(Model.Collection!.CollectionTime)), counted from its risk scores in the Pro database -- nothing is re-scored. "Stored" is the rating the last run wrote.</p>
+        <div class="table-wrap">
+            <table class="grid" data-sortable>
+                <thead><tr><th scope="col">Rating</th><th scope="col">Stored</th><th scope="col">With the values in force (@T(Model.InForce))</th>@if (Model.EnteredCounts is not null) { <th scope="col" data-entered-head>With the values entered (@T(Model.Entered!))</th> }</tr></thead>
+                <tbody>
+                @foreach (var r in RiskRatingThresholds.Ratings.Append(RiskRatingThresholds.None))
+                {
+                    if (r == RiskRatingThresholds.None && N(Model.NowCounts, r) == 0 && N(Model.InForceCounts, r) == 0) { continue; }
+                    <tr data-preview-band="@r">
+                        <td>@r</td>
+                        <td class="num" data-now>@Fmt.Int(N(Model.NowCounts, r))</td>
+                        <td class="num" data-inforce-count title="@Range(Model.InForce, r)">@Fmt.Int(N(Model.InForceCounts, r))</td>
+                        @if (Model.EnteredCounts is not null) { <td class="num" data-entered-count title="@Range(Model.Entered!, r)">@Fmt.Int(N(Model.EnteredCounts, r))</td> }
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>

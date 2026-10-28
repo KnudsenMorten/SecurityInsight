@@ -1,0 +1,21 @@
+id:        SpecteropsBloodhoundEnterprise
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'BloodHound Enterprise'
+category:  'Identity Security'
+description: ''
+displayNames:
+  - 'BloodHound Enterprise'
+
+detections:
+  - id: SpecteropsBloodhoundEnterprise
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bloodhound_enterprise*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Security'
+      Category: 'Identity Security'

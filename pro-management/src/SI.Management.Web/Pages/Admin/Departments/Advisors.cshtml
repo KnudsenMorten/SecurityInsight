@@ -1,0 +1,9 @@
+@page
+@model SI.Management.Web.Pages.Admin.Departments.AdvisorsModel
+@{
+    ViewData["Title"] = "Advisors and sign-in links";
+}
+<h1>Advisors and sign-in links</h1>
+<p class="lede"><a href="/Admin/Departments/Edit?id=@Model.Id">The department's admin page</a> · <a href="/Departments/Detail?id=@Model.Id">The department page</a></p>
+@if (Model.Refusal is not null) { <div class="notice error" role="alert" data-refusal>@Model.Refusal</div> }
+<partial name="~/Pages/Admin/Departments/_Advisors.cshtml" model="new SI.Management.Web.Pages.Admin.Departments.AdvisorPanel(Model.Id, Model.Back)" />

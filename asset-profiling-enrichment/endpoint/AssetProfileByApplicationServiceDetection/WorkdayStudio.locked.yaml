@@ -1,0 +1,21 @@
+id:        WorkdayStudio
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Workday Studio'
+category:  'HCM'
+description: ''
+displayNames:
+  - 'Workday Studio'
+
+detections:
+  - id: WorkdayStudio
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'studio*'
+    set:
+      Tier:     2
+      Purpose:  'HCM'
+      Category: 'HCM'

@@ -1,0 +1,10 @@
+@model SI.Management.Web.Pages.Cmdb.MapModel.Card
+@{
+    var edit = ViewData["edit"] is true;
+    var tier = Model.Tier == SI.Management.Core.ProData.ProDataFilters.Unclassified ? "Unclassified" : "Tier " + Model.Tier;
+}
+<div class="card-asset map-card" draggable="@(edit ? "true" : "false")" data-asset="@Model.Key" data-name="@Model.Name" data-services="@Model.Services">
+    <span class="name">@if (edit) { <input type="checkbox" data-pick aria-label="Select @Model.Name" /> }@Model.Name</span>
+    <span class="meta">@(Model.Kind ?? "asset") · @tier@if (Model.Risk is not null) { <text> · weighted risk @Model.Risk</text> }</span>
+    @if (Model.Services > 1) { <span class="badge multi" title="@Model.Numbers">in @Fmt.Int(Model.Services) services</span> }
+</div>

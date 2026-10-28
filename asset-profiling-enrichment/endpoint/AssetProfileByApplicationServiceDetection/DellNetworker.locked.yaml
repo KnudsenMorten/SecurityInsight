@@ -1,0 +1,22 @@
+id:        DellNetworker
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Dell EMC NetWorker'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Dell EMC NetWorker'
+  - 'EMC NetWorker'
+
+detections:
+  - id: DellNetworker
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'networker*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

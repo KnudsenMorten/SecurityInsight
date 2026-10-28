@@ -1,0 +1,15 @@
+@model SI.Management.Web.RiskExec.ExecViewLoader.Loaded
+@* #288 / #290: why there is nothing to show yet -- a database without the table, a read failure, or no kept view. *@
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (!Model.Ready)
+{
+    <div class="notice warn" role="status" data-exec-empty>The Pro database does not carry the Risk Analysis view yet. It appears after the database is updated (the Pro setup applies the data schema) and the next data sync has run.</div>
+}
+else if (Model.View.Figures is null && Model.Error is null)
+{
+    <section class="card" data-exec-empty>
+        <h2>No Risk Analysis view yet</h2>
+        <p>No @Model.View.Grain report has kept its view yet. It appears here after the next Risk Analysis run of either report and the data sync that follows it.</p>
+    </section>
+}
+@foreach (var p in Model.Problems) { <div class="notice warn" role="status">@p</div> }

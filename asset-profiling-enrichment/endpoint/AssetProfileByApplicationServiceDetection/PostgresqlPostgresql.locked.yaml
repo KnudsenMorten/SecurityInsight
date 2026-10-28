@@ -1,0 +1,21 @@
+id:        PostgresqlPostgresql
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'PostgreSQL'
+category:  'Database'
+description: ''
+displayNames:
+  - 'PostgreSQL'
+
+detections:
+  - id: PostgresqlPostgresql
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'postgresql*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

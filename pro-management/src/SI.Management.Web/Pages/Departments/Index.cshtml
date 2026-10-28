@@ -1,0 +1,64 @@
+@page
+@model SI.Management.Web.Pages.Departments.IndexModel
+@using SI.Management.Core.ProData
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Current is not null && Model.Error is null)
+{
+    <section class="card" aria-labelledby="dept-h">
+        <h2 id="dept-h">Departments in this collection</h2>
+        <div class="table-wrap">
+            <table class="findings" data-sortable data-departments>
+                <thead>
+                    <tr>
+                        <th scope="col">Department</th>
+                        <th scope="col" class="num">Weighted risk</th>
+                        <th scope="col" class="num">Open findings</th>
+                        <th scope="col" class="num">Very High</th>
+                        <th scope="col" class="num">High</th>
+                        <th scope="col" class="num">Assets with findings</th>
+                        <th scope="col" class="num">Assets owned</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Model.Summaries.Where(s => s.DepartmentId != DepartmentSql.Unassigned))
+                    {
+                        <tr data-department="@s.DepartmentId">
+                            <td><a href="@Model.ViewLink("/Departments/Detail", ("id", s.DepartmentId.ToString(System.Globalization.CultureInfo.InvariantCulture)))">@s.Name</a></td>
+                            <td class="num">@Model.Weighted(s)</td>
+                            <td class="num">@Fmt.Int(s.Findings)</td>
+                            <td class="num">@Fmt.Int(s.Critical)</td>
+                            <td class="num">@Fmt.Int(s.High)</td>
+                            <td class="num">@Fmt.Int(s.FindingAssets)</td>
+                            <td class="num">@Fmt.Int(Model.OwnedAssets.TryGetValue(s.DepartmentId, out var o) ? o : 0)</td>
+                        </tr>
+                    }
+                    @foreach (var d in Model.Extra)
+                    {
+                        <tr data-department="@d.DepartmentId">
+                            <td><a href="@Model.ViewLink("/Departments/Detail", ("id", d.DepartmentId.ToString(System.Globalization.CultureInfo.InvariantCulture)))">@d.Name</a></td>
+                            <td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td>
+                            <td class="num">@Fmt.Int(Model.OwnedAssets.TryGetValue(d.DepartmentId, out var o2) ? o2 : 0)</td>
+                        </tr>
+                    }
+                    @if (Model.Mine is null && Model.Unassigned is { } u)
+                    {
+                        <tr data-department="0" class="warn" data-sort-fixed>
+                            <td><a href="@Model.ViewLink("/Departments/Unassigned")">Unassigned</a></td>
+                            <td class="num">@Model.Weighted(u)</td>
+                            <td class="num">@Fmt.Int(u.Findings)</td>
+                            <td class="num">@Fmt.Int(u.Critical)</td>
+                            <td class="num">@Fmt.Int(u.High)</td>
+                            <td class="num">@Fmt.Int(u.FindingAssets)</td>
+                            <td class="num">@Fmt.Int(Model.OwnedAssets.TryGetValue(0, out var o3) ? o3 : 0)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (Model.Summaries.Count == 0 && Model.Extra.Count == 0)
+        {
+            <p class="hint">No department yet. An Admin defines departments, their owners and the rules that place assets under <nav-ref page="/Admin/Departments/Index" />.</p>
+        }
+    </section>
+}
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

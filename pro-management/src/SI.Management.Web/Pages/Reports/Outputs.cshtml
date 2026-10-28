@@ -1,0 +1,11 @@
+@page
+@model SI.Management.Web.Pages.Reports.OutputsModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Output scope";
+    var edit = Model.CanEdit;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/Outputs")" />
+<p class="lede">What the workbooks and the mail receive of what Risk Analysis finds (what each connector receives: <nav-ref page="/Connectors/Scope" />). Nothing ticked = everything, as today. A scope never closes or retires anything: what is already in a connector's target and falls outside the scope is left exactly as it is.</p>
+<partial name="_OutputScopeBody" model="Model" />

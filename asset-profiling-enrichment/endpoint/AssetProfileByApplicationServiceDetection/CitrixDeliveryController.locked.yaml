@@ -1,0 +1,21 @@
+id:        CitrixDeliveryController
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Citrix Delivery Controller'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix Delivery Controller'
+
+detections:
+  - id: CitrixDeliveryController
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'delivery_controller*'
+    set:
+      Tier:     1
+      Purpose:  'VDI'
+      Category: 'VDI'

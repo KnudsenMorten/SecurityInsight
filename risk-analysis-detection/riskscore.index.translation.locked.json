@@ -1,0 +1,49 @@
+{
+  "$comment": "SecurityInsight risk index: the v2.2 key -> SI key translation (REQUIREMENTS #559, owner 2026-10-10: \"risk index base values must be adjusted to the si names\"). The shipped index (riskscore.index.locked.csv) is keyed by the SI generic fields; an index or a customer's own rows still written with the v2.2 columns (riskscore.index.custom.csv of 2.2 / 3.0, the Pro run file of an older web app) are translated with this table on load, row for row, in their order -- every v2.2 base value is carried over (engine/risk-analysis/_shared/RA-RiskIndexSi.ps1, ConvertTo-SIRiskIndexSiRows; proved by tests/pester/SIv3-RiskIndexSi.Tests.ps1). columns: v2.2 column -> SI column. values: per SI column, v2.2 value -> SI value (case-insensitive); a value not listed is kept as written. si_finding_type and si_component did not exist in v2.2: a translated row leaves them blank (= any). asset_class 'device' is the family of device_server and device_client: a 'device' matcher fits both. Severity keeps v2.2's Medium-High band as medium_high so its own base value survives (SI's finding severity folds it into medium). AssetBase = the asset side's base (v2.2 RiskProbablityScore_CriticialityTierLevel, keyed by tier); VulnerabilityBase = the vulnerability side's base (v2.2 RiskConsequenceScore_SecuritySeverity, keyed by severity).",
+  "kind": "risk-index-translation",
+  "version": "1.0.0",
+  "siColumns": ["si_finding_type", "si_category", "si_subcategory", "si_component", "si_finding_key", "asset_class", "si_severity", "VulnerabilityBase", "si_tier", "AssetBase", "Comments", "Precedence"],
+  "columns": {
+    "SecurityDomain": "asset_class",
+    "Category": "si_category",
+    "SubCategory": "si_subcategory",
+    "ConfigurationId": "si_finding_key",
+    "SecuritySeverity": "si_severity",
+    "RiskConsequenceScore_SecuritySeverity": "VulnerabilityBase",
+    "CriticalityTierLevel": "si_tier",
+    "RiskProbablityScore_CriticialityTierLevel": "AssetBase",
+    "Comments": "Comments",
+    "Precedence": "Precedence"
+  },
+  "values": {
+    "asset_class": {
+      "Endpoint": "device",
+      "Identity": "identity",
+      "Azure": "cloud_resource",
+      "PublicIP": "public_ip"
+    },
+    "si_severity": {
+      "Very High": "critical",
+      "Critical": "critical",
+      "High": "high",
+      "Medium-High": "medium_high",
+      "Medium": "medium",
+      "Moderate": "medium",
+      "Low": "low",
+      "Informational": "info",
+      "Info": "info"
+    },
+    "si_tier": {
+      "Critical - tier 0": "0",
+      "High - tier 1": "1",
+      "Medium - tier 2": "2",
+      "Low - tier 3": "3"
+    }
+  },
+  "assetClasses": ["device_server", "device_client", "device", "identity", "cloud_resource", "public_ip"],
+  "riskFactorsV1": {
+    "$comment": "The risk-factor catalog BEFORE model v2 (1.0.0): per factor id its shipped name, impact, stage and axis. A Pro override (cfg.ItemOverride risk-factors:<id>) made against it is converged to model v2 on the next template publish / update (SI-ProOverrideMigration.ps1): a value equal to this 1.0.0 default takes the new shipped value, a value the customer changed is kept; stage becomes state; retired factors (removed) are listed with what replaced them.",
+    "factors": {"internet_exposed":{"name":"Internet exposed","impact":1,"stage":"production","axis":"probability"},"unsupported_os":{"name":"Unsupported operating system","impact":1,"stage":"production","axis":"probability"},"compromised_recently":{"name":"Involved in a recent incident","impact":1,"stage":"production","axis":"probability"},"high_machine_risk":{"name":"High machine risk","impact":1,"stage":"production","axis":"probability"},"antivirus_disabled":{"name":"Antivirus disabled","impact":1,"stage":"production","axis":"probability"},"antivirus_out_of_date":{"name":"Antivirus out of date","impact":1,"stage":"production","axis":"probability"},"not_onboarded":{"name":"Not onboarded to Defender for Endpoint","impact":1,"stage":"production","axis":"probability"},"unmanaged":{"name":"Unmanaged device","impact":1,"stage":"production","axis":"probability"},"excluded_from_defender":{"name":"Excluded from Defender","impact":1,"stage":"production","axis":"probability"},"no_mfa":{"name":"No MFA registered","impact":1,"stage":"production","axis":"probability"},"no_owner":{"name":"Service principal without owner","impact":1,"stage":"production","axis":"probability"},"stale_sign_in":{"name":"No sign-in for 90 days","impact":1,"stage":"production","axis":"probability"},"very_stale_sign_in":{"name":"No sign-in for a year","impact":1,"stage":"production","axis":"probability"},"never_signed_in":{"name":"Never signed in","impact":1,"stage":"production","axis":"probability"},"old_account":{"name":"Account older than 90 days","impact":1,"stage":"production","axis":"probability"},"old_password":{"name":"Password not changed for a year","impact":1,"stage":"production","axis":"probability"},"publisher_not_verified":{"name":"Publisher not verified","impact":1,"stage":"production","axis":"probability"},"multitenant_app":{"name":"Multi-tenant application","impact":1,"stage":"production","axis":"probability"},"permanent_privileged_role":{"name":"Permanent privileged role","impact":1,"stage":"production","axis":"probability"},"expiring_credentials":{"name":"Credentials expire within 30 days","impact":1,"stage":"production","axis":"probability"},"has_secret":{"name":"Client secret in use","impact":1,"stage":"production","axis":"probability"},"expired_credentials":{"name":"Expired credentials","impact":1,"stage":"production","axis":"probability"},"identity_high_blast_radius":{"name":"High blast radius (Defender for Identity)","impact":1,"stage":"production","axis":"probability"},"identity_at_risk":{"name":"Identity at risk (Defender for Identity)","impact":1,"stage":"production","axis":"probability"},"break_glass":{"name":"Emergency-access account","impact":1,"stage":"production","axis":"probability"},"leaked_credentials":{"name":"Leaked credentials","impact":1,"stage":"testing","axis":"probability"},"high_risk_port_open":{"name":"Administrative port open to the internet","impact":1,"stage":"production","axis":"probability"},"high_cvss_public_ip":{"name":"CVSS 9 or higher","impact":1,"stage":"production","axis":"probability"},"ms_criticality_high":{"name":"High Microsoft criticality","impact":1,"stage":"production","axis":"consequence"},"production_environment":{"name":"Production environment","impact":1,"stage":"production","axis":"consequence"},"restricted_data":{"name":"Restricted data","impact":1,"stage":"production","axis":"consequence"},"confidential_data":{"name":"Confidential data","impact":1,"stage":"production","axis":"consequence"},"exploit_available":{"name":"Exploit available","impact":1,"stage":"production","axis":"probability"},"remote_code_execution":{"name":"Remote code execution","impact":1,"stage":"production","axis":"consequence"},"report_scoped":{"name":"Factors computed inside one report","impact":1,"stage":"production","axis":"probability"}},
+    "removed": { "very_stale_sign_in": "stale_sign_in", "break_glass": "classification:break_glass_patterns" }
+  }
+}

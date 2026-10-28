@@ -1,0 +1,78 @@
+/* The chat: the answer bubbles (the Chat page AND the panel) and the panel beside a page (Pages/Shared/_ChatPanel.cshtml).
+   Only its own classes; built on the site.css / app.css tokens (BRAND-2 / BRAND-2.5), so light, dark and the theme
+   switch all work; every text/background pair below is AA in both themes. Mobile first: a full-width sheet on a phone,
+   a side panel from 900px. */
+
+/* ---- the answer stands out: an accent-tinted surface with an accent left border, larger and darker text ---- */
+.msg.chat-answer {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-left: 4px solid var(--accent-fill);
+  padding: .75rem .95rem;
+}
+.msg.chat-answer .who { text-transform: none; letter-spacing: 0; font-size: .8rem; display: flex; align-items: center; gap: .35rem; color: var(--accent); font-weight: 600; }
+.msg.chat-answer .who .chat-icon { width: 16px; height: 16px; }
+.msg .chat-answer-body { white-space: normal; font-size: 1.07rem; line-height: 1.55; color: var(--text-heading); margin-top: .25rem; }
+.chat-answer-body p { margin: 0 0 .5rem; }
+.chat-answer-body p:last-child, .chat-answer-body ul:last-child { margin-bottom: 0; }
+.chat-answer-body ul { margin: 0 0 .5rem; padding-left: 1.25rem; }
+.chat-answer-body li { margin: .15rem 0; }
+/* the plainer "You" bubble */
+.msg.user { background: var(--surface-2); color: var(--text-primary); font-size: .95rem; }
+
+/* ---- highlights: asset names, numbers, ids, severities, tiers ---- */
+.chat-answer-body .chat-asset { font-weight: 700; color: var(--text-heading); }
+.chat-answer-body a.chat-asset { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.chat-answer-body .chat-em { font-weight: 700; }
+.chat-answer-body .chat-num { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-heading); }
+.chat-answer-body .chat-code { font: .92em ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 .3em; color: var(--text-heading); }
+.chat-answer-body .sev, .chat-answer-body .chat-tier { display: inline-block; padding: 0 .4em; border-radius: 4px; font-weight: 600; line-height: 1.35; white-space: nowrap; }
+/* the severity badge colours (status tokens, always with the word itself) */
+.chat-answer-body .sev-vh { background: var(--critical-bg); color: var(--critical); box-shadow: inset 0 0 0 1px var(--critical); }
+.chat-answer-body .sev-h { background: var(--critical-bg); color: var(--critical); }
+.chat-answer-body .sev-mh, .chat-answer-body .sev-m { background: var(--warning-bg); color: var(--warning); }
+.chat-answer-body .sev-l { background: var(--surface-2); color: var(--text-secondary); }
+/* the tier colours (app.css --tier-*) */
+.chat-answer-body .chat-tier.t0 { background: var(--critical-bg); color: var(--tier-0); }
+.chat-answer-body .chat-tier.t1 { background: var(--warning-bg); color: var(--tier-1); }
+.chat-answer-body .chat-tier.t2 { background: var(--surface-2); color: var(--accent); }
+.chat-answer-body .chat-tier.t3, .chat-answer-body .chat-tier.t4, .chat-answer-body .chat-tier.t5 { background: var(--surface-2); color: var(--text-secondary); }
+
+/* ---- what the answer rests on: muted, below the answer ---- */
+.chat-answer .chat-basis { margin: .5rem 0 0; font-size: .82rem; }
+.chat-answer details.chat-how { margin-top: .45rem; font-size: .82rem; }
+.chat-answer details.chat-how > summary { cursor: pointer; color: var(--text-muted); width: max-content; max-width: 100%; }
+.chat-answer details.chat-how > summary:hover, .chat-answer details.chat-how > summary:focus-visible { color: var(--accent); }
+.chat-answer details.chat-how[open] > summary { margin-bottom: .25rem; }
+.chat-answer details.tool-calls { margin-top: .35rem; }
+.chat-answer .tool pre { max-height: 14rem; overflow: auto; }
+
+.chat-fab {
+  position: fixed; right: 16px; bottom: 16px; z-index: 30;
+  border-radius: 999px; padding: .55rem 1rem; box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+}
+.chat-panel {
+  position: fixed; z-index: 35; left: 0; right: 0; bottom: 0; max-height: 85vh;
+  display: flex; flex-direction: column; gap: .5rem;
+  background: var(--surface-1); color: var(--text-primary);
+  border-top: 1px solid var(--border); box-shadow: 0 -8px 32px rgb(0 0 0 / 22%);
+  padding: 12px 16px 16px;
+}
+.chat-panel[hidden] { display: none; }
+.chat-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; }
+.chat-panel-head h2 { margin: 0 0 .25rem; font-size: 1.05rem; }
+.chat-panel-about { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; }
+.chat-panel-about .badge { overflow-wrap: anywhere; }
+.chat-panel-log { flex: 1 1 auto; overflow-y: auto; min-height: 4rem; margin: 0; align-content: start; }
+.chat-panel-log .tool pre { max-height: 12rem; overflow: auto; }
+.chat-panel-form { display: grid; gap: .35rem; }
+.chat-panel-form textarea { width: 100%; min-height: 4.5rem; }
+.chat-panel-form .hint { margin: 0; }
+body.chat-panel-open .chat-fab { display: none; }
+
+@media (min-width: 900px) {
+  .chat-panel {
+    top: 0; bottom: 0; left: auto; width: min(440px, 40vw); max-height: none;
+    border-top: 0; border-left: 1px solid var(--border); box-shadow: -8px 0 32px rgb(0 0 0 / 22%);
+  }
+}

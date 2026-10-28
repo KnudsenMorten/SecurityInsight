@@ -1,0 +1,194 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.EmailModel
+@using SI.Management.Web.Settings
+@using SI.Management.Web.Links
+@{
+    ViewData["Title"] = "E-mail + links";
+}
+<h1>E-mail + links</h1>
+<p class="lede">Whether SecurityInsight sends mail, to whom and through which server, and how links in the mails open this app (secrets only as Key Vault secret names).</p>
+<p class="actions" data-notifications-button><a class="button" href="/Admin/Settings/Notifications">Notifications</a> <a class="button secondary" href="/Admin/Settings/Reports">Reports and alerts</a></p>
+<details class="help">
+    <summary>Links in e-mails</summary>
+    <p>A <strong>deep link</strong> opens a page of this app through the normal Entra sign-in (single sign-on; your Conditional Access policies apply). A <strong>magic link</strong> is OFF by default: when switched on, a mail link may carry a signed token that opens ONE read-only page without signing in, works once, and expires (default 60 minutes). Conditional Access does not see such a link -- enable it only if that is acceptable. The send <strong>schedule</strong> is the cron of the sending job, on the <a href="/Admin/Jobs">Jobs</a> page.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+
+@{
+    var mo = Model.Overview!;
+    var health = mo.Health;
+}
+<section class="card" id="mail" aria-labelledby="h-mail" data-mail-card data-mail-mode="@mo.Mode.Mode" data-mail-health="@health.Level">
+    <h2 id="h-mail">Mail</h2>
+    <p class="purpose">SecurityInsight sends every mail -- reports, safety-check alerts, close-loop and exemption mails, sign-in links -- through ONE transport. The recommended one is an <strong>Office 365 shared mailbox</strong>: Microsoft Graph with SecurityInsight's own managed identity, Mail.Send granted only for that one mailbox through Exchange Online "RBAC for Applications" (never tenant-wide). SMTP stays available for your own relay.</p>
+    @if (mo.Error is not null) { <div class="notice warn" role="status">@mo.Error</div> }
+    @if (mo.Mode.Problem is not null) { <div class="notice warn" role="status" data-mail-problem>@mo.Mode.Problem -- mail is treated as off until it is corrected.</div> }
+    @if (mo.Mode.IsSharedMailbox && mo.Restriction.IsUnrestricted)
+    {
+        <div class="notice error" role="alert" data-mail-unrestricted>Mail.Send is not restricted to the shared mailbox -- SecurityInsight does not send mail until it is. Ask your Exchange administrator to scope it (steps below) and remove the tenant-wide Mail.Send permission. @if (mo.Restriction.Detail is not null) { <br /><span>@mo.Restriction.Detail</span> }</div>
+    }
+    else if (mo.Mode.IsSharedMailbox && !mo.Restriction.AllowsSend)
+    {
+        <div class="notice warn" role="status" data-mail-unverified>Mail.Send is not restricted to the shared mailbox yet -- SecurityInsight refuses to send until the restriction is verified. @if (mo.Restriction.Detail is not null) { <br /><span>@mo.Restriction.Detail</span> }</div>
+    }
+    else if (mo.Mode.IsSharedMailbox && mo.Restriction.IsLegacyPolicy)
+    {
+        <div class="notice warn" role="status" data-mail-legacy-policy>@(MailHealth.LegacyPolicyTitle). @if (mo.Restriction.Detail is not null) { <br /><span>@mo.Restriction.Detail</span> }</div>
+    }
+    else if (mo.Mode.IsNone)
+    {
+        <div class="notice error" role="alert" data-mail-off>@MailHealth.RedTitle</div>
+    }
+    else if (mo.Mode.IsSharedMailbox && mo.Restriction.IsVerified && mo.Restriction.Detail is { Length: > 0 } vd)
+    {
+        @* how the restriction was proved (and a note about an optional probe mailbox that cannot be used) *@
+        <p class="hint" data-mail-restriction-detail>Restriction: @vd</p>
+    }
+    @if (mo.LastTest is { Failed: true })
+    {
+        <div class="notice error" role="alert" data-mail-test-failed data-utc>The last test mail failed: @mo.LastTest.Summary</div>
+    }
+    <dl class="kv">
+        <dt>Mail mode</dt><dd data-mail-mode-label><strong>@MailMode.Label(mo.Mode.Mode)</strong> <code>@mo.Mode.Mode</code> <span class="muted">(@MailMode.SourceLabel(mo.Mode.Source))</span></dd>
+        <dt>@(mo.Mode.IsSharedMailbox ? "Shared mailbox (From)" : "From")</dt><dd>@(mo.From ?? "not set") <a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(MailMode.FromSetting)">Edit</a></dd>
+        @if (mo.Identity is not null) { <dt>SecurityInsight identity</dt><dd><code>@mo.Identity</code></dd> }
+        @if (mo.Mode.IsSharedMailbox)
+        {
+            <dt>Restriction</dt>
+            <dd data-mail-restriction="@mo.Restriction.State">@(mo.Restriction.Label)@if (mo.Restriction.Mailbox is not null) { <text> -- </text><code>@mo.Restriction.Mailbox</code> }@if (mo.Restriction.CheckedUtc is { } chk) { <text>, checked @Fmt.Time(chk)</text> }</dd>
+            <dt>Exchange administrator's proof</dt>
+            <dd data-mail-attestation>@if (mo.Attestation is { } at) { <span>scope <code>@at.Scope</code> for <code>@at.Mailbox</code>, recorded by @at.By @Fmt.Time(at.Utc)</span> } else { <span class="muted">none recorded</span> }</dd>
+        }
+        <dt>Last test mail</dt>
+        <dd data-mail-last-test data-utc>@(mo.LastTest is null ? "none sent yet" : mo.LastTest.Summary)</dd>
+        <dt>Status</dt>
+        <dd data-utc><span class="badge @(health.IsRed ? "bad" : health.IsAmber ? "warn" : "good")">@(health.IsOk ? "set up" : health.IsAmber ? "works -- see the hint" : "not set up")</span> @health.Detail</dd>
+    </dl>
+
+    @if (mo.Mode.IsSmtp && mo.SmtpKept)
+    {
+        @* the SMTP relay kept by choice (Ignore on the Home banner, or the setting): no move hint; Undo brings it back *@
+        <div class="notice" role="status" data-mail-smtp-kept>
+            <strong>SMTP relay kept by choice</strong> -- SecurityInsight no longer suggests moving to an Office 365 shared mailbox. A failed test mail is still shown in red.
+            <form method="post" asp-page-handler="SmtpKeptUndo" class="inline">
+                <button type="submit" class="secondary" data-mail-smtp-kept-undo>Undo</button>
+            </form>
+        </div>
+    }
+    else if (mo.Mode.IsSmtp && !Model.MoveHintDismissed)
+    {
+        <div class="notice warn" role="status" data-mail-move-hint>
+            <strong>@MailHealth.MoveHint</strong> -- SMTP keeps working, but a shared mailbox needs no relay and no password, and Mail.Send reaches only that one mailbox.
+            <ol>
+                <li>Step 1 below: name the shared mailbox -- the command for your Exchange administrator is built from it.</li>
+                <li>Step 2 below: validate it -- it becomes the sender, the restriction is checked and a test mail is sent.</li>
+            </ol>
+            <a href="/Admin/Settings/Email?hint=dismiss#mail" data-mail-move-hint-dismiss>Do not show this again</a>
+        </div>
+    }
+
+    <h3>Who gets which mail</h3>
+    @if (Model.Recipients.Count == 0) { <p class="muted">This install's settings catalog has no recipient settings.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table data-static="a short list of settings, not a grid">
+                <thead><tr><th>Mail</th><th>Recipients</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var (setting, mailType) in Model.Recipients)
+                    {
+                        var row = MailMode.RowOf(Model.Rows[setting.Name], setting.Name);
+                        <tr data-mail-recipients="@setting.Name">
+                            <td>@mailType <code class="name">@setting.Name</code></td>
+                            <td>@(row is null ? setting.DefaultPlain : SettingJson.ToFormText(row.ValueJson).Replace("\n", ", "))</td>
+                            <td><a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(setting.Name)">Edit</a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (Model.MailboxSteps is { } mbs && !(mo.Mode.IsSmtp && mo.SmtpKept))
+    {
+        @await Html.PartialAsync("_MailboxSteps", (mbs, "/Admin/Settings/Email", User.IsAdmin()))
+    }
+
+    <h3 id="h-mail-test">Send a test mail</h3>
+    <p class="muted">The test mail is queued and sent by the mail job through the transport above -- this app never talks to a mail server itself.</p>
+    @if (Model.TestError is not null) { <div class="notice error" role="alert" data-mail-test-error>@Model.TestError</div> }
+    @if (Model.TestMessage is not null) { <div class="notice ok" role="status" data-mail-test-queued>@Model.TestMessage</div> }
+    <form method="post" asp-page-handler="TestMail" class="filterbar" aria-labelledby="h-mail-test">
+        <div class="wide"><label for="m-to">Recipient</label><input id="m-to" type="email" name="TestTo" value="@Model.TestTo" maxlength="254" required /></div>
+        <div class="actions"><button type="submit">Send test mail</button></div>
+    </form>
+
+    @if (User.IsSuperAdmin())
+    {
+        <p><a class="button" href="/Admin/Settings/MailSetup" data-mail-setup-link>Set up mail</a> <span class="muted">-- the guided setup: an Office 365 shared mailbox (recommended) or your SMTP relay.</span></p>
+    }
+    else
+    {
+        <p class="muted">A SuperAdmin sets up mail (Settings &gt; E-mail + links &gt; Set up mail), or run <code>setup\Set-SIMail.ps1</code>.</p>
+    }
+    <details class="help">
+        <summary>How to restrict Mail.Send to the shared mailbox (Exchange administrator)</summary>
+        <ol>
+            <li>In Exchange Online PowerShell: <code>New-ServicePrincipal -AppId &lt;identity client id&gt; -ObjectId &lt;its service principal object id&gt; -DisplayName 'SecurityInsight'</code></li>
+            <li><code>New-ManagementScope -Name '&lt;mailbox name&gt;-Sender' -RecipientRestrictionFilter "PrimarySmtpAddress -eq '&lt;address&gt;'"</code></li>
+            <li><code>New-ManagementRoleAssignment -Name '&lt;mailbox name&gt;-MailSend-&lt;first 8 of the client id&gt;' -App &lt;identity client id&gt; -Role 'Application Mail.Send' -CustomResourceScope '&lt;mailbox name&gt;-Sender'</code></li>
+            <li>Remove any tenant-wide Mail.Send permission of the identity in Entra (API permissions / app role assignments).</li>
+            <li>Check: <code>Test-ServicePrincipalAuthorization -Identity &lt;identity client id&gt; -Resource &lt;address&gt;</code> lists 'Application Mail.Send' with InScope True -- and for any other mailbox InScope False.</li>
+        </ol>
+        <p><code>setup\Set-SIMail.ps1</code> prints these commands with your values filled in.</p>
+    </details>
+</section>
+
+@foreach (var (title, list) in new[] { ("Mail settings", Model.Mail), (WebSettings.Group, Model.Web) })
+{
+    <section class="card" aria-label="@title">
+        <h2>@title</h2>
+        @foreach (var s in list)
+        {
+            var rows = Model.Rows[s.Name].ToList();
+            <div class="setting">
+                <div class="head">
+                    <span class="title">@s.Title</span>
+                    @if (s.Secret) { <span class="badge secret">secret · Key Vault name only</span> }
+                </div>
+                <div class="iname"><code class="name" title="Internal name -- for support and scripts">@s.Name</code> <span class="badge">@s.Type</span></div>
+                @if (!string.IsNullOrWhiteSpace(s.PurposeText)) { <p class="purpose">@s.PurposeText</p> }
+                <dl>
+                    <dt>Default</dt><dd>@s.DefaultPlain</dd>
+                    @if (!string.IsNullOrWhiteSpace(s.Effect)) { <dt>If you change it</dt><dd>@s.Effect</dd> }
+                    @if (rows.Count == 0) { <dt>Value</dt><dd class="status">Using the default</dd> }
+                    @foreach (var r in rows) { <dt>Value · @r.Scope</dt><dd><code>@s.WithUnit(SettingsDiff.Display(r.ValueJson, r.KeyVaultSecretName))</code></dd> }
+                </dl>
+                <div class="actions"><a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(s.Name)">Edit</a></div>
+            </div>
+        }
+    </section>
+}
+
+<section class="card" aria-labelledby="h-link">
+    <h2 id="h-link">Link builder</h2>
+    <form method="post" asp-page-handler="Link" class="filterbar">
+        <div>
+            <label for="l-page">Page</label>
+            <select id="l-page" name="LinkPage">
+                @foreach (var p in DeepLinks.MagicPages) { <option selected="@(p == Model.LinkPage)">@p</option> }
+            </select>
+        </div>
+        <div class="wide"><label for="l-q">Query (optional)</label><input id="l-q" type="text" name="LinkQuery" value="@Model.LinkQuery" placeholder="tier=0&sev=Critical" maxlength="300" /></div>
+        <div class="actions"><button type="submit">Build</button></div>
+    </form>
+    @if (Model.LinkError is not null) { <div class="notice warn" role="status">@Model.LinkError</div> }
+    @if (Model.DeepLink is not null)
+    {
+        <dl class="kv">
+            <dt>Deep link (SSO)</dt><dd class="mono">@Model.DeepLink</dd>
+            @if (Model.MailLink is not null) { <dt>Magic link</dt><dd class="mono">@Model.MailLink <span class="badge warn">single use -- this one is real</span></dd> }
+            else { <dt>Magic link</dt><dd class="muted">off (or not configured) -- mails carry the deep link</dd> }
+        </dl>
+    }
+</section>

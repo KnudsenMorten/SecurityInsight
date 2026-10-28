@@ -1,0 +1,8 @@
+@page
+@model SI.Management.Web.Pages.Cis.SummaryModel
+@{
+    ViewData["Title"] = "Findings per finding key";
+}
+<h1>Findings per finding key</h1>
+<p class="lede">One row per finding key (each CVE or configuration its own row), tier, severity and CMDB group: how many CIs have it, the highest risk score and the weighted total. Select rows to act on their findings. Open a finding to see the CIs that have it. The Risk Analysis summary as in the workbook -- grouped by tier, with the impacted assets -- is <nav-ref page="/Recommendations/Summary" />.</p>
+<partial name="_CiDataGrid" model="Model" />

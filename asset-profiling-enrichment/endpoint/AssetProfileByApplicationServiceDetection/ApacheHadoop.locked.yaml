@@ -1,0 +1,21 @@
+id:        ApacheHadoop
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Apache Hadoop'
+category:  'Analytics'
+description: ''
+displayNames:
+  - 'Apache Hadoop'
+
+detections:
+  - id: ApacheHadoop
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hadoop*'
+    set:
+      Tier:     2
+      Purpose:  'Analytics'
+      Category: 'Analytics'

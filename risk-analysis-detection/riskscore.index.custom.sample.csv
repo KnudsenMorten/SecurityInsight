@@ -1,0 +1,3 @@
+si_finding_type,si_category,si_subcategory,si_component,si_finding_key,asset_class,si_severity,VulnerabilityBase,si_tier,AssetBase,Comments,Precedence
+,Security controls,EDR,,scid-2002,device,critical,5,,,"Example: your own vulnerability base (VulnerabilityBase) for one finding. Rows are keyed by the SI fields (#559); rows written with the 2.2 columns are translated on load (riskscore.index.translation.locked.json). Copy this file to riskscore.index.custom.csv and keep only the rows you want to change. Your rows are checked before the shipped index (riskscore.index.locked.csv), first match wins.",1
+,Security controls,EDR,,scid-2002,device,,,0,5,Example: the asset base (AssetBase) of the same finding on tier-0 assets,2

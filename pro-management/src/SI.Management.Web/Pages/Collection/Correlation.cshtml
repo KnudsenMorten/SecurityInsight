@@ -1,0 +1,115 @@
+@page
+@model SI.Management.Web.Pages.Collection.CorrelationModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@{
+    var r = Model.Report;
+    var active = Model.ActiveTile;
+    // a box's own data attribute (data-bucket="1 source", data-single="Azure", data-match-rate...); Razor never drops a data-* attribute, so it is written whole
+    Microsoft.AspNetCore.Html.IHtmlContent Marker(CorrelationTile t) => Html.Raw(t.Marker is { } m
+        ? m.Name + (m.Value.Length == 0 ? "" : "=\"" + System.Net.WebUtility.HtmlEncode(m.Value) + "\"") : "");
+    string ToneOf(CorrelationTile t) => t.Zero ? "zero" : t.Tone.Css();
+}
+<partial name="_Header" model="Model" />
+@if (r is not null && Model.CorrelatedAt is not null)
+{
+    <section class="card" aria-labelledby="h-cq" data-correlation-summary data-assets="@r.Assets">
+        <h2 id="h-cq">This collection: @CorrelationGroups.Assets(r.Assets)</h2>
+        <p class="hint">Computed @Fmt.Time(Model.CorrelatedAt).</p>
+        <p class="conf-legend" data-confidence-legend>
+            <span class="badge good">@Tone.High.Glyph() @Tone.High.Word()</span>
+            <span class="badge fair">@Tone.Good.Glyph() @Tone.Good.Word()</span>
+            <span class="badge warn">@Tone.Check.Glyph() @Tone.Check.Word()</span>
+            <span class="badge bad">@Tone.Act.Glyph() @Tone.Act.Word()</span>
+            <span class="badge info">@Tone.Info.Glyph() @Tone.Info.Word()</span>
+            <span class="badge">0 = nothing to do</span>
+        </p>
+        @foreach (var grp in Model.Groups)
+        {
+            <div class="conf-group" data-group="@grp.Id">
+                <h3>@grp.Question</h3>
+                <p class="hint">@grp.Hint</p>
+                <div class="stat-row">
+                    @foreach (var t in grp.Tiles)
+                    {
+                        var on = active == t;
+                        var css = "stat conf " + ToneOf(t) + (on ? " is-active" : "");
+                        var label = t.Label + (t.Sub is null ? "" : " · " + t.Sub);
+                        var word = (t.Zero ? "" : t.Tone.Glyph() + " ") + (t.Zero ? "Nothing to do" : t.Tone.Word());
+                        if (t.Filter is { } f)
+                        {
+                            <a class="@css" href="@Model.Drill(f)" data-tile="@t.Id" data-tone="@ToneOf(t)" aria-current="@(on ? "true" : null)" @Marker(t)><div class="n">@(t.Value ?? Fmt.Int(t.Count))</div><div class="l">@label</div><div class="tone">@word</div></a>
+                        }
+                        else
+                        {
+                            <div class="@css" data-tile="@t.Id" data-tone="@ToneOf(t)"><div class="n" @Marker(t)>@(t.Value ?? Fmt.Int(t.Count))</div><div class="l">@label</div><div class="tone">@word</div></div>
+                        }
+                    }
+                    @if (grp.Id == "cmdb")
+                    {
+                        <div class="stat conf zero" data-cmdb-only><div class="n">not measured</div><div class="l">in the CMDB only</div></div>
+                    }
+                </div>
+                @if (grp.Id == "cmdb" && r.Cmdb is { } cm)
+                {
+                    <p class="hint">@CmdbMatch.CmdbOnlyReason@(cm.Sources.Count > 0 ? " CMDB: " + string.Join(", ", cm.Sources.Select(s => s == "servicenow" ? "ServiceNow" : s == "generic-csv" ? "CMDB file" : s)) + "." : "")</p>
+                }
+                @if (grp.Todo.Count > 0)
+                {
+                    <div class="conf-todo" data-todo="@grp.Id"><strong>What to do</strong>
+                        <ul>@foreach (var line in grp.Todo) { <li>@line</li> }</ul>
+                        @if (grp.Id == "cmdb") { <a href="/Cmdb">Open the CMDB page</a> }
+                    </div>
+                }
+            </div>
+        }
+        @if (r.Cmdb is null)
+        {
+            <h3>Against the CMDB</h3>
+            <p class="hint" data-no-cmdb>No CMDB or ServiceNow answered for this collection.</p>
+        }
+    </section>
+}
+@if (Model.Grid is not null)
+{
+    @* a figure's assets come straight under the figures, and every figure links to this anchor: a click always lands on its list *@
+    <section class="card drill@(Model.Drilled ? " is-drilled" : "")" id="@CorrelationModel.DrillAnchor" aria-labelledby="h-drill"
+             data-drill="@(active?.Id ?? (Model.Drilled ? "filter" : "all"))" data-drill-total="@Model.Grid.Total" data-drill-tone="@(active is null ? null : active.Tone.Css())">
+        <div class="split">
+            <h2 id="h-drill">@Model.DrillHeading</h2>
+            @if (Model.Drilled) { <a class="button secondary small" href="@Model.Overview" data-clear-drill>Clear filter</a> }
+        </div>
+        @if (Model.Drilled && Model.Grid.Total == 0)
+        {
+            <p class="notice ok" data-drill-empty>None: no asset in this collection matches.</p>
+        }
+        else if (!Model.Drilled)
+        {
+            <p class="hint">Click a figure above to list only its assets.</p>
+        }
+        else
+        {
+            <p class="hint">Each asset's confidence is the coloured chip in the Confidence column. Back (or Clear filter) returns to the overview.</p>
+        }
+    </section>
+    <partial name="_Grid" model="Model" />
+}
+@if (Model.Trend.Count > 0)
+{
+    <section class="card" aria-labelledby="h-ct" data-correlation-trend="@Model.Trend.Count">
+        <h2 id="h-ct">Over time</h2>
+        @if (Model.TrendChart is not null) { <partial name="_Chart" model="Model.TrendChart" /> }
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th scope="col">Collection</th><th scope="col" class="num">Assets</th><th scope="col" class="num">2+ systems</th><th scope="col" class="num">Weak</th><th scope="col" class="num">Conflicts</th><th scope="col" class="num">Id changes</th><th scope="col" class="num">CMDB match rate</th></tr></thead>
+                <tbody>
+                    @foreach (var p in Model.Trend)
+                    {
+                        <tr data-trend="@p.CollectionId"><td><a href="/Collection/Correlation?c=@Uri.EscapeDataString(p.CollectionId)">@Fmt.Time(p.CollectionTime)</a></td><td class="num">@Fmt.Int(p.Assets)</td><td class="num">@Fmt.Pct(p.MultiSourceShare, 1)</td><td class="num">@Fmt.Pct(p.WeakShare, 1)</td><td class="num">@Fmt.Int(p.Conflicts)</td><td class="num">@Fmt.Int(p.IdChanges)</td><td class="num">@(p.MatchRate is { } m ? Fmt.Pct(m, 1) : "")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+<partial name="_Queries" model="Model" />

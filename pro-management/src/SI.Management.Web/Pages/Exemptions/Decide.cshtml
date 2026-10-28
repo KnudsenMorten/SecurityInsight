@@ -1,0 +1,62 @@
+@page
+@model SI.Management.Web.Pages.Exemptions.DecideModel
+@using SI.Management.Web.Exemptions
+@{
+    ViewData["Title"] = "Exemption request";
+    var r = Model.Req;
+}
+<h1>Exemption request @(r is null ? "" : "#" + r.RequestId)</h1>
+<p><a href="/Exemptions">&larr; All exemptions</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (r is not null)
+{
+    <section class="card" aria-labelledby="h-r">
+        <h2 id="h-r">@r.ItemCount finding(s) in @r.ScopeLabel <span class="badge @(r.State == "approved" ? "good" : r.State == "rejected" ? "bad" : "warn")" data-state="@r.State">@r.State</span></h2>
+        <dl class="kv">
+            <dt>Requested by</dt><dd>@r.RequestedBy, @Fmt.Time(r.RequestedAt)</dd>
+            <dt>Reason</dt><dd>@r.Reason</dd>
+            <dt>Period</dt><dd>@ExemptionPeriods.Describe(r.ExpiresAt)</dd>
+            <dt>Asked of</dt><dd data-asked>@(r.Approver ?? (Model.Asked.Count > 0 ? string.Join(", ", Model.Asked) : "no owner is set -- an Admin decides"))</dd>
+            @if (r.Routing is not null)
+            {
+                @* #391: requested on a department's own page -- recorded on the request for the audit *@
+                <dt>Routed to</dt><dd data-routing="@r.Routing">@ExemptionRouting.Describe(r.Routing, Model.AskedOf?.Department ?? (r.DepartmentId is { } did ? "department " + did : null))</dd>
+            }
+            @if (Model.AlsoDecide.Count > 0) { <dt>May also decide</dt><dd>@string.Join(", ", Model.AlsoDecide)</dd> }
+            @if (r.DecidedBy is not null) { <dt>Decided by</dt><dd>@r.DecidedBy, @Fmt.Time(r.DecidedAt)</dd> }
+            @if (r.DecisionComment is not null) { <dt>Comment</dt><dd>@r.DecisionComment</dd> }
+        </dl>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>#</th><th>What</th><th>Finding</th><th>Exemption</th></tr></thead>
+                <tbody>
+                    @{ var n = 0; }
+                    @foreach (var i in Model.Items)
+                    {
+                        n++;
+                        <tr><td>@Fmt.Int(n)</td><td class="wrap">@i.Describe()</td><td class="wrap">@i.Title</td><td>@(i.ExemptionId?.ToString() ?? "")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    @if (Model.MayDecide)
+    {
+        <section class="card" aria-labelledby="h-d">
+            <h2 id="h-d">Decide</h2>
+            <form method="post" class="stack" data-decide>
+                <input type="hidden" name="id" value="@r.RequestId" />
+                <div><label for="d-comment">Comment (required to reject; the requester gets it)</label><input id="d-comment" type="text" name="Comment" maxlength="400" /></div>
+                <div class="actions">
+                    <button type="submit" asp-page-handler="Approve" data-approve>Approve</button>
+                    <button type="submit" asp-page-handler="Reject" class="secondary" data-reject>Reject</button>
+                </div>
+                <p class="hint">Approving writes the exemptions now, with your name; they apply from the next Risk Analysis run.</p>
+            </form>
+        </section>
+    }
+    else if (r.State == "requested")
+    {
+        <p class="hint">Waiting for a decision by @(Model.AskedOf?.Department is { } dn ? "the business approvers of " + dn + " or the owners of " + r.ScopeLabel : "the owners of " + r.ScopeLabel).</p>
+    }
+}

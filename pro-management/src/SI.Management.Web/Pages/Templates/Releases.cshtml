@@ -1,0 +1,338 @@
+@page
+@model SI.Management.Web.Pages.Templates.ReleasesModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Templates
+@{
+    ViewData["Title"] = "Template releases";
+    var isAdmin = User.IsSuperAdmin();   // template releases are the install's lifecycle: SuperAdmin (#253)
+    var d = Model.Diff;
+}
+<h1>Template releases</h1>
+<p class="lede">New versions of the detection methods and reports this install runs on: what is installed, what your update ring makes available, and exactly which rules each release changes -- before anything changes.</p>
+<details class="help">
+    <summary>How this page works</summary>
+    @if (Model.Split)
+    {
+        <p data-help-split>Templates change in three ways, and none needs an import. <strong>Fixes</strong> to SecurityInsight's own queries and logic arrive with each SecurityInsight update and are always installed. <strong>Your business logic</strong> -- tier rules, risk index, service model, asset tagging -- starts from SecurityInsight's defaults; an update never changes what you edited, and Template conformance shows when SecurityInsight's default changed under your version. <strong>Template packs</strong> -- reports and rules for new Microsoft data, such as a new attack-path type, and updates to SecurityInsight's own templates -- arrive between updates and are installed automatically once this install runs the version the pack needs, like a fix, unless you switch on Hold template packs. Your own changes are never overwritten by a pack. An installed pack can be rolled back with one click.</p>
+    }
+    <p>A <strong>template pack</strong> is a released version of the vendor's templates: mostly <strong>detection methods</strong> (the tier rules, grouped by method) and the Risk Analysis reports. Your updater brings the pack your update ring approves; it is checked against its SHA-256 and waits here. Nothing changes until it is released.</p>
+    <p>@(isAdmin ? "Choose every detection method, or only some, and stage the release. On Review & commit the release job starts with the exact fingerprint of what you reviewed; it refuses anything else, writes the templates, reads them back and only then records the release. Your own overrides are never changed -- an item you overrode reads \"upgrade available\" afterwards. Roll back works the same way, per method, to an earlier version." : "An Admin releases or rolls back a pack.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing || Model.PackTableMissing) { <div class="notice warn" role="status" data-preparing>@TemplateReleases.MissingSchemaMessage</div> }
+
+@if (!Model.SchemaMissing && Model.Error is null)
+{
+    Model.Installed.TryGetValue("TemplatePack", out var ip);
+    var inst = Model.InstalledPack;
+    var sum = Model.Summary;
+    <section class="card" aria-labelledby="h-inst">
+        <h2 id="h-inst">Installed</h2>
+        @if (Model.Split && sum is not null)
+        {
+            @* #405: what is installed per class -- nothing here asks for an import *@
+            <dl class="kv" data-split="1">
+                <dt>Fixes and defaults</dt>
+                <dd data-installed-code="@sum.CodeVersion">@if (sum.CodeVersion is null) { <text>@TemplateReleases.NoInstalledMessage</text> } else { <text>with SecurityInsight <strong>@sum.CodeVersion</strong></text>@if (sum.CodeAt is not null) { <text> -- @Fmt.Time(sum.CodeAt)</text> } }</dd>
+                <dt>Template pack</dt>
+                <dd data-installed-pack="@sum.MicrosoftPack" data-installed-how="@sum.MicrosoftHow">@if (sum.MicrosoftPack is null) { <text>none recorded yet</text> } else { <strong>@sum.MicrosoftPack</strong>@if (sum.MicrosoftHow is not null) { <text>, @sum.MicrosoftHow</text> }@if (sum.MicrosoftAt is not null) { <text> @Fmt.Time(sum.MicrosoftAt)</text> } }</dd>
+                @if (sum.DirectVersion is not null)
+                {
+                    <dt>Ring 1</dt>
+                    <dd data-installed-direct="@sum.DirectVersion">the current templates of SecurityInsight @sum.DirectVersion are installed directly on every deploy<span data-direct-at>@if (sum.DirectAt is not null) { <text> -- @Fmt.Time(sum.DirectAt)</text> }</span></dd>
+                }
+                <dt>Hold template packs</dt>
+                <dd data-hold="@(sum.Hold ? "on" : "off")">@(sum.Hold ? "On: a new template pack waits below until you install it" : "Off: new template packs are installed automatically") (<a href="/Admin/Settings/Edit?name=@TemplateReleases.HoldSettingName">change</a>)</dd>
+                @if (sum.Declined is not null) { <dt>Rolled back</dt><dd data-declined="@sum.Declined">template pack @sum.Declined is not installed automatically again; a newer pack is</dd> }
+            </dl>
+            <p class="hint">Fixes arrive with each SecurityInsight update and are always installed. Your own changes to templates are never changed by an update -- when SecurityInsight's default changes under one of them, Template conformance shows it.</p>
+        }
+        else if (inst is null)
+        {
+            <p data-installed-pack="" data-installed-status="">@TemplateReleases.NoInstalledMessage</p>
+        }
+        else
+        {
+            <p data-installed-pack="@inst.Version" data-installed-status="@(inst.Customised ? "customised" : "as-released")">Installed: <strong>@inst.Describe</strong>@if (ip is not null) { <text> -- @Fmt.Time(ip.UpdatedAt), @ip.UpdatedBy</text> }</p>
+            @if (inst.Customised) { <p class="hint">Template conformance compares your templates with @inst.Name; releasing @inst.Version (or a newer pack) from the list below brings them back to a released version.</p> }
+        }
+        <p class="hint">Template fingerprint: <code>@ReleasesModel.Short(Model.Installed.TryGetValue("TemplateFingerprint", out var fpr) ? fpr.Value : null)</code>@if (fpr is not null) { <text> (@fpr.Version, @Fmt.Time(fpr.UpdatedAt))</text> }</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-avail">
+        <h2 id="h-avail">@(Model.Split ? "Template packs" : "Available")</h2>
+        @if (Model.Split)
+        {
+            @* #405: every pack the updater staged, and where it stands -- installed automatically, held (Install), waiting for code *@
+            var waiting = Model.Staged.Where(s => Model.PackStates[s.PackVersion].State is TemplatePackState.Held or TemplatePackState.Waiting).ToList();
+            if (waiting.Count == 0) { <p class="hint" data-nothing-waiting>No template pack is waiting -- new packs are installed automatically when your update ring approves them.</p> }
+            if (Model.Staged.Count > 0)
+            {
+                <div class="table-wrap">
+                    <table data-staged data-sortable>
+                        <thead><tr><th>Pack</th><th>Name</th><th>Status</th><th>Needs SecurityInsight</th><th>Ring</th><th>Items</th><th>Staged</th></tr></thead>
+                        <tbody>
+                            @foreach (var s in Model.Staged)
+                            {
+                                var st = Model.PackStates[s.PackVersion];
+                                <tr data-pack="@s.PackVersion" data-pack-state="@st.State">
+                                    <td class="mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(s.PackVersion)">@s.PackVersion</a>@if (s.PackVersion == Model.Pack) { <span class="badge">shown</span> }</td>
+                                    <td>@s.DisplayName</td>
+                                    <td><span class="badge @(st.State switch { TemplatePackState.Installed => "good", TemplatePackState.Held or TemplatePackState.Waiting => "warn", _ => "" })">@st.Text</span></td>
+                                    <td class="mono">@s.MinCodeVersion</td>
+                                    <td>@s.Ring</td>
+                                    <td>@Fmt.Int(s.ItemCount)</td>
+                                    <td>@Fmt.Time(s.StagedAt)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+        else if (Model.Staged.Count == 0)
+        {
+            <p class="hint" data-no-pack>@TemplateReleases.NoPackMessage</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-staged data-sortable>
+                    <thead><tr><th>Pack</th><th>Name</th><th>From</th><th>Ring</th><th>Items</th><th>Full</th><th>Staged</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in Model.Staged)
+                        {
+                            <tr data-pack="@s.PackVersion">
+                                <td class="mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(s.PackVersion)">@s.PackVersion</a>@if (s.PackVersion == Model.Pack) { <span class="badge">shown</span> }@if (s.PackVersion == Model.InstalledPack?.Version) { <span class="badge good">installed</span> }</td>
+                                <td>@s.DisplayName</td>
+                                <td>@(s.Origin == "feed" ? "update ring" : s.Origin == "shipped" ? "shipped with the code" : s.Origin)</td>
+                                <td>@s.Ring</td>
+                                <td>@Fmt.Int(s.ItemCount)</td>
+                                <td>@(s.IsFull ? "every kind" : "partial")</td>
+                                <td>@Fmt.Time(s.StagedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (Model.PackError is not null) { <div class="notice error" role="alert" data-pack-error>@Model.PackError</div> }
+    </section>
+}
+
+@if (d is not null && Model.Selected is not null && Model.Split)
+{
+    @* #405: one pack, read-only -- what it changes per detection method; Install only for a pack that waits for it *@
+    var p = Model.Selected; var st = Model.SelectedState;
+    <section class="card" aria-labelledby="h-pack">
+        <h2 id="h-pack">@(string.IsNullOrWhiteSpace(p.Name) ? "Template pack " + p.PackVersion : p.Name) <span class="badge good">SHA-256 verified</span></h2>
+        <p class="hint">Built by SecurityInsight @p.CodeVersion@(p.MinCodeVersion is null ? "" : " · needs SecurityInsight " + p.MinCodeVersion) · @Fmt.Int(p.Items.Count) item(s)@(st is null ? "" : " · " + st.Text)</p>
+        <div class="table-wrap">
+            <table data-methods data-sortable>
+                <thead><tr><th>Detection method</th><th>New</th><th>Changed</th><th>Retired</th><th>Your overrides affected</th></tr></thead>
+                <tbody>
+                    @foreach (var m in d.Methods.Where(m => m.HasChanges))
+                    {
+                        <tr data-method="@m.Id">
+                            <td class="wrap mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(p.PackVersion)&method=@Uri.EscapeDataString(m.Id)">@m.Id</a></td>
+                            <td>@Fmt.Int(m.Added)</td><td>@Fmt.Int(m.Changed)</td><td>@Fmt.Int(m.Retired)</td><td>@Fmt.Int(m.Affected)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (!d.Methods.Any(m => m.HasChanges)) { <p class="hint">Nothing in it changes what the templates in force do.</p> }
+        @if (isAdmin && st is { CanInstall: true } && d.Methods.Any(m => m.HasChanges))
+        {
+            <form method="post" asp-page-handler="Release" data-confirm-title="Install template pack" data-confirm="This stages the install. On Review & commit the release job installs exactly what is listed here, verifies it and records it.">
+                <input type="hidden" name="pack" value="@p.PackVersion" />
+                <input type="hidden" name="reason" value="@("Install " + (p.Name ?? p.PackVersion))" />
+                <div class="actions"><button type="submit" name="scope" value="all" data-install-pack="@p.PackVersion">Install</button></div>
+            </form>
+        }
+    </section>
+}
+else if (d is not null && Model.Selected is not null)
+{
+    var p = Model.Selected;
+    <section class="card" aria-labelledby="h-pack">
+        <h2 id="h-pack">@if (string.IsNullOrWhiteSpace(p.Name)) { <text>Template pack <span class="mono">@p.PackVersion</span></text> } else { @p.Name } <span class="badge good">SHA-256 verified</span></h2>
+        <p class="hint">Built by SecurityInsight @p.CodeVersion@(p.Commit is { Length: > 0 } ? " (" + p.Commit + ")" : "") · @Fmt.Int(p.Items.Count) item(s) · @(p.Scope.Full ? "every template kind" : "partial: " + string.Join(", ", p.Scope.Methods.Count > 0 ? p.Scope.Methods : p.Scope.Kinds)) · SHA-256 <code>@ReleasesModel.Short(p.Sha256)</code></p>
+        <form method="post" asp-page-handler="Release" data-confirm-title="Stage a template release" data-confirm="This only stages the release. On Review & commit the release job starts with the fingerprint of exactly what you selected.">
+            <input type="hidden" name="pack" value="@p.PackVersion" />
+            <div class="table-wrap">
+                <table data-methods data-sortable>
+                    <thead><tr>@if (isAdmin) { <th data-sort="off"><span class="sr-only">Select</span></th> }<th>Detection method</th><th>New</th><th>Changed</th><th>Retired</th><th>Unchanged</th><th>Your overrides affected</th></tr></thead>
+                    <tbody>
+                        @foreach (var g in ReleasesModel.ByEngine(d))
+                        {
+                            <tr class="group"><th colspan="@(isAdmin ? 7 : 6)" scope="rowgroup">@g.Key</th></tr>
+                            @foreach (var m in g)
+                            {
+                                <tr data-method="@m.Id" data-changes="@(m.HasChanges ? "1" : "0")">
+                                    @if (isAdmin) { <td><input type="checkbox" name="Methods" value="@m.Id" checked="@m.HasChanges" aria-label="Select @m.Id" /></td> }
+                                    <td class="wrap mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(p.PackVersion)&method=@Uri.EscapeDataString(m.Id)">@m.Method</a></td>
+                                    <td>@(m.Added > 0 ? Fmt.Int(m.Added) : "")</td>
+                                    <td>@(m.Changed > 0 ? Fmt.Int(m.Changed) : "")</td>
+                                    <td>@(m.Retired > 0 ? Fmt.Int(m.Retired) : "")</td>
+                                    <td class="muted">@m.Unchanged</td>
+                                    <td>@if (m.Affected > 0) { <span class="badge warn" data-affected="@m.Affected">@m.Affected upgrade available after release</span> }</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (isAdmin)
+            {
+                <div class="filters">
+                    <div class="wide"><label for="r-reason">Reason</label><input id="r-reason" type="text" name="reason" maxlength="400" placeholder="why" /></div>
+                    <div class="actions">
+                        <button type="submit" name="scope" value="all" data-release-all>Release all</button>
+                        <button type="submit" name="scope" value="selected" class="secondary" data-release-selected>Release selected</button>
+                    </div>
+                </div>
+                @if (!Model.JobsConfigured) { <p class="hint">The jobs view is not configured for this installation, so the release job cannot be started from here.</p> }
+            }
+        </form>
+    </section>
+}
+
+@if (Model.Method is not null && Model.Expanded.Count > 0)
+{
+    <section class="card" aria-labelledby="h-method">
+        <h2 id="h-method">Rules of <span class="mono">@Model.Method</span></h2>
+        <div class="table-wrap">
+            <table data-rules data-sortable>
+                <thead><tr><th>Rule / item</th><th>Change</th><th>Your version</th></tr></thead>
+                <tbody>
+                    @foreach (var i in Model.Expanded)
+                    {
+                        <tr data-item="@i.Name">
+                            <td class="wrap mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(Model.Pack ?? "")@(Model.Rollback is null ? "" : "&rollback=" + Uri.EscapeDataString(Model.Rollback))&method=@Uri.EscapeDataString(Model.Method)&item=@Uri.EscapeDataString(i.Name)">@i.Name</a></td>
+                            <td><span class="badge @ReleasesModel.Badge(i.Change)">@i.Change</span></td>
+                            <td>@if (i.Override is { Length: > 0 }) { <span class="badge @(i.Affected ? "warn" : "")">@i.Override</span> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+
+@if (Model.ItemDiffOf is { } item)
+{
+    <section class="card" aria-labelledby="h-item">
+        <h2 id="h-item"><span class="mono">@item.Name</span> <span class="badge @ReleasesModel.Badge(item.Change)">@item.Change</span></h2>
+        @if (item.Affected) { <p class="notice warn">You @(item.Override == "disable" ? "switched this item off" : "override this item"). Your version stays; after the release it reads "upgrade available" on Template conformance.</p> }
+        @if (Model.ItemChanges.Count == 0) { <p class="hint">Nothing that changes what the item does.</p> }
+        else { <partial name="_ContentChanges" model="Model.ItemChanges" /> }
+    </section>
+}
+
+@if (!Model.SchemaMissing && Model.Error is null)
+{
+    <section class="card" aria-labelledby="h-job">
+        <h2 id="h-job">Release job <span class="mono">@Model.JobName</span></h2>
+        @if (Model.JobMissing) { <p class="notice warn" role="status" data-job-missing>@TemplateReleases.JobMissingMessage</p> }
+        else if (Model.JobError is not null) { <p class="notice warn">@Model.JobError</p> }
+        else if (Model.Executions.Count == 0) { <p class="hint">No run yet.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-executions data-sortable>
+                    <thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Ended</th></tr></thead>
+                    <tbody>@foreach (var e in Model.Executions) { <tr><td class="mono">@e.Name</td><td><span class="badge @(e.Status == "Succeeded" ? "good" : e.Status == "Failed" ? "bad" : "warn")">@e.Status</span></td><td>@Fmt.Time(e.StartTime)</td><td>@Fmt.Time(e.EndTime)</td></tr> }</tbody>
+                </table>
+            </div>
+            @if (Model.Executions.Any(e => e.Status is "Running" or "Processing")) { <p class="hint">The job is running -- this page refreshes every 15 seconds.</p> }
+        }
+    </section>
+
+    @if (Model.Split)
+    {
+        @* #405: one click -- the Microsoft content back to the previous version; fixes and your business logic are not touched *@
+        <section class="card" aria-labelledby="h-rb">
+            <h2 id="h-rb">Roll back Microsoft content</h2>
+            @if (Model.PreviousMicrosoft is null || Model.Summary?.MicrosoftPack is null) { <p class="hint" data-no-rollback>No earlier Microsoft content is kept yet.</p> }
+            else
+            {
+                <p>Microsoft content @Model.Summary.MicrosoftPack is installed. Rolling back puts the Microsoft content of @Model.PreviousMicrosoft back in force; @Model.Summary.MicrosoftPack is then not installed automatically again (a newer pack is). Fixes and your own changes are not touched.</p>
+                @if (isAdmin)
+                {
+                    <form method="post" asp-page-handler="RollbackMicrosoft" data-confirm-title="Roll back Microsoft content" data-confirm="This stages the roll back. On Review & commit the release job puts the previous Microsoft content back, verifies it and records it.">
+                        <input type="hidden" name="rollback" value="@Model.PreviousMicrosoft" />
+                        <input type="hidden" name="reason" value="@("Roll back Microsoft content " + Model.Summary.MicrosoftPack + " to " + Model.PreviousMicrosoft)" />
+                        <div class="actions"><button type="submit" class="secondary" data-rollback-microsoft="@Model.PreviousMicrosoft">Roll back to @Model.PreviousMicrosoft</button></div>
+                    </form>
+                }
+            }
+        </section>
+    }
+    else
+    {
+    <section class="card" aria-labelledby="h-rb">
+        <h2 id="h-rb">Roll back</h2>
+        @if (Model.RollbackVersions.Count == 0) { <p class="hint">No earlier template version is kept yet.</p> }
+        else
+        {
+            <form method="get" class="filters">
+                <input type="hidden" name="pack" value="@Model.Pack" />
+                <div><label for="rb-v">Back to version</label><select id="rb-v" name="rollback">@foreach (var v in Model.RollbackVersions) { <option selected="@(v == Model.Rollback)">@v</option> }</select></div>
+                <div class="actions"><button type="submit" class="secondary">Show what changes</button></div>
+            </form>
+        }
+        @if (Model.RollbackDiff is { } rd)
+        {
+            <form method="post" asp-page-handler="Rollback" data-confirm-title="Stage a roll back" data-confirm="This only stages the roll back. On Review & commit the release job starts with the fingerprint of exactly what you selected.">
+                <input type="hidden" name="rollback" value="@Model.Rollback" />
+                <input type="hidden" name="pack" value="@Model.Pack" />
+                <div class="table-wrap">
+                    <table data-rollback data-sortable>
+                        <thead><tr>@if (isAdmin) { <th data-sort="off"><span class="sr-only">Select</span></th> }<th>Detection method</th><th>Comes back</th><th>Changes back</th><th>Retired</th><th>Your overrides affected</th></tr></thead>
+                        <tbody>
+                            @foreach (var m in rd.Methods.Where(m => m.HasChanges))
+                            {
+                                <tr data-rollback-method="@m.Id">
+                                    @if (isAdmin) { <td><input type="checkbox" name="Methods" value="@m.Id" aria-label="Roll back @m.Id" /></td> }
+                                    <td class="wrap mono"><a href="/Templates/Releases?pack=@Uri.EscapeDataString(Model.Pack ?? "")&rollback=@Uri.EscapeDataString(Model.Rollback ?? "")&method=@Uri.EscapeDataString(m.Id)">@m.Id</a></td>
+                                    <td>@Fmt.Int(m.Added)</td><td>@Fmt.Int(m.Changed)</td><td>@Fmt.Int(m.Retired)</td><td>@(m.Affected > 0 ? Fmt.Int(m.Affected) : "")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (!rd.Methods.Any(m => m.HasChanges)) { <p class="hint">The templates in force already are version @Model.Rollback.</p> }
+                else if (isAdmin) { <div class="actions"><button type="submit" name="scope" value="selected" data-rollback-selected>Roll back selected</button></div> }
+            </form>
+        }
+    </section>
+    }
+
+    <section class="card" aria-labelledby="h-hist">
+        <h2 id="h-hist">History</h2>
+        @if (Model.History.Count == 0) { <p class="hint">No template release yet.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-history data-sortable>
+                    <thead><tr><th>When</th><th>What</th><th>Pack</th><th>Methods</th><th>By</th><th>Reason</th></tr></thead>
+                    <tbody>
+                        @foreach (var h in Model.History)
+                        {
+                            <tr data-history-kind="@h.Kind">
+                                <td>@Fmt.Time(h.ChangedAt)</td>
+                                <td>@h.What</td>
+                                <td class="mono">@(h.Pack ?? h.NewValue)</td>
+                                <td class="wrap">@h.Methods</td>
+                                <td class="wrap">@h.ChangedBy</td>
+                                <td class="wrap">@h.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }
+    </section>
+}

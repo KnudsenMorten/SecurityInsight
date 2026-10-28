@@ -1,0 +1,210 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    SecurityInsight v2.2 -- Internal-flavour customer override template.
+
+.DESCRIPTION
+    Internal customers use Connect-Platform (PlatformConfiguration repo) which
+    auto-populates SPN cert, SMTP server/port/from, and Az subscription discovery
+    from KV + platform-defaults.ps1 BEFORE this file loads. Result: a typical
+    Internal customer file is short (~60 lines of active settings) -- mostly
+    workspace IDs, recipient lists, engine knobs, and KV pulls.
+
+    Copy this file to `SecurityInsight.custom.ps1` (gitignored) and edit the
+    values marked with <...> placeholders. Leave the rest as-is or delete the
+    sections you don't use.
+
+    Layer precedence (closer wins):
+      1. launcher/_lib/SecurityInsight.shared-defaults.ps1   (solution baseline)
+      2. launcher/<engine>/LauncherConfig.defaults.ps1       (engine baseline)
+      3. config/SecurityInsight.custom.ps1  -- THIS FILE     (customer-wide)
+      4. launcher/<engine>/LauncherConfig.custom.ps1         (per-engine, wins)
+
+    For the full list of every supported global (cadence, EG label overrides,
+    Shodan tuning, AI prompt overrides, schema-discovery, etc.), see
+    `SecurityInsight.custom.reference.ps1` in this folder.
+
+    Community customers (no Connect-Platform): start from
+    `SecurityInsight.custom.community.sample.ps1` instead.
+
+.NOTES
+    Flavour : Internal (Connect-Platform / platform-defaults inherited)
+    Layer   : 3 (solution-wide customer overrides)
+    Author  : Morten Knudsen, Microsoft MVP
+#>
+
+# ============================================================================
+# 1. AUTH  (SPN + Cert via Connect-Platform / HighPriv_* globals)
+# ============================================================================
+$global:SpnTenantId              = $global:AzureTenantId
+$global:SpnClientId              = $global:HighPriv_Modern_ApplicationID_Azure
+$global:SpnCertificateThumbprint = $global:HighPriv_Modern_CertificateThumbprint_Azure
+$global:SI_RebuildAuthBlock      = $true   # re-pull from KV on every run
+$global:AutomationFramework      = $true   # use long-name HighPriv_* globals
+
+# ============================================================================
+# 2. WORKSPACE + STORAGE
+# ============================================================================
+$global:SI_WorkspaceResourceId = '/subscriptions/<sub-id>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<workspace-name>'
+$global:SI_WorkspaceName       = '<workspace-name>'
+$global:SI_DceName             = 'dce-securityinsight'
+# DCE and DCR live in the SAME resource group as the workspace by default
+# (engine derives via Az lookup; explicit override only needed when you split
+# resources across multiple RGs, which is unusual). Don't set these unless
+# you've intentionally placed the DCE/DCR in a different RG -- a stale value
+# here makes the engine print a wrong "ingest -> DCR (rg=...)" line.
+# $global:SI_DceResourceGroup  = '<rg>'
+# $global:SI_DcrResourceGroup  = '<rg>'
+$global:SI_StorageAccount      = '<storage-account-name>'
+$global:SI_Location            = '<azure-region>'              # REQUIRED. Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth
+# $global:SI_TableNamePattern  = 'SI_{0}_Profile'              # engine default
+# $global:SI_DcrNamePattern    = 'dcr-si-{0}-profile'          # engine default
+
+# ============================================================================
+# 3. OUTPUT SINKS
+# ============================================================================
+$global:SI_Sinks_Endpoint  = @('LA','JSON','Excel')
+$global:SI_Sinks_Identity  = @('LA','JSON','Excel')
+$global:SI_Sinks_Azure     = @('LA','JSON','Excel')
+$global:SI_Sinks_PublicIp  = @('LA','JSON','Excel')
+$global:SendToLogAnalytics = $false   # optional copy of the Risk Analysis report rows to Log Analytics (SI_RiskAnalysis_Detailed_CL) -- off by default; SecurityInsight reads its database
+# $global:ExportDestination  = 'https://<storage-account-name>.blob.core.windows.net/securityinsight/'   # optional: also copy the RA workbooks to blob storage
+
+# ============================================================================
+# 4. PER-ENGINE KNOBS
+# ============================================================================
+$global:SI_AssetLimit_Endpoint   = 0
+$global:SI_AssetLimit_Identity   = 0
+$global:SI_AssetLimit_Azure      = 0
+$global:SI_AssetLimit_PublicIp   = 0
+$global:SI_ForceFullRun_Endpoint = $false
+$global:SI_ForceFullRun_Identity = $false
+$global:SI_ForceFullRun_Azure    = $false
+$global:SI_ForceFullRun_PublicIp = $false
+$global:SI_AzureSubscriptionExcludePatterns = @('*Azure for Students*','*Visual Studio*')
+
+# ============================================================================
+# 5. RA MAIL RECIPIENTS  (Server/Port/From inherited from platform-defaults.ps1)
+# ============================================================================
+$global:RiskAnalysis_Detailed_SendMail = $true
+$global:RiskAnalysis_Detailed_To       = @('<recipient-1@example.com>','<recipient-2@example.com>')
+$global:RiskAnalysis_Summary_SendMail  = $true
+$global:RiskAnalysis_Summary_To        = @('<recipient-1@example.com>','<recipient-2@example.com>')
+
+# ============================================================================
+# 6. RISK ANALYSIS
+# ============================================================================
+$global:RiskAnalysis_Summary_Override  = $true
+$global:RiskAnalysis_Detailed_Override = $false
+$global:AutoBucketCount                = $true
+$global:AutoBucketMax                  = 131072   # the engine default; lower it only to cap a small estate
+$global:AutoBucketCache                = $true
+$global:OverwriteXlsx                  = $true
+
+# --- Do the Summary and Detailed reports show the SAME figures? -------------
+# The two reports count different things and always will: Summary counts distinct
+# ASSETS ("142 machines affected"), Detailed counts individual ASSET FINDINGS
+# ("those machines carry 9,410 findings between them"). Neither number is wrong --
+# they answer different questions, and no setting can make them equal. Both mails
+# carry a line under the Risk Score saying so.
+#
+#   'Consistent' (Community default) -- both mails show ONE set of figures, so
+#                             management receiving BOTH reports sees the same numbers twice.
+#   'PerReport' (Pro default) -- each mail shows its own figures; nothing is borrowed.
+#                             Right where management receives only ONE of them.
+#
+# Leave unset for the edition's default (SecurityInsight Pro: 'PerReport';
+# Community: 'Consistent', the behaviour SecurityInsight has always had).
+# $global:SI_AISummary_Mode   = 'Consistent'   # or 'PerReport'
+#
+# In 'Consistent' mode, whose figures the other report adopts. A tie-breaker, NOT a
+# claim that one report is more correct: once you ask for the two mails to agree,
+# one of them has to be copied onto the other. Default 'Summary', because "142
+# machines affected" is the sentence a board reads; set 'Detailed' if your
+# management receives the Detailed report instead.
+# 🪤 In 'Consistent' mode the follower's EMAIL HEADLINE shows the leader's figures
+# while its ATTACHED WORKBOOK still contains its own rows -- so totalling the
+# spreadsheet will not match the headline above it. That is what making the two
+# mails agree costs. Choose 'PerReport' if that is not the trade you want.
+# $global:SI_AISummary_Leader = 'Detailed'     # or 'Summary' (only with the Summary step switched on)
+
+# ============================================================================
+# 7. AZURE OPENAI  (API key pulled from KV at bottom of file)
+# ============================================================================
+$global:OpenAI_endpoint            = 'https://<aoai-account>.openai.azure.com'
+$global:OpenAI_deployment          = '<deployment-name>'
+$global:OpenAI_apiVersion          = '2025-01-01-preview'
+$global:OpenAI_MaxTokensPerRequest = 16384
+$global:BuildSummaryByAI           = $true
+
+# ============================================================================
+# 8. CMDB + ACTIVITY FRESHNESS
+# ============================================================================
+$global:SI_EnableCmdbProvider       = $true
+$global:SI_CmdbRefreshIntervalHours = 24
+$global:SI_ActiveStaleDays          = 30
+# Disabled accounts and devices (disabled in their own directory), one setting per stage -- the shipped defaults:
+# $global:SI_DisabledAssets_Collect      = $true
+# $global:SI_DisabledAssets_Correlate    = $true
+# $global:SI_DisabledAssets_RiskAnalysis = $false
+# $global:SI_DisabledAssets_StateActions = $false
+# $global:SI_DisabledAssets_Connectors   = $false
+
+# ============================================================================
+# 9. REPORT DELIVERY  (mail attachment limit)
+# ============================================================================
+# How large a report may be before it is sent WITHOUT the workbook attached.
+#
+# This is the MESSAGE budget measured base64-ENCODED, not the file size on disk.
+# Attachments inflate about 37% on the wire, so the shipped default of 24 MB
+# admits a workbook of roughly 17 MB on disk.
+#
+# The default is sized for the RELAY, not for the report. Most relays cap a
+# message at 25 MB (Exchange Online's default; on-premises is often lower), and
+# that cap covers the whole message -- body and headers too, not only the
+# attachment. 24 leaves roughly 1.7 MB of headroom under a 25 MB relay.
+#
+# LOWERING THIS IS ALWAYS SAFE. Raising it is only safe if you know your relay
+# accepts more: a budget above the relay's limit means the relay rejects the
+# ENTIRE message, so the recipient loses the summary as well as the workbook.
+# Below the budget the report is simply sent without the attachment, and the
+# mail says where the workbook is.
+#
+# Check your relay first, e.g. Exchange Online:  Get-TransportConfig | fl MaxSendSize
+#
+# $global:SI_MaxMailAttachmentMB = 24
+
+# ============================================================================
+# 10. CONTAINER APP JOB BOOTSTRAP  (uncomment when running Bootstrap-ContainerAppJob.ps1)
+# ============================================================================
+# $global:SI_Bootstrap_ResourceGroupName       = 'rg-securityinsight'
+# $global:SI_Bootstrap_Location                = '<azure-region>'    # REQUIRED. Match $global:SI_Location above.
+# $global:SI_Bootstrap_AcrName                 = 'acrsecurityinsight'
+# $global:SI_Bootstrap_EnvName                 = 'cae-securityinsight'
+# $global:SI_Bootstrap_ImageTag                = 'latest'
+# $global:SI_Bootstrap_Engines                 = @('endpoint','identity','azure','publicip','privilege-tier-classifier','risk-analysis','risk-analysis-detailed','asset-trend')   # the default (+ the Pro engines where present)
+# $global:SI_Bootstrap_ScheduleEndpoint        = '0 4 * * *'
+# $global:SI_Bootstrap_ScheduleIdentity        = '30 4 * * *'
+# $global:SI_Bootstrap_ScheduleAzure           = '0 5 * * *'
+# $global:SI_Bootstrap_ScheduleSchemaDiscovery = '0 3 * * 0'
+# $global:SI_Bootstrap_ScheduleRiskAnalysis    = '0 6 * * *'
+# $global:SI_Bootstrap_TriggerNowAfter         = $true
+# $global:SI_Bootstrap_SkipImageBuild          = $true
+# $global:SI_Bootstrap_UseManagedIdentity      = $true
+# $global:SI_Bootstrap_UseKEDA                 = $true
+# $global:SI_Bootstrap_KedaMaxReplicas         = 30
+# $global:SI_RiskAnalysis_ExportContainer      = 'sistaging'
+# $global:SI_RiskAnalysis_ExportPrefix         = 'risk-analysis'
+# $global:SI_RiskAnalysis_SendToLogAnalytics   = $true
+# $global:SI_RiskAnalysis_BuildSummaryByAI     = $true
+
+# ============================================================================
+# 11. KV PULLS  (late-binding -- runs after $global:Context is set)
+# ============================================================================
+# Optional KV pulls: Get-PlatformSecret THROWS when a secret isn't seeded, so each
+# pull is wrapped in try/catch (-ErrorAction Stop) and the miss is logged to verbose
+# only -- an absent optional key (Shodan/OpenAI off) must not break the launcher.
+# (Matches the generated custom.ps1 pattern.)
+# Storage needs no secret: it is reached with the engine identity's Storage Blob/Queue/Table Data roles.
+if (-not $global:SI_Shodan_ApiKey) { try { $global:SI_Shodan_ApiKey = Get-PlatformSecret -Context $global:Context -Name 'SI-Shodan-ApiKey' -AsPlainText -ErrorAction Stop } catch { Write-Verbose ("SI custom: SI-Shodan-ApiKey not in KV -- skipping ($($_.Exception.Message))") } }
+if (-not $global:OpenAI_apiKey)    { try { $global:OpenAI_apiKey    = Get-PlatformSecret -Context $global:Context -Name 'OpenAI-ApiKey'    -AsPlainText -ErrorAction Stop } catch { Write-Verbose ("SI custom: OpenAI-ApiKey not in KV -- skipping ($($_.Exception.Message))") } }

@@ -1,0 +1,1247 @@
+{
+  "$comment": "Field mapping for provider 'eg': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/eg.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "eg",
+  "version": "1.1.0",
+  "description": "Exposure Graph (advanced hunting ExposureGraphNodes): one record per node; the node's EntityIds carry the other providers' ids. Identity nodes follow the v2.2 rule, extended for on-prem AD (operator 2026-10-09): a node with an Entra object id is a record that enriches its Entra object; a node with no Entra id but an on-prem AD identity (a domain SID, an AD account name, AD critical groups or an admin count) is kept as an AD identity record linked by SID; any other node is dropped. SIEntityIds holds the ids the identity fetch resolved.",
+  "objects": [
+    {
+      "recordType": "device",
+      "class": "device",
+      "match": {
+        "nodeLabels": [
+          "device",
+          "computer-account"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row: NodeId, NodeLabel, NodeName, Categories, NodeProperties.rawData.*, EntityIds"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "user",
+      "class": "identity",
+      "match": {
+        "nodeLabels": [
+          "user",
+          "group"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "service_principal",
+      "class": "identity",
+      "match": {
+        "nodeLabels": [
+          "serviceprincipal",
+          "managedidentity"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "azure_resource",
+      "class": "cloud_resource",
+      "match": {
+        "nodeLabelPrefix": "microsoft.",
+        "exceptLabels": [
+          "microsoft.network/publicipaddresses"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "public_ip",
+      "class": "public_ip",
+      "match": {
+        "nodeLabels": [
+          "microsoft.network/publicipaddresses",
+          "ip"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "finding",
+      "class": "finding",
+      "parts": {
+        "node": "ExposureGraphNodes | where NodeLabel startswith cve -- the vulnerability node (NodeName = the CVE, NodeProperties.rawData.*)"
+      },
+      "key": "node.NodeName",
+      "timestamp": "$collection_time",
+      "note": "#560 the generic SI finding fields of an Exposure Graph vulnerability node. The rawData paths Device_Missing_CVEs_* reads are in the repo; the CPE / product paths are to be confirmed (verify)."
+    }
+  ],
+  "mappings": [
+    {
+      "field": "eg_node_id",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.NodeId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "device",
+        "user",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountDisplayName",
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "note": "#690 (16) a service principal or managed identity node's NodeName is its object id; its name is rawData.accountDisplayName (the object id only when the graph gives no name)."
+    },
+    {
+      "field": "mde_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.EntityIds"
+      ],
+      "normalize": [
+        "select:type=SenseDeviceId|DeviceInventoryId:id",
+        "first",
+        "lower"
+      ]
+    },
+    {
+      "field": "entra_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.EntityIds"
+      ],
+      "normalize": [
+        "select:type=AadDeviceId:id",
+        "lower"
+      ]
+    },
+    {
+      "field": "azure_resource_id",
+      "recordTypes": [
+        "device",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.EntityIds"
+      ],
+      "normalize": [
+        "select:type=AzureResourceId:id",
+        "lower"
+      ]
+    },
+    {
+      "field": "entra_object_id",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "node.SIEntityIds",
+        "node.EntityIds"
+      ],
+      "normalize": [
+        "select:type=AadObjectId:id",
+        "lower"
+      ]
+    },
+    {
+      "field": "ad_sid",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "node.SIEntityIds",
+        "node.EntityIds",
+        "node.NodeProperties.rawData.machineSid"
+      ],
+      "normalize": [
+        "select:type=SecurityIdentifier:id",
+        "upper"
+      ]
+    },
+    {
+      "field": "ad_object_guid",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "node.SIEntityIds",
+        "node.EntityIds"
+      ],
+      "normalize": [
+        "select:type=ActiveDirectoryObjectGuid:id",
+        "lower"
+      ]
+    },
+    {
+      "field": "si_os_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.osPlatform",
+        "node.NodeProperties.rawData.osDistribution"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.osPlatform"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ]
+    },
+    {
+      "field": "si_os_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.osVersion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.deviceType"
+      ],
+      "normalize": [
+        "enum:device_type"
+      ]
+    },
+    {
+      "field": "si_azure_resource_type",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeLabel"
+      ],
+      "normalize": [
+        "lower",
+        "require_contains:/",
+        "regex_extract:(microsoft\\.[a-z0-9]+/[a-z0-9/]+)"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_device_category",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.deviceCategory"
+      ],
+      "normalize": [
+        "enum:device_category"
+      ]
+    },
+    {
+      "field": "si_device_subtype",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.deviceSubtype"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.deviceRole[*]"
+      ],
+      "normalize": [
+        "enum:eg_device_roles"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isDomainController"
+      ],
+      "normalize": [
+        "if_true:domain_controller"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isExchangeServerDnsName",
+        "node.NodeProperties.rawData.isTaggedAsExchangeServer"
+      ],
+      "normalize": [
+        "if_true:exchange"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isAdfsServer"
+      ],
+      "normalize": [
+        "if_true:adfs"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_join_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.azureADJoinType"
+      ],
+      "normalize": [
+        "enum:join_type"
+      ]
+    },
+    {
+      "field": "si_onboarding_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.onboardingStatus"
+      ],
+      "normalize": [
+        "enum:onboarding"
+      ]
+    },
+    {
+      "field": "si_sensor_health",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.sensorHealthState"
+      ],
+      "normalize": [
+        "enum:health"
+      ]
+    },
+    {
+      "field": "si_machine_risk",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.machineRiskState"
+      ],
+      "normalize": [
+        "enum:level"
+      ]
+    },
+    {
+      "field": "si_machine_groups",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.machineGroup"
+      ],
+      "normalize": [
+        "to_list"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.deviceManualTags[*]",
+        "node.NodeProperties.rawData.deviceDynamicTags[*]"
+      ],
+      "normalize": [
+        "tags:eg"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_serial_number",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.serialNumber"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_tpm_enabled",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.tpmData.enabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_smb1_enabled",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.remoteServicesInfo.smb.enableSmb1Protocol"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_rdp_enabled",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.remoteServicesInfo.rdp.allowConnections"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_rdp_nla_required",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.remoteServicesInfo.rdp.nlaRequired"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_is_customer_facing",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isCustomerFacing"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_internet_exposed",
+      "recordTypes": [
+        "device",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.exposedToInternet.type",
+        "node.NodeProperties.rawData.hasInternetExposureSignal"
+      ],
+      "normalize": [
+        "equals:InternetExposure"
+      ],
+      "combine": "any_true"
+    },
+    {
+      "field": "si_internet_exposure_reasons",
+      "recordTypes": [
+        "device",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.exposedToInternet.reasons[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_internet_exposure_cidrs",
+      "recordTypes": [
+        "device",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.exposedToInternet.effectiveRules[*].sourceCidr"
+      ],
+      "normalize": [
+        "cidr"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_ms_criticality",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.criticalityLevel.criticalityLevel",
+        "node.NodeProperties.rawData.criticalityLevel"
+      ],
+      "normalize": [
+        "enum:ms_criticality"
+      ]
+    },
+    {
+      "field": "si_is_production",
+      "recordTypes": [
+        "device",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isProductionEnvironment"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_is_compromised_recently",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isCompromisedRecently"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_handles_sensitive_data",
+      "recordTypes": [
+        "device",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.handlesSensitiveData"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_data_classification_labels",
+      "recordTypes": [
+        "device",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.dataSensitivity.classificationLabels[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_is_external",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.externalUser"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_onprem_synced",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.onPremSyncEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_password_last_changed",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData"
+      ],
+      "normalize": [
+        "select:primaryProvider=ActiveDirectory:passwordUpdateTime",
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_mfa_registered",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isMfaRegistered"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_ad_critical_groups",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.nestedCriticalAdGroups.data[*].groupName",
+        "node.NodeProperties.rawData.nestedCriticalAdGroups[*].groupName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "note": "#690 (29): the graph writes nestedCriticalAdGroups as a DICTIONARY { type, data: [ JSON text {groupUniqueId, groupName} ] } -- [*] over it walked the dictionary's own values (its type name and the whole list), never the groups. data[*].groupName reads each group's name; the second source keeps a plain list of groups readable."
+    },
+    {
+      "field": "si_sam_account_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_ad_domain",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountDomain"
+      ],
+      "normalize": [
+        "trim",
+        "upper"
+      ]
+    },
+    {
+      "field": "si_upn",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountUpn"
+      ],
+      "normalize": [
+        "trim",
+        "lower"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "user",
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountEnabled",
+        "node.NodeProperties.rawData.isEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_admin_count",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.adminCount"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_has_leaked_credentials",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.hasLeakedCredentials",
+        "node.NodeProperties.rawData.hasAdLeakedCredentials"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "combine": "any_true"
+    },
+    {
+      "field": "si_is_sensitive_account",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isSensitive"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_identity_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeLabel"
+      ],
+      "normalize": [
+        "enum:identity_type_sp"
+      ]
+    },
+    {
+      "field": "si_identity_type",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeLabel"
+      ],
+      "normalize": [
+        "enum:identity_type_eg"
+      ],
+      "note": "The user record type holds the graph's user AND group nodes: the label says which (user | group)."
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeLabel"
+      ],
+      "normalize": [
+        "enum:identity_type_eg"
+      ],
+      "note": "An identity only the graph knows (a group; a user or application the directory read did not return) still says what it is; the classification rows turn it into the asset type."
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeLabel"
+      ],
+      "normalize": [
+        "enum:identity_type_sp"
+      ]
+    },
+    {
+      "field": "si_display_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_display_name",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.accountDisplayName",
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "note": "#690 (16) the name, not the object id NodeName carries for a service principal or managed identity."
+    },
+    {
+      "field": "si_app_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.appId"
+      ],
+      "normalize": [
+        "trim",
+        "lower"
+      ],
+      "note": "#690 (16) the application (client) id the graph carries; Entra's own value wins."
+    },
+    {
+      "field": "si_app_owner_org_id",
+      "recordTypes": [
+        "service_principal"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.appOwnerOrganizationId"
+      ],
+      "normalize": [
+        "trim",
+        "lower"
+      ],
+      "note": "#690 (16) the tenant that owns the application; Entra's own value wins."
+    },
+    {
+      "field": "si_public_network_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.publicNetworkAccess"
+      ],
+      "normalize": [
+        "enum:public_access"
+      ]
+    },
+    {
+      "field": "si_network_default_action",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.networkAcls.defaultAction",
+        "node.NodeProperties.rawData.networkRuleSet.defaultAction"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_anonymous_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.allowBlobPublicAccess",
+        "node.NodeProperties.rawData.anonymousPullEnabled",
+        "node.NodeProperties.rawData.allowsPublicAccess"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "combine": "any_true"
+    },
+    {
+      "field": "si_local_auth_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.allowSharedKeyAccess",
+        "node.NodeProperties.rawData.adminUserEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "combine": "any_true"
+    },
+    {
+      "field": "si_min_tls_version",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.minimumTlsVersion",
+        "node.NodeProperties.rawData.minimalTlsVersion",
+        "node.NodeProperties.rawData.siteConfig.minTlsVersion"
+      ],
+      "normalize": [
+        "enum:tls"
+      ]
+    },
+    {
+      "field": "si_https_only",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.supportsHttpsTrafficOnly",
+        "node.NodeProperties.rawData.httpsOnly"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_waf_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.webApplicationFirewallConfiguration.enabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_nsg_open_rdp",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.hasInboundRdpOpenToInternet"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_nsg_open_ssh",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.hasInboundSshOpenToInternet"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.lastSeen",
+        "node.NodeProperties.rawData.lastSeenTime",
+        "node.NodeProperties.rawData.lastActivityTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_eg_query_rules",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource"
+      ],
+      "sources": [
+        "egQueryRules[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_first_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.firstSeenByInventory"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_cve",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "upper",
+        "require_contains:CVE-"
+      ]
+    },
+    {
+      "field": "si_title",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_description",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.description"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_severity",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.severity"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cvss",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.cvssScore"
+      ],
+      "normalize": [
+        "number"
+      ]
+    },
+    {
+      "field": "si_has_exploit",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.hasExploit"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_exploit_verified",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isExploitVerified"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_in_exploit_kit",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isInExploitKit"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_zero_day",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isZeroDay"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_reference_url",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.referenceUrl",
+        "node.NodeProperties.rawData.url"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_published",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.publishedDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cvss_vector",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.cvssVector",
+        "node.NodeProperties.rawData.cvssV3Vector"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_affected_cpe",
+      "recordTypes": [
+        "finding"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.cpes[*]",
+        "node.NodeProperties.rawData.affectedCpes[*]"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_ms_criticality_reason",
+      "recordTypes": [
+        "device",
+        "user",
+        "service_principal",
+        "azure_resource"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.criticalityLevel.ruleNames[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    }
+  ]
+}

@@ -1,0 +1,294 @@
+@page
+@model SI.Management.Web.Pages.RiskFactors.IndexModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.RiskFactors
+@{
+    ViewData["Title"] = "Risk factors";
+    var isAdmin = User.IsAdmin();
+    var sel = Model.Selected;
+}
+<div class="split"><h1>Risk factors</h1></div>
+<p class="lede">The facts that raise a finding's risk score -- each defined once over SecurityInsight fields, with the provider fields that prove it.</p>
+<details class="help" data-riskfactors-help>
+    <summary>How risk factors work</summary>
+    <p><strong>One scope each.</strong> An <em>asset</em> factor says something about the asset itself (exposure, hygiene, importance); a <em>finding</em> factor adds to the recommendation or vulnerability (exploit available, remote code execution, CVSS 9+). A factor is never both.</p>
+    <p><strong>Impact and state.</strong> Every factor adds its impact (1 very low .. 5 very high) to its side of the score. A built-in factor is always on; an optional factor (most hygiene factors) can be switched off. Break glass is not a factor: it is a classification -- see the Break glass tab.</p>
+    <p><strong>No tier.</strong> Tier counts through the risk index and the tier multiplier, so no factor restates it.</p>
+    <p><strong>SecurityInsight fields only.</strong> A factor reads SecurityInsight fields; the provider fields that fill them live in the provider mappings below. When Microsoft renames a field, the mapping changes -- never the factor.</p>
+    <p><strong>Criteria.</strong> A factor with criteria (unsupported operating systems, stale-days thresholds) has a wizard: dropdowns of the values SecurityInsight collected and numbers inside their allowed range -- so a change can never make a failing query.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "Open a factor or a mapping to change its JSON, turn it off, or put the shipped one back. Nothing is written here: the change goes on Review & commit and is written in your name. When SecurityInsight ships a newer version of an item you changed, it shows Upgrade available -- decide it on Template conformance." : "An Admin changes factors and mappings.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RiskFactorStore.MissingSchemaMessage</div> }
+
+@if (sel is not null)
+{
+    var st = Model.StateOf(sel);
+    <section class="card" data-riskfactor-item="@sel.ItemKey">
+        <h2>@sel.ItemKey <span class="badge @IndexModel.Badge(st)">@st</span></h2>
+        @if (st == TemplateConformance.UpgradeAvailable)
+        {
+            <div class="notice warn" role="status" data-upgrade>SecurityInsight ships a newer version of this item. <a href="/Templates/Index?kind=@DataModelItemValidator.Kind&amp;key=@Uri.EscapeDataString(sel.ItemKey)&amp;state=UpgradeAvailable">Compare and decide on Template conformance</a></div>
+        }
+        @if (Model.Criteria is { } crit)
+        {
+            <section class="card" data-criteria-wizard="@crit.Kind">
+                <h3>Criteria</h3>
+                @if (crit.Kind == "threshold")
+                {
+                    <p class="hint">Counts when <code>@crit.Field</code> is older than this many @(crit.Unit ?? "units"). Allowed: @crit.Min to @crit.Max.</p>
+                    @if (isAdmin)
+                    {
+                        <form method="post" asp-page-handler="StageThreshold">
+                            <input type="hidden" name="key" value="@sel.ItemKey" />
+                            <label>@(crit.Unit ?? "Value")<input type="number" name="value" step="1" min="@crit.Min" max="@crit.Max" value="@Model.Threshold" required data-threshold /></label>
+                            <label>Reason<input name="reason" maxlength="400" /></label>
+                            <div class="actions"><button type="submit" data-stage-threshold>Stage this threshold</button></div>
+                        </form>
+                    }
+                    else { <p>Now: <strong>@Model.Threshold</strong> @crit.Unit</p> }
+                }
+                else if (crit.Kind == "list")
+                {
+                    <p class="hint">The entries of the list <code>@crit.List</code>. Keep or drop each one, and add values SecurityInsight collected from your estate -- nothing is typed by hand.</p>
+                    @if (Model.CollectedError is not null) { <div class="notice warn" role="status">@Model.CollectedError</div> }
+                    @if (isAdmin)
+                    {
+                        <form method="post" asp-page-handler="StageList">
+                            <input type="hidden" name="key" value="@sel.ItemKey" />
+                            <fieldset data-list-entries><legend>In the list now</legend>
+                                @foreach (var e in Model.ListEntries) { <label><input type="checkbox" name="keep" value="@e.Index" checked /> @e.Name</label> }
+                                @if (Model.ListEntries.Count == 0) { <p class="hint">The list is empty.</p> }
+                            </fieldset>
+                            <label>Add collected values (@Model.Collected.Count)
+                                <select name="pick" multiple size="12" data-collected>
+                                    @foreach (var v in Model.Collected) { <option value="@v.Token">@v.Label -- @v.Count</option> }
+                                </select>
+                            </label>
+                            <label>Reason<input name="reason" maxlength="400" /></label>
+                            <div class="actions"><button type="submit" data-stage-list>Stage these criteria</button></div>
+                        </form>
+                    }
+                    else { <ul>@foreach (var e in Model.ListEntries) { <li>@e.Name</li> }</ul> }
+                }
+            </section>
+        }
+        @if (isAdmin)
+        {
+            <form method="post" asp-page-handler="Stage">
+                <input type="hidden" name="key" value="@sel.ItemKey" />
+                <label>JSON<textarea name="body" rows="16" class="mono" data-item-body>@IndexModel.Pretty(sel.Effective ?? sel.TemplateBody)</textarea></label>
+                <label>Reason<input name="reason" maxlength="400" /></label>
+                <div class="actions">
+                    <button type="submit" name="decision" value="override" data-stage-override>Stage this change</button>
+                    @if (!sel.Disabled && !(sel.Template == "risk-factors" && RiskFactorModel.ShippedClass(sel) == RiskFactorModel.Builtin)) { <button type="submit" name="decision" value="disable" class="secondary" data-stage-disable>Turn off</button> }
+                    @if (!sel.Own && (sel.Overridden || sel.Disabled)) { <button type="submit" name="decision" value="inherit" class="secondary" data-stage-inherit>Put back the shipped version</button> }
+                    <a class="button secondary" href="/RiskFactors">Close</a>
+                </div>
+            </form>
+        }
+        else
+        {
+            <pre class="mono">@IndexModel.Pretty(sel.Effective ?? sel.TemplateBody)</pre>
+        }
+    </section>
+}
+
+<h2>Factors</h2>
+<p class="hint">Everything that raises a risk score is a risk factor. Each one has an impact from 1 (very low) to 5 (very high): a hygiene factor typically has a low impact, an open RDP port on the internet a high one. A <em>built-in</em> factor is always on; an <em>optional</em> factor can be switched off.@(isAdmin ? " Changing an impact or a state puts the change on Review & commit; nothing is written until you commit it." : "")</p>
+<form method="get" class="filters" data-riskfactor-filters>
+    @* THE shared filter (MultiFilter): several values at once, none ticked = all (owner 2026-10-19) *@
+    @{
+        var aboutFilter = new SI.Management.Web.Pages.MultiFilter { Id = "rf-about", Name = "about", Label = "About", Chosen = Model.Chosen(Model.About), Choices = SI.Management.Web.Pages.MultiFilter.Plain(new[] { "Asset", "Vulnerability" }), Apply = "Show" };
+        var groupFilter = new SI.Management.Web.Pages.MultiFilter { Id = "rf-group", Name = "group", Label = "Group", Chosen = Model.Chosen(Model.Group), Choices = SI.Management.Web.Pages.MultiFilter.Plain(Model.Groups), Apply = "Show" };
+    }
+    <div data-filter-about><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="aboutFilter" /></div>
+    <div data-filter-group><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="groupFilter" /></div>
+    <label>Sort by
+        <select name="sort" data-sort>
+            @foreach (var (k, label) in new[] { ("short", "Short name"), ("about", "About"), ("group", "Group"), ("class", "Built-in"), ("impact", "Impact"), ("state", "State") })
+            { <option value="@k" selected="@((Model.Sort ?? "short") == k)">@label</option> }
+        </select>
+    </label>
+    <label><input type="checkbox" name="desc" value="true" checked="@Model.Desc" /> Highest first</label>
+    <div class="actions"><button type="submit" class="secondary">Show</button></div>
+</form>
+<table class="grid" data-riskfactors data-sortable>
+    <thead><tr><th>Short name</th><th>Description</th><th>About</th><th>Group</th><th>Built-in</th><th>Impact</th><th>State</th><th>Criteria</th></tr></thead>
+    <tbody>
+    @foreach (var f in Model.Factors)
+    {
+        var st = Model.StateOf(f.Row);
+        <tr data-factor="@f.Id" data-about="@f.About" data-class="@(f.IsBuiltin ? "builtin" : "optional")">
+            <td><a href="/RiskFactors?key=@Uri.EscapeDataString(f.Row.ItemKey)" class="mono">@f.ShortName</a> @if (st != TemplateConformance.UpToDate) { <span class="badge @IndexModel.Badge(st)">@st</span> }</td>
+            <td>@(string.IsNullOrEmpty(f.Name) ? f.Description : f.Name)@if (!string.IsNullOrEmpty(f.Name) && !string.IsNullOrEmpty(f.Description)) { <div class="hint">@f.Description</div> }</td>
+            <td>@f.About</td>
+            <td>@f.Group</td>
+            <td>@(f.IsBuiltin ? "Built-in" : "Optional")</td>
+            <td data-value="@(f.ImpactLevel ?? 0)">
+                @if (isAdmin)
+                {
+                    <form method="post" asp-page-handler="StageImpact" class="inline" data-stage-impact>
+                        <input type="hidden" name="key" value="@f.Row.ItemKey" />
+                        <select name="impact" aria-label="Impact of @f.ShortName">
+                            @if (f.ImpactLevel is null) { <option value="" selected>not set (@f.Impact)</option> }
+                            @foreach (var (lvl, label) in RiskFactorModel.ImpactLevels) { <option value="@lvl" selected="@(f.ImpactLevel == lvl)">@lvl -- @label</option> }
+                        </select>
+                        <button type="submit" class="secondary">Stage</button>
+                    </form>
+                }
+                else { <span>@(f.ImpactLevel is { } il ? il + " -- " + RiskFactorModel.ImpactLabel(il) : RiskFactorModel.ImpactLabel(null))</span> }
+            </td>
+            <td>
+                @if (f.IsBuiltin) { <span class="hint" data-always-on>always on</span> }
+                else if (isAdmin)
+                {
+                    <form method="post" asp-page-handler="StageState" class="inline" data-stage-state>
+                        <input type="hidden" name="key" value="@f.Row.ItemKey" />
+                        <select name="factorState" aria-label="State of @f.ShortName">
+                            <option value="enabled" selected="@f.IsEnabled">Enabled</option>
+                            <option value="disabled" selected="@(!f.IsEnabled)">Disabled</option>
+                        </select>
+                        <button type="submit" class="secondary">Stage</button>
+                    </form>
+                }
+                else { <span>@(f.IsEnabled ? "Enabled" : "Disabled")</span> }
+            </td>
+            <td>@if (f.CriteriaKind.Length > 0) { <a href="/RiskFactors?key=@Uri.EscapeDataString(f.Row.ItemKey)" data-criteria-link>@(isAdmin ? "Change" : "View") the @f.CriteriaKind</a> }</td>
+        </tr>
+    }
+    </tbody>
+</table>
+@if (Model.Factors.Count == 0 && Model.AllFactors.Count > 0) { <p data-filter-none>No factor matches this filter.</p> }
+
+<section class="card" data-score-preview>
+    <h2>Score preview</h2>
+    <p class="hint">How a risk score is built, read-only. The <strong>asset side</strong> is the risk index's base for the finding on this kind of asset (its class and tier) plus the impacts of every asset factor that holds. The <strong>vulnerability side</strong> is the risk index's base for the finding type plus the impacts of every vulnerability factor that holds. The score is the asset side times the vulnerability side, with no cap. Example: base 5 plus one asset factor of impact 5, times base 5 plus one vulnerability factor of impact 4: (5 + 5) x (5 + 4) = 90.</p>
+    <form method="get" data-score-form>
+        <input type="hidden" name="about" value="@Model.About" /><input type="hidden" name="group" value="@Model.Group" />
+        @if (Model.IndexRows.Count > 0)
+        {
+            <fieldset data-base-mode><legend>Where the bases come from</legend>
+                <label><input type="radio" name="bases" value="index" checked="@Model.UseIndex" /> The risk index in force, for a sample finding</label>
+                <label><input type="radio" name="bases" value="manual" checked="@(!Model.UseIndex)" /> Numbers I pick</label>
+            </fieldset>
+            <fieldset data-sample-finding><legend>Sample finding (blank = not known)</legend>
+                @foreach (var c in SI.Management.Core.ProData.RiskIndexColumns.SharedMatchers.Concat(new[] { SI.Management.Core.ProData.RiskIndexColumns.Tier, SI.Management.Core.ProData.RiskIndexColumns.Severity }))
+                {
+                    var opts = c == SI.Management.Core.ProData.RiskIndexColumns.AssetClass ? SI.Management.Core.ProData.RiskIndexVocabulary.AssetClasses
+                        : c == SI.Management.Core.ProData.RiskIndexColumns.Tier ? SI.Management.Core.ProData.RiskIndexVocabulary.Tiers
+                        : c == SI.Management.Core.ProData.RiskIndexColumns.Severity ? SI.Management.Core.ProData.RiskIndexVocabulary.Severities
+                        : RiskFactorModel.IndexValues(Model.IndexRows, c);
+                    <label>@SI.Management.Core.ProData.RiskIndexColumns.Label(c)
+                        <select name="sample[@c]" data-sample="@c">
+                            <option value="">-</option>
+                            @foreach (var o in opts) { <option value="@o" selected="@(string.Equals(Model.SampleValue(c), o, StringComparison.OrdinalIgnoreCase))">@o</option> }
+                        </select>
+                    </label>
+                }
+            </fieldset>
+        }
+        <label>Asset side base (used with "Numbers I pick")
+            <select name="ab" data-base-asset>@for (var b = RiskFactorModel.BaseMin; b <= RiskFactorModel.BaseMax; b++) { <option value="@b" selected="@((Model.Ab ?? 5) == b)">@b</option> }</select>
+        </label>
+        <label>Vulnerability side base (used with "Numbers I pick")
+            <select name="vb" data-base-vulnerability>@for (var b = RiskFactorModel.BaseMin; b <= RiskFactorModel.BaseMax; b++) { <option value="@b" selected="@((Model.Vb ?? 5) == b)">@b</option> }</select>
+        </label>
+        <fieldset data-preview-factors><legend>Factors that hold (enabled factors only)</legend>
+            @foreach (var f in Model.AllFactors.Where(x => x.IsEnabled).OrderBy(x => x.About).ThenBy(x => x.ShortName))
+            {
+                <label><input type="checkbox" name="pf" value="@f.Id" checked="@(Model.Pf?.Contains(f.Id) == true)" /> @f.ShortName <span class="hint">(@f.About, impact @(f.ImpactLevel ?? 0))</span></label>
+            }
+        </fieldset>
+        <div class="actions"><button type="submit" class="secondary" data-score-show>Show the score</button></div>
+    </form>
+    @if (Model.Preview is { } pv)
+    {
+        <p data-score-result><strong>(@Fmt.Num(pv.AssetBase, 0) + @pv.AssetImpacts) x (@Fmt.Num(pv.VulnerabilityBase, 0) + @pv.VulnerabilityImpacts) = @Fmt.Num(pv.Score, 0)</strong> <span class="badge" data-score-rating>@pv.Rating</span></p>
+        <p class="hint">Asset side @Fmt.Num(pv.AssetSide, 0) = base @Fmt.Num(pv.AssetBase, 0)@foreach (var f in pv.AssetFactors) { <span> + @f.ShortName @(f.ImpactLevel ?? 0)</span> }. Vulnerability side @Fmt.Num(pv.VulnerabilitySide, 0) = base @Fmt.Num(pv.VulnerabilityBase, 0)@foreach (var f in pv.VulnerabilityFactors) { <span> + @f.ShortName @(f.ImpactLevel ?? 0)</span> }.</p>
+        @if (pv.AssetRow is { } ar && pv.VulnerabilityRow is { } vr)
+        {
+            <p class="hint" data-score-index-rows>From the risk index: the asset base @(ar == 0 ? "matched no row (0)" : "is row " + ar), the vulnerability base @(vr == 0 ? "matched no row (0)" : "is row " + vr) -- first match, as Risk Analysis looks them up. <a href="/RiskIndex">Open the risk index</a></p>
+        }
+    }
+</section>
+
+<h2>Which factors reach which report</h2>
+<p class="hint">Each Risk Analysis report says what it is about (users, service principals, devices, Azure resources, public IPs, vulnerabilities, recommendations). The factors that fit it follow from that: an identity report never gets a network or device factor. A factor you add reaches every report it fits, with no query change. Open a report's row to change its exceptions or scope -- the change goes on Review &amp; commit.</p>
+@if (Model.Matrix.Count == 0) { <p data-matrix-none>The report list arrives with the next template update.</p> }
+else
+{
+    <table class="grid" data-report-factor-matrix data-sortable>
+        <thead><tr><th>Report</th><th>About</th><th>Factors</th><th>Disabled assets</th><th>Scope</th><th>State</th></tr></thead>
+        <tbody>
+        @foreach (var m in Model.Matrix)
+        {
+            var st = Model.StateOf(m.Row);
+            <tr data-report="@m.Report">
+                <td><a href="/RiskFactors?key=@Uri.EscapeDataString(m.Row.ItemKey)">@m.Report</a></td>
+                <td>@string.Join(", ", m.Subjects)</td>
+                <td>@foreach (var f in m.Factors) { <span class="badge @(m.Include.Contains(f) ? "warn" : "")" data-matrix-factor="@f">@f</span> } @if (m.Exclude.Count > 0) { <div class="hint">left out: @string.Join(", ", m.Exclude)</div> }</td>
+                <td>@(m.Disabled switch { "include" => "always shown", "exclude" => "never shown", _ => "by the setting" })</td>
+                <td>@string.Join(", ", m.ScopeParts)</td>
+                <td><span class="badge @IndexModel.Badge(st)">@st</span></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<h2>Network ranges</h2>
+<p class="hint">Addresses in these ranges count as internet exposed, whatever the providers say (DMZ, online landing zones). They are the setting <code>@IndexModel.RangesSetting</code>@(isAdmin ? "" : ".") @if (isAdmin) { <span>-- <a href="/Admin/Settings/Index" data-ranges-setting>change them on Settings</a>.</span> }</p>
+@if (Model.Ranges.Count == 0) { <p data-ranges-none>None: only what the providers report counts as exposure.</p> }
+else { <ul data-ranges>@foreach (var r in Model.Ranges) { <li><code>@r</code></li> }</ul> }
+
+<h2>Same recommendation, several providers</h2>
+<p class="hint">Recommendations that mean the same thing in different providers. Each group becomes one finding per asset, with every provider kept as evidence and the highest severity of them. A finding that moves to the shared id keeps its first-detected date. A meaning rule links a finding that restates another on the same CI into it (it starts at stage testing and links nothing until it is made live). Findings an Admin linked by hand are shown on their own pages.@(isAdmin ? " Open a group to change it, turn it off or put the shipped one back." : "")</p>
+@if (Model.Equivalences.Count == 0) { <p data-equivalence-none>No group: each provider's recommendation is its own finding.</p> }
+else
+{
+    <table class="grid" data-equivalences data-sortable>
+        <thead><tr><th>Recommendation</th><th>Shared id</th><th>Reported as</th><th>Stage</th><th>State</th></tr></thead>
+        <tbody>
+        @foreach (var e in Model.Equivalences)
+        {
+            var st = Model.StateOf(e.Row);
+            <tr data-equivalence="@e.Row.ItemKey">
+                <td><a href="/RiskFactors?key=@Uri.EscapeDataString(e.Row.ItemKey)">@e.Title</a></td>
+                <td class="mono">@e.CanonicalId</td>
+                <td>@foreach (var m in e.Members) { <div class="mono">@m</div> }</td>
+                <td>@e.Stage
+                    @if (isAdmin && e.Stage == "testing" && e.CanonicalId == "(meaning rule)")
+                    {
+                        @* #693 the promotion switch: one data-model change (the rule's stage), staged on Review & commit *@
+                        <form method="post" asp-page-handler="StagePromote" class="inline" data-fold-promote="@e.Row.ItemKey">
+                            <input type="hidden" name="Key" value="@e.Row.ItemKey" />
+                            <input type="hidden" name="Reason" value="promoted from testing to live" />
+                            <button type="submit" class="small secondary" title="Stages the rule at stage production: it links findings from the next Risk Analysis run. Check what it would fold first (setup\Get-SIFindingFoldPreview.ps1).">Make live</button>
+                        </form>
+                    }
+                </td>
+                <td><span class="badge @IndexModel.Badge(st)">@st</span></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<h2>Provider mappings</h2>
+<p class="hint">Where every provider field lands in SecurityInsight. A renamed or new source field is changed here.</p>
+<table class="grid" data-mappings data-sortable>
+    <thead><tr><th>Provider</th><th>SecurityInsight field</th><th>Source fields</th><th>State</th></tr></thead>
+    <tbody>
+    @foreach (var m in Model.Mappings)
+    {
+        var st = Model.StateOf(m.Row);
+        <tr data-mapping="@m.Row.ItemKey">
+            <td>@m.Provider</td>
+            <td><a href="/RiskFactors?key=@Uri.EscapeDataString(m.Row.ItemKey)">@m.Field</a></td>
+            <td class="mono">@m.Sources</td>
+            <td><span class="badge @IndexModel.Badge(st)">@st</span></td>
+        </tr>
+    }
+    </tbody>
+</table>

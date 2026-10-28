@@ -1,0 +1,55 @@
+@* #330: the "Request exemption" form starts from WHAT WAS SELECTED. The dialog's title names it ("Exempt CVE-X on 3 assets");
+   the default is exactly the selection (a.scope absent = "finding"). Only a wider scope that fits the selection is offered,
+   behind "More options". Who approves is shown as names; "Change approver" only when someone else could. "Approve now" only
+   when the user approves every part of it. In the dialog the selection-dependent parts are filled by the script from the
+   count endpoint's preview; on the no-script page (Model.Targets set) the server renders them. *@
+@model SI.Management.Web.Actions.ActionFormModel
+@using SI.Management.Web.Exemptions
+@using SI.Management.Web.Changes
+@{
+    var action = (SI.Management.Web.Actions.RequestExemptionAction)Model.Action;
+    var flow = action.Flow;
+    var s = ExemptionSettings.Values.Defaults;
+    ExemptionPreview? preview = null;
+    try
+    {
+        s = await flow.SettingsAsync(Context.RequestAborted);
+        if (Model.Targets is { Count: > 0 } targets) preview = await action.PreviewOfAsync(User, targets, Context.RequestAborted, Model.Bar.DepartmentId);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { }
+    var now = flow.Now;
+    var choice = ExemptionPeriods.DefaultChoice(s.DefaultMonths);
+    var alt = preview?.Alternatives.FirstOrDefault();
+    static string PeriodLabel(string v, string l) => v switch { ExemptionPeriods.OneYear => "12 months", ExemptionPeriods.Custom => "Custom date", _ => l };
+}
+<div class="exempt-form" data-exempt-form>
+    <p class="exempt-who" data-exempt-approvers>@(preview?.ApproversText ?? "")</p>
+    <details class="exempt-more" data-exempt-change hidden="@(preview is not { Overrides.Count: > 0 })">
+        <summary>Change approver</summary>
+        <label for="@Model.Id("approver")">Ask instead</label>
+        <select id="@Model.Id("approver")" name="a.approver" data-exempt-approver>
+            <option value="">The approvers above</option>
+            @foreach (var a in preview?.Overrides ?? Array.Empty<string>()) { <option value="@a">@a</option> }
+        </select>
+    </details>
+    <details class="exempt-more" data-exempt-more hidden="@(alt is null)">
+        <summary>More options</summary>
+        <label class="exempt-check"><input type="checkbox" name="a.scope" value="@(alt?.Scope ?? ExemptionRepository.ScopeIssue)" data-exempt-alt /> <span data-exempt-alt-label>@alt?.Label</span></label>
+    </details>
+    <label for="@Model.Id("reason")">Reason</label>
+    <input id="@Model.Id("reason")" type="text" name="a.reason" maxlength="400" required minlength="3" placeholder="Why it is acceptable -- the approver and the audit see it" />
+    <div class="exempt-fields">
+        <div>
+            <label for="@Model.Id("period")">Period</label>
+            <select id="@Model.Id("period")" name="a.period" data-exempt-period>
+                @foreach (var (v, l) in ExemptionPeriods.Choices(s.AllowOpenEnded)) { <option value="@v" selected="@(v == choice)">@PeriodLabel(v, l)</option> }
+            </select>
+        </div>
+        <div class="exempt-custom" data-exempt-custom>
+            <label for="@Model.Id("date")">End date</label>
+            <input id="@Model.Id("date")" type="date" name="a.customDate" value="@ExemptionPeriods.DefaultCustomDate(s.DefaultMonths, now)"
+                   min="@now.Date.AddDays(1).ToString("yyyy-MM-dd")" max="@now.Date.AddDays(ExemptionRepository.MaxExpiryDays).ToString("yyyy-MM-dd")" />
+        </div>
+    </div>
+    <label class="exempt-check" data-exempt-approvenow hidden="@(preview?.CanApproveAll != true)"><input type="checkbox" name="a.approveNow" value="true" /> Approve now -- you approve every part of it</label>
+</div>

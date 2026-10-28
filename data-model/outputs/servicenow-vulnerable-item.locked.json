@@ -1,0 +1,130 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "servicenow-vulnerable-item",
+  "version": "1.1.0",
+  "description": "ServiceNow vulnerable items (Vulnerability Response): the import-set view snowstage.vImportVulnerableItem and the data-out push (#914 one contract: u_action, u_row_hash, u_si_batch_id on every row; key u_si_correlation_id + u_vulnerability; u_source_record_id = <CI key>|<finding>). Column names are a contract; append only.",
+  "grain": "ci_finding",
+  "columns": [
+    {
+      "target": "u_si_correlation_id",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "u_class_hint",
+      "from": "si_class",
+      "op": "enum:servicenow_class_hint"
+    },
+    {
+      "target": "u_asset_name",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "u_cmdb_ci",
+      "from": "si_cmdb_id"
+    },
+    {
+      "target": "u_vulnerability",
+      "from": "si_finding_key"
+    },
+    {
+      "target": "u_severity",
+      "from": "si_severity"
+    },
+    {
+      "target": "u_state",
+      "from": "si_finding_state",
+      "op": "enum:open_closed"
+    },
+    {
+      "target": "u_first_seen",
+      "from": "si_first_detected"
+    },
+    {
+      "target": "u_last_seen",
+      "from": "si_last_detected"
+    },
+    {
+      "target": "u_closed_at",
+      "from": "finding.closed_at"
+    },
+    {
+      "target": "u_close_reason",
+      "from": "si_close_reason",
+      "op": "enum:servicenow_close_reason"
+    },
+    {
+      "target": "u_absent_runs",
+      "from": "finding.absent_runs"
+    },
+    {
+      "target": "u_source",
+      "from": "$const:SecurityInsight"
+    },
+    {
+      "target": "u_source_record_id",
+      "from": "finding.item_key"
+    },
+    {
+      "target": "u_changed_at",
+      "from": "$changed_at"
+    },
+    {
+      "target": "u_finding_type",
+      "from": "si_finding_type"
+    },
+    {
+      "target": "u_title",
+      "from": "si_title"
+    },
+    {
+      "target": "u_asset_id",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "u_si_component",
+      "from": "si_component"
+    },
+    {
+      "target": "u_si_servicenow_subci",
+      "from": "si_servicenow_subci"
+    },
+    {
+      "target": "u_si_os_family",
+      "from": "si_os_family"
+    },
+    {
+      "target": "u_si_patch_cycle",
+      "from": "si_patch_cycle"
+    },
+    {
+      "target": "u_row_hash",
+      "from": "$row_hash"
+    },
+    {
+      "target": "u_source_run",
+      "from": "$run_id"
+    },
+    {
+      "target": "u_action",
+      "from": "$action"
+    },
+    {
+      "target": "u_si_batch_id",
+      "from": "$batch_id"
+    },
+    {
+      "target": "u_si_cleared",
+      "from": "$cleared"
+    },
+    {
+      "target": "u_si_reason",
+      "from": "$reason"
+    },
+    {
+      "target": "u_si_replaces",
+      "from": "$replaces"
+    }
+  ],
+  "contract": "snowstage.vImportVulnerableItem"
+}

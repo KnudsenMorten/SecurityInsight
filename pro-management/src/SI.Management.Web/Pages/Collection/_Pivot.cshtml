@@ -1,0 +1,204 @@
+@* #360: the pivot builder of the weighted risk page. Every move is a LINK the server built (a field or measure to a zone,
+   up / down, back to the list), so the builder works with the keyboard and without script; drag and drop (js/app/weighted.js)
+   only follows the link that matches the drop. The table is the server's answer to a whitelisted request. *@
+@model SI.Management.Web.Pages.Collection.WeightedRiskModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@using SI.Management.Web.Collection
+@{
+    var q = Model.Pivot;
+    var t = Model.PivotResult;
+    string Zone(string key) => q is null ? PivotEdit.Pool
+        : q.Rows.Contains(key) ? PivotEdit.Rows : q.Columns.Contains(key) ? PivotEdit.Columns : q.Filters.Contains(key) ? PivotEdit.Filters
+        : q.Values.Contains(key) ? PivotEdit.Values : PivotEdit.Pool;
+    string Arrow(string sort) => q is not null && q.Sort == sort ? (q.Desc ? " ▼" : " ▲") : "";
+    string Aria(string sort) => q is null || q.Sort != sort ? "none" : q.Desc ? "descending" : "ascending";
+    var exportQuery = q is null ? "" : (Model.Current is null ? "" : "&c=" + Uri.EscapeDataString(Model.Current.CollectionId)) + "&" + q.QueryString();
+}
+@{
+    void Chip(string key, bool measure)
+    {
+        var label = WeightedRiskModel.KeyLabel(key);
+        var here = Zone(key);
+        <li class="pivot-chip @(measure ? "measure" : "field")" draggable="true" data-key="@key" data-kind="@(measure ? "measure" : "field")" data-zone-of="@here">
+            <span class="pivot-chip-label">@label</span>
+            <span class="pivot-moves">
+                @foreach (var z in measure ? new[] { PivotEdit.Values } : new[] { PivotEdit.Rows, PivotEdit.Columns, PivotEdit.Filters })
+                {
+                    if (z == here) { continue; }
+                    var href = Model.MoveLink(key, z);
+                    if (href is not null) { <a href="@href" draggable="false" data-move="@z" aria-label="@label to @WeightedRiskModel.ZoneLabel(z)">&rarr; @WeightedRiskModel.ZoneLabel(z)</a> }
+                }
+                @if (here != PivotEdit.Pool)
+                {
+                    if (Model.ShiftLink(key, -1) is { } up) { <a href="@up" draggable="false" data-shift="up" aria-label="Move @label up">&uarr;</a> }
+                    if (Model.ShiftLink(key, 1) is { } down) { <a href="@down" draggable="false" data-shift="down" aria-label="Move @label down">&darr;</a> }
+                    if (Model.MoveLink(key, PivotEdit.Pool) is { } rm) { <a href="@rm" draggable="false" data-move="@PivotEdit.Pool" aria-label="Remove @label">&#x2715;</a> }
+                }
+            </span>
+        </li>
+    }
+}
+<section class="card pivot" data-pivot aria-labelledby="pivot-h">
+    <div class="split">
+        <h2 id="pivot-h">Pivot</h2>
+        @if (q is not null && t is not null)
+        {
+            <span class="actions">
+                @if (q.Rows.Count > 0 || q.Columns.Count > 0) { <a class="button secondary small" href="@Model.PivotLink(PivotEdit.Swap(q))" data-pivot-swap title="Rows become columns and columns rows">Swap rows and columns</a> }
+                <a class="button secondary small" href="@(Model.PagePath + "?handler=PivotCsv" + exportQuery)" data-export="pivot-csv" title="Every row of the pivot, as CSV">@SI.Management.Web.Columns.ExportLabels.AllRowsCsv</a>
+                <a class="button secondary small" href="@(Model.PagePath + "?handler=PivotXlsx" + exportQuery)" data-export="pivot-xlsx" title="Every row of the pivot, as an Excel workbook">@SI.Management.Web.Columns.ExportLabels.AllRowsExcel</a>
+            </span>
+        }
+    </div>
+    @if (Model.PivotNote is not null) { <div class="notice warn" role="status" data-pivot-note>@Model.PivotNote</div> }
+    @if (q is not null)
+    {
+        <p class="hint">Drag a field into Rows, Columns or Filters and a measure into Values -- or use the arrow buttons on each one. Click a column heading to sort. A finding on an asset in two services counts under each of them.</p>
+        <div class="pivot-builder" data-pivot-builder>
+            <div class="pivot-zone pool" data-zone="@PivotEdit.Pool" aria-labelledby="pz-fields">
+                <h3 id="pz-fields">Fields</h3>
+                <ul class="pivot-list">
+                    @foreach (var f in Model.PivotFields.Where(f => !q.FieldsUsed.Contains(f.Key))) { Chip(f.Key, false); }
+                </ul>
+                <h3>Measures</h3>
+                <ul class="pivot-list">
+                    @foreach (var m in PivotSql.Measures.Where(m => !q.Values.Contains(m.Key))) { Chip(m.Key, true); }
+                </ul>
+            </div>
+            @foreach (var (zone, keys) in new[] { (PivotEdit.Rows, q.Rows), (PivotEdit.Columns, q.Columns), (PivotEdit.Filters, q.Filters), (PivotEdit.Values, q.Values) })
+            {
+                <div class="pivot-zone" data-zone="@zone" aria-labelledby="pz-@zone">
+                    <h3 id="pz-@zone">@WeightedRiskModel.ZoneLabel(zone)</h3>
+                    <ul class="pivot-list">
+                        @foreach (var k in keys) { Chip(k, zone == PivotEdit.Values); }
+                    </ul>
+                    @if (keys.Count == 0) { <p class="hint pivot-drop">Drop a @(zone == PivotEdit.Values ? "measure" : "field") here</p> }
+                </div>
+            }
+        </div>
+
+        var filterFields = q.Filters.Concat(q.FilterValues.Keys).Distinct().ToList();
+        @if (filterFields.Count > 0)
+        {
+            <form method="get" action="@Model.PagePath" class="pivot-filters" data-pivot-filters aria-label="Pivot filters">
+                @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
+                <input type="hidden" name="tab" value="pivot" />
+                @foreach (var (k, v) in q.Query().Where(x => !x.Key.StartsWith("pfv.", StringComparison.Ordinal))) { <input type="hidden" name="@k" value="@v" /> }
+                @foreach (var f in filterFields)
+                {
+                    var chosen = q.FilterValues.TryGetValue(f, out var cv) ? cv : (IReadOnlyList<string>)Array.Empty<string>();
+                    var choices = Model.PivotChoices.TryGetValue(f, out var ch) ? ch : [];
+                    <fieldset class="pivot-filter" data-filter-field="@f">
+                        <legend>@WeightedRiskModel.KeyLabel(f)@(chosen.Count > 0 ? ": " + Fmt.Int(chosen.Count) + " chosen" : ": any")</legend>
+                        <div class="colfilter-list">
+                            @foreach (var (value, n) in choices.Select(c => (c.Value, c.Findings)).Union(chosen.Where(x => choices.All(c => c.Value != x)).Select(x => (x, 0d))).Take(PivotSql.MaxChoices))
+                            {
+                                <label><input type="checkbox" name="pfv.@f" value="@value" checked="@chosen.Contains(value)" /> @value <span class="muted">(@ScoreFormat.Count((long)n))</span></label>
+                            }
+                        </div>
+                    </fieldset>
+                }
+                <button type="submit">Apply filters</button>
+            </form>
+        }
+    }
+    @if (q is not null && t is not null)
+    {
+        var cols = t.ColumnKeys;
+        var hasCols = q.Columns.Count > 0;
+        <div class="table-wrap">
+            <table class="findings pivot-table" data-pivot-table data-static="sorted on the server: every heading is a sort link of the pivot, its filters are the pivot filters" aria-describedby="pivot-h">
+                <thead>
+                    @if (hasCols)
+                    {
+                        <tr>
+                            @foreach (var r in q.Rows) { <th scope="col" rowspan="2" aria-sort="@Aria(r)"><a href="@Model.PivotSortLink(r)" data-pivot-sort="@r">@WeightedRiskModel.KeyLabel(r)@Arrow(r)</a></th> }
+                            @foreach (var c in cols) { <th scope="colgroup" colspan="@q.Values.Count" data-col-key="@c">@c</th> }
+                            <th scope="colgroup" colspan="@q.Values.Count">Total</th>
+                        </tr>
+                        <tr>
+                            @foreach (var c in cols) { foreach (var m in q.Values) { var s = m + "|" + c; <th scope="col" class="num" aria-sort="@Aria(s)"><a href="@Model.PivotSortLink(s)" data-pivot-sort="@s">@WeightedRiskModel.KeyLabel(m)@Arrow(s)</a></th> } }
+                            @foreach (var m in q.Values) { <th scope="col" class="num" aria-sort="@Aria(m)"><a href="@Model.PivotSortLink(m)" data-pivot-sort="@m">@WeightedRiskModel.KeyLabel(m)@Arrow(m)</a></th> }
+                        </tr>
+                    }
+                    else
+                    {
+                        <tr>
+                            @foreach (var r in q.Rows) { <th scope="col" aria-sort="@Aria(r)"><a href="@Model.PivotSortLink(r)" data-pivot-sort="@r">@WeightedRiskModel.KeyLabel(r)@Arrow(r)</a></th> }
+                            @foreach (var m in q.Values) { <th scope="col" class="num" aria-sort="@Aria(m)"><a href="@Model.PivotSortLink(m)" data-pivot-sort="@m">@WeightedRiskModel.KeyLabel(m)@Arrow(m)</a></th> }
+                        </tr>
+                    }
+                </thead>
+                <tbody>
+                    @foreach (var l in t.Lines)
+                    {
+                        <tr data-pivot-row="@string.Join(" | ", l.Labels)">
+                            @for (var i = 0; i < l.Labels.Count; i++)
+                            {
+                                var label = l.Labels[i];
+                                var tone = q.Rows[i] == "criticality" ? WeightedServiceSql.Tone(label) : null;
+                                if (i == 0) { <th scope="row" class="wrap">@if (tone is not null) { <span class="badge @tone">@label</span> } else { @label }</th> }
+                                else { <td class="wrap">@if (tone is not null) { <span class="badge @tone">@label</span> } else { @label }</td> }
+                            }
+                            @foreach (var c in cols) { for (var i = 0; i < q.Values.Count; i++) { var v = l.Cells.TryGetValue(c, out var cv2) ? cv2[i] : null; <td class="num" data-value="@Fmt.Raw(v)">@WeightedRiskModel.Measure(q.Values[i], v)</td> } }
+                            @for (var i = 0; i < q.Values.Count; i++) { var v = l.Total.Length > i ? l.Total[i] : null; <td class="num total" data-value="@Fmt.Raw(v)">@WeightedRiskModel.Measure(q.Values[i], v)</td> }
+                        </tr>
+                    }
+                    @if (t.Lines.Count == 0 && q.Rows.Count > 0) { <tr><td colspan="@(q.Rows.Count + (cols.Count + 1) * q.Values.Count)" class="hint">No finding matches.</td></tr> }
+                </tbody>
+                <tfoot>
+                    <tr data-pivot-total>
+                        @if (q.Rows.Count > 0) { <th scope="row" colspan="@q.Rows.Count">Total</th> }
+                        @foreach (var c in cols) { for (var i = 0; i < q.Values.Count; i++) { var v = t.ColumnTotals.TryGetValue(c, out var ct2) ? ct2[i] : null; <td class="num">@WeightedRiskModel.Measure(q.Values[i], v)</td> } }
+                        @for (var i = 0; i < q.Values.Count; i++) { var v = t.Grand.Length > i ? t.Grand[i] : null; <td class="num total" data-grand="@q.Values[i]">@WeightedRiskModel.Measure(q.Values[i], v)</td> }
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        @if (t.ColumnsCut) { <p class="hint">Only the @PivotSql.MaxColumnValues largest column values are columns; the totals count every value.</p> }
+        @if (t.Truncated) { <p class="notice warn" role="status">The pivot was cut at @Fmt.Int(PivotSql.MaxGroups) groups: add a filter or fewer fields for the rest.</p> }
+    }
+</section>
+@if (q is not null)
+{
+    <section class="card" aria-labelledby="saved-h" data-saved-views>
+        <h2 id="saved-h">Saved views</h2>
+        @if (!Model.SavedReady)
+        {
+            <p class="hint">Saved views need the latest database setup (setup\Import-SIProSettings.ps1 -CreateSchema adds them; it only adds).</p>
+        }
+        else
+        {
+            @if (Model.SavedViews.Count == 0) { <p class="hint">No saved view yet. Build a pivot and save it here; it is yours@(Model.CanShare ? ", or shared with every reader" : "").</p> }
+            else
+            {
+                <ul class="saved-views">
+                    @foreach (var v in Model.SavedViews)
+                    {
+                        var mine = string.Equals(v.Owner, Model.Me, StringComparison.OrdinalIgnoreCase);
+                        <li data-view="@v.Id" aria-current="@(Model.OpenView?.Id == v.Id ? "true" : null)">
+                            <a href="@(Model.PagePath + "?" + (Model.Current is null ? "" : "c=" + Uri.EscapeDataString(Model.Current.CollectionId) + "&") + "tab=pivot&view=" + v.Id)">@v.Name</a>
+                            @if (v.Shared) { <span class="badge info">shared</span> }
+                            @if (!mine) { <span class="muted">by @v.Owner</span> }
+                            @if (mine || (v.Shared && Model.CanShare))
+                            {
+                                <form method="post" class="inline-form" asp-page-handler="RemoveView" asp-route-c="@Model.Current?.CollectionId">
+                                    <input type="hidden" name="id" value="@v.Id" />
+                                    <button type="submit" class="small secondary" data-confirm="Remove the saved view '@v.Name'?">Remove</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+            <form method="post" class="stack pivot-save" asp-page-handler="SaveView" asp-route-c="@Model.Current?.CollectionId" data-pivot-save>
+                <input type="hidden" name="state" value="@q.QueryString()" />
+                <label for="pivot-name">Save this pivot as</label>
+                <input id="pivot-name" name="name" maxlength="@PivotView.MaxName" required value="@Model.OpenView?.Name" />
+                @if (Model.CanShare) { <label><input type="checkbox" name="shared" value="true" checked="@(Model.OpenView?.Shared == true)" /> Share with every reader</label> }
+                <button type="submit">Save view</button>
+            </form>
+        }
+    </section>
+}

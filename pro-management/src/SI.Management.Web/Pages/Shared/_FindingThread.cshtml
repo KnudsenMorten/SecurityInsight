@@ -1,0 +1,166 @@
+@model SI.Management.Web.Tasks.FindingThreadView
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Tasks
+@* ONE finding's ONE thread (#265): the governance log (#254), the comments / recommendations / approvals (#258) and the
+   follow-up tasks, read side by side from their own tables -- on Findings > detail and on the department finding page.
+   Every form posts to the handler that decides it today; the server checks again. *@
+@{
+    var v = Model;
+    var t = v.Target;
+    var ret = v.ReturnUrl;
+    var today = v.Today;
+}
+<section class="card" aria-labelledby="h-thread" data-finding-thread data-finding="@t.AssetKey|@t.RecommendationKey">
+    <h2 id="h-thread">Thread and tasks</h2>
+    @if (!v.Visible)
+    {
+        <p class="hint" data-thread-hidden>@v.HiddenWhy</p>
+    }
+    else
+    {
+        <p class="hint">One thread for this vulnerability on this asset, kept across collections: the governance log, comments, recommendations, approvals and follow-up tasks.
+            @if (v.GovernanceReady) { <span>Status: <strong data-governance-status>@GovernanceStatuses.Label(v.State?.Status)</strong>@if (v.State?.ScheduledFor is { } when) { <span data-scheduled> -- planned for the window starting @Fmt.Time(when)</span> }.</span> }</p>
+
+        @* ---- the follow-up tasks ---- *@
+        <h3>Follow-up tasks</h3>
+        @if (!v.TasksReady)
+        {
+            <p class="hint" data-tasks-not-ready>Tasks need the task tables in the Pro database: apply sql\si-pro-settings.sql again (it only adds).</p>
+        }
+        else if (v.Tasks.Count == 0)
+        {
+            <p class="hint" data-tasks-empty>No task on this finding yet.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="findings" data-sortable data-finding-tasks>
+                    <thead><tr><th scope="col">Task</th><th scope="col">For</th><th scope="col">Due</th><th scope="col">Status</th><th scope="col">Created</th></tr></thead>
+                    <tbody>
+                        @foreach (var k in v.Tasks)
+                        {
+                            var bucket = TaskDue.Bucket(k.Status, DateOnly.FromDateTime(k.DueDate), k.CompletedAt, today);
+                            <tr data-task="@k.TaskId" data-status="@k.Status" data-bucket="@bucket">
+                                <td class="wrap"><a href="/Tasks/Task?id=@k.TaskId">@k.Title</a>
+                                    @if (k.IsOpen && k.FindingResolved) { <span class="badge good" data-resolved title="The vulnerability close-loop closed this finding@(k.ResolvedReason is { Length: > 0 } rr ? " (" + rr + ")" : "")">Finding resolved -- close the task?</span> }</td>
+                                <td>@k.AssigneeName <span class="kind-tag">@AssigneeKinds.Label(k.AssigneeKind)</span></td>
+                                <td class="nowrap" data-sort="@k.DueDate.ToString("yyyy-MM-dd")">@k.DueDate.ToString("yyyy-MM-dd")</td>
+                                <td><span class="badge @(bucket == "overdue" ? "bad" : bucket == "soon" ? "warn" : bucket is "recent" or "done" ? "good" : "")">@TaskDue.Label(bucket)</span></td>
+                                <td class="nowrap">@k.CreatedBy</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (v.TasksReady && v.CreateTask.Allowed)
+        {
+            <details class="more" data-task-new>
+                <summary>New follow-up task</summary>
+                <form method="post" asp-antiforgery="true" action="/Tasks/New?handler=Create" class="stack" data-task-form>
+                    <input type="hidden" name="c" value="@v.CollectionId" /><input type="hidden" name="id" value="@v.FindingId" /><input type="hidden" name="returnUrl" value="@ret" />
+                    <label for="t-title">What to follow up</label>
+                    <input id="t-title" name="Title" maxlength="200" required minlength="3" placeholder="e.g. waiting for the vendor to confirm the patch date" />
+                    <label for="t-for">For</label>
+                    <select id="t-for" name="Assignee" data-task-assignee>
+                        <option value="me">Me</option>
+                        @foreach (var p in v.People) { <option value="@p.Key">@p.DisplayName (@(p.Kind == AssigneeKinds.Advisor ? "advisor" : p.Role))</option> }
+                        @if (v.MayAssignEntra) { <option value="entra">An Entra user or group (object id)</option> }
+                    </select>
+                    @if (v.MayAssignEntra)
+                    {
+                        <fieldset class="filterbar" data-task-entra>
+                            <legend>Entra user or group (only when "An Entra user or group" is chosen)</legend>
+                            <div><label for="t-ek">Kind</label><select id="t-ek" name="EntraKind"><option value="user">User</option><option value="group">Group</option></select></div>
+                            <div><label for="t-eid">Object id</label><input id="t-eid" name="EntraId" maxlength="36" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+                            <div><label for="t-en">Name</label><input id="t-en" name="EntraName" maxlength="256" /></div>
+                            <div><label for="t-em">Mail (for the digest, optional)</label><input id="t-em" name="EntraMail" type="email" maxlength="256" /></div>
+                        </fieldset>
+                    }
+                    <div class="filterbar">
+                        <div><label for="t-due">Due</label><input id="t-due" name="Due" type="date" required min="@today.ToString("yyyy-MM-dd")" value="@today.AddDays(7).ToString("yyyy-MM-dd")" /></div>
+                        <div><label for="t-rem">Reminder (optional)</label><input id="t-rem" name="Remind" type="date" min="@today.ToString("yyyy-MM-dd")" /></div>
+                    </div>
+                    <label for="t-note">Note (optional)</label>
+                    <textarea id="t-note" name="Note" rows="2" maxlength="2000"></textarea>
+                    <button type="submit">Create the task</button>
+                    <p class="hint">The task stays on this finding across collections and shows in the assignee's "My tasks". It is audited.</p>
+                </form>
+            </details>
+        }
+
+        @* ---- the thread ---- *@
+        <h3>Thread</h3>
+        @if (v.Items.Count == 0)
+        {
+            <p class="hint" data-governance-empty>Nothing is logged yet.</p>
+        }
+        else
+        {
+            <ol class="thread" data-thread data-governance-log>
+                @foreach (var i in v.Items)
+                {
+                    <li data-kind="@i.Kind" data-source="@i.Source" data-entry="@(i.Source == ThreadItem.FromGovernance ? i.Id.ToString() : null)">
+                        <strong>@i.Label</strong> -- @i.Who
+                        @if (i.Badge is not null) { <span class="badge">@i.Badge</span> }
+                        <span class="hint">@Fmt.Time(i.At)@(i.Detail is null ? "" : " · " + i.Detail)</span>
+                        @if (i.ScheduledFor is { } s) { <span class="muted"> -- window @Fmt.Time(s)</span> }
+                        @if (i.ExemptionRequestId is { } rq) { <span class="muted"> -- <a href="/Exemptions/Decide?id=@rq">request #@rq</a></span> }
+                        @if (i.TaskId is { } tid) { <span class="muted"> -- <a href="/Tasks/Task?id=@tid">task #@tid</a></span> }
+                        <p class="wrap">@i.Text</p>
+                    </li>
+                }
+            </ol>
+        }
+
+        @* ---- writing to it: a comment / a status (the governance log), a recommendation, an approval ---- *@
+        @if (v.ShowGovernanceForm && v.GovernanceReady && v.Write.Allowed)
+        {
+            <form method="post" asp-antiforgery="true" action="@v.FindingPage&amp;handler=Comment" class="stack" data-governance-comment>
+                <input type="hidden" name="returnUrl" value="@ret" />
+                <label for="g-status">Status</label>
+                <select id="g-status" name="status">
+                    <option value="">Keep the status (comment only)</option>
+                    @foreach (var s in GovernanceStatuses.Settable) { <option value="@s">@GovernanceStatuses.Label(s)</option> }
+                </select>
+                <label for="g-comment">Comment (audited)</label>
+                <textarea id="g-comment" name="comment" rows="3" required minlength="3" maxlength="2000"></textarea>
+                <button type="submit">Add to the thread</button>
+            </form>
+        }
+        else if (v.GovernanceReady && !v.Write.Allowed)
+        {
+            <p class="hint" data-governance-readonly>You can read this thread but not write to it: @v.Write.Reason</p>
+        }
+        @if (v.CommentsReady && v.GovernanceReady && (v.Recommend.Allowed || v.Approve.Allowed || v.NeedsCode))
+        {
+            <div class="grid-2">
+                @if (v.Recommend.Allowed)
+                {
+                    <form method="post" asp-antiforgery="true" action="@v.FindingPage&amp;handler=Advise" class="stack" data-advise-form>
+                        <input type="hidden" name="returnUrl" value="@ret" />
+                        <label for="r-text">Recommendation</label>
+                        <textarea id="r-text" name="text" rows="2" maxlength="2000" required minlength="3"></textarea>
+                        <button type="submit" name="kind" value="recommend" class="secondary">Recommend</button>
+                    </form>
+                }
+                @if (v.Approve.Allowed)
+                {
+                    <form method="post" asp-antiforgery="true" action="@v.FindingPage&amp;handler=Advise" class="stack" data-approve-form>
+                        <input type="hidden" name="returnUrl" value="@ret" />
+                        <label for="a-text">What you approve (optional)</label>
+                        <input id="a-text" name="text" maxlength="2000" placeholder="e.g. the recommended change, in the next maintenance window" />
+                        <button type="submit" name="kind" value="approve">Approve</button>
+                    </form>
+                }
+                else if (v.NeedsCode)
+                {
+                    <div>
+                        <p class="hint" data-approve-needs-code>Approving needs a second check: a one-time code mailed to your address.</p>
+                        <p><a class="button" href="/Departments/Confirm?returnUrl=@Uri.EscapeDataString(v.FindingPage)">Confirm with a code</a></p>
+                    </div>
+                }
+            </div>
+        }
+    }
+</section>

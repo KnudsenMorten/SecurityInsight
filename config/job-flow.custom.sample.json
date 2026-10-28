@@ -1,0 +1,29 @@
+{
+  "schema": 2,
+  "id": "daily",
+  "name": "Daily pipeline",
+  "mode": "flow",
+  "startTime": "19:00",
+  "timeZone": "Europe/Copenhagen",
+  "cadence": "daily",
+  "weekday": 1,
+  "intervalMinutes": 1440,
+  "stages": [
+    {
+      "id": "collect",
+      "name": "Collect",
+      "runIfPreviousFailed": false,
+      "steps": [
+        { "job": "ptc", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 180 },
+        { "job": "identity", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 },
+        { "job": "azure", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 },
+        { "job": "endpoint", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 },
+        { "job": "publicip", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 },
+        { "job": "risk-analysis", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 },
+        { "job": "risk-analysis-detailed", "enabled": true, "withPrevious": false, "onFailure": "skip-dependents", "timeoutMinutes": 240 }
+      ]
+    },
+    { "id": "correlate", "name": "Correlate", "runIfPreviousFailed": false, "steps": [] },
+    { "id": "deliver", "name": "Deliver", "runIfPreviousFailed": false, "steps": [] }
+  ]
+}

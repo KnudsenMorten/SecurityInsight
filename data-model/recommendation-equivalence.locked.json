@@ -1,0 +1,142 @@
+{
+  "$comment": "The same recommendation reported by several providers becomes ONE finding on the CI, every provider kept as evidence (SI-RecommendationEquivalence.ps1). A member names the provider's recommendation id (the finding key the provider reports) or its exact title. canonicalId = the key the finding is known by: keep it the id a provider already reports, so its existing findings keep their key; a finding that changes key carries its history over (first detected kept). Only production groups merge. Customer changes: Pro = one override per group on the settings database; Community = recommendation-equivalence.custom.json, per group id. Starter set: Exposure Management reports a Defender for Cloud recommendation under its title, Defender for Cloud under its assessment key -- the pairs below carry the identical title in both providers' rows of the shipped sample (engine/risk-analysis/_samples). Defender for Endpoint: the seven security settings below whose Defender for Endpoint and Defender for Cloud recommendations check the same control on the same machines (network level authentication, minimum password length, account lockout threshold / duration / counter reset, machine inactivity limit, e-mail scanning). Weaker look-alikes (firewall profiles, SmartScreen, disk encryption) are not shipped. #693 a group may also be match=link (an operator links findings on ONE owner -- owner, members, canonicalId, linkedBy, reason, linkedAt; unlink = stage not_used) or match=fold (a meaning rule over the generic SI fields -- evidence / canonical conditions { field, pattern | equals } and on pairs; the evidence finding is folded into every canonical finding of the same CI it meets). Shipped fold rules start as testing.",
+  "kind": "recommendation-equivalence",
+  "version": "1.3.0",
+  "groups": [
+    {
+      "id": "mdc-update-openssl",
+      "canonicalId": "4b5d9550-3120-1f27-8fda-1764c1a66ac3",
+      "canonicalTitle": "Update openssl",
+      "members": [
+        { "provider": "mdc", "id": "4b5d9550-3120-1f27-8fda-1764c1a66ac3" },
+        { "provider": "eg", "id": "Update openssl" }
+      ]
+    },
+    {
+      "id": "mdc-iaas-antimalware-extension",
+      "canonicalId": "a6246390-cc73-8108-2368-57d571bbd3b8",
+      "canonicalTitle": "Microsoft IaaSAntimalware extension should be deployed on Windows servers",
+      "members": [
+        { "provider": "mdc", "id": "a6246390-cc73-8108-2368-57d571bbd3b8" },
+        { "provider": "eg", "id": "Microsoft IaaSAntimalware extension should be deployed on Windows servers" }
+      ]
+    },
+    {
+      "id": "mdc-antimalware-signature-update",
+      "canonicalId": "2d229422-83af-7a3b-50c7-556bb5bce475",
+      "canonicalTitle": "Microsoft Antimalware for Azure should be configured to automatically update protection signatures",
+      "members": [
+        { "provider": "mdc", "id": "2d229422-83af-7a3b-50c7-556bb5bce475" },
+        { "provider": "eg", "id": "Microsoft Antimalware for Azure should be configured to automatically update protection signatures" }
+      ]
+    },
+    {
+      "id": "mdc-vm-disk-encryption",
+      "canonicalId": "0cb5f317-a94b-6b80-7212-13a9cc8826af",
+      "canonicalTitle": "Windows virtual machines should enable Azure Disk Encryption or EncryptionAtHost.",
+      "members": [
+        { "provider": "mdc", "id": "0cb5f317-a94b-6b80-7212-13a9cc8826af" },
+        { "provider": "eg", "id": "Windows virtual machines should enable Azure Disk Encryption or EncryptionAtHost." }
+      ]
+    },
+    {
+      "id": "mdc-sql-geo-redundant-backup",
+      "canonicalId": "6eeddd0b-9ee9-b4c2-af34-4d4fe673e819",
+      "canonicalTitle": "Long-term geo-redundant backup should be enabled for Azure SQL Databases",
+      "members": [
+        { "provider": "mdc", "id": "6eeddd0b-9ee9-b4c2-af34-4d4fe673e819" },
+        { "provider": "eg", "id": "Long-term geo-redundant backup should be enabled for Azure SQL Databases" }
+      ]
+    },
+    {
+      "id": "mdc-sql-firewall-rules",
+      "canonicalId": "8bde1a6b-a583-4a91-b1b5-0366e605cdf4",
+      "canonicalTitle": "Server-level firewall rules should be tracked and maintained at a strict minimum on SQL Servers",
+      "members": [
+        { "provider": "mdc", "id": "8bde1a6b-a583-4a91-b1b5-0366e605cdf4" },
+        { "provider": "eg", "id": "Server-level firewall rules should be tracked and maintained at a strict minimum on SQL Servers" }
+      ]
+    },
+    {
+      "id": "mdc-email-scanning",
+      "canonicalId": "1eb84c57-2252-466d-8504-c7d34fce2126",
+      "canonicalTitle": "Turn on e-mail scanning",
+      "members": [
+        { "provider": "mdc", "id": "1eb84c57-2252-466d-8504-c7d34fce2126" },
+        { "provider": "eg", "id": "Turn on e-mail scanning" },
+        { "provider": "mde", "id": "scid-90" }
+      ]
+    },
+    {
+      "id": "mdc-rdp-network-level-authentication",
+      "canonicalId": "a5a0d2d3-909d-4954-a083-4fb40fcdc181",
+      "canonicalTitle": "Require user authentication for remote connections by using Network Level Authentication",
+      "members": [
+        { "provider": "mdc", "id": "a5a0d2d3-909d-4954-a083-4fb40fcdc181" },
+        { "provider": "eg", "id": "Require user authentication for remote connections by using Network Level Authentication" },
+        { "provider": "mde", "id": "scid-45" }
+      ]
+    },
+    {
+      "id": "mdc-minimum-password-length",
+      "canonicalId": "bc9d4fef-9e33-48fc-bcbd-b53e60caf4a2",
+      "canonicalTitle": "Minimum password length should be 14 or more characters",
+      "members": [
+        { "provider": "mdc", "id": "bc9d4fef-9e33-48fc-bcbd-b53e60caf4a2" },
+        { "provider": "mde", "id": "scid-32" }
+      ]
+    },
+    {
+      "id": "mdc-account-lockout-threshold",
+      "canonicalId": "2c4d3323-de56-450a-acda-75b55f60dba2",
+      "canonicalTitle": "Account lockout threshold",
+      "members": [
+        { "provider": "mdc", "id": "2c4d3323-de56-450a-acda-75b55f60dba2" },
+        { "provider": "mde", "id": "scid-44" }
+      ]
+    },
+    {
+      "id": "mdc-machine-inactivity-limit",
+      "canonicalId": "691b418f-e20e-4d4a-b084-3b7563f38879",
+      "canonicalTitle": "Interactive logon: Machine inactivity limit",
+      "members": [
+        { "provider": "mdc", "id": "691b418f-e20e-4d4a-b084-3b7563f38879" },
+        { "provider": "mde", "id": "scid-28" }
+      ]
+    },
+    {
+      "id": "mdc-account-lockout-duration",
+      "canonicalId": "5cde9936-ffd5-4aca-9f05-6699353ed3ce",
+      "canonicalTitle": "Account lockout duration",
+      "members": [
+        { "provider": "mdc", "id": "5cde9936-ffd5-4aca-9f05-6699353ed3ce" },
+        { "provider": "mde", "id": "scid-41" }
+      ]
+    },
+    {
+      "id": "mdc-reset-account-lockout-counter",
+      "canonicalId": "071cf127-7766-4551-9a72-788c23f17442",
+      "canonicalTitle": "Reset account lockout counter after",
+      "members": [
+        { "provider": "mdc", "id": "071cf127-7766-4551-9a72-788c23f17442" },
+        { "provider": "mde", "id": "scid-42" }
+      ]
+    },
+    {
+      "id": "mdc-update-software-on-mde-cve",
+      "match": "fold",
+      "stage": "production",
+      "description": "Defender for Cloud's 'Update <software>' recommendation on a server restates Defender for Endpoint's CVE findings for that software on the same machine: it is evidence on each of them, not a finding of its own. Compared on the generic SI fields after mapping (the title's software against si_affected_product). Testing until proven on an internal run.",
+      "evidence": [
+        { "field": "si_finding_type", "equals": "recommendation" },
+        { "field": "si_title", "pattern": "^update (?<software>.+)$" }
+      ],
+      "canonical": [
+        { "field": "si_finding_type", "equals": "cve" }
+      ],
+      "on": [
+        { "evidence": "software", "canonical": "si_affected_product" }
+      ]
+    }
+  ]
+}

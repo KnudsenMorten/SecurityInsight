@@ -1,0 +1,21 @@
+id:        MicrosoftDynamicsCrmServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft Dynamics CRM Server'
+category:  'CRM'
+description: ''
+displayNames:
+  - 'Microsoft Dynamics CRM Server'
+
+detections:
+  - id: MicrosoftDynamicsCrmServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dynamics_crm_server*'
+    set:
+      Tier:     2
+      Purpose:  'CRM'
+      Category: 'CRM'

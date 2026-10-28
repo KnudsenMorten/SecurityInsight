@@ -1,0 +1,21 @@
+id:        GoogleApigeeEdge
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Apigee Edge'
+category:  'API Gateway'
+description: ''
+displayNames:
+  - 'Apigee Edge'
+
+detections:
+  - id: GoogleApigeeEdge
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'apigee_edge*'
+    set:
+      Tier:     2
+      Purpose:  'API Gateway'
+      Category: 'API Gateway'

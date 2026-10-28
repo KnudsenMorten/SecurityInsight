@@ -1,0 +1,46 @@
+@* #822 THE "SET VALUE" BOX beside a secret-name field (SecretSetViewComponent). The value goes to the updater ENCRYPTED and
+   is stored in the install's own Key Vault; it is never shown again -- only its state. Inside a page's form (the usual
+   case: a setting or a connector field) the box has no form of its own (forms do not nest): its button posts the page's
+   form to /Admin/Secrets/Set (formaction) and names WHICH secret by its value; the value field is SecretValue:<target>,
+   which the audit trail and the request log always hide ("secret" in the name). Outside a form (OwnForm) it brings one. *@
+@model SI.Management.Web.Settings.SecretSetView
+@{
+    var cls = Model.State.State switch
+    {
+        SI.Management.Web.Settings.SecretState.Stored => "state ok",
+        SI.Management.Web.Settings.SecretState.Failed => "state bad",
+        _ => "state",
+    };
+    var id = "secret-" + System.Text.RegularExpressions.Regex.Replace(Model.Target + "-" + Model.SecretName, "[^A-Za-z0-9_-]", "-");
+    var pick = Model.Target + "|" + Model.SecretName;
+}
+<div class="secret-set" data-secret-set="@Model.SecretName" data-secret-target="@Model.Target">
+    <p class="hint"><span class="@cls" data-secret-state="@Model.State.State.ToString().ToLowerInvariant()">@Model.State.Text</span>
+        <span class="mono">(Key Vault: @Model.SecretName)</span></p>
+    @if (Model.Refused is { } why)
+    {
+        <p class="hint" data-secret-refused>Not settable here: @why.</p>
+    }
+    else if (Model.CanSet)
+    {
+        if (Model.OwnForm)
+        {
+            <form method="post" asp-page="/Admin/Secrets/Set" class="inline-form" autocomplete="off">
+                <input type="hidden" name="ReturnUrl" value="@Model.ReturnUrl" />
+                <label for="@id">@Model.Label -- set value</label>
+                <input id="@id" type="password" name="@SI.Management.Web.Pages.Admin.Secrets.SetModel.ValueField(Model.Target)" autocomplete="new-password" spellcheck="false" />
+                <button type="submit" class="small" name="SecretPick" value="@pick">Set value</button>
+            </form>
+        }
+        else
+        {
+            <span class="inline-form">
+                <label for="@id">@Model.Label -- set value</label>
+                <input id="@id" type="password" name="@SI.Management.Web.Pages.Admin.Secrets.SetModel.ValueField(Model.Target)" autocomplete="new-password" spellcheck="false" />
+                <input type="hidden" name="ReturnUrl" value="@Model.ReturnUrl" />
+                <button type="submit" class="small" formaction="/Admin/Secrets/Set" formmethod="post" formnovalidate name="SecretPick" value="@pick">Set value</button>
+            </span>
+        }
+        <p class="hint">Stored in your Key Vault by the updater, encrypted on the way; never shown again.</p>
+    }
+</div>

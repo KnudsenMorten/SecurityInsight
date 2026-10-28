@@ -1,0 +1,103 @@
+@page
+@model SI.Management.Web.Pages.Admin.Departments.RulesModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Department rules";
+}
+<h1>Department rules and overrides</h1>
+<p class="lede">How an asset gets its department, highest first: a <strong>recommendation override</strong> (one issue on every asset), an <strong>asset override</strong>, then the policy -- @string.Join(" then ", Model.Policy.Sources.Select(s => s == "tags" ? "the platform tags (" + string.Join(", ", Model.Policy.TagNames) + ")" : "the rules below")) -- then @(Model.Policy.DefaultDepartment is null ? "the Unassigned queue" : "the default department " + Model.Policy.DefaultDepartment). The order, the tag names and the default are settings (<nav-ref page="/Admin/Settings/Index" />, <em>Data &amp; retention</em>; the monthly report under <em>Mail &amp; notifications</em>). Changes apply on the next data sync.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Refusal is not null) { <div class="notice error" role="alert" data-refusal>@Model.Refusal</div> }
+@if (Model.Ready)
+{
+    <section class="card" aria-labelledby="chk-h">
+        <h2 id="chk-h">Why is this asset there?</h2>
+        <form method="get" class="gridbar">
+            <label for="chk-a">Asset key</label>
+            <input id="chk-a" name="asset" value="@Model.Asset" maxlength="400" />
+            <label for="chk-r">Recommendation (optional)</label>
+            <input id="chk-r" name="recommendation" value="@Model.Recommendation" maxlength="256" placeholder="a configuration id or CVE" />
+            <button type="submit">Check</button>
+        </form>
+        @if (Model.CheckNote is not null) { <p class="notice warn">@Model.CheckNote</p> }
+        @if (Model.Check is { } c)
+        {
+            <p data-check-answer>With today's policy: <strong>@Model.NameOf(c.DepartmentId)</strong> -- placed by <strong>@c.Source</strong>@(c.Detail is null ? "" : " (" + c.Detail + ")").
+            @if (Model.StoredAnswer is not null) { <span class="hint">The last data sync stored: @Model.StoredAnswer.</span> }</p>
+            @if (Model.CheckTags.Count > 0)
+            {
+                <p class="hint">Its platform tags: @string.Join("; ", Model.CheckTags.Select(t => (t.Name.Length > 0 ? t.Name + "=" : "") + t.Value + " (" + t.Source + ")"))</p>
+            }
+        }
+    </section>
+
+    <section class="card" aria-labelledby="r-h">
+        <h2 id="r-h">Rules <span class="badge">@Fmt.Int(Model.Rules.Count)</span></h2>
+        <p class="hint">The first matching rule (lowest order) wins. * and ? are wildcards. Kinds: name (the asset name), kind (endpoint, identity, azure, publicip), service (the CMDB / business service), group (Defender device group, Azure resource group or subscription), tag (any platform tag, "Name=Value" or the value).</p>
+        <table data-rules data-sortable>
+            <thead><tr><th class="num">Order</th><th>Kind</th><th>Pattern</th><th>Department</th><th>Note</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+            <tbody>
+                @foreach (var r in Model.Rules)
+                {
+                    <tr data-rule="@r.RuleId">
+                        <td class="num" data-value="@Fmt.Raw(r.SortOrder)">@Fmt.Int(r.SortOrder)</td><td>@r.Kind</td><td class="wrap">@r.Pattern</td><td>@r.DepartmentName</td><td class="wrap">@r.Note</td>
+                        <td>
+                            <form method="post" asp-page-handler="RemoveRule" class="row-actions">
+                                <input type="hidden" name="ruleId" value="@r.RuleId" />
+                                <button type="submit" class="small secondary">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <form method="post" asp-page-handler="AddRule" class="gridbar">
+            <label for="r-kind">Kind</label>
+            <select id="r-kind" name="kind">@foreach (var k in ResponsibilityResolver.RuleKinds) { <option>@k</option> }</select>
+            <label for="r-pat">Pattern</label>
+            <input id="r-pat" name="pattern" required maxlength="400" placeholder="SRV-FIN*" />
+            <label for="r-dept">Department</label>
+            <select id="r-dept" name="departmentId">@foreach (var d in Model.Active) { <option value="@d.DepartmentId">@d.Name</option> }</select>
+            <label for="r-order">Order</label>
+            <input id="r-order" name="sortOrder" type="number" min="0" max="100000" value="@((Model.Rules.Count == 0 ? 0 : Model.Rules.Max(r => r.SortOrder)) + 10)" />
+            <label for="r-note">Note</label>
+            <input id="r-note" name="note" maxlength="400" />
+            <button type="submit" disabled="@(Model.Active.Count == 0)">Add rule</button>
+        </form>
+    </section>
+
+    <section class="card" aria-labelledby="o-h">
+        <h2 id="o-h">Active overrides <span class="badge">@Fmt.Int(Model.Overrides.Count)</span></h2>
+        <p class="hint">Assign many at once from the <a href="/Departments/Unassigned">Unassigned</a> view (select rows, or everything a filter matches).</p>
+        <table data-overrides data-sortable>
+            <thead><tr><th>On</th><th>What</th><th>Department</th><th>Reason</th><th>By</th><th data-sort="off">Revoke</th></tr></thead>
+            <tbody>
+                @foreach (var o in Model.Overrides)
+                {
+                    <tr data-override="@o.OverrideId">
+                        <td>@o.Scope</td><td class="wrap">@(o.AssetKey ?? o.RecommendationKey)</td><td>@o.DepartmentName</td><td class="wrap">@o.Reason</td><td class="wrap">@o.CreatedBy, @Fmt.Time(o.CreatedAt)</td>
+                        <td>
+                            <form method="post" asp-page-handler="Revoke" class="row-actions">
+                                <input type="hidden" name="overrideId" value="@o.OverrideId" />
+                                <input type="text" name="reason" required minlength="3" maxlength="400" placeholder="why" aria-label="Reason to revoke" />
+                                <button type="submit" class="small secondary">Revoke</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <h3>One override</h3>
+        <form method="post" asp-page-handler="Override" class="gridbar">
+            <label for="o-scope">On</label>
+            <select id="o-scope" name="scope"><option value="recommendation">a recommendation (every asset)</option><option value="asset">an asset</option></select>
+            <label for="o-key">Key</label>
+            <input id="o-key" name="key" required maxlength="400" placeholder="a configuration id / CVE, or an asset key" />
+            <label for="o-dept">Department</label>
+            <select id="o-dept" name="departmentId">@foreach (var d in Model.Active) { <option value="@d.DepartmentId">@d.Name</option> }</select>
+            <label for="o-reason">Reason</label>
+            <input id="o-reason" name="reason" required minlength="3" maxlength="400" />
+            <button type="submit" disabled="@(Model.Active.Count == 0)">Set override</button>
+        </form>
+    </section>
+}

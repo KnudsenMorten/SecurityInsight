@@ -1,0 +1,133 @@
+{
+  "$comment": "Field mapping for provider 'cmdb': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/cmdb.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "cmdb",
+  "version": "1.0.0",
+  "description": "SecurityInsight's own CMDB (Pro: the CMDB tables; Community: the CMDB csv). A record is linked to a CI in the enrichment step (pinned, identifier, rule, name).",
+  "objects": [
+    {
+      "recordType": "cmdb_ci",
+      "class": "*",
+      "parts": {
+        "ci": "Pro: cfg.CmdbService (+ cfg.CmdbServiceAsset); Community: asset-profiling-providers/generic-cmdb/CMDB.csv"
+      },
+      "key": "ci.cmdbID",
+      "timestamp": "ci.UpdatedAt"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "cmdb_record_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cmdbID",
+        "ci.Number"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cmdbID",
+        "ci.Number"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_name",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cmdbName",
+        "ci.Name"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_criticality",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.Criticality"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_data_sensitivity",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.DataSensitivity"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_environment",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.Environment"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_owner",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.Owner",
+        "ci.OwnerMail"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_owner_department",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.Department"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_service",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cmdbName",
+        "ci.Name"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    }
+  ]
+}

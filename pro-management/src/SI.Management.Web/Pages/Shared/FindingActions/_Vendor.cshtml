@@ -1,0 +1,4 @@
+@model SI.Management.Web.Actions.ActionFormModel
+<label for="@Model.Id("note")">What you ask of the vendor (goes into each mail and the log)</label>
+<textarea id="@Model.Id("note")" name="a.note" rows="3" maxlength="2000" required minlength="3"></textarea>
+<p class="hint">Each finding goes to the vendor contact of the remediation flow that applies to it (<nav-ref page="/Admin/Departments/Flows" />). The mail carries the finding's detail -- no link into SecurityInsight, no risk score.</p>

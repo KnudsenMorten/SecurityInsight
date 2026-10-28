@@ -1,0 +1,79 @@
+@page
+@model SI.Management.Web.Pages.Management.DrilldownModel
+@{
+    ViewData["Title"] = "Top 10 asset drilldown";
+    var d = Model.Data!;
+    var f = d.View.Figures;
+}
+<link rel="stylesheet" href="~/css/exec.css" asp-append-version="true" />
+<div class="exec" data-exec data-grain="@d.View.Grain" data-mode="@d.View.Mode">
+<h1>Top 10 asset drilldown</h1>
+<partial name="_ExportPdf" model="@("Top 10 asset drilldown")" />
+<p class="lede">The ten riskiest assets of the last Risk Analysis run, as the mail ranks them, each with its findings in the newest collection by domain and category, and its highest-risk findings.</p>
+@await Html.PartialAsync("_ExecSelector", (d.View, "/Management/Drilldown"))
+<partial name="_ExecEmpty" model="d" />
+@if (Model.FindingsNote is not null) { <div class="notice warn" role="status">@Model.FindingsNote</div> }
+@if (f is not null)
+{
+    @* #863: the AI summary off is said first, with what turns it on -- never an empty list as if there were no risk *@
+    @if (!f.AISummaryEnabled) { <partial name="_AiSummaryOff" model="@(Model.FromDatabase ? SI.Management.Web.RiskExec.AiSummaryNote.ListFromDatabase : SI.Management.Web.RiskExec.AiSummaryNote.ListFromRun)" /> }
+    @if (Model.ListNote is { } ln) { <p class="hint" data-top-list-note>@ln</p> }
+    @if (Model.Assets.Count == 0) { if (Model.ListNote is null) { <p class="hint" data-top-list-empty>This run listed no assets.</p> } }
+    else if (Model.TableView("drilldown") is { } tv)
+    {
+        @* #589: the ten assets in one table -- each one's CI with its identifiers and context, the chooser, the exports *@
+        <section class="card" aria-labelledby="h-dt"><h2 id="h-dt">The ten assets</h2><partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" /></section>
+    }
+    @foreach (var a in Model.Assets)
+    {
+        var key = Model.CiKey(a);
+        var groups = key is null ? new List<SI.Management.Core.ProData.ExecFindingGroup>() : Model.Findings.Groups.Where(g => g.AssetKey == key).ToList();
+        var top = key is null ? new List<SI.Management.Core.ProData.ExecAssetFinding>() : Model.Findings.Top.Where(t => t.AssetKey == key).ToList();
+        <section class="card exec-drill" aria-labelledby="h-d@(a.Rank)" data-drill="@a.Asset">
+            <h2 id="h-d@(a.Rank)">@Fmt.Int(a.Rank). <a href="@Model.Link(a)">@a.Asset</a></h2>
+            <p><strong>Tier:</strong> @a.Tier · <strong>Weighted Risk Score:</strong> @Fmt.Int((long)Math.Round(a.WeightedRiskScore)) · <strong>Total Risk Score:</strong> @Fmt.Int((long)Math.Round(a.TotalRiskScore)) · <strong>Findings:</strong> @Fmt.Int(a.Findings) · <strong>Domains:</strong> @string.Join(", ", a.Domains)</p>
+            @if (groups.Count > 0)
+            {
+                <h3>Findings by domain and category</h3>
+                <div class="table-wrap">
+                    <table data-sortable data-drill-groups>
+                        <thead><tr><th>Domain</th><th>Category</th><th class="num">Findings</th>@foreach (var s in SI.Management.Web.Pages.Management.DrilldownModel.Severities) { <th class="num">@s</th> }</tr></thead>
+                        <tbody>
+                            @foreach (var g in groups.GroupBy(x => (x.Domain, x.Category)).OrderByDescending(x => x.Sum(y => y.Findings)))
+                            {
+                                <tr>
+                                    <td>@(g.Key.Domain.Length > 0 ? g.Key.Domain : "—")</td>
+                                    <td class="wrap">@(g.Key.Category.Length > 0 ? g.Key.Category : "—")</td>
+                                    <td class="num">@Fmt.Int(g.Sum(x => x.Findings))</td>
+                                    @foreach (var s in SI.Management.Web.Pages.Management.DrilldownModel.Severities)
+                                    {
+                                        <td class="num">@Fmt.Int(g.Where(x => SI.Management.Web.Pages.Management.DrilldownModel.Bucket(x.Severity) == s).Sum(x => x.Findings))</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (top.Count > 0)
+            {
+                <h3>Highest-risk findings</h3>
+                <ul data-drill-top>
+                    @foreach (var t in top)
+                    {
+                        <li><a href="/Findings/Detail?c=@Uri.EscapeDataString(t.CollectionId)&id=@Uri.EscapeDataString(t.FindingId)">@(t.Title.Length > 0 ? t.Title : t.Issue)</a>@if (t.Issue.Length > 0) { <span class="muted"> [@t.Issue]</span> } -- @t.Severity · risk @Fmt.Score(t.RiskScore)@if (t.Domain.Length > 0) { <span> · @t.Domain</span> }</li>
+                    }
+                </ul>
+            }
+            else if (a.TopItems.Count > 0)
+            {
+                <h3>Top items in the report</h3>
+                <ul>@foreach (var i in a.TopItems) { <li>@i</li> }</ul>
+                @if (key is null) { <p class="hint">This asset is not in the Pro database's CI list, so its findings are shown as the report listed them.</p> }
+            }
+        </section>
+    }
+}
+@if (d.Query is { } q) { <partial name="_Query" model='QueryInfo.From(q, "Risk Analysis views")' /> }
+@if (Model.FindingsQuery is { } fq) { <partial name="_Query" model='QueryInfo.From(fq, "Findings of the top 10 assets")' /> }
+</div>

@@ -1,0 +1,122 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.ExportImportModel
+@using SI.Management.Web.ConfigIo
+@using SI.Management.Web.ChangeJournal
+@{
+    ViewData["Title"] = "Export / Import";
+    var n = 0;
+}
+<h1>Export / Import</h1>
+<p class="lede">Export your configuration -- all of it or chosen sections -- to one signed file, and import one: you see what differs, tick what to take over, preview it, and the ticked items become pending changes you commit on <a href="/Changes">Review &amp; commit</a> -- every check still runs. Secrets are never in the file: a secret setting holds only the NAME of its Key Vault secret. The file is the same format as a configuration backup. Use it to copy test to production, to keep a baseline, before a big change, or to send to support.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-io-error>@Model.Error</div> }
+@if (!Model.HasTable)
+{
+    @if (Model.Error is null) { <div class="notice warn" role="status" data-io-missing>The configuration set is not in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds).</div> }
+}
+else
+{
+    <section class="card" aria-labelledby="export-h" data-export>
+        <h2 id="export-h">Export</h2>
+        <form method="get" class="stack-form" data-export-form>
+            <input type="hidden" name="handler" value="Export" />
+            <fieldset>
+                <legend>Sections (none ticked = everything)</legend>
+                @foreach (var s in Model.Sections)
+                {
+                    <label><input type="checkbox" name="S" value="@s.Name" /> @s.Label (@(Fmt.Int(Model.Counts.TryGetValue(s.Name, out var c) ? c : 0)))</label>
+                }
+            </fieldset>
+            <button type="submit" data-export-submit>Export to a file</button>
+        </form>
+    </section>
+
+    <section class="card" aria-labelledby="import-h" data-import>
+        <h2 id="import-h">Import</h2>
+        <form method="post" asp-page-handler="Inspect" enctype="multipart/form-data" class="inline-form" data-inspect-form>
+            <label for="io-file">Configuration file</label>
+            <input id="io-file" name="Upload" type="file" accept=".json,application/json" required />
+            <button type="submit">Upload and compare</button>
+        </form>
+        <p class="hint">Uploading changes nothing: the file is checked and compared with your configuration now.</p>
+    </section>
+
+    @if (Model.Uploaded is { } u && Model.Plan is { } plan)
+    {
+        var hdr = u.Header;
+        <section class="card" aria-labelledby="plan-h" data-plan="@u.Token" data-verdict="@u.Verdict">
+            <h2 id="plan-h">@u.FileName</h2>
+            <dl class="facts">
+                <dt>Signature</dt><dd><span class="badge @(u.Verdict == ConfigBackupFile.Verdict.Verified ? "good" : "warn")">@u.Message</span></dd>
+                <dt>From</dt><dd>@(ConfigEntities.Text(hdr?["product"]) is { Length: > 0 } p ? p : "SecurityInsight") @(ConfigEntities.Text(hdr?["productVersion"])) · tenant @(ConfigEntities.Text(hdr?["tenantId"]) is { Length: > 0 } t ? t : "not stated") · @(ConfigEntities.Text(hdr?["environment"]))</dd>
+                <dt>Exported</dt><dd>by @(ConfigEntities.Text(hdr?["exportedBy"]))</dd>
+            </dl>
+            @foreach (var r in plan.Refusals) { <div class="notice error" role="alert" data-refusal>Cannot be imported: @r</div> }
+            @foreach (var w in plan.Warnings) { <div class="notice warn" role="status" data-warning>@w</div> }
+            @if (!plan.Refused)
+            {
+                <div class="table-wrap">
+                    <table class="findings grid" data-sortable data-list="import-sections">
+                        <thead><tr><th scope="col">Section</th><th scope="col" class="num">New</th><th scope="col" class="num">Changed</th><th scope="col" class="num">Unchanged</th><th scope="col" class="num">Only here</th><th scope="col" class="num">Flagged</th></tr></thead>
+                        <tbody>
+                            @foreach (var s in plan.Sections)
+                            {
+                                <tr data-section="@s.Entity.Name"><td>@s.Entity.Label</td><td class="num" data-value="@s.New">@Fmt.Int(s.New)</td><td class="num" data-value="@s.Changed">@Fmt.Int(s.Changed)</td><td class="num" data-value="@s.Unchanged">@Fmt.Int(s.Unchanged)</td><td class="num" data-value="@s.OnlyHere">@Fmt.Int(s.OnlyHere)</td><td class="num" data-value="@s.Flagged">@Fmt.Int(s.Flagged)</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (Model.Preview is { } pv)
+                {
+                    <div class="notice info" role="status" data-preview="@pv.Count"><strong>Preview -- nothing was written.</strong> Apply would keep the file as a backup and stage these @Fmt.Int(pv.Count) item(s) for Review &amp; commit:
+                        <ul>@foreach (var i in pv) { <li data-preview-item="@i.Id">@i.Entity.Label: <code class="tech">@i.Key</code> -- @i.Words@(i.Flag is null ? "" : " (flagged: " + i.Flag + ")")</li> }</ul>
+                    </div>
+                }
+                <form method="post" class="stack-form" data-choose-form>
+                    <input type="hidden" name="T" value="@u.Token" />
+                    @foreach (var g in plan.Items.Where(i => i.State != ConfigImport.State.Unchanged).GroupBy(i => i.Entity))
+                    {
+                        <details class="restore-area" open data-area="@g.Key.Name">
+                            <summary><strong>@g.Key.Label</strong> -- @Fmt.Int(g.Count()) difference(s)</summary>
+                            <div class="table-wrap">
+                                <table class="findings grid" data-sortable data-list="import-@g.Key.Name">
+                                    <thead><tr><th scope="col">Import</th><th scope="col">Item</th><th scope="col">State</th><th scope="col">File &rarr; now</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var i in g)
+                                        {
+                                            n++;
+                                            var ticked = Model.Pick.Count > 0 ? Model.Pick.Contains(i.Id) : i.DefaultTicked;
+                                            <tr data-item="@i.Id" data-state="@i.State" data-flagged="@(i.Flag is not null)">
+                                                <td><label class="sr-only" for="pick-@n">Import @i.Key</label><input id="pick-@n" type="checkbox" name="Pick" value="@i.Id" checked="@ticked" /></td>
+                                                <td class="wrap"><code class="tech">@i.Key</code></td>
+                                                <td class="wrap">@i.Words@if (i.Flag is not null) { <div class="badge warn" data-flag>flagged: @i.Flag</div> }</td>
+                                                <td class="wrap">@if (i.Diff is { } d) { <ul class="diff">@foreach (var f in d.Fields.Take(30)) { <li><code class="tech">@f.Field</code>: <ins>@f.Backup</ins> &larr; <del>@f.Now</del></li> }</ul> }</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </details>
+                    }
+                    @if (!plan.Items.Any(i => i.State != ConfigImport.State.Unchanged))
+                    {
+                        <p class="notice ok" data-nothing-to-import>Your configuration already matches this file in every section -- there is nothing to import.</p>
+                    }
+                    else
+                    {
+                        @if (u.Verdict != ConfigBackupFile.Verdict.Verified)
+                        {
+                            <label><input type="checkbox" name="AcceptUnverified" value="true" checked="@Model.AcceptUnverified" /> I trust this file (@u.Message)</label>
+                        }
+                        <p class="hint">Each line reads <em>file &larr; now</em>. "Only here" items are not ticked: importing one REMOVES it here. Flagged items carry ids of another tenant -- tick one only when you know the id means the same here.</p>
+                        <label for="io-reason">Why import? (required for Apply, on the audit trail)</label>
+                        <input id="io-reason" name="Reason" type="text" minlength="@ExportImportModel.ReasonMin" maxlength="400" value="@Model.Reason" />
+                        <div class="actions">
+                            <button type="submit" asp-page-handler="Preview" class="secondary" data-preview-submit>Preview (changes nothing)</button>
+                            <button type="submit" asp-page-handler="Apply" data-apply-submit>Apply the ticked items</button>
+                        </div>
+                    }
+                </form>
+            }
+        </section>
+    }
+}

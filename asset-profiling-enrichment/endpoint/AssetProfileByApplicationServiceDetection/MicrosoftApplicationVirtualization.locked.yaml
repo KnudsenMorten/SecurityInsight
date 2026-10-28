@@ -1,0 +1,22 @@
+id:        MicrosoftApplicationVirtualization
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft Application Virtualization'
+category:  'App Delivery'
+description: ''
+displayNames:
+  - 'Microsoft Application Virtualization'
+  - 'App-V'
+
+detections:
+  - id: MicrosoftApplicationVirtualization
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'application_virtualization*'
+    set:
+      Tier:     2
+      Purpose:  'App Delivery'
+      Category: 'App Delivery'

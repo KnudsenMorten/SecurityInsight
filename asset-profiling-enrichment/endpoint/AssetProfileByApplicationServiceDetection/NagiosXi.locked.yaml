@@ -1,0 +1,22 @@
+id:        NagiosXi
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Nagios Core'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Nagios Core'
+  - 'Nagios XI'
+
+detections:
+  - id: NagiosXi
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'xi*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

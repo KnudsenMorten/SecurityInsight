@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://securityinsight.io/schemas/provider-manifest.schema.json",
+  "title": "SecurityInsight provider manifest",
+  "description": "Schema for v2.2/asset-profiling-providers/<name>/manifest.json. See _PROVIDER_CONTRACT.md.",
+  "type": "object",
+  "required": ["id", "kind", "engines", "auth", "bulk"],
+  "additionalProperties": false,
+  "properties": {
+    "id":          { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Folder name (lowercase + dashes only)." },
+    "kind":        { "type": "string", "enum": ["in", "out", "both"] },
+    "engines":     { "type": "array",  "items": { "type": "string", "enum": ["identity","endpoint","azure","publicip"] }, "minItems": 1, "uniqueItems": true },
+    "auth": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type":   { "type": "string", "enum": ["spn","umi","api-key","none"] },
+        "scopes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "bulk":        { "type": "boolean", "description": "true when Read-... returns all assets in N pages (no per-asset calls)." },
+    "rateLimit": {
+      "type": "object",
+      "properties": {
+        "calls": { "type": "integer", "minimum": 1 },
+        "per":   { "type": "string",  "pattern": "^[0-9]+(s|m|h)$" }
+      }
+    },
+    "description": { "type": "string" },
+    "schemaFragment": { "type": "string", "description": "Optional path (relative to provider folder) to a JSON schema fragment." }
+  }
+}

@@ -1,0 +1,229 @@
+@page
+@model SI.Management.Web.Pages.Admin.EnvironmentReportModel
+@using SI.Management.Web.EnvReport
+@{
+    ViewData["Title"] = "Environment report";
+    var r = Model.Report;
+    var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(HttpContext.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, HttpContext.RequestAborted);
+}
+<link rel="stylesheet" href="~/css/report.css" asp-append-version="true" />
+<div class="report-actions no-print" data-report-actions>
+    <h1>Environment report</h1>
+    <p class="lede">The architecture and security facts of this SecurityInsight install, read from the live environment now: its Azure resources, identities, permissions, features, data flows, recent changes and findings. A sensitive document -- Admins and SuperAdmins only; it never holds a secret value (names, ids and states only).</p>
+    <div class="actions">
+        <button type="button" data-print>Export PDF</button>
+        <a class="button secondary" href="/Admin/EnvironmentReport?handler=Json" data-export-json>Export JSON</a>
+    </div>
+    <p class="hint">Export PDF opens your browser's print dialog laid out for A4: choose "Save as PDF".</p>
+</div>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-report-error>@Model.Error</div> }
+@if (r is not null)
+{
+    var s = r.Summary;
+    <article class="report-doc" data-env-report data-confidential="Confidential -- @s.Customer">
+        <section class="report-cover" data-cover>
+            <img src="@brand.LightLogo" alt="@brand.LogoAlt" class="report-logo" data-edition="@(brand.Pro ? "pro" : "community")" />
+            <h1>Environment report</h1>
+            <p class="report-customer">@s.Customer</p>
+            <p>Tenant @s.Tenant @if (s.TenantId is not null) { <code class="tech">@s.TenantId</code> } · environment @s.Environment</p>
+            <p>Read from the live environment @Fmt.Time(r.ReadUtc)</p>
+            <p class="report-confidential">Confidential -- @s.Customer</p>
+        </section>
+        <nav class="report-toc" aria-label="Contents" data-toc>
+            <h2>Contents</h2>
+            <ol>
+                <li><a href="#env-summary">Summary</a></li><li><a href="#env-architecture">Architecture</a></li><li><a href="#env-identities">Identities</a></li>
+                <li><a href="#env-permissions">Permissions per identity</a></li><li><a href="#env-features">Features</a></li><li><a href="#env-flows">Data flows</a></li>
+                <li><a href="#env-changes">Change history</a></li><li><a href="#env-findings">Findings</a></li>
+            </ol>
+        </nav>
+
+        <section id="env-summary" class="report-section" data-part="summary">
+            <h2>1. Summary</h2>
+            <dl class="facts">
+                <dt>Customer</dt><dd>@s.Customer</dd>
+                <dt>Tenant</dt><dd>@s.Tenant</dd>
+                <dt>Product</dt><dd>@s.Product -- @s.Edition</dd>
+                <dt>Licence</dt><dd>@s.Licence</dd>
+                <dt>Version</dt><dd>@s.Version</dd>
+                <dt>Update ring</dt><dd>@(s.Ring ?? "not recorded")</dd>
+                <dt>Environment</dt><dd>@s.Environment</dd>
+                <dt>Installed</dt><dd>@Fmt.Time(s.InstalledUtc, empty: "not recorded")</dd>
+                <dt>Health</dt><dd>@s.Health -- @Fmt.Int(s.StepsDone) of @Fmt.Int(s.StepsTotal) setup steps done</dd>
+                <dt>Findings</dt><dd data-findings-count="@r.Findings.Count">@(Fmt.Int(r.Findings.Count(f => f.Severity == "high"))) high, @(Fmt.Int(r.Findings.Count(f => f.Severity == "medium"))) medium, @(Fmt.Int(r.Findings.Count(f => f.Severity is "low" or "info"))) low / info</dd>
+            </dl>
+        </section>
+
+        <section id="env-architecture" class="report-section" data-part="architecture">
+            <h2>2. Architecture</h2>
+            <p>Subscription <code class="tech">@(r.Azure.SubscriptionId ?? "not known")</code>, resource group <code class="tech">@(r.Azure.ResourceGroup ?? "not known")</code>.</p>
+            @if (r.Azure.Error is not null) { <div class="notice warn" role="status" data-azure-error>@r.Azure.Error</div> }
+            <svg class="report-diagram" viewBox="0 0 960 230" role="img" aria-label="Architecture: the sources, the collection jobs, the Pro database, Log Analytics, Risk Analysis, the web app and the mail" data-diagram="architecture">
+                <g fill="#ffffff" stroke="#1B4FE4" stroke-width="2">
+                    <rect x="10" y="20" width="150" height="60" rx="6" /><rect x="210" y="20" width="150" height="60" rx="6" /><rect x="410" y="20" width="150" height="60" rx="6" />
+                    <rect x="610" y="20" width="150" height="60" rx="6" /><rect x="800" y="20" width="150" height="60" rx="6" />
+                    <rect x="410" y="150" width="150" height="60" rx="6" /><rect x="210" y="150" width="150" height="60" rx="6" /><rect x="800" y="150" width="150" height="60" rx="6" />
+                </g>
+                <g fill="none" stroke="#0B1633" stroke-width="1.5">
+                    <path d="M160 50 H210" /><path d="M360 50 H410" /><path d="M560 50 H610" /><path d="M760 50 H800" /><path d="M485 80 V150" /><path d="M360 180 H410" /><path d="M875 80 V150" />
+                </g>
+                <g font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#0B1633" text-anchor="middle">
+                    <text x="85" y="46">Entra ID, Defender,</text><text x="85" y="64">Azure (read-only)</text>
+                    <text x="285" y="46">Collection jobs</text><text x="285" y="64">(container app jobs)</text>
+                    <text x="485" y="46">Pro database</text><text x="485" y="64">(Azure SQL)</text>
+                    <text x="685" y="46">Log Analytics</text><text x="685" y="64">(CIs, run health)</text>
+                    <text x="875" y="46">Risk Analysis</text><text x="875" y="64">(Kusto reports)</text>
+                    <text x="485" y="176">Correlation and</text><text x="485" y="194">the CI build (SQL)</text>
+                    <text x="285" y="176">Web app (this page)</text><text x="285" y="194">Entra sign-in</text>
+                    <text x="875" y="176">Mail (shared mailbox</text><text x="875" y="194">or SMTP relay)</text>
+                </g>
+            </svg>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-resources">
+                    <thead><tr><th scope="col">Resource</th><th scope="col">Kind</th><th scope="col">Location</th><th scope="col">Network</th></tr></thead>
+                    <tbody>
+                        @foreach (var res in r.Azure.Resources)
+                        {
+                            <tr data-resource="@res.Name"><td class="wrap"><code class="tech">@res.Name</code></td><td>@res.Kind</td><td>@res.Location</td>
+                                <td class="wrap">@(res.Network.Count == 0 ? "–" : string.Join("; ", res.Network.Select(n => n.Fact + ": " + n.Value)))</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (r.Azure.Roles.Count > 0)
+            {
+                <h3>Azure role assignments on the resource group</h3>
+                <div class="table-wrap">
+                    <table class="findings grid" data-sortable data-list="env-rbac">
+                        <thead><tr><th scope="col">Principal</th><th scope="col">Type</th><th scope="col">Role</th><th scope="col">Scope</th></tr></thead>
+                        <tbody>
+                            @foreach (var ra in r.Azure.Roles)
+                            {
+                                <tr><td><code class="tech">@ra.PrincipalId</code></td><td>@ra.PrincipalType</td><td>@ra.Role</td><td class="wrap"><code class="tech">@ra.Scope</code></td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section id="env-identities" class="report-section" data-part="identities">
+            <h2>3. Identities</h2>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-identities">
+                    <thead><tr><th scope="col">Name</th><th scope="col">Id</th><th scope="col">Kind</th><th scope="col">Used for</th></tr></thead>
+                    <tbody>
+                        @foreach (var i in r.Identities)
+                        {
+                            <tr data-identity="@i.Name"><td class="wrap">@i.Name</td><td><code class="tech">@(i.Id ?? "–")</code></td><td>@i.Kind</td><td class="wrap">@i.Used</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="hint">The Invardia Support app and the SQL administrator group are not visible to the web app's identity; they are named in the install's setup record.</p>
+        </section>
+
+        <section id="env-permissions" class="report-section" data-part="permissions">
+            <h2>4. Permissions per identity</h2>
+            <p>Each permission SecurityInsight declares (config\permissions.locked.json) against the newest self-check of the engines that run as that identity: <strong>present</strong>, <strong>missing</strong>, <strong>not checked</strong> (the run could not tell) or <strong>not checked yet</strong> (no engine has reported). Grants beyond the list (extra) are not visible to the web app's identity.</p>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-permissions">
+                    <thead><tr><th scope="col">Identity</th><th scope="col">Area</th><th scope="col">Permission</th><th scope="col">State</th><th scope="col">Why</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in r.Permissions)
+                        {
+                            <tr data-permission="@p.Item" data-state="@p.State"><td class="wrap">@p.Identity</td><td>@p.Area</td><td><code class="tech">@p.Item</code></td>
+                                <td><span class="badge @(p.State == "present" ? "good" : p.State == "missing" ? "bad" : "info")">@p.State</span></td><td class="wrap">@p.Why@if (p.Fix is not null && p.State == "missing") { <div class="hint">Fix: @p.Fix</div> }</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="env-features" class="report-section" data-part="features">
+            <h2>5. Features</h2>
+            <p>The settings that change security behaviour, and every switch set away from its default -- with what the current value does.</p>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-features">
+                    <thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">What it does</th><th scope="col">As it is set now</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in r.Features)
+                        {
+                            <tr data-feature="@f.Setting"><td class="wrap">@f.Title<div class="hint"><code class="tech">@f.Setting</code>@(f.SecurityRelevant ? " · security-relevant" : "")</div></td>
+                                <td>@f.Value@(f.IsDefault ? " (default)" : "")</td><td class="wrap">@f.What</td><td class="wrap">@f.Consequence</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="env-flows" class="report-section" data-part="flows">
+            <h2>6. Data flows</h2>
+            <svg class="report-diagram" viewBox="0 0 960 150" role="img" aria-label="Data flows: collection to records to CIs to Risk Analysis, in SQL and Log Analytics" data-diagram="flows">
+                <g fill="#ffffff" stroke="#18B4F2" stroke-width="2">
+                    <rect x="10" y="40" width="160" height="60" rx="6" /><rect x="210" y="40" width="160" height="60" rx="6" /><rect x="410" y="40" width="160" height="60" rx="6" />
+                    <rect x="610" y="40" width="160" height="60" rx="6" /><rect x="800" y="40" width="150" height="60" rx="6" />
+                </g>
+                <g fill="none" stroke="#0B1633" stroke-width="1.5"><path d="M170 70 H210" /><path d="M370 70 H410" /><path d="M570 70 H610" /><path d="M770 70 H800" /></g>
+                <g font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#0B1633" text-anchor="middle">
+                    <text x="90" y="66">Collection</text><text x="90" y="84">(read-only APIs)</text>
+                    <text x="290" y="66">Records</text><text x="290" y="84">(SQL)</text>
+                    <text x="490" y="66">CIs and links</text><text x="490" y="84">(SQL, copied to LA)</text>
+                    <text x="690" y="66">Risk Analysis</text><text x="690" y="84">(Log Analytics, Kusto)</text>
+                    <text x="875" y="66">Mails, web app,</text><text x="875" y="84">connectors</text>
+                </g>
+            </svg>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-flows">
+                    <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Direction</th><th scope="col">Protocol</th><th scope="col">Authentication</th><th scope="col">Data</th><th scope="col">Here</th></tr></thead>
+                    <tbody>
+                        @foreach (var fl in r.Flows)
+                        {
+                            <tr><td class="wrap">@fl.From</td><td class="wrap">@fl.To</td><td>@fl.Direction</td><td class="wrap">@fl.Protocol</td><td class="wrap">@fl.Auth</td><td class="wrap">@fl.Data</td><td class="wrap">@fl.State</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="env-changes" class="report-section" data-part="changes">
+            <h2>7. Change history</h2>
+            <p>The newest configuration commits (the change journal); the full history and undo are on <nav-ref page="/Admin/Commits" />, every action on <nav-ref page="/Admin/History" />.</p>
+            @if (r.ChangesNote is not null) { <p class="hint" data-changes-note>@r.ChangesNote</p> }
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="env-changes">
+                    <thead><tr><th scope="col">When</th><th scope="col">By</th><th scope="col">Approved by</th><th scope="col">Source</th><th scope="col" class="num">Records</th><th scope="col">What</th><th scope="col">Why</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in r.Changes)
+                        {
+                            <tr><td>@Fmt.Time(c.CommittedUtc)</td><td class="wrap">@c.InitiatedBy</td><td class="wrap">@c.ApprovedBy</td><td>@c.Source</td><td class="num" data-value="@c.Records">@Fmt.Int(c.Records)</td><td class="wrap">@c.Entities</td><td class="wrap">@c.Reason</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="env-findings" class="report-section" data-part="findings">
+            <h2>8. Findings</h2>
+            @if (r.Findings.Count == 0) { <p class="notice ok" data-no-findings>No deviation found.</p> }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="findings grid" data-sortable data-list="env-findings">
+                        <thead><tr><th scope="col">Severity</th><th scope="col">Area</th><th scope="col">Finding</th><th scope="col">Fix</th></tr></thead>
+                        <tbody>
+                            @foreach (var f in r.Findings)
+                            {
+                                <tr data-finding="@f.Area" data-severity="@f.Severity"><td><span class="badge @(f.Severity == "high" ? "bad" : f.Severity == "medium" ? "warn" : "info")">@f.Severity</span></td><td>@f.Area</td><td class="wrap">@f.Text</td><td class="wrap">@f.Fix</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+        <footer class="report-footer">Confidential -- @s.Customer -- SecurityInsight Pro @s.Version -- read @Fmt.Time(r.ReadUtc)</footer>
+    </article>
+}
+@section Scripts {
+    <script src="~/js/print.js" asp-append-version="true"></script>
+}

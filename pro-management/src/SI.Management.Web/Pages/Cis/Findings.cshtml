@@ -1,0 +1,8 @@
+@page
+@model SI.Management.Web.Pages.Cis.FindingsModel
+@{
+    ViewData["Title"] = "Findings per CI";
+}
+<h1>Findings per CI</h1>
+<p class="lede">One row per CI and finding: the finding on the CI that holds it, with its state (open, reopened or closed), when it was first detected and last seen. A CI's risk score is the sum of its findings' scores. The same rows reach the findings workbook through its output fields (<nav-ref page="/Reports/Index" />).</p>
+<partial name="_CiDataGrid" model="Model" />

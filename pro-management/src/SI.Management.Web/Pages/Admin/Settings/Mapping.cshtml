@@ -1,0 +1,154 @@
+@page "{m?}"
+@model SI.Management.Web.Pages.Admin.Settings.MappingModel
+@using SI.Management.Web.Changes
+@{
+    ViewData["Title"] = Model.Spec.Title;
+    var spec = Model.Spec;
+    long N(IReadOnlyDictionary<string, long>? d, string k) => d is not null && d.TryGetValue(k, out var v) ? v : 0;
+    var slots = Model.Bucket.Count + MappingModel.SpareBuckets;
+    string BucketAt(int i) => i < Model.Bucket.Count ? Model.Bucket[i] ?? "" : "";
+    var rules = Math.Max(Model.RuleField.Count, Model.RuleValues.Count) + MappingModel.SpareRules;
+    string At(List<string?> l, int i) => i < l.Count ? l[i] ?? "" : "";
+    var noun = spec.Assets ? "CI(s)" : "finding(s)";
+}
+<h1>@(spec.Id == DimensionMapping.ServiceNowSubCi.Id ? "ServiceNow: sub-CI mapping" : spec.Title)</h1>
+<p class="lede" data-mapping-lede>@spec.Lede Your changes apply from the next run; what is stored already is not rewritten.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-mapping-error>@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RiskFactorStore.MissingSchemaMessage</div> }
+
+<form method="post" class="stack" data-mapping="@spec.Id" novalidate>
+    <section class="card" aria-labelledby="mb-h" data-mapping-buckets>
+        <h2 id="mb-h">Buckets</h2>
+        <p class="hint">Rename a bucket in place; clear its name to remove it; type a name in an empty row to add one. Exactly one is the fallback: what no rule places gets it -- never blank.</p>
+        <table class="grid" data-sortable>
+            <thead><tr><th scope="col">Bucket</th><th scope="col">Fallback</th></tr></thead>
+            <tbody>
+            @for (var i = 0; i < slots; i++)
+            {
+                var slot = i.ToString();
+                <tr data-bucket-slot="@slot">
+                    <td><input type="text" name="Bucket[@slot]" value="@BucketAt(i)" maxlength="64" aria-label="Bucket @(i + 1)" disabled="@(!Model.CanEdit)" /></td>
+                    <td><input type="radio" name="Fallback" value="@slot" checked="@(Model.Fallback == slot)" aria-label="Fallback bucket" disabled="@(!Model.CanEdit)" /></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+
+    @if (spec.BaseField is not null)
+    {
+        <section class="card" aria-labelledby="mc-h" data-mapping-base>
+            <h2 id="mc-h">Per component</h2>
+            <p class="hint">The bucket of a finding no rule below placed, by its component (Component (finding)).</p>
+            <table class="grid" data-sortable>
+                <thead><tr><th scope="col">Component</th><th scope="col">Bucket</th></tr></thead>
+                <tbody>
+                @foreach (var v in Model.BaseValues)
+                {
+                    var cur = Model.Base.TryGetValue(v, out var s) ? s ?? "" : "";
+                    <tr data-base-value="@v">
+                        <td>@v</td>
+                        <td><select name="Base[@v]" aria-label="Bucket of @v" disabled="@(!Model.CanEdit)">
+                            <option value="" selected="@(cur == "")">(the fallback)</option>
+                            @for (var i = 0; i < Model.Bucket.Count; i++)
+                            {
+                                var slot = i.ToString();
+                                <option value="@slot" selected="@(cur == slot)">@BucketAt(i)</option>
+                            }
+                        </select></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </section>
+    }
+
+    <section class="card" aria-labelledby="mr-h" data-mapping-rules>
+        <h2 id="mr-h">Rules (first match wins)</h2>
+        <p class="hint">Checked in the order of the Order column, before @(spec.BaseField is null ? "the fallback" : "the component"). Several values are separated by <code>;</code>. A pattern uses <code>*</code> (anything) and <code>?</code> (one character), case does not matter. Clear a row to remove it; a new bucket can be picked after it is staged once.</p>
+        <div class="table-wrap">
+        <table class="grid" data-sortable>
+            <thead><tr><th scope="col">Order</th><th scope="col">Field</th><th scope="col">Match</th><th scope="col">Value(s)</th><th scope="col">Bucket</th></tr></thead>
+            <tbody>
+            @for (var i = 0; i < rules; i++)
+            {
+                var f = At(Model.RuleField, i); var m = At(Model.RuleMatch, i); var b = At(Model.RuleBucket, i);
+                <tr data-rule-row="@i">
+                    <td><input type="number" name="RuleOrder[@i]" value="@(At(Model.RuleOrder, i) is { Length: > 0 } o ? o : ((i + 1) * 10).ToString(System.Globalization.CultureInfo.InvariantCulture))" step="1" aria-label="Order" disabled="@(!Model.CanEdit)" /></td>
+                    <td><select name="RuleField[@i]" aria-label="Field" disabled="@(!Model.CanEdit)">
+                        <option value="" selected="@(f == "")"></option>
+                        @foreach (var rf in spec.RuleFields) { <option value="@rf.Field" selected="@(f == rf.Field)">@rf.Label</option> }
+                    </select></td>
+                    <td><select name="RuleMatch[@i]" aria-label="Match" disabled="@(!Model.CanEdit)">
+                        @foreach (var mm in DimensionMapping.Matches) { <option value="@mm.Match" selected="@(m == mm.Match)">@mm.Label</option> }
+                    </select></td>
+                    <td><input type="text" name="RuleValues[@i]" value="@At(Model.RuleValues, i)" maxlength="2000" aria-label="Values" disabled="@(!Model.CanEdit)" /></td>
+                    <td><select name="RuleBucket[@i]" aria-label="Bucket" disabled="@(!Model.CanEdit)">
+                        @for (var k = 0; k < Model.Bucket.Count; k++)
+                        {
+                            var slot = k.ToString();
+                            <option value="@slot" selected="@(b == slot)">@BucketAt(k)</option>
+                        }
+                    </select></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        </div>
+    </section>
+
+    @if (Model.CanEdit)
+    {
+        <div><label for="mp-reason">Reason (audited, in the change log)</label><input id="mp-reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" /></div>
+        @if (Model.Problems.Count > 0)
+        {
+            <div class="notice error" role="alert" data-mapping-problems><strong>Not accepted:</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+        }
+        <div class="actions">
+            <button type="submit" asp-page-handler="Preview" asp-route-m="@spec.Id" class="secondary" data-mapping-preview>Preview</button>
+            <button type="submit" asp-page-handler="Stage" asp-route-m="@spec.Id" data-mapping-stage>Stage this mapping</button>
+        </div>
+        <p class="hint">Nothing is written here. A staged change is written on <a href="/Changes">Review &amp; commit</a> in your name, and takes effect from the next run.</p>
+    }
+    else
+    {
+        <p class="hint" data-mapping-readonly>An Admin changes the mapping.</p>
+    }
+</form>
+
+@if (Model.Previewing)
+{
+    <section class="card" aria-labelledby="mpv-h" data-mapping-preview-table>
+        <h2 id="mpv-h">@(spec.Assets ? "CIs" : "Findings") per bucket</h2>
+        @if (Model.Planned is { } planned)
+        {
+            <p class="hint" data-mapping-planned>@(planned.Count == 0 ? "The entered mapping is the one in force." : $"Staging it makes {planned.Count} change(s): " + string.Join("; ", planned.Select(c => c.What)) + ".")</p>
+        }
+        @if (Model.PreviewNotice is not null)
+        {
+            <p class="hint" data-mapping-preview-notice>@Model.PreviewNotice</p>
+        }
+        else if (Model.InForceCounts is not null)
+        {
+            <p class="hint">@(spec.Assets ? "Every CI in the Pro database" : $"The newest complete collection ({Fmt.Time(Model.Collection!.CollectionTime)})"), counted from what is stored -- nothing is re-run. "Stored" is what the last run wrote.</p>
+            var keys = Model.InForce.Buckets.Concat(Model.EnteredCounts?.Keys ?? Enumerable.Empty<string>()).Concat(Model.StoredCounts!.Keys).Distinct(StringComparer.Ordinal).ToList();
+            <div class="table-wrap">
+                <table class="grid" data-sortable>
+                    <thead><tr><th scope="col">Bucket</th><th scope="col">Stored</th><th scope="col">With the mapping in force</th>@if (Model.EnteredCounts is not null) { <th scope="col" data-entered-head>With the mapping entered</th> }</tr></thead>
+                    <tbody>
+                    @foreach (var k in keys)
+                    {
+                        <tr data-preview-bucket="@k">
+                            <td>@k</td>
+                            <td class="num" data-stored>@Fmt.Int(N(Model.StoredCounts, k))</td>
+                            <td class="num" data-inforce-count>@Fmt.Int(N(Model.InForceCounts, k))</td>
+                            @if (Model.EnteredCounts is not null) { <td class="num" data-entered-count>@Fmt.Int(N(Model.EnteredCounts, k))</td> }
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            <p class="hint">@noun in all: @Fmt.Int(Model.InForceCounts.Values.Sum())</p>
+        }
+    </section>
+}

@@ -1,0 +1,76 @@
+@page
+@model SI.Management.Web.Pages.Departments.ThreadModel
+@using SI.Management.Web.FindingComments
+@{
+    ViewData["Title"] = Model.Facts?.Title ?? "Finding";
+    var f = Model.Facts;
+}
+<h1>@(f?.Title ?? Model.Rec ?? "Finding")</h1>
+<p class="lede"><a href="/Departments/Detail?id=@Model.Id">Back to the department</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@if (Model.Error is null)
+{
+    <section class="card" aria-labelledby="ff-h" data-finding="@Model.Asset|@Model.Rec">
+        <h2 id="ff-h">Finding</h2>
+        <dl class="facts">
+            <dt>Asset</dt><dd>@(f?.AssetName ?? Model.Asset)</dd>
+            <dt>Recommendation</dt><dd>@Model.Rec</dd>
+            @if (f is not null)
+            {
+                <dt>Severity</dt><dd>@f.Severity</dd>
+                <dt>Domain</dt><dd>@f.SecurityDomain</dd>
+                <dt>Tier</dt><dd>@(f.Tier ?? "Unclassified")</dd>
+            }
+        </dl>
+    </section>
+
+    <section class="card" aria-labelledby="th-h">
+        <h2 id="th-h">Comments, recommendations and approvals</h2>
+        @if (Model.Thread.Count == 0) { <p class="hint">Nothing yet.</p> }
+        else
+        {
+            <ol class="thread" data-thread>
+                @foreach (var c in Model.Thread)
+                {
+                    <li data-kind="@c.Kind">
+                        <strong>@FindingCommentKinds.Label(c.Kind)</strong> by @c.Author <span class="badge">@c.AuthorRole</span>
+                        <span class="hint">@Fmt.Time(c.CreatedAt) · signed in by @c.AuthMethod</span>
+                        <p class="wrap">@c.Body</p>
+                    </li>
+                }
+            </ol>
+        }
+        @if (f is not null)
+        {
+            @if (Model.CommentGate?.Allowed == true || Model.RecommendGate?.Allowed == true)
+            {
+                <form method="post" class="stack" data-comment-form>
+                    <label for="c-text">Your comment or recommendation</label>
+                    <textarea id="c-text" name="text" rows="4" maxlength="2000" required minlength="3"></textarea>
+                    <div class="row-actions">
+                        @if (Model.CommentGate?.Allowed == true) { <button type="submit" name="kind" value="comment">Comment</button> }
+                        @if (Model.RecommendGate?.Allowed == true) { <button type="submit" name="kind" value="recommend" class="secondary">Recommend</button> }
+                    </div>
+                </form>
+            }
+            else if (Model.CommentGate is { } g) { <p class="hint" data-comment-refused>@g.Reason</p> }
+
+            <h3>Approve</h3>
+            @if (Model.ApproveGate?.Allowed == true)
+            {
+                <form method="post" class="stack" data-approve-form>
+                    <label for="a-text">What you approve (optional)</label>
+                    <input id="a-text" name="text" maxlength="2000" placeholder="e.g. the recommended change, in the next maintenance window" />
+                    <button type="submit" name="kind" value="approve">Approve</button>
+                </form>
+            }
+            else if (Model.NeedsCode)
+            {
+                <p class="hint" data-approve-needs-code>Approving needs a second check: a one-time code mailed to your address.</p>
+                <p><a class="button" href="/Departments/Confirm?returnUrl=@Uri.EscapeDataString(Model.Here)">Confirm with a code</a></p>
+            }
+            else if (Model.ApproveGate is { } a) { <p class="hint" data-approve-refused>@a.Reason</p> }
+        }
+    </section>
+}

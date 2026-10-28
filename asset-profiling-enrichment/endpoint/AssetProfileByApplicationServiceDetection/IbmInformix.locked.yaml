@@ -1,0 +1,21 @@
+id:        IbmInformix
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'IBM Informix'
+category:  'Database'
+description: ''
+displayNames:
+  - 'IBM Informix'
+
+detections:
+  - id: IbmInformix
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'informix*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

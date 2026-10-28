@@ -1,0 +1,5 @@
+u_batch_id,u_connector,u_state,u_started_at,u_batch_time,u_ci_count,u_key_value_count,u_relation_count,u_new_cis,u_changed_cis,u_disappeared_cis,u_previous_batch_id,u_reason,u_si_batch_id
+demo-run-20261003,cmdb-sql,complete,2026-10-03 05:00:00.000,2026-10-03 05:03:00.000,6,4,5,5,0,0,,"6 CI(s): 5 new, 0 changed, 0 missing against the previous batch",demo-run-20261003
+demo-run-20261004,cmdb-sql,held,2026-10-04 05:00:00.000,,2,0,0,0,0,3,demo-run-20261003,HELD -- 3 of the previous batch's 5 CI(s) are missing (60%) -- above the 25% limit; the previous batch stays what ServiceNow imports,demo-run-20261004
+demo-run-20261005,cmdb-sql,complete,2026-10-05 05:00:00.000,2026-10-05 05:03:00.000,6,4,5,0,0,0,demo-run-20261003,"6 CI(s): 0 new, 0 changed, 0 missing against the previous batch",demo-run-20261005
+demo-run-20261006,cmdb-sql,complete,2026-10-06 05:00:00.000,2026-10-06 05:03:00.000,8,6,5,2,1,1,demo-run-20261005,"8 CI(s): 2 new, 1 changed, 1 missing against the previous batch",demo-run-20261006

@@ -1,0 +1,105 @@
+@page
+@model SI.Management.Web.Pages.Cmdb.ServiceModel
+@using SI.Management.Web.Cmdb
+@{
+    var s = Model.Service;
+    ViewData["Title"] = s is null ? "CMDB service" : s.Number + " " + s.Name;
+    var isAdmin = User.IsAdmin();
+}
+<p><a href="/Cmdb">&larr; CMDB</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (s is not null)
+{
+    <h1><span class="mono">@s.Number</span> @s.Name @if (s.Retired) { <span class="badge">retired</span> }</h1>
+    @if (s.Source != Model.Source) { <p class="notice" role="status">This service belongs to @CmdbSources.Label(s.Source), which is not the authoritative CMDB: it is stored, but nothing reads it.</p> }
+    else if (CmdbSources.IsReadOnly(s.Source)) { <p class="notice" role="status">Read-only: this service comes from @CmdbSources.Label(s.Source) and is changed there.</p> }
+    <section class="card" aria-labelledby="h-f">
+        <h2 id="h-f">Service</h2>
+        <dl class="kv">
+            <dt>Number</dt><dd class="mono">@s.Number</dd>
+            @if (s.ExternalId is not null && s.ExternalId != s.Number) { <dt>Id in the source</dt><dd class="mono">@s.ExternalId</dd> }
+            <dt>Description</dt><dd>@s.Description</dd>
+            <dt>Owner</dt><dd>@s.Owner @if (s.OwnerMail is not null) { <span class="muted">(@s.OwnerMail)</span> }</dd>
+            <dt>Criticality</dt><dd>@s.Criticality</dd>
+            <dt>Data sensitivity</dt><dd>@s.DataSensitivity</dd>
+            <dt>Environment</dt><dd>@s.Environment</dd>
+            <dt>Department</dt><dd>@s.Department</dd>
+            @foreach (var x in s.Extra()) { <dt>@x.Key</dt><dd>@x.Value</dd> }
+            <dt>Created</dt><dd>@Fmt.Time(s.CreatedAt) by @s.CreatedBy</dd>
+            <dt>Changed</dt><dd>@Fmt.Time(s.UpdatedAt) by @s.UpdatedBy</dd>
+            @if (s.Retired) { <dt>Retired</dt><dd>@Fmt.Time(s.RetiredAt) by @s.RetiredBy -- @s.RetireReason</dd> }
+        </dl>
+    </section>
+
+    @if (isAdmin && Model.Editable)
+    {
+        <div class="grid-2">
+            <form method="post" asp-page-handler="Save" class="card stack" aria-labelledby="h-e">
+                <h2 id="h-e">Edit</h2>
+                <input type="hidden" name="Version" value="@s.Version" />
+                <div><label for="e-name">Name</label><input id="e-name" name="Name" value="@s.Name" required maxlength="256" /></div>
+                <div><label for="e-desc">Description</label><input id="e-desc" name="Description" value="@s.Description" maxlength="2000" /></div>
+                <div><label for="e-owner">Owner</label><input id="e-owner" name="Owner" value="@s.Owner" maxlength="256" /></div>
+                <div><label for="e-mail">Owner e-mail</label><input id="e-mail" name="OwnerMail" type="email" value="@s.OwnerMail" maxlength="256" /></div>
+                <div><label for="e-crit">Criticality</label><select id="e-crit" name="Criticality"><option value="">(not set)</option>@foreach (var c in CmdbVocabulary.Criticalities) { <option selected="@(c == s.Criticality)">@c</option> }</select></div>
+                <div><label for="e-sens">Data sensitivity</label><select id="e-sens" name="DataSensitivity"><option value="">(not set)</option>@foreach (var c in CmdbVocabulary.Sensitivities) { <option selected="@(c == s.DataSensitivity)">@c</option> }</select></div>
+                <div><label for="e-env">Environment</label><input id="e-env" name="Environment" value="@s.Environment" maxlength="64" /></div>
+                <div><label for="e-dept">Department</label><input id="e-dept" name="Department" value="@s.Department" maxlength="128" /></div>
+                <div><label for="e-reason">Reason (audited)</label><input id="e-reason" name="Reason" maxlength="400" /></div>
+                <div class="actions"><button type="submit">Save</button></div>
+            </form>
+            <form method="post" asp-page-handler="Retire" class="card stack" aria-labelledby="h-r" data-confirm-title="Retire @s.Number?" data-confirm="A retired service is kept with its history, but nothing reads it any more and it cannot be changed. Its number is never given to another service.">
+                <h2 id="h-r">Retire</h2>
+                <p class="hint">Retiring keeps the service, its links and its history; it stops counting in every view. The number is never reused.</p>
+                <input type="hidden" name="Version" value="@s.Version" />
+                <div><label for="r-reason">Reason (audited)</label><input id="r-reason" name="Reason" required minlength="3" maxlength="400" /></div>
+                <div class="actions"><button type="submit" class="secondary">Retire service</button></div>
+            </form>
+        </div>
+    }
+
+    @* #855 M18 / M19: the linked assets and the owned CIs of the lifecycle chosen (default: active), said and chosen once *@
+    var lifeScope = new SI.Management.Web.Pages.ViewScope { Lifecycle = Model.Lifecycle.Words(Model.LifecycleRules, "Linked assets and owned CIs"), LifecycleDefaulted = Model.Lifecycle.IsDefault, Definitions = Model.LifecycleRules.Definitions };
+    <partial name="~/Pages/Shared/_ViewScope.cshtml" model="lifeScope" />
+    <partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(ViewContext.HttpContext.Request, Model.Lifecycle)" />
+    <section class="card" aria-labelledby="h-a">
+        <div class="split"><h2 id="h-a">@Fmt.Int(Model.AssetTotal) linked asset(s)</h2><a href="/Cmdb/Map">Service map</a></div>
+        @if (Model.Assets.Count == 0) { <p class="hint">No asset of this lifecycle is linked to this service.</p> }
+        else if (Model.TableView("assets") is { } av)
+        {
+            @* #589: the CI, its identifiers and context -- the chooser and the exports of every linked asset *@
+            <partial name="~/Pages/Shared/_DataTable.cshtml" model="av" />
+            @if (Model.AssetTotal > Model.Assets.Count) { <p class="hint">The first @Fmt.Int(Model.Assets.Count), by weighted risk; the exports take every linked asset.</p> }
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-o" data-service-cis>
+        <h2 id="h-o">CIs this service owns (@Fmt.Int(Model.OwnedCis.Count))</h2>
+        <p class="hint">Every CI the CI build placed in this service -- linked here, matched by a service model rule, or named by the CI's own CMDB record -- with its open findings. The CIs inherit this service's owner, criticality, data sensitivity and environment; a CI in several services takes the strictest.</p>
+        @if (!Model.OwnedCisRead) { <p class="hint">Not available yet: the CI build has not written the services of the CIs.</p> }
+        else if (Model.OwnedCis.Count == 0) { <p class="hint">No CI of this lifecycle belongs to this service.</p> }
+        else if (Model.TableView("cis") is { } cv)
+        {
+            <partial name="~/Pages/Shared/_DataTable.cshtml" model="cv" />
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-h">
+        <h2 id="h-h">Change history</h2>
+        @if (Model.History.Count == 0) { <p class="hint">No change recorded.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable data-service-history>
+                    <thead><tr><th>When</th><th>Who</th><th>Change</th><th>Reason</th><th>Details</th></tr></thead>
+                    <tbody>
+                        @foreach (var h in Model.History)
+                        {
+                            <tr><td>@Fmt.Time(h.ChangedAt)</td><td>@h.ChangedBy</td><td>@h.Action</td><td>@h.Reason</td><td class="wrap mono">@h.NewValue</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}

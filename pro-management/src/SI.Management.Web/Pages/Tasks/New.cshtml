@@ -1,0 +1,62 @@
+@page
+@model SI.Management.Web.Pages.Tasks.NewModel
+@using SI.Management.Web.Tasks
+@{
+    ViewData["Title"] = "New follow-up tasks";
+    var today = Model.Today;
+}
+<p class="split"><a href="/Findings@(Model.C is null ? "" : "?c=" + Uri.EscapeDataString(Model.C))">&larr; Findings</a></p>
+<h1>A follow-up task for each selected finding</h1>
+<p class="lede">One task per finding -- the same title, person and due day -- each kept on its own finding across collections. At most @Fmt.Int(FindingTaskService.MaxBulk) findings at once; if you may not write to one of them, none is created.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-task-bulk-error>@Model.Error</div> }
+@if (Model.Problems.Count > 0) { <div class="notice error" role="alert"><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div> }
+@if (Model.Targets.Count > 0)
+{
+    <section class="card" aria-labelledby="h-sel">
+        <h2 id="h-sel"><span data-task-bulk-count>@Fmt.Int(Model.Targets.Count)</span> finding(s)</h2>
+        <div class="table-wrap">
+            <table class="findings" data-sortable data-task-bulk>
+                <thead><tr><th scope="col">Asset</th><th scope="col">Finding</th><th scope="col">Severity</th><th scope="col">Department</th></tr></thead>
+                <tbody>
+                    @foreach (var t in Model.Targets)
+                    {
+                        <tr><td class="wrap">@t.Finding.AssetName</td><td class="wrap">@t.Finding.Title</td><td>@t.Finding.Severity</td><td>@(t.DepartmentName ?? "Unassigned")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <section class="card" aria-labelledby="h-form">
+        <h2 id="h-form">The task</h2>
+        <form method="post" asp-page-handler="Submit" class="stack" data-task-bulk-form>
+            <input type="hidden" name="C" value="@Model.C" />
+            @foreach (var t in Model.Targets) { <input type="hidden" name="Sel" value="@t.Finding.FindingId" /> }
+            <label for="b-title">What to follow up</label>
+            <input id="b-title" name="Title" value="@Model.Title" maxlength="200" required minlength="3" />
+            <label for="b-for">For</label>
+            <select id="b-for" name="Assignee">
+                <option value="me">Me</option>
+                @foreach (var p in Model.People) { <option value="@p.Key">@p.DisplayName (@(p.Kind == AssigneeKinds.Advisor ? "advisor" : p.Role))</option> }
+                @if (Model.MayAssignEntra) { <option value="entra">An Entra user or group (object id)</option> }
+            </select>
+            @if (Model.People.Count == 0) { <p class="hint">The selected findings are in more than one department (or none), so only you@(Model.MayAssignEntra ? " or an Entra user or group" : "") can be given the tasks here.</p> }
+            @if (Model.MayAssignEntra)
+            {
+                <fieldset class="filterbar">
+                    <legend>Entra user or group (only when "An Entra user or group" is chosen)</legend>
+                    <div><label for="b-ek">Kind</label><select id="b-ek" name="EntraKind"><option value="user">User</option><option value="group">Group</option></select></div>
+                    <div><label for="b-eid">Object id</label><input id="b-eid" name="EntraId" maxlength="36" /></div>
+                    <div><label for="b-en">Name</label><input id="b-en" name="EntraName" maxlength="256" /></div>
+                    <div><label for="b-em">Mail (optional)</label><input id="b-em" name="EntraMail" type="email" maxlength="256" /></div>
+                </fieldset>
+            }
+            <div class="filterbar">
+                <div><label for="b-due">Due</label><input id="b-due" name="Due" type="date" required min="@today.ToString("yyyy-MM-dd")" value="@(Model.Due?.ToString("yyyy-MM-dd") ?? today.AddDays(7).ToString("yyyy-MM-dd"))" /></div>
+                <div><label for="b-rem">Reminder (optional)</label><input id="b-rem" name="Remind" type="date" min="@today.ToString("yyyy-MM-dd")" /></div>
+            </div>
+            <label for="b-note">Note (optional)</label>
+            <textarea id="b-note" name="Note" rows="2" maxlength="2000">@Model.Note</textarea>
+            <button type="submit">Create @Fmt.Int(Model.Targets.Count) task(s)</button>
+        </form>
+    </section>
+}

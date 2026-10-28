@@ -1,0 +1,21 @@
+id:        MdaemonEmailServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'MDaemon Email Server'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'MDaemon Email Server'
+
+detections:
+  - id: MdaemonEmailServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'email_server*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

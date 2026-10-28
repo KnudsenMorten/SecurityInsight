@@ -1,0 +1,20 @@
+@page
+@model SI.Management.Web.Pages.Collection.AssetsModel
+@inject SI.Management.Web.Navigation.TabCounts TabCounts
+@{
+    // owner 2026-10-19 ("i thought the menu item showed all cis - confused"): this page says what "at risk" includes, and
+    // how many of every CI that is -- the count of this collection's grid (unfiltered), of the CI list's own count
+    // owner 2026-10-19 (decided): the counts are of the ACTIVE CIs, as the CI list, the tier board and the tabs (TabCounts)
+    var tabCounts = await TabCounts.CiAsync(User, ViewContext.HttpContext.RequestServices, ViewContext.HttpContext.RequestAborted);
+    var all = tabCounts.All;
+    var g = Model.Grid;
+    var unfiltered = g is not null && g.State.Filters.Count == 0 && g.State.Search is null && g.State.Selected.Count == 0;
+}
+<partial name="_Header" model="Model" />
+<p class="lede" data-at-risk-meaning>"At risk" means a CI with at least one finding in this Risk Analysis collection. <nav-ref page="/Cis/Index" /> lists the active CIs, with or without findings (every CI, not seen and retired too, is one click away there).</p>
+@if (unfiltered && SI.Management.Web.Navigation.TabCounts.AtRiskSentence(tabCounts) is { } sentence)
+{
+    <p class="notice" role="status" data-at-risk-count><strong>@(sentence).</strong></p>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

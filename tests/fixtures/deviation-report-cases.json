@@ -1,0 +1,85 @@
+{
+  "_purpose": "ONE fixture, two implementations: Get-SIDeviationReport (engine/_shared/SI-DeviationReport.ps1, Pester: tests/pester/SIv3-DeviationReport.Tests.ps1) and its C# twin in the Pro web app (xunit: DeviationReportTests). Both must turn these rows into exactly the expected rows, in this order. Change the rules in both, then here.",
+  "now": "2026-10-03T12:00:00Z",
+  "expiringDays": 30,
+  "catalog": [
+    { "name": "AI_MaxAttempts", "type": "int", "secret": false, "default": 4 },
+    { "name": "AutoBucketCache", "type": "bool", "secret": false, "default": true },
+    { "name": "MailTo", "type": "list", "secret": false, "default": [] },
+    { "name": "OpenAI_apiKey", "type": "text", "secret": true, "default": null },
+    { "name": "SI_StorageAccount", "type": "text", "secret": false, "default": null },
+    { "name": "WorkspaceName", "type": "text", "secret": false, "default": "log-si" },
+    { "name": "ScoreFactor", "type": "number", "secret": false, "default": 1.5 }
+  ],
+  "settings": [
+    { "Name": "AI_MaxAttempts", "Scope": "solution", "ValueJson": "6", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "AI_MaxAttempts", "Scope": "engine:endpoint", "ValueJson": "4", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "AutoBucketCache", "Scope": "engine:risk-analysis", "ValueJson": "true", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "MailTo", "Scope": "solution", "ValueJson": "[]", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "OpenAI_apiKey", "Scope": "solution", "ValueJson": null, "KeyVaultSecretName": "openai-api-key", "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "SI_StorageAccount", "Scope": "solution", "ValueJson": "\"stsiexample\"", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-15T08:00:00Z", "UpdatedBy": "dave@example.test" },
+    { "Name": "WorkspaceName", "Scope": "solution", "ValueJson": "\"log-custom\"", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-06T10:00:00Z", "UpdatedBy": "admin@example.test" },
+    { "Name": "ScoreFactor", "Scope": "solution", "ValueJson": "1.50", "KeyVaultSecretName": null, "UpdatedAt": "2026-09-06T10:00:00Z", "UpdatedBy": "admin@example.test" }
+  ],
+  "documents": [
+    { "Kind": "exclusions", "DocKey": "global", "Body": "{ \"_note\": \"x\", \"ExcludedAssetTags\": [\"--Excluded--SI\"] }", "UpdatedAt": "2026-09-02T10:00:00Z", "UpdatedBy": "admin@example.test" },
+    { "Kind": "exclusions", "DocKey": "Device_Missing_CVEs_Summary", "Body": "{ \"Comment\": \"c\", \"ExcludedCves\": [\"CVE-2025-1111\", \"CVE-2024-2222\"], \"ExcludedConfigurationIds\": [], \"CveMinAgeDays\": 30 }", "UpdatedAt": "2026-09-20T10:00:00Z", "UpdatedBy": "erin@example.test" },
+    { "Kind": "weights", "DocKey": "solution", "Body": "{ \"$schema\": \"s\", \"weightedRiskFactors\": { \"endpoint\": { \"combine\": \"product\", \"fields\": [ { \"field\": \"a\", \"valueMap\": { \"x\": 150 } }, { \"field\": \"b\", \"valueMap\": { \"y\": 120 } } ] } } }", "UpdatedAt": "2026-09-03T10:00:00Z", "UpdatedBy": "admin@example.test" },
+    { "Kind": "rule", "DocKey": "endpoint/RuleB", "Body": "id: RuleB\nmode: disable\n", "UpdatedAt": "2026-09-04T10:00:00Z", "UpdatedBy": "admin@example.test" },
+    { "Kind": "rule", "DocKey": "identity/OwnRule", "Body": "id: OwnRule\ndetections:\n  - id: OwnRule\n    set:\n      Tier: 2\n", "UpdatedAt": "2026-09-04T10:00:00Z", "UpdatedBy": "admin@example.test" }
+  ],
+  "templates": [
+    { "Kind": "rule", "ItemKey": "endpoint/RuleA", "TemplateVersion": "3.0.1", "BodyJson": "id: RuleA\ndetections:\n  - id: RuleA\n    set:\n      Tier: 2\n" },
+    { "Kind": "rule", "ItemKey": "endpoint/RuleB", "TemplateVersion": "3.0.1", "BodyJson": "id: RuleB\ndetections:\n  - id: RuleB\n    set:\n      Tier: 1\n" },
+    { "Kind": "rule", "ItemKey": "endpoint/RuleC", "TemplateVersion": "3.0.1", "BodyJson": "id: RuleC\ndetections:\n  - id: RuleC\n    set:\n      Tier: 1\n" },
+    { "Kind": "rule", "ItemKey": "endpoint/RuleD", "TemplateVersion": "3.0.1", "BodyJson": "id: RuleD\npurpose: 'shipped'\ndetections:\n  - id: RuleD\n    set:\n      Tier: 1\n" },
+    { "Kind": "rareport", "ItemKey": "report/Report_X", "TemplateVersion": "3.0.1", "BodyJson": "{\"ReportName\":\"Report_X\"}" },
+    { "Kind": "riskindex", "ItemKey": "row/a|b|c|d|e|f", "TemplateVersion": "3.0.1", "BodyJson": "{}" }
+  ],
+  "overrides": [
+    { "Kind": "ruletier", "ItemKey": "endpoint/RuleA", "State": "override", "BodyJson": "{\"ruleKey\":\"endpoint/RuleA\",\"tier\":0}", "UpdatedAt": "2026-09-21T10:00:00Z", "UpdatedBy": "frank@example.test" },
+    { "Kind": "rule", "ItemKey": "endpoint/RuleC", "State": "override", "BodyJson": "id: RuleC\ndetections:\n  - id: RuleC\n    set:\n      Tier: 0\n", "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" },
+    { "Kind": "rule", "ItemKey": "endpoint/RuleD", "State": "override", "BodyJson": "id: RuleD\npurpose: 'ours'\ndetections:\n  - id: RuleD\n    set:\n      Tier: 1\n", "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" },
+    { "Kind": "rareport", "ItemKey": "report/Report_X", "State": "disable", "BodyJson": null, "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" },
+    { "Kind": "riskindex", "ItemKey": "row/a|b|c|d|e|f", "State": "override", "BodyJson": "{\"Comments\":\"ours\"}", "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" },
+    { "Kind": "cmdbownership", "ItemKey": "assettype/server", "State": "override", "BodyJson": "{\"siAssetType\":\"server\"}", "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" },
+    { "Kind": "naming", "ItemKey": "SomeName", "State": "inherit", "BodyJson": null, "UpdatedAt": "2026-09-05T10:00:00Z", "UpdatedBy": "ops@example.test" }
+  ],
+  "exemptions": [
+    { "ExemptionId": "10", "Scope": "finding", "ReportName": "Report_X", "ConfigurationId": null, "Cve": "CVE-2025-1111", "AssetKey": "asset-1", "Reason": "compensating control", "ExpiresAt": "2026-10-10T00:00:00Z", "CreatedBy": "hank@example.test", "CreatedAt": "2026-09-01T09:00:00Z", "RevokedAt": null },
+    { "ExemptionId": "11", "Scope": "issue", "ReportName": null, "ConfigurationId": "scid-100", "Cve": null, "AssetKey": null, "Reason": "not applicable", "ExpiresAt": "2026-09-30T00:00:00Z", "CreatedBy": "ivy@example.test", "CreatedAt": "2026-08-01T09:00:00Z", "RevokedAt": null },
+    { "ExemptionId": "12", "Scope": "asset", "ReportName": null, "ConfigurationId": null, "Cve": null, "AssetKey": "asset-2", "Reason": "lab machine", "ExpiresAt": null, "CreatedBy": "gina@example.test", "CreatedAt": "2026-09-22T09:59:00Z", "RevokedAt": null },
+    { "ExemptionId": "13", "Scope": "finding", "ReportName": null, "ConfigurationId": null, "Cve": "CVE-2023-0001", "AssetKey": "asset-3", "Reason": "gone", "ExpiresAt": null, "CreatedBy": "ivy@example.test", "CreatedAt": "2026-08-01T09:00:00Z", "RevokedAt": "2026-08-15T09:00:00Z" },
+    { "ExemptionId": "14", "Scope": "issue", "ReportName": null, "ConfigurationId": null, "Cve": "CVE-2024-9999", "AssetKey": null, "Reason": "false positive", "ExpiresAt": "2027-01-01T00:00:00Z", "CreatedBy": "jack@example.test", "CreatedAt": "2026-09-10T09:00:00Z", "RevokedAt": null }
+  ],
+  "changeLog": [
+    { "ChangeId": 1, "Name": "AI_MaxAttempts", "Scope": "solution", "Kind": null, "Action": "Set", "ChangedAt": "2026-08-01T08:00:00Z", "ChangedBy": "alice@example.test", "Reason": "first" },
+    { "ChangeId": 2, "Name": "AI_MaxAttempts", "Scope": "solution", "Kind": null, "Action": "Reset", "ChangedAt": "2026-08-10T08:00:00Z", "ChangedBy": "bob@example.test", "Reason": null },
+    { "ChangeId": 3, "Name": "AI_MaxAttempts", "Scope": "solution", "Kind": null, "Action": "Set", "ChangedAt": "2026-09-01T08:00:00Z", "ChangedBy": "carol@example.test", "Reason": "throttling at night" },
+    { "ChangeId": 4, "Name": "AI_MaxAttempts", "Scope": "solution", "Kind": null, "Action": "Set", "ChangedAt": "2026-09-15T08:00:00Z", "ChangedBy": "dave@example.test", "Reason": null },
+    { "ChangeId": 5, "Name": "Device_Missing_CVEs_Summary", "Scope": "document", "Kind": "exclusions", "Action": "Set", "ChangedAt": "2026-09-20T10:00:00Z", "ChangedBy": "erin@example.test", "Reason": "vendor patch pending" },
+    { "ChangeId": 6, "Name": "endpoint/RuleA", "Scope": "item", "Kind": "ruletier", "Action": "Set", "ChangedAt": "2026-09-21T10:00:00Z", "ChangedBy": "frank@example.test", "Reason": "moved to tier 0 after review" },
+    { "ChangeId": 7, "Name": "exemption/12", "Scope": "exemption", "Kind": "exemption", "Action": "Set", "ChangedAt": "2026-09-22T10:00:00Z", "ChangedBy": "gina@example.test", "Reason": "accepted risk" }
+  ],
+  "expected": [
+    { "Kind": "Exemption", "Item": "CVE-2025-1111 on asset-1", "Scope": "Report_X", "ShippedDefault": "not exempt", "Current": "exempt (finding)", "Reason": "compensating control", "Owner": "hank@example.test", "ChangedBy": "hank@example.test", "ChangedAt": "2026-09-01T09:00:00Z", "ExpiresAt": "2026-10-10T00:00:00Z", "Status": "expiring", "HistoryName": "exemption/10", "HistoryScope": "exemption" },
+    { "Kind": "Exemption", "Item": "CVE-2024-9999 on every asset", "Scope": "every report", "ShippedDefault": "not exempt", "Current": "exempt (issue)", "Reason": "false positive", "Owner": "jack@example.test", "ChangedBy": "jack@example.test", "ChangedAt": "2026-09-10T09:00:00Z", "ExpiresAt": "2027-01-01T00:00:00Z", "Status": "active", "HistoryName": "exemption/14", "HistoryScope": "exemption" },
+    { "Kind": "Exemption", "Item": "every finding on asset-2", "Scope": "every report", "ShippedDefault": "not exempt", "Current": "exempt (asset)", "Reason": "lab machine", "Owner": "gina@example.test", "ChangedBy": "gina@example.test", "ChangedAt": "2026-09-22T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "exemption/12", "HistoryScope": "exemption" },
+    { "Kind": "Exemption", "Item": "scid-100 on every asset", "Scope": "every report", "ShippedDefault": "not exempt", "Current": "exempt (issue)", "Reason": "not applicable", "Owner": "ivy@example.test", "ChangedBy": "ivy@example.test", "ChangedAt": "2026-08-01T09:00:00Z", "ExpiresAt": "2026-09-30T00:00:00Z", "Status": "expired", "HistoryName": "exemption/11", "HistoryScope": "exemption" },
+    { "Kind": "Exclusion", "Item": "CveMinAgeDays", "Scope": "Device_Missing_CVEs_Summary", "ShippedDefault": "0", "Current": "30", "Reason": "vendor patch pending", "Owner": "erin@example.test", "ChangedBy": "erin@example.test", "ChangedAt": "2026-09-20T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "Device_Missing_CVEs_Summary", "HistoryScope": "document" },
+    { "Kind": "Exclusion", "Item": "ExcludedCves: CVE-2024-2222", "Scope": "Device_Missing_CVEs_Summary", "ShippedDefault": "not excluded", "Current": "excluded", "Reason": "vendor patch pending", "Owner": "erin@example.test", "ChangedBy": "erin@example.test", "ChangedAt": "2026-09-20T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "Device_Missing_CVEs_Summary", "HistoryScope": "document" },
+    { "Kind": "Exclusion", "Item": "ExcludedCves: CVE-2025-1111", "Scope": "Device_Missing_CVEs_Summary", "ShippedDefault": "not excluded", "Current": "excluded", "Reason": "vendor patch pending", "Owner": "erin@example.test", "ChangedBy": "erin@example.test", "ChangedAt": "2026-09-20T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "Device_Missing_CVEs_Summary", "HistoryScope": "document" },
+    { "Kind": "Exclusion", "Item": "ExcludedAssetTags: --Excluded--SI", "Scope": "global", "ShippedDefault": "not excluded", "Current": "excluded", "Reason": "", "Owner": "admin@example.test", "ChangedBy": "admin@example.test", "ChangedAt": "2026-09-02T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "global", "HistoryScope": "document" },
+    { "Kind": "DisabledDetection", "Item": "report/Report_X", "Scope": "rareport", "ShippedDefault": "on", "Current": "turned off", "Reason": "", "Owner": "ops@example.test", "ChangedBy": "ops@example.test", "ChangedAt": "2026-09-05T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "report/Report_X", "HistoryScope": "item" },
+    { "Kind": "DisabledDetection", "Item": "endpoint/RuleB", "Scope": "rule", "ShippedDefault": "on", "Current": "turned off", "Reason": "", "Owner": "admin@example.test", "ChangedBy": "admin@example.test", "ChangedAt": "2026-09-04T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "endpoint/RuleB", "HistoryScope": "document" },
+    { "Kind": "TierMove", "Item": "endpoint/RuleC", "Scope": "rule", "ShippedDefault": "tier 1", "Current": "tier 0", "Reason": "", "Owner": "ops@example.test", "ChangedBy": "ops@example.test", "ChangedAt": "2026-09-05T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "endpoint/RuleC", "HistoryScope": "item" },
+    { "Kind": "TierMove", "Item": "endpoint/RuleA", "Scope": "ruletier", "ShippedDefault": "tier 2", "Current": "tier 0", "Reason": "moved to tier 0 after review", "Owner": "frank@example.test", "ChangedBy": "frank@example.test", "ChangedAt": "2026-09-21T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "endpoint/RuleA", "HistoryScope": "item" },
+    { "Kind": "ItemOverride", "Item": "assettype/server", "Scope": "cmdbownership", "ShippedDefault": "(none)", "Current": "added", "Reason": "", "Owner": "ops@example.test", "ChangedBy": "ops@example.test", "ChangedAt": "2026-09-05T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "assettype/server", "HistoryScope": "item" },
+    { "Kind": "ItemOverride", "Item": "row/a|b|c|d|e|f", "Scope": "riskindex", "ShippedDefault": "template 3.0.1", "Current": "overridden", "Reason": "", "Owner": "ops@example.test", "ChangedBy": "ops@example.test", "ChangedAt": "2026-09-05T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "row/a|b|c|d|e|f", "HistoryScope": "item" },
+    { "Kind": "ItemOverride", "Item": "endpoint/RuleD", "Scope": "rule", "ShippedDefault": "template 3.0.1", "Current": "overridden", "Reason": "", "Owner": "ops@example.test", "ChangedBy": "ops@example.test", "ChangedAt": "2026-09-05T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "endpoint/RuleD", "HistoryScope": "item" },
+    { "Kind": "ItemOverride", "Item": "identity/OwnRule", "Scope": "rule", "ShippedDefault": "(none)", "Current": "added", "Reason": "", "Owner": "admin@example.test", "ChangedBy": "admin@example.test", "ChangedAt": "2026-09-04T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "identity/OwnRule", "HistoryScope": "document" },
+    { "Kind": "RiskWeights", "Item": "weightedRiskFactors/endpoint", "Scope": "solution", "ShippedDefault": "(none)", "Current": "2 weighted field(s)", "Reason": "", "Owner": "admin@example.test", "ChangedBy": "admin@example.test", "ChangedAt": "2026-09-03T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "solution", "HistoryScope": "document" },
+    { "Kind": "Setting", "Item": "AI_MaxAttempts", "Scope": "solution", "ShippedDefault": "4", "Current": "6", "Reason": "throttling at night", "Owner": "carol@example.test", "ChangedBy": "dave@example.test", "ChangedAt": "2026-09-15T08:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "AI_MaxAttempts", "HistoryScope": "solution" },
+    { "Kind": "Setting", "Item": "WorkspaceName", "Scope": "solution", "ShippedDefault": "\"log-si\"", "Current": "\"log-custom\"", "Reason": "", "Owner": "admin@example.test", "ChangedBy": "admin@example.test", "ChangedAt": "2026-09-06T10:00:00Z", "ExpiresAt": null, "Status": "active", "HistoryName": "WorkspaceName", "HistoryScope": "solution" }
+  ]
+}

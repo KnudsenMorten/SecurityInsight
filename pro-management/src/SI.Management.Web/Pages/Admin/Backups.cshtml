@@ -1,0 +1,150 @@
+@page
+@model SI.Management.Web.Pages.Admin.BackupsModel
+@using SI.Management.Web.ChangeJournal
+@{
+    ViewData["Title"] = "Backups";
+    var now = DateTime.UtcNow;
+    var waiting = Model.Approvals.Where(a => a.IsOpen(now)).ToList();
+    var n = 0;
+}
+<h1>Backups</h1>
+<p class="lede">A copy of your configuration -- settings, departments and their people, access, exemptions, template overrides, connectors, the CMDB service model, the pipeline, reports and saved views -- taken every day and whenever you press Back up now. A day without changes is recorded as "no change" instead of a second copy. Backups are kept @Fmt.Int(Model.Settings.BackupRetentionDays) days (Settings: <code>@ConfigSettings.BackupRetentionDays</code>); a pinned backup is kept until it is unpinned. Secrets, the audit trail, the change journal, caches, telemetry and run logs are never in a backup.</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert" data-backups-error>@Model.Error</div>
+}
+@if (!Model.HasTable)
+{
+    @if (Model.Error is null)
+    {
+        <div class="notice warn" role="status" data-backups-missing>Configuration backups are not set up in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds).</div>
+    }
+}
+else if (Model.Chosen is { } b)
+{
+    <p><a href="/Admin/Backups">&larr; All backups</a></p>
+    <section class="card" aria-labelledby="restore-h" data-restore="@b.Id">
+        <h2 id="restore-h">Restore from backup #@b.Id (@Fmt.Time(b.TakenUtc))</h2>
+        <p class="lede">What differs between this backup and your configuration now. Tick single records, or a whole area; the ticked records become pending changes that you review and commit on Review &amp; commit -- nothing is written here, every check still runs, and the restore can be undone like any commit.@(Model.Settings.SecondPerson ? " A second SuperAdmin must approve the restore before it can be committed." : "")</p>
+        @if (Model.Diff.Count == 0)
+        {
+            <p class="notice ok" data-no-difference>Your configuration is the same as this backup -- there is nothing to restore.</p>
+        }
+        else
+        {
+            <form method="post" asp-page-handler="Restore" class="stack-form" data-restore-form
+                  data-confirm-title="Restore the ticked records?" data-confirm="@(Model.Settings.SecondPerson ? "The choice is sent to another SuperAdmin for approval." : "They become pending changes; commit them on Review & commit.")">
+                <input type="hidden" name="BackupId" value="@b.Id" />
+                @foreach (var g in Model.Diff.GroupBy(d => d.Entity))
+                {
+                    <details class="restore-area" open data-area="@g.Key.Name">
+                        <summary><label><input type="checkbox" name="PickEntity" value="@g.Key.Name" /> <strong>@g.Key.Label</strong></label> -- @Fmt.Int(g.Count()) difference(s)</summary>
+                        <div class="table-wrap">
+                            <table class="findings grid" data-sortable data-list="restore-@g.Key.Name">
+                                <thead><tr><th scope="col">Restore</th><th scope="col">Record</th><th scope="col">Since the backup</th><th scope="col">Backup &rarr; now</th></tr></thead>
+                                <tbody>
+                                    @foreach (var d in g)
+                                    {
+                                        { n++; }
+                                        <tr data-diff="@d.Id" data-kind="@d.Kind">
+                                            <td><label class="sr-only" for="pick-@n">Restore @d.Key</label><input id="pick-@n" type="checkbox" name="Pick" value="@d.Id" /></td>
+                                            <td class="wrap"><code class="tech">@d.Key</code></td>
+                                            <td>@d.Words<div class="hint">restore: @(d.RestoreOp == "Add" ? "put it back" : d.RestoreOp == "Remove" ? "take it out" : "set it back")</div></td>
+                                            <td class="wrap"><ul class="diff">@foreach (var f in d.Fields.Take(30)) { <li><code class="tech">@f.Field</code>: <ins>@f.Backup</ins> &larr; <del>@f.Now</del></li> }</ul></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                }
+                <p class="hint">Each line reads <em>backup &larr; now</em>: restoring puts the backup's value back.</p>
+                <label for="restore-reason">Why restore? (required, on the audit trail)</label>
+                <input id="restore-reason" name="Reason" type="text" required minlength="@BackupsModel.ReasonMin" maxlength="400" />
+                <button type="submit" data-restore-submit>@(Model.Settings.SecondPerson ? "Ask a second SuperAdmin to approve" : "Stage the ticked records")</button>
+            </form>
+        }
+    </section>
+}
+else
+{
+    @if (waiting.Count > 0 || Model.Approvals.Count > 0)
+    {
+        <section class="card" aria-labelledby="approvals-h" data-approvals>
+            <h2 id="approvals-h">Restores waiting for a second SuperAdmin</h2>
+            @if (waiting.Count == 0) { <p class="hint">None waiting.</p> }
+            @foreach (var a in Model.Approvals)
+            {
+                <div class="approval" data-approval="@a.Id" data-state="@a.State">
+                    <p><strong>@a.Title</strong> · asked by @a.RequestedBy @Fmt.Time(a.RequestedUtc) · <span class="badge @(a.State == "pending" ? "warn" : a.State == "approved" ? "ok" : "info")">@(a.IsOpen(now) ? "waiting" : a.State)</span></p>
+                    @if (!string.IsNullOrEmpty(a.Reason)) { <p class="hint">Why: @a.Reason</p> }
+                    @if (!string.IsNullOrEmpty(a.OutcomeText)) { <p class="hint">@a.OutcomeText</p> }
+                    @if (Model.MayRestore && a.MayDecide(Model.Me, now))
+                    {
+                        <form method="post" asp-page-handler="Decide" class="inline-form" data-decide-form>
+                            <input type="hidden" name="ApprovalId" value="@a.Id" />
+                            <label for="note-@a.Id" class="sr-only">Note</label>
+                            <input id="note-@a.Id" name="Note" type="text" maxlength="400" placeholder="Note (optional)" />
+                            <button type="submit" name="Approve" value="true">Approve</button>
+                            <button type="submit" name="Approve" value="false" class="secondary">Reject</button>
+                        </form>
+                    }
+                    else if (a.IsOpen(now) && string.Equals(a.RequestedBy, Model.Me, StringComparison.OrdinalIgnoreCase))
+                    {
+                        <p class="hint" data-own-request>You asked for this -- another SuperAdmin approves or rejects it.</p>
+                    }
+                </div>
+            }
+        </section>
+    }
+    <section class="card" aria-labelledby="backups-h" data-backups>
+        <h2 id="backups-h">@Fmt.Int(Model.Backups.Count) backup(s)</h2>
+        <div class="toolbar">
+            <form method="post" asp-page-handler="BackupNow" class="inline-form" data-backup-now>
+                <label for="bn-note" class="sr-only">Note</label>
+                <input id="bn-note" name="Note" type="text" maxlength="400" placeholder="Note (optional), e.g. before the CMDB clean-up" />
+                <button type="submit">Back up now</button>
+            </form>
+            @if (Model.MayRestore)
+            {
+                <form method="post" asp-page-handler="Import" enctype="multipart/form-data" class="inline-form" data-import-form>
+                    <label for="imp-file">Import a backup file</label>
+                    <input id="imp-file" name="Upload" type="file" accept=".json,application/json" required />
+                    <label><input type="checkbox" name="AcceptUnverified" value="true" /> I trust this file (it was signed by another installation, or not at all)</label>
+                    <button type="submit" class="secondary">Import</button>
+                </form>
+            }
+        </div>
+        <div class="table-wrap">
+            <table class="findings grid" data-sortable data-list="backups" aria-describedby="backups-h">
+                <thead><tr><th scope="col">Taken</th><th scope="col">By</th><th scope="col">How</th><th scope="col" class="num">Records</th><th scope="col">Kept</th><th scope="col">Action</th></tr></thead>
+                <tbody>
+                    @if (Model.Backups.Count == 0) { <tr><td colspan="6" class="hint">No backup yet. The daily backup job takes the first one, or press Back up now.</td></tr> }
+                    @foreach (var x in Model.Backups)
+                    {
+                        <tr data-backup-row="@x.Id" data-nochange="@(x.NoChange ? "1" : "0")" data-pinned="@(x.Pinned ? "1" : "0")">
+                            <td>@Fmt.Time(x.TakenUtc, zone: true)<div class="hint">#@x.Id</div></td>
+                            <td>@x.TakenBy</td>
+                            <td>@(x.Trigger switch { "scheduled" => "daily job", "manual" => "Back up now", "import" => "imported file", _ => x.Trigger })@(x.NoChange ? " · no change since #" + x.SameAsBackupId : "")@(string.IsNullOrEmpty(x.Note) ? "" : " · " + x.Note)</td>
+                            <td class="num" title="@string.Join(", ", x.CountList.Select(c => (Model.Entities.Find(c.Entity)?.Label ?? c.Entity) + " " + c.N))">@Fmt.Int(x.Records)</td>
+                            <td>@if (x.Pinned) { <span>pinned by @x.PinnedBy</span> } else { <span>until @Fmt.Time(x.TakenUtc.AddDays(Model.Settings.BackupRetentionDays))</span> }</td>
+                            <td class="wrap">
+                                <form method="post" asp-page-handler="Pin" class="inline-form" data-pin-form>
+                                    <input type="hidden" name="BackupId" value="@x.Id" />
+                                    <input type="hidden" name="Pinned" value="@(x.Pinned ? "false" : "true")" />
+                                    <button type="submit" class="small secondary">@(x.Pinned ? "Unpin" : "Pin")</button>
+                                </form>
+                                <a class="button small secondary" href="/Admin/Backups?handler=Export&id=@x.Id" data-export>Download</a>
+                                @if (Model.MayRestore) { <a class="button small" href="/Admin/Backups?restore=@x.Id" data-restore-link>Restore&hellip;</a> }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (!Model.MayRestore)
+        {
+            <p class="hint" data-restore-superadmin>Only a SuperAdmin can restore from a backup or import a backup file.</p>
+        }
+    </section>
+}

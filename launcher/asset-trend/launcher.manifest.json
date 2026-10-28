@@ -1,0 +1,10 @@
+{
+  "description": "SecurityInsight_Trend -- launcher for the asset-trend engine (daily trend rollup).",
+  "scriptType": "Engine",
+  "community": true,
+  "notes": "Invokes engine/asset-trend/Invoke-SITrend.ps1. Reads the Risk Analysis results in the workspace and publishes SI_Trend_CL, a narrow daily table kept for years. Schedule it LAST, once per day, after Risk Analysis. Customer config layered: LauncherConfig.defaults.ps1 -> SecurityInsight.custom.ps1 (config) -> LauncherConfig.custom.ps1 -> CLI args.",
+  "scriptName": "Trend",
+  "author": "Morten Knudsen (Invardia) <info@invardia.com>",
+  "version": "3.0.0",
+  "communityRepo": "SecurityInsight"
+}

@@ -1,0 +1,21 @@
+id:        MicrosoftSharepointFoundation
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft SharePoint Foundation'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'Microsoft SharePoint Foundation'
+
+detections:
+  - id: MicrosoftSharepointFoundation
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sharepoint_foundation*'
+    set:
+      Tier:     2
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

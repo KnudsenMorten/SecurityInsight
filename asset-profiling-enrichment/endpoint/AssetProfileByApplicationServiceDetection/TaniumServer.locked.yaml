@@ -1,0 +1,21 @@
+id:        TaniumServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Tanium Server'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'Tanium Server'
+
+detections:
+  - id: TaniumServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

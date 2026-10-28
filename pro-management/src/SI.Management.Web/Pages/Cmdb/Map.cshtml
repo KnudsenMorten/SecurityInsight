@@ -1,0 +1,104 @@
+@page
+@model SI.Management.Web.Pages.Cmdb.MapModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Cmdb
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
+@{
+    ViewData["Title"] = "Service map";
+    var canEdit = User.IsAdmin() && !Model.ReadOnly;
+    ViewData["edit"] = canEdit;
+    var token = Antiforgery.GetAndStoreTokens(HttpContext).RequestToken;
+    string TierLbl(string t) => t == ProDataFilters.Unclassified ? "Unclassified" : "Tier " + t;
+}
+<h1>Service map</h1>
+<p class="lede">Which assets belong to which business service. @(canEdit ? "Select assets and drag them onto a service to link them; drag them back onto the asset list to unlink them." : "")</p>
+<details class="help">
+    <summary>How the service map works</summary>
+    <p>The first column lists the assets (most weighted risk first), filtered on the server. Every other column is a service of the <a href="/Cmdb">CMDB</a>. An asset may belong to several services: it then shows in each of their columns, with a badge saying how many services it is in.</p>
+    @if (canEdit)
+    {
+        <p><strong>Select</strong> cards with their checkbox (or Ctrl/Cmd-click), or tick <em>all matching the filter</em>; then <strong>drag</strong> one of them onto a service. Dragging from a service onto the asset list unlinks the selected cards from that service; dragging from one service onto another adds them to the second. Every drop asks for a reason and only stages the change -- dashed = staged, not written. Commit on <a href="/Changes">Review &amp; commit</a>.</p>
+    }
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.ReadOnly)
+{
+    <p class="notice" role="status" data-readonly>The CMDB source is @CmdbSources.Label(Model.Source). The links are shown read-only; they are changed in the source and arrive with its next import.</p>
+}
+
+<form method="get" class="board-tools" data-autosubmit>
+    <div><label for="m-q">Find assets</label><input id="m-q" type="search" name="q" value="@Model.Q" placeholder="name or key" maxlength="200" data-search /></div>
+    @* THE shared filter (MultiFilter) for every filter (owner 2026-10-19): ticks OR-ed, filters AND-ed *@
+    @foreach (var mf in new[]
+    {
+        new SI.Management.Web.Pages.MultiFilter { Id = "m-kind", Name = "kind", Label = "Asset kind", Chosen = Model.Chosen("kind"), Choices = SI.Management.Web.Pages.MultiFilter.Plain(ProDataFilters.AssetKinds), Note = ProDataSql.KindOverlapNote, Apply = "Filter" },
+        new SI.Management.Web.Pages.MultiFilter { Id = "m-tier", Name = "tier", Label = "Tier", Chosen = Model.Chosen("tier"), Choices = SI.Management.Web.Pages.MultiFilter.Plain(ProDataFilters.Tiers, TierLbl), Apply = "Filter" },
+        new SI.Management.Web.Pages.MultiFilter { Id = "m-dept", Name = "dept", Label = "Department", Chosen = Model.Chosen("dept"), Choices = SI.Management.Web.Pages.MultiFilter.Plain(Model.Departments), Apply = "Filter" },
+    })
+    {
+        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div>
+    }
+    <div><label class="nowrap"><input type="checkbox" name="unlinked" value="true" checked="@Model.Unlinked" /> Unlinked only</label></div>
+    @* #855 M18: the lifecycle chosen travels with the filter form *@
+    @if (Model.LifecycleInForce.QueryValue is { } lfv) { <input type="hidden" name="lifecycle" value="@lfv" /> }
+    <div class="actions"><button type="submit">Filter</button> <a class="button secondary" href="/Cmdb/Map">Clear</a></div>
+</form>
+@* #855 M18 (owner 2026-10-21: "default filter is active, so it should be active only"): the assets and lanes of the lifecycle chosen *@
+@{ var mapScope = new SI.Management.Web.Pages.ViewScope { Lifecycle = Model.LifecycleInForce.Words(Model.LifecycleRules, "Assets"), LifecycleDefaulted = Model.LifecycleInForce.IsDefault, Definitions = Model.LifecycleRules.Definitions }; }
+<partial name="~/Pages/Shared/_ViewScope.cshtml" model="mapScope" />
+<partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(ViewContext.HttpContext.Request, Model.LifecycleInForce)" />
+
+<div class="board-wrap" data-map data-token="@token" data-query="@Model.QueryString" data-edit="@(canEdit ? "1" : "0")">
+    <script type="application/json" data-staged>@Json.Serialize(Model.StagedForMap())</script>
+    <div class="board" data-lanes>
+        <section class="lane pool" data-lane="@SI.Management.Web.Pages.Cmdb.MapModel.Pool" data-drop="@(canEdit ? "1" : "0")" aria-label="Assets">
+            <header>
+                <h2>Assets <span class="badge" data-total>@Fmt.Int(Model.PoolTotal)</span></h2>
+                @if (canEdit)
+                {
+                    <label class="nowrap hint"><input type="checkbox" data-select-matching data-count="@Model.PoolTotal" /> All @Fmt.Int(Model.PoolTotal) matching the filter</label>
+                    <p class="hint" data-selection-hint>Select cards, then drag one onto a service.</p>
+                }
+            </header>
+            <div class="cards" data-cards data-loaded="@Model.PoolAssets.Count" data-total="@Model.PoolTotal">
+                @foreach (var a in Model.PoolAssets) { <partial name="_MapCard" model="SI.Management.Web.Pages.Cmdb.MapModel.ToCard(a)" /> }
+                @if (Model.PoolAssets.Count == 0) { <p class="hint">No asset matches the filter.</p> }
+                @if (Model.PoolTotal > Model.PoolAssets.Count) { <button type="button" class="secondary small load-more" data-load-more>Load more</button> }
+            </div>
+        </section>
+        @foreach (var s in Model.Services)
+        {
+            var lane = Model.Lanes.TryGetValue(s.ServiceId, out var l) ? l : (Array.Empty<MapAsset>(), 0L);
+            <section class="lane service" data-lane="@s.ServiceId" data-service-number="@s.Number" data-service-name="@s.Name" data-drop="@(canEdit ? "1" : "0")" aria-label="@s.Number @s.Name">
+                <header>
+                    <h2><span class="mono">@s.Number</span> @s.Name <span class="badge" data-total>@Fmt.Int(s.Assets)</span></h2>
+                    <div class="sources">
+                        @if (s.Criticality is not null) { <span class="source">@s.Criticality</span> }
+                        @if (s.Environment is not null) { <span class="source">@s.Environment</span> }
+                        @if (s.Department is not null) { <span class="source">@s.Department</span> }
+                        <a class="source" href="/Cmdb/Service?id=@s.ServiceId">details</a>
+                    </div>
+                </header>
+                <div class="cards" data-cards data-loaded="@lane.Item1.Count" data-total="@lane.Item2">
+                    @foreach (var a in lane.Item1) { <partial name="_MapCard" model="SI.Management.Web.Pages.Cmdb.MapModel.ToCard(a)" /> }
+                    @if (lane.Item1.Count == 0) { <p class="hint">No asset@(canEdit ? " -- drop assets here" : "").</p> }
+                    @if (lane.Item2 > lane.Item1.Count) { <button type="button" class="secondary small load-more" data-load-more>Load more</button> }
+                </div>
+            </section>
+        }
+        @if (Model.Services.Count == 0 && Model.Error is null)
+        {
+            <section class="lane"><header><h2>No service</h2></header><div class="cards"><p class="hint">@(Model.ReadOnly ? "No service has been imported from the source yet." : "Add services on the CMDB page first.") <a href="/Cmdb">CMDB</a></p></div></section>
+        }
+    </div>
+</div>
+
+<dialog class="modal" data-reason-dialog aria-labelledby="reason-title">
+    <form method="dialog">
+        <h2 id="reason-title" data-reason-title>Stage this change?</h2>
+        <p data-reason-text></p>
+        <label for="reason-input">Reason (audited)</label>
+        <input id="reason-input" type="text" maxlength="400" data-reason-input />
+        <div class="actions"><button type="submit" value="ok">Stage</button><button type="submit" value="cancel" class="secondary">Cancel</button></div>
+    </form>
+</dialog>

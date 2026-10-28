@@ -1,0 +1,21 @@
+id:        MulesoftAnypointRuntime
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'MuleSoft Anypoint Runtime'
+category:  'Integration'
+description: ''
+displayNames:
+  - 'MuleSoft Anypoint Runtime'
+
+detections:
+  - id: MulesoftAnypointRuntime
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'anypoint_runtime*'
+    set:
+      Tier:     2
+      Purpose:  'Integration'
+      Category: 'Integration'

@@ -1,0 +1,105 @@
+@page
+@model SI.Management.Web.Pages.Admin.ConnectorsModel
+@{
+    ViewData["Title"] = "Connector status";
+}
+<div class="split"><h1>Connector status</h1><partial name="_ExportExcel" /></div>
+<p class="lede">The integrations that send SecurityInsight's results to other systems (the vulnerability close-loop targets and the ServiceNow CMDB push): when each last ran, what it planned and wrote, and why it stopped.</p>
+<details class="help">
+    <summary>How to read this page</summary>
+    <p><strong>Halted</strong> means a safety guard stopped the run before it closed anything (an empty or collapsed desired set, an incomplete run, a scope change, the close ceiling). The plan line is what the run intended; "written per run" is what reached the target. A source that is not available is listed at the top -- the others still show.</p>
+</details>
+@foreach (var e in Model.Errors) { <div class="notice warn" role="status">@e</div> }
+
+<section class="card" aria-labelledby="h-cr">
+    <h2 id="h-cr">Runs per connector</h2>
+    @if (Model.ConnectorRunRows.Count == 0) { <p class="hint">No connector run recorded yet. Each close-loop run records one line per connector here; manage them on <a href="/Admin/ConnectorSetup">Connectors</a>.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Connector</th><th>Started</th><th>Mode</th><th>Outcome</th><th class="num">Plan open</th><th class="num">Plan close</th><th class="num">Held</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Reopened</th><th class="num">Errors</th><th>Why</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.ConnectorRunRows)
+                    {
+                        <tr class="@(r.Outcome == "halted" ? "exempt" : "")">
+                            <td class="mono">@r.ConnectorName <span class="hint">@r.Kind</span></td><td>@Fmt.Time(r.StartedAt)</td><td>@r.Mode</td>
+                            <td><span class="@(r.Outcome is "success" or "whatif" ? "state ok" : "state bad")">@r.Outcome</span></td>
+                            <td class="num" data-value="@Fmt.Raw(r.PlanOpen)">@Fmt.Int(r.PlanOpen)</td><td class="num" data-value="@Fmt.Raw(r.PlanClose)">@Fmt.Int(r.PlanClose)</td><td class="num" data-value="@Fmt.Raw(r.Held)">@Fmt.Int(r.Held)</td>
+                            <td class="num" data-value="@Fmt.Raw(r.Opened)">@Fmt.Int(r.Opened)</td><td class="num" data-value="@Fmt.Raw(r.Closed)">@Fmt.Int(r.Closed)</td><td class="num" data-value="@Fmt.Raw(r.Reopened)">@Fmt.Int(r.Reopened)</td><td class="num" data-value="@Fmt.Raw(r.Errors)">@Fmt.Int(r.Errors)</td>
+                            <td class="wrap">@(r.HaltReason ?? r.Error)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<section class="card" aria-labelledby="h-t">
+    <h2 id="h-t">Close-loop targets</h2>
+    @if (Model.Targets.Count == 0) { <p class="hint">No close-loop item yet.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Source</th><th class="num">Open</th><th class="num">Closed</th><th>Last change</th></tr></thead>
+                <tbody>@foreach (var t in Model.Targets) { <tr><td>@t.Source</td><td class="num">@Fmt.Int(t.Open)</td><td class="num">@Fmt.Int(t.Closed)</td><td>@Fmt.Time(t.LastChange)</td></tr> }</tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<div class="grid-2">
+    <section class="card" aria-labelledby="h-a">
+        <h2 id="h-a">Written per close-loop run</h2>
+        @if (Model.Applied.Count == 0) { <p class="hint">No run has written anything yet.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Run</th><th>When</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Reopened</th><th class="num">Seen</th></tr></thead>
+                    <tbody>@foreach (var a in Model.Applied) { <tr><td class="mono">@a.RunId</td><td>@Fmt.Time(a.LastAt)</td><td class="num">@Fmt.Int(a.Opened)</td><td class="num">@Fmt.Int(a.Closed)</td><td class="num">@Fmt.Int(a.Reopened)</td><td class="num">@Fmt.Int(a.Seen)</td></tr> }</tbody>
+                </table>
+            </div>
+        }
+    </section>
+    <section class="card" aria-labelledby="h-h">
+        <h2 id="h-h">Connector engine runs</h2>
+        @if (Model.Health.Count == 0 && Model.Runs.Count == 0) { <p class="hint">No connector run recorded in the last 7 days.</p> }
+        @if (Model.Health.Count > 0)
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Engine</th><th>When</th><th>Phase</th><th>Outcome</th></tr></thead>
+                    <tbody>@foreach (var h in Model.Health.Take(30)) { <tr><td>@h.Engine</td><td>@Fmt.Time(h.CollectionTime)</td><td>@h.Phase</td><td>@if (SI.Management.Web.Pages.Admin.RunHealthModel.IsOk(h.ExitReason)) { <span class="state ok">@(h.ExitReason.Length == 0 ? "ok" : h.ExitReason)</span> } else if (SI.Management.Web.Pages.Admin.RunHealthModel.IsThrottled(h.ExitReason)) { <span class="state warn" title="@SI.Management.Web.Jobs.JobFlow.ThrottledText">throttled</span> } else { <span class="state bad">@h.ExitReason</span> }</td></tr> }</tbody>
+                </table>
+            </div>
+        }
+        @if (Model.Runs.Count > 0)
+        {
+            <h3>Recorded by the data sync</h3>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Engine</th><th>Started</th><th>Ended</th><th>Verdict</th></tr></thead>
+                    <tbody>@foreach (var r in Model.Runs) { <tr><td>@r.Engine</td><td>@Fmt.Time(r.StartedAt)</td><td>@Fmt.Time(r.EndedAt)</td><td>@r.Verdict</td></tr> }</tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+<section class="card" aria-labelledby="h-l">
+    <h2 id="h-l">Plan, halts and push summaries (last 7 days)</h2>
+    @if (Model.Lines.Count == 0) { <p class="hint">No connector summary line in the log workspace.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>When</th><th>Execution</th><th>Line</th></tr></thead>
+                <tbody>@foreach (var l in Model.Lines) { <tr class="@(l.Text.Contains("HALTED") ? "exempt" : "")"><td class="nowrap">@Fmt.Time(l.At)</td><td class="mono">@l.Execution</td><td class="wrap mono">@if (l.Text.Contains("HALTED")) { <span class="badge bad">halted</span> } @l.Text</td></tr> }</tbody>
+            </table>
+        </div>
+    }
+</section>
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

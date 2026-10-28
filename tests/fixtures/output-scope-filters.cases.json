@@ -1,0 +1,28 @@
+{
+  "_": "THE ONE RULE of an output scope, held by BOTH implementations to these cases (owner 2026-10-19): the engine's Test-SIOutputScopeFinding (tests\\pester\\SIv3-OutputScope.Tests.ps1) and the web app's OutputScope.Passes (ViewFollowUpTests). fields: the row's values per SI field (a list = several values of one finding). A customer's wish: risk rating Critical + High, domains Endpoint + Azure.",
+  "scopes": {
+    "critical_high": { "severities": [], "domains": ["Endpoint", "Azure"], "filters": { "si_risk_rating": { "values": ["Critical", "High"] } } },
+    "classes": { "filters": { "si_class": { "values": ["device", "cloud_resource"] }, "si_component": { "values": ["OS"] } } },
+    "old": { "severities": ["Very High", "High"], "tiers": [0, 1], "domains": ["Endpoint"] }
+  },
+  "cases": [
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Endpoint", "fields": { "si_risk_rating": ["Critical"] }, "pass": true },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Azure", "fields": { "si_risk_rating": ["high"] }, "pass": true },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Endpoint", "fields": { "si_risk_rating": ["Moderate"] }, "pass": false },
+    { "scope": "critical_high", "severity": "Low", "tier": 3, "domain": "Endpoint", "fields": { "si_risk_rating": ["Low"] }, "pass": false },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Identity", "fields": { "si_risk_rating": ["Critical"] }, "pass": false },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "PublicIP", "fields": { "si_risk_rating": ["High"] }, "pass": false },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Endpoint", "fields": { "si_risk_rating": [] }, "pass": false },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "", "fields": { "si_risk_rating": ["High"] }, "pass": true },
+    { "scope": "critical_high", "severity": "High", "tier": 1, "domain": "Endpoint", "fields": { "si_risk_rating": ["Low", "High"] }, "pass": true },
+    { "scope": "classes", "severity": "High", "tier": 0, "domain": "Endpoint", "fields": { "si_class": ["device"], "si_component": ["OS"] }, "pass": true },
+    { "scope": "classes", "severity": "High", "tier": 0, "domain": "Endpoint", "fields": { "si_class": ["identity"], "si_component": ["OS"] }, "pass": false },
+    { "scope": "classes", "severity": "High", "tier": 0, "domain": "Azure", "fields": { "si_class": ["cloud_resource"], "si_component": ["SQL"] }, "pass": false },
+    { "scope": "classes", "severity": "High", "tier": 0, "domain": "Azure", "fields": { "si_class": ["cloud_resource"] }, "pass": false },
+    { "scope": "old", "severity": "Critical", "tier": 0, "domain": "Endpoint", "fields": {}, "pass": true },
+    { "scope": "old", "severity": "", "tier": null, "domain": "", "fields": {}, "pass": true },
+    { "scope": "old", "severity": "Medium", "tier": 0, "domain": "Endpoint", "fields": {}, "pass": false },
+    { "scope": "old", "severity": "High", "tier": 2, "domain": "Endpoint", "fields": {}, "pass": false },
+    { "scope": "old", "severity": "High", "tier": 1, "domain": "Azure", "fields": {}, "pass": false }
+  ]
+}

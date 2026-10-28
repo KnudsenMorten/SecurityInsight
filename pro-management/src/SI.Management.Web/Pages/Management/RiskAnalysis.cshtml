@@ -1,0 +1,197 @@
+@page
+@model SI.Management.Web.Pages.Management.RiskAnalysisModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.RiskExec
+@{
+    ViewData["Title"] = "Risk Analysis (executive)";
+    var v = Model.View!;
+    var f = v.Figures;
+    var head = v.Own ?? f;
+    var other = v.Grain == RiskExecGrain.Summary ? RiskExecGrain.Detailed : RiskExecGrain.Summary;
+    string ModeWords(string m) => m == "PerReport" ? "each report shows its own figures" : "both reports show the same figures";
+}
+<link rel="stylesheet" href="~/css/exec.css" asp-append-version="true" />
+<div class="exec" data-exec data-grain="@v.Grain" data-mode="@v.Mode" data-leader="@v.Leader">
+<h1>Risk Analysis (executive)</h1>
+<partial name="_ExportPdf" model="@("Risk Analysis (executive)")" />
+<p class="lede">The Risk Analysis mail management receives -- the protection score (both views, per asset type), the findings by domain, the AI-written analysis and the riskiest assets -- with the mail's own figures from the last run of each report.</p>
+
+@if (v.SummaryOn)
+{
+<nav class="exec-grain noprint" aria-label="Report data">
+    <span class="muted">Show the data of the</span>
+    <span class="seg" role="group" aria-label="Report">
+    @foreach (var g in RiskExecGrain.All)
+    {
+        <a href="?grain=@g.ToLowerInvariant()" aria-current="@(g == v.Grain ? "true" : "false")" data-grain-link="@g">@g report</a>
+    }
+    </span>
+</nav>
+}
+else
+{
+    @* #636: the Risk Analysis Summary step is off -- nothing to choose *@
+    <p class="muted exec-grain noprint" data-exec-detailed-only>The data of the Detailed report: every finding counts (one finding = one issue on one asset).</p>
+}
+
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (!Model.Ready)
+{
+    <div class="notice warn" role="status" data-exec-empty>The Pro database does not carry the executive view yet. It appears after the database is updated (the Pro setup applies the data schema) and the next data sync has run.</div>
+}
+else if (f is null)
+{
+    <section class="card" data-exec-empty>
+        <h2>No Risk Analysis view yet</h2>
+        <p>No @v.Grain report has kept its view yet. It appears here after the next Risk Analysis run of either report and the data sync that follows it.</p>
+        @if (Model.All.Count > 0 && v.SummaryOn) { <p><a href="?grain=@other.ToLowerInvariant()">Show the @other report instead</a>.</p> }
+    </section>
+}
+else
+{
+    <div class="notice exec-mode" role="status" data-exec-mode>
+        @if (v.FromLeader)
+        {
+            <text><strong>Figures from the @v.Leader report, as in the mails.</strong> The reports are set to agree (@ModeWords(v.Mode)), so the Summary and the Detailed selection show the same risk score, table and Top-50.</text>
+        }
+        else if (v.Mode == "PerReport")
+        {
+            <text><strong>The @v.Grain report's own figures, as in its mail.</strong> @RiskExecGrain.PerReportNotice</text>
+        }
+        else
+        {
+            <text><strong>The @v.Grain report's own figures, as in its mail.</strong></text>
+        }
+        @if (v.Note is not null) { <span data-exec-note> @v.Note</span> }
+        @if (User.IsAdmin()) { <a class="noprint" href="/Admin/Settings/Index?q=SI_AISummary">Change how the reports agree</a> }
+    </div>
+
+    <article class="exec-mail" aria-label="Risk Analysis summary">
+        <header class="exec-banner">
+            <div class="exec-title">SecurityInsight &middot; Risk Analysis</div>
+            <div class="exec-meta">
+                <span data-exec-report>@(head?.ReportTemplate is { Length: > 0 } rt ? rt : "RiskAnalysis_" + v.Grain)</span><br />
+                <span class="exec-sub">@(string.IsNullOrWhiteSpace(head?.Tenant) ? "—" : head!.Tenant) &middot; @Fmt.Time(head!.GeneratedAt)</span>
+            </div>
+        </header>
+
+        @if (f.Kpi is { } k)
+        {
+            @* #636 (owner 2026-10-19): the PROTECTION SCORE replaced the old 0-100 KPI -- both views, as the run's mail showed them *@
+            <div class="exec-hero" data-exec-total="@k.TotalRows">
+                <div class="exec-kpi" data-exec-protection="@(k.Protection is { } pp ? SI.Management.Core.ProData.ScoreFormat.Invariant(pp.Lifecycle) : "")">
+                    @* owner 2026-10-20: the headline larger, the value smaller (balanced, exec.css .exec-cap / .exec-score), and the
+                       accepted lifecycle's actual values under it (the settings in force) *@
+                    <div class="exec-cap ps-cap">@SI.Management.Web.RiskExec.ExecutiveFigures.LifecycleName</div>
+                    @if (k.Protection is { } p)
+                    {
+                        @* owner 2026-10-20: each value in its band's words and colour (ProtectionBands), never a fixed green *@
+                        var pbl = ProtectionBands.Of(p.Lifecycle); var pbt = ProtectionBands.Of(p.Technical);
+                        var raLife = await AcceptedLifecycle.ReadAsync(ViewContext.HttpContext.RequestServices, ViewContext.HttpContext.RequestAborted);
+                        <div class="exec-score band-@pbl.Tone" data-band="@pbl.Tone">@Fmt.Pct(p.Lifecycle, 1) &middot; @pbl.Name</div>
+                        <div class="ps-explain" data-lifecycle-line>@raLife.Line</div>
+                        <div class="exec-also" data-exec-band><span class="exec-cap ps-cap">@SI.Management.Web.RiskExec.ExecutiveFigures.ActualName:</span> <strong class="exec-also-score band-@pbt.Tone" data-band="@pbt.Tone">@Fmt.Pct(p.Technical, 1) &middot; @pbt.Name</strong></div>
+                        <div class="exec-legend">higher is better &middot; the share of active assets with no open Very High / High finding, tier-weighted &middot; @Fmt.Int(p.NoDate) of @Fmt.Int(p.Findings) counted findings without a date count as open</div>
+                    }
+                    else
+                    {
+                        <div class="exec-legend" data-exec-protection-none>This view has no protection score yet: it is taken from this run's stored figures once the data sync has computed them (the Executive overview shows the last computed score). A Summary view, or a view kept before #636, has none.</div>
+                    }
+                </div>                <div class="exec-table table-wrap">
+                    <table class="exec-sev" data-exec-sev data-static="the mail's fixed four-domain table with its Total row, shown exactly as mailed">
+                        <thead><tr><th>Domain</th><th class="num">Total</th>@foreach (var s in ExecKpi.Severities) { <th class="num">@ExecKpi.SeverityLabel(s)</th> }</tr></thead>
+                        <tbody>
+                            @foreach (var (key, label) in ExecKpi.Domains)
+                            {
+                                <tr data-domain="@key"><td>@label</td><td class="num">@Fmt.Int(k.Count(key, "Total"))</td>@foreach (var s in ExecKpi.Severities) { <td class="num sev-@s.ToLowerInvariant()">@Fmt.Int(k.Count(key, s))</td> }</tr>
+                            }
+                            <tr class="exec-total" data-domain="Total"><td>Total</td><td class="num">@Fmt.Int(k.TotalCount("Total"))</td>@foreach (var s in ExecKpi.Severities) { <td class="num sev-@s.ToLowerInvariant()">@Fmt.Int(k.TotalCount(s))</td> }</tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <p class="exec-grain-note">The <strong>Summary</strong> report counts distinct <strong>assets</strong>; the <strong>Detailed</strong> report counts individual <strong>asset findings</strong> (one asset can carry many). The two reports therefore show different totals and percentages for the same estate &mdash; that is expected, and neither figure is wrong.</p>
+
+            @if (k.Protection is { ByType.Count: > 0 } pt)
+            {
+                <h3 class="exec-h3">Protection Score by asset type</h3>
+                <div class="exec-tiles" data-exec-tiles>
+                    @foreach (var x in pt.ByType)
+                    {
+                        var xb = ProtectionBands.Of(x.Lifecycle);
+                        <div class="exec-tile band-@xb.Tone" data-tile="@x.Type">
+                            <div class="exec-label">@x.Type</div>
+                            <div class="exec-tile-score">@(x.Lifecycle is { } xl ? Fmt.Pct(xl, 1) + " · " + xb.Name : "–")</div>
+                            <div class="exec-legend">within Accepted Lifecycle &middot; @(x.Technical is { } xt ? Fmt.Pct(xt, 1) : "–") Actual Risks &middot; @Fmt.Int(x.Assets) assets</div>
+                            <progress class="exec-bar" max="100" value="@Math.Clamp(x.Lifecycle ?? 0, 2, 100)" aria-hidden="true"></progress>
+                        </div>
+                    }
+                </div>
+            }        }
+        else
+        {
+            <p class="notice warn">This run produced no figures (the roll-up did not complete); the rest of its view is shown below.</p>
+        }
+
+        @{
+            var sections = ExecNarrative.Sections(f.AISummaryText);
+            var tableShown = false;
+        }
+        @if (f.AISummaryEnabled)
+        {
+            <h2 class="exec-h2">AI-generated analysis</h2>
+            <div class="exec-ai" data-exec-ai>
+                @foreach (var sec in sections)
+                {
+                    if (sec.IsTopAssets && f.TopAssets.Count > 0)
+                    {
+                        tableShown = true;
+                        @await Html.PartialAsync("_ExecTopAssets", (Model, f, sec.Heading))
+                    }
+                    else
+                    {
+                        if (sec.Heading is not null) { <h3>@sec.Heading</h3> }
+                        @Html.Raw(ExecNarrative.ToHtml(sec.Body))
+                    }
+                }
+                @if (!tableShown && f.TopAssets.Count > 0)
+                {
+                    @await Html.PartialAsync("_ExecTopAssets", (Model, f, $"Top {f.TopAssets.Count} risky assets"))
+                }
+            </div>
+            <p class="exec-small"><em>This narrative was generated by AI and may contain mistakes. Validate critical decisions against the detailed findings.</em></p>
+        }
+        else
+        {
+            @* #863: said plainly, with what turns it on; the Top 50 list never depends on it (a run that kept none: the database's list) *@
+            <partial name="_AiSummaryOff" model="@(SI.Management.Web.RiskExec.AiSummaryNote.NoNarrative + (f.TopAssets.Count > 0 ? " " + SI.Management.Web.RiskExec.AiSummaryNote.ListFromRun : ""))" />
+            @if (f.TopAssets.Count > 0) { @await Html.PartialAsync("_ExecTopAssets", (Model, f, $"Top {f.TopAssets.Count} risky assets")) }
+            else { <p class="exec-small" data-top-list-note>This run kept no Top 50 list. <a href="/Management/TopAssets?grain=@f.Grain.ToLowerInvariant()">Top 50 risky assets</a> lists the riskiest active CIs from the database, in the mail's order.</p> }
+        }
+
+        @if (Model.Legend.Count > 0)
+        {
+            <section class="exec-appendix" data-riskfactor-legend aria-labelledby="h-rf-legend">
+                <h2 id="h-rf-legend">Appendix: risk factors</h2>
+                <p class="exec-small">The short names in the reports' risk factor columns. Each factor adds its impact (1 very low .. 5 very high) to its side of the score: an asset factor to the asset side, a vulnerability factor to the vulnerability side; risk score = asset side x vulnerability side.</p>
+                <table data-sortable>
+                    <thead><tr><th>Short name</th><th>Description</th><th>About</th><th class="num">Impact</th><th>State</th></tr></thead>
+                    <tbody>
+                    @foreach (var r in Model.Legend)
+                    {
+                        <tr data-legend-factor="@r.Id"><td class="mono">@r.ShortName</td><td>@r.Description</td><td>@r.AppliesTo</td><td class="num" data-value="@r.Impact">@r.Impact</td><td>@r.State</td></tr>
+                    }
+                    </tbody>
+                </table>
+            </section>
+        }
+        <footer class="exec-foot" data-exec-age data-utc>
+            Figures generated @Fmt.Time(f.FiguresGeneratedAt) (@SI.Management.Web.Pages.Management.RiskAnalysisModel.Age(f.FiguresGeneratedAt, DateTimeOffset.UtcNow)) by the @f.FiguresFromGrain report@(f.CollectionTime is { } ct ? " · data collected " + Fmt.When(ct) : "")@(string.IsNullOrWhiteSpace(f.SolutionVersion) ? "" : " · build v" + f.SolutionVersion).
+            @if (v.Own is { } own && own.GeneratedAt != f.FiguresGeneratedAt) { <span>The @v.Grain report last ran @Fmt.Time(own.GeneratedAt).</span> }
+        </footer>
+    </article>
+    <p class="hint noprint">To print or save as PDF, use the browser's print command: the menus are left out and the page fits the paper.</p>
+}
+@foreach (var p in Model.Problems) { <div class="notice warn" role="status">@p</div> }
+@if (Model.Query is { } q) { <partial name="_Query" model='QueryInfo.From(q, "Risk Analysis views")' /> }
+</div>

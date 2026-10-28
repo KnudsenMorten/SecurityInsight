@@ -1,0 +1,21 @@
+id:        BmcRemedy
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'BMC Remedy'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'BMC Remedy'
+
+detections:
+  - id: BmcRemedy
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remedy*'
+    set:
+      Tier:     1
+      Purpose:  'ITSM'
+      Category: 'ITSM'

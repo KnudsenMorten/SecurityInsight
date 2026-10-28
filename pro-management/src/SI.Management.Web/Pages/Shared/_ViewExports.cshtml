@@ -1,0 +1,37 @@
+@model SI.Management.Web.Columns.ViewExports
+@using SI.Management.Web.Columns
+@* THE export choices of every data view, together and always visible (owner 2026-10-19): "Export: this page · selected
+   rows · all matching rows" x CSV / Excel, and every column. "All matching rows" = every row matching the current filters
+   (never only the page shown). "Selected rows" submits the grid's selection form (the ticked rows travel as sel); while
+   nothing is ticked the script disables it and says why (js/app/ui.js). Each button's full words are its accessible name
+   and hover text (ExportLabels); the button itself reads CSV / Excel. *@
+<div class="export-choices" data-view-exports role="group" aria-label="Export">
+    <span class="ec-title">Export</span>
+    @if (Model.Page)
+    {
+        <span class="ec-group" data-export-scope="page">
+            <span class="ec-label">this page</span>
+            <a class="button secondary small" href="@Model.PageCsvHref" data-export="csv-page" aria-label="@ExportLabels.PageRowsCsv" title="@ExportLabels.PageRowsHint, as CSV">CSV</a>
+            <a class="button secondary small" href="@Model.PageXlsxHref" data-export="xlsx-page" aria-label="@ExportLabels.PageRowsExcel" title="@ExportLabels.PageRowsHint, as an Excel workbook">Excel</a>
+        </span>
+    }
+    @if (Model.SelectionForm is { } form)
+    {
+        <span class="ec-group" data-export-scope="selected">
+            <span class="ec-label">selected rows</span>
+            <button type="submit" form="@form" name="handler" value="Csv" formmethod="get" formnovalidate class="secondary small" data-export-rows data-export-selected data-strip="@Model.SelectionStrip"
+                    aria-label="@ExportLabels.SelectedRowsCsv" title="@ExportLabels.SelectedRowsHint, as CSV">CSV</button>
+            <button type="submit" form="@form" name="handler" value="Xlsx" formmethod="get" formnovalidate class="secondary small" data-export-rows data-export-selected data-strip="@Model.SelectionStrip"
+                    aria-label="@ExportLabels.SelectedRowsExcel" title="@ExportLabels.SelectedRowsHint, as an Excel workbook">Excel</button>
+        </span>
+    }
+    <span class="ec-group" data-export-scope="all">
+        <span class="ec-label">all matching rows</span>
+        <a class="button secondary small" href="@Model.CsvHref" data-export="csv" aria-label="@ExportLabels.AllRowsCsv" title="@ExportLabels.AllRowsCsvHint">CSV</a>
+        <a class="button secondary small" href="@Model.XlsxHref" data-export="xlsx" aria-label="@ExportLabels.AllRowsExcel" title="@ExportLabels.AllRowsExcelHint">Excel</a>
+        @if (Model.AllColumnsHref is not null)
+        {
+            <a class="button secondary small" href="@Model.AllColumnsHref" data-export="xlsx-all" aria-label="@ExportLabels.AllColumns" title="@ExportLabels.AllColumnsHint">every column</a>
+        }
+    </span>
+</div>

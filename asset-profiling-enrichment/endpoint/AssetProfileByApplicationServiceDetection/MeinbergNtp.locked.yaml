@@ -1,0 +1,21 @@
+id:        MeinbergNtp
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Meinberg NTP'
+category:  'Time Sync'
+description: ''
+displayNames:
+  - 'Meinberg NTP'
+
+detections:
+  - id: MeinbergNtp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ntp*'
+    set:
+      Tier:     3
+      Purpose:  'Time Sync'
+      Category: 'Time Sync'

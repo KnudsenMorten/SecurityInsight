@@ -1,0 +1,34 @@
+@model SI.Management.Web.Reports.ReportTestResult
+<section class="card" aria-labelledby="h-test" data-test-result="@(Model.Ran ? "ran" : "not-run")">
+    <h2 id="h-test">Test run</h2>
+    @if (Model.Error is not null)
+    {
+        <div class="notice error" role="alert" data-test-error>@Model.Error</div>
+    }
+    else
+    {
+        <p class="hint">Read-only, against this workspace: at most @SI.Management.Web.Reports.LogAnalyticsReportQueryRunner.Cap rows@(Model.More ? " (there are more)" : ""), in @Model.Seconds.ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) s.</p>
+        <p data-test-rows="@Model.Rows.Count">@Model.Rows.Count row(s), @Model.Columns.Count column(s).</p>
+    }
+    @if (Model.Issues.Count > 0)
+    {
+        <ul class="issues" data-contract-issues="@Model.Issues.Count(i => i.Error)">
+            @foreach (var i in Model.Issues) { <li class="@(i.Error ? "bad" : "warn")">@(i.Error ? "Contract error" : "Note"): @i.Message</li> }
+        </ul>
+    }
+    else if (Model.Ran) { <p class="good" data-contract-ok>The rows meet the report contract.</p> }
+    @if (Model.Rows.Count > 0)
+    {
+        <div class="table-wrap">
+            <table data-test-table data-sortable>
+                <thead><tr>@foreach (var c in Model.Columns) { <th scope="col">@c</th> }</tr></thead>
+                <tbody>
+                    @foreach (var r in Model.Rows)
+                    {
+                        <tr>@foreach (var c in Model.Columns) { <td class="wrap">@(r.TryGetValue(c, out var v) ? Convert.ToString(v, System.Globalization.CultureInfo.CurrentCulture) : "")</td> }</tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>

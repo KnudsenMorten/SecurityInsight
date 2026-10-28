@@ -1,11 +1,13 @@
 # Guards and guard modes
 
-SecurityInsight Pro checks its own results before it acts on them. When a check finds something that could do damage
+SecurityInsight checks its own results before it acts on them. When a check finds something that could do damage
 that does not heal by itself, it **holds, refuses or stops** that step, so incomplete or suspicious data never closes
 tickets, retires CMDB items or replaces what you see. Each time that happens is a guard event. Everything else is
 reported as a warning and never blocks your work.
 
 You see every event on **Operations > Guards (safety checks)**.
+
+![Check, hold and release: a safety check holds, refuses or stops a step that would do damage and records an event; the next good run clears it, or an Admin releases the held set once. The daily data health check turns Unhealthy after three anomalous days, then every data-out channel plans and reports only until one good day](images/guards-data-health.png)
 
 ## Which checks are on
 

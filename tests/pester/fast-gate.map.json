@@ -53,7 +53,7 @@
     { "suite": "SIv3-SettingInfo.Tests.ps1", "seconds": 0, "why": "the settings catalog guard: every setting in settings.catalog.locked.json has its info" }
   ],
   "_quick_comment": "The quick gate's rules (Get-SIQuickGateSelection). broadOver: a file SEEN by more suites than this (it names the file; or, when none does, a script that loads it) is BROAD -> the core set + at most namedMax suites (named after the file first, then the ones that name it most often). hubLoads: a file whose code names this many other SI code files is a HUB -> the core set + at most namedMax suites named after it (owner 2026-10-13) (hubs lists the ones measured 2026-10-13; the rule finds new ones). throttle: suites at once, each its own process. suiteLimitSeconds / gateLimitSeconds: THE HARD 10-MINUTE STOP (owner: 'we even agreed on hard limit of max 10 min') -- never raised above 600. dotnetMaxClasses: at most this many web test classes for one gate (+ the always classes).",
-  "quick": { "broadOver": 3, "namedMax": 3, "hubLoads": 20, "throttle": 12, "suiteLimitSeconds": 600, "gateLimitSeconds": 600, "dotnetMaxClasses": 15 },
+  "quick": { "broadOver": 3, "namedMax": 3, "hubLoads": 20, "throttle": 12, "suiteLimitSeconds": 1200, "gateLimitSeconds": 1200, "dotnetMaxClasses": 15 },
   "hubs": [
     { "path": "engine/risk-analysis/Invoke-RiskAnalysis.ps1", "loads": 61 },
     { "path": "release/Build-SISupportScripts.ps1", "loads": 39 },

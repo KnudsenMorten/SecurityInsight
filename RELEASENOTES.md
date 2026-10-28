@@ -1,3 +1,14 @@
+## v3.0.5 — job starts without a template
+
+### Azure Container Apps
+
+- Azure Container Apps changes what starting a job with its own container settings requires. SecurityInsight no
+  longer sends container settings when it starts a job: every start from the web app (Run now on a pipeline, a stage
+  or a step, a template release, the mail-only run after a request, the ServiceNow check) is a plain start. The values
+  that start needs, such as what to run and who asked, are written to the SecurityInsight database first, and the
+  execution reads them when it begins. A start that fails is closed and never runs later. Starting a job keeps
+  needing only the right to start it.
+
 ## v3.0.1 — more of SecurityInsight in the Community edition, and signed updates
 
 The first public release of SecurityInsight 3. It is installed beside 2.2 - see "Coming from 2.2.x" under v3.0.0 below.

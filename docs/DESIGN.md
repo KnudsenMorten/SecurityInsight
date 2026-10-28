@@ -4756,6 +4756,15 @@ az containerapp job start --name 'caj-si-risk-analysis'            --resource-gr
 az containerapp job start --name 'caj-si-risk-analysis-detailed'   --resource-group $rg   # Detailed
 ```
 
+**A start carries no template.** Every start SecurityInsight makes for a person (Run now on a pipeline, stage or step, a
+template release, the mail-only run after a request, the ServiceNow check) is a plain start with an empty body, so the
+web app needs only the right to start a job, never the right to change one. The values that start needs (what to run,
+and who asked) are written to the SecurityInsight database as a start request first; after the start, the request is
+bound to the execution it started. When the execution begins, it takes the request bound to it and uses only the values
+allowed for that job; a request whose start failed is closed and never runs later. A run that the execution guard skips
+hands its request back to the next execution of the same job. The pipeline runner and the updater start jobs as their own
+identities, which already manage those jobs.
+
 ### 6. How to **monitor** an execution
 
 ```powershell

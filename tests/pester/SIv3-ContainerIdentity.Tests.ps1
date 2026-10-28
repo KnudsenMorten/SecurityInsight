@@ -379,7 +379,7 @@ Describe 'no managed-identity branch without the switch (WIRING over the engine 
     }
     It 'the engines never load the managed-identity helper themselves (a VM never has it)' {
         $loaders = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'engine') -Recurse -File -Filter '*.ps1' |
-            Where-Object { (Get-Code $_.FullName.Substring($script:SIRoot.Length + 1)) -match 'SI-ManagedIdentity\.ps1' })
+            Where-Object { (Get-Code $_.FullName.Substring($script:SIRoot.Length + 1)) -match '(?m)^\s*\.\s+[^\r\n]*SI-ManagedIdentity\.ps1|Join-Path[^\r\n]*SI-ManagedIdentity\.ps1' })   # a LOAD (dot-source / a path built to it), not a file name in an error text
         $loaders | Should -BeNullOrEmpty
     }
 }

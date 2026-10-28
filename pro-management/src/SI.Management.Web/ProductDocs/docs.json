@@ -2,7 +2,7 @@
   "product": "securityinsight",
   "version": "3.0.0",
   "pages": [
-    { "slug": "install",                    "title": "Install SecurityInsight Pro",        "order": 1,  "file": "install.md" },
+    { "slug": "install",                    "title": "Install SecurityInsight",            "order": 1,  "file": "install.md" },
     { "slug": "upgrade",                    "title": "Updates and upgrades",               "order": 2,  "file": "upgrade.md" },
     { "slug": "operations",                 "title": "Operations",                         "order": 3,  "file": "operations.md" },
     { "slug": "security",                   "title": "Security",                           "order": 4,  "file": "security.md" },

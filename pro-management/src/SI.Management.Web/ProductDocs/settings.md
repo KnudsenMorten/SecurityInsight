@@ -1,6 +1,6 @@
 # Settings
 
-All of SecurityInsight Pro's settings are on one page: **Configuration > Settings**. Admins change them there. You do
+All of SecurityInsight's settings are on one page: **Configuration > Settings**. Admins change them there. You do
 not edit configuration files.
 
 ![The Settings page: one card per topic, each with its own Save](images/settings-cards.png)
@@ -47,7 +47,7 @@ in the install's Key Vault. The jobs read the secret at run time with their own 
 | **AI** | The Azure OpenAI connection, which features use AI, and spending limits. |
 | **Departments & owners** | How SecurityInsight finds the department that owns an asset. When open findings count as overdue. See [Departments](departments). |
 | **Connectors & CMDB** | CMDB enrichment, the SQL CMDB connector, and asset tagging. See [CMDB and ServiceNow](cmdb-servicenow). |
-| **Data & retention** | Where each collection's data goes (Log Analytics, JSON, Excel). How long run logs and Pro data are kept. How exempted findings are counted. |
+| **Data & retention** | Where each collection's data goes (Log Analytics, JSON, Excel). How long run logs and SecurityInsight data are kept. How exempted findings are counted. |
 | **Licence & updates** | The licence and updates from Invardia (see below). |
 | **Sign-in & Azure resources** | The identity the jobs sign in as, the Key Vault, the Log Analytics workspace, storage and container hosting. These are set at install. |
 | **Web app** | The header, the chat, the wall board and number formats. |

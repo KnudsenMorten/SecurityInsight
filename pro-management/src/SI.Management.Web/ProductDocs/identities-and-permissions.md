@@ -1,6 +1,6 @@
 # Identities and permissions
 
-Every identity SecurityInsight Pro creates or uses, every permission it holds, and why. There is one identity per role,
+Every identity SecurityInsight creates or uses, every permission it holds, and why. There is one identity per role,
 and no identity is shared between components with different jobs. No identity holds a secret or a certificate: each
 runtime component signs in with its own managed identity.
 
@@ -9,6 +9,8 @@ Permissions* and on the run's health record with the command that fixes it; the 
 
 ## The identities
 
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
+
 | Identity (name on a new install) | Kind | What it is for | Lifetime |
 |---|---|---|---|
 | `id-si-engine` | User-assigned managed identity | Every engine job: collection, correlation, Risk Analysis, data sync, connectors, verification, data health, the pipeline | As long as the install |
@@ -16,7 +18,7 @@ Permissions* and on the run's health record with the command that fixes it; the 
 | `id-si-mcp` | User-assigned managed identity | The MCP server: read-only answers to MCP clients | As long as the install |
 | `id-si-updater` | User-assigned managed identity | The updater: licence, signed releases, image build, database schema, rolling the jobs | As long as the install |
 | `id-si-tagging` | User-assigned managed identity | Asset tagging, only when you opt in | Until you remove asset tagging |
-| *SecurityInsight* | Entra app registration (sign-in) | Users' sign-in to the web app and bearer tokens for the MCP server. No secret, no certificate: the web app's identity is its federated credential. Assignment required. | As long as the install |
+| *SecurityInsight* | Entra app registration (sign-in) | Users' sign-in to the web app and bearer tokens for the MCP server. No secret, no certificate: the web app's identity is its federated credential. No assignment required: SecurityInsight decides who has access, on its *Access* page. | As long as the install |
 | `grp-si-sql-admins`, shown as *SecurityInsight SQL admins* (an existing install may still show *grp-si-sql-admins* until its update renames it) | Role-assignable Entra security group | The SQL server's Entra administrator. Holds the Invardia Support app only, when you chose support; otherwise empty. | As long as the install |
 | *Invardia Support* | Entra app registration in your tenant | Optional. Created by you, at a level you choose. See [Support access](support-access). | Until you remove it |
 | The person who installs | Your own account | Runs the guided install; a member of the SQL admin group only for the length of the install | The install |
@@ -75,7 +77,7 @@ the names an existing install shows.
 
 | Where | Right | Why |
 |---|---|---|
-| Pro database | The role `si_engine` | See [SQL access](sql-access) |
+| SecurityInsight database | The role `si_engine` | See [SQL access](sql-access) |
 | Exchange Online | Application Mail.Send, scoped to the one shared mailbox | Send SecurityInsight's mail as that mailbox and no other |
 
 ## The web app's identity
@@ -85,10 +87,10 @@ the names an existing install shows.
 | Container registry | AcrPull | Pull its image |
 | Log Analytics workspace | Log Analytics Reader | The Jobs page reads the jobs' console logs |
 | The named SecurityInsight jobs | Container Apps Jobs Operator | Start a job (*Run now*). It cannot change a job, its image or its schedule. |
-| Pro database | The role `si_web` | Read the views; write only the tables people's decisions go to. See [SQL access](sql-access). |
+| SecurityInsight database | The role `si_web` | Read the views; write only the tables people's decisions go to. See [SQL access](sql-access). |
 | Azure OpenAI resource (optional) | Cognitive Services OpenAI User | The chat, when AI is switched on |
 | Key Vault (optional) | Key Vault Secrets User | The magic-link signing key, only when magic links are on |
-| Microsoft Graph (optional, not granted by setup) | GroupMember.Read.All, User.ReadBasic.All | The searchable people picker on the admin pages, only when an administrator grants them and switches the lookup on |
+| Microsoft Graph (granted by the guided install) | User.ReadBasic.All, GroupMember.Read.All, Application.Read.All, all read only | The names of people and groups on the *Access* page; finding a person or group by name when you add access; a person's groups when their sign-in token lists too many; who holds a role on the SecurityInsight application. When the person installing may not grant them, the install says so and finding people by name stays off until an Entra administrator runs `Grant-SIIdentity -WebApp`. |
 
 The web app holds no secret, is not a member of the SQL admin group, has no DDL right and never writes a secret: a
 secret you paste is handed encrypted to the updater, which stores it in the Key Vault.
@@ -99,7 +101,7 @@ secret you paste is handed encrypted to the updater, which stores it in the Key 
 |---|---|---|
 | Container registry | AcrPull | Pull its image |
 | Log Analytics workspace | Log Analytics Reader | Answer questions about the reports |
-| Pro database | The role `si_mcp`: read over what it serves, never the web app's sign-in keys | Its tools are read only |
+| SecurityInsight database | The role `si_mcp`: read over what it serves, never the web app's sign-in keys | Its tools are read only |
 
 ## The updater's identity
 
@@ -108,7 +110,7 @@ secret you paste is handed encrypted to the updater, which stores it in the Key 
 | The install's resource group and registry | Contributor | Build the image in your registry, roll the jobs and apps, bring job and database sizes up to the defaults |
 | Key Vault | Key Vault Secrets Officer | Keep the licence, the install key and the update state |
 | Key Vault | Key Vault Crypto Officer | The key the web app's secret hand-over is encrypted with (it never leaves the vault) |
-| Pro database | The role `si_updater`: DDL to apply a release's schema, and EXECUTE on the signed grant procedure | Apply the release's database changes without any admin. See [SQL access](sql-access). |
+| SecurityInsight database | The role `si_updater`: DDL to apply a release's schema, and EXECUTE on the signed grant procedure | Apply the release's database changes without any admin. See [SQL access](sql-access). |
 
 ## Asset tagging's identity (opt-in)
 
@@ -121,7 +123,7 @@ Asset tagging is the one SecurityInsight job that writes to your tenant, so it n
 | Microsoft Defender for Endpoint | Machine.ReadWrite.All | Only when writing is on | Set machine tags |
 | Azure | Reader at the tagging scope; Tag Contributor there only when writing is on | | Evaluate the Resource Graph rules; set Azure resource tags |
 | Azure | Log Analytics Reader, Monitoring Metrics Publisher, Storage Blob Data Contributor, AcrPull, Key Vault Secrets User | Always | Its rules, its activity rows (what it planned and wrote), its run log, its image, the licence |
-| Pro database | Read of its settings | Always | Read its settings at run start |
+| SecurityInsight database | Read of its settings | Always | Read its settings at run start |
 
 Until writing is switched on in the web app, asset tagging only reports what it would tag.
 
@@ -129,7 +131,7 @@ Until writing is switched on in the web app, asset tagging only reports what it 
 
 Delegated permissions `openid`, `profile`, `offline_access` and `User.Read` (sign-in only), app roles SuperAdmin,
 Admin, Reader, Wallboard and Department, one delegated scope for user-delegated MCP clients, security-group ids in the
-token so groups can be mapped to roles. No assignment is required: anyone in your directory can sign in, and sees nothing until a SuperAdmin gives them a role on the Access page -- SecurityInsight decides who has access. Its only credential is the web app's managed identity as a
+token so groups can be mapped to roles. No assignment is required: anyone in your directory can sign in, and sees nothing until a SuperAdmin gives them a role on the Access page: SecurityInsight decides who has access. Its only credential is the web app's managed identity as a
 federated credential.
 
 ## What breaks without a permission

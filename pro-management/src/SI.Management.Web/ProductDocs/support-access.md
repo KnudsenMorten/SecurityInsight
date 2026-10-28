@@ -13,15 +13,19 @@ without any contact.
 | Microsoft Graph | Read-only application permissions | The read permissions, plus what the setup scripts need to create and repair SecurityInsight's own app registrations and groups |
 | SecurityInsight's resource group | Reader and Log Analytics Reader | Contributor, and role assignment limited to the roles SecurityInsight's own identities use, to service principals only |
 | SecurityInsight's Key Vault | Key Vault Reader: the vault's metadata, never a secret value | Key Vault Secrets Officer: can repair a secret |
-| SecurityInsight's databases | Through the SQL admin group | Through the SQL admin group |
-| SecurityInsight's sign-in app registration | -- | Owner, to repair the web app's sign-in |
+| SecurityInsight's databases | Its own database user with db_owner, and a member of the SQL admin group | Its own database user with db_owner, and a member of the SQL admin group |
+| SecurityInsight's sign-in app registration | None | Owner, to repair the web app's sign-in |
 
 The exact list of the Support app's permissions per level is on the page of Invardia's script that creates it (below).
-SecurityInsight adds only its own part: the Key Vault role, the group membership and the ownership.
+SecurityInsight adds only its own part: the Key Vault role, the database access and the ownership.
 
-The Support app is the only member of the SQL admin group after setup. That group is its one way in to the
-databases; it has no database user of its own. See [SQL access](sql-access). The Support app is never the engine's
-identity and never runs your pipeline.
+The Support app reaches SecurityInsight's databases in two ways, at both levels: it is a member of the SQL admin
+group, and it has its own database user with db_owner in the SecurityInsight database and in the identity ledger. Both are kept
+through every update and removed only by `Grant-SISupportAccess -Remove`. So, once you have created the app, Invardia's
+support can help without asking you for a new grant first. See [SQL access](sql-access). The Support app is never the
+engine's identity and never runs your pipeline.
+
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
 
 ## How you give and remove it
 

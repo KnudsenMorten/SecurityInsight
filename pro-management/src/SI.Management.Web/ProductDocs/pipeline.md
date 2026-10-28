@@ -1,6 +1,6 @@
 # The daily pipeline
 
-SecurityInsight Pro runs its jobs as one **Daily pipeline** of three stages: **Collect → Correlate → Deliver**. You see
+SecurityInsight runs its jobs as one **Daily pipeline** of three stages: **Collect → Correlate → Deliver**. You see
 and control it on **Operations > Jobs**.
 
 ![The Jobs page on demo data: the Daily pipeline at 22:00 in its time zone, and Stage 1 Collect with its steps. This demo install still runs each job on its own timer, so the pipeline reads "off".](images/pipeline-jobs.png)
@@ -9,11 +9,13 @@ and control it on **Operations > Jobs**.
 
 | Stage | What it does | Steps (in order) |
 |---|---|---|
-| **1. Collect** | Takes data in: the role catalogue, the profilers and Risk Analysis. | Privilege tier classifier, identity profiling, Azure profiling, endpoint profiling, public IP profiling, Risk Analysis Summary, Risk Analysis Detailed |
-| **2. Correlate** | Links the same asset seen by several sources into one asset. | Asset correlation, asset properties |
-| **3. Deliver** | Hands the results on. | SQL CMDB, ServiceNow CMDB, vulnerability connector (SQL), vulnerability connector (ServiceNow), data sync into the web app, mails |
+| **1. Collect** (data in) | Takes data in: the role catalogue and the profilers, read only. | Privilege tier classifier, identity profiling, Azure profiling and endpoint profiling (together), public IP profiling |
+| **2. Correlate** (data structure) | Links the same asset seen by several sources into one asset (CI), then finds and scores the risks on those assets. | Asset correlation, Risk Analysis Detailed. Risk Analysis Summary is a step as well, switched off by default; switched on, it runs together with Detailed. |
+| **3. Deliver** (data out) | Hands the results on. | SQL CMDB, ServiceNow CMDB, vulnerability connector (SQL), vulnerability connector (ServiceNow), data sync into the web app, the daily mail, verification and data health |
 
 A job you did not install (for example the ServiceNow steps without ServiceNow) is left out.
+
+![The daily pipeline stage by stage: Collect runs the privilege tier classifier, identity profiling, Azure and endpoint profiling together, then public IP profiling; Correlate builds the assets, then Risk Analysis Detailed, with the optional Summary beside it; Deliver hands out to the CMDB, the vulnerability connectors, the data sync, the daily mail and the verification with data health; and what happens when a step fails](images/pipeline-stages.png)
 
 ## When it runs
 
@@ -91,9 +93,9 @@ On the Jobs page an Admin can:
 
 ## The risk trend
 
-The trend is not a separate step. The Risk Analysis Summary run writes the day's trend row itself, from the rows it
-has just published. A partial run is not a trend point: that day is a gap, never a drop. The web app's trend pages
-(*Changes & trends > Trends*) read the history in the Pro database.
+The trend is not a separate step. When the data sync loads the findings of Risk Analysis Detailed, it keeps the day's
+counts in the SecurityInsight database, and the web app's trend pages (*Changes & trends > Trends*) read it there. The trend counts findings: one per issue per
+asset.
 
 ## Checking a run
 

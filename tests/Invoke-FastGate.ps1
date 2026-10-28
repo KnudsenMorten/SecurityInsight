@@ -43,11 +43,11 @@
       4. HOW IT RUNS (Invoke-SIQuickGateRun): every suite in its own pwsh 7 process (tests\pester\_Invoke-GateShard.ps1),
          the web app's build + tests in one more (tests\pester\_Invoke-GateDotnet.ps1), up to 12 at once, each with an empty
          standard input. A line the moment each finishes; every 60 s what still runs.
-      5. AT 10 MINUTES: STOP AND REPORT. 600 s per suite AND 600 s for the whole gate (fast-gate.map.json quick; never
+      5. AT 20 MINUTES: STOP AND REPORT (owner 2026-10-28: "extend to 20 min"). 1200 s per suite AND 1200 s for the whole gate (fast-gate.map.json quick; never
          above). A suite still running is ENDED -- its whole process tree, by process id (Stop-SIGateProcessTree), never
          by name -- and reported red BY NAME "TIMED OUT after N min"; a suite the limit left no time to start is "NOT RUN";
          the others' results stand. A stopped run is 'NOT TESTED' -- never green (exit 1).
-         A suite MEASURED over 600 s is not stopped at 10 minutes for now (owner 2026-10-13: "accepted, skip 10 min for
+         A suite MEASURED over 1200 s is not stopped at 20 minutes for now (owner 2026-10-13: "accepted, skip 10 min for
          now"): it gets its measured time x1.5 (Get-SIQuickGateSlowLimit), said in the log; the gate reads OVER THE LIMIT.
       4b. SQL FIRST (owner 2026-10-25): when a selected suite has real-SQL tests, SQL Server Express is started if stopped
          and SELECT 1 is asked until it answers (up to 180 s); SI_TEST_LOCALSQL is then set for every suite. SQL that never
@@ -109,12 +109,12 @@ param(
     [string]$SelectionFile,
     [switch]$UpdateDurations,
     [string]$ResultFile,
-    # bounds a FULL run only (only the owner starts one); the quick gate has its own hard 10-minute stop (below)
+    # bounds a FULL run only (only the owner starts one); the quick gate has its own hard 20-minute stop (below)
     [int]$TimeoutMinutes = 40,
-    # THE HARD 10-MINUTE STOP of the quick gate (owner 2026-10-13: "we even agreed on hard limit of max 10 min"): per suite and
-    # for the whole gate; 0 = fast-gate.map.json quick (600). Never above 600 -- a shorter one is for the gate's own tests.
-    [ValidateRange(0, 600)][int]$SuiteLimitSeconds = 0,
-    [ValidateRange(0, 600)][int]$GateLimitSeconds = 0,
+    # THE HARD 20-MINUTE STOP of the quick gate (owner 2026-10-13: 10 min; owner 2026-10-28: "extend to 20 min"): per suite and
+    # for the whole gate; 0 = fast-gate.map.json quick (1200). Never above 1200 -- a shorter one is for the gate's own tests.
+    [ValidateRange(0, 1200)][int]$SuiteLimitSeconds = 0,
+    [ValidateRange(0, 1200)][int]$GateLimitSeconds = 0,
     [ValidateRange(1, 600)][int]$ProgressSeconds = 60,
     # the older COVERING selection (every suite that covers each changed path), as a diagnostic: -ListOnly only
     [switch]$Precise,
@@ -152,9 +152,9 @@ function Get-SIFastGateMap {
             NamedMax  = $(if ($j.quick -and $j.quick.namedMax) { [int]$j.quick.namedMax } else { 3 })
             HubLoads  = $(if ($j.quick -and $j.quick.hubLoads) { [int]$j.quick.hubLoads } else { 20 })
             Throttle  = $(if ($j.quick -and $j.quick.throttle) { [int]$j.quick.throttle } else { 12 })
-            # never above 600 s, whatever the file says: THE HARD 10-MINUTE STOP (owner: "we even agreed on hard limit of max 10 min")
-            SuiteLimitSeconds = [Math]::Min(600, $(if ($j.quick -and $j.quick.suiteLimitSeconds) { [int]$j.quick.suiteLimitSeconds } else { 600 }))
-            GateLimitSeconds  = [Math]::Min(600, $(if ($j.quick -and $j.quick.gateLimitSeconds) { [int]$j.quick.gateLimitSeconds } else { 600 }))
+            # never above 1200 s, whatever the file says: THE HARD 20-MINUTE STOP (owner 2026-10-28: "extend to 20 min")
+            SuiteLimitSeconds = [Math]::Min(1200, $(if ($j.quick -and $j.quick.suiteLimitSeconds) { [int]$j.quick.suiteLimitSeconds } else { 1200 }))
+            GateLimitSeconds  = [Math]::Min(1200, $(if ($j.quick -and $j.quick.gateLimitSeconds) { [int]$j.quick.gateLimitSeconds } else { 1200 }))
             DotnetMaxClasses  = $(if ($j.quick -and $j.quick.dotnetMaxClasses) { [int]$j.quick.dotnetMaxClasses } else { 15 })
         }
         Solution = [string]$j.dotnet.solution
@@ -815,17 +815,17 @@ function Get-SIFastGateDotnetFilter {
 }
 function Get-SIFastGateBudget {
     <#
-        PURE. THE 10-MINUTE LIMIT of every release gate (owner 2026-10-13: "we even agreed on hard limit of max 10 min"):
-        600 s for the HOTFIX gate (the gate of every release, fix or feature) and for the FAST (dev) gate alike; a full
-        run (only the owner starts one) has none. Over the limit is said PLAINLY -- "OVER THE 10-MINUTE LIMIT" -- and is
+        PURE. THE 20-MINUTE LIMIT of every release gate (owner 2026-10-13: 10 min; owner 2026-10-28: "extend to 20 min"):
+        1200 s for the HOTFIX gate (the gate of every release, fix or feature) and for the FAST (dev) gate alike; a full
+        run (only the owner starts one) has none. Over the limit is said PLAINLY -- "OVER THE 20-MINUTE LIMIT" -- and is
         never a reason to leave a suite out: -OverBudget names the covering suites that made the gate longer.
     #>
     param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][double]$Seconds, [AllowEmptyCollection()][string[]]$OverBudget = @())
-    $b = switch ($Mode) { 'quick' { 600 } 'hotfix' { 600 } 'fast' { 600 } default { 0 } }
+    $b = switch ($Mode) { 'quick' { 1200 } 'hotfix' { 1200 } 'fast' { 1200 } default { 0 } }
     if (-not $b) { return $null }
     $met = $Seconds -le $b
     $why = @($OverBudget | Where-Object { $_ })
-    $text = '{0} gate: {1:N0} s of the {2:N0} s limit (10 minutes) -- {3}' -f $Mode, $Seconds, $b, $(if ($met) { 'met' } else { 'OVER THE 10-MINUTE LIMIT' })
+    $text = '{0} gate: {1:N0} s of the {2:N0} s limit (20 minutes) -- {3}' -f $Mode, $Seconds, $b, $(if ($met) { 'met' } else { 'OVER THE 20-MINUTE LIMIT' })
     if (-not $met -and $why.Count) { $text += (' (it took longer because {0} cover{1} the change)' -f ($why -join ', '), $(if ($why.Count -eq 1) { 's' } else { '' })) }
     [pscustomobject]@{ Target = $b; Seconds = [int]$Seconds; Met = $met; Text = $text }
 }
@@ -886,8 +886,8 @@ function Invoke-SIQuickGateRun {
         web app's build + tests in one more), all at once up to -Throttle, every one with an EMPTY standard input (a
         prompt fails at once instead of waiting for a key over SSH).
 
-        AT THE LIMIT: STOP AND REPORT. An item running longer than -SuiteLimitSeconds (600), or still running when the
-        whole run has taken -GateLimitSeconds (600), is ENDED -- its whole process tree, by process id
+        AT THE LIMIT: STOP AND REPORT. An item running longer than -SuiteLimitSeconds (1200), or still running when the
+        whole run has taken -GateLimitSeconds (1200), is ENDED -- its whole process tree, by process id
         (Stop-SIGateProcessTree) -- and is State 'TimedOut' ("TIMED OUT after N min", by name); an item the limit left no
         time to start is State 'NotRun' ("NOT RUN"). The others' results stand. One line the moment an item finishes
         (-OnFinish turns the finished item into its status text and colour), and every -ProgressSeconds (60) the clock
@@ -895,7 +895,7 @@ function Invoke-SIQuickGateRun {
         StartFailed); Seconds; ExitCode; Note; Ended; Out; Err; Item }.
     #>
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items, [Parameter(Mandatory)][string]$Work, [int]$Throttle = 12,
-          [double]$SuiteLimitSeconds = 600, [double]$GateLimitSeconds = 600, [double]$ProgressSeconds = 60, [scriptblock]$OnFinish)
+          [double]$SuiteLimitSeconds = 1200, [double]$GateLimitSeconds = 1200, [double]$ProgressSeconds = 60, [scriptblock]$OnFinish)
     $inv = [Globalization.CultureInfo]::InvariantCulture
     $min = { param([double]$s) $m = [Math]::Max(0.1, [Math]::Round($s / 60, 1, [MidpointRounding]::AwayFromZero)); if ($m -eq [Math]::Floor($m)) { ([int]$m).ToString($inv) } else { $m.ToString('0.0', $inv) } }
     $clockText = { (Get-Date).ToString('HH:mm:ss', $inv) }
@@ -938,7 +938,7 @@ function Invoke-SIQuickGateRun {
                 & $finish ([pscustomobject]@{ Name = $r.Item.Name; Kind = $r.Item.Kind; State = 'Done'; Seconds = [Math]::Round($sec, 1); ExitCode = [int]$r.Process.ExitCode; Note = ''; Ended = @(); Out = $r.Out; Err = $r.Err; Item = $r.Item })
                 continue
             }
-            # an item may carry its own limit (LimitSeconds): a suite measured over 10 minutes gets its measured time (owner 2026-10-13: "accepted, skip 10 min for now")
+            # an item may carry its own limit (LimitSeconds): a suite measured over 20 minutes gets its measured time (owner 2026-10-13: "accepted, skip 10 min for now")
             $itemLimit = if ($r.Item.PSObject.Properties['LimitSeconds'] -and [double]$r.Item.LimitSeconds -gt 0) { [double]$r.Item.LimitSeconds } else { $SuiteLimitSeconds }
             $overSuite = $sec -ge $itemLimit
             if (-not $overSuite -and -not $gateOver) { continue }
@@ -1013,12 +1013,12 @@ function Wait-SIQuickGateSql {
 
 function Get-SIQuickGateSlowLimit {
     <#
-        PURE. A suite MEASURED over the 10-minute limit (-LimitSeconds, 600) is not stopped at 10 minutes in a release gate
+        PURE. A suite MEASURED over the 20-minute limit (-LimitSeconds, 1200) is not stopped at 20 minutes in a release gate
         for now (owner 2026-10-13: "accepted, skip 10 min for now"): it gets its measured time x -Factor (1.5: a loaded VM;
         SIv3-CiBuildSql measured 1,800 s took 1,990 s on 2026-10-13). Returns that limit in seconds, or 0 = the normal
-        10-minute limit. The gate says so in the log and its budget line reads "OVER THE 10-MINUTE LIMIT".
+        20-minute limit. The gate says so in the log and its budget line reads "OVER THE 20-MINUTE LIMIT".
     #>
-    param([double]$MeasuredSeconds = 0, [double]$LimitSeconds = 600, [double]$Factor = 1.5)
+    param([double]$MeasuredSeconds = 0, [double]$LimitSeconds = 1200, [double]$Factor = 1.5)
     if ($MeasuredSeconds -le $LimitSeconds) { return 0 }
     [int][Math]::Ceiling($MeasuredSeconds * $Factor)
 }
@@ -1048,7 +1048,7 @@ function Get-SIQuickGateStatus {
     if ($skipped.Count) { $parts += ('SKIPPED (a skip is not a pass): ' + ($skipped -join ', ')) }
     $scaleText = if ($scaleTests) { '; {0} test(s) not run (Scale, on demand){1}' -f $scaleTests, $(if ($scale.Count) { ' -- ' + ($scale -join ', ') + ' not run at all' } else { '' }) } else { '' }
     $text = switch ($status) {
-        'NOT TESTED' { 'NOT TESTED -- the gate was STOPPED at its 10-minute limit; a stopped run is never green (' + ($parts -join '; ') + ')' }
+        'NOT TESTED' { 'NOT TESTED -- the gate was STOPPED at its 20-minute limit; a stopped run is never green (' + ($parts -join '; ') + ')' }
         'FAIL' { 'FAIL -- ' + ($parts -join '; ') + $scaleText }
         default { 'PASS -- {0} of {0} green{1}' -f (@($Outcomes).Count - $scale.Count), $scaleText }
     }
@@ -1326,7 +1326,7 @@ if ($SelectionFile) {
                           OverBudget = @($overBudget.Keys); Dropped = @(); DotnetClasses = [ordered]@{} }
     foreach ($pj in $dotnetPlan) { $selDoc.DotnetClasses[$pj.Name] = $(if ($pj.Whole) { @('*') } else { @($pj.Classes) }) }
     # for the release command's STOP (setup\Release-SI.ps1: a selection of every suite, or one that cannot fit the
-    # 10-minute limit, is a question to the owner): how many suites there are, and the selection's measured seconds
+    # 20-minute limit, is a question to the owner): how many suites there are, and the selection's measured seconds
     $selSec = $durations[$(if ($Runtime -eq 'ps51') { 'ps51' } else { 'pwsh' })]; $selTotal = 0.0; $selLongest = 0.0; $selLongestName = ''
     foreach ($k in $reasons.Keys) { $x = if ($selSec.ContainsKey($k) -and $selSec[$k] -gt 0) { [double]$selSec[$k] } else { 20.0 }; $selTotal += $x; if ($x -gt $selLongest) { $selLongest = $x; $selLongestName = $k } }
     $selDoc.AllSuites = $allSuites.Count; $selDoc.MeasuredSeconds = [Math]::Round($selTotal, 1); $selDoc.LongestSeconds = [Math]::Round($selLongest, 1); $selDoc.LongestSuite = $selLongestName
@@ -1337,7 +1337,7 @@ if ($SelectionFile) {
 }
 if ($ListOnly) { exit 0 }
 
-# ---- 4q. THE QUICK GATE: every selected suite in its own process, in parallel; at 10 minutes STOP AND REPORT ------------
+# ---- 4q. THE QUICK GATE: every selected suite in its own process, in parallel; at 20 minutes STOP AND REPORT ------------
 if (-not $Full) {
     $qRuntimes = @(switch ($Runtime) { 'both' { 'pwsh', 'ps51' } 'pwsh' { 'pwsh' } 'ps51' { 'ps51' } })
     $qExe = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
@@ -1402,10 +1402,10 @@ if (-not $Full) {
             $envFor = if ($rt -eq 'ps51') { @{ PSModulePath = $ps51Path; SI_GATE_PS51 = '1' } } elseif ($qRuntimes -contains 'ps51') { @{ SI_GATE_PS51 = '1' } } else { $null }
             # SI_TEST_LOCALSQL for EVERY suite (owner 2026-10-25), in the item's own environment -- set and restored around its start
             if ($sqlEnv) { if (-not $envFor) { $envFor = @{} }; foreach ($ek in $sqlEnv.Keys) { $envFor[$ek] = $sqlEnv[$ek] } }
-            # a suite MEASURED over 10 minutes is not stopped at 10 (owner 2026-10-13: "accepted, skip 10 min for now"): it gets
-            # its measured time (x1.5 for a loaded VM) and the gate says plainly that it runs over the 10-minute limit
+            # a suite MEASURED over 20 minutes is not stopped at 20 (owner 2026-10-13: "accepted, skip 10 min for now"): it gets
+            # its measured time (x1.5 for a loaded VM) and the gate says plainly that it runs over the 20-minute limit
             $slow = Get-SIQuickGateSlowLimit -MeasuredSeconds $(if ($sec.ContainsKey($s)) { [double]$sec[$s] } else { 0 })
-            if ($slow -gt 0) { $slowSuites[$s] = $slow; Write-Host ('  NOTE {0} is measured at {1:N0} s -- OVER THE 10-MINUTE LIMIT; it runs with its measured time (stopped only after {2:N0} s; owner 2026-10-13: "accepted, skip 10 min for now"), so this gate runs over 10 minutes' -f $s, [double]$sec[$s], $slow) -ForegroundColor Yellow }
+            if ($slow -gt 0) { $slowSuites[$s] = $slow; Write-Host ('  NOTE {0} is measured at {1:N0} s -- OVER THE 20-MINUTE LIMIT; it runs with its measured time (stopped only after {2:N0} s; owner 2026-10-13: "accepted, skip 10 min for now"), so this gate runs over 20 minutes' -f $s, [double]$sec[$s], $slow) -ForegroundColor Yellow }
             $items.Add([pscustomobject]@{ Name = $(if ($qRuntimes.Count -gt 1) { "$s [$rt]" } else { $s }); Suite = $s; Runtime = $rt; Kind = 'pester'; Exe = $qExe[$rt]; Args = $a; ResultFile = $res; Env = $envFor; LimitSeconds = $slow })
         }
     }

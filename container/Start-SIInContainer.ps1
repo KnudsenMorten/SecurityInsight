@@ -328,6 +328,23 @@ if (-not $siIngest.SubscriptionId) { Write-Warning '[ingest] no subscription fou
 # made (no Reader on the job, ARM unreachable) is said and the run goes on -- the guard never blocks a run on its own failure.
 $guardJob = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_NAME'); $guardExec = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME')
 $guardSub = Get-OptionalEnv 'SI_JOBS_SUBSCRIPTIONID' (Get-OptionalEnv 'SI_FLOW_SUBSCRIPTIONID' $null); $guardRg = Get-OptionalEnv 'SI_JOBS_RESOURCEGROUP' (Get-OptionalEnv 'SI_FLOW_RESOURCEGROUP' $null)
+
+# #931: the values a person's start carries (Run now, a template release, a mail-only run, who started it) arrive as a
+# start request in the Pro database, never as a start override (Azure Container Apps: an override needs jobs/write). Claimed
+# BEFORE the guard below, which reads them; handed back when this execution does nothing, so the next one takes it.
+$startRequest = @{ Claimed = $false }; $startRequestInvoke = $null
+if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase -and $guardJob -and $guardExec -and (Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -ne '1' -and -not (Get-OptionalEnv 'SI_COLLECT_PHASE' $null)) {
+    try {
+        . (Join-Path $PSScriptRoot '../engine/_shared/SI-JobStartRequest.ps1')
+        if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') }
+        $startRequestInvoke = Get-SIGuardProInvoke
+        $startRequest = Invoke-SIJobStartRequestClaim -Invoke $startRequestInvoke -Job ([string]$guardJob) -Execution ([string]$guardExec)
+        if ($startRequest.Line) { Write-Host $startRequest.Line }
+    } catch { Write-Warning ('[start-request] the start request could not be read ({0}) -- the run goes on as configured' -f $_.Exception.Message) }
+}
+function Undo-SIStartRequestClaim {
+    if ($script:startRequest.Claimed) { $null = Invoke-SIJobStartRequestRelease -Invoke $script:startRequestInvoke -RequestId $script:startRequest.RequestId -Execution ([string]$script:guardExec) }
+}
 if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -ne '1' -and -not (Get-OptionalEnv 'SI_COLLECT_PHASE' $null)) {
     $guardOther = $null
     try {
@@ -341,9 +358,10 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
     if ($guardDecision.Action -eq 'Run' -and $guardDecision.Message) { Write-Host $guardDecision.Message }
     # #277 (live, ring 1 2026-10-05): the flow runner wakes every 5 minutes -- a wake-up during a flow run is normal
     # operation, not a guard: one INFO line, no row, no guard event, no telemetry, no warning.
-    if ($guardDecision.Action -eq 'FlowBusy') { Write-Host $guardDecision.Message; exit 0 }
+    if ($guardDecision.Action -eq 'FlowBusy') { Write-Host $guardDecision.Message; Undo-SIStartRequestClaim; exit 0 }
     if ($guardDecision.Action -eq 'Skip') {
         Write-Host $guardDecision.Message -ForegroundColor Yellow
+        Undo-SIStartRequestClaim
         try {
             if (-not (Get-Command -Name Send-SIRunHealthRow -ErrorAction SilentlyContinue)) { . '/app/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1' }
             Send-SIRunHealthRow -Phase End -ExitReason 'skipped' -ErrorMessage ('skipped: previous still running ({0})' -f $guardOther.name) -NoTelemetry `
@@ -423,6 +441,7 @@ if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) {
                         -RunContext ([pscustomobject]@{ RunId = $guardExec; Engine = $engine; ShardIndex = 0; ShardCount = 1; CollectionTime = [datetime]::UtcNow; StartedAt = [datetime]::UtcNow })
                 } catch { }
                 try { Publish-SILauncherTranscript -Engine $engine -Context (New-SIRunLogStorageContext) | Out-Null } catch { }
+                Undo-SIStartRequestClaim
                 exit 0
             }
         }

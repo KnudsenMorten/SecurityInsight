@@ -538,12 +538,14 @@ if (jobs.IsConfigured)
     builder.Services.AddHttpClient<ArmJobsClient>();
     // CR8 (framework 12.11f item 1): with start-only rights on the jobs (Jobs:ChangeMode = request) a trigger change is a
     // request the pipeline runner applies; the default changes it directly, as before
+    // #931: a start with values never carries a template (Azure Container Apps: that needs jobs/write) -- the values go to
+    // the database as a start request the job claims (StartRequestJobsClient), in both modes
     if (jobs.ChangesAreRequests)
         builder.Services.AddTransient<IJobsClient>(sp => new RequestedTriggerJobsClient(
-            new SI.Management.Web.Audit.AttributedJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()),
+            new SI.Management.Web.Audit.AttributedJobsClient(new StartRequestJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<ISqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()),
             sp.GetRequiredService<ISqlExecutor>()));
     else
-        builder.Services.AddTransient<IJobsClient>(sp => new SI.Management.Web.Audit.AttributedJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()));
+        builder.Services.AddTransient<IJobsClient>(sp => new SI.Management.Web.Audit.AttributedJobsClient(new StartRequestJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<ISqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()));
 }
 else builder.Services.AddSingleton<IJobsClient, NotConfiguredJobsClient>();
 // #269: the daily job flow's definition + run records (cfg.JobFlow / cfg.FlowRun / cfg.FlowStepRun)

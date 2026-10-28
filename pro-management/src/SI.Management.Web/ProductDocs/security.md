@@ -1,6 +1,6 @@
 # Security
 
-How SecurityInsight Pro is secured, in one page. The detail is on the pages linked from each section. A full security
+How SecurityInsight is secured, in one page. The detail is on the pages linked from each section. A full security
 review pack for your CISO is published at https://invardia.com/products/securityinsight/security/.
 
 ## Principles
@@ -17,10 +17,14 @@ review pack for your CISO is published at https://invardia.com/products/security
 6. **Damage is stopped, not cleaned up afterwards.** Safety checks hold large or sudden changes before they reach your
    CMDB, ServiceNow or tickets. See [Guards and guard modes](guards) and [Data health](data-health).
 
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
+
 ## Sign-in and roles
 
 - Every user signs in with Entra ID: single sign-on, your MFA and your Conditional Access apply. The enterprise
-  application requires assignment, so only people or groups given an app role can sign in at all.
+  application does not require assignment: SecurityInsight decides who has access. Anyone in your directory can sign in,
+  and the web app refuses every page to a person it gives no role until a SuperAdmin adds them on the *Access* page. To
+  limit who can sign in at all, add a Conditional Access policy for the SecurityInsight enterprise application.
 - The sign-in uses the authorisation code flow with PKCE and the web app's managed identity as a federated credential:
   no client secret and no certificate exist to steal or renew. Sessions last at most 8 hours. Every page except a health
   probe requires a signed-in user.

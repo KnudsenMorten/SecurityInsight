@@ -32,7 +32,7 @@ Azure cannot rename a container app, a job, a managed identity, a SQL server, a 
 
 - **Resources keep their names** on an install made before this convention. A new install gets the new names.
 - **Display names are renamed by the update** on every install: the engine application first, then the sign-in
-  application, and the SQL admin group's display name -- only from SecurityInsight's earlier name; a name you chose is kept.
+  application, and the SQL admin group's display name - only from SecurityInsight's earlier name; a name you chose is kept.
   Each is renamed once, read back, and put back if it does not take. Where the update may not rename them, an
   administrator runs `Set-SIDisplayNames.ps1`. The mail sender's display name has always been *SecurityInsight*.
 - **Never renamed:** the mail sender's address and the Exchange scope that limits sending to it, because your own mail

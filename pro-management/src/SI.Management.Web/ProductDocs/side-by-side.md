@@ -3,6 +3,8 @@
 You run SecurityInsight 2.2 and want SecurityInsight 3. There is no supported upgrade from 2.2 to 3. You install 3 as
 a separate installation beside 2.2, run both for a while, compare the results, and then switch 2.2 off.
 
+![SecurityInsight 2.2 and 3 side by side: both read the same Microsoft sources read only; 3 is a new install in its own resource group with no upgrade path from 2.2; you install 3, configure it, compare the two, then retire 2.2](images/upgrade-side-by-side.png)
+
 This page explains why, and how to set it up. It applies to both editions: Community (free) and Pro (Pro Business and
 Pro Enterprise).
 

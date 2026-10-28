@@ -189,6 +189,11 @@ try {
     $ctx['jobs'] = @{ RoleIds = $roleIds; Decision = $js; WebId = [string](Get-SIBaselineProp $web @('id')); WebPid = $webPid; ChangeModeBefore = (Get-SIWebChangeMode -WebApp $web) }
     $plan['web-jobs-start-only'] = @{ Action = $js.Action; Reason = $js.Reason }
     $plan['web-jobs-contributor-off'] = @{ Action = $(switch ($js.ContributorOff) { 'remove' { 'remove' } 'wait' { 'keep' } default { 'none' } }); Reason = $js.ContributorReason }
+    # #931: never before the release whose web app starts jobs with no override
+    if ($plan['web-jobs-contributor-off'].Action -eq 'remove') {
+        $sr = Test-SIBaselineStartRequestReady -Jobs @($shape.Jobs)
+        if (-not $sr.Ready) { $plan['web-jobs-contributor-off'] = @{ Action = 'keep'; Reason = $sr.Line } }
+    }
 }
 catch {
     $jr = @{ Found = $false; Line = ('the web app''s jobs role was not read: {0}' -f $_.Exception.Message) }

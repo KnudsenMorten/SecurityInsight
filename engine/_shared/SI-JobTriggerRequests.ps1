@@ -12,13 +12,17 @@
       * READ BACK: the job's trigger after the change must be what was asked, else the row says failed;
       * a row older than a day is EXPIRED, never applied late;
       * every row gets AppliedUtc + Outcome (applied | failed | refused | expired) + Detail -- one line in the run's log each.
+      * a start-env row (#931, a job start's own values) is not a trigger change: the job itself takes it
+        (SI-JobStartRequest.ps1), so this pass never reads it.
     NEVER THROWS: a request that fails is recorded and the pipeline runs on. PS 5.1 safe.
 #>
 
 $script:SIJobTriggerMaxAgeHours = 24
 
 function Get-SIJobTriggerPendingSql {
-    'SELECT TOP (50) RequestId, JobName, Action, Cron, RequestedBy, RequestedUtc, DATEDIFF(MINUTE, RequestedUtc, SYSUTCDATETIME()) AS AgeMinutes FROM cfg.JobTriggerRequest WHERE AppliedUtc IS NULL ORDER BY RequestId'
+    # #931: a start request (start-env) is never applied here; one no execution took within the day is closed as expired
+    'UPDATE cfg.JobTriggerRequest SET AppliedUtc = SYSUTCDATETIME(), Outcome = N''expired'', Detail = N''no execution of the job took it'' WHERE Action = N''start-env'' AND AppliedUtc IS NULL AND RequestedUtc < DATEADD(HOUR, -24, SYSUTCDATETIME()); ' +
+    'SELECT TOP (50) RequestId, JobName, Action, Cron, RequestedBy, RequestedUtc, DATEDIFF(MINUTE, RequestedUtc, SYSUTCDATETIME()) AS AgeMinutes FROM cfg.JobTriggerRequest WHERE AppliedUtc IS NULL AND Action <> N''start-env'' ORDER BY RequestId'
 }
 
 function Get-SIJobTriggerRecordSql {

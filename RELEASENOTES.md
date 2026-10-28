@@ -1,3 +1,24 @@
+## v3.0.1 — more of SecurityInsight in the Community edition, and signed updates
+
+The first public release of SecurityInsight 3. It is installed beside 2.2 - see "Coming from 2.2.x" under v3.0.0 below.
+
+### More in the Community edition
+
+- **Cross-engine correlation** (one object id across all engines) and **full asset properties** are now part of the
+  Community edition. The v3.0.0 table below lists them as Pro; from 3.0.1 they are in both editions.
+- **Asset tagging**, **verification** and **data health** are in both editions.
+- The Community edition shows its own logo in the web app.
+
+### Updates
+
+- A Community install updates from the SecurityInsight update channel. Before anything is installed, the release is
+  checked against a signed entry: its version, its size and its SHA-256.
+- An update never overlaps another update that is still running, and a running update keeps reporting its stage, so it never looks hung.
+- Version numbers are short: 3.0.1, 3.0.2, ...
+
+### Reliability
+
+- When a part of the data sync fails (for example because the database is full), the run reports that part as failed instead of finishing as if all was well.
 ## v3.0.0 — two editions, one-command updates, and your settings finally win
 
 SecurityInsight 3.0 is the first release with two editions, a new licence for the public edition, and an

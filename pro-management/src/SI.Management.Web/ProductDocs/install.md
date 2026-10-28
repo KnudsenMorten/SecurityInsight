@@ -1,9 +1,12 @@
-# Install SecurityInsight Pro
+# Install SecurityInsight
 
-SecurityInsight Pro 3.0 runs in your own Azure subscription. The engines run as Azure Container Apps jobs, each on a
-managed identity. Pro adds an Azure SQL database and a web app. You install it with one guided flow: a short wizard on
+SecurityInsight runs in your own Azure subscription. The engines run as Azure Container Apps jobs, each on a managed
+identity, with an Azure SQL database and a web app. You install it with one guided flow: a short wizard on
 invardia.com, then one command in Azure Cloud Shell. Nothing is hosted by Invardia: your data, the database and every
 job stay in your subscription.
+
+Both editions use the same install. Without a licence it installs the **Community** edition. With a SecurityInsight
+**Pro** licence it installs Pro, which adds the paid engines and the CMDB.
 
 ## Before you start
 
@@ -17,16 +20,18 @@ ends as a warning with the exact command for the person who can.
 | Privileged Role Administrator or Global Administrator | Only to give the engine identity its read-only Microsoft Graph and Defender permissions, and to create the role-assignable SQL admin group |
 | Contributor on the subscription | To register the Azure resource providers SecurityInsight uses (Microsoft.App, Microsoft.OperationalInsights, Microsoft.Insights, Microsoft.ContainerRegistry, Microsoft.ManagedIdentity, Microsoft.KeyVault, Microsoft.Storage and Microsoft.Sql) |
 
-Have your SecurityInsight Pro licence ready. The install can also fetch it for you: a Pro install requests its licence
-from Invardia, bound to your tenant, and renews it before it ends.
+| Edition | Licence |
+|---|---|
+| Community | None. The install says it installs the Community edition. |
+| Pro | Have your SecurityInsight Pro licence ready, or let the install fetch it: a Pro install requests its licence from Invardia, bound to your tenant, and renews it before it ends. |
 
-**Cost (estimate, list prices).** The two Pro databases run on the Standard tier (S3 for the Pro database, S1 for the
-identity ledger) whatever the tenant's size, plus the web app (it scales to zero), the Container Apps jobs and Log
-Analytics ingestion, which grows with the number of assets.
+**Cost (estimate, list prices).** The two databases run on the Standard tier (S3 for the SecurityInsight database, S1
+for the identity ledger) whatever the tenant's size, plus the web app (it scales to zero), the Container Apps jobs and
+Log Analytics ingestion, which grows with the number of assets.
 
 ## 1. Answer the wizard
 
-The wizard asks six short pages of questions. It never asks for a password or key.
+The wizard asks seven short pages of questions. It never asks for a password or key.
 
 | Page | What you decide |
 |---|---|
@@ -34,7 +39,8 @@ The wizard asks six short pages of questions. It never asks for a password or ke
 | **Data and scope** | A new or an existing Log Analytics workspace. Your Microsoft Sentinel / Defender workspace (optional; Risk Analysis reads sign-in and security logs from it). What SecurityInsight reads in Azure: this subscription (the default), a management group, or the whole tenant. |
 | **Features** | AI classification and summaries with your own Azure OpenAI deployment (off by default). Shodan enrichment of your own public IP addresses (off by default). The start time of the daily pipeline (default 19:00 in the local time of the install's Azure region, after the nightly update at 18:30; Danish time when the region is not known) and your time zone. |
 | **Reports by e-mail** | Whether to mail the Risk Analysis reports, the recipients, and how mail is sent: a shared mailbox (recommended) or your own SMTP relay. |
-| **SecurityInsight Pro** | The region for the Pro database. Whether to install the web app, and whether it is reachable from the internet behind Entra sign-in or from your network only. The web app administrators. Whether asset tagging may write tags (it runs as its own identity and only reports what it would tag until you also switch writing on in the web app). Your ServiceNow instance URL (optional). |
+| **Database and web app** | The region for the database. Whether to install the web app, and whether it is reachable from the internet behind Entra sign-in or from your network only. The web app administrators. The install's update ring. Whether asset tagging may write tags (it runs as its own identity and only reports what it would tag until you also switch writing on in the web app). |
+| **SecurityInsight Pro** | Pro only: your ServiceNow instance URL (optional). |
 | **Invardia support** | Whether Invardia Support may help you, and at which level: *Troubleshoot* (read only) or *Setup* (can also repair). Empty = no support access. See [Support access](support-access). |
 
 **Tip.** If you choose *From the internet*, add a Conditional Access policy for the SecurityInsight enterprise
@@ -51,6 +57,8 @@ goes straight into the install's Key Vault. It is never written to a configurati
 
 ### What the install does
 
+![What the guided install creates: in one resource group a Container Apps environment with the engine jobs, the pipeline runner, the updater, the web app behind its sign-in front and the MCP server; an Entra-only Azure SQL server with the Pro database and the identity ledger; Log Analytics, storage, Key Vault and a container registry; one managed identity per role; and in Entra ID the sign-in app registration, the SQL admin group and the read-only permissions](images/install-resources.png)
+
 First it checks, and changes nothing:
 
 1. Your Azure sign-in
@@ -58,7 +66,7 @@ First it checks, and changes nothing:
 3. Your permissions
 4. The Azure resource providers
 5. That the names are free
-6. That the region accepts the Pro database
+6. That the region accepts the database
 
 Then it installs, one step at a time:
 
@@ -68,16 +76,16 @@ Then it installs, one step at a time:
 | Log Analytics workspace, data collection endpoint | Where the engines send their data. A workspace the install creates keeps data 90 days. |
 | Storage account | Created with shared-key access off. Everything uses managed identities. |
 | Key Vault | Holds the licence, the install key and the keys you entered. Purge protection is on. |
-| SecurityInsight Pro licence | Verified offline (signature, dates, product and your tenant) before anything is written. |
+| Licence | Pro: verified offline (signature, dates, product and your tenant) before anything is written. Community: skipped. |
 | Container registry and image, Container Apps environment | The image is built from the signed source inside your own registry. The registry's admin user stays off; every job pulls with its own identity. |
 | The identities | One managed identity per role: the engine, the web app, the MCP server, the updater and, if you opted in, asset tagging. See [Identities and permissions](identities-and-permissions). |
 | Access inside the resource group | Grants for each identity on its own resources only. |
 | Read access outside the resource group | Reader where SecurityInsight reads, and read access to your security workspace. |
 | Read-only Microsoft Graph and Defender permissions | The application permissions the engine reads with. All read only. |
 | Scheduled engine jobs | One job per engine and the daily pipeline, each sized for your tenant. |
-| Pro database server and tables | An Entra-only Azure SQL server, its databases, one least-privilege role per component and the certificate-signed grant procedure that later updates use. SQL auditing to your workspace, kept 90 days. See [SQL access](sql-access). |
-| Pro configuration templates | The default templates (reports, rules, risk index). |
-| Pro settings | Your answers as settings in the database. Records the install's update ring, its tenant and its resource names. |
+| Database server and tables | An Entra-only Azure SQL server, its databases, one least-privilege role per component and the certificate-signed grant procedure that later updates use. SQL auditing to your workspace, kept 90 days. See [SQL access](sql-access). |
+| Configuration templates | The default templates (reports, rules, risk index). |
+| Settings | Your answers as settings in the database. Records the install's update ring, its tenant and its resource names. |
 | SecurityInsight web app | The web app, its MCP server and their Entra sign-in. The sign-in uses no secret and no certificate. |
 | The updater | The nightly job that keeps the install on its update ring. See [Releases, rings and waves](releases). |
 | Invardia Support access | Only when you chose a support level. |

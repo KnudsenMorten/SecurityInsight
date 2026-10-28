@@ -54,7 +54,7 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.ItemOverride';           Verbs = 'INSERT, UPDATE, DELETE' }
     @{ Object = 'cfg.JobFlow';                 Verbs = 'INSERT, UPDATE' }
     @{ Object = 'cfg.PipelineQueue';           Verbs = 'INSERT, UPDATE' }   # #306: Run now requests + Cancel
-    @{ Object = 'cfg.JobTriggerRequest';       Verbs = 'INSERT' }           # CR8: a job's trigger change, applied by the pipeline runner (start-only rights on the jobs)
+    @{ Object = 'cfg.JobTriggerRequest';       Verbs = 'INSERT, UPDATE' }   # CR8: a job's trigger change, applied by the pipeline runner (start-only rights on the jobs); #931: a start's own values, bound to the execution after the start
     @{ Object = 'cfg.SignedRequest';           Verbs = 'INSERT' }           # CR8 step 2 (observe only): each change with the person's signed token
     @{ Object = 'cfg.PendingSecret';           Verbs = 'INSERT, DELETE' }   # the secret hand-over: ciphertext only; a new paste replaces the one still waiting
     @{ Object = 'cfg.MgmtReport';              Verbs = 'INSERT, UPDATE' }

@@ -1867,6 +1867,26 @@ CREATE TABLE cfg.JobTriggerRequest (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_JobTriggerRequest_Pending' AND object_id = OBJECT_ID('cfg.JobTriggerRequest'))
 CREATE INDEX IX_JobTriggerRequest_Pending ON cfg.JobTriggerRequest (AppliedUtc, RequestId);
 
+-- #931: a job start's own values without a start override (Azure Container Apps: a start with containers needs
+-- Microsoft.App/jobs/write, which the web app must not hold). The web app writes Action 'start-env' with the values as a
+-- JSON object (EnvJson) and starts the job with no body; the job's entrypoint claims the row (ExecutionName = its own
+-- execution) and sets only the names allowed for that job (engine\_shared\SI-JobStartRequest.ps1). Additive: nullable.
+IF COL_LENGTH('cfg.JobTriggerRequest', 'EnvJson') IS NULL
+ALTER TABLE cfg.JobTriggerRequest ADD EnvJson NVARCHAR(4000) NULL;
+
+IF COL_LENGTH('cfg.JobTriggerRequest', 'ExecutionName') IS NULL
+ALTER TABLE cfg.JobTriggerRequest ADD ExecutionName NVARCHAR(128) NULL;
+
+-- The action list grows without dropping anything (the schema stays additive): the first list is switched off and a
+-- second, wider one added. Nothing is removed and no row is changed.
+IF COL_LENGTH('cfg.JobTriggerRequest', 'Action') IS NOT NULL AND EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_JobTriggerRequest_Action'
+           AND parent_object_id = OBJECT_ID('cfg.JobTriggerRequest') AND is_disabled = 0 AND definition NOT LIKE '%start-env%')
+ALTER TABLE cfg.JobTriggerRequest NOCHECK CONSTRAINT CK_JobTriggerRequest_Action;
+
+IF COL_LENGTH('cfg.JobTriggerRequest', 'Action') IS NOT NULL AND (SELECT COUNT(*) FROM sys.check_constraints WHERE name = 'CK_JobTriggerRequest_Actions'
+           AND parent_object_id = OBJECT_ID('cfg.JobTriggerRequest')) = 0
+ALTER TABLE cfg.JobTriggerRequest ADD CONSTRAINT CK_JobTriggerRequest_Actions CHECK (Action IN (N'to-manual', N'to-schedule', N'start-env'));
+
 -- CR8 step 2, OBSERVE ONLY (framework 12.11f item 2, SI #659): every change a person makes in the web app is recorded with
 -- the person's signed Entra token as the web app received it (Token, TokenSource bearer | session | none) and the time it
 -- was captured. The pipeline runner verifies it (signature against Entra's published keys, issuer, audience, issued <=

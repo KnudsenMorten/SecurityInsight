@@ -4,7 +4,7 @@
     it the pim way"; "default release is quick"; "we even agreed on hard limit of max 10 min"): a core set + the few suites
     the change needs (narrow / broad / hub / unmapped / documents / release-bump / a changed suite / -Suites), the web app's
     tests only for a web change and then only the matching classes, every suite in its own process in parallel, and a
-    HARD 10-minute stop that ends a suite's whole process tree and reports it TIMED OUT by name (the run: NOT TESTED).
+    HARD 20-minute stop (10 until 2026-10-28) that ends a suite's whole process tree and reports it TIMED OUT by name (the run: NOT TESTED).
     These tests prove the selection (pure functions), the stop (a fake suite that sleeps past a SHORT test limit), the
     refusal of "everything", and the older covering selection / full-run sharding that -Precise and -Full still use.
 #>
@@ -182,9 +182,9 @@ Describe '#416 THE HOTFIX GATE: EVERY suite that covers the changed files (the b
         @($t.Dropped.Keys).Count | Should -Be 0
     }
     It 'the budget is a WARNING: a missed hotfix budget says plainly which covering suites made it take longer' {
-        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 710 -OverBudget @('SIv3-Heavy.Tests.ps1')
+        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 1310 -OverBudget @('SIv3-Heavy.Tests.ps1')
         $b.Met | Should -BeFalse
-        $b.Text | Should -Match 'hotfix gate: 710 s of the 600 s limit \(10 minutes\) -- OVER THE 10-MINUTE LIMIT \(it took longer because SIv3-Heavy\.Tests\.ps1 covers the change\)'
+        $b.Text | Should -Match 'hotfix gate: 1[.,]?310 s of the 1[.,]?200 s limit \(20 minutes\) -- OVER THE 20-MINUTE LIMIT \(it took longer because SIv3-Heavy\.Tests\.ps1 covers the change\)'
         (Get-SIFastGateBudget -Mode hotfix -Seconds 200 -OverBudget @('SIv3-Heavy.Tests.ps1')).Text | Should -Not -Match 'took longer'
     }
     It 'WIRING: no "left to the nightly" anywhere in the gate; the plain over-budget line is printed and OverBudget is in the selection file + result' {
@@ -227,12 +227,12 @@ Describe '#416 THE HOTFIX GATE: EVERY suite that covers the changed files (the b
         # the smoke set is within the safety list: the full cycle runs all of it too
         foreach ($s in $script:Map.Smoke) { $script:Map.Safety | Should -Contain $s }
     }
-    It 'THE 10-MINUTE LIMIT (owner 2026-10-13): 600 s for every release gate -- hotfix and fast alike; over it is said plainly; a full run has none' {
-        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 280; $b.Met | Should -BeTrue; $b.Target | Should -Be 600; $b.Text | Should -Match 'hotfix gate: 280 s of the 600 s limit \(10 minutes\) -- met'
-        (Get-SIFastGateBudget -Mode hotfix -Seconds 600).Met | Should -BeTrue
-        $o = Get-SIFastGateBudget -Mode hotfix -Seconds 601; $o.Met | Should -BeFalse; $o.Text | Should -Match 'OVER THE 10-MINUTE LIMIT'
-        (Get-SIFastGateBudget -Mode fast -Seconds 590).Met | Should -BeTrue
-        (Get-SIFastGateBudget -Mode fast -Seconds 601).Text | Should -Match 'fast gate: 601 s of the 600 s limit \(10 minutes\) -- OVER THE 10-MINUTE LIMIT'
+    It 'THE 20-MINUTE LIMIT (owner 2026-10-13: 10 min; 2026-10-28: "extend to 20 min"): 1200 s for every release gate -- hotfix and fast alike; over it is said plainly; a full run has none' {
+        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 280; $b.Met | Should -BeTrue; $b.Target | Should -Be 1200; $b.Text | Should -Match 'hotfix gate: 280 s of the 1[.,]?200 s limit \(20 minutes\) -- met'
+        (Get-SIFastGateBudget -Mode hotfix -Seconds 1200).Met | Should -BeTrue
+        $o = Get-SIFastGateBudget -Mode hotfix -Seconds 1201; $o.Met | Should -BeFalse; $o.Text | Should -Match 'OVER THE 20-MINUTE LIMIT'
+        (Get-SIFastGateBudget -Mode fast -Seconds 1190).Met | Should -BeTrue
+        (Get-SIFastGateBudget -Mode fast -Seconds 1201).Text | Should -Match 'fast gate: 1[.,]?201 s of the 1[.,]?200 s limit \(20 minutes\) -- OVER THE 20-MINUTE LIMIT'
         Get-SIFastGateBudget -Mode full -Seconds 5000 | Should -BeNullOrEmpty
     }
     It 'WIRING: the -Precise listing reaches the covering selection with the measured seconds; a FULL run builds the dotnet solution; the result carries Phases + Budget + OverBudget' {
@@ -696,16 +696,16 @@ Describe 'THE QUICK GATE selects the PIM way (owner 2026-10-13: "yes, build it t
         }
         $sum | Should -BeLessOrEqual 150
         $script:Map.Quick.BroadOver | Should -Be 3; $script:Map.Quick.NamedMax | Should -Be 3; $script:Map.Quick.HubLoads | Should -Be 20
-        $script:Map.Quick.SuiteLimitSeconds | Should -Be 600; $script:Map.Quick.GateLimitSeconds | Should -Be 600
+        $script:Map.Quick.SuiteLimitSeconds | Should -Be 1200; $script:Map.Quick.GateLimitSeconds | Should -Be 1200
         @($script:Map.Hubs).Count | Should -BeGreaterThan 5
         foreach ($h in $script:Map.Hubs) { Test-Path -LiteralPath (Join-Path $script:SIRoot ($h -replace '/', '\')) | Should -BeTrue -Because "$h is a listed hub" }
-        # never above 10 minutes, whatever the file says
+        # never above 20 minutes, whatever the file says
         $tmp = Join-Path $TestDrive 'map.json'
         $j = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\pester\fast-gate.map.json')) | ConvertFrom-Json
         $j.quick.suiteLimitSeconds = 3600; $j.quick.gateLimitSeconds = 7200
         [IO.File]::WriteAllText($tmp, ($j | ConvertTo-Json -Depth 8))
         $m2 = Get-SIFastGateMap -Path $tmp
-        $m2.Quick.SuiteLimitSeconds | Should -Be 600; $m2.Quick.GateLimitSeconds | Should -Be 600
+        $m2.Quick.SuiteLimitSeconds | Should -Be 1200; $m2.Quick.GateLimitSeconds | Should -Be 1200
     }
 }
 
@@ -753,7 +753,7 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $v = Get-SIQuickGateStatus -Outcomes $outs
         $v.Status | Should -Be 'NOT TESTED'
         @($v.TimedOut) | Should -Be @('Sleeper-Fake.Tests.ps1')
-        $v.Text | Should -Match '^NOT TESTED -- the gate was STOPPED at its 10-minute limit; a stopped run is never green \(TIMED OUT: Sleeper-Fake\.Tests\.ps1\)'
+        $v.Text | Should -Match '^NOT TESTED -- the gate was STOPPED at its 20-minute limit; a stopped run is never green \(TIMED OUT: Sleeper-Fake\.Tests\.ps1\)'
     }
     It 'at the WHOLE gate''s limit: what runs is ended, what never started is NOT RUN -- by name; never green' {
         $w = Join-Path $TestDrive 'run2'
@@ -769,6 +769,7 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
     }
     It 'a suite MEASURED over 10 minutes is not stopped at 10 in a release gate (owner 2026-10-13: "accepted, skip 10 min for now"): it gets its measured time and the gate says so' {
         Get-SIQuickGateSlowLimit -MeasuredSeconds 1800 | Should -Be 2700
+        Get-SIQuickGateSlowLimit -MeasuredSeconds 1200 | Should -Be 0
         Get-SIQuickGateSlowLimit -MeasuredSeconds 600 | Should -Be 0
         Get-SIQuickGateSlowLimit -MeasuredSeconds 120 | Should -Be 0
         Get-SIQuickGateSlowLimit | Should -Be 0
@@ -783,7 +784,7 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         # wiring: the gate gives a measured-slow suite its time, widens the whole gate's limit and says so plainly
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
         $g | Should -Match 'LimitSeconds = \$slow \}\)'
-        $g | Should -Match 'OVER THE 10-MINUTE LIMIT; it runs with its measured time'
+        $g | Should -Match 'OVER THE 20-MINUTE LIMIT; it runs with its measured time'
         $g | Should -Match '\$qGateLimit = \[Math\]::Max\(\$qGateLimit'
         $g | Should -Match "Get-SIFastGateBudget -Mode 'quick' -Seconds \`$summary\.Seconds -OverBudget @\(\`$slowSuites\.Keys\)"
     }
@@ -809,10 +810,10 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $g | Should -Match "Status = \`$verdict\.Status"
         $g | Should -Match 'QUICK GATE TIMED OUT: \{0\} after'
         $g | Should -Match 'QUICK GATE NOT RUN: \{0\}'
-        # the limits can never be raised above 10 minutes
-        $g | Should -Match '\[ValidateRange\(0, 600\)\]\[int\]\$SuiteLimitSeconds'
-        $g | Should -Match '\[ValidateRange\(0, 600\)\]\[int\]\$GateLimitSeconds'
-        $g | Should -Match 'SuiteLimitSeconds = \[Math\]::Min\(600'
+        # the limits can never be raised above 20 minutes
+        $g | Should -Match '\[ValidateRange\(0, 1200\)\]\[int\]\$SuiteLimitSeconds'
+        $g | Should -Match '\[ValidateRange\(0, 1200\)\]\[int\]\$GateLimitSeconds'
+        $g | Should -Match 'SuiteLimitSeconds = \[Math\]::Min\(1200'
         # the web app: built and tested in its own stoppable process, the PROJECT (never the solution), only on a web change
         $d = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')
         $d | Should -Match 'dotnet build \(\[string\]\$pj\.Path\) -c Release --nologo -v q -nodeReuse:false'

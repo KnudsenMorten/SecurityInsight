@@ -5,7 +5,7 @@ factors such as internet exposure. The **weighted risk score** multiplies that b
 asset: the **criticality** and **data sensitivity** of its CMDB service. The same finding then ranks higher on a payroll
 server than on a sandbox.
 
-Open **Risks (detailed) > Risk score > Weighted risk score**. Pick a collection at the top; the newest is selected.
+Open **Assets & services > Risk scores > Weighted, per service**. Pick a collection at the top; the newest is selected.
 
 ![Weighted risk score, By service: services ordered by CMDB criticality, then weighted risk](images/weighted-risk-by-service.png)
 
@@ -73,7 +73,7 @@ The spread of weighted scores, and every CI's weighted total.
   service has a criticality, it reads *not set*, and the page orders by weighted risk alone, with a link to the CMDB
   page.
 - **Assets linked to services**, by your CMDB, by profile rules (`cmdbId`), or on the CMDB page.
-- **A data sync after the import.** The page reads the collection the data sync loaded into the Pro database.
+- **A data sync after the import.** The page reads the collection the data sync loaded into the SecurityInsight database.
 
 ## Who sees what
 

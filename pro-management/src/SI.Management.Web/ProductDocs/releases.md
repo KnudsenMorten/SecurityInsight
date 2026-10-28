@@ -18,6 +18,8 @@ SecurityInsight decides which version goes to which ring; Invardia's update plat
 manifest that names the release and its SHA-256. Your updater asks for the manifest of **its own** ring only, and
 refuses a manifest signed for another ring.
 
+![Releases travel ring 0, 1, 2 and 3 in order; rings 2 and 3 need the release owner's approval and wait while an install that runs the version on a lower ring is Unhealthy; a wave serves named installs a version early; every install reports counts the release is judged on](images/release-rings.png)
+
 ## What a release must pass
 
 | Gate | Rule |

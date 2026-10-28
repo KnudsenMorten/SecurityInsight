@@ -76,7 +76,7 @@ one rule, act only on a complete batch. The pages below describe it for your Ser
 
 To set it up in SecurityInsight:
 
-- **Hand-off database:** the Pro database carries the views; for a database of your own, add a connector on
+- **Hand-off database:** the SecurityInsight database carries the views; for a database of your own, add a connector on
   **Configuration > Connectors > Setup** with kind **sql** and direction **cmdb**, and give its `server` and
   `database`.
 - **ServiceNow push:** on **Configuration > Connectors > Setup**, set up one ServiceNow connector with direction

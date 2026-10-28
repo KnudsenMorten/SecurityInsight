@@ -6,7 +6,7 @@ states and the same rule for when a reader may act. This page is the contract. I
 | Target | What it carries | Where the batch state is | Batch id on the rows |
 |---|---|---|---|
 | **ServiceNow push** (the ServiceNow data-out connector) | CIs and vulnerable items, posted to your Import Set staging tables | The staging status table (`u_si_staging_status`) | `u_si_batch_id` on every row |
-| **Hand-off database, the Pro database** (your MID Server reads SQL views) | CIs, tags, relations, proposed CIs, vulnerable items | `snowstage.vImportBatch` (the batches of the CI hand-off and of the two SQL connectors below) | `u_si_batch_id` on `snowstage.vImportCi` and `snowstage.vImportVulnerableItem` |
+| **Hand-off database, the SecurityInsight database** (your MID Server reads SQL views) | CIs, tags, relations, proposed CIs, vulnerable items | `snowstage.vImportBatch` (the batches of the CI hand-off and of the two SQL connectors below) | `u_si_batch_id` on `snowstage.vImportCi` and `snowstage.vImportVulnerableItem` |
 | **Hand-off database of your own** (a connector of kind **sql**, direction **cmdb**) | CIs, tags, relations, proposed CIs | Its own `snowstage.vImportBatch` (`u_si_batch_id`, `u_state`) | `u_si_batch_id` (and the older `u_batch_id`, the same value) on every row |
 | **CMDB SQL connector** | SecurityInsight's CI table `cmdbsync.ConfigurationItem` | `cmdbsync.SyncRun` | `SiBatchId` on each CI it wrote |
 | **SQL vulnerability connector** | `vuln.VulnerabilityItem` | `vuln.SyncRun` | `SiBatchId` on each record, from the write itself |
@@ -47,7 +47,7 @@ How each target makes a batch:
 |---|---|---|
 | ServiceNow push | `<run id>:<output>` | A second row in the staging status table, after the last data row |
 | CMDB SQL connector | `<run id>:cmdb-sql` | In the **same transaction** as the CI changes. A reader never sees a CI change without the `complete` row |
-| CI hand-off, the Pro database | `<run id>:cmdb-handoff` | After the last CI row of the run is written. The batch is `writing` from before the first row, and every CI row it writes carries its id from that write on. An error ends it `failed` |
+| CI hand-off, the SecurityInsight database | `<run id>:cmdb-handoff` | After the last CI row of the run is written. The batch is `writing` from before the first row, and every CI row it writes carries its id from that write on. An error ends it `failed` |
 | SQL vulnerability connector | `<run id>:vuln-sql:<connector>` | At the end of the run. The connector writes **record by record, not in one transaction**, so a reader can see a run's records while its batch is still `writing`. Every record the run writes carries the run's batch id **from that write on** (the batch row is written first, so the id is always one you can look up), and the batch end adds the clear marker. A record whose `u_si_batch_id` names a `writing` or `failed` batch is not to be acted on yet |
 | Hand-off database of your own | the run | One statement after the row count is checked. The import views show only the newest complete batch |
 
@@ -61,7 +61,7 @@ with the same words as the staging status table: `u_si_batch_id`, `u_output` (`s
 when its `u_si_batch_id` is a `complete` batch in `snowstage.vImportBatch`. Skip the other rows; the next complete batch
 carries them. A record the newest run did not write keeps the id of the batch that last wrote it, which is complete.
 
-**The reader rule for the Pro database's CI views** (`snowstage.vImportCi`) is the same: act on a row only when its
+**The reader rule for the SecurityInsight database's CI views** (`snowstage.vImportCi`) is the same: act on a row only when its
 `u_si_batch_id` is a `complete` batch in `snowstage.vImportBatch`. Each run writes the views as one batch of its own,
 `<run id>:cmdb-handoff`: while it writes, the rows it has written carry that batch's id and the batch is `writing`, so
 you skip them; the rows it has not reached yet still carry the id of the complete batch before. A row the newest run did

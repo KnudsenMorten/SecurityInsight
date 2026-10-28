@@ -115,6 +115,20 @@ switch ($siAuth.Mode) {
 }
 Write-Host ('[auth] signing in as {0}' -f $siAuth.Reason)
 
+# #931: the values a start carries (a one-off certification run: template, mode, Log Analytics / mail off) arrive as a start
+# request in the Pro database, never as a start override (Azure Container Apps: an override needs jobs/write). Claimed
+# before the SI_RA_* values below are read. Not for a queue worker (it runs its producer's run).
+$raJob = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_NAME'); $raExec = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME')
+if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase -and $raJob -and $raExec -and (Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -ne '1' -and
+    (Get-OptionalEnv 'SI_RA_SCALEOUT_ROLE' '').Trim().ToLowerInvariant() -ne 'worker') {
+    try {
+        . (Join-Path $PSScriptRoot '../engine/_shared/SI-JobStartRequest.ps1')
+        if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') }
+        $raStartRequest = Invoke-SIJobStartRequestClaim -Invoke (Get-SIGuardProInvoke) -Job ([string]$raJob) -Execution ([string]$raExec)
+        if ($raStartRequest.Line) { Write-Host $raStartRequest.Line }
+    } catch { Write-Warning ('[start-request] the start request could not be read ({0}) -- the run goes on as configured' -f $_.Exception.Message) }
+}
+
 # Aliases the RA script reads in some code paths.
 $global:AzureTenantId = $global:SpnTenantId
 

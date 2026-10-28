@@ -1,7 +1,7 @@
 # SQL access
 
-SecurityInsight Pro keeps its settings, decisions, audit trail and the copies of findings the web app reads in Azure SQL,
-in your subscription: the **Pro database** and the **identity ledger** (the object identifiers that tie records to one
+SecurityInsight keeps its settings, decisions, audit trail and the copies of findings the web app reads in Azure SQL,
+in your subscription: the **SecurityInsight database** and the **identity ledger** (the object identifiers that tie records to one
 asset). This page describes who can reach them and with which rights. The model is the same in every Invardia product.
 
 ## The rules
@@ -14,13 +14,17 @@ asset). This page describes who can reach them and with which rights. The model 
    component never deletes.
 4. **No standing security or DDL right on a runtime identity**, except the updater's right to apply a release's schema.
    Grants after a release go through one certificate-signed procedure (below).
-5. **The SQL admin group holds the Invardia Support app only.** The updater is not a member. People get in just in
+5. **The SQL admin group holds the Invardia Support app only**, when you create it. The Support app also has its own
+   database user with db_owner in both databases, kept through every update, so support can help without a new grant;
+   only `Grant-SISupportAccess -Remove` takes either away. The updater is not a member. People get in just in
    time, for example through Privileged Identity Management for Groups with approval and a time limit. The person who
    installs is a member only for the length of the install.
 6. **SQL auditing** on the server, to the install's own Log Analytics workspace, kept 90 days.
 7. **A static test per release** fails when the product's code touches a table outside its role's grant list.
 
 ## The roles
+
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
 
 | Role | Component | What it may do |
 |---|---|---|
@@ -37,13 +41,15 @@ The templates job has its own identity and role, so the engine role carries no w
 The audit trail and the change history it is built from refuse UPDATE and DELETE to every database user, enforced by
 the database (`DENY ... TO public`). Because no runtime identity holds DDL or ownership, the DENY binds all of them,
 including an identity added later under any name. The one way rows leave the trail is the retention procedure, which
-refuses anything younger than 13 months and records itself. The honest limit: the database owner (the admin group) is
-not bound by a DENY, which is why that group is kept empty or holds only the Support app.
+refuses anything younger than 13 months and records itself. The honest limit: a database owner (the admin group, and the
+Support app's own db_owner user) is not bound by a DENY, which is why the group is kept empty or holds only the Support
+app, and why the Support app exists only when you create it. Every statement it runs goes through Invardia's audited
+SQL call.
 
 ## Grants after a release: the signed grant procedure
 
 A release can add tables, and the components need rights on them. These are applied by **one certificate-signed
-procedure** in the Pro database, `cfg.ApplyComponentGrants`, which the updater may only EXECUTE:
+procedure** in the SecurityInsight database, `cfg.ApplyComponentGrants`, which the updater may only EXECUTE:
 
 - It applies only the release's shipped grant list, under fixed rules: the grantee is one of SecurityInsight's own
   roles; the permission is SELECT, INSERT, UPDATE, DELETE or EXECUTE; the object is in SecurityInsight's own schemas;
@@ -84,4 +90,4 @@ Most installs run for years with no Support app and no contact with Invardia. Th
 |---|---|
 | Query the database as a person | Become a member of the SQL admin group for the time you need, through PIM for Groups, or ask an administrator to add you |
 | See who did what | The SQL audit in your Log Analytics workspace (`SQLSecurityAuditEvents`) and the product's own audit trail in the web app |
-| Allow Invardia to help | Create the Invardia Support app; it becomes a member of the admin group. See [Support access](support-access). |
+| Allow Invardia to help | Create the Invardia Support app; it becomes a member of the admin group and gets its own database user with db_owner in both databases. See [Support access](support-access). |

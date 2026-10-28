@@ -4,6 +4,8 @@ SecurityInsight checks its own data every day. It asks the sources again for a r
 compares the answers with what it stored. While the data is not healthy, nothing leaves SecurityInsight: no ticket is
 closed, nothing is handed to your CMDB or ServiceNow, no tag is written. Releases to other customers wait as well.
 
+![Check, hold and release: a safety check holds, refuses or stops a step that would do damage and records an event; the next good run clears it, or an Admin releases the held set once. The daily data health check turns Unhealthy after three anomalous days, then every data-out channel plans and reports only until one good day](images/guards-data-health.png)
+
 ## What is checked
 
 Every day, inside the verification job, as the engine identity and read only:

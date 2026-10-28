@@ -226,6 +226,9 @@ Describe 'no free file loads a Pro file' {
             'tests\pester\SIv3-SocAttackPaths.Tests.ps1|report-certification'   # the spec case runs only after Test-Path finds the folder (skipped without it)
             'tests\pester\SIv3-SqlTier.Tests.ps1|SI-UpdaterInvardia.ps1'        # #756: the Invardia update path is read only after Test-Path finds it (skipped without it)
             'tests\pester\SIv3-StepFailureCause.Tests.ps1|asset-correlation'     # a job NAME in fixture log lines -- a label, never loaded
+            'tests\pester\SIv3-NoScriptSigningClaims.Tests.ps1|release\'         # the published product pages are read only after Test-Path finds the folder
+            # the data sync's step NAME 'view-context' (a label in its step list) -- the Pro test fixture folder tests\fixtures\view-context is never loaded
+            'engine\pro-data\_shared\SI-DataSync.ps1|view-context'
             # The container parity test NAMES Pro engines only to assert they have no launcher config of their own.
             'tests\pester\SIv3-ContainerParity.Tests.ps1|asset-correlation'
             'tests\pester\SIv3-ContainerParity.Tests.ps1|asset-cmdb'

@@ -370,6 +370,26 @@ function Get-SIWebChangeMode {
     Get-SIBaselineEnvValue -Resources @($WebApp) -Name $script:SIBaselineChangeModeEnv
 }
 
+$script:SIBaselineStartRequestVersion = [version]'3.0.2'
+
+function Test-SIBaselineStartRequestReady {
+    <#
+        PURE. #931: a web app without Container Apps Jobs Contributor can start a job only with no override (Azure Container
+        Apps: an override needs jobs/write). The release that moved a start's values off the start is
+        $script:SIBaselineStartRequestVersion; before it, the web app's Run now, template release and mail-only starts would
+        fail. -Jobs: the install's jobs (ARM); the updater's 'si-installed' tag says the installed release.
+        @{ Ready; Line }.
+    #>
+    param([object[]]$Jobs = @(), [version]$Needed = $script:SIBaselineStartRequestVersion)
+    $upd = @(@($Jobs) | Where-Object { $_ -and [string](Get-SIBaselineProp $_ @('name')) -match '-updater$' })[0]
+    $tag = if ($upd) { [string](Get-SIBaselineProp $upd @('tags', 'si-installed')) } else { '' }
+    $v = $null
+    if ($tag -match '^(\d+)\.(\d+)\.(\d+)') { $v = [version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]) }
+    if (-not $v) { return @{ Ready = $false; Line = 'the installed release is not known (no si-installed tag on the updater) -- Container Apps Jobs Contributor stays' } }
+    if ($v -lt $Needed) { return @{ Ready = $false; Line = ('the install runs {0}: the web app still starts jobs with their values on the start, which needs Container Apps Jobs Contributor -- it stays until {1} is installed' -f $tag, $Needed) } }
+    @{ Ready = $true; Line = ('the install runs {0}: the web app starts jobs with no override' -f $tag) }
+}
+
 function Get-SIJobsStartOnlyDecision {
     <#
         PURE. CR8 item 1 for SI: the web app's rights on the jobs.

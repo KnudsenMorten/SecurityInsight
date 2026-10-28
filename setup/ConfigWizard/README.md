@@ -17,14 +17,6 @@ All pages are live. **Setup** POSTs the wizard's full state to `/api/apply` and 
 | Shodan attack surface | public-IP scanning (optional) |
 | Output sinks + Defender | output sinks, Defender for Cloud collection |
 | Setup | review and provision |
-## Screenshots
-
-| Step | Screenshot |
-|------|------------|
-| 1 — Tenant identity (SPN mode toggle, display name pre-filled) | ![Step 1](../../docs/screenshots/wizard/SetupWizard-1-ConnectMethods.png) |
-| 2 — Workspace + ingestion (workspace name + RG + DCE all pre-filled) | ![Step 2](../../docs/screenshots/wizard/SetupWizard-2-Workspace-ingestion.png) |
-| 8 — Setup page (provisioning, per-phase log) | ![Step 8 — Setup](../../docs/screenshots/wizard/SetupWizard-8-Setup.png) |
-
 ## Run it
 
 ```powershell

@@ -25,10 +25,6 @@ A customer-facing, offline-first web wizard that drives the **entire** SecurityI
 
 | Step | Screenshot |
 |------|------------|
-| 1 — Tenant identity (SPN mode toggle, display name pre-filled) | ![Step 1](../../docs/screenshots/wizard/01-tenant-identity.png) |
-| 2 — Workspace + ingestion (workspace name + RG + DCE all pre-filled) | ![Step 2](../../docs/screenshots/wizard/02-workspace-ingestion.png) |
-| 10 — Apply page before clicking | ![Step 10 — before](../../docs/screenshots/wizard/10-apply-page.png) |
-| 10 — Apply page after success (all 3 phases green) | ![Step 10 — success](../../docs/screenshots/wizard/10-apply-success.png) |
 
 ## Run it
 

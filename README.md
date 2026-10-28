@@ -76,9 +76,7 @@
 
 👉 **Management-friendly Risk Score KPI** — Quick overview using overall Risk Score (KPI) and an Risk Score breakdown per security domain in email summary. Data is also stored in LogAnalytics for trend reporting.
 
-![Mail summary — Risk Score KPI + per-domain breakdown](./docs/screenshots/Mail-Summary-risk-score.png)
 
-![Mail summary — top risky assets](./docs/screenshots/Mail-Summary-top-assets.png)
 
 ---
 
@@ -263,23 +261,18 @@ Real-world patterns customers run this against. Every one of them is cheap to li
 
 #### Asset profiling — Identity (find users with no MFA registered)
 
-![Identity asset profile — find users with no MFA registered](./docs/screenshots/asset-profiling-identity-find-no-mfa-registered.png)
 
 #### Asset profiling — Endpoint (Tier 0 Domain Controller with CMDB enrichment)
 
-![Endpoint asset profile — Tier 0 DC with CMDB join](./docs/screenshots/asset-profiling-endpoint-tier0-dc-cmdb.png)
 
 #### Asset profiling — Azure (resource criticality inherited from parent subscription)
 
-![Azure asset profile — tier inheritance from parent](./docs/screenshots/asset-profiling-azure-tier-parent.png)
 
 #### Asset profiling — Identity (top-matches drive tier decision)
 
-![Identity tier decision — top-matches breakdown](./docs/screenshots/asset-profiling-identity-topmatches-tier-decission.png)
 
 #### Asset profiling — Identity (API-permission-driven tier)
 
-![Identity tier — API permissions drive tier verdict](./docs/screenshots/asset-profiling-identity-api-permissions.png)
 
 #### Sample reports + AI exec-summary email
 
@@ -737,77 +730,63 @@ The wizard runs cross-platform on **Windows 11** + **Windows Server**, both on-p
 
 #### Wizard tour — screenshot walkthrough
 
-![Setup Wizard overview](docs/screenshots/wizard/Setup-wizard.png)
 
 ##### 0 — Launch + Welcome
 
 In the same `pwsh` shell where you ran `Connect-AzAccount` + `Connect-MgGraph`, run `.\setup\ConfigWizard\Start-SetupWizard.ps1`. The listener prints its pre-flight, opens `http://localhost:8766` in your default browser, and waits.
 
-![Wizard launch](docs/screenshots/wizard/SetupWizard-0-Start.png)
 
 If your shell is missing one of the required contexts, the wizard refuses to start and prints the exact `Connect-*` command you need:
 
-![Wizard start error — missing Connect](docs/screenshots/wizard/SetupWizard-0-Start-Error-Connect.png)
 
 The Welcome page groups prereqs into *Always required* / *Use existing* / *Optional features* cards. Click **Start configuring** when ready.
 
-![Welcome page](docs/screenshots/wizard/SetupWizard-0-WelcomeWizard.png)
 
 ##### 1 — Tenant identity (engine host + SPN + credential)
 
 Pick the engine host + bootstrap-auth combination (dropdown — drives which credential-storage options stay visible later). Tenant ID is auto-pre-filled from your Az login.
 
-![Step 1 — Connect methods](docs/screenshots/wizard/SetupWizard-1-ConnectMethods.png)
 
 Pick SPN mode (**Create new** / **Use existing**), credential type (Secret / Self-signed cert), and storage (Inline / Local cert store / Key Vault). The wizard hides combinations that can't bootstrap on your chosen host (e.g. KV storage is hidden for non-MI hosts because nothing can reach KV before the SPN exists).
 
-![Step 1 — SPN options](docs/screenshots/wizard/SetupWizard-1-ConnectMethods-SPN.png)
 
 ##### 2 — Workspace + ingestion
 
 Subscription ID auto-pre-filled. Pick Azure region from the 53-region dropdown. Workspace name + RG, DCE name + RG, storage account name + RG + container — all defaults pre-filled with the v2.2 standard layout. Optional **naming suffix** (e.g. `prod`) auto-appends to all resource names.
 
-![Step 2 — Workspace + ingestion](docs/screenshots/wizard/SetupWizard-2-Workspace-ingestion.png)
 
 ##### 3 — Mail / SMTP *(optional)*
 
 Off / Anonymous relay / Authenticated. Sub-fields appear based on the mode. SendGrid / Brevo / M365 SMTP AUTH all work.
 
-![Step 3 — Mail](docs/screenshots/wizard/SetupWizard-3-Mail.png)
 
 ##### 4 — CMDB integration *(optional)*
 
 Off / CSV file. Type the path to your CMDB asset export; SI joins it onto every `SI_*_Profile_CL` row for owner / department / business-app enrichment.
 
-![Step 4 — CMDB](docs/screenshots/wizard/SetupWizard-4-CMDB.png)
 
 ##### 5 — Azure OpenAI *(optional)*
 
 Off / Enabled. Use existing OpenAI resource (paste endpoint + deployment + key) OR create new (resource name + RG + region + deployment + model SKU). Default model: `gpt-4.1-mini` (replaces the deprecated `gpt-4o-mini`).
 
-![Step 5 — Azure OpenAI integration](docs/screenshots/wizard/SetupWizard-5-OpenAI-integration.png)
 
 ##### 6 — Shodan attack-surface *(optional)*
 
 Off / Enabled. API key + license-tier dropdown (Free / Membership / Small Business / Corporate) so the engine backs off before hitting rate limits.
 
-![Step 6 — Shodan integration](docs/screenshots/wizard/SetupWizard-6-Shodan-integration.png)
 
 ##### 7 — Output sinks + Defender XDR + Entra diagnostic logs *(optional)*
 
 JSON sink toggle (adds `'JSON'` to every `SI_Sinks_<Engine>`). Defender XDR / Sentinel workspace linkage:
 
-![Step 7 — JSON sink + Defender integration](docs/screenshots/wizard/SetupWizard-7-Json-defender-integration.png)
 
 **Entra ID diagnostic-log streaming.** Default ON. Auto-skipped when you linked an existing Defender / Sentinel workspace above (their existing Diagnostic Setting already streams the same categories). When enabled, Phase 4 of Setup creates the `SI-EntraDiag` Diagnostic Setting — see *Phase 4* under § 4.3 above for the full category list and operator-role requirements.
 
-![Step 7 — Diagnostic logs](docs/screenshots/wizard/SetupWizard-7-DiagnosticsLogs.png)
 
 ##### 8 — Setup (provisioning)
 
 Review summary (4 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config → Entra Diagnostic Setting phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written, Diagnostic Setting PUT result). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent).
 
-![Step 8 — Setup](docs/screenshots/wizard/SetupWizard-8-Setup.png)
 
 Stop the listener with **Ctrl+C** in the pwsh window — the v2.2.119 graceful-stop handler releases port 8766 immediately so re-launching always works.
 

@@ -1,0 +1,22 @@
+id:        AdobeExperienceManager
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Adobe Experience Manager'
+category:  'CMS'
+description: ''
+displayNames:
+  - 'Adobe Experience Manager'
+  - 'AEM'
+
+detections:
+  - id: AdobeExperienceManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'experience_manager*'
+    set:
+      Tier:     2
+      Purpose:  'CMS'
+      Category: 'CMS'

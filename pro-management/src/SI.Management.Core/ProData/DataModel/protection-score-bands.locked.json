@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "about": "The Protection Score's bands -- ONE definition, read by the engine (engine\\_shared\\SI-ProtectionScore.ps1 Get-SIProtectionBand: the mails, the Risk Analysis log line) and the web app (SI.Management.Core ProtectionBands: the score cards, the wall board, the Executive overview and report, the management mail). The score is 0-100, higher is better; a band is the first one, from the top, whose 'min' the score reaches. Tone is the web app's colour family (a score, not a risk: a good band may be green); ink is the colour the mails use on white (WCAG AA). The ranges are the engine's existing bands (mirroring Microsoft's Secure Score bands) -- to confirm with the owner (REQUIREMENTS #827). The web app embeds an exact copy (pro-management\\src\\SI.Management.Core\\ProData\\DataModel); a test keeps the two equal.",
+  "bands": [
+    { "name": "Very Good", "min": 90, "tone": "very-good", "ink": "#1b5e20" },
+    { "name": "Good", "min": 75, "tone": "good", "ink": "#2e7d32" },
+    { "name": "Moderate", "min": 50, "tone": "moderate", "ink": "#a14a00" },
+    { "name": "At Risk", "min": 0, "tone": "at-risk", "ink": "#c62828" }
+  ]
+}

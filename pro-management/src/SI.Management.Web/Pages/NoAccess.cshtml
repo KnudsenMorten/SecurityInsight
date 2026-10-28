@@ -1,0 +1,44 @@
+@page
+@model SI.Management.Web.Pages.NoAccessModel
+@{
+    Layout = null;
+    var who = User.ChangeName();
+    // the sign-in landing shows the edition's logo (owner 2026-10-28): Pro only while the licence says Pro
+    var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(HttpContext.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, HttpContext.RequestAborted);
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>No access yet - SecurityInsight</title>
+    @Html.Raw(brand.IconLinks())
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/app.css" asp-append-version="true" />
+</head>
+<body>
+<main class="container" data-no-access>
+    <img class="signin-logo" src="@brand.LightLogo" alt="@brand.LogoAlt" height="44" data-edition="@(brand.Pro ? "pro" : "community")" />
+    <h1>You have no access to SecurityInsight yet</h1>
+    <div class="notice warn" role="status">
+        <p>You are signed in@(string.IsNullOrWhiteSpace(who) ? "" : " as " + who), but nobody has given you a role in SecurityInsight.</p>
+        @if (Model.SuperAdmins.Count > 0)
+        {
+            <p>Ask a SuperAdmin to add you on the Access page:</p>
+            <ul data-superadmins>
+                @foreach (var s in Model.SuperAdmins)
+                {
+                    <li>@s.Name@(s.Mail is null ? "" : " (" + s.Mail + ")")</li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p>Ask the person who installed SecurityInsight in your organisation to add you on the Access page.</p>
+        }
+        <p>Once you are added, open this page again (it can take a few seconds).</p>
+    </div>
+</main>
+</body>
+</html>

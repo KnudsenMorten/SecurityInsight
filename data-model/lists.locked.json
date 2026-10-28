@@ -1,0 +1,581 @@
+{
+  "$comment": "SecurityInsight lists used by risk factors and rules (template kind: list). A \"conditions\" list holds entries that each carry a condition group; in_list is true when any entry matches. A \"values\" list holds plain values (contains_any). Customer overrides: lists.custom.json, per list id (an entry list replaces the shipped one; use \"add\" to extend it).",
+  "kind": "list",
+  "version": "1.0.0",
+  "lists": [
+    {
+      "id": "unsupported_os",
+      "type": "conditions",
+      "description": "Operating systems out of vendor security support. Update as vendors end support.",
+      "entries": [
+        {
+          "name": "Windows 7",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Windows7"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Windows 8",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Windows8($|\\.)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Windows 8.1",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Windows8\\.1"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Windows Server 2003",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)WindowsServer2003"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Windows Server 2008 / 2008 R2",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)WindowsServer2008"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Windows Server 2012 / 2012 R2",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)WindowsServer2012"
+              }
+            ]
+          }
+        },
+        {
+          "name": "CentOS 6",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^CentOS\\ 6(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "CentOS 7",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^CentOS\\ 7(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "RHEL 6",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^RHEL\\ 6(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "RHEL 7",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^RHEL\\ 7(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "SLES 11",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^SLES\\ 11(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "SLES 12",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^SLES\\ 12(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Ubuntu 14.04",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Ubuntu\\ 14\\.04(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Ubuntu 16.04",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Ubuntu\\ 16\\.04(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Ubuntu 18.04",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Ubuntu\\ 18\\.04(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Debian 8",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Debian\\ 8(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Debian 9",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Debian\\ 9(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Debian 10",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Debian\\ 10(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 30",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 30(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 31",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 31(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 32",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 32(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 33",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 33(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 34",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 34(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fedora 35",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_name",
+                "op": "matches",
+                "value": "(?i)^Fedora\\ 35(\\b|$)"
+              }
+            ]
+          }
+        },
+        {
+          "name": "macOS 12 and earlier",
+          "when": {
+            "all": [
+              {
+                "field": "si_os_platform",
+                "op": "eq",
+                "value": "macos"
+              },
+              {
+                "field": "si_os_version",
+                "op": "lt",
+                "value": 13
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "high_risk_ports",
+      "type": "values",
+      "description": "Administrative and database ports that must not be open to the internet.",
+      "values": [
+        22,
+        3389,
+        1433,
+        3306,
+        5432,
+        5985,
+        5986
+      ]
+    },
+    {
+      "id": "internet_exposed_ranges",
+      "type": "ranges",
+      "description": "Address ranges that are internet-facing by design (DMZ, online landing zones). Empty by default: the customer fills it in lists.custom.json.",
+      "values": []
+    },
+    {
+      "id": "service_environment_order",
+      "type": "values",
+      "description": "Business service environments, strictest first. A CI in several services takes the strictest environment of them; a value not in the list counts after every listed one.",
+      "values": [
+        "production",
+        "prod",
+        "disaster recovery",
+        "dr",
+        "staging",
+        "pre-production",
+        "preprod",
+        "uat",
+        "acceptance",
+        "test",
+        "qa",
+        "development",
+        "dev",
+        "sandbox",
+        "lab"
+      ]
+    },
+    {
+      "id": "tag_keys_environment",
+      "type": "values",
+      "description": "Tag keys that name the ENVIRONMENT of an Azure resource (-> si_environment). Compared without case, spaces, dashes and underscores; the first key in the list that the resource carries wins -- its own tags first, then its resource group's and subscription's. Add your own tag keys here.",
+      "values": [
+        "environment",
+        "env",
+        "stage"
+      ]
+    },
+    {
+      "id": "tag_keys_cost_center",
+      "type": "values",
+      "description": "Tag keys that name the COST CENTER of an Azure resource (-> si_cost_center). Same rules as tag_keys_environment.",
+      "values": [
+        "costcenter",
+        "cost-center",
+        "cost_center",
+        "cost center",
+        "costcentre"
+      ]
+    },
+    {
+      "id": "tag_keys_app_name",
+      "type": "values",
+      "description": "Tag keys that name the APPLICATION or workload an Azure resource belongs to (-> si_app_name). Same rules as tag_keys_environment.",
+      "values": [
+        "application",
+        "applicationname",
+        "application-name",
+        "app",
+        "appname",
+        "app-name",
+        "workload",
+        "service",
+        "system"
+      ]
+    },
+    {
+      "id": "tag_keys_owner",
+      "type": "values",
+      "description": "Tag keys that name the OWNER of an Azure resource (-> si_owner). Same rules as tag_keys_environment.",
+      "values": [
+        "owner",
+        "owners",
+        "technicalowner",
+        "technical-owner",
+        "businessowner",
+        "business-owner",
+        "team",
+        "contact"
+      ]
+    },
+    {
+      "id": "excluded_asset_tags",
+      "type": "values",
+      "description": "Asset tags that take an asset out of every Risk Analysis report (the shipped tag). The customer adds tags on the Exclusions page (global or per report); both apply.",
+      "values": [
+        "--Excluded--SI"
+      ]
+    },
+    {
+      "id": "mail_access_permissions",
+      "type": "values",
+      "description": "Application permissions that read, send or impersonate mail organisation-wide (Microsoft Graph and Exchange Online: mail, mailbox items and folders, import / export and migration, Exchange Web Services). The mailbox-access and mailbox-impersonation reports look for these and name the ones a service principal holds. EWS.AccessAsUser.All is delegated only -- kept so a grant that shows it is never missed.",
+      "values": [
+        "Mail.Read",
+        "Mail.ReadWrite",
+        "Mail.Send",
+        "Mail.ReadBasic",
+        "Mail.ReadBasic.All",
+        "Mail-Advanced.ReadWrite.All",
+        "MailboxSettings.ReadWrite",
+        "MailboxItem.Read.All",
+        "MailboxItem.ImportExport.All",
+        "MailboxFolder.Read.All",
+        "MailboxFolder.ReadWrite.All",
+        "Mailbox.Migration",
+        "full_access_as_app",
+        "EWS.AccessAsApp",
+        "EWS.AccessAsUser.All"
+      ]
+    },
+    {
+      "id": "directory_write_permissions",
+      "type": "values",
+      "description": "Application permissions that write the whole directory.",
+      "values": [
+        "Directory.ReadWrite.All"
+      ]
+    },
+    {
+      "id": "role_management_write_permissions",
+      "type": "values",
+      "description": "Application permissions that assign any Entra role, Global Administrator included.",
+      "values": [
+        "RoleManagement.ReadWrite.Directory"
+      ]
+    },
+    {
+      "id": "app_role_assignment_write_permissions",
+      "type": "values",
+      "description": "Application permissions that grant any application permission to any application.",
+      "values": [
+        "AppRoleAssignment.ReadWrite.All"
+      ]
+    },
+    {
+      "id": "role_assignment_write_permissions",
+      "type": "values",
+      "description": "Application permissions that grant roles or permissions (the two above together).",
+      "values": [
+        "RoleManagement.ReadWrite.Directory",
+        "AppRoleAssignment.ReadWrite.All"
+      ]
+    },
+    {
+      "id": "pim_write_permissions",
+      "type": "values",
+      "description": "Application permissions that create or change Privileged Identity Management assignments, eligibilities or their policies directly: the current role and group schedule permissions, the role management policy permissions, and the legacy PrivilegedAccess ones.",
+      "values": [
+        "RoleEligibilitySchedule.ReadWrite.Directory",
+        "RoleAssignmentSchedule.ReadWrite.Directory",
+        "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup",
+        "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup",
+        "RoleManagementPolicy.ReadWrite.Directory",
+        "RoleManagementPolicy.ReadWrite.AzureADGroup",
+        "PrivilegedAccess.ReadWrite.AzureAD",
+        "PrivilegedAccess.ReadWrite.AzureADGroup",
+        "PrivilegedAccess.ReadWrite.AzureResources"
+      ]
+    },
+    {
+      "id": "high_privilege_app_permissions",
+      "type": "values",
+      "description": "Application permissions that make a service principal Tier 0 / Tier 1 (they take over the directory, its roles, its applications, its PIM, its authentication, or all mail / files). The multi-tenant and the dormant privileged workload reports count a service principal holding one as high-privileged, next to a Tier 0 / 1 Entra role and the privilege tier catalog's high-risk permission.",
+      "values": [
+        "RoleManagement.ReadWrite.Directory",
+        "AppRoleAssignment.ReadWrite.All",
+        "Directory.ReadWrite.All",
+        "Application.ReadWrite.All",
+        "Application.ReadWrite.OwnedBy",
+        "Group.ReadWrite.All",
+        "GroupMember.ReadWrite.All",
+        "User.ReadWrite.All",
+        "UserAuthenticationMethod.ReadWrite.All",
+        "Policy.ReadWrite.ConditionalAccess",
+        "Policy.ReadWrite.AuthenticationMethod",
+        "Domain.ReadWrite.All",
+        "IdentityRiskyUser.ReadWrite.All",
+        "DeviceManagementConfiguration.ReadWrite.All",
+        "DeviceManagementRBAC.ReadWrite.All",
+        "RoleEligibilitySchedule.ReadWrite.Directory",
+        "RoleAssignmentSchedule.ReadWrite.Directory",
+        "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup",
+        "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup",
+        "RoleManagementPolicy.ReadWrite.Directory",
+        "RoleManagementPolicy.ReadWrite.AzureADGroup",
+        "PrivilegedAccess.ReadWrite.AzureAD",
+        "PrivilegedAccess.ReadWrite.AzureADGroup",
+        "PrivilegedAccess.ReadWrite.AzureResources",
+        "Mail.ReadWrite",
+        "Mail.Send",
+        "full_access_as_app",
+        "EWS.AccessAsApp",
+        "Files.ReadWrite.All",
+        "Sites.FullControl.All",
+        "Sites.ReadWrite.All",
+        "Exchange.ManageAsApp"
+      ]
+    },
+    {
+      "id": "microsoft_first_party_tenants",
+      "type": "values",
+      "description": "The tenants Microsoft's own applications are owned by (a service principal's appOwnerOrganizationId): Microsoft Services (the first-party tenant SI already uses to tell first-party SPs apart) and Microsoft's corporate tenant.",
+      "values": [
+        "f8cdef31-a31e-4b4a-93e4-5f571e91255a",
+        "72f988bf-86f1-41af-91ab-2d7cd011db47"
+      ]
+    },
+    {
+      "id": "risk_rating_bands",
+      "type": "values",
+      "description": "The risk rating bands of the risk score (asset side x vulnerability side): a finding scoring at least the first value is Critical, at least the second High, at least the third Moderate, below that Low. Three whole numbers, highest first. Owner 2026-10-11: 50 / 30 / 15 (from the real score distribution: a tier-0 asset with a critical vulnerability, 56, is Critical); the values are data so they change without a release. Customer: lists.custom.json -- Pro: the list's override.",
+      "values": [
+        50,
+        30,
+        15
+      ],
+      "labels": [
+        "Critical",
+        "High",
+        "Moderate"
+      ],
+      "below": "Low"
+    },
+    {
+      "id": "break_glass_patterns",
+      "type": "values",
+      "description": "The NAMING PATTERNS of an emergency-access (break-glass) account -- break glass is a CLASSIFICATION, not a risk factor. Glob patterns (* = any text, ? = one character; letters, digits, space and . _ @ -; never wildcards only), matched case-insensitively against the identity's sign-in name, display name and the names of its groups (an emergency-access group). An identity is break-glass when its provider says so (si_is_break_glass), when a pattern matches, when it carries the extension attribute and value you define (the list break_glass_attribute), or when it is excluded from ALL the enabled Conditional Access policies that would apply to it (being excluded from one policy is not enough). The CI build sets si_is_break_glass from it (engine/data-model/SI-BreakGlass.ps1), so the tier rules and the break-glass reports read it. Customer: lists.custom.json (a values list replaces this one; \"add\" extends it) -- Pro: the list's override (wizard).",
+      "values": [
+        "*break*glass*",
+        "*emergency*access*",
+        "*emergency*admin*",
+        "*emergency*account*",
+        "bg-*",
+        "bg_*",
+        "bg.*",
+        "brk-*",
+        "brk_*",
+        "ea-admin*",
+        "ea_admin*"
+      ]
+    },
+    {
+      "id": "break_glass_attribute",
+      "type": "values",
+      "description": "The EXTENSION ATTRIBUTE and VALUE that mark an emergency-access (break-glass) account in YOUR directory -- nothing is shipped; the list is empty until you define it. Each entry is attribute=value: the attribute is extensionAttribute1 to extensionAttribute15 (the user's on-premises extension attributes) or the name of a directory extension (extension_<application id without dashes>_<name>); the value is the text the attribute must hold (compared whole, upper and lower case alike; never empty). Example: extensionAttribute6=Break_Glass_Account. A user that carries one of the entries is break-glass (si_is_break_glass, with the entry in si_break_glass_attribute and the rule named in si_break_glass_reason). The attribute is read with the user only while an entry names it. Customer: lists.custom.json -- Pro: the list's override.",
+      "values": []
+    }
+  ]
+}

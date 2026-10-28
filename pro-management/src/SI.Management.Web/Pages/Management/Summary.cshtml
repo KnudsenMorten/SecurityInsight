@@ -1,0 +1,16 @@
+@page
+@model SI.Management.Web.Pages.Management.SummaryModel
+@{
+    ViewData["Title"] = "Management summary";
+    var d = Model.Data!;
+}
+<link rel="stylesheet" href="~/css/exec.css" asp-append-version="true" />
+<div class="exec" data-exec data-grain="@d.View.Grain" data-mode="@d.View.Mode">
+<h1>Management summary</h1>
+<partial name="_ExportPdf" model="@("Management summary")" />
+<p class="lede">The management summary as it would be mailed now (risk score, risk by domain, vulnerabilities opened and closed per week), scheduled for your management on <nav-ref page="/Reports/Index" then="Management summary" />.</p>
+@await Html.PartialAsync("_ExecSelector", (d.View, "/Management/Summary"))
+@if (d.Error is not null) { <div class="notice error" role="alert">@d.Error</div> }
+<iframe class="mgmt-preview" title="Management summary" sandbox="" src="/Management/Summary?handler=Html&grain=@d.View.Grain.ToLowerInvariant()" data-mgmt-frame></iframe>
+<p class="hint noprint"><a href="/Reports/Management">Schedule it</a> · <a href="/Management/Summary?handler=Html&grain=@d.View.Grain.ToLowerInvariant()" target="_blank" rel="noopener">Open it on its own (to print)</a></p>
+</div>

@@ -1,0 +1,64 @@
+@page
+@model SI.Management.Web.Pages.Management.IndexModel
+@{
+    ViewData["Title"] = "Executive overview";
+    var since = Model.First is { } f0 && Model.Latest is { } l0 && l0.Day != f0.Day ? Fmt.Day(f0.Day) : null;
+}
+<h1>Executive overview</h1>
+<partial name="_ExportPdf" model="@("Executive overview - risk trend")" />
+<h2 class="tab-title">Risk trend</h2>
+<p class="lede">How severe the estate's findings are, day by day: the average risk score per finding, how many findings there are and how many are Very High or High -- lower is better for all three.</p>
+<details class="help">
+    <summary>What these numbers mean</summary>
+    <p>Every finding has its own score (severity and exposure, weighted by the asset's tier). The <strong>average risk score per finding</strong> tells you how serious a typical finding is (lower is better); it does not grow just because more assets were scanned. Adding every finding's score together would, so that total is not shown. It is not the 0-100 <strong>risk score</strong> of the wall board and the executive report, where higher is better.</p>
+    <p data-one-source><strong>One source:</strong> these are the Pro database's daily numbers -- exactly what <nav-ref page="/Management/Trends" /> shows split by "Nothing (total)". When a day has several collections, the newest one counts. Trends also splits them by tier, severity, domain or report and shows the <strong>highest</strong> score of any one finding.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@await Html.PartialAsync("_Range", new RangeInfo(Model.Days, new[] { 30, 90, 180, 365 }, "days", "days"))
+
+<div class="tiles">
+    <div class="tile">
+        <div class="label">Average risk score per finding (lower is better)</div>
+        <div class="value">@(Model.Latest is { } l ? Fmt.Score(l.AverageRiskScore) : "–")</div>
+        @if (since is not null) { <partial name="_ChangeSince" model="ChangeSince.Of(Model.Latest!.AverageRiskScore, Model.First!.AverageRiskScore, Better.Lower, ChangeKind.Score, since)" /> }
+    </div>
+    <div class="tile">
+        <div class="label">Findings</div>
+        <div class="value">@(Model.Latest is { } l2 ? Fmt.Int(l2.Findings) : "–")</div>
+        @if (since is not null) { <partial name="_ChangeSince" model="ChangeSince.Of(Model.Latest!.Findings, Model.First!.Findings, Better.Lower, ChangeKind.Count, since)" /> }
+    </div>
+    <div class="tile">
+        <div class="label">Very High + High findings</div>
+        <div class="value">@(Model.Latest is { } l5 ? Fmt.Int(l5.TopSeverityFindings) : "–")</div>
+        @if (since is not null) { <partial name="_ChangeSince" model="ChangeSince.Of(Model.Latest!.TopSeverityFindings, Model.First!.TopSeverityFindings, Better.Lower, ChangeKind.Count, since)" /> }
+    </div>
+    <div class="tile">
+        <div class="label">Tier-0 assets with findings</div>
+        <div class="value">@(Model.Latest?.Tier0Assets is { } t0 ? Fmt.Int(t0) : "–")</div>
+        <div class="delta"><a href="@Url.Page("/Management/Tier0")">Tier-0 exposure</a></div>
+    </div>
+    <div class="tile">
+        <div class="label">Last data point</div>
+        <div class="value">@(Model.Latest is { } l4 ? Fmt.Day(l4.Day) : "–")</div>
+    </div>
+</div>
+
+<section class="card" aria-labelledby="h-trend">
+    <h2 id="h-trend">Average risk score per finding (lower is better), last @Model.Days days</h2>
+    @if (Model.Chart is not null) { <partial name="_Chart" model="Model.Chart" /> }
+    <details class="more">
+        <summary>Table view</summary>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Day</th><th class="num">Average risk score per finding</th><th class="num">Findings</th><th class="num">Very High + High</th><th class="num">Tier-0 assets with findings</th></tr></thead>
+                <tbody>
+                    @foreach (var p in Model.Points.Reverse())
+                    {
+                        <tr><td>@Fmt.Day(p.Day)</td><td class="num">@Fmt.Score(p.AverageRiskScore)</td><td class="num">@Fmt.Int(p.Findings)</td><td class="num">@Fmt.Int(p.TopSeverityFindings)</td><td class="num">@(p.Tier0Assets is { } t ? Fmt.Int(t) : "–")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </details>
+    @if (Model.Query is not null) { <partial name="_Query" model="Model.Query" /> }
+</section>

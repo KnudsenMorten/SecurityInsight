@@ -1,0 +1,3 @@
+@model SI.Management.Web.Actions.ActionFormModel
+<label for="@Model.Id("comment")">Comment (kept in each finding's governance log, audited)</label>
+<textarea id="@Model.Id("comment")" name="a.comment" rows="3" maxlength="2000" required minlength="3"></textarea>

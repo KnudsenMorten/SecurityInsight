@@ -1,0 +1,165 @@
+@page
+@model SI.Management.Web.Pages.Records.IndexModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@{
+    ViewData["Title"] = "Records per source";
+    var g = Model.Grid;
+    var spec = SI.Management.Web.Pages.Records.IndexModel.Spec;
+    var req = Model.Request.Query;
+    IReadOnlyList<string> Chosen(string p) => req[p].Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToList();
+    var sel = Model.Selected;
+}
+<h1>Records per source</h1>
+<p class="lede">What each source system reported, one row per record, before the records were joined into CIs. Filter by provider to see one source's records; a record's name shows its fields.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.NotLoaded) { <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText</div> }
+@if (sel is not null)
+{
+    <section class="card" aria-labelledby="h-record" id="record" data-record="@sel.RecordKey">
+        <h2 id="h-record">@(sel.Name ?? sel.RecordKey)</h2>
+        <dl class="kv">
+            <dt>Provider</dt><dd>@sel.Provider</dd>
+            <dt>Record type</dt><dd>@sel.RecordType</dd>
+            <dt>Class</dt><dd>@sel.Class</dd>
+            <dt>Record</dt><dd class="mono">@sel.RecordKey</dd>
+            <dt>CI</dt><dd>@if (!string.IsNullOrEmpty(sel.CiId)) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(sel.CiId)">@sel.CiId</a> } else { <text>not joined to a CI</text> }</dd>
+            <dt>Last seen by the source</dt><dd>@Fmt.Time(sel.SourceLastSeen)</dd>
+            <dt>Collected</dt><dd>@Fmt.Time(sel.CollectionTime)</dd>
+            <dt>Complete collection</dt><dd>@(sel.Complete is false ? "no -- the source's collection was incomplete" : "yes")</dd>
+        </dl>
+        <h3>Fields (@Fmt.Int(Model.SelectedFields.Count))</h3>
+        @if (Model.SelectedFields.Count == 0) { <p class="hint">This record carries no fields.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable data-record-fields>
+                    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+                    <tbody>@foreach (var f in Model.SelectedFields) { <tr><td class="mono">@f.Field</td><td class="wrap">@SI.Management.Web.Pages.Cis.DetailModel.Value(f.Text)</td></tr> }</tbody>
+                </table>
+            </div>
+        }
+        <p class="hint"><a href="@Model.Link(("key", null))">Close the record</a></p>
+    </section>
+}
+@if (g is not null)
+{
+    var st = g.State;
+    // #589: the chosen columns in the chosen order (own + the record's CI with its identifiers and context)
+    var cols = Model.DisplayColumns.Count > 0 ? Model.DisplayColumns : CollectionPageModel.Visible(spec);
+    var pages = g.Total == 0 ? 1 : (int)Math.Ceiling(g.Total / (double)st.Size);
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")), ("key", null));
+    string AriaSort(GridColumn c) => st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> selection =
+        @<form id="rec-s" method="get" action="/Records">
+            @foreach (var kv in req.Where(k => k.Key is not ("sel" or "handler" or "p" or "key")))
+            {
+                foreach (var v in kv.Value) { <input type="hidden" name="@kv.Key" value="@v" /> }
+            }
+            <div class="quickstrip" id="rec-strip" data-action-strip>
+                <strong><span data-selected-count>0</span> selected</strong>
+                <div class="actions">
+                    <button type="submit" data-show-selected>Show only these</button>
+                </div>
+            </div>
+        </form>;
+    var toolbar = new GridToolbar
+    {
+        Id = "rec-tools", Total = g.Total, Skip = st.Skip, Count = g.Rows.Count, Page = st.Page, Pages = pages, Noun = "record(s)",
+        PageLink = n => Model.Link(("p", GridToolbar.PageParam(n)), ("key", null)), FirstLast = true, AlwaysShowPage = true, Actions = selection,
+        Size = st.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n)), ("key", null)),
+    };
+    // THE shared filter for every filter; a choice's count only while nothing else narrows the list (then it is exact)
+    var narrowed = st.Filters.Count > 0 || st.Search is not null;
+    var filters = SI.Management.Web.Pages.Records.IndexModel.Filters.Select(x => new SI.Management.Web.Pages.MultiFilter
+    {
+        Id = "rec-mf-" + x.Param, Name = x.Param, Label = x.Label, Form = "rec-f", Chosen = SI.Management.Web.Pages.MultiFilter.ValuesOf(req, x.Param),
+        Choices = SI.Management.Web.Pages.MultiFilter.Plain(Model.FacetValues(x.Column), null,
+            v => narrowed ? null : Model.Facets.FirstOrDefault(f => f.Facet == x.Column && string.Equals(f.Value, v, StringComparison.Ordinal))?.N),
+    }).ToList();
+    var exports = Model.Exports.ForGrid("rec-s", "#rec-strip");
+    <section class="card" aria-labelledby="rec-h">
+        <h2 id="rec-h">@Fmt.Int(g.Total) @(g.Total == 1 ? "record" : "records")</h2>
+        @* the filter form: its controls sit in the toolbar row and its Filters panel (form attribute) *@
+        <form id="rec-f" method="get" action="/Records" role="search" aria-label="Search and filter the records">
+            @foreach (var s in st.Selected) { <input type="hidden" name="sel" value="@s" /> }
+        </form>
+        @* THE view toolbar, one row (owner 2026-10-19): Search · Filters · Columns · Layout · Export *@
+        <div class="data-toolbar" role="group" aria-label="Search, filters, columns, layout and export">
+            <div class="gridbar dt-search">
+                <label for="rec-q" class="sr-only">Search</label>
+                <input form="rec-f" id="rec-q" type="search" name="q" value="@st.Search" placeholder="Search: name, record or CI id" maxlength="200" data-search data-grid-search />
+                <button form="rec-f" type="submit">Apply</button> <a class="button secondary" href="/Records">Clear</a>
+            </div>
+            <details class="tool-menu filters-menu" data-filters-menu>
+                <summary class="tool-button">Filters@(st.Filters.Count > 0 ? " · " + Fmt.Int(st.Filters.Count) + " active" : "")</summary>
+                <div class="tool-panel filters-panel">
+                    @foreach (var mf in filters) { <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div> }
+                    @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+                    <input form="rec-f" type="hidden" name="size" value="@st.Size" />
+                    <div class="actions"><button form="rec-f" type="submit">Apply</button> <a class="button secondary" href="/Records">Clear</a></div>
+                </div>
+            </details>
+            @if (Model.Chooser is { } chooser) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="chooser" /> }
+            <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
+        </div>
+
+        @if (st.Filters.Count > 0 || st.Selected.Count > 0 || st.Search is not null)
+        {
+            <ul class="chips" aria-label="Active filters">
+                @if (st.Search is not null) { <li><a href="@Model.Link(("q", null))" aria-label="Remove the search">Search: @st.Search ✕</a></li> }
+                @foreach (var f in st.Filters)
+                {
+                    var param = SI.Management.Web.Pages.Records.IndexModel.Filters.First(x => x.Column == f.Key).Param;
+                    <li><a href="@Model.Link((param, null))" aria-label="Remove the filter on @f.Key">@(spec.Column(f.Key)?.Label ?? f.Key): @(string.Join(" or ", f.Values)) ✕</a></li>
+                }
+                @if (st.Selected.Count > 0) { <li><a href="@Model.Link(("sel", null))" aria-label="Show every record again">Only the @Fmt.Int(st.Selected.Count) selected record(s) ✕</a></li> }
+            </ul>
+        }
+
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+
+        <div class="table-wrap" data-selectable data-strip="#rec-strip">
+            <table class="findings grid" data-grid="cirecords" aria-describedby="rec-h">
+                <thead>
+                    <tr>
+                        <th class="sel"><input type="checkbox" data-select-all aria-label="Select every record on this page" /></th>
+                        @foreach (var c in cols)
+                        {
+                            if (!c.Sortable) { <th scope="col" data-col="@c.Key">@c.Label</th> continue; }
+                            <th scope="col" aria-sort="@AriaSort(c)" data-col="@c.Key"><a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a></th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (g.Rows.Count == 0) { <tr><td colspan="@(cols.Count + 1)" class="hint">No record matches.</td></tr> }
+                    @foreach (var row in g.Rows)
+                    {
+                        var key = Model.Cell(row, "RecordKey");
+                        <tr data-key="@key">
+                            <td class="sel"><input form="rec-s" type="checkbox" name="sel" value="@key" data-select-row checked="@(st.Selected.Contains(key ?? ""))" aria-label="Select this record" /></td>
+                            @foreach (var c in cols)
+                            {
+                                if (SI.Management.Web.Columns.GridLayout.IsExtra(c))
+                                {
+                                    <td class="wrap" data-col="@c.Key" data-extra>@SI.Management.Web.Columns.DataCellHtml.Render(SI.Management.Web.Columns.GridLayout.Text(row, c.Key))</td>
+                                    continue;
+                                }
+                                var text = CollectionPageModel.Text(c, row);
+                                var href = text.Length == 0 ? null : Model.CellLink(c, row);
+                                <td class="wrap" data-col="@c.Key">
+                                    @if (c.Type == GridType.Date && CollectionPageModel.Moment(c, row) is { } when) { @Fmt.Time(when) }
+                                    else if (href is not null) { <a href="@href">@text</a> }
+                                    else { @text }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

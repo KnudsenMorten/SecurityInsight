@@ -1,0 +1,21 @@
+id:        RancherServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Rancher Server'
+category:  'Containers'
+description: ''
+displayNames:
+  - 'Rancher Server'
+
+detections:
+  - id: RancherServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     1
+      Purpose:  'Containers'
+      Category: 'Containers'

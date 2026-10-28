@@ -1,0 +1,352 @@
+{
+  "$comment": "What the collectors collect. Azure: the resource types with a possible public endpoint, plus the types they depend on. azureResourceTypes is ALSO the CI scope (owner 2026-10-11): a listed type without rollUpInto becomes a CI; a type with rollUpInto is a CHILD -- never a CI of its own, it becomes a part of its parent CI (listed in the parent's rollUpInto.field and si_child_resources, its id a linked object of the parent); keepOwnCi = the type stays a CI and is ALSO listed on its parent. rollUpInto.parentBy: 'path' (the parent is the ARM id above it) or dot paths into the ARM object, tried in order (managedBy, properties.virtualMachine.id). A nested type that is not listed rolls up into its path parent when that parent is listed; any other type is not recorded (a CI it had ages out: not seen, then retired). Customer overrides: collection-scope.custom.json (add or remove types; switch a provider off) or the Pro data-model settings (collection-scope:<type>).",
+  "kind": "collection-scope",
+  "version": "1.0.0",
+  "providers": {
+    "mde": {
+      "enabled": true
+    },
+    "entra": {
+      "enabled": true,
+      "recordTypes": [
+        "user",
+        "service_principal",
+        "device"
+      ]
+    },
+    "azure": {
+      "enabled": true
+    },
+    "eg": {
+      "enabled": true
+    },
+    "mdi": {
+      "enabled": true
+    },
+    "shodan": {
+      "enabled": true,
+      "$note": "paid entitlement"
+    },
+    "cmdb": {
+      "enabled": true
+    },
+    "intune": {
+      "enabled": true,
+      "$note": "managed devices (DeviceManagementManagedDevices.Read.All); compliance policies and update rings with DeviceManagementConfiguration.Read.All -- a read that is refused is skipped and said"
+    },
+    "ad": {
+      "enabled": false,
+      "$note": "planned; VM host only"
+    },
+    "servicenow": {
+      "enabled": false,
+      "$note": "enabled by the ServiceNow connector"
+    }
+  },
+  "azureResourceTypes": [
+    {
+      "type": "microsoft.compute/virtualmachines",
+      "group": "compute"
+    },
+    {
+      "type": "microsoft.compute/virtualmachinescalesets",
+      "group": "compute"
+    },
+    {
+      "type": "microsoft.hybridcompute/machines",
+      "group": "compute"
+    },
+    {
+      "type": "microsoft.compute/virtualmachines/extensions",
+      "group": "compute",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.compute/virtualmachines"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_vm_extensions",
+        "shape": {
+          "name": "name",
+          "type": "properties.type",
+          "publisher": "properties.publisher",
+          "version": "properties.typeHandlerVersion"
+        }
+      }
+    },
+    {
+      "type": "microsoft.compute/virtualmachinescalesets/extensions",
+      "group": "compute",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.compute/virtualmachinescalesets"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_vm_extensions",
+        "shape": {
+          "name": "name",
+          "type": "properties.type",
+          "publisher": "properties.publisher",
+          "version": "properties.typeHandlerVersion"
+        }
+      }
+    },
+    {
+      "type": "microsoft.hybridcompute/machines/extensions",
+      "group": "compute",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.hybridcompute/machines"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_vm_extensions",
+        "shape": {
+          "name": "name",
+          "type": "properties.type",
+          "publisher": "properties.publisher",
+          "version": "properties.typeHandlerVersion"
+        }
+      }
+    },
+    {
+      "type": "microsoft.compute/disks",
+      "group": "compute",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.compute/virtualmachines"
+        ],
+        "parentBy": [
+          "managedBy"
+        ],
+        "field": "si_disks",
+        "shape": {
+          "name": "name",
+          "sku": "sku.name",
+          "size_gb": "properties.diskSizeGB",
+          "os_type": "properties.osType",
+          "encryption": "properties.encryption.type",
+          "network_access": "properties.networkAccessPolicy"
+        }
+      }
+    },
+    {
+      "type": "microsoft.network/networkinterfaces",
+      "group": "network",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.compute/virtualmachines"
+        ],
+        "parentBy": [
+          "properties.virtualMachine.id"
+        ],
+        "field": "si_network_interfaces",
+        "shape": {
+          "name": "name",
+          "private_ip_addresses": "properties.ipConfigurations[*].properties.privateIPAddress",
+          "network_security_group": "properties.networkSecurityGroup.id"
+        }
+      }
+    },
+    {
+      "type": "microsoft.storage/storageaccounts",
+      "group": "storage"
+    },
+    {
+      "type": "microsoft.sql/servers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.sql/servers/databases",
+      "group": "database",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.sql/servers"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_sql_databases",
+        "shape": {
+          "name": "name",
+          "sku": "sku.name",
+          "status": "properties.status"
+        }
+      }
+    },
+    {
+      "type": "microsoft.sql/servers/firewallrules",
+      "group": "database",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.sql/servers"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_sql_firewall_rules",
+        "shape": {
+          "name": "name",
+          "start_ip": "properties.startIpAddress",
+          "end_ip": "properties.endIpAddress"
+        }
+      }
+    },
+    {
+      "type": "microsoft.sql/managedinstances",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.dbforpostgresql/flexibleservers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.dbformysql/flexibleservers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.sqlvirtualmachine/sqlvirtualmachines",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.dbforpostgresql/servers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.dbformysql/servers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.dbformariadb/servers",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.documentdb/databaseaccounts",
+      "group": "database"
+    },
+    {
+      "type": "microsoft.keyvault/vaults",
+      "group": "secrets"
+    },
+    {
+      "type": "microsoft.web/sites",
+      "group": "app"
+    },
+    {
+      "type": "microsoft.web/serverfarms",
+      "group": "app"
+    },
+    {
+      "type": "microsoft.containerservice/managedclusters",
+      "group": "containers"
+    },
+    {
+      "type": "microsoft.app/containerapps",
+      "group": "containers"
+    },
+    {
+      "type": "microsoft.containerregistry/registries",
+      "group": "containers"
+    },
+    {
+      "type": "microsoft.containerinstance/containergroups",
+      "group": "containers"
+    },
+    {
+      "type": "microsoft.network/publicipaddresses",
+      "group": "network",
+      "$note": "a public IP stays a CI of its own (the internet scan and the public IP reports key on it) and is ALSO listed on the resource it is attached to",
+      "rollUpInto": {
+        "keepOwnCi": true,
+        "parentTypes": [
+          "microsoft.network/networkinterfaces",
+          "microsoft.compute/virtualmachines",
+          "microsoft.network/applicationgateways",
+          "microsoft.network/loadbalancers"
+        ],
+        "parentBy": [
+          "properties.ipConfiguration.id"
+        ],
+        "field": "si_public_ip_addresses",
+        "shape": {
+          "name": "name",
+          "ip_address": "properties.ipAddress",
+          "sku": "sku.name"
+        }
+      }
+    },
+    {
+      "type": "microsoft.network/virtualnetworks",
+      "group": "network"
+    },
+    {
+      "type": "microsoft.network/virtualnetworks/subnets",
+      "group": "network",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.network/virtualnetworks"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_subnets",
+        "shape": {
+          "name": "name",
+          "address_prefix": "properties.addressPrefix",
+          "network_security_group": "properties.networkSecurityGroup.id"
+        }
+      }
+    },
+    {
+      "type": "microsoft.network/applicationgateways",
+      "group": "network"
+    },
+    {
+      "type": "microsoft.cdn/profiles",
+      "group": "network"
+    },
+    {
+      "type": "microsoft.network/frontdoors",
+      "group": "network"
+    },
+    {
+      "type": "microsoft.apimanagement/service",
+      "group": "network"
+    },
+    {
+      "type": "microsoft.network/networksecuritygroups",
+      "group": "network",
+      "$note": "collected for the exposure derivation (its own inbound rules)"
+    },
+    {
+      "type": "microsoft.cognitiveservices/accounts",
+      "group": "ai"
+    },
+    {
+      "type": "microsoft.cognitiveservices/accounts/deployments",
+      "group": "ai",
+      "rollUpInto": {
+        "parentTypes": [
+          "microsoft.cognitiveservices/accounts"
+        ],
+        "parentBy": [
+          "path"
+        ],
+        "field": "si_ai_deployments",
+        "shape": {
+          "name": "name",
+          "model": "properties.model.name",
+          "model_version": "properties.model.version"
+        }
+      }
+    },
+    {
+      "type": "microsoft.operationalinsights/workspaces",
+      "group": "monitoring"
+    }
+  ]
+}

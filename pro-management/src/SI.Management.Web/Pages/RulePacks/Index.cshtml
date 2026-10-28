@@ -1,0 +1,110 @@
+@page
+@model SI.Management.Web.Pages.RulePacks.IndexModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.RulePacks
+@{
+    ViewData["Title"] = "Rule packs";
+    var isAdmin = User.IsAdmin();
+    var sel = Model.Selected;
+}
+<div class="split"><h1>Rule packs</h1></div>
+<p class="lede">The rules that enrich every CI -- tier, purpose, tags -- grouped in packs you turn on, test and put live.</p>
+<details class="help" data-rulepacks-help>
+    <summary>How rule packs work</summary>
+    <p><strong>Live or testing.</strong> A live pack decides: its rules set values on the CIs. A testing pack only proposes: each CI shows what it would set, and nothing changes until the pack goes live.</p>
+    <p><strong>Priority.</strong> When two rules set the same field, the higher priority wins (for tier, the lowest tier among the deciding rules). A manual override on a CI wins over every rule.</p>
+    <p><strong>Packs from Invardia.</strong> A pack delivered through the template channel is never put in use by itself: it arrives switched off. Stage it to run it as testing, review what it would set, then promote it to live.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "Click a pack's name to turn it on or off, stage it, promote it or put it back to testing. Nothing is written here: each decision goes on Review & commit and is written in your name. Put the shipped version back to remove your decision." : "An Admin turns packs on and off and puts them live.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RulePackStore.MissingSchemaMessage</div> }
+
+@if (sel is not null)
+{
+    <section class="card" data-rulepack="@sel.Key">
+        <h2>@sel.Name <span class="badge @IndexModel.Badge(sel.StateText)">@sel.StateText</span></h2>
+        @if (!string.IsNullOrEmpty(sel.Description)) { <p>@sel.Description</p> }
+        <p class="hint">From @IndexModel.SourceText(sel.Source). Priority @sel.PriorityText.@(sel.Overridden ? " Your decision is in force (the shipped pack says otherwise)." : "")</p>
+
+        <h3>Rules</h3>
+        <div class="table-wrap">
+            <table class="grid" data-rulepack-rules data-sortable>
+                <thead><tr><th>Rule</th><th>Applies to</th><th>Sets</th><th>Own stage</th><th>Priority</th></tr></thead>
+                <tbody>
+                @foreach (var r in sel.Rules)
+                {
+                    <tr data-rule="@r.Id"><td class="wrap">@(string.IsNullOrEmpty(r.Name) ? r.Id : r.Name)<br /><span class="muted mono">@r.Id</span></td><td>@string.Join(", ", r.AppliesTo)</td><td class="wrap mono">@r.Sets</td><td>@r.Stage</td><td>@(r.Priority ?? sel.Priority)</td></tr>
+                }
+                </tbody>
+            </table>
+        </div>
+
+        <h3>What it would set</h3>
+        @if (Model.ProposalError is not null) { <div class="notice warn" role="status">@Model.ProposalError</div> }
+        else if (!sel.Testing) { <p class="hint" data-proposals-not-testing>@(sel.Live ? "The pack is live: its values are on the CIs (each CI shows the rule that set them)." : "The pack is off: it proposes nothing. Turn it on or stage it to see what it would set.")</p> }
+        else if (Model.Proposals.Count == 0) { <p data-proposals-none>Nothing: on the newest CI build no rule of this pack would change a value.</p> }
+        else
+        {
+            <p class="hint">On the newest CI build, @Fmt.Int(Model.Proposals.Count) value(s) would change if this pack went live@(Model.Proposals.Count >= RulePackStore.MaxProposals ? " (the first " + RulePackStore.MaxProposals + " shown)" : "").</p>
+            <div class="table-wrap">
+                <table class="grid" data-proposals data-sortable>
+                    <thead><tr><th>CI</th><th>Rule</th><th>Field</th><th>Now</th><th>Would be</th><th>Why it does not decide now</th></tr></thead>
+                    <tbody>
+                    @foreach (var p in Model.Proposals)
+                    {
+                        <tr data-proposal="@p.CiId"><td><a href="/Cis/Detail?id=@Uri.EscapeDataString(p.CiId)">@(p.CiName ?? p.CiId)</a></td><td class="mono">@p.Rule</td><td class="mono">@p.Field</td><td>@p.Current</td><td>@p.Proposed</td><td>@p.Reason</td></tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (isAdmin)
+        {
+            <form method="post" asp-page-handler="Decide" data-rulepack-decide>
+                <input type="hidden" name="key" value="@sel.Key" />
+                <label>Reason<input name="reason" maxlength="400" /></label>
+                @if (sel.Testing) { <label class="check"><input type="checkbox" name="reviewed" value="true" data-reviewed /> I reviewed what this pack would set</label> }
+                <div class="actions">
+                    @if (sel.FromInvardia && !sel.Enabled) { <button type="submit" name="decision" value="stage" data-stage-pack>Stage for testing</button> }
+                    else if (!sel.Enabled) { <button type="submit" name="decision" value="on" data-pack-on>Turn on</button> }
+                    @if (sel.Testing) { <button type="submit" name="decision" value="promote" data-promote>Promote to live</button> }
+                    @if (sel.Live) { <button type="submit" name="decision" value="testing" class="secondary" data-back-to-testing>Back to testing</button> }
+                    @if (sel.Enabled) { <button type="submit" name="decision" value="off" class="secondary" data-pack-off>Turn off</button> }
+                    <a class="button secondary" href="/RulePacks">Close</a>
+                </div>
+            </form>
+            @if (sel.Overridden)
+            {
+                <form method="post" asp-page-handler="Reset" class="inline">
+                    <input type="hidden" name="key" value="@sel.Key" />
+                    <button type="submit" class="secondary" data-pack-reset>Put back the shipped version</button>
+                </form>
+            }
+        }
+    </section>
+}
+
+<h2>Packs</h2>
+@if (!Model.SchemaMissing && Model.Packs.Count == 0) { <p data-rulepacks-none>No rule pack is published to this database yet.</p> }
+else if (Model.Packs.Count > 0)
+{
+    <table class="grid" data-rulepacks data-sortable>
+        <thead><tr><th>Pack</th><th>State</th><th>Priority</th><th>Rules</th><th>Sets</th><th>From</th><th>Template</th></tr></thead>
+        <tbody>
+        @foreach (var p in Model.Packs)
+        {
+            var conf = Model.States.TryGetValue(p.Key, out var c) ? c : (p.Overridden ? TemplateConformance.Overridden : TemplateConformance.UpToDate);
+            <tr data-pack="@p.Key" data-state="@p.StateText">
+                <td><a href="/RulePacks?key=@Uri.EscapeDataString(p.Key)">@p.Name</a>@if (!string.IsNullOrEmpty(p.Description)) { <div class="hint">@p.Description</div> }</td>
+                <td><span class="badge @IndexModel.Badge(p.StateText)">@p.StateText</span></td>
+                <td>@p.PriorityText</td>
+                <td>@Fmt.Int(p.Rules.Count)</td>
+                <td class="wrap mono">@string.Join(", ", p.Rules.SelectMany(r => r.Sets.Split("; ", StringSplitOptions.RemoveEmptyEntries)).Select(s => s.Split(" = ")[0]).Distinct())</td>
+                <td>@IndexModel.SourceText(p.Source)</td>
+                <td>@conf</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

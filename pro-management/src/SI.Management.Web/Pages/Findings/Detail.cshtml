@@ -1,0 +1,142 @@
+@page
+@model SI.Management.Web.Pages.Findings.DetailModel
+@using SI.Management.Core.ProData
+@{
+    var d = Model.Detail;
+    ViewData["Title"] = d is null ? "Finding" : d.Finding.Title;
+}
+<p class="split"><a href="/Findings@(Model.C is null ? "" : "?c=" + Uri.EscapeDataString(Model.C))">&larr; Findings</a>@if (d is not null) { <partial name="_ExportExcel" /> }</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (d is not null)
+{
+    var f = d.Finding;
+    <h1>@(string.IsNullOrEmpty(f.Title) ? "(untitled finding)" : f.Title)</h1>
+    @if (f.IsExempted) { <p><span class="badge exempted" data-exempted-mark>@SI.Management.Core.ProData.Exempted.Label(f.ExemptedUntil)</span> <span class="hint">An approved exemption covered this finding in this collection: it is kept in the data and left out of the numbers unless they include exempted findings.</span></p> }
+    <p class="lede"><span class="tierdot t@(f.Tier)"></span>@SI.Management.Web.Pages.Tiers.TierLinks.AssetLabel(f.Tier, f.AssetKey) · @f.AssetName · @f.Severity · Risk Score @Fmt.Score(f.RiskScore)</p>
+
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-f">
+            <h2 id="h-f">The finding</h2>
+            <dl class="kv">
+                <dt>Asset</dt><dd>@f.AssetName <span class="kind-tag">@f.AssetKind</span></dd>
+                <dt>Asset key</dt><dd class="mono">@f.AssetKey</dd>
+                <dt>Report</dt><dd>@f.ReportName</dd>
+                <dt>Domain</dt><dd>@f.SecurityDomain</dd>
+                @if (f.Cve.Length > 0) { <dt>CVE</dt><dd>@f.Cve</dd> }
+                @if (f.ConfigurationId.Length > 0) { <dt>Configuration</dt><dd class="mono">@f.ConfigurationId</dd> }
+                <dt>Severity</dt><dd>@f.Severity</dd>
+                <dt>Risk Score</dt><dd>@Fmt.Score(f.RiskScore)</dd>
+                <dt>Collection</dt><dd>@Fmt.Time(f.CollectionTime) <span class="muted">@f.CollectionId</span></dd>
+            </dl>
+        </section>
+        <section class="card" aria-labelledby="h-a">
+            <h2 id="h-a">The asset's identifiers</h2>
+            @if (d.Identifiers.Count == 0) { <p class="hint">No other identifiers are recorded for this asset.</p> }
+            else
+            {
+                <dl class="kv">@foreach (var (t, v) in d.Identifiers) { <dt>@t</dt><dd class="mono">@v</dd> }</dl>
+            }
+            <p class="hint"><a href="/Findings?q=@Uri.EscapeDataString(f.AssetName)@(Model.C is null ? "" : "&c=" + Uri.EscapeDataString(Model.C))">Every finding on @f.AssetName</a> · <a href="/Tiers?q=@Uri.EscapeDataString(f.AssetName)">On the tier board</a></p>
+        </section>
+    </div>
+
+    <section class="card" aria-labelledby="h-ex">
+        <h2 id="h-ex">Exemptions</h2>
+        @if (Model.Covering.Count == 0) { <p class="hint">No active exemption covers this finding.</p> }
+        else
+        {
+            <ul>@foreach (var e in Model.Covering) { <li><span class="badge good">@e.Scope</span> @e.Reason <span class="muted" data-utc>-- @e.CreatedBy, @Fmt.Time(e.CreatedAt)@(e.ExpiresAt is { } x ? ", until " + Fmt.When(x) : "")</span></li> }</ul>
+        }
+        @if (User.IsReader())
+        {
+            <p><a class="button" data-request-exemption href="/Exemptions/Request?src=findings&amp;c=@Uri.EscapeDataString(f.CollectionId)&amp;Sel=@Uri.EscapeDataString(f.FindingId)">Request exemption</a>
+                <span class="hint">An approver of the @(string.IsNullOrEmpty(f.SecurityDomain) ? "finding's" : f.SecurityDomain) domain approves or rejects it; only an approved exemption applies.</span></p>
+        }
+        @if (User.MayChange())
+        {
+            @if (Model.Problems.Count > 0)
+            {
+                <div class="notice error" role="alert"><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+            }
+            <form method="post" asp-page-handler="Exempt" class="stack">
+                <input type="hidden" name="c" value="@Model.C" /><input type="hidden" name="id" value="@Model.Id" />
+                <fieldset>
+                    <legend>Exempt</legend>
+                    <label><input type="radio" name="ExemptScope" value="finding" checked="@(Model.ExemptScope == "finding")" /> This finding on @f.AssetName</label>
+                    <label><input type="radio" name="ExemptScope" value="issue" checked="@(Model.ExemptScope == "issue")" /> @(f.Cve.Length > 0 ? f.Cve : f.ConfigurationId) on every asset</label>
+                    <label><input type="radio" name="ExemptScope" value="asset" checked="@(Model.ExemptScope == "asset")" /> Every finding on @f.AssetName</label>
+                </fieldset>
+                <div><label for="reason">Reason (required, audited)</label><input id="reason" type="text" name="ExemptReason" value="@Model.ExemptReason" maxlength="400" required minlength="3" /></div>
+                <div><label for="until">Until (optional)</label><input id="until" type="date" name="ExemptUntil" /></div>
+                <div class="actions"><button type="submit">Stage exemption</button> <a class="button secondary" href="/Changes">Review &amp; commit</a></div>
+                <p class="hint">Staging writes nothing. The exemption is written, with this reason and your name, when it is committed on Review &amp; commit.</p>
+            </form>
+        }
+    </section>
+
+    @* #693 the findings this one is linked with (one finding), and the links undone (history) *@
+    <section class="card" aria-labelledby="h-ln" data-finding-links>
+        <h2 id="h-ln">Linked findings</h2>
+        @{ var isAdmin = User.IsAdmin(); var active = Model.Links.Where(l => l.Active).ToList(); var undone = Model.Links.Where(l => !l.Active).ToList(); var myKey = f.ConfigurationId.Length > 0 ? f.ConfigurationId : f.Cve; }
+        @if (active.Count == 0) { <p class="hint" data-links-none>This finding is not linked with another finding.@(Model.LinkOwner is null ? " (Findings can be linked once Risk Analysis has keyed them on their CI.)" : "")</p> }
+        @foreach (var l in active)
+        {
+            <div class="stack" data-link="@l.Id">
+                <p><span class="badge good">one finding</span> <strong class="mono">@l.CanonicalId</strong> @l.CanonicalTitle <span class="muted">stays; the others are its evidence</span></p>
+                <table class="grid" data-sortable>
+                    <thead><tr><th>Finding key</th><th>Title</th><th>Report</th><th>Role</th></tr></thead>
+                    <tbody>
+                    @foreach (var m in l.Members)
+                    {
+                        <tr data-link-member="@m.Id"><td class="mono">@m.Id</td><td>@m.Title</td><td>@m.Report</td><td>@(string.Equals(m.Id, l.CanonicalId, StringComparison.OrdinalIgnoreCase) ? "stays" : "evidence")@(string.Equals(m.Id, myKey, StringComparison.OrdinalIgnoreCase) ? " (this finding)" : "")</td></tr>
+                    }
+                    </tbody>
+                </table>
+                <p class="hint" data-utc>Linked by @l.LinkedBy@(l.LinkedAt is { } la ? ", " + Fmt.Time(la) : ""): @l.Reason · @l.Id · in force from the next Risk Analysis run after it was made</p>
+                @if (isAdmin)
+                {
+                    <form method="post" asp-page-handler="Unlink" class="stack" data-unlink>
+                        <input type="hidden" name="c" value="@Model.C" /><input type="hidden" name="id" value="@Model.Id" /><input type="hidden" name="LinkId" value="@l.Id" />
+                        <div><label for="unlink-@l.Id">Why are they not one finding? (kept with the link and in the change history)</label><input id="unlink-@l.Id" type="text" name="UnlinkReason" maxlength="400" required minlength="3" /></div>
+                        <div class="actions"><button type="submit" class="secondary">Unlink</button></div>
+                    </form>
+                }
+            </div>
+        }
+        @if (undone.Count > 0)
+        {
+            <details class="more" data-links-history><summary>Undone links (@undone.Count)</summary>
+                <ul>@foreach (var l in undone) { <li data-link-undone="@l.Id">@string.Join(", ", l.Members.Select(m => m.Id)) into @l.CanonicalId -- linked by @l.LinkedBy@(l.LinkedAt is { } a ? " " + Fmt.Time(a) : "") (@l.Reason); undone by @l.UnlinkedBy@(l.UnlinkedAt is { } u ? " " + Fmt.Time(u) : "") (@l.UnlinkReason)</li> }</ul>
+            </details>
+        }
+        @if (isAdmin && active.Count == 0 && Model.LinkOwner is not null)
+        {
+            <p class="hint"><a href="/Findings?q=@Uri.EscapeDataString(f.AssetName)@(Model.C is null ? "" : "&c=" + Uri.EscapeDataString(Model.C))" data-link-start>Link it with other findings on @f.AssetName</a>: tick them in the list (this one included) and choose <strong>Link as one</strong>.</p>
+        }
+    </section>
+
+    @if (Model.Thread is { } th)
+    {
+        @* #265: the finding's ONE thread (governance log, comments, recommendations, approvals, follow-up tasks) *@
+        <p class="hint" data-finding-governance><a href="/Departments/Finding?c=@Uri.EscapeDataString(f.CollectionId)&amp;id=@Uri.EscapeDataString(f.FindingId)">Governance: set the status or apply the remediation flow</a></p>
+        <partial name="_FindingThread" model="th" />
+    }
+
+    <section class="card" aria-labelledby="h-d">
+        <h2 id="h-d">Detail</h2>
+        @if (Model.Fields.Count == 0) { <p class="hint">This finding carries no detail.</p> }
+        else
+        {
+            <dl class="kv">@foreach (var (k, v) in Model.Fields) { <dt>@k</dt><dd>@if (v.StartsWith('{') || v.StartsWith('[')) { <code class="mono">@v</code> } else { @v }</dd> }</dl>
+        }
+        @if (d.AssetPropertiesJson is { Length: > 0 } props)
+        {
+            <details class="more"><summary>The asset's properties</summary><pre><code>@props</code></pre></details>
+        }
+        @if (d.Finding.AssetKey is { Length: > 0 } ak)
+        {
+            <p class="hint" data-asset-metadata-link><a href="/Collection/Asset?c=@Uri.EscapeDataString(d.Finding.CollectionId)&amp;key=@Uri.EscapeDataString(ak)#full-metadata">The asset: its security profile and, when on, its full metadata per source</a></p>
+        }
+    </section>
+}
+@if (Model.Query is not null) { <partial name="_Query" model='QueryInfo.Sql(Model.Query, "This finding")' /> }

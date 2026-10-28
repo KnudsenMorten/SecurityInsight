@@ -1,0 +1,21 @@
+id:        MicrosoftSystemCenterOrchestrator
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft System Center Orchestrator'
+category:  'Automation'
+description: ''
+displayNames:
+  - 'Microsoft System Center Orchestrator'
+
+detections:
+  - id: MicrosoftSystemCenterOrchestrator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_orchestrator*'
+    set:
+      Tier:     1
+      Purpose:  'Automation'
+      Category: 'Automation'

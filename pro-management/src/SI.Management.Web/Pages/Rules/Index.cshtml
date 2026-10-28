@@ -1,0 +1,78 @@
+@page
+@model SI.Management.Web.Pages.Rules.IndexModel
+@using SI.Management.Web.Changes
+@{
+    ViewData["Title"] = "Profiling rules";
+    var isAdmin = User.IsAdmin();
+    var cat = Model.Catalog;
+}
+<div class="split"><h1>Profiling rules</h1>
+    @if (isAdmin && cat is { Schema: true })
+    {
+        <span>
+            <a class="button" href="/Rules/Edit?engine=endpoint" data-add-rule>Add a rule</a>
+        </span>
+    }
+</div>
+<p class="lede">The rules that recognise what each asset (CI) is -- a domain controller, a backup server, an admin's laptop -- and set its tier, purpose and category. The next profiling run applies exactly the rules listed here.</p>
+<details class="help" data-rules-help>
+    <summary>How profiling rules work, and what you can change</summary>
+    <p><strong>A rule</strong> has one or more <strong>detections</strong>. A detection fires on an asset (CI) when <em>one</em> of its conditions matches (any) or when <em>every</em> condition matches (all). A condition is a kind of test -- the asset's name, its operating system, an MDE machine-group tag, installed software, a group membership, an IP range, a tag -- with the values it looks for. A detection that fires <strong>sets</strong> the tier (0 = critical .. 3 = low) and, if you like, a purpose, a category, tags or a CMDB service id. An asset gets the lowest (most critical) tier of every rule that fires on it.</p>
+    <p><strong>What you can change:</strong> any vendor rule (your version replaces the vendor's, which stays available to reset to), turn a vendor rule off, or add your own rules. This is the same as the *.custom.yaml files of version 2.2 -- with the same grammar, so a rule written here behaves exactly as the same rule in a file. <strong>Edit as a form or as YAML</strong>: the form shows every part of a rule; a rule with a structure the form cannot show is edited as YAML.</p>
+    <p><strong>Saving.</strong> Nothing is written on these pages. "Stage" puts the change on Review &amp; commit, where it is written in your name with a change-history entry. A rule moved to another tier on the tier board keeps that move on top of your text.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (cat is not null)
+{
+    @foreach (var n in cat.Notes) { <div class="notice warn" role="status" data-note>@n</div> }
+    var examples = cat.Rules.Where(r => r.IsShippedExample).ToList();
+    if (examples.Count > 0)
+    {
+        <div class="notice warn" role="status" data-shipped-examples>@(examples.Count == 1 ? "1 rule set is" : Fmt.Int(examples.Count) + " rule sets are") the shipped example -- review it: @string.Join(", ", examples.Select(r => r.Key)). Each still starts with the sample's '# SAMPLE / TEMPLATE' header and the next run applies it as written.</div>
+    }
+    @if (cat.Schema)
+    {
+        <section class="card" aria-labelledby="h-rules">
+            <h2 id="h-rules">Rules <span class="badge" data-rule-count>@Fmt.Int(cat.Rules.Count)</span>
+                <span class="badge warn">@Fmt.Int(cat.Rules.Count(r => r.Origin == RuleOrigin.Changed)) changed</span>
+                <span class="badge bad">@Fmt.Int(cat.Rules.Count(r => r.Origin == RuleOrigin.Off)) turned off</span>
+                <span class="badge">@Fmt.Int(cat.Rules.Count(r => r.Origin == RuleOrigin.Yours)) yours</span>
+            </h2>
+            <div class="table-wrap">
+                <table data-sortable data-rules-table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Rule</th>
+                            <th scope="col">Engine</th>
+                            <th scope="col">Source</th>
+                            <th scope="col">Applies to</th>
+                            <th scope="col">Purpose</th>
+                            <th scope="col">Category</th>
+                            <th scope="col">Tiers it sets</th>
+                            <th scope="col" class="num">Detections</th>
+                            <th scope="col">Condition kinds</th>
+                            <th scope="col">Changed by</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in cat.Rules)
+                        {
+                            <tr data-rule="@r.Key">
+                                <td class="wrap"><a href="/Rules/Edit?key=@Uri.EscapeDataString(r.Key)">@r.Id</a></td>
+                                <td>@r.Engine</td>
+                                <td><span class="badge @IndexModel.OriginClass(r.Origin)" data-origin="@IndexModel.OriginLabel(r.Origin)">@IndexModel.OriginLabel(r.Origin)</span>@if (r.MovedToTier is { } mt) { <span class="badge" data-moved>moved to Tier @mt</span> }@if (r.IsShippedExample) { <span class="badge warn" data-shipped-example title="@RuleEntry.ShippedExampleWarning">shipped example</span> }</td>
+                                <td>@r.Summary.AppliesTo</td>
+                                <td class="wrap">@r.Summary.Purpose</td>
+                                <td>@r.Summary.Category</td>
+                                <td data-sort="@(r.Summary.Tiers.Count > 0 ? Fmt.Raw(r.Summary.Tiers.Min()) : "9")">@string.Join(", ", r.Summary.Tiers.Select(t => "Tier " + t))</td>
+                                <td class="num" data-value="@Fmt.Raw(r.Summary.Detections)">@Fmt.Int(r.Summary.Detections)</td>
+                                <td class="wrap">@string.Join(", ", r.Summary.Kinds)</td>
+                                <td>@r.UpdatedBy</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+}

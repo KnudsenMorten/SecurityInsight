@@ -1,0 +1,70 @@
+@model TrendCardSet
+@* #334: one card per group -- the newest value big, the change vs the previous day and vs 7 days before (down = green
+   for findings and risk), a sparkline on the card's OWN scale (hover / focus: the day + value, sparkline.js). The whole
+   card opens the group's findings. 2 per row at 360 px, 5 in a row on a desktop. *@
+@if (Model.Empty)
+{
+    <p class="hint" data-tcards-empty>No data yet -- the cards fill in after the first complete run is loaded.</p>
+}
+else
+{
+    <ul class="tcards" id="@Model.Id" aria-label="@Model.AriaLabel" data-tcards>
+        @foreach (var c in Model.Cards)
+        {
+            var today = TrendCardMath.Today(c);
+            var day = TrendCardMath.TodayDay(Model, c);
+            var d1 = TrendCardMath.VsPreviousDay(Model, c);
+            var d7 = TrendCardMath.VsWeekAgo(Model, c);
+            var sp = TrendCardMath.Spark(c);
+            var last = TrendCardMath.LastIndex(c);
+            <li class="tcard @c.Tone" data-tcard="@c.Key">
+                <h3 class="tcard-h">@if (c.Href is not null) { <a href="@c.Href">@c.Label</a> } else { @c.Label }</h3>
+                @if (today is null)
+                {
+                    <div class="tcard-value muted" data-today="">–</div>
+                    <p class="tcard-none muted">No data yet</p>
+                }
+                else
+                {
+                    <div class="tcard-value" data-today="@Fmt.Raw(today)">@TrendCardMath.Show(Model, today)</div>
+                    <div class="tcard-day muted">@(day is { } dd ? Fmt.Day(dd) : "")</div>
+                    <dl class="tcard-chg">
+                        <div>
+                            <dt>vs previous day</dt>
+                            @if (d1 is { } a)
+                            {
+                                <dd class="chg @a.ToneClass" data-chg="day" title="Compared with @Fmt.Day(a.Against)">@TrendCardMath.ShowChange(Model, a) <span class="sr-only">@a.Meaning</span></dd>
+                            }
+                            else
+                            {
+                                <dd class="chg none" data-chg="day">–<span class="sr-only"> no earlier day yet</span></dd>
+                            }
+                        </div>
+                        <div>
+                            <dt>vs 7 days ago</dt>
+                            @if (d7 is { } b)
+                            {
+                                <dd class="chg @b.ToneClass" data-chg="week" title="Compared with @Fmt.Day(b.Against)">@TrendCardMath.ShowChange(Model, b) <span class="sr-only">@b.Meaning</span></dd>
+                            }
+                            else
+                            {
+                                <dd class="chg none" data-chg="week">–<span class="sr-only"> no day 7 days back yet</span></dd>
+                            }
+                        </div>
+                    </dl>
+                    <figure class="spark">
+                        <svg viewBox="0 0 @Fmt.Raw(TrendCardMath.Width) @Fmt.Raw(TrendCardMath.Height)" preserveAspectRatio="none" tabindex="0" role="img"
+                             aria-label="@c.Label over the period: lowest @TrendCardMath.Show(Model, sp.Min), highest @TrendCardMath.Show(Model, sp.Max), now @TrendCardMath.Show(Model, today). Use the arrow keys to read each day."
+                             data-spark data-days="@TrendCardMath.RawDays(Model)" data-values="@TrendCardMath.RawValues(c)" data-kind="@(Model.Kind == TrendValueKind.Score ? "score" : "count")"
+                             data-x="@string.Join(",", sp.Points.Select(p => p is { } q ? Fmt.Raw(q.X) : ""))" data-y="@string.Join(",", sp.Points.Select(p => p is { } q ? Fmt.Raw(q.Y) : ""))">
+                            <path class="spark-line" d="@sp.Path" />
+                            @if (last >= 0 && sp.Points[last] is { } lp) { <circle class="spark-now" cx="@Fmt.Raw(lp.X)" cy="@Fmt.Raw(lp.Y)" r="2.2" /> }
+                            <line class="spark-cursor" x1="0" x2="0" y1="0" y2="@Fmt.Raw(TrendCardMath.Height)" visibility="hidden" />
+                        </svg>
+                        <figcaption class="spark-tip muted" aria-live="polite" data-spark-tip>@("Low " + TrendCardMath.Show(Model, sp.Min) + " · high " + TrendCardMath.Show(Model, sp.Max))</figcaption>
+                    </figure>
+                }
+            </li>
+        }
+    </ul>
+}

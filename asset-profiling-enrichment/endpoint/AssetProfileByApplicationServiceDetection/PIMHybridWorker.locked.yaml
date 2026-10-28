@@ -1,0 +1,24 @@
+id:        PIMHybridWorker
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'PIM Hybrid Worker'
+category:  'Server Roles'
+description: 'Runs the PIM engine (privileged identity management for Entra ID and Azure) with its high-privilege identity -- control of this machine is control of who holds privileged roles.'
+
+detections:
+  - id: PIMHybridWorker
+    detect:
+      any:
+        # The naming convention a PIM hybrid worker is deployed with, e.g. pimhybridwrk, pim-hybrid-worker.
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^pimhybridwrk'
+            - '(?i)^pim[-_]?hybrid[-_]?w(or)?k(er)?'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)pim.?hybrid.?w(or)?k(er)?'
+    set:
+      Tier:     0
+      Purpose:  'PIM Hybrid Worker'
+      Category: 'Server Roles'

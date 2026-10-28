@@ -1,0 +1,137 @@
+@page
+@model SI.Management.Web.Pages.Admin.CommitsModel
+@using SI.Management.Web.ChangeJournal
+@{
+    ViewData["Title"] = "Commits";
+    var pages = Model.Total == 0 ? 1 : (int)Math.Ceiling(Model.Total / (double)Model.PageSize);
+    var pg = Math.Max(1, Model.PageNo);
+}
+<h1>Commits</h1>
+<p class="lede">Every saved change to the configuration, one commit at a time: who made it, when, who approved it, where it came from and exactly what changed. @(Model.AllCommits ? "As a SuperAdmin you see every commit and can undo any of them." : "You see the commits you made yourself and can undo them; a SuperAdmin can undo any commit.") An undo never writes directly: it becomes pending changes you review and commit, so it can be undone again.</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert" data-commits-error>@Model.Error</div>
+}
+@if (!Model.HasTable && Model.Error is null)
+{
+    <div class="notice warn" role="status" data-journal-missing>The change journal is not set up in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds). Changes are still on the <a href="/Admin/History">audit trail</a>.</div>
+}
+else if (Model.Rows.Count > 0)
+{
+    var first = Model.Rows[0];
+    <p><a href="/Admin/Commits">&larr; All commits</a></p>
+    <section class="card" aria-labelledby="commit-h" data-commit="@first.CommitId">
+        <h2 id="commit-h">Commit by @first.InitiatedBy</h2>
+        <dl class="facts">
+            <dt>When</dt><dd>@Fmt.Time(first.CommittedUtc, zone: true)</dd>
+            <dt>From</dt><dd data-source="@first.Source">@CommitsModel.SourceWords(first.Source)</dd>
+            @if (!string.IsNullOrEmpty(first.ApprovedBy)) { <dt>Approved by</dt><dd data-approved>@first.ApprovedBy</dd> }
+            @if (!string.IsNullOrEmpty(first.UndoOf)) { <dt>Undoes</dt><dd><a href="/Admin/Commits?id=@Uri.EscapeDataString(first.UndoOf)" data-undo-of>commit @first.UndoOf</a></dd> }
+            @if (!string.IsNullOrEmpty(first.Reason)) { <dt>Why</dt><dd>@first.Reason</dd> }
+            <dt>Commit id</dt><dd><code class="tech">@first.CommitId</code> (the same id on the <a href="/Admin/History?q=@Uri.EscapeDataString(first.CommitId)">audit trail</a>)</dd>
+        </dl>
+        @if (Model.Events.Count > 0)
+        {
+            <h3>What it did</h3>
+            <ul class="events" data-commit-events>
+                @foreach (var ev in Model.Events)
+                {
+                    <li>@Fmt.Time(ev.TsUtc) · <code class="tech">@ev.Action</code> by @ev.Actor · <span class="badge @(ev.Outcome == "ok" ? "ok" : ev.Outcome == "held" ? "warn" : "bad")">@ev.Outcome</span>@(string.IsNullOrEmpty(ev.OutcomeText) ? "" : " -- " + ev.OutcomeText)</li>
+                }
+            </ul>
+        }
+        <form method="post" asp-page-handler="Undo" class="stack-form" data-undo-form
+              data-confirm-title="Stage the undo of the ticked records?" data-confirm="Their inverse becomes pending changes. Nothing changes until you commit them on Review & commit.">
+            <input type="hidden" name="Id" value="@first.CommitId" />
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="commit-records" aria-describedby="commit-h">
+                    <thead><tr><th scope="col">Undo</th><th scope="col">What</th><th scope="col">Change</th><th scope="col">Before &rarr; after</th></tr></thead>
+                    <tbody>
+                        @foreach (var item in Model.Plan)
+                        {
+                            var fields = ConfigEntities.Fields(item.Entity ?? Model.Entities.All[0], item.Row.Before, item.Row.After);
+                            <tr data-record="@item.Row.JournalId" data-op="@item.Row.Op" data-changed-since="@(item.ChangedSince is not null ? "1" : "0")">
+                                <td>
+                                    @if (item.Blocked is null)
+                                    {
+                                        <label class="sr-only" for="pick-@item.Row.JournalId">Undo @item.Title</label>
+                                        <input id="pick-@item.Row.JournalId" type="checkbox" name="Pick" value="@item.Row.JournalId" checked="@item.DefaultTicked" />
+                                    }
+                                    else { <span class="hint" data-blocked>can't</span> }
+                                </td>
+                                <td class="wrap"><strong>@(item.Entity?.Label ?? item.Row.Entity)</strong><div class="hint"><code class="tech">@item.Row.EntityKey</code></div>
+                                    @if (item.ChangedSince is { } since) { <div class="notice warn small" data-since>Changed since by @since.InitiatedBy (@Fmt.Time(since.CommittedUtc)) -- not ticked; <a href="/Admin/Commits?id=@Uri.EscapeDataString(since.CommitId)">see that commit</a>. Ticking it reverts their change too.</div> }
+                                    @if (item.Blocked is not null) { <div class="hint" data-blocked-why>@item.Blocked</div> }
+                                </td>
+                                <td>@CommitsModel.OpWords(item.Row.Op)<div class="hint">undo: @(item.Op == "Add" ? "put it back" : item.Op == "Remove" ? "take it out" : "set it back")</div></td>
+                                <td class="wrap">
+                                    @if (fields.Count == 0) { <span class="hint">no field changed (stamps only)</span> }
+                                    else
+                                    {
+                                        <ul class="diff">@foreach (var f in fields.Take(30)) { <li><code class="tech">@f.Field</code>: <del>@f.Before</del> &rarr; <ins>@f.After</ins></li> }</ul>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (Model.MayUndo)
+            {
+                <label for="undo-reason">Why undo it? (required, on the audit trail)</label>
+                <input id="undo-reason" name="Reason" type="text" required minlength="@CommitsModel.ReasonMin" maxlength="400" />
+                <button type="submit" data-undo-submit>Stage the undo of the ticked records</button>
+            }
+            else
+            {
+                <p class="hint" data-cannot-undo>This commit cannot be undone: @Model.CannotUndo</p>
+            }
+        </form>
+    </section>
+}
+else if (Model.HasTable)
+{
+    <section class="card" aria-labelledby="commits-h" data-commits>
+        <h2 id="commits-h">@Fmt.Int(Model.Total) commit(s)</h2>
+        <form method="get" action="/Admin/Commits" class="gridbar" role="search" aria-label="Search the commits">
+            @* THE shared filter (MultiFilter): several kinds at once, none ticked = everything (owner 2026-10-19) *@
+            @{
+                var entityFilter = new SI.Management.Web.Pages.MultiFilter
+                {
+                    Id = "c-entity", Name = "entity", Label = "What", Chosen = Model.ChosenEntities,
+                    Choices = Model.Entities.All.Select(e => new SI.Management.Web.Pages.FilterChoice(e.Name, e.Label)).ToList(),
+                };
+            }
+            <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="entityFilter" />
+            <label for="c-q" class="sr-only">Search</label>
+            <input id="c-q" type="search" name="q" value="@Model.Q" placeholder="Search who, key or commit id" maxlength="200" />
+            <input type="hidden" name="size" value="@Model.PageSize" />
+            <button type="submit">Apply</button>
+            <a class="button secondary" href="/Admin/Commits">Clear</a>
+        </form>
+        @{
+            var toolbar = new GridToolbar { Id = "commits-tools", Total = Model.Total, Skip = (pg - 1) * Model.PageSize, Count = Model.Commits.Count, Noun = "commit(s)", Page = pg, Pages = pages, PageLink = n => Model.Link(n), PreviousLabel = "Newer", NextLabel = "Older", Size = Model.PageSize, SizeLink = n => Model.Link(1, n) };
+        }
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+        <div class="table-wrap">
+            <table class="findings grid" data-grid="commits" aria-describedby="commits-h">
+                <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Approved by</th><th scope="col">From</th><th scope="col" class="num">Records</th><th scope="col">What changed</th></tr></thead>
+                <tbody>
+                    @if (Model.Commits.Count == 0) { <tr><td colspan="6" class="hint">No commits yet@(Model.AllCommits ? "" : " made by you").</td></tr> }
+                    @foreach (var c in Model.Commits)
+                    {
+                        <tr data-commit-row="@c.CommitId">
+                            <td><a href="/Admin/Commits?id=@Uri.EscapeDataString(c.CommitId)">@Fmt.Time(c.CommittedUtc, zone: true)</a></td>
+                            <td>@c.InitiatedBy</td>
+                            <td>@(c.ApprovedBy ?? "")</td>
+                            <td>@CommitsModel.SourceWords(c.Source)@(c.UndoOf is null ? "" : " (undo)")</td>
+                            <td class="num">@Fmt.Int(c.Records)</td>
+                            <td class="wrap">@string.Join(", ", c.Entities.Split(", ").Select(n => Model.Entities.Find(n)?.Label ?? n))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}

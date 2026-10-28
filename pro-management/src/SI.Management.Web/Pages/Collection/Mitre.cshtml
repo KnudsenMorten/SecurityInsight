@@ -1,0 +1,13 @@
+@page
+@model SI.Management.Web.Pages.Collection.MitreModel
+<partial name="_Header" model="Model" />
+<div class="grid-2">
+    @if (Model.Tactics is not null) { <partial name="_FacetTable" model="Model.Tactics" /> }
+    @if (Model.Techniques is not null) { <partial name="_FacetTable" model="Model.Techniques" /> }
+</div>
+@if (Model.NamedView is not null)
+{
+    <p class="hint" data-grouping-by="@(Model.ByTechnique ? "technique" : "tactic")">Grouped per @(Model.ByTechnique ? "technique" : "tactic") -- @if (Model.ByTechnique) { <a href="@Model.ByLink(false)">group per tactic</a> } else { <a href="@Model.ByLink(true)">group per technique</a> }. A group opens its findings on Raw rows.</p>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

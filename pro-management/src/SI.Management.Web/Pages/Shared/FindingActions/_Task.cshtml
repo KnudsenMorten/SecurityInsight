@@ -1,0 +1,39 @@
+@model SI.Management.Web.Actions.ActionFormModel
+@using SI.Management.Web.Tasks
+@inject FindingTaskService Tasks
+@{
+    var today = Tasks.Today;
+    var mayEntra = false;
+    IReadOnlyList<TaskPerson> people = Array.Empty<TaskPerson>();
+    try
+    {
+        mayEntra = await Tasks.MayAssignEntraAsync(User, Context.RequestAborted);
+        if (Model.Bar.DepartmentId is { } d && await Tasks.Store.ReadyAsync(Context.RequestAborted)) people = await Tasks.Store.PeopleAsync(d, Context.RequestAborted);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { }
+}
+<label for="@Model.Id("title")">What to follow up</label>
+<input id="@Model.Id("title")" name="a.title" maxlength="200" required minlength="3" />
+<label for="@Model.Id("for")">For</label>
+<select id="@Model.Id("for")" name="a.assignee" data-task-assignee>
+    <option value="me">Me</option>
+    @foreach (var p in people) { <option value="@p.Key">@p.DisplayName (@(p.Kind == AssigneeKinds.Advisor ? "advisor" : p.Role))</option> }
+    @if (mayEntra) { <option value="entra">An Entra user or group (object id)</option> }
+</select>
+@if (mayEntra)
+{
+    <fieldset class="filterbar">
+        <legend>Entra user or group (only when "An Entra user or group" is chosen)</legend>
+        <div><label for="@Model.Id("ek")">Kind</label><select id="@Model.Id("ek")" name="a.entraKind"><option value="user">User</option><option value="group">Group</option></select></div>
+        <div><label for="@Model.Id("eid")">Object id</label><input id="@Model.Id("eid")" name="a.entraId" maxlength="36" /></div>
+        <div><label for="@Model.Id("en")">Name</label><input id="@Model.Id("en")" name="a.entraName" maxlength="256" /></div>
+        <div><label for="@Model.Id("em")">Mail (optional)</label><input id="@Model.Id("em")" name="a.entraMail" type="email" maxlength="256" /></div>
+    </fieldset>
+}
+<div class="filterbar">
+    <div><label for="@Model.Id("due")">Due</label><input id="@Model.Id("due")" name="a.due" type="date" required min="@today.ToString("yyyy-MM-dd")" value="@today.AddDays(7).ToString("yyyy-MM-dd")" /></div>
+    <div><label for="@Model.Id("remind")">Reminder (optional)</label><input id="@Model.Id("remind")" name="a.remind" type="date" min="@today.ToString("yyyy-MM-dd")" /></div>
+</div>
+<label for="@Model.Id("note")">Note (optional)</label>
+<textarea id="@Model.Id("note")" name="a.note" rows="2" maxlength="2000"></textarea>
+<p class="hint">One task per finding, at most @Fmt.Int(FindingTaskService.MaxBulk). If you may not write to one of them, or the person does not fit every one, none is created.</p>

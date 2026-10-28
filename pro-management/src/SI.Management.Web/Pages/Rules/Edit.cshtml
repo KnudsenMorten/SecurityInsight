@@ -1,0 +1,192 @@
+@page
+@model SI.Management.Web.Pages.Rules.EditModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Rules
+@{
+    var isAdmin = User.IsAdmin();
+    var e = Model.Entry;
+    ViewData["Title"] = e is null ? "Add a profiling rule" : "Rule " + e.Id;
+    var cat = Model.Catalog;
+    var kinds = DocumentValidator.RuleKinds;
+}
+@functions {
+    // one value row: name, value (one per line for a list), list / text switches, remove
+    async Task ParamRows(IList<RuleParam> ps, string prefix, string removeOp)
+    {
+        for (var k = 0; k < ps.Count; k++)
+        {
+            var p = ps[k];
+            var n = $"{prefix}[{k}]";
+            <div class="param-row" data-param="@p.Name">
+                <div><label for="@(n).Name">Name</label><input id="@(n).Name" type="text" name="@(n).Name" value="@p.Name" maxlength="100" list="rule-param-names" /></div>
+                <div class="wide"><label for="@(n).Value">@RuleFormModel.Label(p.Name)@(p.List ? " (one per line)" : "")</label><textarea id="@(n).Value" name="@(n).Value" rows="@(Math.Clamp(p.Value.Split('\n').Length, 1, 12))">@p.Value</textarea></div>
+                <div class="checks">
+                    <label><input type="checkbox" name="@(n).List" value="true" checked="@(p.List ? "checked" : null)" /> list</label>
+                    <label><input type="checkbox" name="@(n).Text" value="true" checked="@(p.Text ? "checked" : null)" /> text</label>
+                    <input type="hidden" name="@(n).List" value="false" /><input type="hidden" name="@(n).Text" value="false" />
+                </div>
+                <div class="actions"><button type="submit" name="Op" value="@removeOp:@k" asp-page-handler="Edit" class="small secondary" aria-label="Remove @p.Name">Remove</button></div>
+            </div>
+        }
+    }
+}
+<div class="split"><h1>@(e is null ? "Add a profiling rule" : e.Id)</h1>
+    <a class="button secondary" href="/Rules">All rules</a>
+</div>
+@if (e is not null)
+{
+    <p class="lede">@e.Engine rule -- <span class="badge @IndexModel.OriginClass(e.Origin)" data-origin="@IndexModel.OriginLabel(e.Origin)">@IndexModel.OriginLabel(e.Origin)</span>
+        @if (e.MovedToTier is { } mt) { <span class="badge" data-moved>moved to Tier @mt on the tier board</span> }
+        @if (e.UpdatedBy is not null) { <span class="hint">last changed by @e.UpdatedBy @Fmt.Time(e.UpdatedAt)</span> }
+    </p>
+}
+else
+{
+    <p class="lede">A rule of your own. It is applied after the vendor's rules; an asset (CI) gets the lowest tier of every rule that fires on it.</p>
+}
+<details class="help">
+    <summary>Editing a rule</summary>
+    <p><strong>Form or YAML.</strong> Both edit the same rule. The form shows every part: the rule's fields (the engines it applies to, its purpose, category, description), and per detection whether one condition is enough (<em>any</em>) or every one is needed (<em>all</em>), the conditions (a kind and the values it looks for, one per line), the assets (CIs) it skips and what it sets. <strong>list</strong> = several values; <strong>text</strong> = the values are text (untick it only for a number or true / false).</p>
+    <p><strong>Check</strong> validates with the same rules the profiling run applies and shows the exact text that will be stored. <strong>Stage</strong> puts it on Review &amp; commit; nothing is written before that.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (e is { IsShippedExample: true }) { <div class="notice warn" role="status" data-shipped-example>@RuleEntry.ShippedExampleWarning</div> }
+@if (cat is { Schema: false }) { <div class="notice warn" role="status">@SqlItemSource.MissingSchemaMessage</div> }
+@foreach (var m in Model.Messages) { <div class="notice @(m.StartsWith("Not ", StringComparison.Ordinal) ? "error" : "ok")" role="status" data-message>@m</div> }
+@if (Model.Problems.Count > 0)
+{
+    <div class="notice error" role="alert" data-problems><strong>Problems</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+}
+@if (Model.FormWhy is not null) { <div class="notice warn" role="status" data-form-why>This rule is edited as YAML: @Model.FormWhy</div> }
+
+@if (cat is { Schema: true } && (e is not null || isAdmin))
+{
+    @if (!isAdmin)
+    {
+        <section class="card" aria-labelledby="h-text">
+            <h2 id="h-text">The rule in force</h2>
+            <pre class="code" data-rule-text>@(e?.Body ?? e?.VendorBody ?? "")</pre>
+        </section>
+    }
+    else
+    {
+        <form method="post" data-rule-form>
+            <input type="hidden" name="Key" value="@Model.Key" />
+            <input type="hidden" name="View" value="@Model.View" />
+            @if (e is null)
+            {
+                <section class="card" aria-labelledby="h-new">
+                    <h2 id="h-new">The new rule</h2>
+                    <div class="filters">
+                        <div><label for="r-engine">Engine</label>
+                            <select id="r-engine" name="Engine">@foreach (var en in EditModel.Engines) { <option value="@en" selected="@(en == (Model.Engine ?? "endpoint") ? "selected" : null)">@en</option> }</select></div>
+                        <div><label for="r-id">Rule id (letters, digits, _ and -)</label><input id="r-id" type="text" name="NewId" value="@Model.NewId" maxlength="100" required data-new-id /></div>
+                    </div>
+                </section>
+            }
+            <div class="actions" data-view-switch>
+                @if (Model.View == "form") { <button type="submit" name="Op" value="to-yaml" asp-page-handler="Edit" class="secondary" data-to-yaml>Edit as YAML</button> }
+                else { <button type="submit" name="Op" value="to-form" asp-page-handler="Edit" class="secondary" data-to-form>Edit as a form</button> }
+            </div>
+            @if (Model.View == "yaml")
+            {
+                <section class="card" aria-labelledby="h-yaml">
+                    <h2 id="h-yaml">YAML</h2>
+                    <textarea name="Yaml" class="code" rows="28" spellcheck="false" aria-labelledby="h-yaml" data-yaml>@Model.Yaml</textarea>
+                </section>
+            }
+            else
+            {
+                <section class="card" aria-labelledby="h-fields">
+                    <h2 id="h-fields">The rule</h2>
+                    <input type="hidden" name="Form.Id" value="@Model.Form.Id" />
+                    @{ await ParamRows(Model.Form.Fields, "Form.Fields", "remove-field"); }
+                    <div class="actions"><button type="submit" name="Op" value="add-field" asp-page-handler="Edit" class="small secondary" data-add-field>Add a field</button></div>
+                </section>
+                @for (var i = 0; i < Model.Form.Detections.Count; i++)
+                {
+                    var d = Model.Form.Detections[i];
+                    var dn = $"Form.Detections[{i}]";
+                    <section class="card" aria-labelledby="h-det-@i" data-detection="@i">
+                        <div class="split"><h2 id="h-det-@i">Detection @(i + 1)</h2>
+                            <button type="submit" name="Op" value="remove-detection:@i" asp-page-handler="Edit" class="small danger" data-remove-detection>Remove this detection</button></div>
+                        <div class="filters">
+                            <div><label for="@(dn).Id">Detection id</label><input id="@(dn).Id" type="text" name="@(dn).Id" value="@d.Id" maxlength="100" /></div>
+                            <div><label for="@(dn).Combine">Fires when</label>
+                                <select id="@(dn).Combine" name="@(dn).Combine">
+                                    <option value="any" selected="@(d.Combine == "any" ? "selected" : null)">any condition matches</option>
+                                    <option value="all" selected="@(d.Combine == "all" ? "selected" : null)">every condition matches</option>
+                                </select></div>
+                            <div><label for="@(dn).Tier">Sets the tier</label>
+                                <select id="@(dn).Tier" name="@(dn).Tier" data-tier>
+                                    <option value="" selected="@(d.Tier == "" ? "selected" : null)">no tier</option>
+                                    @for (var t = 0; t <= 3; t++) { <option value="@t" selected="@(d.Tier == t.ToString(System.Globalization.CultureInfo.InvariantCulture) ? "selected" : null)">Tier @t</option> }
+                                </select></div>
+                        </div>
+                        <h3>Conditions</h3>
+                        @for (var j = 0; j < d.Conditions.Count; j++)
+                        {
+                            var c = d.Conditions[j];
+                            var cn = $"{dn}.Conditions[{j}]";
+                            <fieldset class="condition" data-condition="@j">
+                                <legend>Condition @(j + 1)</legend>
+                                <div class="filters">
+                                    <div><label for="@(cn).Kind">Kind</label>
+                                        <select id="@(cn).Kind" name="@(cn).Kind" data-kind>
+                                            <option value="">(choose)</option>
+                                            @foreach (var k in kinds) { <option value="@k" selected="@(k == c.Kind ? "selected" : null)">@k</option> }
+                                            @if (!string.IsNullOrEmpty(c.Kind) && !kinds.Contains(c.Kind)) { <option value="@c.Kind" selected>@c.Kind (unknown)</option> }
+                                        </select></div>
+                                    <div class="actions">
+                                        <button type="submit" name="Op" value="kind:@i:@j" asp-page-handler="Edit" class="small secondary" data-kind-apply>Use this kind's values</button>
+                                        <button type="submit" name="Op" value="remove-condition:@i:@j" asp-page-handler="Edit" class="small danger">Remove condition</button>
+                                    </div>
+                                </div>
+                                @{ await ParamRows(c.Params, $"{cn}.Params", $"remove-param:{i}:{j}"); }
+                                <div class="actions"><button type="submit" name="Op" value="add-param:@i:@j" asp-page-handler="Edit" class="small secondary">Add a value</button></div>
+                            </fieldset>
+                        }
+                        <div class="actions"><button type="submit" name="Op" value="add-condition:@i" asp-page-handler="Edit" class="small secondary" data-add-condition>Add a condition</button></div>
+                        <h3>What it sets (besides the tier)</h3>
+                        @{ await ParamRows(d.Set, $"{dn}.Set", $"remove-set:{i}"); }
+                        <div class="actions"><button type="submit" name="Op" value="add-set:@i" asp-page-handler="Edit" class="small secondary">Add a value it sets</button></div>
+                        <h3>Other settings of this detection</h3>
+                        @{ await ParamRows(d.Fields, $"{dn}.Fields", $"remove-dfield:{i}"); }
+                        <div class="actions"><button type="submit" name="Op" value="add-dfield:@i" asp-page-handler="Edit" class="small secondary">Skip assets (CIs) / add a setting</button></div>
+                    </section>
+                }
+                <div class="actions"><button type="submit" name="Op" value="add-detection" asp-page-handler="Edit" class="secondary" data-add-detection>Add a detection</button></div>
+            }
+            <datalist id="rule-param-names">
+                @foreach (var n in RuleFormModel.KindParams.Values.SelectMany(x => x).Concat(new[] { "appliesTo", "mode", "purpose", "category", "description", "excludeAssets", "Purpose", "Category", "Tags", "cmdbId" }).Distinct()) { <option value="@n"></option> }
+            </datalist>
+            <section class="card" aria-labelledby="h-stage" data-stage>
+                <h2 id="h-stage">Check and stage</h2>
+                <div class="filters">
+                    <div class="wide"><label for="r-reason">Reason (recorded with the change)</label><input id="r-reason" type="text" name="Reason" maxlength="400" value="@Model.Reason" placeholder="why" /></div>
+                </div>
+                <div class="actions">
+                    <button type="submit" name="Op" value="check" asp-page-handler="Edit" class="secondary" data-check>Check</button>
+                    <button type="submit" name="Act" value="save" asp-page-handler="Stage" data-stage-save>Stage for Review &amp; commit</button>
+                    @if (e is not null && e.VendorBody is not null && e.Origin != RuleOrigin.Off) { <button type="submit" name="Act" value="off" asp-page-handler="Stage" class="danger" data-stage-off>Turn this rule off</button> }
+                    @if (e is not null && e.VendorBody is not null && e.Version is not null) { <button type="submit" name="Act" value="reset" asp-page-handler="Stage" class="secondary" data-stage-reset>Reset to the vendor's rule</button> }
+                    @if (e is not null && e.VendorBody is null) { <button type="submit" name="Act" value="remove" asp-page-handler="Stage" class="danger" data-stage-remove>Remove this rule</button> }
+                </div>
+            </section>
+        </form>
+        @if (Model.Checked is not null)
+        {
+            <section class="card" aria-labelledby="h-checked" data-checked>
+                <h2 id="h-checked">The text that will be stored</h2>
+                <pre class="code">@Model.Checked</pre>
+            </section>
+        }
+    }
+    @if (e?.VendorBody is not null && e.Origin != RuleOrigin.Vendor)
+    {
+        <details class="card" data-vendor-text>
+            <summary>The vendor's rule</summary>
+            <pre class="code">@e.VendorBody</pre>
+        </details>
+    }
+}

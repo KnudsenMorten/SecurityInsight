@@ -1,0 +1,223 @@
+@page
+@model SI.Management.Web.Pages.RiskIndex.IndexModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.RiskIndex
+@{
+    ViewData["Title"] = "Risk index";
+    var isAdmin = User.IsAdmin();
+    var edit = Model.Editing;
+    var st = Model.State;
+    var byRow = Model.Issues.Where(i => i.Row >= 0).GroupBy(i => i.Row).ToDictionary(g => g.Key, g => g.ToList());
+    var whole = Model.Issues.Where(i => i.Row < 0).ToList();
+    var errors = Model.Issues.Count(i => i.Error);
+    var warnings = Model.Issues.Count(i => !i.Error);
+    string Cell(string v) => string.IsNullOrEmpty(v) ? "any" : v;
+}
+<div class="split"><h1>Risk index</h1>
+    @if (st is not null) { <a class="button secondary" href="/RiskIndex?handler=Csv" data-export-committed>Export CSV</a> }
+</div>
+<p class="lede">Risk Analysis checks these rows from the top, and the first row that fits a finding sets its base score.</p>
+@if (Model.EditBlocked is { } blocked)
+{
+    <div class="notice warn" role="status" data-edit-blocked>Editing is not available: @blocked Install the newest template pack and editing opens. <a href="/Templates/Releases" data-edit-blocked-action>Open Template releases</a></div>
+}
+else if (st is not null && !isAdmin)
+{
+    <p class="hint" data-readonly>Only admins can change the risk index.</p>
+}
+<details class="help" data-riskindex-help>
+    <summary>How the risk index works</summary>
+    <p><strong>Keyed by the SecurityInsight fields.</strong> Each row matches a finding on its finding type, category, subcategory, component, finding key and asset class (device_server, device_client, device for both, identity, cloud_resource, public_ip). That is how "Defender not responding" can be critical on a server and low on a user's laptop.</p>
+    <p><strong>First match wins, per base.</strong> For the <strong>asset base</strong>, Risk Analysis takes the first row (top down) that has an asset base and whose matchers and Tier all fit the finding. For the <strong>vulnerability base</strong> it takes the first row that has a vulnerability base and whose matchers and Severity fit. A blank matcher fits any value. No row fits: the base is 0. The two bases are looked up separately, so a row's severity never limits its asset base and its tier never limits its vulnerability base.</p>
+    <p><strong>The risk score</strong> is (asset base + the impacts of the asset risk factors) x (vulnerability base + the impacts of the vulnerability risk factors), with no cap: for example (5 + 5) x (5 + 4) = 90. Only the two bases come from this index; the factors and their impacts are on the Risk factors page.</p>
+    <p><strong>What you can change:</strong> the rows, their order, the six matchers, severity, tier, the two bases (0 to 10) and the comments. Show or hide columns for reading. <strong>What you cannot change here:</strong> which columns are matchers -- a new matcher column would need an engine change. An index written with the older 2.2 columns is imported translated, every base value kept.</p>
+    <p><strong>Order.</strong> Put specific rows above general ones. "Sort by specificity" does that (server / client rows first, then other asset classes, then tier / severity rows, then finding key, subcategory, category). A row that a row above it already covers completely is marked: it is never used.</p>
+    <p><strong>Saving.</strong> Nothing is written on this page. "Check and dry run" scores current findings with your edit and with the index in force; "Stage" puts the edit on Review &amp; commit, where it is written in your name with one change-history entry per row.</p>
+</details>
+
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@SqlRiskIndexStore.MissingSchemaMessage</div> }
+@if (st is not null && !st.HasOrder)
+{
+    <div class="notice" role="status" data-legacy-index>Shown in the order Risk Analysis checks it, converted from the older format and translated to the SecurityInsight fields with the same base values.</div>
+}
+@if (st is not null && st.Unplaced > 0)
+{
+    <div class="notice warn" role="status" data-unplaced>@st.Unplaced row(s) have no place in the order yet (made before the index had one): Risk Analysis checks them after every other row. Move them where they belong and stage the index.</div>
+}
+@if (st is not null) { foreach (var n in st.Notes) { <div class="notice warn" role="status">@n</div> } }
+@foreach (var m in Model.Messages) { <div class="notice @(m.StartsWith("Not ", StringComparison.Ordinal) ? "error" : "ok")" role="status" data-message>@m</div> }
+@foreach (var w in whole) { <div class="notice @(w.Error ? "error" : "warn")" role="status">@w.Message</div> }
+
+@if (st is not null)
+{
+    <section class="card" aria-labelledby="h-rows">
+        <div class="split">
+            <h2 id="h-rows">Rows <span class="badge" data-row-count>@Fmt.Int(Model.Rows.Count)</span>
+                @if (Model.Edited) { <span class="badge warn" data-edited>edited, not staged</span> }
+                @if (errors > 0) { <span class="badge bad" data-errors="@errors">@Fmt.Int(errors) problem(s)</span> }
+                @if (warnings > 0) { <span class="badge warn" data-warnings="@warnings">@Fmt.Int(warnings) note(s)</span> }
+            </h2>
+            @if (Model.CanEdit && !edit) { <a class="button" href="/RiskIndex?edit=1" data-edit-open>Edit</a> }
+            else if (edit) { <a class="button secondary" href="/RiskIndex" data-edit-close>Stop editing</a> }
+        </div>
+        <fieldset class="filters" data-columns>
+            <legend>Show columns</legend>
+            @foreach (var c in RiskIndexColumns.Content)
+            {
+                <label><input type="checkbox" data-col-toggle="@c" checked /> @RiskIndexColumns.Label(c)</label>
+            }
+        </fieldset>
+        <form method="post" enctype="multipart/form-data" data-riskindex="@(edit ? "edit" : "read")" id="ri-form">
+            <input type="hidden" name="Draft" value="@Model.DraftJson()" data-draft />
+            <input type="hidden" value="@Model.TemplatesJson()" data-templates />
+            @if (edit)
+            {
+                <div class="filters" data-toolbar>
+                    <div class="actions">
+                        <button type="button" data-add>Add row</button>
+                        <button type="submit" asp-page-handler="Sort" class="secondary" data-sort>Sort by specificity</button>
+                        <button type="submit" asp-page-handler="Check" class="secondary" data-check>Check and dry run</button>
+                        <button type="submit" asp-page-handler="Export" class="secondary" data-export>Export edited CSV</button>
+                    </div>
+                    <div><label for="ri-upload">Import CSV (SI fields, or the 2.2 columns)</label><input id="ri-upload" type="file" name="Upload" accept=".csv,text/csv" /></div>
+                    <div class="actions"><button type="submit" asp-page-handler="Import" class="secondary" data-import>Import</button></div>
+                </div>
+                <p class="hint">Move a row: the arrow buttons, or Alt + Up / Alt + Down in any of its fields. Blank matcher = any value.</p>
+            }
+            <div class="table-wrap">
+                <table data-static="the row order is the precedence: sorting the table would misstate which row wins" data-ri-table>
+                    <thead>
+                        <tr>
+                            <th scope="col" class="num">Order</th>
+                            <th scope="col">Source</th>
+                            @foreach (var c in RiskIndexColumns.Content)
+                            {
+                                var isBase = c is RiskIndexColumns.AssetBase or RiskIndexColumns.VulnerabilityBase;
+                                <th scope="col" data-col="@c" class="@(isBase ? "num" : "")">@RiskIndexColumns.Label(c)@if (c == RiskIndexColumns.Severity) { <span class="hint"> (vulnerability)</span> } else if (c == RiskIndexColumns.Tier) { <span class="hint"> (asset)</span> }</th>
+                            }
+                            @if (edit) { <th scope="col">Actions</th> }
+                        </tr>
+                    </thead>
+                    <tbody data-rows>
+                        @for (var i = 0; i < Model.Rows.Count; i++)
+                        {
+                            var r = Model.Rows[i];
+                            var origin = Model.OriginOf(i);
+                            var mine = byRow.TryGetValue(i, out var list) ? list : null;
+                            <tr data-row="@i" data-src="@(i < Model.Sources.Count ? Model.Sources[i] : "")" class="@(mine?.Any(x => x.Error) == true ? "bad" : "")">
+                                <td class="num" data-order>@Fmt.Int(i + 1)</td>
+                                <td><span class="badge @(origin == "vendor" ? "good" : origin == "changed" ? "warn" : "")" data-origin="@origin">@origin</span></td>
+                                @foreach (var c in RiskIndexColumns.Content)
+                                {
+                                    var v = r.Get(c);
+                                    var num = c is RiskIndexColumns.AssetBase or RiskIndexColumns.VulnerabilityBase;
+                                    <td data-col="@c" class="@(num ? "num" : "")">
+                                        @if (edit)
+                                        {
+                                            if (num)
+                                            {
+                                                <input type="number" step="any" min="0" max="10" inputmode="decimal" value="@v" data-field="@c" aria-label="@RiskIndexColumns.Label(c), row @(i + 1)" />
+                                            }
+                                            else if (c == RiskIndexColumns.Severity)
+                                            {
+                                                <input type="text" list="ri-severities" value="@v" data-field="@c" placeholder="any" aria-label="Severity, row @(i + 1)" />
+                                            }
+                                            else if (c == RiskIndexColumns.Tier)
+                                            {
+                                                <input type="text" list="ri-tiers" value="@v" data-field="@c" placeholder="any" aria-label="Tier, row @(i + 1)" />
+                                            }
+                                            else if (c == RiskIndexColumns.AssetClass)
+                                            {
+                                                <input type="text" list="ri-classes" value="@v" data-field="@c" placeholder="any" aria-label="Asset class, row @(i + 1)" />
+                                            }
+                                            else
+                                            {
+                                                <input type="text" value="@v" data-field="@c" placeholder="@(c == RiskIndexColumns.Comments ? "" : "any")" maxlength="400" aria-label="@RiskIndexColumns.Label(c), row @(i + 1)" />
+                                            }
+                                        }
+                                        else if (num) { @(string.IsNullOrEmpty(v) ? "-" : v) }
+                                        else if (c == RiskIndexColumns.Comments) { @v }
+                                        else { <span class="@(string.IsNullOrEmpty(v) ? "hint" : "")">@Cell(v)</span> }
+                                    </td>
+                                }
+                                @if (edit)
+                                {
+                                    <td data-actions>
+                                        <button type="button" class="small secondary" data-up aria-label="Move row @(i + 1) up">Up</button>
+                                        <button type="button" class="small secondary" data-down aria-label="Move row @(i + 1) down">Down</button>
+                                        <button type="button" class="small secondary" data-dup aria-label="Duplicate row @(i + 1)">Duplicate</button>
+                                        <button type="button" class="small secondary" data-reset aria-label="Reset row @(i + 1) to the vendor's" disabled="@(origin == "yours" ? "disabled" : null)">Reset</button>
+                                        <button type="button" class="small danger" data-delete aria-label="Delete row @(i + 1)">Delete</button>
+                                    </td>
+                                }
+                            </tr>
+                            @if (mine is not null)
+                            {
+                                <tr class="issue-row" data-issues-for="@i"><td></td><td colspan="@(RiskIndexColumns.Content.Length + (edit ? 2 : 1))">
+                                    <ul class="issues">@foreach (var x in mine) { <li class="@(x.Error ? "bad" : "warn")">@(x.Error ? "Problem" : "Note"): @x.Message</li> }</ul>
+                                </td></tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (edit)
+            {
+                <datalist id="ri-severities">@foreach (var s in RiskIndexVocabulary.Severities) { <option value="@s"></option> }</datalist>
+                <datalist id="ri-tiers">@foreach (var t in RiskIndexVocabulary.Tiers) { <option value="@t"></option> }</datalist>
+                <datalist id="ri-classes">@foreach (var a in RiskIndexVocabulary.AssetClasses) { <option value="@a"></option> }</datalist>
+                <div class="filters" data-stage>
+                    <div class="wide"><label for="ri-reason">Reason (recorded with the change)</label><input id="ri-reason" type="text" name="Reason" maxlength="400" value="@Model.Reason" placeholder="why" /></div>
+                    <div class="actions"><button type="submit" asp-page-handler="Stage" data-stage-button>Stage for Review &amp; commit</button> <a class="button secondary" href="/RiskIndex">Discard edits</a></div>
+                </div>
+            }
+        </form>
+    </section>
+}
+
+@if (Model.Preview is { } p)
+{
+    <section class="card" aria-labelledby="h-preview" data-preview>
+        <h2 id="h-preview">Dry run</h2>
+        @if (p.Note is not null) { <p class="hint">@p.Note</p> }
+        <div class="tiles">
+            <div class="tile"><div class="label">Findings scored</div><div class="value" data-scored="@p.Scored">@Fmt.Int(p.Scored)</div><div class="delta" data-utc>@(p.CollectionTime is { } ctime ? "collection " + Fmt.When(ctime) : "")</div></div>
+            <div class="tile"><div class="label">Score changes</div><div class="value" data-changed="@p.Changed">@Fmt.Int(p.Changed)</div><div class="delta">@Fmt.Int(p.Up) up, @Fmt.Int(p.Down) down</div></div>
+            <div class="tile"><div class="label">Risk rating changes</div><div class="value" data-rating-changed="@p.RatingChanged">@Fmt.Int(p.RatingChanged)</div></div>
+        </div>
+        <p class="hint">At most @Fmt.Int(IndexModel.SampleSize) findings of the newest collection, scored by the same rule Risk Analysis uses. Before = the index in force, after = your edit; each finding keeps its own risk factors. The largest changes first (at most @Fmt.Int(RiskIndexDryRun.MaxListed)).</p>
+        @if (p.Rows.Count > 0)
+        {
+            <div class="table-wrap">
+                <table data-sortable data-preview-table>
+                    <thead><tr>
+                        <th scope="col">Asset</th><th scope="col">Finding</th><th scope="col">Report</th><th scope="col">Asset class</th><th scope="col">Severity</th><th scope="col">Tier</th>
+                        <th scope="col" class="num">Asset side before</th><th scope="col" class="num">after</th>
+                        <th scope="col" class="num">Vulnerability side before</th><th scope="col" class="num">after</th>
+                        <th scope="col" class="num">Risk score before</th><th scope="col" class="num">after</th><th scope="col">Rating</th><th scope="col">Rows (before / after)</th>
+                    </tr></thead>
+                    <tbody>
+                        @foreach (var row in p.Rows)
+                        {
+                            <tr data-preview-row="@row.Finding.Id">
+                                <td class="wrap">@row.Finding.AssetName</td>
+                                <td class="wrap">@(row.Finding.Title ?? row.Finding.Values.FindingKey)</td>
+                                <td class="wrap">@row.Finding.ReportName</td>
+                                <td>@row.Finding.Values.AssetClass</td>
+                                <td>@row.Finding.Values.Severity</td>
+                                <td>@row.Finding.Values.Tier</td>
+                                <td class="num" data-value="@row.AssetBefore.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.AssetBefore, 1)</td><td class="num" data-value="@row.AssetAfter.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.AssetAfter, 1)</td>
+                                <td class="num" data-value="@row.VulnBefore.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.VulnBefore, 1)</td><td class="num" data-value="@row.VulnAfter.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.VulnAfter, 1)</td>
+                                <td class="num" data-value="@row.TotalBefore.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.TotalBefore, 1)</td><td class="num @(row.TotalAfter > row.TotalBefore ? "up" : "down")" data-value="@row.TotalAfter.ToString(System.Globalization.CultureInfo.InvariantCulture)">@Fmt.Num(row.TotalAfter, 1)</td>
+                                <td>@(row.RatingBefore == row.RatingAfter ? row.RatingAfter : row.RatingBefore + " -> " + row.RatingAfter)</td>
+                                <td>@(row.AssetRowBefore)/@(row.VulnRowBefore) -> @(row.AssetRowAfter)/@(row.VulnRowAfter)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else if (p.Scored > 0) { <p data-no-change>No finding of the sample changes score.</p> }
+    </section>
+}

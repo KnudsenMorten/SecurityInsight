@@ -1,0 +1,21 @@
+id:        ErlangOtp
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Erlang/OTP'
+category:  'Runtime/Server'
+description: ''
+displayNames:
+  - 'Erlang/OTP'
+
+detections:
+  - id: ErlangOtp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'otp*'
+    set:
+      Tier:     2
+      Purpose:  'Runtime/Server'
+      Category: 'Runtime/Server'

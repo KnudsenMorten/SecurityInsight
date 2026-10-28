@@ -1,0 +1,22 @@
+id:        IntersystemsIris
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'InterSystems Cache'
+category:  'Database'
+description: ''
+displayNames:
+  - 'InterSystems Cache'
+  - 'InterSystems IRIS'
+
+detections:
+  - id: IntersystemsIris
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'iris*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

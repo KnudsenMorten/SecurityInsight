@@ -1,0 +1,16 @@
+@page
+@model SI.Management.Web.Pages.Recommendations.SummaryModel
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.NotBuilt is { } notBuilt)
+{
+    @* #842: the view is not written for this collection -- the notice above says why; the views that ARE written follow *@
+    <p class="hint" data-summary-notbuilt="@notBuilt.ToString().ToLowerInvariant()"><a href="@Model.ViewLink(SI.Management.Web.Navigation.NamedViews.DetailedPage)">Open Detailed</a> · <a href="@(SI.Management.Web.Navigation.NamedViews.Find(Model.PagePath, "cve")!.Href(Model.PagePath, Model.Current?.CollectionId))">Vulnerabilities (CVE)</a></p>
+    @if (Model.BuiltViews.Count > 0)
+    {
+        <ul class="hint" data-summary-built>
+            @foreach (var (label, href) in Model.BuiltViews) { <li><a href="@href">@label</a></li> }
+        </ul>
+    }
+}
+@if (Model.Grid is not null) { <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" /> }
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

@@ -1,0 +1,146 @@
+@model SI.Management.Web.Pages.Cis.CiDataGridModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@* The grid of a CI-data view (Detailed, Summary): the Records page's pattern over one spec. *@
+@{
+    var g = Model.Grid;
+    var spec = Model.Spec;
+    var req = Model.Request.Query;
+    var id = spec.Name;
+    IReadOnlyList<string> Chosen(string p) => req[p].Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToList();
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status" data-grid-preparing>@Model.Notice</div> }
+@if (Model.NotLoaded) { <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText</div> }
+@if (!Model.NotLoaded && Model.Error is null)
+{
+    // #855 M5 / M6 (owner 2026-10-21: "default filter is active, so it should be active only"): the CIs whose findings the grid
+    // counts -- the lifecycle chosen, default ACTIVE -- said above the grid with the numbers in force, and chosen beside it
+    var lifeScope = new SI.Management.Web.Pages.ViewScope { Lifecycle = Model.Lifecycle.Words(Model.LifecycleRules, "Findings"), LifecycleDefaulted = Model.Lifecycle.IsDefault, Definitions = Model.LifecycleRules.Definitions };
+    <partial name="~/Pages/Shared/_ViewScope.cshtml" model="lifeScope" />
+    <partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(Model.Request, Model.Lifecycle)" />
+}
+@if (g is not null)
+{
+    var st = g.State;
+    // #589: the chosen columns in the chosen order (own + the CI, its identifiers and context, the finding context)
+    var cols = Model.DisplayColumns.Count > 0 ? Model.DisplayColumns : CollectionPageModel.Visible(spec);
+    var pages = g.Total == 0 ? 1 : (int)Math.Ceiling(g.Total / (double)st.Size);
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")));
+    string AriaSort(GridColumn c) => st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    // #272: THE shared action bar -- the rows stand for findings of the newest collection, so the selected rows get the same
+    // actions as every other finding grid (exemption, comment, status, task, department, export)
+    var bar = Model.ActionBar(id + "-strip");
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> selection =
+        @<form id="@(id)-s" method="get" action="@Model.Route">
+            @foreach (var kv in req.Where(k => k.Key is not ("sel" or "handler" or "p")))
+            {
+                foreach (var v in kv.Value) { <input type="hidden" name="@kv.Key" value="@v" /> }
+            }
+            @if (bar is not null)
+            {
+                <partial name="~/Pages/Shared/_FindingActions.cshtml" model="bar" />
+            }
+            else
+            {
+                <div class="quickstrip" id="@(id)-strip" data-action-strip>
+                    <strong><span data-selected-count>0</span> selected</strong>
+                    <div class="actions">
+                        <button type="submit" data-show-selected>Show only these</button>
+                    </div>
+                </div>
+            }
+        </form>;
+    var toolbar = new GridToolbar
+    {
+        Id = id + "-tools", Total = g.Total, Skip = st.Skip, Count = g.Rows.Count, Page = st.Page, Pages = pages, Noun = Model.Noun,
+        PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))), FirstLast = true, AlwaysShowPage = true, Actions = selection,
+        Size = st.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+    };
+    // THE shared filter for every filter (owner 2026-10-19: every filter takes several values; a value may also arrive
+    // '|'-joined in one parameter, a link from another page)
+    var filters = Model.Filters.Select(x => new SI.Management.Web.Pages.MultiFilter
+    {
+        Id = id + "-mf-" + x.Param, Name = x.Param, Label = x.Label, Form = id + "-f",
+        Choices = SI.Management.Web.Pages.MultiFilter.Plain(x.Choices), Chosen = SI.Management.Web.Pages.MultiFilter.ValuesOf(req, x.Param),
+    }).ToList();
+    var exports = Model.Exports.ForGrid(id + "-s", "#" + id + "-strip");
+    <section class="card" aria-labelledby="@(id)-h" data-ci-grid="@id">
+        <h2 id="@(id)-h">@Fmt.Int(g.Total) @(g.Total == 1 ? GridToolbar.Singular(Model.Noun) : GridToolbar.Plural(Model.Noun))</h2>
+        @* the filter form: its controls sit in the toolbar row and its Filters panel (form attribute) *@
+        <form id="@(id)-f" method="get" action="@Model.Route" role="search" aria-label="Search and filter">
+            @foreach (var s in st.Selected) { <input type="hidden" name="sel" value="@s" /> }
+            @* #855: the lifecycle chosen travels with the search and the filters *@
+            @if (Model.Lifecycle.QueryValue is { } lfv) { <input type="hidden" name="lifecycle" value="@lfv" /> }
+        </form>
+        @* THE view toolbar, one row (owner 2026-10-19): Search · Filters · Columns · Layout · Export *@
+        <div class="data-toolbar" role="group" aria-label="Search, filters, columns, layout and export">
+            <div class="gridbar dt-search">
+                <label for="@(id)-q" class="sr-only">Search</label>
+                <input form="@(id)-f" id="@(id)-q" type="search" name="q" value="@st.Search" placeholder="Search: CI, finding or title" maxlength="200" data-search data-grid-search />
+                <button form="@(id)-f" type="submit">Apply</button> <a class="button secondary" href="@Model.Route">Clear</a>
+            </div>
+            <details class="tool-menu filters-menu" data-filters-menu>
+                <summary class="tool-button">Filters@(st.Filters.Count > 0 ? " · " + Fmt.Int(st.Filters.Count) + " active" : "")</summary>
+                <div class="tool-panel filters-panel">
+                    @foreach (var mf in filters) { <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div> }
+                    @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+                    <input form="@(id)-f" type="hidden" name="size" value="@st.Size" />
+                    <div class="actions"><button form="@(id)-f" type="submit">Apply</button> <a class="button secondary" href="@Model.Route">Clear</a></div>
+                </div>
+            </details>
+            @if (Model.Chooser is { } chooser) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="chooser" /> }
+            <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
+        </div>
+
+        @if (g.Total > SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit)
+        {
+            <div class="notice" role="status" data-export-limit>An export holds at most @Fmt.Int(SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit) rows and this list has @Fmt.Int(g.Total): an export of it stops at the first @Fmt.Int(SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit) rows in the sort order (the file's Export sheet says so). Narrow the filter -- one class, one component or one severity at a time -- and export each part to get every row.</div>
+        }
+
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+
+        <div class="table-wrap" data-selectable data-strip="#@(id)-strip">
+            <table class="findings grid" data-grid="@id" aria-describedby="@(id)-h">
+                <thead>
+                    <tr>
+                        <th class="sel"><input type="checkbox" data-select-all aria-label="Select every row on this page" /></th>
+                        @foreach (var c in cols)
+                        {
+                            if (!c.Sortable) { <th scope="col" data-col="@c.Key">@c.Label</th> continue; }
+                            <th scope="col" aria-sort="@AriaSort(c)" data-col="@c.Key"><a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a></th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (g.Rows.Count == 0) { <tr><td colspan="@(cols.Count + 1)" class="hint">No row matches.</td></tr> }
+                    @foreach (var row in g.Rows)
+                    {
+                        var key = Model.Cell(row, spec.KeyColumn);
+                        <tr data-key="@key">
+                            <td class="sel"><input form="@(id)-s" type="checkbox" name="sel" value="@key" data-select-row checked="@(st.Selected.Contains(key ?? ""))" aria-label="Select this row" /></td>
+                            @foreach (var c in cols)
+                            {
+                                if (SI.Management.Web.Columns.GridLayout.IsExtra(c))
+                                {
+                                    <td class="wrap" data-col="@c.Key" data-extra>@SI.Management.Web.Columns.DataCellHtml.Render(SI.Management.Web.Columns.GridLayout.Text(row, c.Key))</td>
+                                    continue;
+                                }
+                                var text = CollectionPageModel.Text(c, row);
+                                var href = text.Length == 0 ? null : Model.CellLink(c, row);
+                                <td class="wrap" data-col="@c.Key">
+                                    @if (c.Type == GridType.Date && CollectionPageModel.Moment(c, row) is { } when) { @Fmt.Time(when) }
+                                    else if (href is not null) { <a href="@href">@text</a> }
+                                    else { @text }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

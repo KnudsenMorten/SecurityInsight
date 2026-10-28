@@ -1,0 +1,21 @@
+id:        PostfixPostfix
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Postfix'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Postfix'
+
+detections:
+  - id: PostfixPostfix
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'postfix*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

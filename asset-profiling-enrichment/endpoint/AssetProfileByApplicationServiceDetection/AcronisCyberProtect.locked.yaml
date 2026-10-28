@@ -1,0 +1,22 @@
+id:        AcronisCyberProtect
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Acronis Cyber Backup'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Acronis Cyber Backup'
+  - 'Acronis Cyber Protect'
+
+detections:
+  - id: AcronisCyberProtect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cyber_protect*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

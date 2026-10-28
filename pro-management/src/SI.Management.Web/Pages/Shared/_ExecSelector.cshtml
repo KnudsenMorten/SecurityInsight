@@ -1,0 +1,43 @@
+@model (SI.Management.Core.ProData.ExecPresentation View, string Path)
+@* #288 / #290: the Summary / Detailed selector and what the agreement mode means for the figures shown.
+   #636: while the Risk Analysis Summary step is off there is nothing to choose -- the Detailed report's data, said in one line. *@
+@using SI.Management.Core.ProData
+@{
+    var v = Model.View;
+    var choices = RiskExecSelector.Choices(v.SummaryOn);
+}
+@if (choices.Count > 1)
+{
+<nav class="exec-grain noprint" aria-label="Report data">
+    <span class="muted">Show the data of the</span>
+    <span class="seg" role="group" aria-label="Report">
+    @foreach (var g in choices)
+    {
+        <a href="@Model.Path?grain=@g.ToLowerInvariant()" aria-current="@(g == v.Grain ? "true" : "false")" data-grain-link="@g">@g report</a>
+    }
+    </span>
+</nav>
+}
+else
+{
+    <p class="muted exec-grain noprint" data-exec-detailed-only>The data of the Detailed report: every finding counts (one finding = one issue on one asset).</p>
+}
+@if (v.Figures is { } f)
+{
+    <div class="notice exec-mode" role="status" data-exec-mode>
+        @if (v.FromLeader)
+        {
+            <text><strong>Figures from the @v.Leader report, as in the mails.</strong> The reports are set to agree, so the Summary and the Detailed selection show the same lists.</text>
+        }
+        else if (v.Mode == "PerReport")
+        {
+            <text><strong>The @v.Grain report's own figures, as in its mail.</strong> @RiskExecGrain.PerReportNotice</text>
+        }
+        else
+        {
+            <text><strong>The @v.Grain report's own figures, as in its mail.</strong></text>
+        }
+        @if (v.Note is not null) { <span data-exec-note> @v.Note</span> }
+        <span class="muted"> Generated @Fmt.Time(f.FiguresGeneratedAt) by the @f.FiguresFromGrain report.</span>
+    </div>
+}

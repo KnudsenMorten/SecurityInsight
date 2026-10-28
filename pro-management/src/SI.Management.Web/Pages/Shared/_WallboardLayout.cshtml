@@ -1,0 +1,40 @@
+@{
+    var refresh = ViewData["Refresh"] is int r && r >= 60 ? r : 300;
+    // the edition's logo, favicon and name (owner 2026-10-28): Pro only while the licence says Pro
+    var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(Context.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, Context.RequestAborted);
+}
+<!DOCTYPE html>
+@* #345: the build this page was served from -- version-check.js shows "a new version is available" (it never reloads by
+   itself; this page's own refresh tick below picks the new version up) *@
+@{ var signedIn = User.Identity?.IsAuthenticated == true; }
+<html lang="en" data-number-locale="@DisplayCulture.Locale" data-app-build="@(signedIn ? AppInfo.Build.Id : null)" data-app-version="@(signedIn ? AppInfo.Version : null)">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    @* a plain reload: no script needed, and a lost connection recovers on the next tick *@
+    <meta http-equiv="refresh" content="@refresh" />
+    <title>@ViewData["Title"] - @brand.Product</title>
+    @Html.Raw(brand.IconLinks())
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/app.css" asp-append-version="true" />
+    <script src="~/js/theme.js" asp-append-version="true"></script>
+    <script src="~/js/link-area.js" asp-append-version="true"></script>
+</head>
+<body class="wallboard">
+    @* the same always-dark brand bar as every page (BRAND-2.2), reversed logo *@
+    <header class="topbar" data-brandbar>
+        <span class="brand">
+            <img class="logo" src="@brand.HeaderLogo" alt="" width="167" height="36" data-edition="@(brand.Pro ? "pro" : "community")" />
+            <span class="sr-only">@brand.LogoAlt</span>
+        </span>
+        @if (AppInfo.Version.Length > 0) { <span class="version-pill" data-version title="@AppInfo.Version@(AppInfo.Build.BuiltText.Length > 0 ? " (" + AppInfo.Build.BuiltText + ")" : "")">v@(SI.Management.Web.Changes.InstalledRelease.Short(AppInfo.Version))</span> }
+    </header>
+    <main id="main">
+        @RenderBody()
+    </main>
+    @* BRAND-2.10 (#313): the times in the browser's own zone (the page reloads itself, so no live update is needed) *@
+    <script src="~/js/local-time.js" asp-append-version="true"></script>
+    <script src="~/js/version-check.js" asp-append-version="true"></script>
+</body>
+</html>

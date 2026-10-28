@@ -1,0 +1,156 @@
+@page
+@model SI.Management.Web.Pages.RiskFactors.ClassificationModel
+@using SI.Management.Web.Changes
+@{
+    ViewData["Title"] = "Classification";
+    var isAdmin = User.IsAdmin();
+    var target = Model.CurrentTarget;
+    var subject = ClassificationMapping.SubjectOf(Model.Field);
+}
+<div class="split"><h1>Classification</h1></div>
+<p class="lede">How SecurityInsight classifies every finding and asset: its component (OS, SQL, Network ...), its asset type and its subtype -- one mapping for all of them.</p>
+<details class="help" data-classification-help>
+    <summary>How classification works</summary>
+    <p><strong>One mapping.</strong> Every row says: when a source's field matches, set a classification to a value. For example: an Azure resource type <code>microsoft.sql/servers/databases</code> sets the asset type to Database and the subtype to SQL Database; Defender for Endpoint seeing SQL Server installed sets the subtype to SQL Server; a vulnerability in SQL Server sets the component to SQL.</p>
+    <p><strong>Priority.</strong> When several rows match, the row with the highest priority wins: one value per classification. No match keeps the default (Other for a dimension, General for a subtype) -- never blank.</p>
+    <p><strong>Dimensions.</strong> A dimension is a list of values a finding or asset is tagged with (Component first; more will come). It is an extra column in reports, exports and the ServiceNow hand-off.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "Add a row, change one or remove it. Every choice is a list: the fields, the values SecurityInsight collected from your estate, the value to set -- nothing is typed into a query. The change goes on Review & commit and is written in your name." : "An Admin changes the rows.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@RiskFactorStore.MissingSchemaMessage</div> }
+
+<nav class="tabs" aria-label="Classification" data-classification-targets>
+    @foreach (var t in Model.Targets)
+    {
+        <a href="/RiskFactors/Classification?target=@Uri.EscapeDataString(t)" aria-current="@(t == target ? "true" : null)" data-target="@t">@ClassificationMapping.TargetLabel(t)</a>
+    }
+</nav>
+
+@if (Model.Dimension is { } dim)
+{
+    <h2>@dim.Name: values</h2>
+    @if (!string.IsNullOrEmpty(dim.Description)) { <p class="hint">@dim.Description</p> }
+    <table class="grid" data-dimension-values="@dim.Id" data-sortable>
+        <thead><tr><th>Value</th><th>Meaning</th><th>Default</th></tr></thead>
+        <tbody>
+        @foreach (var v in dim.Values)
+        {
+            <tr data-dimension-value="@v.Value"><td>@v.Value</td><td>@v.Description</td><td>@(v.Value == dim.Default ? "no match" : "")</td></tr>
+        }
+        </tbody>
+    </table>
+    @if (dim.OwnRules > 0) { <p class="hint" data-dimension-own-rules>This dimension still carries @dim.OwnRules rules of its own; SecurityInsight reads them with the rows below.</p> }
+}
+else if (Model.CurrentTargetInfo is { } pending)
+{
+    <p class="hint" data-dimension-pending>The values of @pending.Dimension arrive with the next template update: @string.Join(", ", Model.TargetValues).</p>
+}
+@if (Model.CurrentTargetInfo is { } ti)
+{
+    <p class="hint" data-target-info>@ClassificationMapping.TargetLabel(target) is set on @(ti.AppliesTo == "finding" ? "findings" : "assets")@(ti.Multi ? ", with every matching value" : ", the highest-priority matching row winning"); no match: @(ti.Fallback == "$keep" ? "the value the source gave (Other when it gave none)" : ti.Fallback).</p>
+}
+
+<h2>@ClassificationMapping.TargetLabel(target): rows</h2>
+@if (!Model.TargetRows.Any()) { <p data-rows-none>No row sets @ClassificationMapping.TargetLabel(target).ToLowerInvariant() yet.</p> }
+else
+{
+    <table class="grid" data-classification-rows="@target" data-sortable>
+        <thead><tr><th>Priority</th><th>Source</th><th>When</th><th>Sets</th><th>Origin</th><th>State</th>@if (isAdmin) { <th>Change</th> }</tr></thead>
+        <tbody>
+        @foreach (var r in Model.TargetRows)
+        {
+            <tr data-classification-row="@r.Data.ItemKey">
+                <td data-value="@r.Priority">@r.Priority</td>
+                <td>@r.Source</td>
+                <td>@r.Text@if (r.When.Length > 0) { <div class="hint" data-row-when>and also: @r.When</div> }</td>
+                <td><strong>@r.Set</strong></td>
+                <td>@(r.Own ? "Yours" : "SecurityInsight")</td>
+                <td>@(r.Off ? "Off" : r.Data.Overridden ? "Changed" : r.Stage == "production" ? "On" : r.Stage)</td>
+                @if (isAdmin)
+                {
+                    <td>
+                        <a href="/RiskFactors/Classification?target=@Uri.EscapeDataString(target)&amp;edit=@Uri.EscapeDataString(r.Data.ItemKey)" data-edit-row>Edit</a>
+                        @if (!r.Off)
+                        {
+                            <form method="post" asp-page-handler="RemoveRow" class="inline">
+                                <input type="hidden" name="key" value="@r.Data.ItemKey" /><input type="hidden" name="target" value="@target" />
+                                <button type="submit" class="secondary" data-remove-row>@(r.Own ? "Remove" : "Turn off")</button>
+                            </form>
+                        }
+                        @if (!r.Own && (r.Off || r.Data.Overridden))
+                        {
+                            <form method="post" asp-page-handler="RestoreRow" class="inline">
+                                <input type="hidden" name="key" value="@r.Data.ItemKey" /><input type="hidden" name="target" value="@target" />
+                                <button type="submit" class="secondary" data-restore-row>Put back</button>
+                            </form>
+                        }
+                    </td>
+                }
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@if (isAdmin && !Model.SchemaMissing)
+{
+    <section class="card" data-classification-wizard>
+        <h2>@(Model.Editing is null ? "Add a row" : "Change the row " + Model.Editing.Id)</h2>
+        <form method="get" data-wizard-step="read">
+            <input type="hidden" name="target" value="@target" />
+            @if (Model.Editing is not null) { <input type="hidden" name="edit" value="@Model.Editing.Data.ItemKey" /> }
+            <h3>1. What the row reads</h3>
+            <label>Source
+                <select name="source">@foreach (var s in ClassificationMapping.Sources) { <option value="@s" selected="@(Model.Source == s)">@s</option> }</select>
+            </label>
+            <label>Field
+                <select name="field">
+                    <option value="">Pick a field</option>
+                    @foreach (var f in ClassificationMapping.Fields) { <option value="@f.Field" selected="@(Model.Field == f.Field)">@f.Label (@f.Subject)</option> }
+                </select>
+            </label>
+            <label>Match
+                <select name="match">@foreach (var (m, label) in ClassificationMapping.MatchLabels) { <option value="@m" selected="@(Model.Match == m)">@label</option> }</select>
+            </label>
+            <div class="actions"><button type="submit" class="secondary" data-wizard-next>Next</button></div>
+        </form>
+        @if (ClassificationMapping.Fields.Any(f => f.Field == Model.Field) && Model.Match is not null)
+        {
+            <form method="post" asp-page-handler="StageRow" data-wizard-step="set">
+                <input type="hidden" name="target" value="@target" /><input type="hidden" name="source" value="@Model.Source" />
+                <input type="hidden" name="field" value="@Model.Field" /><input type="hidden" name="match" value="@Model.Match" />
+                @if (Model.Editing is not null) { <input type="hidden" name="edit" value="@Model.Editing.Data.ItemKey" /> }
+                @if (Model.Editing?.When is { Length: > 0 } ew) { <p class="hint" data-edit-when>This row also requires: @ew -- kept as it is (change it in the JSON on the Factors tab).</p> }
+                <h3>2. When it matches</h3>
+                @if (Model.Match is "equals" or "in")
+                {
+                    @if (Model.CollectedError is not null) { <div class="notice warn" role="status">@Model.CollectedError</div> }
+                    <label>@ClassificationMapping.FieldLabel(Model.Field) values SecurityInsight collected (@Model.Collected.Count)
+                        <select name="pick" multiple="@(Model.Match == "in")" size="@(Model.Match == "in" ? 12 : 1)" data-collected>
+                            @foreach (var v in Model.Collected) { <option value="@v.Token" selected="@(Model.Editing?.Values.Contains(v.Value) == true)">@v.Value -- @v.Count</option> }
+                        </select>
+                    </label>
+                    @if (Model.Collected.Count == 0) { <p class="hint" data-collected-none>SecurityInsight has collected no value of this field from your estate yet (@subject).</p> }
+                }
+                else
+                {
+                    <label>@(Model.Match == "prefix" ? "Starts with" : "Pattern (* any run, ? one character)")
+                        <input name="pattern" maxlength="256" value="@(Model.Editing?.Values.FirstOrDefault())" pattern="[A-Za-z0-9 ._@@/:+#\-*?]+" required data-pattern />
+                    </label>
+                }
+                <h3>3. What it sets</h3>
+                <label>@ClassificationMapping.TargetLabel(target)
+                    <select name="set" data-set>@foreach (var v in Model.TargetValues) { <option value="@v" selected="@(Model.Editing?.Set == v)">@v</option> }</select>
+                </label>
+                <label>Priority (@ClassificationMapping.PriorityMin to @ClassificationMapping.PriorityMax; the highest matching row wins)
+                    <input type="number" name="priority" step="1" min="@ClassificationMapping.PriorityMin" max="@ClassificationMapping.PriorityMax" value="@(Model.Editing?.Priority ?? 100)" required data-priority />
+                </label>
+                <label>Reason<input name="reason" maxlength="400" /></label>
+                <div class="actions">
+                    <button type="submit" data-stage-row>Stage this row</button>
+                    <a class="button secondary" href="/RiskFactors/Classification?target=@Uri.EscapeDataString(target)">Cancel</a>
+                </div>
+            </form>
+        }
+    </section>
+}

@@ -1,0 +1,31 @@
+@* THE "What you're looking at" line of every view (ViewScope.cs, owner 2026-10-19): directly under the page title, from
+   the page's real state -- the run, the lifecycle, the other defaults, the person's filters as chips, "Show everything"
+   and the definitions with the numbers from the settings. *@
+@model SI.Management.Web.Pages.ViewScope
+@{
+    var s = Model;
+}
+<div class="view-scope" data-view-scope role="note" aria-label="What you're looking at">
+    <p class="vs-line">
+        <strong class="vs-title">What you're looking at:</strong>
+        @if (s.RunTime is { } at) { <span data-vs-run>Data from the @(s.RunKind is { Length: > 0 } k ? k + " " : "")run of @Fmt.Time(at)</span> }
+        @if (s.Lifecycle is { Length: > 0 } life) { <span class="vs-sep" aria-hidden="true">·</span> @if (s.LifecycleDefaulted) { <span data-vs-lifecycle data-lifecycle-default-text>@life</span> } else { <span data-vs-lifecycle>@life</span> } }
+        @foreach (var d in s.Defaults) { <span class="vs-sep" aria-hidden="true">·</span> <span data-vs-default>@d</span> }
+        @if (s.ShowEverythingHref is { } all) { <span class="vs-sep" aria-hidden="true">·</span> <a href="@all" data-vs-show-all>Show everything</a> }
+    </p>
+    @if (s.Chips.Count > 0)
+    {
+        <ul class="chips" aria-label="Active filters">
+            @foreach (var c in s.Chips) { <li data-vs-chip><a href="@c.RemoveHref" aria-label="Remove the filter on @c.Text.Split(':')[0]">@c.Text ✕</a></li> }
+        </ul>
+    }
+    @if (s.Definitions.Count > 0)
+    {
+        <details class="vs-info" data-vs-info>
+            <summary aria-label="What these words mean"><span aria-hidden="true">i</span> What these words mean</summary>
+            <dl>
+                @foreach (var (term, meaning) in s.Definitions) { <dt>@term</dt><dd>@meaning</dd> }
+            </dl>
+        </details>
+    }
+</div>

@@ -1,0 +1,14 @@
+@page
+@model SI.Management.Web.Pages.Reports.OutputFieldsModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Outputs
+@using SI.Management.Web.Pages.Reports
+@{
+    ViewData["Title"] = "Output fields";
+    var sel = Model.Selected;
+    var edit = Model.CanEdit;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/OutputFields")" />
+<p class="lede">Which columns each workbook carries -- the CI and findings workbooks -- from which SecurityInsight field, and under which name (what each connector sends: <nav-ref page="/Connectors/Fields" />). Change, rename, remove or add a column; the outputs use your columns from their next run.</p>
+<partial name="_OutputFieldsBody" model="Model" />

@@ -1,0 +1,22 @@
+id:        DellAvamar
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Dell EMC Avamar Server'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Dell EMC Avamar Server'
+  - 'Avamar'
+
+detections:
+  - id: DellAvamar
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'avamar*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

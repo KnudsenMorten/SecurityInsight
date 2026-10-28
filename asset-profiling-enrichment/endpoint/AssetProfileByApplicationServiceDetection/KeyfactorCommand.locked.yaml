@@ -1,0 +1,22 @@
+id:        KeyfactorCommand
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Keyfactor Command'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Keyfactor Command'
+  - 'Keyfactor Universal Orchestrator'
+
+detections:
+  - id: KeyfactorCommand
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'command*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

@@ -1,0 +1,6 @@
+@model SI.Management.Web.Columns.SelectedExports
+@using SI.Management.Web.Columns
+@* The selected-row exports of a grid's selection strip: the ticked rows, the columns chosen (words: ExportLabels). A GET
+   to the page's own export handler, also from a form that posts (the ticked rows and the filters travel as the query). *@
+<button type="submit" name="handler" value="Xlsx" class="secondary" data-export-rows formmethod="get" formnovalidate form="@Model.Form" title="@ExportLabels.SelectedRowsHint, as an Excel workbook">@ExportLabels.SelectedRowsExcel</button>
+<button type="submit" name="handler" value="Csv" class="secondary" data-export-rows formmethod="get" formnovalidate form="@Model.Form" title="@ExportLabels.SelectedRowsHint, as CSV">@ExportLabels.SelectedRowsCsv</button>

@@ -1,0 +1,71 @@
+# SecurityInsight -- the AssetTagging rule pack on the CI (#462, V3-DATA-MODEL 2.8).
+# The asset-tagging engine (asset-profiling-enrichment/endpoint/AssetTagging.locked.yaml) decides its auto-exclusion
+# tags with KQL against Defender and WRITES them to Defender. This pack states the same decisions over SI FIELDS, so the
+# CI carries the tag the engine writes (si_tags, source rule) -- one rule model, no provider names.
+# The engine's switches apply here too: config_flag names its AutoExcludeRules.* switch (config/asset-tagging.config.json)
+# and the rule runs ONLY when that switch is true -- no file, no switch or false = the rule is not used (#643: every tag
+# here is an EXCLUSION, which every report honours, so it is the customer's choice and never a default -- the same rule as
+# the tagging engine and the shipped sample). config_patterns takes the condition from its DeviceNamePatterns
+# (StartsWith / Contains / MatchesRegex).
+# Customer changes: data-model/rules/AssetTagging.custom.yaml (or the data-model overlay's rules/ folder), one rule per id.
+# The pack header (name, stage, priority, source) is what the Rule packs page shows; a custom file may set stage /
+# enabled for the whole pack (Pro: Configuration > Rule packs, through Review & commit).
+name: Asset tagging
+description: Tags the devices Defender cannot onboard, has too little information about or does not support, and the devices whose name matches an exclusion pattern.
+stage: production
+priority: 100
+source: shipped
+rules:
+  - id: asset-tagging/can-be-onboarded
+    name: Defender can onboard this device, it is not onboarded
+    stage: production
+    priority: 100
+    applies_to: [device]
+    mechanism: mde.detection
+    config_flag: AutoExcludeRules.ExcludeCanBeOnboarded
+    when:
+      any:
+        - si_onboarding_status:
+            eq: can_be_onboarded
+    set:
+      si_tags: [Auto-CanBeOnboarded--Excluded--SI]
+  - id: asset-tagging/insufficient-info
+    name: Defender has insufficient information about this device
+    stage: production
+    priority: 100
+    applies_to: [device]
+    mechanism: mde.detection
+    config_flag: AutoExcludeRules.ExcludeInsufficientInfo
+    when:
+      any:
+        - si_onboarding_status:
+            eq: insufficient_info
+    set:
+      si_tags: [Auto-InsufficientInfo--Excluded--SI]
+  - id: asset-tagging/unsupported
+    name: Defender does not support this device
+    stage: production
+    priority: 100
+    applies_to: [device]
+    mechanism: mde.detection
+    config_flag: AutoExcludeRules.ExcludeUnsupported
+    when:
+      any:
+        - si_onboarding_status:
+            eq: unsupported
+    set:
+      si_tags: [Auto-Unsupported--Excluded--SI]
+  - id: asset-tagging/name-pattern
+    name: The device name matches an exclusion pattern
+    stage: production
+    priority: 100
+    applies_to: [device]
+    mechanism: name.pattern
+    config_flag: AutoExcludeRules.ExcludeByDeviceNamePattern
+    config_patterns: DeviceNamePatterns
+    when:
+      any:
+        - si_asset_name:
+            is_empty: true
+    set:
+      si_tags: [Auto-NamePattern--Excluded--SI]

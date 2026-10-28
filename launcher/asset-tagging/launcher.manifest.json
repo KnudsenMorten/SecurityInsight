@@ -1,0 +1,10 @@
+{
+  "description": "SecurityInsight_AssetTagging -- launcher for the asset-tagging engine (criticality tags; report only unless -Apply).",
+  "scriptType": "Engine",
+  "community": true,
+  "notes": "Invokes engine/asset-tagging/AssetTagging.ps1. The only SecurityInsight engine that CAN write, and it is REPORT ONLY by default: it writes tags only with -Apply or SI_AssetTagging_Apply = $true, and then needs the write grants (opt-in in setup). Customer config layered: LauncherConfig.defaults.ps1 -> SecurityInsight.custom.ps1 (config) -> LauncherConfig.custom.ps1 -> CLI args.",
+  "scriptName": "AssetTagging",
+  "author": "Morten Knudsen (Invardia) <info@invardia.com>",
+  "version": "3.0.0",
+  "communityRepo": "SecurityInsight"
+}

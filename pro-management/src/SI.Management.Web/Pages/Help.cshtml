@@ -1,0 +1,68 @@
+@page
+@inject SI.Management.Web.Changes.ILicenceUsageSource LicenceUsageSource
+@{
+    ViewData["Title"] = "Help + glossary";
+}
+<h1>Help + glossary</h1>
+<p class="lede">What the words on these pages mean, and how a change gets from a click to the next engine run.</p>
+<p data-help-docs>The full documentation of the version you run (install, settings, the daily pipeline, guards and more) is on <nav-ref page="/Docs/Index" />.</p>
+
+<section class="card" aria-labelledby="h-build" data-build>
+    <h2 id="h-build">This version</h2>
+    <p>@AppInfo.Product <strong data-build-version>v@(AppInfo.Build.Display.Length > 0 ? AppInfo.Build.Display : "unknown")</strong> · <span data-build-line>@AppInfo.Build.Line</span></p>
+    @if (AppInfo.Build.Commit.Length > 0) { <p class="muted">Commit <code data-build-commit>@AppInfo.Build.Commit</code>. Quote this line when you contact support; <a href="/about">/about</a> has the same as JSON.</p> }
+    else { <p class="muted">Quote this line when you contact support.</p> }
+    @* LICENCE-DIMENSION: the dimension in the support facts, as everywhere the edition is shown *@
+    @if (await LicenceUsageSource.ReadAsync(HttpContext.RequestAborted) is { } lu)
+    {
+        <p data-build-licence>Licence: <strong>@lu.DimensionText</strong>@if (lu.Cap is { } capN && lu.Devices is { } devN) { <text> · @Fmt.Int(devN) of @Fmt.Int(capN) devices in use</text> }</p>
+    }
+</section>
+
+<section class="card" aria-labelledby="h-flow">
+    <h2 id="h-flow">How a change is made</h2>
+    <ol>
+        <li><strong>Stage</strong> it: exempt a finding, drop an asset on another tier, edit an exclusions document. Nothing is written.</li>
+        <li><strong>Review</strong> it on <a href="/Changes">Review &amp; commit</a>: what it replaces, what it becomes, and whether the engines would accept it.</li>
+        <li><strong>Commit</strong> it (Admin): each change is written in its own transaction, with your name and reason in the change history.</li>
+        <li>It takes effect from the <strong>next run</strong> of the engine that reads it.</li>
+    </ol>
+</section>
+
+<section class="card" aria-labelledby="h-g">
+    <h2 id="h-g">Glossary</h2>
+    <dl class="glossary">
+        <dt>Asset tier</dt><dd>How critical an asset is: Tier 0 = controls identity or the whole estate (domain controllers, PKI, admin workstations), Tier 1 = servers and services, Tier 2 = workplace, Tier 3 = everything else. "Unclassified" = no tier yet.</dd>
+        <dt>Finding</dt><dd>One issue on one asset in one collection: a vulnerability (CVE), a misconfiguration (configuration id) or an exposure, from one Risk Analysis report.</dd>
+        <dt>Collection</dt><dd>One complete Risk Analysis run copied into the Pro database. Pick an older one to see the estate as it was then; data older than the retention (default 90 days) is removed.</dd>
+        <dt>Protection Score</dt><dd>Our ability to protect our assets, as a percentage: 0 to 100, higher is better. The share of active assets (devices, identities, cloud resources, public IPs; groups left out) with no open, non-exempted Very High or High finding, weighted by tier (Tier 0 = 8, Tier 1 = 4, Tier 2 = 2, Tier 3 = 1 by default). Two views, both shown: <strong>@SI.Management.Web.RiskExec.ExecutiveFigures.ActualName</strong> counts every such finding (a patch released yesterday lowers it); <strong>@SI.Management.Web.RiskExec.ExecutiveFigures.LifecycleName</strong> leaves out a finding younger than its asset type's grace (30 days by default, Settings: SI_ProtectionScore_GraceDays_*). A finding's age is its fix's release date, else the source's first-seen, else SI's first detection; a finding with no date always counts. Each value carries its band: @string.Join(", ", SI.Management.Core.ProData.ProtectionBands.All.Select(b => b.Name + " from " + Fmt.Num(b.Min, 0) + " %")). It is shown on the wall board, the executive pages and the management mail; on the wall board the view chosen also drives the domain and severity table below it.</dd>
+        <dt>Risk score</dt><dd>One finding's priority number: security severity, the asset's tier and the risk factors combined. It has no upper limit; the higher it is, the higher the risk and the sooner to fix it (shown as "Risk Score" in the finding tables). It belongs to one finding; scores are never added together, except as an asset's total (<strong>asset risk score</strong>).</dd>
+        <dt>Weighted risk score</dt><dd>The risk score multiplied by the risk weights (for example the CMDB criticality). No upper limit, higher = more risk; an asset's total is its <strong>weighted asset risk score</strong>.</dd>
+        <dt>Average risk score per finding</dt><dd>How serious a typical finding is: the risk scores of a group of findings (a day, a domain, a tier) divided by how many findings there are. Unlike a total, it does not grow just because more assets were scanned. Lower is better.</dd>
+        <dt>Risk Analysis KPI</dt><dd>The 0-100 figure the Risk Analysis run computes for its own mail and page (At Risk below 50, Moderate 50+, Good 75+, Very Good 90+). It is not the protection score.</dd>
+        <dt>Highest risk score</dt><dd>The risk score of the single worst finding in the group.</dd>
+        <dt>Very High + High findings</dt><dd>How many findings are at the two top severities.</dd>
+        <dt>Severity order</dt><dd>Very High, High, Medium, Low, Informational, then none. Every list, filter, chart and export uses this order; clicking a Severity column sorts by it, most severe first, and again for least severe first.</dd>
+        <dt>Most important first</dt><dd>The default sort: the most critical tier first, then the highest risk score.</dd>
+        <dt>Exemption</dt><dd>An accepted finding: one finding on one asset, one issue on every asset, or every finding on one asset -- with a reason, an optional expiry, and who made it. It is never deleted; a revoke ends it.</dd>
+        <dt>Exclusion</dt><dd>A report-level setting (CVE ids, configuration ids, asset tags, minimum CVE age) that keeps matching findings out of a report. Edited as a document.</dd>
+        <dt>Setting</dt><dd>One configuration choice. The Settings page shows each by a plain name, with its internal name underneath for support and scripts, what it is for, what applies when you leave it alone, and what changes if you change it. Common settings come first; Advanced ones (tuning and diagnostics) are folded away. The Community configuration reference carries the same words.</dd>
+        <dt>Tier rule</dt><dd>A detection that sets an asset's tier (for example "name matches dc*"). An asset's tier is the LOWEST (most critical) tier any matching rule gives it.</dd>
+        <dt>Tier source</dt><dd>What set an asset's tier, recorded by the profiler that tiered it: a tier rule, installed software, a logon, a posture rule, an Entra role, an Azure role, an API permission, an AD group, the owning asset (public IPs), the classification, an operator override or tag, or the default when nothing matched. The tier board counts, per tier, who decided it -- an SI rule, your tag, a manual override, the default -- as chips that filter its table; a row's details list every claim on the tier, the one that decided first. An asset with nothing recorded counts as "not recorded".</dd>
+        <dt>Pin</dt><dd>A tier rule the tier board writes for one asset, matched by its exact name. It can make an asset more critical; to make it less critical, the rule that set its tier must change too.</dd>
+        <dt>Trends</dt><dd>The Pro trend: any dimension over time, from the Pro database, with drill-down. The Risk score page shows the same daily numbers for the whole estate (one source).</dd>
+        <dt>New / closed / reopened</dt><dd>Vulnerability lifecycle from the close-loop: opened when first seen, closed when SecurityInsight no longer sees it after a fix, reopened when it comes back.</dd>
+        <dt>Halted</dt><dd>A connector run that a safety guard stopped before it closed anything. The reason is on the Connector status page.</dd>
+        <dt>Deep link / magic link</dt><dd>A link in an e-mail. A deep link opens through your normal sign-in. A magic link (off by default) opens one read-only page once, without signing in, and expires.</dd>
+        <dt>Wall board (home)</dt><dd>The home page: the first page you see after signing in, and where Home in the menu and the logo take you. It opens with the risk score and its rating (Very Good 90+, Good 75+, Moderate 50+, At Risk below 50), the findings by domain and severity from the last Risk Analysis run (the same figures as the Risk Analysis page and the mail), then the headline numbers and the top 10 Tier-0 assets, and refreshes itself. "Full screen" shows it without the menu, for a wall screen. A kiosk account with the Wallboard role sees only this page, always full screen. A person of a department starts on their departments instead.</dd>
+    </dl>
+</section>
+
+<section class="card" aria-labelledby="h-roles">
+    <h2 id="h-roles">Roles</h2>
+    <dl class="glossary">
+        <dt>Admin</dt><dd>Everything: settings, documents, exemptions, tier changes, jobs, connector status, review &amp; commit.</dd>
+        <dt>Viewer</dt><dd>Every read-only page: findings, tier board, dashboards, trends, wall board, chat.</dd>
+        <dt>Wallboard</dt><dd>The wall board page only, full screen without the menu.</dd>
+    </dl>
+</section>

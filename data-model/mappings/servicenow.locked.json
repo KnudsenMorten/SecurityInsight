@@ -1,0 +1,499 @@
+{
+  "$comment": "Field mapping for provider 'servicenow': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/servicenow.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "servicenow",
+  "version": "1.0.0",
+  "description": "ServiceNow CMDB (Table API, cmdb_ci and subclasses). Read-only inbound; the outbound hand-off is an output map.",
+  "objects": [
+    {
+      "recordType": "cmdb_ci",
+      "class": "*",
+      "parts": {
+        "ci": "GET /api/now/table/cmdb_ci (sysparm_fields per the scope)"
+      },
+      "key": "ci.sys_id",
+      "timestamp": "ci.sys_updated_on"
+    },
+    {
+      "recordType": "vulnerable_item",
+      "class": "finding",
+      "parts": {
+        "item": "Table API sn_vul_vulnerable_item (sysparm_display_value=all): number, state, assigned_to, due_date, vulnerability, risk_score, cmdb_ci"
+      },
+      "key": "item.sys_id",
+      "timestamp": "item.sys_updated_on",
+      "note": "#560 what the customer's ITSM says about a finding SecurityInsight handed over (ticket state, assignee, due date). Every path is to be confirmed on the customer's instance (verify)."
+    }
+  ],
+  "mappings": [
+    {
+      "field": "servicenow_sys_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.sys_id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.sys_id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_name",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.name"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_class",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.sys_class_name"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_criticality",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.busines_criticality",
+        "ci.u_business_criticality"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_data_sensitivity",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.u_data_sensitivity",
+        "ci.data_classification"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_environment",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.environment",
+        "ci.u_environment",
+        "ci.used_for.display_value",
+        "ci.used_for"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cmdb_owner",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.owned_by.display_value",
+        "ci.managed_by.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_owner_department",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.department.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_service",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.u_business_service.display_value",
+        "ci.service.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cmdb_support_group",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.support_group.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_serial_number",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.serial_number"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_fqdn",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.fqdn"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_ip_addresses",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.ip_address"
+      ],
+      "normalize": [
+        "ip"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_mac_addresses",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.mac_address"
+      ],
+      "normalize": [
+        "mac"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "azure_resource_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.object_id",
+        "ci.u_azure_resource_id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "vulnerable_item"
+      ],
+      "sources": [
+        "item.vulnerability.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_ticket_state",
+      "recordTypes": [
+        "vulnerable_item"
+      ],
+      "sources": [
+        "item.state.display_value",
+        "item.state"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_due_date",
+      "recordTypes": [
+        "vulnerable_item"
+      ],
+      "sources": [
+        "item.due_date.value",
+        "item.due_date"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "vulnerable_item"
+      ],
+      "sources": [
+        "item.assigned_to.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_owner_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.owned_by.value",
+        "ci.managed_by.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_support_group_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.support_group.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_assignment_group",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.assignment_group.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_assignment_group_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.assignment_group.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_assigned_to",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.assigned_to.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_assigned_to_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.assigned_to.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_location",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.location.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_location_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.location.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_install_status",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.install_status.display_value",
+        "ci.install_status"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_operational_status",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.operational_status.display_value",
+        "ci.operational_status"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_updated",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.sys_updated_on.value",
+        "ci.sys_updated_on"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_last_discovered",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.last_discovered.value",
+        "ci.last_discovered"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_cost_center",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cost_center.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_cost_center_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.cost_center.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_company",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.company.display_value"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_cmdb_company_id",
+      "recordTypes": [
+        "cmdb_ci"
+      ],
+      "sources": [
+        "ci.company.value"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    }
+  ]
+}

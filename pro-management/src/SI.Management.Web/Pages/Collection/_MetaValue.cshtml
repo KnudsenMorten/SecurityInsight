@@ -1,0 +1,47 @@
+@model SI.Management.Core.ProData.MetaValue
+@using SI.Management.Core.ProData
+@* One value of the full asset metadata (#408): a list stays a list, an array of objects is an expandable table -- never
+   numbered columns. Recursive: a cell of a table can itself hold a list or a table. Text is encoded by Razor. *@
+@switch (Model.Kind)
+{
+    case "null":
+        <span class="muted">(not set)</span>
+        break;
+    case "empty":
+        <span class="muted">(empty)</span>
+        break;
+    case "bool":
+        @(Model.Text == "true" ? "Yes" : "No")
+        break;
+    case "number":
+        <span data-value="@Model.Text">@SI.Management.Web.Pages.Collection.AssetModel.NumberText(Model.Text)</span>
+        break;
+    case "list":
+        if (Model.Count == 0) { <span class="muted">(empty list)</span> }
+        else
+        {
+            <ul class="meta-list" data-meta-list="@Model.Count">
+                @foreach (var i in Model.Items!) { <li><partial name="_MetaValue" model="i" /></li> }
+            </ul>
+        }
+        break;
+    case "table":
+        <details class="meta-table" data-meta-table="@Model.Count" open="@(Model.Count <= 3 ? "open" : null)">
+            <summary>@Model.Count @(Model.Count == 1 ? "item" : "items")</summary>
+            <div class="table-wrap">
+                <table data-sortable data-default-sort="off">
+                    <thead><tr>@foreach (var c in Model.Columns!) { <th scope="col" class="mono">@c</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var r in Model.Rows!)
+                        {
+                            <tr>@foreach (var v in r) { <td class="wrap">@if (v is not null) { <partial name="_MetaValue" model="v" /> }</td> }</tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        break;
+    default:
+        <span class="meta-text">@Model.Text</span>
+        break;
+}

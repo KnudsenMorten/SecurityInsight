@@ -1,0 +1,39 @@
+@page
+@model SI.Management.Web.Pages.Management.DomainsModel
+@{
+    ViewData["Title"] = "Domains";
+}
+<h1>Domain scores over time</h1>
+<p class="lede">How severe each domain's findings are, day by day: the average risk score per finding per domain.</p>
+<details class="help">
+    <summary>Why an average</summary>
+    <p>A domain with more assets has more findings, so adding up every finding's risk score would mostly measure its size. The average risk score per finding compares domains fairly; the finding count is listed beside it.</p>
+    <p data-one-source><strong>One source:</strong> these are the Pro database's daily numbers -- exactly what <nav-ref page="/Management/Trends" /> shows split by "Security domain".</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@await Html.PartialAsync("_Range", new RangeInfo(Model.Days, new[] { 30, 90, 180, 365 }, "days", "days"))
+
+<section class="card" aria-labelledby="h-dom">
+    <h2 id="h-dom">Average risk score per finding by domain, last @Model.Days days</h2>
+    @if (Model.Chart is not null) { <partial name="_Chart" model="Model.Chart" /> }
+    <h3>Now vs the start of the period</h3>
+    <div class="table-wrap">
+        <table data-sortable>
+            <thead><tr><th>Domain</th><th class="num">Average now</th><th class="num">Average at start</th><th class="num">Change</th><th class="num">Findings now</th></tr></thead>
+            <tbody>
+                @foreach (var s in Model.Summary)
+                {
+                    var d = s.Then is { } th && s.Now is { } nw ? nw - th : (double?)null;
+                    <tr>
+                        <td>@s.Domain</td>
+                        <td class="num">@Fmt.Score(s.Now)</td>
+                        <td class="num">@Fmt.Score(s.Then)</td>
+                        <td class="num"><span class="@(d > 0 ? "up" : d < 0 ? "down" : "")">@(d is { } dd ? Fmt.SignedScore(dd) : "–")</span></td>
+                        <td class="num">@Fmt.Int(s.Findings)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    @if (Model.Query is not null) { <partial name="_Query" model="Model.Query" /> }
+</section>

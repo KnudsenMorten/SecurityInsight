@@ -1,0 +1,21 @@
+id:        FortinetFortianalyzer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Fortinet FortiAnalyzer'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Fortinet FortiAnalyzer'
+
+detections:
+  - id: FortinetFortianalyzer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fortianalyzer*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

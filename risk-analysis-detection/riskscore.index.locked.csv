@@ -1,0 +1,103 @@
+si_finding_type,si_category,si_subcategory,si_component,si_finding_key,asset_class,si_severity,VulnerabilityBase,si_tier,AssetBase,Comments,Precedence
+,,,,scid-2002,device_server,,,,5,"Defender for Endpoint not responding (impaired communications) on a SERVER is critical at any tier (owner 2026-10-10, #559)",1
+,,,,scid-2002,device_client,,,0,4,the same on a Tier 0 client (a privileged workstation) stays high (#559),2
+,,,,scid-2002,device_client,,,,1,"the same on a user client is low: a user on vacation (owner 2026-10-10, #559)",3
+,Security controls,EDR,,scid-2002,device,critical,4,,,Fix Microsoft Defender for Endpoint impaired communications,4
+,Security controls,EDR,,scid-2002,device,,,0,4,Fix Microsoft Defender for Endpoint impaired communications,5
+,Security controls,EDR,,scid-2002,device,,,1,3,Fix Microsoft Defender for Endpoint impaired communications,6
+,Security controls,EDR,,scid-2002,device,,,2,2,Fix Microsoft Defender for Endpoint impaired communications,7
+,Security controls,EDR,,scid-2002,device,,,3,1,Fix Microsoft Defender for Endpoint impaired communications,8
+,Security controls,EDR,,scid-2001,device,critical,3,,,Fix Microsoft Defender for Endpoint sensor data collection (Very High >= High: owner 2026-10-10),9
+,Security controls,EDR,,scid-2001,device,,,0,1,Fix Microsoft Defender for Endpoint sensor data collection,10
+,Security controls,EDR,,scid-2001,device,,,1,1,Fix Microsoft Defender for Endpoint sensor data collection,11
+,Security controls,EDR,,scid-2001,device,,,2,1,Fix Microsoft Defender for Endpoint sensor data collection,12
+,Security controls,EDR,,scid-2001,device,,,3,1,Fix Microsoft Defender for Endpoint sensor data collection,13
+,Security controls,EDR,,scid-2000,device,critical,3,,,Turn on Microsoft Defender for Endpoint sensor (Very High >= High: owner 2026-10-10),14
+,Security controls,EDR,,scid-2000,device,,,0,1,Turn on Microsoft Defender for Endpoint sensor,15
+,Security controls,EDR,,scid-2000,device,,,1,1,Turn on Microsoft Defender for Endpoint sensor,16
+,Security controls,EDR,,scid-2000,device,,,2,1,Turn on Microsoft Defender for Endpoint sensor,17
+,Security controls,EDR,,scid-2000,device,,,3,1,Turn on Microsoft Defender for Endpoint sensor,18
+,Security controls,Antivirus,,scid-2014,device,,,0,4,,19
+,Security controls,Antivirus,,scid-2014,device,,,1,3,,20
+,Security controls,Antivirus,,scid-2014,device,,,2,2,,21
+,Security controls,Antivirus,,scid-2014,device,,,3,1,,22
+,Security controls,EDR,,,device,critical,4,,,,23
+,Security controls,EDR,,,device,,,0,4,,24
+,Security controls,EDR,,,device,,,1,3,,25
+,Security controls,EDR,,,device,,,2,2,,26
+,Security controls,EDR,,,device,,,3,1,,27
+,Security controls,Antivirus,,,device,,,0,4,,28
+,Security controls,Antivirus,,,device,,,1,3,,29
+,Security controls,Antivirus,,,device,,,2,2,,30
+,Security controls,Antivirus,,,device,,,3,1,,31
+,Security controls,,,,device,critical,5,,,,32
+,Security controls,,,,device,,,0,4,,33
+,Security controls,,,,device,,,1,3,,34
+,Security controls,,,,device,,,2,2,,35
+,Security controls,,,,device,,,3,1,,36
+,,,,,device,critical,4,,,,37
+,,,,,device,high,3,,,,38
+,,,,,device,medium_high,2,,,,39
+,,,,,device,medium,1,,,,40
+,,,,,device,low,1,,,,41
+,,,,,device,,,0,4,,42
+,,,,,device,,,1,3,,43
+,,,,,device,,,2,2,,44
+,,,,,device,,,3,1,,45
+,Security controls,Antivirus,,scid-2014,device,,5,,4,,46
+,Security controls,EDR,,scid-2002,device,,4,,4,,47
+,Security controls,EDR,,scid-2001,device,,2,,1,,48
+,Security controls,EDR,,scid-2000,device,,2,,1,,49
+,Security controls,Antivirus,,,device,,5,,4,,50
+,Security controls,EDR,,,device,,4,,4,,51
+,Security controls,,,,device,,5,,4,,52
+,,,,,device,,4,,4,,53
+,Security controls,EDR,,scid-2002,,critical,4,,,,54
+,Security controls,EDR,,scid-2002,,,,0,4,,55
+,Security controls,EDR,,scid-2002,,,,1,3,,56
+,Security controls,EDR,,scid-2002,,,,2,2,,57
+,Security controls,EDR,,scid-2002,,,,3,1,,58
+,Security controls,EDR,,scid-2001,,critical,3,,,Very High >= High: owner 2026-10-10,59
+,Security controls,EDR,,scid-2001,,,,0,1,,60
+,Security controls,EDR,,scid-2001,,,,1,1,,61
+,Security controls,EDR,,scid-2001,,,,2,1,,62
+,Security controls,EDR,,scid-2001,,,,3,1,,63
+,Security controls,EDR,,scid-2000,,critical,3,,,Very High >= High: owner 2026-10-10,64
+,Security controls,EDR,,scid-2000,,,,0,1,,65
+,Security controls,EDR,,scid-2000,,,,1,1,,66
+,Security controls,EDR,,scid-2000,,,,2,1,,67
+,Security controls,EDR,,scid-2000,,,,3,1,,68
+,Security controls,Antivirus,,scid-2014,,,,0,4,,69
+,Security controls,Antivirus,,scid-2014,,,,1,3,,70
+,Security controls,Antivirus,,scid-2014,,,,2,2,,71
+,Security controls,Antivirus,,scid-2014,,,,3,1,,72
+,Security controls,EDR,,,,critical,4,,,,73
+,Security controls,EDR,,,,,,0,4,,74
+,Security controls,EDR,,,,,,1,3,,75
+,Security controls,EDR,,,,,,2,2,,76
+,Security controls,EDR,,,,,,3,1,,77
+,Security controls,Antivirus,,,,,,0,4,,78
+,Security controls,Antivirus,,,,,,1,3,,79
+,Security controls,Antivirus,,,,,,2,2,,80
+,Security controls,Antivirus,,,,,,3,1,,81
+,Security controls,,,,,critical,5,,,,82
+,Security controls,,,,,,,0,4,,83
+,Security controls,,,,,,,1,3,,84
+,Security controls,,,,,,,2,2,,85
+,Security controls,,,,,,,3,1,,86
+,,,,,,critical,4,,,,87
+,,,,,,high,3,,,,88
+,,,,,,medium_high,2,,,,89
+,,,,,,medium,1,,,,90
+,,,,,,low,1,,,,91
+,,,,,,,,0,4,,92
+,,,,,,,,1,3,,93
+,,,,,,,,2,2,,94
+,,,,,,,,3,1,,95
+,Security controls,Antivirus,,scid-2014,,,5,,4,,96
+,Security controls,EDR,,scid-2002,,,4,,4,,97
+,Security controls,EDR,,scid-2001,,,2,,1,,98
+,Security controls,EDR,,scid-2000,,,2,,1,,99
+,Security controls,Antivirus,,,,,5,,4,,100
+,Security controls,EDR,,,,,4,,4,,101
+,Security controls,,,,,,5,,4,,102

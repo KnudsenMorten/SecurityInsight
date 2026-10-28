@@ -1,0 +1,76 @@
+@page
+@model SI.Management.Web.Pages.Admin.RunHealthModel
+@{
+    ViewData["Title"] = "Run health";
+    var h = Model.Health!;
+}
+<h1>Run health</h1>
+<p class="lede">Every engine run: when it ran, how long it took and how it ended (what a safety check held is on <a href="/Admin/Guards" data-guards-link>Guards</a>).</p>
+<p class="hint" data-run-reports-link>Whether each Risk Analysis report was complete in its run: <a href="/Admin/RunHealth/Reports">Risk Analysis reports</a>.</p>
+<partial name="_NotConfigured" model="h.Source" />
+@await Html.PartialAsync("_Range", new RangeInfo(Model.Days, new[] { 1, 7, 30 }, "days", "days"))
+
+<section class="card" aria-labelledby="h-latest">
+    <h2 id="h-latest">Latest run per engine</h2>
+    <p class="hint">Newest first. A run the job flow started counts for its engine too: "Recorded by" says whether the engine's own record or the flow's record of that step is the latest.</p>
+    @if (Model.LatestPerEngine.Count == 0)
+    {
+        <p class="hint">No runs in this period.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable data-default-sort="When" data-latest-runs>
+                <thead><tr><th>Engine</th><th>When</th><th>Recorded by</th><th>Phase</th><th class="num">Duration (s)</th><th>Verdict</th></tr></thead>
+                <tbody>
+                    @foreach (var x in Model.LatestPerEngine)
+                    {
+                        var r = x.Row;
+                        var ok = SI.Management.Web.Pages.Admin.RunHealthModel.IsOk(r.ExitReason);
+                        <tr data-engine="@x.Engine">
+                            <td>@x.Engine</td><td>@Fmt.Time(r.When)</td><td>@(x.ViaFlow ? "the flow" : "the engine")</td><td>@r.Phase</td>
+                            <td class="num" data-value="@Fmt.Raw(r.DurationSec)">@(r.DurationSec is { } d ? Fmt.Num(d, 0) : "–")</td>
+                            @if (!x.HasEnd)
+                            {
+                                <td>Started -- no end row yet</td>
+                            }
+                            else if (SI.Management.Web.Pages.Admin.RunHealthModel.IsDryRun(r.ExitReason))
+                            {
+                                <td><span>Dry run</span> · nothing was published</td>
+                            }
+                            else if (SI.Management.Web.Pages.Admin.RunHealthModel.IsPartial(r.ExitReason))
+                            {
+                                <td><span>Partial</span> · not everything was published</td>
+                            }
+                            else if (SI.Management.Web.Pages.Admin.RunHealthModel.IsThrottled(r.ExitReason))
+                            {
+                                <td><span class="state warn" data-verdict="throttled">Throttled</span> · @SI.Management.Web.Jobs.JobFlow.ThrottledText</td>
+                            }
+                            else
+                            {
+                                <td><span class="@(ok ? "down" : "up")">@(ok ? "OK" : "Failed")</span>@(string.IsNullOrWhiteSpace(r.ExitReason) ? "" : " · " + r.ExitReason)</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <partial name="_Query" model='QueryInfo.From(h, "Latest run per engine")' />
+</section>
+
+<section class="card" aria-labelledby="h-all">
+    <h2 id="h-all">All runs, last @Model.Days day@(Model.Days == 1 ? "" : "s")</h2>
+    <div class="table-wrap">
+        <table data-sortable data-default-sort="When" data-all-runs>
+            <thead><tr><th>When</th><th>Engine</th><th>Phase</th><th class="num">Duration (s)</th><th>Exit reason</th><th>Run id</th></tr></thead>
+            <tbody>
+                @foreach (var r in Model.AllRuns)
+                {
+                    <tr><td>@Fmt.Time(r.When)</td><td>@r.Engine</td><td>@r.Phase</td><td class="num" data-value="@Fmt.Raw(r.DurationSec)">@(r.DurationSec is { } d ? Fmt.Num(d, 0) : "–")</td><td class="wrap">@r.ExitReason</td><td class="wrap"><code>@r.RunId</code></td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <partial name="_Query" model='QueryInfo.From(h, "All runs")' />
+</section>

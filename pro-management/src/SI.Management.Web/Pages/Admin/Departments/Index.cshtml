@@ -1,0 +1,54 @@
+@page
+@model SI.Management.Web.Pages.Admin.Departments.IndexModel
+@using SI.Management.Web.Departments
+@using SI.Management.Web.Pages.Admin.Departments
+@{
+    ViewData["Title"] = "Departments";
+    var f = Model.Form;
+    var search = Url.Page(null, "People") ?? "";
+}
+<h1>Departments</h1>
+<p class="lede">Departments own assets and security recommendations. Which department an asset belongs to is decided by the <a href="/Admin/Departments/Rules">department rules, tags and overrides</a>; the data sync applies every change on its next run.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Refusal is not null) { <div class="notice error" role="alert" data-refusal>@Model.Refusal</div> }
+@if (Model.Ready)
+{
+    <section class="card" aria-labelledby="list-h">
+        <div class="split">
+            <h2 id="list-h">@Fmt.Int(Model.All.Count) department(s)</h2>
+            <a class="button secondary small" href="?retired=@(Model.Retired ? "false" : "true")">@(Model.Retired ? "Hide retired" : "Show retired")</a>
+        </div>
+        <div class="table-wrap">
+            <table data-admin-departments data-sortable>
+                <thead><tr><th>Department</th><th>People</th><th>Also matches</th><th>Changed</th></tr></thead>
+                <tbody>
+                    @foreach (var d in Model.All)
+                    {
+                        <tr data-department="@d.DepartmentId" class="@(d.Retired ? "muted" : "")">
+                            <td><a href="/Admin/Departments/Edit?id=@d.DepartmentId">@d.Name</a>@if (d.Retired) { <span class="badge">retired</span> }</td>
+                            <td class="wrap" data-people>@string.Join("; ", Model.Of(d.DepartmentId).Select(p => $"{p.DisplayName} ({DepartmentRoles.Label(p.Role).ToLowerInvariant()})"))</td>
+                            <td class="wrap">@string.Join(", ", d.MatchList)</td>
+                            <td class="wrap">@d.UpdatedBy, @Fmt.Time(d.UpdatedAt)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <section class="card" aria-labelledby="new-h">
+        <h2 id="new-h">New department</h2>
+        <form method="post" asp-page-handler="Create" class="stack" data-new-department>
+            <label for="d-name">Name</label>
+            <input id="d-name" name="name" value="@f.Name" required maxlength="128" />
+            <label for="d-mail">Shared mailbox (optional)</label>
+            <input id="d-mail" name="mail" type="email" value="@f.Mail" maxlength="256" />
+            <label for="d-desc">Description (optional)</label>
+            <input id="d-desc" name="description" value="@f.Description" maxlength="400" />
+            <label for="d-match">Also matches (optional)</label>
+            <input id="d-match" name="matchValues" value="@f.MatchValues" maxlength="1000" placeholder="tag values for this department, separated by ;" />
+            <h3>People</h3>
+            <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new PeopleTableModel(Model.Rows, Array.Empty<DepartmentMemberRow>(), search, Model.DirectoryOn)" />
+            <button type="submit">Create department</button>
+        </form>
+    </section>
+}

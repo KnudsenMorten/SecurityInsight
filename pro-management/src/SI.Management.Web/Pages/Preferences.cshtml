@@ -1,0 +1,22 @@
+@page
+@model SI.Management.Web.Pages.PreferencesModel
+@{ ViewData["Title"] = "Your preferences"; }
+<h1>Your preferences</h1>
+<p class="lede">Kept in this browser only. Nothing here changes what anyone else sees.</p>
+<section class="card" aria-labelledby="h-num">
+    <h2 id="h-num">Number format</h2>
+    <form method="post" class="stack">
+        <div>
+            <label for="pref-num">How numbers are written</label>
+            <select id="pref-num" name="numberFormat">
+                @foreach (var c in DisplayCulture.Choices)
+                {
+                    <option value="@c.Value" selected="@(c.Value == Model.Chosen)">@c.Label</option>
+                }
+            </select>
+            <p class="hint">Automatic follows the browser's language -- an English browser on a Danish PC writes 1,234.5. Exports (CSV, Excel) always keep plain numbers.</p>
+        </div>
+        <input type="hidden" name="returnUrl" value="/Preferences" />
+        <div class="actions"><button type="submit">Save</button></div>
+    </form>
+</section>

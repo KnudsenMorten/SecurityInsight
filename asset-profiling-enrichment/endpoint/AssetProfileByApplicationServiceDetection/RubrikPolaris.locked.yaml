@@ -1,0 +1,21 @@
+id:        RubrikPolaris
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Rubrik Polaris'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Rubrik Polaris'
+
+detections:
+  - id: RubrikPolaris
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'polaris*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

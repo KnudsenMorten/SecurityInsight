@@ -1,0 +1,1176 @@
+[
+  {
+    "code": "si-ra-0101",
+    "title": "Defender Vulnerability Management is not in this tenant",
+    "causeClass": "missing-licence",
+    "appliesTo": {
+      "capabilities": [
+        "defenderVulnMgmt"
+      ],
+      "licences": [
+        "MDE P2 or the Defender Vulnerability Management add-on"
+      ]
+    },
+    "customerText": "Your tenant does not have Microsoft Defender Vulnerability Management, so the reports about missing security updates and device recommendations do not apply. Nothing is wrong and nothing is missing.",
+    "internalNote": "Tenant lacks DeviceTvm* tables (no MDE P2 / Defender Vulnerability Management add-on). Seen at customer A 2026-10-15. Reports: Device_Missing_CVEs_*, Device_Recommendations_*.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": "3.0.0.202610151821",
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. If you add Defender Vulnerability Management later, these reports start on their own with the next run."
+      }
+    ],
+    "lesson": null,
+    "since": "3.0.0.202610151821"
+  },
+  {
+    "code": "si-ra-0102",
+    "title": "An optional asset field is not in this install (for example no CMDB)",
+    "causeClass": "missing-column",
+    "appliesTo": {
+      "capabilities": [
+        "cmdb"
+      ],
+      "licences": []
+    },
+    "customerText": "Your install has no CMDB data, so one asset field SecurityInsight can use does not exist yet. Earlier versions then scored findings without the asset's tier and exposure; this version reads the field only when it exists.",
+    "internalNote": "SI_CI_CL has no si_cmdb_* (or other optional) column at an install without that source; 1701 and older failed the CI context read (Failed to resolve scalar expression si_cmdb_id) -> findings scored without tier/exposure. Seen at customer G 2026-10-15.",
+    "whoActs": "nobody",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "fixed-in",
+    "fixedIn": "3.0.0.202610151840",
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The fix arrives with the update; the next run scores every finding with its asset's tier and exposure."
+      }
+    ],
+    "lesson": null,
+    "since": "3.0.0.202610151840"
+  },
+  {
+    "code": "si-ra-0103",
+    "title": "A report query used a reserved word and could not run",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report could not run because of an error in SecurityInsight's own query, so it returned no rows. This was SecurityInsight's fault, not your environment's.",
+    "internalNote": "Identity_SPN_OwnerMismatch read _ow.of (of is a KQL keyword) -> Log Analytics SYN0002, 0 rows. Internal 2026-10-15.",
+    "whoActs": "nobody",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "fixed-in",
+    "fixedIn": "3.0.0.202610151701",
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The fix arrives with the update; the next run fills the report."
+      }
+    ],
+    "lesson": null,
+    "since": "3.0.0.202610151701"
+  },
+  {
+    "code": "si-ra-0201",
+    "title": "A report returned more rows than the source's count",
+    "causeClass": "count-more",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A report returned slightly more rows than the source counted (the two are read a moment apart). Nothing is missing; earlier versions wrongly called the report incomplete.",
+    "internalNote": "Retrieved > source count was marked NotComplete before 1821 (customer G 2026-10-15, Attack_Paths_Summary_Credential_Based_Lateral_Movement 4 vs 3).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "fixed-in",
+    "fixedIn": "3.0.0.202610151821",
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do."
+      }
+    ],
+    "lesson": null,
+    "since": "3.0.0.202610151821"
+  },
+  {
+    "code": "si-ra-0302",
+    "title": "A report's data is more than Log Analytics can answer at once",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report needs more data from Log Analytics than one answer can carry. SecurityInsight reads it again in smaller parts; only when even the smallest parts cannot be answered is the report left out of this run. Its findings are then unknown for this run, not resolved, and SecurityInsight's team looks at it.",
+    "internalNote": "Log Analytics PartialError for a limit (result over the row / size limit, a part out of time or memory) on a report's own query or a lookup it needs. The read is repeated in 2, 4, 8 ... parts (a hash of the whole result row) until every part is whole; it stops (this code) only when two part counts in a row were refused with no row at all -- the query's own work is the limit, which every part repeats. A short answer is never stored as whole. NOT the cause at customer A 2026-10-15 (19:22Z / 19:28Z, Azure_Recommendations_* and Azure_DefenderRecommendations_*): there SI_AzureRecommendation_CL did not exist, a union isfuzzy leg over it is answered PartialError (severity Warning, 'Failed to resolve table'), and the engine refused every partial answer as 'exceeded the allowed limits' -- that answer is now taken as the whole result (#690 (37)).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the run log for the report: it names the query or lookup and the part count it reached. The query itself has to be made lighter (fewer columns, an earlier filter) -- more parts cannot help."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0303",
+    "title": "Risk Analysis ran out of memory on a report",
+    "causeClass": "out-of-memory",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Risk Analysis ran out of memory while it read the data one report needs, so that report was left out of this run. Its findings are unknown for this run, not resolved, and nothing is closed because of it. The other reports ran. The next update gives the Risk Analysis job more memory, and SecurityInsight's team looks at it.",
+    "internalNote": "An OutOfMemoryException while a report's lookups (its let-bindings over SI_CI_CL / SI_*_Profile_CL) were read from Log Analytics or inlined. Seen at the large ring-1 install 2026-10-15 23:27Z (rc.1247 / 1701): Identity_Admin_LogonTo_InternetExposedDevice_Summary, two hours into the run -- every report's lookups were cached for the whole run and never let go. Since this code: a lookup is kept only while the current or the previous report uses it, an out-of-memory lets go of every cached lookup (the run goes on), and the run health END says 'out of memory', which raises the Risk Analysis job one size band at the next update. Before this code the same failure was reported as too-large (si-ra-0905).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the run log for the report: the lookup it read, its rows and the job's size. Check that the next update raised the Risk Analysis job one size band (the update log says 'job size: ... raised'); at 4 CPU / 8 GiB the report's lookup itself has to be made smaller."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-set-0401",
+    "title": "The settings database cannot be reached",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight could not reach its own settings database, so the run stopped before it collected anything. Your existing data is unchanged.",
+    "internalNote": "SQL error 40 on the settings database (sql-si-*): firewall / public network access or a paused server; check the server network settings with the Support app (needs its role on the SI subscription). Seen at customer E (a test install) 2026-10-15.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "params": {
+          "ResourceGroup": "resourceGroup",
+          "SubscriptionId": "subscriptionId"
+        },
+        "who": "customer",
+        "script": "Grant-SISupportAccess.ps1"
+      }
+    ],
+    "lesson": null,
+    "since": "3.0.0.202610151854"
+  },
+  {
+    "code": "si-col-0501",
+    "title": "A collection ran out of memory",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One collection needed more memory than its job has and stopped before it finished. It is marked not complete, so nothing in it is read as removed and the last complete collection stays in use until the next run finishes.",
+    "internalNote": "Identity producer at customer B 2026-10-15 (3.0.0.202610151701, 1,195 subscriptions): the Azure RBAC read kept the whole role-definition list per subscription; OutOfMemoryException from the 6th minute, both identity sources then threw and were \"continued with 0\". Fixed: role names only (built-ins once per run), the Exposure Graph identity nodes / service principal index / MFA registration read page by page, a failed source stops the collection (NOT COMPLETE), class out-of-memory (#702). The job-size rule raises the job one band after an out-of-memory run at the next update.",
+    "whoActs": "nobody",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "fixed-in",
+    "fixedIn": null,
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The fix arrives with the update; the update also gives the job more memory when its last run ran out."
+      }
+    ],
+    "lesson": "A lookup kept per subscription / per page multiplies by the tenant: keep names and ids, never whole answers.",
+    "since": null
+  },
+  {
+    "code": "si-upl-0601",
+    "title": "The run record could not be built",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A run could not prepare its status report for the support service, so support did not hear how the run ended. The run itself is not affected; its result is in the run log.",
+    "internalNote": "customer B 2026-10-15 19:11Z: \"The status report to Invardia could not be prepared (OutOfMemoryException)\" -- no run record / heartbeat after 15:25Z, the failure never reached Invardia. Fixed: a failed run lets go of its caches before the end record; an out-of-memory while preparing tries once more with the run record alone; the warning and the result carry si-upl-0601 (#702).",
+    "whoActs": "nobody",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "fixed-in",
+    "fixedIn": null,
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run reports as usual."
+      }
+    ],
+    "lesson": "The end-of-run report must not need the memory the run used up: free first, then build the smallest report.",
+    "since": null
+  },
+  {
+    "code": "si-ra-0900",
+    "title": "A report failed for a cause SecurityInsight does not recognise yet",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report could not be completed this run for a reason SecurityInsight does not recognise yet. SecurityInsight support has been told and looks into it; nothing has to be done in your environment.",
+    "internalNote": "No rule recognised the engine's error text (Get-SIReportCause Known = false). Read the item's Detail; give the cause its own code when it is understood.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the Detail on the environment's page and the run's log for the report; add a code for the cause."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0901",
+    "title": "A report has no data source in this tenant",
+    "causeClass": "no-data-source",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report reads data your tenant does not have (for example a Microsoft Defender product that is not in use), so the report does not apply. Nothing is wrong and nothing is missing.",
+    "internalNote": "Generic code of no-data-source: a table the report reads is not in this tenant (MissingName names it).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The report starts on its own when the data source is added."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0902",
+    "title": "A column a report reads is not in this install",
+    "causeClass": "missing-column",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report reads a field that does not exist in your install, so the report could not be completed this run. SecurityInsight support has been told; nothing has to be done in your environment.",
+    "internalNote": "Generic code of missing-column: the column named in MissingName is not in the table the report reads (an optional CI column is si-ra-0102).",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Check whether the column is optional at this install; the report must read it only when it exists."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0903",
+    "title": "A report's query has an error",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report could not run because of an error in SecurityInsight's own query, so it returned no rows this run. This is SecurityInsight's fault, not your environment's.",
+    "internalNote": "Generic code of query-defect: Log Analytics / advanced hunting refused the query (syntax or semantic error). Re-running fails identically; the query must be fixed.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Fix the report's query and release the fix; the next run fills the report."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0904",
+    "title": "A report timed out or Microsoft's service failed",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Microsoft's service did not answer one report in time this run (or answered with a temporary error). The report is read again on the next run; nothing has to be done in your environment.",
+    "internalNote": "Generic code of platform-timeout: a timeout, a 5xx, throttling or a cancelled query after the run's retries. Retries holds the answers.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Compare the report's run time and retries with its last good run; if it repeats, raise its slice count."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0905",
+    "title": "A report's answer was too large",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report's answer was larger than Microsoft's service returns at once, so it could not be read in full this run. SecurityInsight reads it in smaller parts on its own; nothing has to be done in your environment.",
+    "internalNote": "Generic code of too-large: 502 Bad Gateway from the hunting front end, the 100,000-row limit, the allowed result size, or out of memory.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Check the report's slice count against its rows; if it repeats, raise the slice count."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0906",
+    "title": "A report returned more rows than the source counted",
+    "causeClass": "count-more",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A report returned slightly more rows than the source counted (the two are read a moment apart). Nothing is missing.",
+    "internalNote": "Generic code of count-more (the known case is si-ra-0201).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0907",
+    "title": "A report returned fewer rows than the source holds",
+    "causeClass": "count-less",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report returned fewer rows than the source holds, so it is not complete this run. The findings that are missing are kept as they were (not closed); SecurityInsight support has been told.",
+    "internalNote": "Generic code of count-less: retrieved below the source's count, rows lost between retrieval and storage, a lost slice, or far fewer findings than the previous run.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Compare SourceCount, Rows and LastGoodRows; read the Detail for the slice that was lost."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0908",
+    "title": "A report could not reach the settings database",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight could not reach its own settings database while running one report. Your existing data is unchanged; SecurityInsight support has been told.",
+    "internalNote": "Generic code of settings-unreachable (the known case is si-set-0401).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Check the server's network settings with the Support app."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0909",
+    "title": "SecurityInsight's identity may not read what a report needs",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight's identity is not allowed to read the data one report needs, so the report could not be completed. Get Started > Permissions names the missing permission; grant it with the setup script.",
+    "internalNote": "Generic code of permission: a 401 / 403 from Graph, Defender, ARM, Key Vault or storage while the report ran.",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open Get Started > Permissions and grant what it lists with the setup script."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0910",
+    "title": "A report needs a licence this tenant does not have",
+    "causeClass": "missing-licence",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report needs a Microsoft licence your tenant does not have, so the report does not apply. Nothing is wrong and nothing is missing.",
+    "internalNote": "Generic code of missing-licence (the known case is si-ra-0101, Defender Vulnerability Management).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. If the licence is added later, the report starts on its own with the next run."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0911",
+    "title": "A report kept its last complete result: a source it reads returned no rows",
+    "causeClass": "held-last-good",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report reads a Microsoft source that had rows before and returned none this run. SecurityInsight kept the report's last complete result and closed nothing in it. The report updates again as soon as the source has rows. If you turned that feature off on purpose, an Admin can accept the empty source on the Run reports page.",
+    "internalNote": "#900 / #902: a held report, kind silent-source (data-model/hold-kinds.locked.json) -- a source table the report reads counted 0 rows (a successful count) after it had rows (sidata.RaSourceCount). Information only: the report keeps its last complete result and nothing of it closes. MissingName names the table. Held 3 Detailed runs in a row = si-ra-0913.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The report updates on its own when the source has rows again."
+      },
+      {
+        "who": "customer",
+        "text": "Only if the feature behind the source was turned off for good: an Admin opens Run health > Risk Analysis reports and accepts the empty source for that report."
+      }
+    ],
+    "lesson": "A source that goes silent is not a fix: the findings it showed never close because of it.",
+    "since": null
+  },
+  {
+    "code": "si-ra-0912",
+    "title": "A report kept its last complete result: the Entra role read was not complete",
+    "causeClass": "held-last-good",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The list of Entra role assignments came back incomplete this run. The reports that read role lists kept their last complete result and closed nothing. The next run reads the list again.",
+    "internalNote": "#899 / #902: a held report, kind role-read (data-model/hold-kinds.locked.json) -- the identity run could not read the Entra role assignments completely. Information only: the report keeps its last complete result and nothing of it closes. Held 3 Detailed runs in a row = si-ra-0914.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run reads the role assignments again."
+      }
+    ],
+    "lesson": "A role list that was not read is never an empty role list.",
+    "since": null
+  },
+  {
+    "code": "si-ra-0913",
+    "title": "A report has kept its last complete result for 3 Detailed runs in a row: a source it reads still returns no rows",
+    "causeClass": "held-too-long",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "One report has kept its last complete result for three Detailed runs in a row, because a source it reads still returns no rows. SecurityInsight support has been told and is looking into it. Nothing in the report was closed. If you turned that feature off on purpose, an Admin can accept the empty source on the Run reports page.",
+    "internalNote": "#902 (4): si-ra-0911 for the same report escalateAfterDetailedRuns (3) Detailed runs in a row (sidata.RaReportStatus.HeldRuns). The data is still the last complete result; nothing closes. Check the source table (MissingName) in the tenant: a connector or a licence that stopped, or a feature the customer retired (then the Admin accepts it as empty).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the run's WARNING line for the source (its last non-zero count and date) and check that table in the tenant; ask the customer whether the feature was turned off."
+      },
+      {
+        "who": "customer",
+        "text": "Only if the feature behind the source was turned off for good: an Admin opens Run health > Risk Analysis reports and accepts the empty source for that report."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-ra-0914",
+    "title": "A report has kept its last complete result for 3 Detailed runs in a row: the Entra role read is still not complete",
+    "causeClass": "held-too-long",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The list of Entra role assignments has come back incomplete for three Detailed runs in a row. The reports that read it still show their last complete result and nothing was closed. SecurityInsight support has been told and is looking into it.",
+    "internalNote": "#902 (4): si-ra-0912 for the same report escalateAfterDetailedRuns (3) Detailed runs in a row (sidata.RaReportStatus.HeldRuns). The data is still the last complete result; nothing closes. Read the identity run's role-read lines (pages, rows, the second read).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the identity run's log for the role assignment read (each read's pages and rows) and the Graph answers it got."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-cmdb-0701",
+    "title": "No endpoints to send to the CMDB: the tenant has no active devices",
+    "causeClass": "no-data-source",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The endpoint collection ran and found no active devices in your tenant, so the CMDB connector had nothing to send. Nothing is wrong and nothing is missing. When devices are added, they reach the CMDB with the next run.",
+    "internalNote": "The endpoint profile table never held a row, but the endpoint collection ended well in the window: it found no active devices (customer A 2026-10-15: 1 Entra device, stale; 0 from MDE, Exposure Graph and Resource Graph), so SI_Endpoint_Profile_CL is never created. Before this code the CMDB SQL connector said every run \"no endpoint profile snapshot yet -- the first collection has not published one\" (success-partial, class unknown at Invardia). Now the run is a success with this code; a collection that never ran, or failed, stays \"not yet\".",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. If devices are added to the tenant, the next run sends them to the CMDB."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0801",
+    "title": "The updater may not store secrets in Key Vault (secure hand-over)",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Secrets you paste in the SecurityInsight web app are handed to the updater, which stores them in your Key Vault. The updater's identity is not allowed to use its hand-over key there yet, so pasted secrets wait and are not stored. Run the updater setup again with its role grants.",
+    "internalNote": "cfg.InstallState 'SecretHandover' state 'missing' (checked by the updater within 3 days): the updater's hand-over key read / unwrap was refused with a 403 on the install's Key Vault (error class kv-403). Raised by the hourly heartbeat's Warnings (#719). The same check feeds the setup report's secret-handover control.",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Run the updater setup again with its role grants: .\\setup\\Install-SIUpdaterJob.ps1 -SubscriptionId <subscription id> -ResourceGroupName <resource group> -GrantSpnRoles"
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0802",
+    "title": "The updater may not change the SecurityInsight database",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The last update stopped before it changed anything, because the updater's identity is missing its rights on the SecurityInsight database. Nothing was rolled and the install keeps running on its current version. A database administrator grants the rights once with the setup script.",
+    "internalNote": "cfg.InstallState 'UpdateState' error names a database permission (db_ddladmin / db_securityadmin / 'permission was denied'): the updater's database step (container/updater/_shared/SI-UpdaterDatabase.ps1) was refused -- typically the updater was taken out of the server's SQL admin group without setup\\Grant-SIUpdaterDatabase.ps1 having granted its own roles. Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Let a member of the database server's Entra admin group run .\\setup\\Grant-SIUpdaterDatabase.ps1 once; the next update applies itself."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0803",
+    "title": "Azure refused the new version for a SecurityInsight job, so the update was rolled back",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The update built the new version, but Azure refused to put it on one or more SecurityInsight jobs. Usually Azure could not reach your container registry at that moment. Every job that had already changed was put back on the version it ran before, so your install keeps working on its current version and no data was lost. The update is tried again.",
+    "internalNote": "ROLL step of setup/Invoke-SIContainerUpdate.ps1 (Invoke-SIJobImageRoll): the job's ARM PATCH was answered 400 InvalidParameterValueInContainerTemplate \"Field 'template.containers.<job>.image' is invalid ... Get https://<acr>/v2/: dial tcp <ip>:443: connect: connection refused\" -- Container Apps validates the image against the registry while it takes the PATCH. Seen at customer D 2026-10-19 14:09Z (rc13, 2 of 22 PATCHes; SUP-2026-00198/00199/00200; Basic ACR, public, no firewall). Since this code the PATCH is sent again for that transient registry answer (Test-SIArmRegistryTransient, up to 18 passes of 10 s) before the update fails. Not transient (never retried): MANIFEST_UNKNOWN / NAME_UNKNOWN / 401 / 403. Reported by the updater as step 'roll'.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Check the update log: every job reads back its previous image and the installed version did not move. Read the 400's details: a registry network answer (connection refused, i/o timeout) is transient -- start the same update again. An image that does not exist or a registry that refuses the identity is not -- fix that first."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0804",
+    "title": "A SecurityInsight job could not be put back on its previous version after a failed update",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "An update failed, and SecurityInsight could not put one or more of its jobs back on the version they ran before. Those jobs may now run a different version than the rest. SecurityInsight's support team puts them back for you.",
+    "internalNote": "ROLLBACK step of setup/Invoke-SIContainerUpdate.ps1: the restore PATCH (to the PreviousImage DETECT read BEFORE the roll, Get-SIContainerRollbackPlan) was refused or did not read back. Reported by the updater as step 'restore' ONLY for such a job -- before SUP-2026-00198 (2026-10-19) a clean rollback was reported as 'restore' with the roll's own 400. The update log names each job and the image it must run.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the update log for the jobs that 'could NOT be restored' and the image each must run; put each back on it (one PATCH of its template image), read it back, then start the update again."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0805",
+    "title": "A SecurityInsight job did not confirm the new version, so the update was rolled back",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Azure took the new version for a SecurityInsight job, but the job did not confirm it in time, or more than the version changed. Every job that had changed was put back on the version it ran before, so your install keeps working on its current version. SecurityInsight's support team looks at it.",
+    "internalNote": "VERIFY step of setup/Invoke-SIContainerUpdate.ps1 (Invoke-SIJobImageRoll read-back): the PATCH was accepted but the job ended Failed, reads back another image, changed more than the image (fingerprint), or was still provisioning after 8 minutes. Reported by the updater as step 'roll'.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the update log's VERIFY line for the job (failed / reads back / more than the image changed / still provisioning) and the job's ARM state; when the cause is cleared, start the update again."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-upd-0806",
+    "title": "An update has waited more than 24 hours for a pipeline run to end",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A new SecurityInsight version is never installed while a pipeline run is going, so a run always finishes on the version it started with. This update has waited more than 24 hours for the current run to end. Nothing is stopped or lost: the update is installed as soon as the run ends, before the next run starts.",
+    "internalNote": "cfg.InstallState 'UpdateState' compact field waits.since older than 24 hours: the updater's run gate (container/updater/_shared/SI-UpdaterRunGate.ps1, owner decision 2026-10-23) found a pipeline run or step still going at every try since then. Warning only: the gate never cancels a run and never blocks one. The run itself (Operations > Jobs) says why it is long; a person may cancel it there (#700) -- the updater never does.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Look at the running pipeline run on Operations > Jobs (its steps, how long each has run). A long run on a large install is expected; the update lands when it ends. Only when the run is stuck, decide with the customer whether to cancel it there."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-perm-1001",
+    "title": "SecurityInsight's identity is missing a Microsoft Graph permission",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Microsoft Graph refused SecurityInsight's identity, so the collections that read Entra ID could not complete and their data is from the last good run. Get Started > Permissions names the missing permission; grant it with the setup script.",
+    "internalNote": "Run health (SI_RunHealth_CL): the newest failed run in 24 hours that read Microsoft Graph has error class graph-401 / graph-403, and no run of a Graph-reading engine succeeded since. Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open Get Started > Permissions and grant what it lists with the setup script; the next run collects again."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-perm-1002",
+    "title": "SecurityInsight's identity is missing a Microsoft Defender permission",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [
+        "defenderXdr"
+      ],
+      "licences": []
+    },
+    "customerText": "Microsoft Defender refused SecurityInsight's identity, so the device data and the reports that read Defender could not complete; the data is from the last good run. Get Started > Permissions names the missing permission; grant it with the setup script.",
+    "internalNote": "Run health (SI_RunHealth_CL): the newest failed run in 24 hours that read Defender (machines, advanced hunting) has error class defender-403, and no run of a Defender-reading engine succeeded since. Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open Get Started > Permissions and grant what it lists with the setup script; the next run collects again."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-perm-1003",
+    "title": "SecurityInsight's identity may not read Azure",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Azure refused SecurityInsight's identity, so the Azure collection could not complete and its data is from the last good run. SecurityInsight needs Reader on the subscriptions or management groups it covers; grant it with the setup script.",
+    "internalNote": "Run health (SI_RunHealth_CL): the newest failed run in 24 hours that read Azure Resource Manager / Resource Graph has error class arm-403, and no run of an Azure-reading engine succeeded since. Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open Get Started > Permissions and grant what it lists with the setup script; the next run collects again."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-perm-1004",
+    "title": "SecurityInsight may not read the security scores",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight may not read your tenant's Microsoft Secure Score or Defender exposure score yet, so the status report carries no scores. Nothing SecurityInsight collects is affected. Grant the two read-only permissions with the setup script.",
+    "internalNote": "The heartbeat reads Graph /security/secureScores?$top=1 (SecurityEvents.Read.All) and Defender /api/exposureScore (WindowsDefenderATP Score.Read.All), once per process per hour. One of them answered 401 / 403 -- Counts secureScore / secureScoreMax / exposureScore are then left out. Required permissions since 2026-10-16 (owner: \"Add, permission REQUIRED\"): granted on every new install; an existing install's update names them (the permission note). Raised by the hourly heartbeat's Warnings.",
+    "whoActs": "customer",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open Get Started > Permissions: it lists Microsoft Graph SecurityEvents.Read.All and WindowsDefenderATP Score.Read.All with the two lines to run (Grant-SIIdentity.ps1 for the managed identity, Grant-SIIdentity.ps1 -AppId for an app registration)."
+      },
+      {
+        "who": "customer",
+        "text": "An admin who can give admin consent (Privileged Role Administrator or Global Administrator) runs them; the next hourly status report carries the scores."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-mail-1101",
+    "title": "The mail send right is not limited to the shared mailbox",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight's identity could send mail as other mailboxes than its shared mailbox, so SecurityInsight refuses to send any mail until the send right is limited. Limit it with the mail setup script.",
+    "internalNote": "cfg.InstallState 'MailRestriction' state 'unrestricted' (Get-SIMailRestrictionVerdict: a tenant-wide Mail.Send, or an Exchange role assignment not scoped to the shared mailbox). Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Run .\\setup\\Set-SIMail.ps1 -Apply: it removes the tenant-wide Mail.Send and limits the send right to the shared mailbox (Exchange RBAC for Applications)."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-mail-1102",
+    "title": "SecurityInsight may not send as its shared mailbox yet",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight's identity may not send mail as its shared mailbox yet, so reports and alerts are not mailed. Exchange's role assignment is missing or not active yet (it can take up to two hours after it is made).",
+    "internalNote": "cfg.InstallState 'MailRestriction' state 'not-granted' (the send probe as the shared mailbox was refused, or the mailbox does not exist). Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Run .\\setup\\Set-SIMail.ps1 -Apply for the shared mailbox, wait up to two hours, then send a test mail from the Settings page."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-mail-1103",
+    "title": "The mail send right is not verified as limited to the shared mailbox",
+    "causeClass": "permission",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight could not verify that its send right is limited to the shared mailbox: there is no other mailbox to test it with, and no Exchange administrator has confirmed it. Set a test mailbox, or let an Exchange administrator confirm the restriction on the Settings page.",
+    "internalNote": "cfg.InstallState 'MailRestriction' state 'unverified' and no 'MailRestrictionAttestation' row. Raised by the hourly heartbeat's Warnings (#719).",
+    "whoActs": "customer",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Set SI_Mail_ProbeMailbox to a mailbox outside the shared mailbox's scope, or let an Exchange administrator confirm the restriction (Settings > Mail)."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-flow-1201",
+    "title": "The pipeline runner is not scheduled",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The job that starts SecurityInsight's daily pipeline has no timer, so the pipeline does not start by itself and a run you start from the web app waits. Your existing data is unchanged. The next update puts the job back on its schedule; support can do it at once.",
+    "internalNote": "caj-si-flow triggerType is not Schedule (no '*/5 * * * *' wake-up) and no job of the pipeline runs on its own timer (Get-SIFlowRunnerScheduleState 'not-scheduled'). Found live 2026-10-17 at one ring-2 install: caj-si-flow Manual since its install on 15 Oct, a queued run waited 6 h (#732). Every update now patches it to Schedule '*/5 * * * *' (Invoke-SIFlowRunnerSchedule, step 9b) and reads it back. Raised by the heartbeat's Warnings; since = the job's last change (systemData.lastModifiedAt). Support: put caj-si-flow on Schedule '*/5 * * * *' through the Support app, or start the update now.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next update puts the pipeline job back on its schedule; support can do it at once."
+      }
+    ],
+    "lesson": "A job an install depends on to start anything must be checked by every update and by the heartbeat, not only created right once.",
+    "since": null
+  },
+  {
+    "code": "si-flow-1202",
+    "title": "A scheduled collection waited for or skipped a pipeline run",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A collection that starts on its own daily timer found the pipeline running. It never runs beside the pipeline, so the two do not compete for the database: when the pipeline collects the same data itself, the scheduled collection did nothing; otherwise it waited for the run to end and then ran. Nothing is lost: the pipeline's own collection and the next scheduled one collect as usual.",
+    "internalNote": "cfg.InstallState 'CollectionHeld' {job, exec, run, action = skipped | waiting | waited | limit, atUtc} within the last 24 hours: a Collect-stage job's own execution (a producer, or the one job of an engine collected without queue scaling) found cfg.PipelineLock held by a live run (engine/_shared/SI-CollectionRunGate.ps1, 2026-10-25: a daily identity collection on its own timer rewrote 2.39 M CI records for 10-12 hours beside the pipeline on a 100 DTU database). skipped = the run includes that job's step; waiting / waited = it does not, so the collection waited (no cap of its own); limit = the job's own run limit ended the wait, nothing was collected. The pipeline's own step is never held. Information only; since = the time of that collection.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. If it shows every day, the collection's own timer falls inside the pipeline's usual run; support may move that timer outside it on Operations > Jobs."
+      }
+    ],
+    "lesson": "A collection on its own timer and the pipeline's collection are two writers of the same tables: the one that is not the pipeline's must look before it writes.",
+    "since": null
+  },
+  {
+    "code": "si-flow-1203",
+    "title": "A pipeline run or step has run much longer than usual",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The pipeline run going on now, or one of its steps, has run much longer than it usually takes on this installation. Nothing is stopped: the run goes on and may still finish normally, for example after much more data than usual. Support looks at the run to see whether it is still making progress.",
+    "internalNote": "The newest cfg.FlowRun is Running and it, or a Running / Starting cfg.FlowStepRun of it, has run longer than max(2 x usual, usual + 2 h). Usual = the median of the install's own lengths among the newest 10 run records (a run: full runs that succeeded -- Scope pipeline, no FromStep; a step: that job's successful steps), at least 3 measured; without them the floor applies: 24 h for a run, 12 h for a step (Get-SIPipelineLongRun, engine/_shared/SI-JobFlow.ps1). Found 2026-10-26: four large installs had one run going for ~79 h (a data sync ~45 h, a correlation ~65 h) that looked Running and healthy. Warning only: nothing is stopped or held, no cap. since = when the first of them crossed its threshold; the run and step are Pipeline.runId / step; the runner's log, the run's note and the step's RetryReason say the age and the usual length. A person may cancel the run on Operations > Jobs (#700) -- SecurityInsight never does.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Open the run on Operations > Jobs: which step runs, for how long, and whether its log still moves. A step that still makes progress on much more data is left to finish. A step that stands still: decide with the customer whether to cancel the run there."
+      }
+    ],
+    "lesson": "A run that only looks Running is not proof it is healthy: compare its age with how long it usually takes on that installation.",
+    "since": null
+  },
+  {
+    "code": "si-snow-1301",
+    "title": "A ServiceNow output's check failed",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight could not confirm that ServiceNow is ready for one of its outputs: the instance could not be reached, the key was refused or lacks a role, the Import Set table is missing, a column is missing or too short, or the table matches the columns by label. Nothing is sent to that table until it is fixed, so no row is lost or cut -- the rows go on the next run. Open the connector on Configuration > Connectors > Setup to see the check and run it again.",
+    "internalNote": "cfg.ServiceNowCheck: the newest row of an output (servicenow-ci / servicenow-vulnerable-item) has Outcome 'failed' (engine\\asset-cmdb\\_shared\\SI-SnowVerify.ps1: the data-out run before it sends, the daily check in the verification job, the web app's Verify on the mail job). The push of that output is held (Compare-SISnowSendColumns). Raised by the heartbeat's Warnings; since = the first not-ok check after the last ok one.",
+    "whoActs": "customer",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "customer",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "customer",
+        "text": "Open the ServiceNow connector (Configuration > Connectors > Setup), read the check, fix the instance address, the key, the role or the table in ServiceNow, and press Verify."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-data-1401",
+    "title": "The asset pages show an older copy than the rest of the web app",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The pages of the merged assets (CIs and assets) show a copy that is older than the run the rest of the web app shows, so their numbers can differ from the other pages. Your data is unchanged. SecurityInsight refreshes the copy by itself within minutes; support is told if it stays.",
+    "internalNote": "sidata.PublishedRun 'current' in the data database has CopiedAt NULL or older than PublishedAt: the pointer moved without the copies (sidata.CiPub, AssetPub, ...) being refreshed. Before the publisher refreshed the copies itself, a publish that did not go through the runner's batch (a hand publish through sidata.PublishedRunSet) did exactly that; found live 2026-10-21 (the copy predated the CI lifecycle build). Now sidata.PublishedRunSet refreshes them in its own transaction (sidata.PublishedCopyRefreshAll) and sidata.PublishedCopyCatchUp repairs a stale copy on every wake-up of the pipeline runner, after every publish attempt that did not publish, and in the update (step 9g). Raised by the heartbeat's Warnings (Get-SIHeartbeatPublishedCopySql); since = PublishedAt. If it stays: read the runner's log for the catch-up line, or EXEC sidata.PublishedCopyCatchUp through the Support app.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. SecurityInsight refreshes the copy by itself; support looks into it if the warning stays."
+      }
+    ],
+    "lesson": "A copy that must match a pointer is refreshed by the same code that moves the pointer, in the same transaction -- never by one of its callers.",
+    "since": null
+  },
+  {
+    "code": "si-data-1402",
+    "title": "The report figures are from an earlier collection",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The newest Risk Analysis run has not been prepared for the overview yet, so the report figures shown are those of the run before it, with that run's date. Your data is unchanged. The figures move to the newest run by themselves once it is prepared.",
+    "internalNote": "#871: the newest complete Detailed collection (sidata.Collection Kind Detailed Status Complete) has no row in sidata.SummaryGroupState: its run stopped before the data sync built the groupings, or the data sync is still running. The heartbeat then sends the grouped figures (Counts usersWithoutMfa, cves, ... and Security) from the newest collection that HAS its groupings, decided by that collection's own verdicts; Security.collectionUtc is that collection's time and this warning's since is the newest collection's time. Normal for the hours between the Risk Analysis and the data sync of one run; if it stays past the next run, the data sync is not reaching the groupings -- read the pipeline's run page for the data sync step.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next pipeline run prepares the newest collection, and the figures move to it by themselves."
+      }
+    ],
+    "lesson": "A figure the install has had is sent with its date when a run did not renew it -- never left out, which reads as a fall.",
+    "since": null
+    },
+  {
+    "code": "si-data-1403",
+    "title": "The database is almost full",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The SecurityInsight database uses more than 85 % of its maximum size. When it is full, parts of the data sync cannot be written and the overview keeps older figures until they are. Support raises the maximum size or checks what the database keeps.",
+    "internalNote": "#904: the heartbeat's Database field (usedMb / maxSizeMb: sys.database_files FILEPROPERTY SpaceUsed of the data files, DATABASEPROPERTYEX MaxSizeInBytes) shows usedMb at or above 85 % of maxSizeMb. Seen first on a large install 2026-10-26 when the data sync hit the size quota (1105 / 40544) and the groupings, remediations and key figures of a collection were not written. Raise the database's max size (Azure portal or ARM, the install's Pro database) or check the retention of the large tables (cfg.ConnectorChange, the collections' own retention). since = when the heartbeat first saw it.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Raise the maximum size of the SecurityInsight database, or check what it keeps, before it is full."
+      }
+    ],
+    "lesson": "A limit that stops writes is watched before it is reached, never found by the write it refuses.",
+    "since": null
+  },
+  {
+    "code": "si-data-1404",
+    "title": "The database is full",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The SecurityInsight database reached its maximum size, so a part of the data sync could not be written. The pages of that part show their last complete result until it is. Support raises the maximum size; the next run builds what is missing.",
+    "internalNote": "#904: a part of the data sync (engine/pro-data/_shared/SI-DataSync.ps1: groupings, remediations, key figures, narrow findings, ...) failed on Azure SQL's size quota (1105 / 40544 / 'has reached its size quota'). Sent by the data sync as a failure of that part (Job si-datasync, FailedStep = the part, ErrorClass database-full); the step ends success-partial with the part named. Raise the database's max size, then queue a run (or wait for the next): each part builds what it is missing. Check the retention of the large tables (cfg.ConnectorChange).",
+    "whoActs": "support",
+    "priority": "P1",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Raise the maximum size of the SecurityInsight database. The next run builds what is missing by itself."
+      }
+    ],
+    "lesson": "A part that fails on a full database is a failure of that part, sent to support -- never only a warning line in the log.",
+    "since": null
+  }
+]

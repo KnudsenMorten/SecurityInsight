@@ -1,0 +1,316 @@
+{
+  "$comment": "Field mapping for provider 'ad': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/ad.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "ad",
+  "version": "1.0.0",
+  "description": "Active Directory over LDAP (.NET System.DirectoryServices, no PowerShell module). Runs only where a domain controller is reachable.",
+  "objects": [
+    {
+      "recordType": "device",
+      "class": "device",
+      "parts": {
+        "computer": "LDAP (objectCategory=computer)"
+      },
+      "key": "computer.objectGUID",
+      "timestamp": "computer.lastLogonTimestamp"
+    },
+    {
+      "recordType": "user",
+      "class": "identity",
+      "parts": {
+        "user": "LDAP (objectCategory=person)(objectClass=user)"
+      },
+      "key": "user.objectGUID",
+      "timestamp": "user.lastLogonTimestamp"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "ad_object_guid",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "computer.objectGUID",
+        "user.objectGUID"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "ad_sid",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "computer.objectSid",
+        "user.objectSid"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_ad_distinguished_name",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "computer.distinguishedName",
+        "user.distinguishedName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.dNSHostName",
+        "computer.cn"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_hostname",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.cn"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_fqdn",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.dNSHostName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_os_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.operatingSystem"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.operatingSystem"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ]
+    },
+    {
+      "field": "si_os_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.operatingSystemVersion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_account_enabled",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "computer.userAccountControl",
+        "user.userAccountControl"
+      ],
+      "normalize": [
+        "uac_enabled"
+      ]
+    },
+    {
+      "field": "si_created",
+      "recordTypes": [
+        "device",
+        "user"
+      ],
+      "sources": [
+        "computer.whenCreated",
+        "user.whenCreated"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "computer.lastLogonTimestamp"
+      ],
+      "normalize": [
+        "filetime_utc"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userPrincipalName",
+        "user.sAMAccountName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_upn",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userPrincipalName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_sam_account_name",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.sAMAccountName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_mail",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.mail"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_admin_count",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.adminCount"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_last_sign_in",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.lastLogonTimestamp"
+      ],
+      "normalize": [
+        "filetime_utc"
+      ]
+    },
+    {
+      "field": "si_password_last_changed",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.pwdLastSet"
+      ],
+      "normalize": [
+        "filetime_utc"
+      ]
+    },
+    {
+      "field": "si_password_never_expires",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.userAccountControl"
+      ],
+      "normalize": [
+        "uac_flag:65536"
+      ]
+    },
+    {
+      "field": "si_group_memberships",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.memberOf[*]"
+      ],
+      "normalize": [
+        "dn_cn"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_org_department",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.department"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_extension_attributes",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.extensionAttributes"
+      ],
+      "normalize": []
+    }
+  ]
+}

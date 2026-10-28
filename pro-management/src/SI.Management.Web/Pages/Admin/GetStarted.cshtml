@@ -1,0 +1,383 @@
+@page
+@model SI.Management.Web.Pages.Admin.GetStartedModel
+@using SI.Management.Web.GetStarted
+@using SI.Management.Web.Settings
+@using SI.Management.Web.Auth
+@using SI.Management.Web.Pages.Admin
+@{
+    ViewData["Title"] = "Get Started";
+    var r = Model.Result;
+    var cur = Model.Current;
+    var step = cur.Step;
+    var blocked = step.Need == "superadmin" && !Model.CanSuperAdmin;
+}
+@* Get Started is a WIZARD (#446, built like ELDK's /Forms/Wizard): one step at a time, its OWN form in the card -- the
+   settings it needs (the Settings page's editor, the same save), the people picker, Run now -- then Previous / Save & exit /
+   Save & next. Done is checked from the data on every visit (GetStarted/GetStartedGuide.cs holds the steps). *@
+<div class="gs-wiz">
+    <h1>Get Started</h1>
+
+    <section class="gs-progress" aria-label="Progress" data-getstarted data-done="@r.Done" data-total="@r.Total" data-open-required="@r.OpenRequired">
+        <div class="gs-count"><span data-gs-count>@Fmt.Int(r.Done) of @Fmt.Int(r.Total) steps done</span><span>@Fmt.Pct(r.Percent)</span></div>
+        <div class="gs-bar" role="progressbar" aria-valuemin="0" aria-valuemax="@r.Total" aria-valuenow="@r.Done" aria-label="Steps done"><div class="gs-bar-fill gs-w-@(r.Percent / 5 * 5)"></div></div>
+        <nav class="gs-pills" aria-label="Steps">
+            @foreach (var s in r.Steps)
+            {
+                var isCur = s.Id == cur.Id;
+                <a class="gs-pill gs-@s.Kind@(isCur ? " gs-current" : "")" href="@GetStartedModel.Href(s.Id)" aria-current="@(isCur ? "step" : "false")" data-gs-pill="@s.Id" data-gs-kind="@s.Kind">
+                    @if (s.Done) { <span class="gs-mark" aria-hidden="true">&#10003;</span> }
+                    else if (s.Kind == "open") { <span class="gs-mark" aria-hidden="true">!</span> }
+                    <span>@s.Step.Title</span>
+                    <span class="sr-only">@(s.Kind switch { "done" => "done", "open" => "still open", "waiting" => "waiting", _ => "optional" })</span>
+                </a>
+            }
+        </nav>
+    </section>
+
+    <section class="gs-card" aria-labelledby="gs-title" data-gs-step="@cur.Id">
+        @* only the REQUIRED steps are counted; a step that waits for the first run closes by itself, an optional one can wait *@
+        @if (r.Done == r.Total)
+        {
+            var waitingSteps = r.Steps.Count(s => s.Kind == "waiting");
+            <div class="notice ok gs-alldone" role="status" data-gs-ready><strong>Everything required is done -- nice work!</strong> You can still review or change any answer: choose a step above, or use Previous / Next.@(waitingSteps > 0 ? " The steps that wait for the first run close by themselves when its data is there." : "")@(r.Steps.Any(s => s.Kind == "optional") ? " The optional steps can wait." : "")</div>
+        }
+        <p class="gs-eyebrow">STEP @(Model.Index + 1) OF @(r.Steps.Count)@if (step.Waits && !cur.Done) {<text> · CLOSES BY ITSELF</text>} else if (!cur.Required && !step.Waits) {<text> · OPTIONAL</text>}</p>
+        <h2 id="gs-title">@step.Title</h2>
+        <p class="gs-desc">@step.What</p>
+        @* data-utc: a time in the note ("it started 2026-10-12 19:52 UTC") is shown in the viewer's own zone (local-time.js) *@
+        <p class="gs-state gs-state-@cur.Kind" data-gs-state="@cur.Kind" data-utc>
+            @(cur.Kind switch { "done" => "✓ ", "open" => "! ", _ => "" })@cur.Label
+            @if (!string.IsNullOrEmpty(cur.Note))
+            {
+                @* the AI step: the words follow the switch the moment it is ticked ("On -- not saved yet"), main.js *@
+                if (cur.Label.Length > 0) { <text> -- </text> }
+                <span data-gs-ai-status="@(cur.Id == "ai" ? (Model.AiSavedOn ? "on" : "off") : null)" aria-live="polite">@cur.Note</span>
+            }
+        </p>
+
+        <form method="post" class="gs-form" novalidate>
+            <input type="hidden" name="__step" value="@cur.Id" />
+            @* Enter = Save & next (the first submit button is the form's default) *@
+            <button type="submit" name="__dir" value="next" class="sr-only" tabindex="-1" aria-hidden="true">Save and next</button>
+            @if (Model.Problem is { } problem) { <div class="notice error" role="alert" data-gs-problem>@problem</div> }
+
+            @if (blocked)
+            {
+                <p class="hint" data-gs-needs-superadmin>Only a SuperAdmin can do this step -- ask one of them.</p>
+            }
+            else
+            {
+                switch (step.Form)
+                {
+                    case "settings":
+                        <div class="set-fields gs-fields">
+                            @foreach (var f in Model.Fields)
+                            {
+                                var (rule, hidden) = Model.ShowWhen(f);
+                                await Html.RenderPartialAsync("_SettingField", new SettingFieldView(f, Model.CanSuperAdmin, Model.Errors.TryGetValue(f.Setting.Name, out var err) ? err : null, rule, hidden));
+                            }
+                        </div>
+                        if (cur.Id == "ai")
+                        {
+                            @* the ONE key field: the paste box, with the key's state beside it. The key is handed to the updater
+                               encrypted -- the web app never writes it anywhere readable -- and the updater stores it in your Key
+                               Vault. The state is read on every load (stored / waiting / the updater's reason) and stays until it
+                               changes. The input's name says "secret", so the audit trail never records it. *@
+                            var ks = Model.AiKeyState;
+                            <div class="gs-inline gs-aikey" data-gs-ai-key>
+                                <label for="gs-aikey">Azure OpenAI key</label>
+                                <input id="gs-aikey" type="password" name="@SI.Management.Web.Settings.AiKeyStore.FormField" autocomplete="new-password" spellcheck="false" />
+                                @if (ks is not null)
+                                {
+                                    <span class="gs-keystate gs-keystate-@ks.State.ToString().ToLowerInvariant()" data-gs-ai-key-state="@ks.State.ToString().ToLowerInvariant()" role="status">
+                                        @(ks.State switch { SecretState.Stored => "✓ ", SecretState.Failed => "! ", _ => "" })@ks.Text
+                                    </span>
+                                }
+                                @if (Model.AiKeyError is { } kerr) { <p class="set-error" data-gs-ai-key-error>@kerr</p> }
+                                <p class="hint">Paste the key from the Azure portal (your Azure OpenAI resource &gt; Keys and Endpoint) and save. It is handed to SecurityInsight's updater encrypted, and the updater stores it in your Key Vault -- leave it empty to keep the key already stored.</p>
+                            </div>
+                            if (Model.AdvancedFields.Count > 0)
+                            {
+                                <details class="gs-advanced" data-gs-advanced>
+                                    <summary>Advanced</summary>
+                                    <div class="set-fields gs-fields">
+                                        @foreach (var f in Model.AdvancedFields)
+                                        {
+                                            await Html.RenderPartialAsync("_SettingField", new SettingFieldView(f, Model.CanSuperAdmin, Model.Errors.TryGetValue(f.Setting.Name, out var aerr) ? aerr : null, null, false));
+                                        }
+                                    </div>
+                                </details>
+                            }
+                        }
+                        if (cur.Id == "mail")
+                        {
+                            <div class="gs-inline" data-gs-testmail>
+                                <label for="gs-testto">Send a test mail to</label>
+                                <input id="gs-testto" type="email" name="TestTo" value="@Model.TestTo" autocomplete="off" />
+                                <button type="submit" class="secondary" name="__action" value="testmail" data-gs-test>Save and send a test mail</button>
+                            </div>
+                        }
+                        break;
+
+                    case "access":
+                        if (r.Facts?.EntraRoles is { } entra && entra.Any(h => h.Role is "Admin" or "SuperAdmin"))
+                        {
+                            <p class="gs-sub">Can manage SecurityInsight (role given in Entra):</p>
+                            <ul class="gs-list" data-gs-entra>
+                                @foreach (var h in entra.Where(h => h.Role is "Admin" or "SuperAdmin")) { <li>@h.Name <span class="muted">(@(h.Type == "Group" ? "group" : "person"), @h.Role)</span></li> }
+                            </ul>
+                        }
+                        if (Model.Managers.Count > 0)
+                        {
+                            <p class="gs-sub">Added here so far:</p>
+                            <ul class="gs-list" data-gs-managers>
+                                @foreach (var a in Model.Managers) { <li>@a.DisplayName <span class="muted">(@(a.PrincipalType == AccessAssignment.Group ? "group" : "person"), @AccessClaims.Label(a.Role))</span></li> }
+                            </ul>
+                        }
+                        <p class="gs-sub">Add a person or group who can manage SecurityInsight:</p>
+                        if (Model.NameLookup)
+                        {
+                            <div class="picker" data-access-picker data-search-url="/Admin/Access?handler=Search">
+                                <label for="a-find">Person or group</label>
+                                <input id="a-find" type="search" autocomplete="off" spellcheck="false" placeholder="Start typing a name or mail address"
+                                       role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="a-find-list" data-picker-input />
+                                <ul id="a-find-list" class="picker-list" role="listbox" hidden data-picker-list></ul>
+                                <p class="hint" data-picker-chosen hidden></p>
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="hint" data-access-nolookup>Searching people by name is not switched on for this install yet -- paste the person's or group's object id from the Entra admin center.</p>
+                        }
+                        <div class="filterbar">
+                            <div class="wide"><label for="a-id">Entra object id</label><input id="a-id" type="text" name="PrincipalId" pattern="[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}" /></div>
+                            <div><label for="a-type">Type</label><select id="a-type" name="PrincipalType"><option value="User">Person</option><option value="Group">Group</option></select></div>
+                            <div class="wide"><label for="a-name">Name shown</label><input id="a-name" type="text" name="DisplayName" maxlength="256" /></div>
+                            <div><label for="a-role">Role</label><select id="a-role" name="Role"><option value="Admin">Admin</option><option value="SuperAdmin">SuperAdmin</option></select></div>
+                        </div>
+                        <p class="hint">Leave it empty and press Save &amp; next to go on without adding anyone.</p>
+                        break;
+
+                    case "run":
+                        if (r.Facts?.RunStartedUtc is { } runSince)
+                        {
+                            @* a run is in progress: nothing to start -- say that it runs and since when *@
+                            <div class="gs-inline" data-gs-running data-utc>
+                                <p>A collection is running now -- it started @Fmt.When(runSince). Nothing needs to be started; this step closes by itself when the run has finished.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="gs-inline" data-gs-run>
+                                <p>@(cur.Id == "sources" ? "Each source reads with SecurityInsight's own identity. Start a collection to check them all now." : "Start one complete collection now: every source, then the Risk Analysis and its detailed results.") It runs in the background (about half an hour); this step turns done when it has finished.</p>
+                                <button type="submit" class="secondary" name="__action" value="run" data-gs-runnow>Start a full collection now</button>
+                            </div>
+                        }
+                        break;
+
+                    case "permissions":
+                        @* every engine checks its OWN permissions at run start and records them on its run-health END record
+                           (GetStarted/GetStartedPermissions.cs); the step shows them per identity, with the fix *@
+                        var perms = GetStartedPermissions.WithExpected(r.Facts?.Permissions);
+                        var pgroups = GetStartedPermissions.Groups(perms);
+                        foreach (var g in pgroups)
+                        {
+                            <div data-gs-perm-identity="@g.Identity">
+                                <p class="gs-sub">@(string.IsNullOrEmpty(g.Label) ? "Identity" : char.ToUpperInvariant(g.Label[0]) + g.Label[1..])@if (!string.IsNullOrEmpty(g.Identity)) {<text> <span class="muted">(client id @g.Identity)</span></text>} -- @string.Join(", ", g.Engines.Select(GetStartedPermissions.Label))</p>
+                                @if (g.Missing.Count == 0)
+                                {
+                                    <p class="hint" data-gs-perm-ok>&#10003; Nothing missing.</p>
+                                }
+                                else
+                                {
+                                    var grantable = g.Missing.Where(x => GetStartedPermissionFix.Grantable(x.Gap)).Select(x => x.Gap).ToList();
+                                    <table class="gs-tiers gs-perms" data-gs-perm-gaps data-sortable>
+                                        <thead><tr><th>Missing</th><th>Where</th><th>What it is for</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var (gap, engs) in g.Missing)
+                                            {
+                                                <tr data-gs-perm-gap><td>@gap.Area: @gap.Item</td><td>@string.Join(", ", engs.Select(GetStartedPermissions.Label))</td><td>@GetStartedPermissionFix.Plain(gap)@if (!GetStartedPermissionFix.Grantable(gap)) {<text> </text><code>@gap.Fix</code>}</td></tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                    if (grantable.Count > 0)
+                                    {
+                                        @* framework 12.19 SCRIPT-PLUS-PREFILLED-COMMAND: who, where, and the complete commands with this install's names *@
+                                        var fix = GetStartedPermissionFix.Build(grantable, g.Identity, g.Label, Model.PermissionInstall);
+                                        <div class="gs-perm-fix" data-gs-perm-fix="@fix.Script">
+                                            <p class="gs-sub">How to fix</p>
+                                            <p><strong>Who:</strong> @fix.Who</p>
+                                            <p><strong>Where:</strong> @fix.Where</p>
+                                            @if (fix.Commands is { } cmds)
+                                            {
+                                                <p>Copy and run these commands -- they download the script from Invardia and run it with this install's names filled in:</p>
+                                                <pre data-gs-perm-cmd><code>@cmds</code></pre>
+                                                <button type="button" class="copy secondary small" data-copy="@cmds" data-gs-perm-copy aria-label="Copy the commands">Copy</button>
+                                            }
+                                            else
+                                            {
+                                                <p class="hint" data-gs-perm-unknown>The web app does not know @fix.Unknown of this install, so it cannot fill in the command. Download the script from <a href="@(GetStartedPermissionFix.UrlBase + fix.Script + ".ps1")">@(GetStartedPermissionFix.UrlBase + fix.Script + ".ps1")</a> and run it: <code>@grantable[0].Fix</code></p>
+                                            }
+                                            <a class="script-doc" data-script-doc="@fix.Script" href="@SI.Management.Web.Links.ScriptDocs.Url(fix.Script)" target="_blank" rel="noopener noreferrer">What does @fix.Script do?</a>
+                                        </div>
+                                    }
+                                }
+                                @if (g.NotChecked.Count > 0)
+                                {
+                                    <p class="hint" data-gs-perm-notchecked>Could not be checked: @string.Join("; ", g.NotChecked.Select(x => x.Gap.Area + " " + x.Gap.Item)) -- @g.NotChecked[0].Gap.Fix</p>
+                                }
+                                @if (g.More > 0) { <p class="hint">... and @Fmt.Int(g.More) more on the newest run record.</p> }
+                            </div>
+                        }
+                        var pending = perms.Where(p => !p.Checked).ToList();
+                        var young = GetStartedGuide.Young(r.Facts);
+                        if (pending.Count > 0)
+                        {
+                            <p class="gs-sub">Not checked yet:</p>
+                            <ul class="gs-list" data-gs-perm-pending>
+                                @foreach (var p in pending) { <li>@GetStartedPermissions.Label(p.Engine): @GetStartedPermissions.NotCheckedReason(p, young)</li> }
+                            </ul>
+                        }
+                        <p class="hint">Each engine checks with its own identity when it runs; after a fix, the next run of that engine updates this step@(r.Facts?.RunStartedUtc is null ? " (or start a collection on the Data sources step)" : " (a collection is running now)").</p>
+                        break;
+
+                    case "tiers":
+                        if (r.Facts is { } facts && facts.AssetsPerTier.Count > 0)
+                        {
+                            <table class="gs-tiers" data-gs-tiers data-sortable>
+                                <thead><tr><th>Tier</th><th class="num">Assets</th></tr></thead>
+                                <tbody>
+                                    @foreach (var t in facts.AssetsPerTier.OrderBy(k => k.Key, StringComparer.Ordinal)) { <tr><td>Tier @t.Key@(t.Key == "0" ? " (most critical)" : "")</td><td class="num">@Fmt.Int(t.Value)</td></tr> }
+                                </tbody>
+                            </table>
+                        }
+                        <p class="hint">Domain controllers, identity systems and the servers you cannot lose belong in tier 0. The tiers follow your tier rules; this step is done once tier 0 has assets.</p>
+                        break;
+
+                    case "connectors":
+                        @* #446: the connector's own fields in the step -- written to the same connector store as Connector setup *@
+                        @* owner 2026-10-20: "it is not either-or" -- one card per connector, each its own state, any combination on *@
+                        var cxs = Model.ConnectorForms ?? GetStartedConnector.PrefillAll(Model.ConnectorRows);
+                        var runs = r.Facts?.ConnectorRuns ?? Array.Empty<SI.Management.Web.Changes.ConnectorRunRow>();
+                        <p data-gs-connectors>Every connector is independent: switch on any of them -- one, several or none. SecurityInsight works without one. The step is done when every connector you switched on has run once.</p>
+                        if (Model.ConnectorTableMissing)
+                        {
+                            <p class="hint" data-gs-connector-notable>This database has no connector table yet -- the Pro settings schema (sql\si-pro-settings.sql) adds it.</p>
+                        }
+                        else
+                        {
+                            foreach (var c in Model.ConnectorRows.Where(GetStartedConnector.Covers))
+                            {
+                                <input type="hidden" name="@(GetStartedConnector.VersionPrefix + c.Name)" value="@c.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                            }
+                            var snowShared = cxs.Values.FirstOrDefault(x => x.Kind == "servicenow");
+                            <div class="gs-connectors" data-gs-connector-form>
+                                @foreach (var slot in GetStartedConnector.Slots)
+                                {
+                                    var cx = cxs[slot.Key];
+                                    var row = GetStartedConnector.Match(Model.ConnectorRows, slot.Kind, slot.Direction);
+                                    var last = row is null ? null : runs.Where(x => x.ConnectorName.Equals(row.Name, StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.StartedAt ?? DateTime.MinValue).FirstOrDefault();
+                                    var okRun = last is not null && SI.Management.Web.GetStarted.GetStartedGuide.RunOk(last.Outcome);
+                                    <section class="card gs-connector" data-gs-connector="@slot.Key" aria-labelledby="gs-cx-@slot.Key">
+                                        <h3 id="gs-cx-@slot.Key">@slot.Title @if (row is not null) { <span class="badge @(row.Enabled ? "ok" : "")" data-gs-connector-state="@slot.Key">@(row.Enabled ? "on" : "off") · @row.Mode</span> } else { <span class="badge" data-gs-connector-state="@slot.Key">not set up</span> }</h3>
+                                        <p class="hint">@slot.What @if (slot.OnInPro) { <strong data-gs-connector-pro>On by default in Pro.</strong> }</p>
+                                        @if (row is not null)
+                                        {
+                                            <p data-gs-connector-last="@slot.Key">
+                                                Connector <code>@row.Name</code>:
+                                                @if (last is null) { <text>not run yet.</text> }
+                                                else
+                                                {
+                                                    <text>last run @last.Outcome@(last.StartedAt is { } at ? " (" + Fmt.Time(at) + ")" : "")</text>
+                                                    @if (!okRun && (last.HaltReason ?? last.Error) is { Length: > 0 } why) { <span class="notice error" role="status" data-gs-connector-why="@slot.Key">@why</span> }
+                                                    <text> -- </text><a href="/Collection/Connectors">its runs</a>
+                                                }
+                                            </p>
+                                        }
+                                        <div class="set-fields gs-fields">
+                                            @if (slot.Kind == "sql")
+                                            {
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-@slot.Key-server">SQL server</label>
+                                                    <input id="cx-@slot.Key-server" type="text" name="@GetStartedConnector.Field(slot, "Server")" value="@cx.Server" autocomplete="off" spellcheck="false" placeholder="<server>.database.windows.net" />
+                                                </div>
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-@slot.Key-database">Database</label>
+                                                    <input id="cx-@slot.Key-database" type="text" name="@GetStartedConnector.Field(slot, "Database")" value="@cx.Database" autocomplete="off" spellcheck="false" placeholder="@(slot.Direction == "cmdb" ? "sqldb-si-cmdb-handoff" : "sqldb-si-vulnerabilities")" />
+                                                </div>
+                                            }
+                                            else if (slot.Direction == "vulnerability")
+                                            {
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-@slot.Key-table">Vulnerable-item Import Set table</label>
+                                                    <input id="cx-@slot.Key-table" type="text" name="@GetStartedConnector.Field(slot, "Table")" value="@cx.Table" autocomplete="off" spellcheck="false" placeholder="u_si_vulnerable_item" />
+                                                </div>
+                                            }
+                                            <div class="set-field">
+                                                <label class="set-label" for="cx-@slot.Key-mode">Mode</label>
+                                                <select id="cx-@slot.Key-mode" name="@GetStartedConnector.Field(slot, "Mode")">
+                                                    @if (!SI.Management.Web.Changes.ConnectorRepository.IsOwnSqlTarget(slot.Kind, slot.Direction))
+                                                    {
+                                                        <option value="whatif" selected="@(cx.Mode != "apply")">whatif -- plan and log, send nothing (start here)</option>
+                                                    }
+                                                    <option value="apply" selected="@(cx.Mode == "apply")">apply -- send</option>
+                                                </select>
+                                                @if (SI.Management.Web.Changes.ConnectorRepository.IsOwnSqlTarget(slot.Kind, slot.Direction))
+                                                {
+                                                    @* #865: SI's own SQL target is never in test mode -- it would record nothing *@
+                                                    <p class="hint" data-gs-own-sql-always-on>@SI.Management.Web.Changes.ConnectorRepository.OwnSqlTargetNote</p>
+                                                }
+                                            </div>
+                                            <div class="set-field">
+                                                <span class="set-label">Switched on</span>
+                                                <label class="set-radio"><input type="checkbox" name="@GetStartedConnector.Field(slot, "Enabled")" value="true" checked="@cx.Enabled" data-gs-connector-enabled="@slot.Key" /> On -- the connector runs with its job</label>
+                                            </div>
+                                        </div>
+                                        <p class="actions"><button type="submit" class="secondary" name="__action" value="@(GetStartedConnector.RunAction + slot.Key)" data-gs-connector-runonce="@slot.Key">Save and run once</button></p>
+                                    </section>
+                                    @if (slot.Key == "sqlcmdb")
+                                    {
+                                        @* the ServiceNow instance + secret names: entered ONCE, shared by both ServiceNow connectors *@
+                                        <section class="card gs-connector-shared" data-gs-servicenow-shared aria-labelledby="gs-cx-snow">
+                                            <h3 id="gs-cx-snow">ServiceNow connection (both ServiceNow connectors)</h3>
+                                            <div class="set-fields gs-fields">
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-instance">ServiceNow instance -- Key Vault secret name</label>
+                                                    <input id="cx-instance" type="text" name="@(GetStartedConnector.Prefix)InstanceRef" value="@snowShared?.InstanceRef" autocomplete="off" spellcheck="false" placeholder="SI-ServiceNow-Instance" />
+                                                </div>
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-user">User -- Key Vault secret name</label>
+                                                    <input id="cx-user" type="text" name="@(GetStartedConnector.Prefix)UserRef" value="@snowShared?.UserRef" autocomplete="off" spellcheck="false" placeholder="SI-ServiceNow-User" />
+                                                </div>
+                                                <div class="set-field">
+                                                    <label class="set-label" for="cx-password">Password -- Key Vault secret name</label>
+                                                    <input id="cx-password" type="text" name="@(GetStartedConnector.Prefix)PasswordRef" value="@snowShared?.PasswordRef" autocomplete="off" spellcheck="false" placeholder="SI-ServiceNow-Password" />
+                                                </div>
+                                            </div>
+                                        </section>
+                                    }
+                                }
+                            </div>
+                            <p class="hint">Secrets stay in your Key Vault: give the <strong>names</strong> of the secrets, never a password. A value that looks like a secret is refused. "Save and run once" saves every card and runs that one connector once -- in whatif it plans and logs what it would send, and sends nothing. The same connectors are on Connectors &gt; Setup.</p>
+                        }
+                        break;
+                }
+            }
+
+            <div class="gs-nav">
+                @if (Model.Previous is not null) { <button type="submit" class="secondary" name="__dir" value="prev" formnovalidate data-gs-back>Previous</button> } else { <span></span> }
+                <span class="gs-nav-spacer"></span>
+                <button type="submit" class="secondary" name="__dir" value="exit" data-gs-exit>Save &amp; exit</button>
+                <button type="submit" name="__dir" value="next" data-gs-next>@(Model.Next is null ? "Save & finish" : "Save & next") &rarr;</button>
+            </div>
+        </form>
+        @* #503: the shared mailbox in two steps -- outside the step's form (its own forms post to Settings > E-mail and come
+           back here); shown while the shared mailbox is chosen *@
+        @if (cur.Id == "mail" && !blocked && Model.MailboxSteps is { } mbs)
+        {
+            <div data-show-when="SI_Mail_Mode=sharedMailbox" hidden="@(Model.Fields.FirstOrDefault(x => x.Setting.Name == "SI_Mail_Mode")?.Text is { Length: > 0 } chosen && !string.Equals(chosen, "sharedMailbox", StringComparison.OrdinalIgnoreCase))">
+                @await Html.PartialAsync("_MailboxSteps", (mbs, "/Admin/GetStarted?step=mail", User.IsAdmin()))
+            </div>
+        }
+    </section>
+</div>

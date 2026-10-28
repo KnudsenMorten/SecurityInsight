@@ -1,0 +1,9 @@
+@page
+@model SI.Management.Web.Pages.Collection.VulnerabilitiesModel
+<partial name="_Header" model="Model" />
+@if (Model.Grid is not null)
+{
+    <p class="hint">"Open in close-loop" counts the items the vulnerability close-loop holds open for the CVE right now, on any asset. A CVE opens its rows in this collection.</p>
+    <partial name="_Grid" model="Model" />
+}
+<partial name="_Queries" model="Model" />

@@ -1,0 +1,38 @@
+@page
+@model SI.Management.Web.Pages.Cmdb.SourceModel
+@using SI.Management.Web.Cmdb
+@{
+    ViewData["Title"] = "CMDB source";
+}
+<p><a href="/Cmdb">&larr; CMDB</a></p>
+<h1>CMDB source</h1>
+<p class="lede">One CMDB is authoritative at a time. Choose it here; the review says exactly what happens before anything is saved.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Stale) { <div class="notice error" role="alert">Someone changed the CMDB source since you opened this page. Reload it and choose again.</div> }
+
+<form method="post" class="card stack" aria-labelledby="h-c">
+    <h2 id="h-c">Now: @CmdbSources.Label(Model.Current)</h2>
+    <input type="hidden" name="ReadVersion" value="@Model.CurrentVersion" />
+    <fieldset>
+        <legend>Authoritative CMDB</legend>
+        @foreach (var s in CmdbSources.All)
+        {
+            var c = Model.Counts.TryGetValue(s, out var x) ? x : (0, 0L);
+            <label class="nowrap"><input type="radio" name="Target" value="@s" checked="@(s == (Model.Target ?? Model.Current))" data-source-choice="@s" />
+                @CmdbSources.Label(s) <span class="muted">(@Fmt.Int(c.Item1) service(s), @Fmt.Int(c.Item2) link(s) stored)</span></label><br />
+        }
+    </fieldset>
+    @if (Model.Consequences is { } cons)
+    {
+        <section class="notice" data-consequences>
+            <h3>What happens when you save</h3>
+            <ul>@foreach (var l in cons) { <li>@l</li> }</ul>
+        </section>
+        <div><label for="s-reason">Reason (audited)</label><input id="s-reason" name="Reason" required minlength="3" maxlength="400" /></div>
+        <div class="actions"><button type="submit" asp-page-handler="Save">Switch the CMDB source</button> <a class="button secondary" href="/Cmdb/Source">Cancel</a></div>
+    }
+    else
+    {
+        <div class="actions"><button type="submit" asp-page-handler="Review">Review the switch</button></div>
+    }
+</form>

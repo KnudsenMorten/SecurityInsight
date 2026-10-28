@@ -1,0 +1,23 @@
+@model SI.Management.Web.Navigation.ViewPicker
+@* #636: the named views of a Security recommendations page, at the top (owner 2026-10-13, approved): one line of choices,
+   the one in use marked; a choice opens the page with its filters and sort in the URL. A view with counts per value
+   (MITRE tactics, compliance tags, CVSS bands, risk ratings) lists them under it, each narrowing the table. *@
+<nav class="view-picker" aria-label="Views" data-view-picker>
+    <span class="view-picker-label">View</span>
+    <ul class="seg">
+        @foreach (var v in Model.Views)
+        {
+            <li><a href="@v.Href(Model.Page, Model.Collection)" title="@v.Hint" data-view="@v.Id" aria-current="@(v.Id == Model.Selected.Id ? "page" : "false")">@v.Label</a></li>
+        }
+    </ul>
+</nav>
+@if (Model.FacetLinks is { Count: > 0 } links)
+{
+    <div class="view-facets" role="group" aria-label="@(Model.Selected.FacetTitle ?? Model.Selected.Label)" data-view-facets="@Model.Selected.Facet">
+        <span class="opening-label">@(Model.Selected.FacetTitle ?? Model.Selected.Label)</span>
+        @foreach (var (label, n, href) in links)
+        {
+            <a class="chip" href="@href">@label <span class="muted">@Fmt.Int(n)</span></a>
+        }
+    </div>
+}

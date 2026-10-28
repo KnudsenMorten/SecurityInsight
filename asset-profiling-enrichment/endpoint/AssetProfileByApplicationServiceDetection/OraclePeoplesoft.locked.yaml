@@ -1,0 +1,21 @@
+id:        OraclePeoplesoft
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Oracle PeopleSoft'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Oracle PeopleSoft'
+
+detections:
+  - id: OraclePeoplesoft
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'peoplesoft*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

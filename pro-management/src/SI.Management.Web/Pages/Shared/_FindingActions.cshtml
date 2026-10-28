@@ -1,0 +1,80 @@
+@* THE ONE ACTION BAR for selected findings (#272), on every grid that lists findings. Rendered INSIDE the page's selection
+   form: the ticked rows (sel / Sel) and the filter travel with that form. Without script every action button posts the
+   selection to /Actions/Prepare (a full page with the action's form); with script (js/app/finding-actions.js)
+   the button opens the action's form in a dialog, posts it to /Actions/Apply and shows the result per finding.
+   The actions come from the registry (Actions/FindingActions.cs): a new action appears here without a page change. *@
+@model SI.Management.Web.Actions.FindingActionBar
+@using SI.Management.Web.Actions
+@inject FindingActionRegistry Registry
+@{
+    // #589: on a grid whose rows ARE findings the selected rows export themselves (the view's export choices, the chosen
+    // columns) -- the bar's own export would only repeat them; it stays where a row stands for several findings, as
+    // "Export the findings of the selected rows"
+    var offered = (await Registry.OfferedAsync(User, Context.RequestAborted))
+        .Where(a => Model.Map is not null || a.Key != ExportSelectedAction.ActionKey).ToList();
+    var guard = Model.Guard;
+    var all = offered.Where(a => a.SupportsAllMatching && Model.Total <= Math.Min(Model.BulkMax, a.BulkLimit)).ToList();
+    var id = FindingActionBar.IdOf(Model.StripId);
+}
+@if (offered.Count > 0)
+{
+    <div class="finding-actions" data-finding-actions data-total="@Model.Total" data-src="@Model.Source" data-bar-grid="@Model.Grid" data-aggregated="@(Model.Map is null ? null : "1")" data-row-noun="@Model.Map?.RowNoun">
+        <input type="hidden" name="src" value="@Model.Source" />
+        @if (Model.Grid is not null) { <input type="hidden" name="grid" value="@Model.Grid" /> }
+        @foreach (var (k, v) in Model.Hidden) { <input type="hidden" name="@k" value="@v" /> }
+        @if (Model.Total > 0)
+        {
+            <div class="actions-all" data-actions-all>
+                @if (guard.Allowed && all.Count > 0 && Model.AllMatching)
+                {
+                    <label for="@id-all">All @FindingActionBar.Count(Model.Total) @(Model.Map is null ? "" : Model.Map.RowNoun + " row(s) ")matching the filter:</label>
+                    <select id="@id-all" name="allAction" data-actions-all-action>
+                        @foreach (var a in all) { <option value="@a.Key">@a.Label</option> }
+                    </select>
+                    <button type="submit" class="small secondary" formaction="/Actions/Prepare" formmethod="post" formnovalidate name="all" value="1" data-actions-all-apply>Apply to all @FindingActionBar.Count(Model.Total) matching</button>
+                }
+                else
+                {
+                    @* #330: the reason is shown only when asked for ("Why not?"), never as a standing note under every grid *@
+                    <button type="button" class="small secondary" disabled aria-disabled="true" data-request-all-disabled aria-describedby="@id-why">Apply to all matching</button>
+                    <details class="bulk-why"><summary>Why not?</summary><span class="bulk-hint" id="@id-why" data-bulk-why>@(guard.Allowed && all.Count > 0 && !Model.AllMatching ? "On this view, tick the " + Model.Map!.RowNoun + " rows to act on -- \"all matching\" is not offered here." : guard.Reason ?? "No action here applies to every matching finding -- select them.")</span></details>
+                }
+            </div>
+        }
+        <div class="quickstrip" id="@Model.StripId" data-action-strip>
+            <strong><span data-selected-count>0</span> selected</strong>
+            <button type="button" class="link small" data-selection-clear aria-label="Clear the selection">clear</button>
+            <div class="actions" role="group" aria-label="Actions on the selected findings">
+                @if (Model.ShowOnlySelected) { <button type="submit" class="secondary" data-show-selected>Show only these</button> }
+                @foreach (var a in offered)
+                {
+                    <button type="submit" formaction="/Actions/Prepare" formmethod="post" formnovalidate name="action" value="@a.Key" data-action="@a.Key" data-group="@a.Group"
+                           
+                            class="@(a.Group == ActionGroups.Decide ? "" : "secondary")" title="@a.Hint">@a.Label</button>
+                }
+                @* #286 / #589: the selected ROWS themselves export from the view's export choices, next to Export (owner
+                   2026-10-19: Pages/Shared/_ViewExports.cshtml, "selected rows" -- they submit this same selection form);
+                   on an aggregated view the bar's own export is of their findings *@
+            </div>
+        </div>
+        <template data-action-dialogs>
+            @foreach (var a in offered)
+            {
+                <dialog class="modal action-dialog" data-action-dialog="@a.Key" aria-labelledby="fa-@a.Key-h" data-downloads="@(a.Downloads ? "1" : "0")">
+                    <form method="post" asp-page="/Actions/Apply" class="stack" data-action-form="@a.Key">
+                        <input type="hidden" name="action" value="@a.Key" />
+                        <h2 id="fa-@a.Key-h" data-action-title data-label="@a.Label">@a.Label</h2>
+                        <p class="hint">@a.Hint</p>
+                        <p class="notice" role="status" data-action-scope></p>
+                        <partial name="@a.FormPartial" model="new ActionFormModel(a, Model)" />
+                        <div class="actions">
+                            <button type="submit" data-action-submit>@a.Label</button>
+                            <button type="button" class="secondary" data-action-cancel>Close</button>
+                        </div>
+                        <div class="action-results" data-action-results hidden aria-live="polite"></div>
+                    </form>
+                </dialog>
+            }
+        </template>
+    </div>
+}

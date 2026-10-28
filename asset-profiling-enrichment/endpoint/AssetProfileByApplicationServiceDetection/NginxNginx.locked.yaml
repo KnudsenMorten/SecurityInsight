@@ -1,0 +1,21 @@
+id:        NginxNginx
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'nginx'
+category:  'Web Server'
+description: ''
+displayNames:
+  - 'nginx'
+
+detections:
+  - id: NginxNginx
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nginx*'
+    set:
+      Tier:     2
+      Purpose:  'Web Server'
+      Category: 'Web Server'

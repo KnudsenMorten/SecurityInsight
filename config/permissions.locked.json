@@ -1,0 +1,86 @@
+{
+  "_": "THE ONE LIST of what each SecurityInsight engine's own identity must hold, read by the engines' permission self-check at run start (engine/_shared/SI-PermissionCheck.ps1), recorded on the run-health END record (PermissionGaps) and shown in Get Started > Permissions. The application permissions are the same as the grant plans in container/_shared/SI-ContainerConfig.ps1 (collection: SIContainerIdentityAppRoles, asset tagging: SIAssetTaggingIdentityAppRoles) -- tests/pester/SIv3-PermissionCheck.Tests.ps1 fails when they drift apart. 'when' = only while that setting is on (asset tagging writes only when SI_Pro_AssetTagging_Apply is on). 'azure' items are Azure actions checked at the collection scope with ONE read of the caller's own permissions. 'database' items are roles in the Pro database (Pro installs only; absent on Community). 'engines' says which identity each container engine (SI_ENGINE) runs as and which areas it checks; an engine not listed uses 'default'.",
+  "version": 1,
+  "identities": {
+    "collection": {
+      "label": "SecurityInsight's collection identity",
+      "api": [
+        {
+          "resource": "Microsoft Graph",
+          "resourceAppId": "00000003-0000-0000-c000-000000000000",
+          "audience": "https://graph.microsoft.com/",
+          "roles": [
+            "User.Read.All", "Group.Read.All", "Directory.Read.All", "Device.Read.All", "Application.Read.All",
+            "AuditLog.Read.All", "Policy.Read.All", "RoleManagement.Read.All", "RoleManagement.Read.Directory",
+            "RoleManagementPolicy.Read.Directory", "RoleEligibilitySchedule.Read.Directory", "RoleAssignmentSchedule.Read.Directory",
+            "PrivilegedAccess.Read.AzureADGroup", "IdentityRiskyUser.Read.All", "IdentityRiskEvent.Read.All",
+            "IdentityRiskyServicePrincipal.Read.All", "ThreatHunting.Read.All", "UserAuthenticationMethod.Read.All", "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "AccessReview.Read.All", "SecurityAlert.Read.All", "SecurityEvents.Read.All"
+          ],
+          "conditionalRoles": []
+        },
+        {
+          "resource": "Microsoft Threat Protection",
+          "resourceAppId": "8ee8fdad-f234-4243-8f3b-15c294843740",
+          "audience": "https://api.security.microsoft.com/",
+          "roles": [ "AdvancedHunting.Read.All" ],
+          "conditionalRoles": []
+        },
+        {
+          "resource": "WindowsDefenderATP",
+          "resourceAppId": "fc780465-2017-40d4-a0c5-307022471b92",
+          "audience": "https://api.securitycenter.microsoft.com/",
+          "roles": [ "Machine.Read.All", "Vulnerability.Read.All", "SecurityRecommendation.Read.All", "Score.Read.All" ],
+          "conditionalRoles": []
+        }
+      ],
+      "azure": [
+        { "item": "Reader", "action": "*/read" }
+      ],
+      "database": [ "db_datareader", "db_datawriter" ],
+      "fix": {
+        "api": "Grant the application permission and give admin consent: for the managed identity run setup\\Grant-SIIdentity.ps1 -IdentityName <identity> -IdentityResourceGroup <resource group> -Apply; for an app registration run setup\\Grant-SIIdentity.ps1 -AppId <client id> -Apply.",
+        "azure": "Give the identity Reader where SecurityInsight collects from (the subscription, a management group or the tenant root group): setup\\Grant-SIIdentity.ps1 -IdentityName <identity> -IdentityResourceGroup <resource group> -ReaderScopes <scope> -Apply.",
+        "database": "As the SQL server's Entra admin, give the identity a user in the Pro database with db_datareader and db_datawriter: run the guided install again (setup\\Install-SecurityInsight.ps1) -- its database step adds it."
+      }
+    },
+    "tagging": {
+      "label": "asset tagging's own identity",
+      "api": [
+        {
+          "resource": "Microsoft Graph",
+          "resourceAppId": "00000003-0000-0000-c000-000000000000",
+          "audience": "https://graph.microsoft.com/",
+          "roles": [ "ThreatHunting.Read.All", "User.Read.All", "Application.Read.All" ],
+          "conditionalRoles": [ { "role": "CustomSecAttributeAssignment.ReadWrite.All", "when": "SI_Pro_AssetTagging_Apply" } ]
+        },
+        {
+          "resource": "WindowsDefenderATP",
+          "resourceAppId": "fc780465-2017-40d4-a0c5-307022471b92",
+          "audience": "https://api.securitycenter.microsoft.com/",
+          "roles": [],
+          "conditionalRoles": [ { "role": "Machine.ReadWrite.All", "when": "SI_Pro_AssetTagging_Apply" } ]
+        }
+      ],
+      "azure": [
+        { "item": "Reader", "action": "*/read" },
+        { "item": "Tag Contributor", "action": "Microsoft.Resources/tags/write", "when": "SI_Pro_AssetTagging_Apply" }
+      ],
+      "database": [ "db_datareader" ],
+      "fix": {
+        "api": "Grant asset tagging's permissions and give admin consent: setup\\Grant-SIIdentity.ps1 -IdentityName uami-securityinsight-tagging -IdentityResourceGroup <resource group> -Tagging -Apply.",
+        "azure": "Give asset tagging's identity its Azure roles: setup\\Grant-SIIdentity.ps1 -IdentityName uami-securityinsight-tagging -IdentityResourceGroup <resource group> -Tagging -Apply.",
+        "database": "As the SQL server's Entra admin, once: setup\\Grant-SITaggingDatabase.ps1 -SubscriptionId <subscription> -ResourceGroupName <resource group> -SqlServer <server> -SqlDatabase <database> -Apply."
+      }
+    }
+  },
+  "engines": {
+    "default": { "identity": "collection", "checks": [ "database" ] },
+    "identity": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "azure": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "endpoint": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "publicip": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "risk-analysis": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "verification": { "identity": "collection", "checks": [ "api", "azure", "database" ] },
+    "asset-tagging": { "identity": "tagging", "checks": [ "api", "azure", "database" ] }
+  }
+}

@@ -1,0 +1,22 @@
+id:        MicrosoftSqlServerReportingServices
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft SQL Server Reporting Services'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Microsoft SQL Server Reporting Services'
+  - 'SSRS'
+
+detections:
+  - id: MicrosoftSqlServerReportingServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sql_server_reporting_services*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

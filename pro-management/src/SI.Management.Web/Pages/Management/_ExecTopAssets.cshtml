@@ -1,0 +1,7 @@
+@model (SI.Management.Web.Pages.Management.RiskAnalysisModel Page, SI.Management.Core.ProData.ExecSnapshot View, string? Heading)
+@* The mail's "Top N risky assets" list: the same numbers the AI was given to copy, each asset linked -- as THE data table
+   (#589): each asset's CI with its identifiers and context, the chooser, the all-rows exports. *@
+<section class="exec-top" aria-labelledby="h-exec-top" data-exec-top>
+    <h3 id="h-exec-top">@(Model.Heading ?? "Top risky assets")</h3>
+    @if (Model.Page.TableView("topassets") is { } tv) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" /> }
+</section>

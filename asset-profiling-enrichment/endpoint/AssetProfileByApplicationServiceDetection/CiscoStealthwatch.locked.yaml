@@ -1,0 +1,21 @@
+id:        CiscoStealthwatch
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Cisco Stealthwatch'
+category:  'NDR'
+description: ''
+displayNames:
+  - 'Cisco Stealthwatch'
+
+detections:
+  - id: CiscoStealthwatch
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'stealthwatch*'
+    set:
+      Tier:     1
+      Purpose:  'NDR'
+      Category: 'NDR'

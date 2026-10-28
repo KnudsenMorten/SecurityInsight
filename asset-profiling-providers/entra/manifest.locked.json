@@ -1,0 +1,15 @@
+{
+  "$schema": "../_manifest.schema.json",
+  "id":          "entra",
+  "kind":        "in",
+  "engines":     ["identity"],
+  "auth": {
+    "type":   "spn",
+    "scopes": [
+      "https://graph.microsoft.com/.default"
+    ]
+  },
+  "bulk":        true,
+  "rateLimit":   { "calls": 1000, "per": "60s" },
+  "description": "Microsoft Graph - users, service principals, managed identities, deleted-user pass."
+}

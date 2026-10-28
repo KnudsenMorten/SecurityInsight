@@ -1,0 +1,50 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "excel-records",
+  "version": "1.0.0",
+  "description": "The Raw sheet / Raw grid: one row per provider record.",
+  "grain": "record",
+  "columns": [
+    {
+      "target": "Provider",
+      "from": "si_provider"
+    },
+    {
+      "target": "Record type",
+      "from": "si_record_type"
+    },
+    {
+      "target": "Record",
+      "from": "si_record_key"
+    },
+    {
+      "target": "CI",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "Name",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "Class",
+      "from": "si_class"
+    },
+    {
+      "target": "State",
+      "from": "si_record_state"
+    },
+    {
+      "target": "Provider last seen",
+      "from": "si_source_last_seen",
+      "op": "format_date"
+    },
+    {
+      "target": "Collected",
+      "from": "si_collection_time",
+      "op": "format_date"
+    }
+  ],
+  "gridDefault": true,
+  "allFieldsAvailable": true
+}

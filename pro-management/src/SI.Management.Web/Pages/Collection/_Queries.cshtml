@@ -1,0 +1,3 @@
+@* The queries behind the page: recorded for the layout's one "The query behind this" disclosure at the bottom. *@
+@model SI.Management.Web.Pages.Collection.CollectionPageModel
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

@@ -1,0 +1,100 @@
+@page "{slug?}"
+@model SI.Management.Web.Pages.Docs.IndexModel
+@using SI.Management.Web.Docs
+@{
+    var lib = Model.Library;
+    var cur = Model.Current;
+    ViewData["Title"] = cur is null ? "Documentation" : cur.Title + " · Documentation";
+    var installed = AppInfo.Version.Length > 0 ? AppInfo.Version : "";
+}
+<link rel="stylesheet" href="~/css/docs.css" asp-append-version="true" />
+
+<div class="docs" data-docs>
+    <aside class="docs-side" aria-label="Documentation pages">
+        <form method="get" action="/Docs" class="docs-search" role="search">
+            <label for="docs-q">Search the documentation</label>
+            <input id="docs-q" type="search" name="q" value="@Model.Q" placeholder="a word or two" data-docs-search />
+        </form>
+        <nav aria-label="Pages">
+            <ul class="docs-pages" data-docs-pages>
+                @foreach (var p in lib.Pages)
+                {
+                    <li><a href="@p.Href" aria-current="@(cur?.Slug == p.Slug ? "page" : "false")">@p.Title</a></li>
+                }
+            </ul>
+        </nav>
+        <p class="docs-version" data-docs-version>
+            These pages ship with @AppInfo.Product@if (installed.Length > 0) { <text> <strong>v@(installed)</strong></text> }, the version you run.
+            @if (lib.Version.Length > 0) { <span class="muted">Pages of version @lib.Version.</span> }
+        </p>
+        <p class="docs-published"><a href="@(cur is null ? ProductDocLibrary.PublishedUrl : ProductDocLibrary.PublishedUrlOf(cur.Slug))" target="_blank" rel="noopener noreferrer" data-docs-published>Published version on invardia.com</a>
+            <span class="muted">(may describe a newer version)</span></p>
+    </aside>
+
+    <div class="docs-main">
+        @if (!string.IsNullOrWhiteSpace(Model.Q))
+        {
+            <section class="card" aria-labelledby="h-hits" data-docs-hits>
+                <h2 id="h-hits">Search: @Model.Q</h2>
+                @if (Model.Hits.Count == 0)
+                {
+                    <p>Nothing in these pages has all of these words.</p>
+                }
+                else
+                {
+                    <ul class="docs-hits">
+                        @foreach (var h in Model.Hits)
+                        {
+                            <li><a href="@h.Href">@h.Page.Title@if (h.Section.Heading.Length > 0 && h.Section.Heading != h.Page.Title) { <text>: @h.Section.Heading</text> }</a>
+                                <p class="muted">@h.Snippet</p></li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+
+        @if (cur is not null)
+        {
+            var toc = cur.Headings.Where(h => h.Level == 2).ToList();
+            <article class="docs-page" data-docs-page="@cur.Slug">
+                @if (toc.Count > 2)
+                {
+                    <nav class="docs-toc" aria-label="On this page">
+                        <p class="muted">On this page</p>
+                        <ul>@foreach (var h in toc) { <li><a href="#@h.Anchor">@h.Text</a></li> }</ul>
+                    </nav>
+                }
+                @* SafeMarkdown: every character of the page is encoded; the only tags are the ones it writes itself *@
+                @Html.Raw(cur.Html)
+            </article>
+        }
+        else if (string.IsNullOrWhiteSpace(Model.Q))
+        {
+            <h1>Documentation</h1>
+            @if (Model.Missing)
+            {
+                <p class="notice error" role="alert" data-docs-missing>This version has no page called "@Model.Slug". Pick one of the pages below.</p>
+            }
+            <p class="lede">How to install, run and use @AppInfo.Product. These pages ship with the version you run, so they always describe what you see here; they are read from this web app, never from the internet.</p>
+            @if (lib.Pages.Count == 0)
+            {
+                <p data-docs-empty>This version ships without documentation pages. The <a href="@ProductDocLibrary.PublishedUrl" target="_blank" rel="noopener noreferrer">published version on invardia.com</a> has them.</p>
+            }
+            else
+            {
+                <ul class="docs-index" data-docs-index>
+                    @foreach (var p in lib.Pages)
+                    {
+                        var intro = p.Sections.FirstOrDefault()?.Text ?? "";
+                        <li><a href="@p.Href">@p.Title</a>@if (intro.Length > 0) { <span class="muted"> · @(intro.Length > 160 ? intro[..160] + " ..." : intro)</span> }</li>
+                    }
+                </ul>
+            }
+            @if (lib.Problems.Count > 0 && User.IsAdmin())
+            {
+                <details class="docs-problems"><summary>@lib.Problems.Count problem(s) in the shipped pages</summary>
+                    <ul>@foreach (var pr in lib.Problems) { <li>@pr</li> }</ul></details>
+            }
+        }
+    </div>
+</div>

@@ -1,0 +1,22 @@
+id:        EsetProtect
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'ESET Security Management Center'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'ESET Security Management Center'
+  - 'ESET PROTECT'
+
+detections:
+  - id: EsetProtect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'protect*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

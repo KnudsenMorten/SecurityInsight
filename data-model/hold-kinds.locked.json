@@ -1,0 +1,9 @@
+{
+  "_comment": "THE ONE LIST of the reasons SecurityInsight holds a report back ON PURPOSE at its last complete result (#902). Every reader goes through it: the engine (engine/_shared/SI-HoldKinds.ps1 -- the stored sidata.RaReportStatus.HoldKind, the uplink item, the mail, the heartbeat Warnings) and the web app (SI.Management.Core/Holds/HoldKinds.cs, embedded). A new kind = one entry here + its two codes in errors.locked.json (code: information, cause class held-last-good; escalationCode: the same report held escalateAfterDetailedRuns Detailed runs in a row, cause class held-too-long). acceptEmpty: an Admin may accept the source as empty for good, per report (only a kind that means a SUCCESSFUL read of zero rows). A test fails when code emits a kind that is not here.",
+  "version": 1,
+  "escalateAfterDetailedRuns": 3,
+  "kinds": [
+    { "kind": "silent-source", "code": "si-ra-0911", "escalationCode": "si-ra-0913", "acceptEmpty": true },
+    { "kind": "role-read", "code": "si-ra-0912", "escalationCode": "si-ra-0914", "acceptEmpty": false }
+  ]
+}

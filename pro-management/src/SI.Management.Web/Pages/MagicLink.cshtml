@@ -1,0 +1,8 @@
+@page
+@model SI.Management.Web.Pages.MagicLinkModel
+@{
+    ViewData["Title"] = "Link";
+}
+<h1>This link cannot be opened</h1>
+<div class="notice warn" role="alert">@Model.Why</div>
+<p><a class="button" href="/">Sign in</a> to open SecurityInsight with your own account.</p>

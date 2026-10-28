@@ -1,0 +1,21 @@
+id:        RabbitmqRabbitmq
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'RabbitMQ'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'RabbitMQ'
+
+detections:
+  - id: RabbitmqRabbitmq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'rabbitmq*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

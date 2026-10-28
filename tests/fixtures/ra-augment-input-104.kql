@@ -1,0 +1,572 @@
+// =================================================================================================
+// REPORT  Group membership privilege paths to Azure resources using Exposure Graph
+// =================================================================================================
+//
+// Report purpose
+// Identify identities that are members of groups and where those groups have permissions or roles on
+// privileged Azure targets. Enrich each path with the standard node context and prioritize by the
+// business impact of the FINAL TARGET.
+//
+// Interpretation guard and priority rules
+// - Priority is driven by the TARGET criticality tier first
+// - Then by tier escalation where source tier is higher than target tier
+// - Then by internet exposure where target exposure is weighted higher than source exposure
+// - The source identity matters as an amplifier but the target drives the priority
+//
+// Output description detailed rows
+// One row per unique path
+// Identity -> Group -> Target
+// Enriched with
+// - IsInternetExposed for source and target
+// - AssetTierByTag for source and target
+// - LegacyEndOfSupport for source and target
+// - RiskFactor probability fields including detailed breakdown for source and target
+// - AttackPathPriorityScore components and mapped severity label
+// - Human readable AttackPath and AttackPathDetailed strings
+//
+// Query steps overview
+// Step 0  Define legacy operating system reference lists
+// Step 1  Build Nodes catalog as enrichment backbone using standard context fields
+// Step 2  Find identities in groups and de duplicate to a stable group membership grain
+// Step 3  Find group permissions or roles on Azure targets
+// Step 4  Assemble Identity -> Group -> Target paths and de duplicate
+// Step 5  Enrich source identity and target using Nodes catalog
+// Step 6  Apply standard prioritization logic and build attack path strings
+// Step 7  Project detailed output columns and apply ordering
+// =================================================================================================
+
+// Step 0  Define legacy operating systems that should increase probability
+let LegacyWindowsOSPlatforms = dynamic([
+  "WindowsServer2008",
+  "WindowsServer2008R2",
+  "WindowsServer2012",
+  "WindowsServer2012R2",
+  "Windows7",
+  "Windows8",
+  "Windows8.1"
+]);
+
+let LegacyMacOSMajorVersions = dynamic([10, 11, 12]);
+
+let LegacyLinuxMatchers = dynamic([
+  "CentOS 7",
+  "Ubuntu 18.04",
+  "Debian 10",
+  "RHEL 7",
+  "SLES 12"
+]);
+
+// Step 0b  CL asset-metadata lookup for the FINAL TARGET (Azure resources only).
+// EG drives path detection + scoring + tier; CL contributes ONLY cmdb metadata.
+// Join key  FinalTargetId (= EG NodeId) == SI_Azure_Profile_CL.AzureResourceId_Guid (= EG NodeId hex).
+let _TargetCmdb =
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    // RA-1 -- BACKFILL THE v3 IDENTITY WITHOUT MOVING THE ROW ABOVE.
+    // Both editions write this table and v2.2 emits no SI_ columns, so the arg_max winner is
+    // frequently a v2.2 row and the identity comes back EMPTY for an asset that plainly has
+    // one. Measured 2026-08-29 over ago(8d): SI_Azure_Profile_CL 9698 rows carried SI_AssetId
+    // on 3502, but after this arg_max only 1 of 782 winners did.
+    // ðŸ”’ THE ROW IS DELIBERATELY NOT RE-RANKED. This binding also carries Tier, cmdb* and
+    // IsExcludedByTag, and Tier drives CriticalityTier which drives the risk score -- preferring
+    // a v3 row here would move scores across the whole catalog. Same row as before -- only the
+    // identity is filled, from the newest row that actually has one.
+    // ðŸ“Œ The lookup is one row per PrimaryEntityId, so the leftouter cannot fan out. Verified:
+    // row count unchanged, Tier still set on every row, SI_AssetId 425 -> 771 of 782 (azure).
+    | join kind=leftouter (
+          SI_Azure_Profile_CL
+          | where TimeGenerated > ago(8d)
+          | where isnotempty(tostring(column_ifexists("SI_AssetId", "")))
+          | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+          | project _v3Pk = PrimaryEntityId,
+                    _v3Name = tostring(column_ifexists("SI_AssetName", "")),
+                    _v3Id   = tostring(column_ifexists("SI_AssetId", ""))
+      ) on $left.PrimaryEntityId == $right._v3Pk
+    | extend SI_AssetName = coalesce(tostring(column_ifexists("SI_AssetName", "")), _v3Name)
+    | extend SI_AssetId   = coalesce(tostring(column_ifexists("SI_AssetId", "")),   _v3Id)
+    | project-away _v3Pk, _v3Name, _v3Id
+    | project
+        Target_AzureResourceId_Guid = tostring(column_ifexists("AzureResourceId_Guid", "")),
+        Target_cmdbName             = tostring(column_ifexists("cmdbName", "")),
+        Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
+        Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
+        Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+        Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
+          AssetName_From_CL      = iif(isnotempty(tostring(column_ifexists("SI_AssetName", ""))), tostring(column_ifexists("SI_AssetName", "")), tostring(column_ifexists("AssetName", ""))),
+          AssetId_From_CL        = iif(isnotempty(tostring(column_ifexists("SI_AssetId", ""))), tostring(column_ifexists("SI_AssetId", "")), tostring(column_ifexists("AssetId", ""))),
+          AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
+    | where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")));
+
+// Step 1  Build node catalog used to enrich attack paths
+let Nodes =
+    ExposureGraphNodes
+    | extend CategoriesStr = tolower(tostring(Categories))
+    | extend NodeNameNorm  = coalesce(NodeName, tostring(EntityIds[0].id), tostring(NodeId))
+    | extend RawData = todynamic(NodeProperties).rawData
+    | extend Raw     = todynamic(todynamic(NodeProperties).raw)
+    | extend AadDeviceId =
+        tostring(coalesce(
+            RawData.aadDeviceId,
+            Raw.aadDeviceId,
+            NodeProperties.aadDeviceId
+        ))
+
+    | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+    //__STALE_DEVICE_FILTER_BEGIN__
+    | where 1 == 1
+    //__STALE_DEVICE_FILTER_END__
+    //__BUCKET_FILTER_BEGIN__
+| extend __bucket_key = coalesce(
+    tostring(column_ifexists('DeviceKey','')),
+    tostring(column_ifexists('NodeId','')),
+    tostring(column_ifexists('DeviceNodeId','')),
+    tostring(column_ifexists('AadDeviceId','')),
+    tostring(column_ifexists('DeviceId','')),
+    tostring(column_ifexists('MachineId','')),
+    tostring(column_ifexists('Id','')),
+    tostring(column_ifexists('SourceNodeId','')),
+    tostring(column_ifexists('TargetNodeId',''))
+)
+| where isnotempty(__bucket_key)
+| extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % 2
+| where __bucket == 0
+//__BUCKET_FILTER_END__
+
+    | extend CriticalityLevel =
+        toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(NodeProperties.rawData.criticalityLevel.criticalityLevel),
+            tostring(NodeProperties.criticalityLevel.criticalityLevel)
+        ))
+    | extend CriticalityRuleBased =
+        toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].ruleBasedCriticalityLevel),
+            tostring(NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel),
+            tostring(NodeProperties.criticalityLevel.ruleBasedCriticalityLevel)
+        ))
+    | extend CriticalityRuleNames =
+        coalesce(
+            strcat_array(NodeProperties.criticalityLevelProps[0].ruleNames, ", "),
+            strcat_array(NodeProperties.rawData.criticalityLevel.ruleNames, ", "),
+            ""
+        )
+
+    | extend IsInternetExposed =
+        tobool(coalesce(
+            NodeProperties.rawData.isCustomerFacing,
+            NodeProperties.raw.isCustomerFacing,
+            false
+        ))
+
+    | extend IsExcluded =
+        tobool(coalesce(
+            NodeProperties.rawData.isExcluded,
+            NodeProperties.raw.isExcluded,
+            false
+        ))
+
+    | extend RawData = todynamic(NodeProperties).rawData
+    | extend Raw     = todynamic(todynamic(NodeProperties).raw)
+
+    | extend tagsBag1 = todynamic(coalesce(RawData.tags, dynamic({})))
+    | extend tagsBag2 = todynamic(coalesce(todynamic(NodeProperties).tags, dynamic({})))
+    | extend tagsBag3 = todynamic(coalesce(Raw.tags, dynamic({})))
+
+    | extend AssetTierFromBag = tostring(coalesce(
+        tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
+        tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
+    ))
+
+    | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
+    | extend deviceDynamicTags = iff(isnull(RawData.deviceDynamicTags), dynamic([]), todynamic(RawData.deviceDynamicTags))
+    | extend tagsArray1        = iff(isnull(RawData.tags.tags),         dynamic([]), todynamic(RawData.tags.tags))
+
+    | extend _AllTags          = array_concat(array_concat(deviceManualTags, deviceDynamicTags), tagsArray1)
+    | extend AssetTags         = strcat_array(_AllTags, ";")
+
+    // Exclude Devices, which includes tag with '--Excluded--SI'
+    | where AssetTags !has "--Excluded--SI"
+
+    | extend _TierTagsFromText = extract_all(@"([^;]*--tier[0-3]--SI[^;]*)", AssetTags)
+
+    | extend AssetTierByTag =
+        case(
+            isnotempty(AssetTierFromBag), AssetTierFromBag,
+            array_length(_TierTagsFromText) > 0, strcat_array(array_sort_asc(_TierTagsFromText), ";"),
+            ""
+        )
+
+    | extend CriticalityTierFromTag =
+        case(
+            AssetTierByTag has "--tier0--SI" or tolower(AssetTierByTag) has "tier0" or AssetTierByTag == "0", 0,
+            AssetTierByTag has "--tier1--SI" or tolower(AssetTierByTag) has "tier1" or AssetTierByTag == "1", 1,
+            AssetTierByTag has "--tier2--SI" or tolower(AssetTierByTag) has "tier2" or AssetTierByTag == "2", 2,
+            AssetTierByTag has "--tier3--SI" or tolower(AssetTierByTag) has "tier3" or AssetTierByTag == "3", 3,
+            int(null)
+        )
+
+    | extend CriticalityTier = toint(coalesce(CriticalityLevel, CriticalityTierFromTag, 3))
+    | extend CriticalityTierLevel =
+        case(
+            CriticalityTier == 0, "Critical - tier 0",
+            CriticalityTier == 1, "High - tier 1",
+            CriticalityTier == 2, "Medium - tier 2",
+            "Low - tier 3"
+        )
+
+    | extend AssetOSPlatform =
+        tostring(coalesce(RawData.osPlatform, RawData.OSPlatform, RawData.platform, RawData.operatingSystem, RawData.os))
+    | extend AssetOSVersion =
+        tostring(coalesce(RawData.osVersion, RawData.OSVersion, RawData.version, RawData.operatingSystemVersion))
+    | extend AssetOSDistribution =
+        tostring(coalesce(RawData.osDistribution, RawData.OSDistribution, RawData.distribution))
+    | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+
+    | extend IsLegacyWindows = iff(AssetOSPlatform in~ (LegacyWindowsOSPlatforms), 1, 0)
+    | extend IsLegacyMacOS   = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (LegacyMacOSMajorVersions), 1, 0)
+    | extend IsLegacyLinux   = iff(
+            tolower(AssetOSPlatform) has "linux"
+            and (AssetOSDistribution has_any (LegacyLinuxMatchers) or AssetOSVersion has_any (LegacyLinuxMatchers)),
+            1, 0
+        )
+    | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+
+    | extend RiskFactorsArray =
+        todynamic(coalesce(
+            NodeProperties.rawData.risk.riskFactors,
+            NodeProperties.risk.riskFactors,
+            dynamic([])
+        ))
+    | extend RiskFactorsArray = iff(isnull(RiskFactorsArray), dynamic([]), RiskFactorsArray)
+
+    | mv-apply rf = RiskFactorsArray on (
+        where isnotempty(trim(" ", tostring(rf)))
+        | summarize RiskFactorSet = make_set(tostring(rf))
+    )
+    | extend RiskFactorSet = coalesce(RiskFactorSet, dynamic([]))
+    | extend RF_P_RiskFactorsCount = array_length(RiskFactorSet)
+    | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
+    | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
+
+    | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
+    | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+    | extend RiskFactor_Probability_Detailed =
+        strcat_array(
+            array_sort_asc(
+                array_concat(
+                    RiskFactorSet,
+                    iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+                    iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                )
+            ),
+            ";"
+        )
+
+    | mv-apply rf = array_concat(
+            RiskFactorSet,
+            iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+            iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+        ) on (
+        where isnotempty(trim(" ", tostring(rf)))
+        | summarize ScoreParts = make_set(strcat(tostring(rf), "=1"))
+    )
+    | extend RiskFactor_Probability_DetailedScore =
+        strcat_array(array_sort_asc(coalesce(ScoreParts, dynamic([]))), ";")
+
+    | project
+        NodeId,
+        NodeName          = NodeNameNorm,
+        NodeLabel,
+        Categories        = CategoriesStr,
+        NodeProperties,
+        CriticalityLevel,
+        CriticalityTier,
+        CriticalityTierLevel,
+        CriticalityRuleBased,
+        CriticalityRuleNames,
+        IsInternetExposed,
+        IsExcluded,
+        AssetTags,
+        AssetTierByTag,
+        LegacyEndOfSupport,
+        RiskFactorsArray,
+        RiskFactor_Probability,
+        RiskFactor_Probability_Detailed,
+        RiskFactor_Probability_DetailedScore,
+        RiskFactor_Consequence;
+
+// Step 2  Find identities in groups and de duplicate
+let IdentityGroupMembership =
+    ExposureGraphEdges
+    | where EdgeLabel == "member of"
+    | where SourceNodeLabel in ("user", "serviceprincipal", "managedidentity")
+    | where TargetNodeLabel == "group"
+    | project
+        IdentityNodeId    = SourceNodeId,
+        IdentityNodeName  = SourceNodeName,
+        IdentityNodeLabel = SourceNodeLabel,
+        GroupNodeId       = TargetNodeId,
+        GroupNodeName     = TargetNodeName
+    | summarize
+        Identities        = make_set(IdentityNodeName),
+        IdentityTypes     = make_set(IdentityNodeLabel),
+        IdentityCount     = dcount(IdentityNodeId),
+        FirstIdentityId   = any(IdentityNodeId),
+        FirstIdentityName = any(IdentityNodeName),
+        FirstIdentityLabel= any(IdentityNodeLabel),
+    MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
+    EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
+    AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
+    AssetId                = min(coalesce(tostring(column_ifexists("SI_AssetId", "")), tostring(column_ifexists("AssetId_From_CL", "")), tostring(column_ifexists("AssetId", "")))),
+    MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
+    MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
+    ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
+      by GroupNodeId, GroupNodeName;
+
+// Step 3  Find group permissions or roles on Azure targets
+let GroupAccessToTargets =
+    ExposureGraphEdges
+    | where EdgeLabel in ("has role on", "has permissions to")
+    | where SourceNodeLabel == "group"
+    | where TargetNodeLabel in (
+        "subscriptions",
+        "resourcegroups",
+        "microsoft.keyvault/vaults",
+        "microsoft.storage/storageaccounts",
+        "microsoft.sql/servers",
+        "microsoft.compute/virtualmachines",
+        "microsoft.cognitiveservices/accounts"
+    )
+    | project
+        GroupNodeId      = SourceNodeId,
+        EdgeLabel        = EdgeLabel,
+        FinalTargetId    = TargetNodeId,
+        FinalTargetName  = TargetNodeName,
+        FinalTargetLabel = TargetNodeLabel;
+
+// Step 4  Assemble Identity -> Group -> Target paths and de duplicate
+let Paths =
+    IdentityGroupMembership
+    | join kind=inner (GroupAccessToTargets) on GroupNodeId
+    | summarize
+        Identities         = any(Identities),
+        IdentityTypes      = any(IdentityTypes),
+        IdentityCount      = any(IdentityCount),
+        FirstIdentityId    = any(FirstIdentityId),
+        FirstIdentityName  = any(FirstIdentityName),
+        FirstIdentityLabel = any(FirstIdentityLabel),
+        GroupNodeName      = any(GroupNodeName),
+        EdgeLabel          = any(EdgeLabel),
+        FinalTargetName    = any(FinalTargetName),
+        FinalTargetLabel   = any(FinalTargetLabel),
+    MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
+    EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
+    AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
+    AssetId                = min(coalesce(tostring(column_ifexists("SI_AssetId", "")), tostring(column_ifexists("AssetId_From_CL", "")), tostring(column_ifexists("AssetId", "")))),
+    MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
+    MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
+    ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
+      by FinalTargetId, GroupNodeId;
+
+// Step 5-7  Enrich source and target and apply standard prioritization logic
+Paths
+| join kind=leftouter (
+    Nodes
+    | project-rename
+        SourceNodeId                = NodeId,
+        SourceNodeName              = NodeName,
+        SourceNodeLabel             = NodeLabel,
+        SourceCriticalityTier       = CriticalityTier,
+        SourceCriticalityTierLevel  = CriticalityTierLevel,
+        SourceIsInternetExposed     = IsInternetExposed,
+        SourceIsExcluded            = IsExcluded,
+        SourceAssetTierByTag        = AssetTierByTag,
+        SourceLegacyEndOfSupport    = LegacyEndOfSupport,
+        SourceRiskProb              = RiskFactor_Probability,
+        SourceRiskProbDetailed      = RiskFactor_Probability_Detailed,
+        SourceRiskProbDetailedScore = RiskFactor_Probability_DetailedScore,
+        SourceNodeProperties        = NodeProperties
+) on $left.FirstIdentityId == $right.SourceNodeId
+
+| join kind=leftouter (
+    Nodes
+    | project-rename
+        TargetNodeId                = NodeId,
+        TargetNodeName              = NodeName,
+        TargetNodeLabel             = NodeLabel,
+        TargetCriticalityTier       = CriticalityTier,
+        TargetCriticalityTierLevel  = CriticalityTierLevel,
+        TargetCriticalityRuleBased  = CriticalityRuleBased,
+        TargetCriticalityRuleNames  = CriticalityRuleNames,
+        TargetIsInternetExposed     = IsInternetExposed,
+        TargetIsExcluded            = IsExcluded,
+        TargetAssetTierByTag        = AssetTierByTag,
+        TargetLegacyEndOfSupport    = LegacyEndOfSupport,
+        TargetRiskProb              = RiskFactor_Probability,
+        TargetRiskProbDetailed      = RiskFactor_Probability_Detailed,
+        TargetRiskProbDetailedScore = RiskFactor_Probability_DetailedScore,
+        TargetNodeProperties        = NodeProperties
+) on $left.FinalTargetId == $right.TargetNodeId
+
+// CL asset-metadata enrichment for the FINAL TARGET (cmdb fields only -- EG owns tier/path).
+| join kind=leftouter (_TargetCmdb) on $left.FinalTargetId == $right.Target_AzureResourceId_Guid
+| extend
+    cmdbId            = Target_cmdbId,
+    cmdbName            = Target_cmdbName,
+    cmdbCriticality     = Target_cmdbCriticality,
+    cmdbDataSensitivity = Target_cmdbDataSensitivity
+
+// Step 6  Attack path prioritization logic
+| extend TierEscalation =
+    case(
+        isnotempty(SourceCriticalityTier) and isnotempty(TargetCriticalityTier) and SourceCriticalityTier > TargetCriticalityTier,
+            SourceCriticalityTier - TargetCriticalityTier,
+        0
+    )
+| extend IsLateralMovement = TierEscalation > 0
+| extend LateralMovementType =
+    case(
+        TierEscalation >= 3, "Privilege escalation large tier jump",
+        TierEscalation == 2, "Privilege escalation two tiers",
+        TierEscalation == 1, "Privilege escalation one tier",
+        "Direct access same tier"
+    )
+
+| extend TargetTierWeight =
+    case(
+        TargetCriticalityTier == 0, 100,
+        TargetCriticalityTier == 1, 60,
+        TargetCriticalityTier == 2, 30,
+        10
+    )
+| extend EscalationWeight = TierEscalation * 10
+| extend ExposureWeight   = iff(TargetIsInternetExposed == true, 8, 0) + iff(SourceIsInternetExposed == true, 3, 0)
+| extend SourceTierAmplifier =
+    case(
+        SourceCriticalityTier == 0, 8,
+        SourceCriticalityTier == 1, 5,
+        SourceCriticalityTier == 2, 2,
+        0
+    )
+| extend AttackPathPriorityScore = TargetTierWeight + EscalationWeight + ExposureWeight + SourceTierAmplifier
+
+| extend AttackPathPriority =
+    case(
+        AttackPathPriorityScore >= 90,  "Very High",
+        AttackPathPriorityScore >= 60,  "High",
+        AttackPathPriorityScore >= 30,  "Medium-High",
+        AttackPathPriorityScore >= 15,  "Medium",
+        "Low"
+    )
+
+// Step 7  Human readable paths
+| extend InternetExposureTarget = iff(TargetIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
+| extend InternetExposureSource = iff(SourceIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
+
+| extend AttackPath =
+    strcat(
+        FirstIdentityLabel, " [", FirstIdentityName, "] -> ",
+        "group [", GroupNodeName, "] -> ",
+        TargetNodeLabel, " [", FinalTargetName, "]"
+    )
+
+| extend AttackPathDetailed =
+    strcat(
+        "SOURCE ", FirstIdentityLabel, " [", FirstIdentityName, "] ",
+        "tier ", tostring(SourceCriticalityTier), " ", tostring(SourceCriticalityTierLevel), " | ", InternetExposureSource,
+        iff(IdentityCount > 1, strcat(" | + ", tostring(IdentityCount - 1), " other identity/ies"), ""),
+        " -> GROUP [", GroupNodeName, "] ",
+        " -> TARGET ", TargetNodeLabel, " [", FinalTargetName, "] ",
+        "tier ", tostring(TargetCriticalityTier), " ", tostring(TargetCriticalityTierLevel), " | ", InternetExposureTarget,
+        " | escalation ", tostring(TierEscalation),
+        " | ", LateralMovementType
+    )
+
+| extend SecurityDomain = "Azure"
+| extend Category = "Attack Paths"
+| extend Subcategory = "GroupMembershipPrivilege"
+// Per-row identity columns expected by engine dedup (AssetName, ConfigurationName/Id).
+// ConfigurationId carries the FINAL TARGET id so (AssetName, ConfigurationId) is unique per row.
+| extend
+    AssetName              = FinalTargetName,
+    AssetLabel             = FinalTargetLabel,
+    ConfigurationName      = tostring(LateralMovementType),
+    ConfigurationId        = tostring(FinalTargetId),
+    SecuritySeverity       = tostring(AttackPathPriority),
+    Impact                 = todouble(AttackPathPriorityScore),
+    CriticalityTier        = TargetCriticalityTier,
+    CriticalityTierLevel   = TargetCriticalityTierLevel,
+    RiskFactor_Consequence = 0,
+    RiskFactor_Probability = TargetRiskProb,
+    RiskFactor_Probability_Detailed      = TargetRiskProbDetailed,
+    RiskFactor_Probability_DetailedScore = TargetRiskProbDetailedScore
+// Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
+// Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
+//__WEIGHTED_FACTORS_BEGIN__
+| extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
+| extend RiskScore_Weight_Factor   = 100
+| extend RiskFactor_Weight         = 100
+//__WEIGHTED_FACTORS_END__
+| project
+    SecurityDomain,
+    Category,
+    Subcategory,
+    ConfigurationName,
+    ConfigurationId,
+    AssetName,
+    AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("AssetId_From_CL", ""), column_ifexists("ConfigurationId", "")),
+    AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure"),
+    Impact,
+    SecuritySeverity,
+    CriticalityTier,
+    CriticalityTierLevel,
+    cmdbId,
+    cmdbName,
+    cmdbCriticality,
+    cmdbDataSensitivity,
+    RiskFactor_Consequence,
+    RiskFactor_Probability,
+    RiskFactor_Probability_Detailed,
+    RiskFactor_Probability_DetailedScore,
+    RiskScore_Weight_Detailed,
+    RiskScore_Weight_Factor,
+    RiskFactor_Weight,
+    AttackPath,
+    AttackPathDetailed,
+    AttackPathPriority,
+    AttackPathPriorityScore,
+    TierEscalation,
+    IsLateralMovement,
+    LateralMovementType,
+    EscalationWeight,
+    ExposureWeight,
+    GroupNodeId,
+    GroupNodeName,
+    EdgeLabel,
+    FirstIdentityId,
+    FirstIdentityName,
+    FirstIdentityLabel,
+    TotalIdentitiesInGroup = IdentityCount,
+    AllIdentities = Identities,
+    IdentityTypes,
+    FinalTargetId,
+    FinalTarget = FinalTargetName,
+    FinalTargetType = FinalTargetLabel,
+    TargetCriticalityRuleBased,
+    TargetCriticalityRuleNames,
+    TargetAssetTierByTag,
+    TargetIsInternetExposed,
+    TargetLegacyEndOfSupport,
+    SourceCriticalityTier,
+    SourceCriticalityTierLevel,
+    SourceAssetTierByTag,
+    SourceIsInternetExposed,
+    SourceLegacyEndOfSupport,
+    SourceRiskProb,
+    SourceRiskProbDetailed,
+    SourceRiskProbDetailedScore,
+    SourceNodeProperties,
+    TargetNodeProperties
+
+| order by RiskScore_Weight_Factor desc, AttackPathPriorityScore desc, TierEscalation desc, CriticalityTier asc, FinalTarget asc

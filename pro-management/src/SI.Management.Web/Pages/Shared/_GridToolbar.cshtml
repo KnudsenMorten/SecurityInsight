@@ -1,0 +1,65 @@
+@* THE toolbar of every grid (GridToolbar.cs): under the search box and the filter chips, above the column headers --
+   the selection count and the actions left; "Showing 1–50 of 1.117.524 findings", the rows per page (50 / 100 / 250 /
+   500, #857), the page box and the pager right (owner 2026-10-19). Sticky while the page scrolls; it wraps at phone width. The bottom variant is the pager alone,
+   under a long page. Only what can be clicked looks like a button: the range is plain text, the page is a box you
+   type a page into (Enter goes there; js/app/ui.js), Previous / Next / First / Last are links. Pages never render their
+   own pager or selection strip: GridToolbarStructureTests fails the build of a page that does. *@
+@model SI.Management.Web.Pages.GridToolbar
+@{
+    var t = Model;
+    var link = t.PageLink;
+    Func<string, Microsoft.AspNetCore.Html.IHtmlContent> pager =
+        @<text>
+            @if (t.FirstLast && t.Page > 1) { <a href="@link!(1)" data-gt-first>First</a> }
+            @if (t.Page > 1) { <a href="@link!(t.Page - 1)" rel="prev">@t.PreviousLabel</a> }
+            <span class="gt-page">
+                <label for="@item-page">page</label>
+                @* the box belongs to no form (a toolbar may sit inside a page's form): the script turns Enter into the page's link *@
+                <input id="@item-page" type="number" inputmode="numeric" min="1" max="@t.Pages" value="@t.Page" data-page="@t.Page" data-gt-page-box
+                       data-href="@t.PageTemplate" data-marker="@SI.Management.Web.Pages.GridToolbar.PageMarker" form="@item-nopost" aria-describedby="@item-of"
+                       title="Type a page number and press Enter" />
+                <span id="@item-of">of @Fmt.Int(t.Pages)</span>
+            </span>
+            @if (t.Page < t.Pages) { <a href="@link!(t.Page + 1)" rel="next">@t.NextLabel</a> }
+            @if (t.FirstLast && t.Page < t.Pages) { <a href="@link!(t.Pages)" data-gt-last>Last</a> }
+        </text>;
+}
+@if (t.Bottom)
+{
+    if (t.WantsBottom && link is not null)
+    {
+        <nav class="pager pager-bottom" id="@t.Id" aria-label="Pages (bottom)" data-gt-pager-bottom>
+            @pager(t.Id)
+        </nav>
+    }
+}
+else
+{
+    <div class="grid-toolbar" id="@t.Id" data-grid-toolbar>
+        <div class="gt-actions" data-gt-actions>
+            @if (t.Bar is not null) { <partial name="~/Pages/Shared/_FindingActions.cshtml" model="t.Bar" /> }
+            @if (t.Actions is not null) { @t.Actions(null) }
+        </div>
+        <div class="gt-paging">
+            <span class="gt-range" data-gt-range data-gt-total="@t.Total">@t.Range</span>
+            @if (t.SizeLink is { } sizeLink && t.Total > 0)
+            {
+                @* #857: rows per page -- plain links (Tab reaches each, Enter follows it; no script), the one in force marked *@
+                <nav class="gt-size" aria-label="Rows per page" data-gt-size data-size="@t.Size">
+                    <span class="gt-size-label" aria-hidden="true">Per page</span>
+                    @foreach (var s in t.SizeChoices)
+                    {
+                        if (s == t.Size) { <a href="@sizeLink(s)" aria-current="true" data-size-choice="@s" aria-label="@s rows per page (shown)">@s</a> }
+                        else { <a href="@sizeLink(s)" data-size-choice="@s" aria-label="@s rows per page">@s</a> }
+                    }
+                </nav>
+            }
+            @if (t.Paged && link is not null)
+            {
+                <nav class="pager" aria-label="Pages" data-gt-pager>
+                    @pager(t.Id)
+                </nav>
+            }
+        </div>
+    </div>
+}

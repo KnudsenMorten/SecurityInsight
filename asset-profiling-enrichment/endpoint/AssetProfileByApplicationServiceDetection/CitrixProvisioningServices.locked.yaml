@@ -1,0 +1,21 @@
+id:        CitrixProvisioningServices
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Citrix Provisioning Services'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix Provisioning Services'
+
+detections:
+  - id: CitrixProvisioningServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'provisioning_services*'
+    set:
+      Tier:     2
+      Purpose:  'VDI'
+      Category: 'VDI'

@@ -1,0 +1,21 @@
+id:        ZendeskConnect
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Zendesk Connect'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Zendesk Connect'
+
+detections:
+  - id: ZendeskConnect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'connect*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

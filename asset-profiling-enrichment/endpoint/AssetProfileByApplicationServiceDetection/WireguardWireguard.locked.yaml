@@ -1,0 +1,21 @@
+id:        WireguardWireguard
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'WireGuard'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'WireGuard'
+
+detections:
+  - id: WireguardWireguard
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'wireguard*'
+    set:
+      Tier:     2
+      Purpose:  'VPN'
+      Category: 'VPN'

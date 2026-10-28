@@ -1,0 +1,21 @@
+id:        DrupalDrupal
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Drupal'
+category:  'CMS'
+description: ''
+displayNames:
+  - 'Drupal'
+
+detections:
+  - id: DrupalDrupal
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'drupal*'
+    set:
+      Tier:     2
+      Purpose:  'CMS'
+      Category: 'CMS'

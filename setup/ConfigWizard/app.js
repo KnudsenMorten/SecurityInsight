@@ -1,0 +1,1340 @@
+/* =============================================================================
+   SecurityInsight  --  Config Wizard
+   app.js -- wizard state machine + page rendering + snippet generation.
+   No frameworks, no build, runs straight off file://.
+   ============================================================================= */
+'use strict';
+
+// ---------------------------------------------------------------------------
+// PAGE REGISTRY -- one entry per left-rail item.
+//   id     : DOM data-page selector
+//   label  : rail text
+//   active : false => "Coming soon" placeholder, can't be next-target
+// ---------------------------------------------------------------------------
+const PAGES = [
+  { id: 'welcome',   label: 'Welcome',                active: true  },
+  { id: 'tenant',    label: 'Tenant identity',        active: true  },
+  { id: 'workspace', label: 'Workspace + ingestion',  active: true  },
+  { id: 'output',    label: 'Mail / SMTP',            active: true  },
+  { id: 'cmdb',      label: 'CMDB integration',       active: true  },
+  { id: 'apptag',    label: 'Azure OpenAI',           active: true  },
+  { id: 'raexcl',    label: 'RA exclusions',          active: false },  // power-user; v2.2.112+
+  { id: 'assettag',  label: 'Asset exclusion tags',   active: false },  // power-user; v2.2.112+
+  { id: 'shodan',    label: 'Shodan attack surface',  active: true  },
+  { id: 'advanced',  label: 'Output sinks + Defender', active: true  },
+  { id: 'review',    label: 'Apply',                  active: true  },
+];
+// Note: registry holds 11 entries (Welcome + 10 numbered steps). The numbered
+// "Step N of 10" labels in the page bodies count from "Tenant identity" onward.
+
+const STORAGE_KEY = 'si.v22.wizard.state.v1';
+
+// ---------------------------------------------------------------------------
+// STATE -- single source of truth, mirrored to localStorage on every change.
+// ---------------------------------------------------------------------------
+const state = {
+  currentPage: 'welcome',
+  visited: { welcome: true },     // page id -> true once user has navigated to it
+  data: {                         // user-entered values, keyed by data-key attr
+    // DEFAULT SIGN-IN (operator 2026-10-07): a MANAGED IDENTITY (user-assigned). A service principal by certificate
+    // (recommended for an SPN) or by client secret (supported) is an explicit choice. A server outside Azure cannot
+    // have a managed identity: there the wizard switches to a new service principal by certificate (snapSignIn).
+    spnMode:     'managedIdentity', // 'managedIdentity' | 'createNew' | 'useExisting'
+    credType:    'certThumb',     // 'certThumb' (= cert, recommended for a service principal) | 'kvSecret' (= secret)
+    credStorage: 'LocalCertStore',// 'KeyVault' | 'LocalCertStore' | 'Inline' (auto-snapped to a valid combo for hostType + credType)
+    hostType:    'azureVMMI',     // 'win' | 'azureVMMI' | 'azureContainerMI' (drives valid auth options)
+    // Optional-feature master toggles (each defaults OFF -- explicit opt-in)
+    smtpMode:      'off',         // 'off' | 'anon' | 'auth'
+    cmdbMode:      'off',         // 'off' | 'csv'
+    openAiMode:    'off',         // 'off' | 'enabled'
+    openAiResMode: 'useExisting', // 'useExisting' | 'createNew' (createNew is v2.2.112+)
+    shodanMode:    'off',         // 'off' | 'enabled'
+    defenderMode:  'off',         // 'off' | 'linked'
+    entraDiagToSI: 'enabled',     // 'off' | 'enabled' -- ON by default; auto-skipped when defenderMode='linked'
+    enableJsonSink: false,        // bool -- adds 'JSON' to every SI_Sinks_<Engine>
+  },
+};
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      Object.assign(state, parsed);
+      // Ensure required nested objects exist after restore
+      state.visited = state.visited || { welcome: true };
+      state.data    = state.data    || {};
+      if (!state.data.spnMode)     state.data.spnMode     = 'managedIdentity';
+      if (!state.data.credType)    state.data.credType    = 'certThumb';
+      if (!state.data.credStorage) state.data.credStorage = 'LocalCertStore';
+      if (!state.data.hostType)    state.data.hostType    = 'azureVMMI';
+      if (!state.data.smtpMode)     state.data.smtpMode     = 'off';
+      if (!state.data.cmdbMode)     state.data.cmdbMode     = 'off';
+      if (!state.data.openAiMode)   state.data.openAiMode   = 'off';
+      if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
+      if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
+      if (!state.data.defenderMode) state.data.defenderMode = 'off';
+      if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'enabled';
+      // Migration A: gpt-4o-mini was the default model in v2.2.111-v2.2.116.
+      // v2.2.117 switched to gpt-4.1-mini after OpenAI deprecated the old SKU.
+      // openAiModel still gets the SKU snap (it IS a model SKU field).
+      if (state.data.openAiModel === 'gpt-4o-mini') state.data.openAiModel = 'gpt-4.1-mini';
+      // Migration B: deployment-name fields were defaulted to the model SKU
+      // string ('gpt-4o-mini' / 'gpt-4.1-mini') in v2.2.111-v2.2.122. v2.2.123
+      // switches the convention to use the OpenAI RESOURCE INSTANCE NAME
+      // (oai-si-prod-community-vm) so resource + deployment align 1:1 -- the
+      // pattern Morten uses in his real custom config. Auto-snap saved state
+      // that still holds either model-SKU default to the new instance-name
+      // default (operators who deliberately picked an SKU-name deployment
+      // can re-type it in the field after migration).
+      if (state.data.openAiDeployment    === 'gpt-4o-mini' || state.data.openAiDeployment    === 'gpt-4.1-mini') state.data.openAiDeployment    = siHostingDefault('oai-si-prod-community-vm');
+      if (state.data.openAiNewDeployment === 'gpt-4o-mini' || state.data.openAiNewDeployment === 'gpt-4.1-mini') state.data.openAiNewDeployment = siHostingDefault('oai-si-prod-community-vm');
+    }
+  } catch (e) {
+    console.warn('Wizard: localStorage restore failed --', e);
+  }
+}
+function saveState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  catch (e) { console.warn('Wizard: localStorage save failed --', e); }
+}
+
+// ---------------------------------------------------------------------------
+// VALIDATORS -- inline error messages live in <span class="err" data-err="...">
+// ---------------------------------------------------------------------------
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const HEX40_RE = /^[0-9a-fA-F]{40}$/;
+const KV_RE   = /^[a-z][a-z0-9-]{1,22}[a-z0-9]$/;       // 3-24, leading letter
+
+const validators = {
+  tenantId:        v => !!v && GUID_RE.test(v),
+  appId:           v => !!v && GUID_RE.test(v),
+  subscriptionId:  v => !!v && GUID_RE.test(v),
+  spnDisplayName:  v => !!v && /^[A-Za-z0-9][A-Za-z0-9 \-_.()]{2,}$/.test(v),
+  kvName:               v => !!v && KV_RE.test(v),
+  secretName:           v => !!v && v.length > 0,
+  certThumbprint:       v => !!v && HEX40_RE.test(v.replace(/\s/g, '')),
+  workspaceName:        v => !!v && v.length > 0,
+  workspaceRg:          v => !!v && v.length > 0,
+  dceName:              v => !!v && v.length > 0,
+  dceRg:                v => !!v && v.length > 0,
+  storageAccountName:   v => !!v && /^[a-z0-9]{3,24}$/.test(v),  // Azure storage account name rules
+  storageResourceGroup: v => !!v && v.length > 0,
+  storageContainer:     v => !!v && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(v),
+  location:             v => !!v && /^[a-z0-9]+[0-9]?$/.test(v),  // Azure region short-name (lowercase, no spaces)
+  openAiResName:        v => !!v && /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(v),
+  openAiResRg:          v => !!v && v.length > 0,
+  openAiSubscriptionId: v => !v || GUID_RE.test(v),  // optional -- empty = inherit Step 2's sub
+  openAiLocation:       v => !!v && /^[a-z0-9]+[0-9]?$/.test(v),
+  openAiNewDeployment:  v => !!v && v.length > 0,
+};
+
+function isFieldValid(key) {
+  const v = state.data[key];
+  const fn = validators[key];
+  if (!fn) return true;
+  return fn(v == null ? '' : String(v));
+}
+
+// Per-page list of required keys -- used to mark a page as "done" in the rail
+// and to gate the Next button.
+const PAGE_REQS = {
+  welcome:   [],
+  tenant:    ['tenantId', 'appId'].concat(/* credType-dependent, added dynamically */),
+  workspace: ['subscriptionId', 'location', 'workspaceName', 'workspaceRg', 'dceName', 'dceRg', 'storageAccountName', 'storageResourceGroup', 'storageContainer'],
+};
+
+function tenantRequiredKeys() {
+  // Required fields branch by SPN mode:
+  //   createNew  -> tenantId + spnDisplayName (+ kvName when CredStorage=KeyVault)
+  //   useExisting -> tenantId + appId + cred-block fields
+  // managedIdentity -> tenantId only (the identity is created and granted on Apply)
+  if (state.data.spnMode === 'managedIdentity') return ['tenantId'];
+  if (state.data.spnMode === 'createNew') {
+    const base = ['tenantId', 'spnDisplayName'];
+    if (state.data.credStorage === 'KeyVault') return base.concat(['kvName']);
+    // LocalCertStore + Inline don't need an additional input; cred is generated locally / returned inline.
+    return base;
+  }
+  // useExisting (legacy / power-user path)
+  const base = ['tenantId', 'appId'];
+  if (state.data.credType === 'certThumb') return base.concat(['certThumbprint']);
+  return base.concat(['kvName', 'secretName']);
+}
+
+function isPageDone(pageId) {
+  if (pageId === 'welcome') return !!state.visited.welcome;
+  let reqs;
+  if (pageId === 'tenant')    reqs = tenantRequiredKeys();
+  else if (pageId === 'workspace') reqs = PAGE_REQS.workspace;
+  else                        reqs = PAGE_REQS[pageId] || [];
+  if (reqs.length === 0) return false;
+  return reqs.every(isFieldValid);
+}
+
+// ---------------------------------------------------------------------------
+// SNIPPET GENERATORS -- each page that emits config has its own builder.
+// All snippets are rendered with simple syntax highlighting via <span> wraps.
+// ---------------------------------------------------------------------------
+
+// Wrap PowerShell snippet text in <span class="cmt|var|str"> tokens.
+// Cheap-but-readable -- not a real tokenizer, deliberately conservative.
+function highlightPs(raw) {
+  // Escape HTML first
+  let s = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Trailing comments (after a closing single-quote + whitespace) -- match BEFORE
+  // the string rule so the trailing '# default' tag on a default-value line wins.
+  s = s.replace(/('\s+)(#[^\n]*)$/gm, '$1<span class="cmt">$2</span>');
+  // Full-line comments (# to end-of-line) -- preserve leading whitespace
+  s = s.replace(/^(\s*)(#.*)$/gm, '$1<span class="cmt">$2</span>');
+  // Single-quoted strings
+  s = s.replace(/('[^']*')/g, '<span class="str">$1</span>');
+  // $global:Foo variables
+  s = s.replace(/(\$global:[A-Za-z_][A-Za-z0-9_]*)/g, '<span class="var">$1</span>');
+  return s;
+}
+
+function psQuote(v) {
+  if (v == null) return "''";
+  return "'" + String(v).replace(/'/g, "''") + "'";
+}
+
+// Compute the effective name for a Step-2 resource key, applying the optional
+// state.data.namingSuffix. Used by the snippet builder + buildApplyState so
+// the SAME name lands in both places.
+//   key           -- state key (e.g. 'workspaceName')
+//   opts.storage  -- true for storage account names: hyphens stripped, lowercased,
+//                    truncated to 24 chars (Azure storage rules).
+// Returns the suffixed name, or the bare base name if no suffix is set.
+// DEFAULT NAMES for a new install: <type>-si-<ring>-<edition>-<hosting>. The page's data-defaults carry the
+// VM form (prod-community-vm); when the engines run as Container Apps jobs the hosting part becomes 'ca'.
+// Only an untouched default is adjusted -- a name the customer typed is never rewritten.
+const SI_DEFAULT_LABEL_VM = 'prod-community-vm';
+const SI_DEFAULT_LABEL_CA = 'prod-community-ca';
+function siHostingDefault(def) {
+  if (typeof def !== 'string' || def.indexOf(SI_DEFAULT_LABEL_VM) < 0) return def;
+  return (state.data.hostType === 'azureContainerMI') ? def.split(SI_DEFAULT_LABEL_VM).join(SI_DEFAULT_LABEL_CA) : def;
+}
+function syncHostingDefaults() {
+  document.querySelectorAll('input[data-key][data-default]').forEach(el => {
+    const def = el.getAttribute('data-default');
+    if (!def || def.indexOf(SI_DEFAULT_LABEL_VM) < 0) return;
+    const key = el.dataset.key;
+    const ca = def.split(SI_DEFAULT_LABEL_VM).join(SI_DEFAULT_LABEL_CA);
+    if (state.data[key] === def || state.data[key] === ca) {
+      state.data[key] = siHostingDefault(def);
+      el.value = state.data[key];
+    }
+  });
+  saveState();
+}
+
+function nameWithSuffix(key, opts) {
+  opts = opts || {};
+  let base = state.data[key];
+  if (base == null || base === '') {
+    const el = document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]');
+    base = el ? siHostingDefault(el.getAttribute('data-default') || '') : '';
+  }
+  // CRITICAL: if the operator never typed a value AND there's no data-default
+  // for this field, return empty string -- never fabricate a name out of just
+  // the suffix. Otherwise a blank storageAccountName + suffix '1' produces
+  // '1', which Azure rejects with the misleading "Invalid resource payload:
+  // 'properties' are missing" error mid-Phase 2.
+  if (!base) return '';
+  const sfx = (state.data.namingSuffix || '').trim();
+  if (!sfx) return base;
+  if (opts.storage) {
+    const safe = sfx.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return (base + safe).substring(0, 24);
+  }
+  return base + '-' + sfx;
+}
+
+// Like assignLine, but applies state.data.namingSuffix to the value.
+function suffixedAssignLine(varName, key, fallback, pad, opts) {
+  opts = opts || {};
+  let val = nameWithSuffix(key, opts);
+  if (!val) val = fallback;
+  const head = '$global:' + varName + ' '.repeat(Math.max(1, (pad || 0) - varName.length)) + '= ' + psQuote(val);
+  const def  = (document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]') || {}).getAttribute && document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]').getAttribute('data-default');
+  const defH = siHostingDefault(def);
+  const sfx  = (state.data.namingSuffix || '').trim();
+  let tag = '';
+  if (sfx) tag = '   # default+suffix';
+  else if (defH && state.data[key] === defH) tag = '   # default';
+  return head + tag;
+}
+
+// Resolve the value for a state key, preferring (in order):
+//   1. user-typed value in state.data
+//   2. the input's data-default attribute (real wizard default)
+//   3. the supplied <fallback> placeholder token (e.g. '<sub-guid>')
+// Returns { quoted, isDefault } so the snippet can mark default lines visibly.
+function resolveValue(key, fallback) {
+  const v = state.data[key];
+  const el = document.querySelector('input[data-key="' + key + '"]');
+  const def = el ? siHostingDefault(el.getAttribute('data-default')) : null;
+  if (v != null && v !== '') {
+    // Defaults are pre-seeded into state, so flag isDefault when the
+    // user-visible value still matches the recommended default.
+    return { raw: String(v), quoted: psQuote(v), isDefault: (def != null && v === def) };
+  }
+  if (def) return { raw: def, quoted: psQuote(def), isDefault: true };
+  return { raw: fallback, quoted: psQuote(fallback), isDefault: false };
+}
+
+// Build a '$global:Var = <value>' line, padded to <pad> so multiple lines
+// align, with a trailing '# default' marker when the value came from the
+// input's data-default attribute (so customers see WHAT they get if they
+// leave the field untouched).
+function assignLine(varName, key, fallback, pad) {
+  const r = resolveValue(key, fallback);
+  const head = '$global:' + varName + ' '.repeat(Math.max(1, (pad || 0) - varName.length)) + '= ' + r.quoted;
+  return r.isDefault ? head + '   # default' : head;
+}
+
+// Tenant page snippet: branches by SPN mode.
+//   createNew  -> shows the "wizard will create on Apply" template; AppId / cred
+//                 are placeholders the wizard's /api/apply endpoint fills in.
+//   useExisting -> classic snippet using the existing AppId + cred details.
+function buildTenantSnippet() {
+  const d = state.data;
+  const lines = [];
+  lines.push('# ----------------------------------------------------------------------------');
+  lines.push('# SecurityInsight -- Tenant identity (Layer 4: config/SecurityInsight.custom.ps1)');
+  lines.push('# Generated by the SecurityInsight setup wizard.');
+  lines.push('# ----------------------------------------------------------------------------');
+  lines.push('');
+
+  if (d.spnMode === 'managedIdentity') {
+    lines.push('# --- Sign-in: a MANAGED IDENTITY (the default -- no secret or certificate) ---');
+    lines.push("$global:SI_AuthMethod   = 'ManagedIdentity'");
+    lines.push(assignLine('SI_SPN_TenantId', 'tenantId', '<tenant-guid>', 16));
+    if (d.hostType === 'azureContainerMI') {
+      lines.push('# The Container Apps jobs sign in as their user-assigned identity: the container setup');
+      lines.push('# (Bootstrap-ContainerAppJob -UseManagedIdentity -GrantIdentityRoles) creates and grants it on Apply.');
+    } else {
+      lines.push('# On Apply the wizard creates the user-assigned identity "' + (d.managedIdentityName || 'id-si-<label>') + '",');
+      lines.push('# grants it the read-only permissions and attaches it to the VM' + (d.vmName ? (' "' + d.vmName + '"') : ' (when you name it)') + '.');
+      lines.push('# Its client id is then written here as $global:SI_ManagedIdentityClientId.');
+    }
+    return lines.join('\n');
+  }
+
+  if (d.spnMode === 'createNew') {
+    lines.push('# --- Tenant ----------------------------------------------------------------');
+    lines.push(assignLine('SI_SPN_TenantId', 'tenantId', '<tenant-guid>', 16));
+    lines.push('');
+    lines.push('# --- SPN to be CREATED on Apply --------------------------------------------');
+    lines.push('# The wizard\'s /api/apply endpoint runs New-SISpn:');
+    lines.push('#   - Creates Entra app registration "' + (resolveValue('spnDisplayName', '<spn-display-name>').raw) + '"');
+    const credKindHuman = (d.credType === 'certThumb') ? 'Self-signed certificate' : 'Client secret';
+    lines.push('#   - Generates credential : ' + credKindHuman);
+    lines.push('#   - Stores credential in : ' + (d.credStorage || 'KeyVault'));
+    if (d.credStorage === 'KeyVault') {
+      lines.push('#   - Key Vault            : ' + (resolveValue('kvName', '<kv-name>').raw));
+    }
+    lines.push('#   - Grants Microsoft Graph permissions + admin consent');
+    lines.push('#   - Grants RBAC at root MG: Reader (Tag Contributor only when asset tagging is opted in)');
+    lines.push('# After Apply, $global:SI_SPN_AppId / SI_SPN_Secret (or _CertThumbprint)');
+    lines.push('# are written to config\\SecurityInsight.custom.ps1 automatically.');
+    lines.push('# To trigger Apply directly:');
+    lines.push('#   Invoke-RestMethod -Method POST http://localhost:8766/api/apply -ContentType application/json -Body $stateJson');
+    return lines.join('\n');
+  }
+
+  // useExisting (legacy / power-user path)
+  lines.push('# --- Tenant + service principal --------------------------------------------');
+  lines.push(assignLine('SI_SPN_TenantId', 'tenantId', '<tenant-guid>',     16));
+  lines.push(assignLine('SI_SPN_AppId',    'appId',    '<app-client-guid>', 16));
+  lines.push('');
+  if (d.credType === 'certThumb') {
+    lines.push('# --- Credential: certificate thumbprint (recommended for production) ------');
+    lines.push(assignLine('SI_SPN_CertThumbprint', 'certThumbprint', '<40-hex-chars>', 22));
+  } else {
+    lines.push('# --- Credential: secret stored in Azure Key Vault -------------------------');
+    lines.push(assignLine('SI_KeyVaultName',     'kvName',     '<kv-name>',     20));
+    lines.push(assignLine('SI_SPN_KvSecretName', 'secretName', '<secret-name>', 20));
+  }
+  return lines.join('\n');
+}
+
+// Workspace page snippet: cumulative -- includes tenant block too so the
+// customer can copy ONE block and have it all.
+function buildWorkspaceSnippet() {
+  const d = state.data;
+  const lines = [];
+  lines.push(buildTenantSnippet());
+  lines.push('');
+  lines.push('# --- Subscription + Log Analytics workspace + ingestion ----------------');
+  const sfx = (d.namingSuffix || '').trim();
+  if (sfx) lines.push('# Naming suffix in effect: "-' + sfx + '" (applied to all default names below)');
+  lines.push(assignLine('SI_AzSubscriptionId',     'subscriptionId', '<sub-guid>',       30));
+  lines.push(assignLine('SI_Location',             'location',       'westeurope',       30));
+  lines.push(suffixedAssignLine('SI_WorkspaceName',         'workspaceName',  '<workspace-name>', 30));
+  lines.push(suffixedAssignLine('SI_WorkspaceResourceGroup','workspaceRg',    '<workspace-rg>',   30));
+  lines.push('# SI_WorkspaceResourceId is composed at config-load time from the parts above.');
+  lines.push('$global:SI_WorkspaceResourceId  = "/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_WorkspaceResourceGroup)/providers/Microsoft.OperationalInsights/workspaces/$($global:SI_WorkspaceName)"');
+  lines.push('');
+  lines.push('# --- Data Collection Endpoint ------------------------------------------');
+  lines.push(suffixedAssignLine('SI_DceName',          'dceName', '<dce-name>', 25));
+  lines.push(suffixedAssignLine('SI_DceResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push(suffixedAssignLine('SI_DcrResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push('');
+  lines.push('# --- Storage account (reached with the signed-in identity) -------------');
+  lines.push(suffixedAssignLine('SI_StorageAccount',       'storageAccountName',   '<storage-acct>',  25, { storage: true }));
+  lines.push(suffixedAssignLine('SI_StorageResourceGroup', 'storageResourceGroup', '<storage-rg>',    25));
+  lines.push(suffixedAssignLine('SI_ExportContainer',      'storageContainer',     'securityinsight', 25));
+  lines.push('$global:ExportDestination       = "https://$($global:SI_StorageAccount).blob.core.windows.net/$($global:SI_ExportContainer)/"');
+  return lines.join('\n');
+}
+
+// ---------- Optional-section snippet builders (pages 3-7) -----------------
+
+function buildOutputSnippet() {
+  const d = state.data;
+  if (d.smtpMode === 'off' || !d.smtpMode) {
+    return '# Mail mode is OFF -- nothing written.\n# (Engines run silent; LA + Excel still produced.)';
+  }
+  const lines = [];
+  lines.push('# --- SMTP / mail (Layer 4) -----------------------------------------------');
+  lines.push(assignLine('SmtpServer', 'smtpServer', '<smtp-host>', 14));
+  lines.push(assignLine('SmtpPort',   'smtpPort',   '587',         14));
+  lines.push('$global:SMTP_UseSSL    = $' + ((d.smtpUseSsl !== false) ? 'true' : 'false'));
+  lines.push(assignLine('SMTPFrom',   'smtpFrom',   '<sender@example.com>', 14));
+  if (d.smtpMode === 'auth') {
+    lines.push(assignLine('SMTPUser',     'smtpUser',     '<smtp-login>', 14));
+    lines.push(assignLine('SMTPPassword', 'smtpPassword', '<smtp-pass>',  14));
+  } else {
+    lines.push('# Anonymous relay -- no SMTPUser / SMTPPassword needed.');
+  }
+  const recipients = (d.mailTo || '').split(/[,;\s]+/).filter(Boolean);
+  const recipPs = recipients.length ? '@(' + recipients.map(r => "'" + r.replace(/'/g, "''") + "'").join(', ') + ')' : "@('<your-inbox@example.com>')";
+  lines.push('$global:MailTo         = ' + recipPs);
+  return lines.join('\n');
+}
+
+function buildCmdbSnippet() {
+  const d = state.data;
+  if (d.cmdbMode !== 'csv') return '# CMDB mode is OFF -- nothing written.';
+  const lines = [];
+  lines.push('# --- CMDB CSV enrichment (Layer 4) ---------------------------------------');
+  lines.push('$global:SI_EnableCmdbProvider     = $true');
+  lines.push(assignLine('SI_CmdbCsvPath',             'cmdbCsvPath',     '<C:\\path\\to\\cmdb.csv>', 32));
+  lines.push(assignLine('SI_CmdbRefreshIntervalHours','cmdbRefreshHours','24',                       32));
+  return lines.join('\n');
+}
+
+function buildApptagSnippet() {
+  // The "apptag" page is now Azure OpenAI in v2.2.111 -- the section ID
+  // wasn't renamed to keep state-key compatibility.
+  const d = state.data;
+  if (d.openAiMode !== 'enabled') return '# OpenAI mode is OFF -- nothing written.';
+  const lines = [];
+  lines.push('# --- Azure OpenAI -- AI summary on RiskAnalysis runs (Layer 4) ----------');
+  lines.push('$global:BuildSummaryByAI = $true');
+  if (d.openAiResMode === 'createNew') {
+    // Wizard provisions the resource on Apply and writes the endpoint + key
+    // directly. The custom config still needs the consumer globals set so
+    // engines pick up the new deployment without a re-edit.
+    const resName = d.openAiResName || siHostingDefault('oai-si-prod-community-vm');
+    lines.push('# Azure OpenAI resource will be CREATED on Apply with these settings:');
+    lines.push('#   Resource    : ' + resName);
+    lines.push('#   Resource RG : ' + (d.openAiResRg || siHostingDefault('rg-si-prod-community-vm')));
+    lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '(inherits Step 2 subscription)'));
+    lines.push('#   Region      : ' + (d.openAiLocation || 'swedencentral'));
+    lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4.1-mini'));
+    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || resName));
+    lines.push('# Endpoint + API key are filled in by the wizard on Apply:');
+    lines.push("$global:OpenAI_endpoint   = 'https://" + resName + ".openai.azure.com/'");
+    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', resName,             22));
+    lines.push("$global:OpenAI_apiVersion = '2025-01-01-preview'");
+    lines.push("$global:OpenAI_apiKey     = '(filled in by wizard on Apply)'");
+  } else {
+    lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', '<your-deployment-name>',                22));
+    lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2025-01-01-preview',                   22));
+    lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
+  }
+  lines.push(assignLine('MaxAiSpendPerRun', 'openAiMaxSpend', '3', 22));
+  return lines.join('\n');
+}
+
+function buildShodanSnippet() {
+  const d = state.data;
+  if (d.shodanMode !== 'enabled') return '# Shodan mode is OFF -- nothing written.';
+  const lines = [];
+  lines.push('# --- Shodan attack-surface enrichment (Layer 4) -------------------------');
+  lines.push(assignLine('SI_Shodan_ApiKey',     'shodanApiKey',     '<your-shodan-key>', 24));
+  // (A "licence tier" select stood here. Nothing read it -- the backend never wrote it and no engine knows
+  //  SI_Shodan_LicenseTier -- so the choice was silently discarded. The engine's real budget control is
+  //  $global:SI_ShodanMonthlyCreditCap, documented in config\SecurityInsight.custom.reference.ps1. #174)
+  return lines.join('\n');
+}
+
+function buildAdvancedSnippet() {
+  const d = state.data;
+  const lines = [];
+  let any = false;
+  if (d.enableJsonSink) {
+    lines.push('# --- JSON output sink for every engine (Layer 4) ------------------------');
+    lines.push("$global:SI_Sinks_RiskAnalysis  = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Endpoint      = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Identity      = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Azure         = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_PublicIP      = @('LA','Excel','JSON')");
+    any = true;
+  }
+  if (d.defenderMode === 'linked') {
+    if (any) lines.push('');
+    lines.push('# --- Defender XDR / Sentinel workspace linkage (Layer 4) ----------------');
+    lines.push(assignLine('SI_DefenderXdrWorkspaceResourceId', 'defenderWorkspaceResourceId', '</subscriptions/.../workspaces/...>', 38));
+    any = true;
+  }
+  if (d.defenderMode === 'off' && d.entraDiagToSI === 'enabled') {
+    if (any) lines.push('');
+    lines.push('# --- Entra ID Diagnostic Setting -- auto-stream sign-in + audit logs ----');
+    lines.push('# Wizard creates an Entra Diagnostic Setting on Apply targeting the SI');
+    lines.push('# workspace, with these 8 log categories enabled (derived from query refs):');
+    lines.push("$global:SI_AutoCreateEntraDiagToSelf = $true");
+    lines.push("$global:SI_EntraDiagSettingName     = 'SI-EntraDiag'");
+    lines.push("$global:SI_EntraDiagCategories      = @('SignInLogs','AuditLogs','NonInteractiveUserSignInLogs','ServicePrincipalSignInLogs','ManagedIdentitySignInLogs','UserRiskEvents','ProvisioningLogs','MicrosoftGraphActivityLogs')");
+    any = true;
+  }
+  if (!any) return '# Output sinks: LA + Excel only. Defender XDR linkage: OFF. Entra diag: OFF.\n# (Defaults are fine when you have an existing Sentinel workspace -- skip both.)';
+  return lines.join('\n');
+}
+
+const SNIPPET_BUILDERS = {
+  tenant:    buildTenantSnippet,
+  workspace: buildWorkspaceSnippet,
+  output:    buildOutputSnippet,
+  cmdb:      buildCmdbSnippet,
+  apptag:    buildApptagSnippet,
+  shodan:    buildShodanSnippet,
+  advanced:  buildAdvancedSnippet,
+};
+
+function renderPreviews() {
+  // Re-render the snippet on every keystroke for the active page (cheap).
+  const builder = SNIPPET_BUILDERS[state.currentPage];
+  if (!builder) return;
+  const target = document.getElementById('preview-' + state.currentPage);
+  if (!target) return;
+  target.innerHTML = highlightPs(builder());
+}
+
+// ---------------------------------------------------------------------------
+// RAIL RENDERING -- 11 entries with status badges.
+// Badges: ✓ done · ● current · ○ pending · ⊘ coming-soon
+// ---------------------------------------------------------------------------
+function renderRail() {
+  const ul = document.getElementById('rail-nav');
+  ul.innerHTML = '';
+  // Pages that are not offered are not shown: the rail numbers match the "Step N of 8" headings.
+  PAGES.filter(p => p.active).forEach((p, idx) => {
+    const li = document.createElement('li');
+    li.dataset.page = p.id;
+    li.className = '';
+    let badgeChar;
+    if (!p.active) {
+      li.classList.add('soon', 'disabled');
+      badgeChar = '\u2298';                 // ⊘ coming soon
+    } else if (p.id === state.currentPage) {
+      li.classList.add('current');
+      badgeChar = '\u25CF';                 // ● current
+    } else if (isPageDone(p.id)) {
+      li.classList.add('done');
+      badgeChar = '\u2713';                 // ✓ done
+    } else {
+      badgeChar = '\u25CB';                 // ○ pending
+    }
+    const num = (idx === 0) ? '' : String(idx);
+    li.innerHTML = '<span class="num">' + num + '</span>' +
+                   '<span class="badge">' + badgeChar + '</span>' +
+                   '<span class="label">' + p.label + '</span>';
+    if (p.active) {
+      li.addEventListener('click', () => goToPage(p.id));
+    }
+    ul.appendChild(li);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// PAGE NAVIGATION
+// ---------------------------------------------------------------------------
+function goToPage(id) {
+  const target = PAGES.find(p => p.id === id);
+  if (!target || !target.active) return;
+  state.currentPage = id;
+  state.visited[id] = true;
+  saveState();
+  renderApp();
+  // Scroll the main content area to top so we don't land mid-page.
+  document.querySelector('.main').scrollTo({ top: 0, behavior: 'instant' });
+}
+
+// "Next" only walks active pages -- skips placeholder Coming-Soon items.
+function nextPage() {
+  const activeIds = PAGES.filter(p => p.active).map(p => p.id);
+  const i = activeIds.indexOf(state.currentPage);
+  if (i >= 0 && i < activeIds.length - 1) goToPage(activeIds[i + 1]);
+}
+function prevPage() {
+  const activeIds = PAGES.filter(p => p.active).map(p => p.id);
+  const i = activeIds.indexOf(state.currentPage);
+  if (i > 0) goToPage(activeIds[i - 1]);
+}
+
+// ---------------------------------------------------------------------------
+// PAGE / FORM RENDERING
+// ---------------------------------------------------------------------------
+function renderProgress() {
+  const shown = PAGES.filter(p => p.active);
+  const idx = shown.findIndex(p => p.id === state.currentPage);
+  const total = shown.length;
+  document.getElementById('progress-text').textContent =
+    'Page ' + (idx + 1) + ' of ' + total + '  \u00B7  ' + (shown[idx] ? shown[idx].label : '');
+  document.getElementById('progress-fill').style.width =
+    (((idx + 1) / total) * 100).toFixed(1) + '%';
+}
+
+function renderNavButtons() {
+  const activeIds = PAGES.filter(p => p.active).map(p => p.id);
+  const i = activeIds.indexOf(state.currentPage);
+  const back = document.getElementById('btn-back');
+  const next = document.getElementById('btn-next');
+  back.disabled = (i <= 0);
+  // No more active pages after current => disable next
+  const noMore = (i < 0) || (i >= activeIds.length - 1);
+  next.disabled = noMore;
+  next.textContent = noMore ? 'Last step' : 'Next \u2192';
+}
+
+function showCurrentPageOnly() {
+  document.querySelectorAll('.page').forEach(el => {
+    el.hidden = (el.dataset.page !== state.currentPage);
+  });
+}
+
+// Hydrate every input on the current page from state.data, attach change
+// listeners, and run validators.
+function hydrateForms() {
+  // Checkbox inputs (handle BEFORE the generic text-input pass below so the
+  // text branch's input.value.trim() doesn't see them as text).
+  document.querySelectorAll('input[type="checkbox"][data-key]').forEach(cb => {
+    const key = cb.dataset.key;
+    if (state.data[key] != null) cb.checked = !!state.data[key];
+    if (!cb._wired) {
+      cb.addEventListener('change', () => {
+        state.data[key] = !!cb.checked;
+        saveState();
+        renderPreviews();
+        renderRail();
+        renderNavButtons();
+      });
+      cb._wired = true;
+    }
+  });
+
+  // Text + password inputs
+  document.querySelectorAll('input[data-key]:not([type="checkbox"])').forEach(input => {
+    const key = input.dataset.key;
+    // First-touch default seeding: if the field has a data-default and the
+    // user has never written to it (state is null/undefined, NOT empty
+    // string -- empty means they cleared it deliberately), seed the state
+    // and the input value from data-default so the recommended value is
+    // visible and "accept defaults = just click Next" works.
+    const def = input.getAttribute('data-default');
+    if (state.data[key] == null && def) {
+      state.data[key] = siHostingDefault(def);
+      saveState();
+    }
+    if (state.data[key] != null) input.value = state.data[key];
+    if (!input._wired) {
+      input.addEventListener('input', () => {
+        state.data[key] = input.value.trim();
+        validateField(input);
+        saveState();
+        renderPreviews();
+        renderRail();   // status badges may flip
+        renderNavButtons();
+      });
+      input._wired = true;
+    }
+    validateField(input);
+  });
+
+  // Dropdowns (e.g. host-type picker on the Tenant Identity page).
+  document.querySelectorAll('select[data-key]').forEach(sel => {
+    const key = sel.dataset.key;
+    const def = sel.getAttribute('data-default');
+    if (state.data[key] == null && def) {
+      state.data[key] = def;
+      saveState();
+    }
+    if (state.data[key] != null) sel.value = state.data[key];
+    if (!sel._wired) {
+      sel.addEventListener('change', () => {
+        state.data[key] = sel.value;
+        saveState();
+        if (key === 'hostType') syncHostingDefaults();
+        syncCredBlocks();
+        renderPreviews();
+        renderRail();
+        renderNavButtons();
+      });
+      sel._wired = true;
+    }
+  });
+
+  // Toggle groups (radio-style)
+  document.querySelectorAll('[data-toggle-key]').forEach(group => {
+    const key = group.dataset.toggleKey;
+    group.querySelectorAll('label[data-val]').forEach(lbl => {
+      const val = lbl.dataset.val;
+      const checked = (state.data[key] === val);
+      lbl.classList.toggle('checked', checked);
+      const radio = lbl.querySelector('input[type="radio"]');
+      if (radio) radio.checked = checked;
+      if (!lbl._wired) {
+        lbl.addEventListener('click', () => {
+          state.data[key] = val;
+          saveState();
+          hydrateForms();
+          syncCredBlocks();
+          renderPreviews();
+          renderRail();
+          renderNavButtons();
+        });
+        lbl._wired = true;
+      }
+    });
+  });
+
+  syncCredBlocks();
+}
+
+// Show/hide the SPN-mode / cred-type / cred-storage blocks on the Tenant page.
+//   data-spn-mode-block      = 'createNew' | 'useExisting'
+//   data-cred-block          = 'kvSecret'  | 'certThumb'   (legacy = useExisting cred block)
+//   data-cred-storage-block  = 'KeyVault'  | 'LocalCertStore' | 'Inline'  (createNew only)
+//
+// Compound visibility: an element is shown only if ALL its data-* filters match the
+// current state. This lets the HTML mark e.g. "createNew + KeyVault" with two attrs
+// and we only show it when both are active.
+// Map of HTML data-attribute -> state key for compound visibility filters.
+// Add new filters here only -- syncCredBlocks() iterates this map generically.
+const VIS_FILTERS = {
+  spnModeBlock:     'spnMode',
+  credBlock:        'credType',
+  credStorageBlock: 'credStorage',
+  hostTypeBlock:    'hostType',
+  smtpModeBlock:      'smtpMode',     // off | anon | auth
+  cmdbModeBlock:      'cmdbMode',     // off | csv
+  openAiModeBlock:    'openAiMode',   // off | enabled
+  openAiResModeBlock: 'openAiResMode',// useExisting | createNew
+  shodanModeBlock:    'shodanMode',   // off | enabled
+  defenderModeBlock:  'defenderMode', // off | linked
+  entraDiagToSiBlock: 'entraDiagToSI',// off | enabled (only when defenderMode=off)
+};
+
+// Valid storage options per (hostType, credType). Drives:
+//   - which storage radio labels are visible (HTML data-host-type-block + data-cred-block)
+//   - auto-snap for state.data.credStorage when current pick becomes invalid
+const VALID_STORAGE_BY_HOST = {
+  win:              ['LocalCertStore', 'Inline'],                 // no MI = no KV bootstrap
+  azureVMMI:        ['LocalCertStore', 'Inline', 'KeyVault'],
+  azureContainerMI: ['Inline', 'KeyVault'],                       // ephemeral container, no cert store
+};
+const VALID_STORAGE_BY_CRED = {
+  kvSecret:  ['Inline', 'KeyVault'],
+  certThumb: ['LocalCertStore', 'KeyVault'],
+};
+
+function snapCredStorage() {
+  const ht = state.data.hostType;
+  const ct = state.data.credType;
+  const cs = state.data.credStorage;
+  const allowed = (VALID_STORAGE_BY_HOST[ht] || []).filter(x => (VALID_STORAGE_BY_CRED[ct] || []).includes(x));
+  if (!allowed.includes(cs)) {
+    // Snap to the first allowed option (preferred order matches the host's valid list).
+    state.data.credStorage = allowed[0] || 'Inline';
+  }
+}
+
+// No managed identity can exist on a server outside Azure ('win'): the sign-in snaps to a NEW service principal by
+// CERTIFICATE (the secret stays one click away). Mirrors Resolve-SIWizardSignIn in backend\SI-WizardSignIn.ps1.
+function snapSignIn() {
+  if (state.data.hostType === 'win' && state.data.spnMode === 'managedIdentity') {
+    state.data.spnMode = 'createNew';
+    state.data.credType = 'certThumb';
+  }
+}
+
+function syncCredBlocks() {
+  // Defensive: ensure every driver field is populated. Old localStorage
+  // from pre-v2.2.106 sessions may be missing them, which breaks the visibility
+  // pass below (every conditional would compare to undefined and pass-through).
+  if (!state.data.spnMode)     state.data.spnMode     = 'managedIdentity';
+  if (!state.data.credType)    state.data.credType    = 'certThumb';
+  if (!state.data.credStorage) state.data.credStorage = 'LocalCertStore';
+  if (!state.data.hostType)    state.data.hostType    = 'azureVMMI';
+  if (!state.data.smtpMode)     state.data.smtpMode     = 'off';
+  if (!state.data.cmdbMode)     state.data.cmdbMode     = 'off';
+  if (!state.data.openAiMode)   state.data.openAiMode   = 'off';
+  if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
+  if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
+  if (!state.data.defenderMode) state.data.defenderMode = 'off';
+  if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
+  // A server outside Azure cannot have a managed identity: switch to a new service principal by certificate.
+  snapSignIn();
+  // Auto-snap credStorage to a valid combo for the current hostType x credType
+  // so a hidden radio is never the active selection.
+  snapCredStorage();
+
+  // Single-pass visibility for every element carrying any of our filter
+  // attributes. Each filter value may be a single token ("createNew") or a
+  // comma-separated whitelist ("azureVMMI,azureContainerMI"); the element is
+  // visible only if EVERY filter the element declares matches state.
+  const selector = Object.keys(VIS_FILTERS).map(a => '[data-' + a.replace(/([A-Z])/g, '-$1').toLowerCase() + ']').join(', ');
+  document.querySelectorAll(selector).forEach(el => {
+    let hide = false;
+    for (const [attr, stateKey] of Object.entries(VIS_FILTERS)) {
+      const want = el.dataset[attr];
+      if (!want) continue;
+      const wants = want.split(',').map(s => s.trim()).filter(Boolean);
+      if (!wants.includes(state.data[stateKey])) { hide = true; break; }
+    }
+    el.hidden = hide;
+  });
+}
+
+function validateField(input) {
+  const key = input.dataset.key;
+  if (!validators[key]) return;
+  // Empty + not-yet-required => no error styling (don't yell at the customer
+  // before they've typed anything, but mark as invalid so badges work).
+  const val = (input.value || '').trim();
+  const errEl = document.querySelector('.err[data-err="' + key + '"]');
+  if (val === '') {
+    input.classList.remove('invalid');
+    if (errEl) errEl.classList.remove('show');
+    return;
+  }
+  const ok = validators[key](val);
+  input.classList.toggle('invalid', !ok);
+  if (errEl) errEl.classList.toggle('show', !ok);
+}
+
+// ---------------------------------------------------------------------------
+// MASTER RENDER
+// ---------------------------------------------------------------------------
+function renderApp() {
+  showCurrentPageOnly();
+  hydrateForms();
+  renderPreviews();
+  renderRail();
+  renderProgress();
+  renderNavButtons();
+}
+
+// ---------------------------------------------------------------------------
+// COPY-TO-CLIPBOARD -- buttons with data-copy="<elementId>"
+// ---------------------------------------------------------------------------
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg || 'Copied to clipboard.';
+  t.classList.add('show');
+  clearTimeout(showToast._tid);
+  showToast._tid = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+async function copyById(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  // Use textContent to strip the syntax-highlight <span> wrappers.
+  const text = el.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Copied to clipboard.');
+  } catch (e) {
+    // Fallback for file:// + older browsers (clipboard API often blocked there).
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showToast('Copied to clipboard.'); }
+    catch (_) { showToast('Copy failed -- select + Ctrl+C manually.'); }
+    document.body.removeChild(ta);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// INIT
+// ---------------------------------------------------------------------------
+// Pull /api/state from the listener and auto-prefill blank tenantId +
+// subscriptionId from the operator's connected Az + Graph contexts. The
+// operator just authenticated to the tenant they want to provision into --
+// retyping the GUID is friction. Only fills when state is empty (never
+// overrides what the operator typed). Best-effort: fails silently if the
+// wizard is opened from disk (file://) without a listener.
+async function autoFillFromOperatorContext() {
+  try {
+    const resp = await fetch('/api/state', { method: 'GET' });
+    if (!resp.ok) return;
+    const obj = await resp.json();
+    const op  = obj && obj.operatorContext;
+    if (!op) return;
+    let dirty = false;
+    if (op.tenantId && !state.data.tenantId) {
+      state.data.tenantId = op.tenantId;
+      dirty = true;
+    }
+    if (op.subscriptionId && !state.data.subscriptionId) {
+      state.data.subscriptionId = op.subscriptionId;
+      dirty = true;
+    }
+    if (dirty) {
+      saveState();
+      // Refresh any visible inputs + snippet/rail (wizard may already be on
+      // tenant or workspace page when this resolves async).
+      hydrateForms();
+      renderPreviews();
+      renderRail();
+      renderNavButtons();
+    }
+  } catch (e) {
+    // file:// context or listener unreachable -- silent.
+  }
+}
+
+function init() {
+  loadState();
+  // Always start a fresh page load on the Welcome page. localStorage answers
+  // are still preserved -- when the operator clicks Next / navigates the rail,
+  // every previously-typed value is back in the inputs. But the Welcome page
+  // (with the prereq cards + "Reset all answers" button + new-vs-existing
+  // guidance) is what they need to SEE first on every launch, especially
+  // after restarting the listener mid-test.
+  state.currentPage = 'welcome';
+  // Fire-and-forget: pulls operator's tenant + sub from /api/state and
+  // auto-prefills blank fields. Resolves async so init() doesn't block.
+  autoFillFromOperatorContext();
+
+  // Wire the hero buttons on the Welcome page.
+  document.getElementById('btn-start').addEventListener('click', () => goToPage('tenant'));
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    if (!confirm('Reset every wizard answer and clear localStorage?')) return;
+    localStorage.removeItem(STORAGE_KEY);
+    // Reset the in-memory state too -- mutating in place because consts above
+    // hold references to these objects.
+    state.currentPage = 'welcome';
+    state.visited = { welcome: true };
+    Object.keys(state.data).forEach(k => delete state.data[k]);
+    state.data.credType = 'kvSecret';
+    // Clear input element values manually -- hydrateForms only writes when
+    // state has a value; it doesn't blank stale DOM input.value.
+    document.querySelectorAll('input[data-key]').forEach(i => { i.value = ''; });
+    renderApp();
+    showToast('All answers cleared.');
+  });
+
+  // Bottom-bar nav
+  document.getElementById('btn-next').addEventListener('click', nextPage);
+  document.getElementById('btn-back').addEventListener('click', prevPage);
+
+  // Keyboard nav: Enter advances when current page is "done", but not when
+  // focused inside a textarea or when the user is in the middle of typing in
+  // an invalid field.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
+    if (isPageDone(state.currentPage)) {
+      e.preventDefault();
+      nextPage();
+    }
+  });
+
+  // Copy buttons (delegated -- works for buttons in placeholder cards too).
+  document.body.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-copy]');
+    if (btn) copyById(btn.dataset.copy);
+  });
+
+  renderApp();
+}
+
+// Defer until DOM is parsed (script tag is at end of body but kept for safety).
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+
+// ===========================================================================
+// APPLY PAGE  (Step 10) -- POSTs the wizard's collected state to /api/apply,
+// renders 3-phase progress (SPN -> Infrastructure -> Config file), shows the
+// result (or error) in-page. The /api/apply backend is live since v2.2.105.
+// ===========================================================================
+function buildApplyState() {
+    var d = state.data || {};
+    var st = {
+        tenantId:       d.tenantId       || '',
+        subscriptionId: d.subscriptionId || '',
+        hostType:       d.hostType       || 'azureVMMI',
+        spn: {
+            displayName: d.spnMode === 'createNew' ? (d.spnDisplayName || siHostingDefault('SecurityInsight (prod-community-vm)')) : null,
+            // Default: a managed identity. A service principal by certificate or by secret only when chosen.
+            credKind:    d.spnMode === 'managedIdentity' ? 'ManagedIdentity' : (d.credType === 'kvSecret' ? 'Secret' : 'Cert'),
+            credStorage: d.credStorage || 'LocalCertStore',
+            managedIdentityName: d.spnMode === 'managedIdentity' ? (d.managedIdentityName || null) : null,
+            vmName:              d.spnMode === 'managedIdentity' ? (d.vmName || null) : null,
+            vmResourceGroup:     d.spnMode === 'managedIdentity' ? (d.vmResourceGroup || null) : null,
+            // Existing-SPN mode: the summary promised "Use existing SPN <appId>" but the app id was never
+            // sent, so the backend looked up -- and created -- an app with no name.
+            existingAppId:      d.spnMode === 'useExisting' ? (d.appId || null) : null,
+            existingThumbprint: (d.spnMode === 'useExisting' && d.credType === 'certThumb') ? (d.certThumbprint || null) : null,
+            kvSecretName:       (d.spnMode === 'useExisting' && d.credType !== 'certThumb') ? (d.secretName || null) : null,
+            // #175: the backend honoured this all along; the page never sent it, so Community asset-tagging
+            // could only be enabled from the CLI. Opt-in -- the only write role SecurityInsight ever asks for.
+            includeTagContributor: !!d.includeTagContributor
+        },
+        infra: {
+            location:             d.location             || 'westeurope',
+            resourceGroupName:    nameWithSuffix('workspaceRg')          || siHostingDefault('rg-si-prod-community-vm'),
+            workspaceName:        nameWithSuffix('workspaceName')        || siHostingDefault('log-si-prod-community-vm'),
+            dceName:              nameWithSuffix('dceName')              || siHostingDefault('dce-si-prod-community-vm'),
+            dceResourceGroup:     nameWithSuffix('dceRg')                || nameWithSuffix('workspaceRg') || siHostingDefault('rg-si-prod-community-vm'),
+            storageAccountName:   nameWithSuffix('storageAccountName', { storage: true }) || '',
+            storageResourceGroup: nameWithSuffix('storageResourceGroup') || nameWithSuffix('workspaceRg') || siHostingDefault('rg-si-prod-community-vm'),
+            storageContainer:     nameWithSuffix('storageContainer')     || 'securityinsight'
+        },
+        namingSuffix: d.namingSuffix || null
+    };
+    if (d.kvName) {
+        st.spn.keyVaultName = d.kvName;
+        st.infra.keyVaultName = d.kvName;
+    }
+    if (d.smtpMode && d.smtpMode !== 'off') {
+        st.smtp = {
+            Mode:     d.smtpMode,
+            Server:   d.smtpServer || null,
+            Port:     d.smtpPort   ? Number(d.smtpPort) : 587,
+            UseSsl:   d.smtpUseSsl !== false,
+            From:     d.smtpFrom   || null,
+            MailTo:   (d.mailTo || '').split(/[,;\s]+/).filter(Boolean)
+        };
+        if (d.smtpMode === 'auth') {
+            st.smtp.User     = d.smtpUser     || null;
+            st.smtp.Password = d.smtpPassword || null;
+        }
+    }
+    if (d.openAiMode === 'enabled' && d.openAiEndpoint) {
+        st.openAi = {
+            Endpoint:        d.openAiEndpoint,
+            Deployment:      d.openAiDeployment || null,
+            ApiKey:          d.openAiApiKey     || null,
+            ApiVersion:      d.openAiApiVersion || '2024-08-01-preview',
+            MaxSpendPerRun:  d.openAiMaxSpend ? Number(d.openAiMaxSpend) : null
+        };
+    }
+    if (d.shodanMode === 'enabled' && d.shodanApiKey) {
+        st.shodan = { ApiKey: d.shodanApiKey };
+    }
+    if (d.cmdbMode === 'csv') {
+        st.cmdb = {
+            Enabled:      true,
+            RefreshHours: d.cmdbRefreshHours ? Number(d.cmdbRefreshHours) : 24,
+            CsvPath:      d.cmdbCsvPath || null
+        };
+    }
+    if (d.enableJsonSink) st.enableJsonSink = true;
+    if (d.defenderMode === 'linked' && d.defenderWorkspaceResourceId) {
+        st.defenderWorkspaceResourceId = d.defenderWorkspaceResourceId;
+    }
+    if (d.defenderMode !== 'linked' && d.entraDiagToSI === 'enabled') {
+        st.entraDiagnosticSetting = {
+            Enabled:    true,
+            Name:       'SI-EntraDiag',
+            Categories: ['SignInLogs','AuditLogs','NonInteractiveUserSignInLogs','ServicePrincipalSignInLogs','ManagedIdentitySignInLogs','UserRiskEvents','ProvisioningLogs','MicrosoftGraphActivityLogs']
+        };
+    }
+    // Container Apps Job runtime (Phase 5) -- gated on hostType. Default tuning;
+    // backend Initialize-SIContainerInfra resolves the registry, environment and identity names from the RG when
+    // absent: rg-si-<label> -> acrsi<label>01 / cae-si-<label> / id-si-<label>; any other RG keeps the names
+    // earlier releases created there (a re-run never builds a second environment next to the first).
+    if (d.hostType === 'azureContainerMI') {
+        st.container = {
+            UseKEDA:         true,
+            KedaMaxReplicas: 30
+        };
+    }
+    return st;
+}
+
+function renderApplySummary() {
+    var d = state.data || {};
+    var st = buildApplyState();
+    var spnEl = document.getElementById('apply-summary-spn');
+    if (spnEl) {
+        if (d.spnMode === 'managedIdentity') {
+            spnEl.textContent = (d.hostType === 'azureContainerMI')
+                ? ('Sign in as a managed identity: the Container Apps jobs\' user-assigned identity\n(created and granted by the container setup) in tenant ' + (st.tenantId || '<TENANT-ID>'))
+                : ('Sign in as a managed identity: create user-assigned identity ' + (d.managedIdentityName || 'id-si-<label>') +
+                   ' in tenant ' + (st.tenantId || '<TENANT-ID>') + '\nGrant it the read-only permissions' +
+                   (d.vmName ? ('\nAttach it to VM ' + d.vmName) : '\nAttach it to your VM (name it on step 1, or attach it in the portal)'));
+        } else if (d.spnMode === 'createNew') {
+            spnEl.textContent =
+                'Create SPN "' + st.spn.displayName + '" in tenant ' + (st.tenantId || '<TENANT-ID>') + '\n' +
+                'Cred kind    : ' + st.spn.credKind + '\n' +
+                'Cred storage : ' + st.spn.credStorage +
+                (st.spn.keyVaultName ? ('\nKey Vault    : ' + st.spn.keyVaultName) : '');
+        } else {
+            spnEl.textContent = 'Use existing SPN ' + (d.appId || '<APP-ID>') + ' in tenant ' + (st.tenantId || '<TENANT-ID>');
+        }
+    }
+    var inEl = document.getElementById('apply-summary-infra');
+    if (inEl) {
+        inEl.textContent =
+            'Subscription : ' + (st.subscriptionId || '<SUB-ID>') + '\n' +
+            'Location     : ' + st.infra.location + '\n' +
+            'Workspace    : ' + st.infra.workspaceName + ' (RG ' + st.infra.resourceGroupName + ')\n' +
+            'DCE          : ' + st.infra.dceName + '\n' +
+            'Storage      : ' + (st.infra.storageAccountName || '<STORAGE-ACCT>') + '   <- reached with the identity';
+    }
+    var cfgEl = document.getElementById('apply-summary-config');
+    if (cfgEl) {
+        var optional = [];
+        if (st.smtp)     optional.push('SMTP');
+        if (st.openAi)   optional.push('Azure OpenAI');
+        if (st.shodan)   optional.push('Shodan');
+        if (st.cmdb)     optional.push('CMDB');
+        if (st.enableJsonSink) optional.push('JSON sink');
+        cfgEl.textContent = 'Write config\\SecurityInsight.custom.ps1 -- an existing file keeps every value; only settings it lacks are added (a backup is written first).\n' +
+            'Optional sections: ' + (optional.length ? optional.join(', ') : 'none');
+    }
+    var diagEl = document.getElementById('apply-summary-entradiag');
+    if (diagEl) {
+        if (st.entraDiagnosticSetting && st.entraDiagnosticSetting.Enabled) {
+            diagEl.textContent =
+                'Create tenant-level Entra Diagnostic Setting "' + (st.entraDiagnosticSetting.Name || 'SI-EntraDiag') + '" targeting the SI workspace.\n' +
+                'Categories : ' + (st.entraDiagnosticSetting.Categories || []).join(', ') + '\n' +
+                'Required role: Entra Security Administrator OR Global Administrator on the operator account.';
+        } else {
+            diagEl.textContent = 'SKIPPED -- toggle is off (or you linked an existing Defender / Sentinel workspace whose own Diagnostic Setting already streams these categories).';
+        }
+    }
+    var caEl = document.getElementById('apply-summary-container');
+    if (caEl) {
+        if (st.container) {
+            caEl.textContent =
+                'Provision Container Apps Job runtime (ACR + image + CAE + KEDA-scaled Jobs).\n' +
+                'CAE name        : ' + (st.container.EnvName || (/^rg-si-(r0|r1|r2|prod)-(community|pro)-(ca|vm)(-[a-z0-9][a-z0-9-]*)?$/.test(st.infra.resourceGroupName) ? st.infra.resourceGroupName.replace(/^rg-/, 'cae-') : 'cae-securityinsight (the name already used in this resource group)')) + '\n' +
+                'KEDA scaling    : ' + (st.container.UseKEDA ? 'on' : 'off') + ' (max replicas ' + (st.container.KedaMaxReplicas || 30) + ')\n' +
+                'Pre-requisites  : the wizard\'s own Azure sign-in (no Azure CLI; the image is built in the registry over REST).\n' +
+                'Required role   : Owner OR Contributor + User Access Administrator on the target subscription.';
+        } else {
+            caEl.textContent = 'SKIPPED -- engine host is not "Azure Container Apps Job with MI" on Step 1; the engines run on the VM directly.';
+        }
+    }
+    var pre = document.getElementById('preview-apply');
+    if (pre) {
+        var safeSt = JSON.parse(JSON.stringify(st));
+        if (safeSt.smtp && safeSt.smtp.Password)   safeSt.smtp.Password = '***';
+        if (safeSt.openAi && safeSt.openAi.ApiKey) safeSt.openAi.ApiKey = '***';
+        if (safeSt.shodan && safeSt.shodan.ApiKey) safeSt.shodan.ApiKey = '***';
+        pre.textContent = JSON.stringify(safeSt, null, 2);
+    }
+}
+
+function setApplyPhase(phase, status) {
+    var el = document.querySelector('.apply-phase[data-phase="' + phase + '"]');
+    if (!el) return;
+    el.dataset.status = status;
+    var ic = el.querySelector('.apply-icon');
+    var stEl = el.querySelector('.apply-status');
+    if (ic) {
+        ic.innerHTML = status === 'ok' ? '&#10003;'
+                       : status === 'failed' ? '&#10007;'
+                       : status === 'running' ? '&#9696;'
+                       : status === 'consent-pending' ? '&#9888;'   // amber warning triangle
+                       : '&#9711;';
+    }
+    if (stEl) stEl.textContent = status;
+}
+
+function setApplyStatePill(text, bg) {
+    var p = document.getElementById('apply-state-pill');
+    if (!p) return;
+    p.textContent = text;
+    if (bg) p.style.background = bg;
+}
+
+function _esc(s) {
+    return String(s).replace(/[<&>]/g, function(c) { return c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'; });
+}
+
+// Render the per-step apply log as a monospace panel. Each entry in `log`
+// is one line emitted by Start-SetupWizard's apply orchestration -- the
+// caller can scan it to see exactly which step landed / failed.
+function renderApplyLogPanel(log) {
+    if (!log || !log.length) return '';
+    var rows = log.map(function(line) {
+        // Colour-code by prefix so the operator can scan green-good vs red-fail
+        var colour = '#5a6a7a';                                  // default grey
+        if (/\bok\b|=ok\b|succeeded|granted|created/i.test(line)) colour = '#2e7d32';
+        if (/\bfailed\b|FAIL|ERROR|throw/i.test(line))            colour = '#c62828';
+        if (/consent-pending|pending/i.test(line))                 colour = '#f57c00';
+        return '<div style="color:' + colour + ';">' + _esc(line) + '</div>';
+    }).join('');
+    return '<div class="note" style="background:#f5f7fa;border-left-color:#5a6a7a;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.55;margin-top:12px;max-height:380px;overflow:auto;">' +
+           '<b style="font-family:-apple-system,Segoe UI,sans-serif;">Per-step log (' + log.length + ' entries)</b>' +
+           '<div style="margin-top:8px;">' + rows + '</div>' +
+           '</div>';
+}
+
+// Pre-Apply field validation. Returns array of human-readable problems;
+// empty array = ready to apply. Catches blank required fields BEFORE we POST
+// so Azure doesn't reject mid-Phase 2 with cryptic InvalidResource errors.
+function validateApplyPayload(st) {
+    var problems = [];
+    if (!st.tenantId)                       problems.push('Step 1: Tenant ID is required (auto-prefilled from the wizard\'s own Azure sign-in; check the account you signed in with).');
+    if (!st.subscriptionId)                 problems.push('Step 2: Subscription ID is required.');
+    if (!st.infra || !st.infra.location)    problems.push('Step 2: Azure region is required.');
+    if (!st.infra || !st.infra.workspaceName)        problems.push('Step 2: Workspace name is required.');
+    if (!st.infra || !st.infra.resourceGroupName)    problems.push('Step 2: Workspace resource group is required.');
+    if (!st.infra || !st.infra.dceName)              problems.push('Step 2: Data Collection Endpoint name is required.');
+    if (!st.infra || !st.infra.storageAccountName)   problems.push('Step 2: Storage account name is required (3-24 chars, lowercase letters + digits, globally unique). The placeholder "stsiprodcommunityvm01" is just a hint -- you must type your actual account name.');
+    if (!st.infra || !st.infra.storageContainer)     problems.push('Step 2: Storage container name is required.');
+    if (st.spn && st.spn.credKind === 'Secret' && st.spn.credStorage === 'KeyVault' && !st.spn.keyVaultName) {
+        problems.push('Step 1: Key Vault name is required when secret + KeyVault storage is selected.');
+    }
+    return problems;
+}
+
+async function runApply() {
+    var btn = document.getElementById('btn-apply');
+    var progress = document.getElementById('apply-progress');
+    var result = document.getElementById('apply-result');
+    if (!btn || !progress || !result) return;
+
+    // Pre-flight client-side validation
+    var st = buildApplyState();
+    var problems = validateApplyPayload(st);
+    if (problems.length > 0) {
+        result.innerHTML = '<div class="note warn"><b>&#10007; Cannot apply -- missing required fields:</b><ul style="margin:8px 0 0 18px;">' +
+            problems.map(function(p) { return '<li>' + _esc(p) + '</li>'; }).join('') +
+            '</ul></div>';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Setting up...';
+    progress.style.display = 'block';
+    result.innerHTML = '';
+    setApplyPhase('spn', 'running');
+    setApplyPhase('infra', 'pending');
+    setApplyPhase('config', 'pending');
+    setApplyStatePill('RUNNING', '#fff4e5');
+
+    var payload = JSON.stringify(st);
+    var respText = '';
+    try {
+        var resp = await fetch('/api/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+        });
+        respText = await resp.text();
+        var obj = null;
+        try { obj = JSON.parse(respText); } catch (e) { /* keep raw */ }
+
+        if (resp.ok && obj && obj.ok) {
+            // SPN phase may report 'consent-pending' even when overall apply
+            // succeeded -- the SPN was created and the perms requested, but a
+            // Global Admin still has to click the consent URL. Reflect that
+            // distinction in the per-phase pills + the result panel.
+            var spnPhase = (obj.phaseStatus && obj.phaseStatus.spn) || 'ok';
+            setApplyPhase('spn', spnPhase === 'consent-pending' ? 'consent-pending' : 'ok');
+            setApplyPhase('infra', 'ok');
+            setApplyPhase('config', 'ok');
+            var consentStatus = (obj.spn && obj.spn.ConsentStatus) || 'granted';
+            var pendingPerms  = (obj.spn && obj.spn.PendingPermissions) || [];
+            var consentUrl    = (obj.spn && obj.spn.ConsentUrl) || '';
+            if (consentStatus === 'granted') {
+                setApplyStatePill('DONE', '#e8f5e9');
+            } else {
+                setApplyStatePill('CONSENT PENDING', '#fff8e1');
+            }
+            var appId = (obj.spn && obj.spn.AppId) || '?';
+            var wsId  = (obj.infra && obj.infra.WorkspaceResourceId) || '?';
+            var cfgPath = (obj.configFile && obj.configFile.Path) || '?';
+            var cfgBytes = (obj.configFile && obj.configFile.Bytes) || 0;
+            var cfgSecs = (obj.configFile && obj.configFile.Sections) || [];
+            var html = '<div class="note" style="background:' + (consentStatus === 'granted' ? '#e8f5e9' : '#fff8e1') +
+                       ';border-left-color:' + (consentStatus === 'granted' ? '#2e7d32' : '#f57c00') + ';">' +
+                       '<b>' + (consentStatus === 'granted' ? '&#10003; Apply succeeded.' : '&#9888; Apply succeeded -- ADMIN CONSENT PENDING.') + '</b><br>' +
+                       'SPN AppId: <code>' + _esc(appId) + '</code><br>' +
+                       'Workspace: <code>' + _esc(wsId) + '</code><br>' +
+                       'Config file: <code>' + _esc(cfgPath) + '</code> (' + cfgBytes + ' bytes)<br>' +
+                       'Sections written: ' + _esc(cfgSecs.join(', ') || '(none)') + '</div>';
+            // Surface the admin-consent URL prominently when not all perms were granted.
+            // The operator hands this URL to a Global Admin who clicks it once; afterward
+            // re-clicking 'Apply now' validates that consent landed (Apply is idempotent).
+            if (consentStatus !== 'granted' && consentUrl) {
+                html += '<div class="note warn" style="background:#fff8e1;border-left-color:#f57c00;margin-top:12px;">' +
+                        '<b>Admin consent required for ' + pendingPerms.length + ' permission(s):</b><br>' +
+                        '<code style="font-size:11px;display:block;margin:6px 0;">' + _esc(pendingPerms.join(', ')) + '</code>' +
+                        '<b>How to resolve:</b><br>' +
+                        '1. Send this URL to a <b>Global Administrator</b> (or anyone with the <b>Privileged Role Administrator</b> role on the app):<br>' +
+                        '<a href="' + _esc(consentUrl) + '" target="_blank" rel="noopener" style="display:inline-block;margin:8px 0;padding:8px 14px;background:#1a3a5c;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">&#128279; Open admin-consent page</a><br>' +
+                        '<code style="font-size:11px;word-break:break-all;color:#5a6a7a;">' + _esc(consentUrl) + '</code><br>' +
+                        '2. After they click <b>Accept</b>, re-click <b>Setup</b> above. The wizard re-validates each permission and updates this panel (Setup is idempotent &mdash; nothing is re-created).' +
+                        '</div>';
+            }
+            html += renderApplyLogPanel(obj.log);
+            result.innerHTML = html;
+        } else {
+            var phase = (obj && obj.phase) || 'unknown';
+            var err   = (obj && obj.error) || respText || ('HTTP ' + resp.status);
+            var ps = (obj && obj.phaseStatus) || {};
+            ['spn','infra','config'].forEach(function(p) {
+                if (ps[p]) setApplyPhase(p, ps[p]);
+                else if (p === phase) setApplyPhase(p, 'failed');
+            });
+            setApplyStatePill('FAILED', '#fdecea');
+            result.innerHTML =
+                '<div class="note warn"><b>&#10007; Apply failed at phase: ' + _esc(phase) + '</b><br>' +
+                '<pre style="white-space:pre-wrap;font-size:12px;margin:8px 0;">' + _esc(err) + '</pre></div>' +
+                renderApplyLogPanel(obj && obj.log);
+        }
+    } catch (e) {
+        setApplyPhase('spn', 'failed');
+        setApplyStatePill('FAILED', '#fdecea');
+        result.innerHTML = '<div class="note warn"><b>&#10007; Apply failed (network)</b><br>' + _esc(e.message || e) + '</div>';
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '&#9658; Setup';
+    }
+}
+
+function wireApplyPage() {
+    var btn = document.getElementById('btn-apply');
+    if (btn && !btn._wired) {
+        btn.addEventListener('click', runApply);
+        btn._wired = true;
+    }
+    renderApplySummary();
+}
+
+// Re-render the apply summary every time the user lands on the review page.
+var _origGoToPage = goToPage;
+goToPage = function(id) {
+    _origGoToPage(id);
+    if (id === 'review') wireApplyPage();
+};

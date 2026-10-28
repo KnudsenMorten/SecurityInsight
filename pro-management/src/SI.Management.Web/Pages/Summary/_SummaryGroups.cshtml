@@ -1,0 +1,100 @@
+@model SI.Management.Web.Pages.Summary.IndexModel
+@* #636: Risks > Summary as the stored groupings of the Detailed findings (sidata.SummaryGroup, written once per collection by
+   the data sync from data-model\summary-groupings.locked.json). Never a GROUP BY over the findings per request. *@
+@using SI.Management.Web.Summary
+@{
+    var g = Model.Grouping;
+    var st = Model.GroupState;
+    var pages = Math.Max(1, (int)Math.Ceiling(Model.GroupTotal / (double)Math.Max(1, Model.Size)));
+}
+<h1>Summary</h1>
+<p class="lede">The findings of the newest Risk Analysis run, grouped: per recommendation with its affected assets, per asset, per tier, per domain, category and subcategory, per risk rating, department, severity and report. Every finding of an active CI counts (one finding = one issue on one asset).</p>
+@{
+    // #855 (owner 2026-10-21: "default filter is active, so it should be active only"): the stored groupings are built over the
+    // findings of active CIs only -- said, with the seen window in force
+    var sgRules = ViewContext.HttpContext.RequestServices.GetService(typeof(SI.Management.Core.ProData.ICiLifecycleRulesReader)) is SI.Management.Core.ProData.ICiLifecycleRulesReader sgReader
+        ? await sgReader.ReadAsync(ViewContext.HttpContext.RequestAborted) : SI.Management.Core.ProData.CiLifecycleDefinitions.Defaults;
+    var sgScope = new SI.Management.Web.Pages.ViewScope { Lifecycle = SI.Management.Core.ProData.LifecycleFilter.ActiveOnlyWords(sgRules), Definitions = sgRules.Definitions };
+}
+<partial name="~/Pages/Shared/_ViewScope.cshtml" model="sgScope" />
+@if (!Model.SummaryOn)
+{
+    <p class="hint" data-summary-step-off>The Risk Analysis Summary report is switched off (the default): these groupings come from the detailed findings. It can be switched on again on <nav-ref page="/Admin/Jobs" />.</p>
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (st is null || !st.HasTables) { <div class="notice" role="status" data-no-tables>@SI.Management.Web.Pages.Summary.IndexModel.GroupsNoTablesText</div> }
+else if (st.CollectionId is null) { <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Summary.IndexModel.GroupsNoCollectionText</div> }
+else if (!st.Prepared) { <div class="notice" role="status" data-preparing>@SI.Management.Web.Pages.Summary.IndexModel.GroupsPreparingText</div> }
+else
+{
+    <p class="hint" data-scope>The run of @Fmt.Time(st.CollectionTime) · @Fmt.Int(st.Findings) finding(s) · @(Model.Counted ? "exempted findings left out" : "exempted findings included") · grouped @Fmt.Time(st.BuiltAt).</p>
+    <form method="get" class="filterbar noprint" aria-label="Grouping">
+        @if (Model.SummaryOn) { <input type="hidden" name="view" value="groups" /> }
+        <div>
+            <label for="sg-by">Group</label>
+            <select id="sg-by" name="by" data-autosubmit>
+                @foreach (var x in SummaryGroups.All)
+                {
+                    <option value="@x.Id" selected="@(x.Id == g.Id)">@x.Label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="sg-ex">Exempted findings</label>
+            <select id="sg-ex" name="exempted">
+                <option value="" selected="@(!Model.Counted)">Included</option>
+                <option value="hide" selected="@Model.Counted">Left out</option>
+            </select>
+        </div>
+        <div><label for="sg-q">Search</label><input id="sg-q" name="q" value="@Model.GroupSearch" maxlength="400" /></div>
+        <div><button type="submit">Show</button></div>
+    </form>
+    <div class="table-wrap">
+        <table class="findings" data-summary-groups="@g.Id" data-sortable>
+            <thead>
+                <tr>
+                    @foreach (var k in g.KeyLabels) { <th scope="col">@k</th> }
+                    @if (g.Id is "recommendation" or "asset") { <th scope="col">Name</th> }
+                    <th scope="col" class="num">Findings</th>
+                    <th scope="col" class="num">Assets</th>
+                    @if (g.Id != "recommendation") { <th scope="col" class="num">Recommendations</th> }
+                    <th scope="col" class="num">Very High</th>
+                    <th scope="col" class="num">High</th>
+                    <th scope="col" class="num">On tier 0</th>
+                    <th scope="col">Most critical tier</th>
+                    <th scope="col" class="num">Highest risk</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var r in Model.GroupRows)
+            {
+                var keys = new[] { r.Key1, r.Key2, r.Key3 };
+                <tr>
+                    @for (var i = 0; i < g.KeyLabels.Count; i++)
+                    {
+                        var text = SummaryGroups.KeyText(g.Id, i, keys[i], Model.Departments);
+                        if (g.Id == "asset" && i == 0 && keys[0].Length > 0) { <td><a href="/Collection/Asset?key=@Uri.EscapeDataString(keys[0])">@text</a></td> }
+                        else if (g.Id == "recommendation" && i == 0 && keys[0].Length > 0) { <td><a href="/Findings?q=@Uri.EscapeDataString(keys[0])">@text</a></td> }
+                        else { <td>@text</td> }
+                    }
+                    @if (g.Id is "recommendation" or "asset") { <td>@r.Label</td> }
+                    <td class="num">@Fmt.Int(r.Findings)</td>
+                    <td class="num">@Fmt.Int(r.Assets)</td>
+                    @if (g.Id != "recommendation") { <td class="num">@Fmt.Int(r.Recommendations)</td> }
+                    <td class="num">@Fmt.Int(r.CriticalFindings)</td>
+                    <td class="num">@Fmt.Int(r.HighFindings)</td>
+                    <td class="num">@Fmt.Int(r.Tier0Findings)</td>
+                    <td>@(r.BestTier is { } t ? "Tier " + t : "Unclassified")</td>
+                    <td class="num">@Fmt.Score(r.MaxRisk)</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+    @if (Model.GroupRows.Count == 0) { <p class="muted" data-empty>No group matches.</p> }
+    <p class="hint noprint" data-pager>Showing @Fmt.Int(Model.GroupRows.Count == 0 ? 0 : (Model.PageNo - 1) * (long)Model.Size + 1)–@Fmt.Int((Model.PageNo - 1) * (long)Model.Size + Model.GroupRows.Count) of @Fmt.Int(Model.GroupTotal) group(s) · page @Model.PageNo of @pages
+        @if (Model.PageNo > 1) { <text> · </text><a href="@Model.GroupLink(("p", (Model.PageNo - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)))">previous</a> }
+        @if (Model.PageNo < pages) { <text> · </text><a href="@Model.GroupLink(("p", (Model.PageNo + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)))">next</a> }
+    </p>
+}
+@if (Model.SummaryOn) { <p class="hint noprint"><a href="/Summary" data-summary-report-link>The Risk Analysis Summary report's own rows</a></p> }

@@ -1,0 +1,21 @@
+id:        SentineloneSingularity
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'SentinelOne Singularity'
+category:  'EDR'
+description: ''
+displayNames:
+  - 'SentinelOne Singularity'
+
+detections:
+  - id: SentineloneSingularity
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'singularity*'
+    set:
+      Tier:     1
+      Purpose:  'EDR'
+      Category: 'EDR'

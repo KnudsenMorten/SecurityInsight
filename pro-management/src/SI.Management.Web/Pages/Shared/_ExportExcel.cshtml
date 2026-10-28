@@ -1,0 +1,9 @@
+@* "Export to Excel": this page's own URL, with its current filters, answered by the page's Xlsx handler (same role gate as the page). *@
+@{
+    var req = ViewContext.HttpContext.Request;
+    var parts = req.Query.Where(kv => !kv.Key.Equals("handler", StringComparison.OrdinalIgnoreCase))
+        .SelectMany(kv => kv.Value.Select(v => Uri.EscapeDataString(kv.Key) + "=" + Uri.EscapeDataString(v ?? "")))
+        .Append("handler=Xlsx");
+    var href = req.PathBase + req.Path + "?" + string.Join("&", parts);
+}
+<a class="button secondary small" href="@href" data-export="xlsx" title="Download the tables on this page as an Excel workbook">Export to Excel</a>

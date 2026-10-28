@@ -1,0 +1,7 @@
+@model RangeInfo
+<ul class="range" aria-label="Period">
+    @foreach (var c in Model.Choices)
+    {
+        <li><a href="?@(Model.Param)=@c" aria-current="@(c == Model.Current ? "true" : "false")">@c @Model.Unit</a></li>
+    }
+</ul>

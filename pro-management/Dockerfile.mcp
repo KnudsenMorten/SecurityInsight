@@ -1,0 +1,27 @@
+# SecurityInsight Pro MCP server (read-only estate tools, streamable HTTP at /mcp, Entra bearer required).
+#
+# A SEPARATE image and Container App from the web app: it is its own ASP.NET Core process (SI.Management.Mcp) with
+# its own authentication (JwtBearer access tokens, not the web app's sign-in cookie), so it cannot share the web
+# app's process or port. It shares SI.Management.Core -- the same curated tools the web app's chat calls in-process.
+#
+# BUILD CONTEXT: the same staged folder as ./Dockerfile (deploy\Deploy-SIManagement.ps1 -Apply builds both):
+#   az acr build --registry <acr> --image si-management-mcp:<tag> --file pro-management/Dockerfile.mcp <stage>
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY pro-management/src/SI.Management.Core/SI.Management.Core.csproj pro-management/src/SI.Management.Core/
+COPY pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj pro-management/src/SI.Management.Mcp/
+RUN dotnet restore pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj
+COPY pro-management/src/SI.Management.Core/ pro-management/src/SI.Management.Core/
+COPY pro-management/src/SI.Management.Mcp/ pro-management/src/SI.Management.Mcp/
+RUN dotnet publish pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj -c Release -o /app --no-restore -p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app .
+ENV ASPNETCORE_HTTP_PORTS=8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    ASPNETCORE_ENVIRONMENT=Production
+EXPOSE 8080
+USER $APP_UID
+ENTRYPOINT ["dotnet", "SI.Management.Mcp.dll"]

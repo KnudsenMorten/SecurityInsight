@@ -1,0 +1,79 @@
+@page
+@model SI.Management.Web.Pages.Admin.QuerySplittingModel
+@using SI.Management.Web.QuerySplitting
+@{
+    ViewData["Title"] = "Risk Analysis query splitting";
+    var isAdmin = User.IsAdmin();
+    var v = Model.View;
+}
+<h1>Risk Analysis query splitting</h1>
+<p class="lede">Each Risk Analysis report asks Microsoft Defender in buckets: slices of your assets, one query each, so no answer is too large. This page shows how many buckets each report uses, how that changed, and whether a count looks wrong.</p>
+<details class="help">
+    <summary>How the bucket count works</summary>
+    <p>A report starts from the count it used last time. When a bucket's answer is too large, that bucket is split and run again, and the next run starts from twice the count. After three runs far below every limit, a report tries half the count. A reset, or a changed query, makes the next run size the report again: from its last measured result when there is one, otherwise 1, 2, 4, 8.</p>
+    <p><strong>Jump</strong>: a count 4 times the report's usual count (the median of its earlier runs), or above 256, points at a wrong query or wrong data. The run completes and the report is named in a warning on the Guards page.</p>
+    <p><strong>Reset</strong> (Admin): staged on Review &amp; commit; the next run of that report sizes it again, once, and remembers the new count.</p>
+</details>
+@foreach (var p in Model.Problems) { <div class="notice error" role="alert" data-problem>@p</div> }
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database has no bucket sizing tables yet. The next update applies them; the next Risk Analysis run fills them.</div> }
+else
+{
+    <section class="card" aria-labelledby="h-reports" data-bucket-reports>
+        <div class="split">
+            <h2 id="h-reports">Reports (@Fmt.Int(v.Rows.Count))</h2>
+            @if (isAdmin && v.Rows.Count > 0)
+            {
+                <form method="post" asp-page-handler="ResetAll" class="inline-form" data-reset-all
+                      data-confirm-title="Size every report again?" data-confirm="The next run of each report sizes its buckets again, once. That run can take longer.">
+                    <input type="text" name="Reason" placeholder="Why (on the audit trail)" required minlength="3" maxlength="400" />
+                    <button type="submit" class="secondary">Reset all</button>
+                </form>
+            }
+        </div>
+        @if (v.Rows.Count == 0)
+        {
+            <p class="hint">No Risk Analysis run has recorded a bucket count yet.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable data-bucket-table>
+                    <thead><tr><th>Report</th><th>Template</th><th class="num">Buckets now</th><th class="num">Last run: started</th><th class="num">Last run: ended</th><th class="num">Run before</th><th class="num">Usual</th><th>Last change</th><th>Jump</th><th>What it means</th>@if (isAdmin) { <th>Reset</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var r in v.Rows)
+                        {
+                            <tr data-report="@r.Report" data-template="@r.Template" data-jump="@(r.Jump ? "yes" : "no")">
+                                <td>@r.Report</td>
+                                <td>@r.Template</td>
+                                <td class="num" data-value="@(r.Now ?? 0)" data-now>@(r.Now is { } n ? Fmt.Int(n) : "--")</td>
+                                <td class="num" data-value="@(r.Last?.StartCount ?? 0)" data-started>@(r.Last is { } l1 ? Fmt.Int(l1.StartCount) : "--")</td>
+                                <td class="num" data-value="@(r.Last?.Count ?? 0)" data-ended>@(r.Last is { } l2 ? Fmt.Int(l2.Count) : "--")</td>
+                                <td class="num" data-value="@(r.Before ?? 0)" data-before>@(r.Before is { } b ? Fmt.Int(b) : "--")</td>
+                                <td class="num" data-value="@(r.Usual ?? 0)" data-usual>@(r.Usual is { } u ? Fmt.Int(u) : "--")</td>
+                                <td data-value="@(r.LastChangeUtc is { } lc ? LocalTime.Iso(lc) : "")">@(r.LastChangeUtc is { } lc2 ? Fmt.Time(lc2) : "--")</td>
+                                <td data-flag>@(r.Jump ? "Jump" : "")</td>
+                                <td data-note>@BucketText.Note(r)</td>
+                                @if (isAdmin)
+                                {
+                                    <td>
+                                        @if (r.Reset is null)
+                                        {
+                                            <form method="post" asp-page-handler="Reset" class="inline-form" data-reset-form>
+                                                <input type="hidden" name="Template" value="@r.Template" />
+                                                <input type="hidden" name="Report" value="@r.Report" />
+                                                <input type="text" name="Reason" placeholder="Why" required minlength="3" maxlength="400" />
+                                                <button type="submit" class="secondary">Reset</button>
+                                            </form>
+                                        }
+                                        else { <span class="muted">reset waiting for the next run</span> }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}

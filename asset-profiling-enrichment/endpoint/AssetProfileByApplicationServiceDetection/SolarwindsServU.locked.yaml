@@ -1,0 +1,21 @@
+id:        SolarwindsServU
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Solarwinds Serv-U FTP Server'
+category:  'FTP'
+description: ''
+displayNames:
+  - 'Solarwinds Serv-U FTP Server'
+
+detections:
+  - id: SolarwindsServU
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'serv-u*'
+    set:
+      Tier:     2
+      Purpose:  'FTP'
+      Category: 'FTP'

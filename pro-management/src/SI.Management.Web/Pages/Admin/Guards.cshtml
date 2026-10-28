@@ -1,0 +1,447 @@
+@page
+@model SI.Management.Web.Pages.Admin.GuardsModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Guards
+@{
+    ViewData["Title"] = "Guards";
+    var st = Model.State;
+    // the table is for scanning: When · What happened · Severity · Status · Action (the rest is in each row's detail)
+    var cols = new[] { "Ts", "Guard", "Severity", "Ack" }.Select(k => SqlGuardEventStore.Spec.Column(k)!).ToList();
+    string HeadOf(GridColumn c) => c.Key switch { "Guard" => "What happened", "Ack" => "Status", _ => c.Label };
+    var filterOf = st?.Filters.ToDictionary(f => f.Key, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, GridFilterValue>(StringComparer.OrdinalIgnoreCase);
+    var pages = st is null || Model.Total == 0 ? 1 : (int)Math.Ceiling(Model.Total / (double)st.Size);
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st is not null && st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")));
+    string AriaSort(GridColumn c) => st is null || st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    string ChipClass(string word) => word == "Critical" ? "bad" : word == "Warning" ? "warn" : "info";
+    var now = DateTime.UtcNow;
+}
+<h1>Guards</h1>
+<p class="lede">Safety checks pause a change that looks unusual. Release it if it's expected.</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+@if (Model.ReleaseNotice is not null)
+{
+    <div class="notice warn" role="status" data-release-notice>@Model.ReleaseNotice</div>
+}
+@* CR4 (#654): the stricter period after a release that changed engine code -- read-only limits, a SuperAdmin may end it early *@
+@if (Model.Mode.IsStrict || Model.Mode.EndedEarly)
+{
+    var gm = Model.Mode;
+    <section class="card" aria-labelledby="gstrict-h" data-guard-strict="@gm.Mode">
+        <h2 id="gstrict-h">@(gm.IsStrict ? "Stricter period" : "Stricter period ended early")</h2>
+        @if (gm.IsStrict)
+        {
+            <p data-strict-sentence>@GuardModeRules.Sentence(gm)</p>
+            <ul class="plain" data-strict-limits>
+                @foreach (var (name, label, unit) in new[] { ("SI_VulnSync_MaxClosePercent", "Close at most", "% of open vulnerabilities in one run"), ("SI_AssetProperties_ChangeGuardPercent", "Change at most", "% of CMDB items in one run") })
+                {
+                    if (Model.ConfiguredOf(name) is { } c)
+                    {
+                        var eff = GuardModeRules.Effective(c, gm);
+                        <li data-strict-limit="@name">@label <strong>@eff.ToString("0.##", SI.Management.Core.ProData.ScoreFormat.Culture)</strong> @unit @if (GuardModeRules.LimitText(c, gm, "%") is { Length: > 0 } lt) { <span class="hint">(@lt)</span> }</li>
+                    }
+                }
+                <li class="hint">Every other limit of a safety check is halved the same way (at least 1). A limit of 1 stays 1.</li>
+            </ul>
+            @if (Model.MayEndStrict)
+            {
+                <form method="post" asp-page-handler="EndStrict" class="stack-form" data-strict-end>
+                    <label for="strict-reason">Reason (required)</label>
+                    <input id="strict-reason" name="StrictReason" type="text" minlength="@GuardModeRules.ReasonMin" maxlength="500" required placeholder="e.g. the release was checked on the test environment" />
+                    <button type="submit">End the stricter period now</button>
+                    <span class="hint">The normal limits apply again at once. Recorded in the audit log with your reason.</span>
+                </form>
+            }
+            else
+            {
+                <p class="hint" data-strict-readonly>A SuperAdmin can end it early, with a reason.</p>
+            }
+        }
+        else
+        {
+            <p data-strict-ended>Ended early by @(gm.EndedByRole ?? "SuperAdmin")@(string.IsNullOrWhiteSpace(gm.EndedBy) ? "" : " (" + gm.EndedBy + ")") on @GuardReleaseText.When(gm.EndedEarlyAt)@(string.IsNullOrWhiteSpace(gm.Reason) ? "" : ": " + gm.Reason). The normal limits apply.</p>
+        }
+    </section>
+}
+@if (!Model.HasTable)
+{
+    @if (Model.Error is null)
+    {
+        <div class="notice warn" role="status" data-guards-missing>The guard events are not set up in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds). Until then the safety checks still mail and are listed in run health.</div>
+    }
+}
+else if (st is not null)
+{
+    var states = Model.States();
+    var waitingReleases = Model.Approvals.Where(a => a.IsOpen(now)).ToList();
+    @if (Model.Approvals.Count > 0)
+    {
+        <section class="card" aria-labelledby="gapprovals-h" data-guard-approvals>
+            <h2 id="gapprovals-h">Releases waiting for a second SuperAdmin</h2>
+            @if (waitingReleases.Count == 0) { <p class="hint">None waiting.</p> }
+            @foreach (var a in Model.Approvals)
+            {
+                <div class="approval" data-approval="@a.Id" data-state="@a.State">
+                    <p><strong>@a.Title</strong> · asked by @a.RequestedBy @Fmt.Time(a.RequestedUtc) · <span class="badge @(a.IsOpen(now) ? "warn" : a.State is "applied" or "approved" ? "ok" : "info")">@(a.IsOpen(now) ? "waiting" : a.State)</span></p>
+                    @if (!string.IsNullOrEmpty(a.Reason)) { <p class="hint">Why: @a.Reason</p> }
+                    @if (!string.IsNullOrEmpty(a.OutcomeText)) { <p class="hint">@a.OutcomeText</p> }
+                    @if (Model.MayRelease && a.MayDecide(Model.Me, now))
+                    {
+                        <form method="post" asp-page-handler="Decide" class="inline-form" data-decide-form>
+                            <input type="hidden" name="ApprovalId" value="@a.Id" />
+                            <label for="gnote-@a.Id" class="sr-only">Note</label>
+                            <input id="gnote-@a.Id" name="Reason" type="text" maxlength="400" placeholder="Note (optional)" />
+                            <button type="submit" name="Approve" value="true">Approve</button>
+                            <button type="submit" name="Approve" value="false" class="secondary">Reject</button>
+                        </form>
+                    }
+                    else if (a.IsOpen(now) && string.Equals(a.RequestedBy, Model.Me, StringComparison.OrdinalIgnoreCase))
+                    {
+                        <p class="hint" data-own-request>You asked for this -- another SuperAdmin approves or rejects it.</p>
+                    }
+                </div>
+            }
+        </section>
+    }
+    @* operator 2026-10-09 ("this is way too complex and honestly hard to explain to people"): HELD NOW -- only current
+       holds, ONE row per check, ONE plain sentence from the stored numbers, ONE Release (the next run only; the reason is
+       optional and reads "Released by <name>"). Everything technical is in the row's Details. *@
+    var heldNow = Model.HeldNow();
+    var holdingGuards = heldNow.Select(h => h.Guard.Id).Distinct().Count();
+    <section class="card" aria-labelledby="gstate-h" data-guard-states data-holding-count="@holdingGuards">
+        <h2 id="gstate-h">@(holdingGuards == 0 ? "Nothing is held" : holdingGuards == 1 ? "1 safety check is holding" : Fmt.Int(holdingGuards) + " safety checks are holding")</h2>
+        @if (heldNow.Count > 0)
+        {
+            <p class="hint">Release applies to the next run only. Releases are one at a time on purpose -- a release closes or loads data, so there is no "release all".</p>
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="guard-states" aria-describedby="gstate-h">
+                    <thead><tr><th scope="col">What is held</th><th scope="col">Release</th></tr></thead>
+                    <tbody>
+                        @foreach (var h in heldNow)
+                        {
+                            var rel = h.Rel;
+                            var g = h.Guard;
+                            var collection = rel.IsCollection;
+                            var mayRelease = g.Releasable && rel.State == "held" && rel.CanRelease(now) && Model.MayRelease;
+                            <tr data-guard-state="@g.Id" data-holding="1" data-held="@rel.Id" data-held-state="@rel.State" data-releasable="@(g.Releasable && rel.CanRelease(now) ? "1" : "0")">
+                                <td class="wrap">
+                                    <span data-held-sentence data-utc>@GuardReleaseText.Sentence(rel)</span>
+                                    <details class="guard-detail" data-held-details>
+                                        <summary>Details</summary>
+                                        <dl class="guard-parts" data-utc>
+                                            <dt>If you release</dt><dd data-part="ifrelease">@GuardReleaseText.IfRelease(rel)</dd>
+                                            <dt>If you leave it</dt><dd data-part="consequence">@GuardReleaseText.IfLeft(rel)</dd>
+                                            <dt>Safety check</dt><dd>@g.Title · <code class="tech">@g.Id</code></dd>
+                                            @if (!string.IsNullOrWhiteSpace(rel.RunDetail ?? rel.HoldReason)) { <dt>What the run said</dt><dd data-incomplete>@(rel.RunDetail ?? rel.HoldReason)</dd> }
+                                            <dt>Held</dt><dd>@GuardReleaseText.When(rel.HeldUtc) · run <code class="tech">@rel.RunId</code> · @rel.Connector@(rel.ExpiresUtc is { } ex ? " · can be released until " + GuardReleaseText.When(ex) : "")</dd>
+                                            <dt>Held set</dt><dd><code class="tech" data-plan-hash>@rel.PlanHash</code></dd>
+                                        </dl>
+                                        @if (mayRelease)
+                                        {
+                                            <form method="post" asp-page-handler="@(collection ? "ReleaseCollection" : "Release")" class="stack-form" data-held-release-expert="@rel.Id">
+                                                <input type="hidden" name="ReleaseId" value="@rel.Id" />
+                                                <input type="hidden" name="PlanHash" value="@rel.PlanHash" />
+                                                <partial name="_ReleaseValidity" model="rel.Id" />
+                                                <label for="hrx-@rel.Id">Reason (optional)</label>
+                                                <input id="hrx-@rel.Id" name="Reason" type="text" maxlength="1000" value="Released by @Model.Me" />
+                                                <button type="submit" class="secondary">Release with these options</button>
+                                            </form>
+                                        }
+                                    </details>
+                                </td>
+                                <td class="wrap">
+                                    @if (!g.Releasable)
+                                    {
+                                        <span data-never-releasable>Can't be released</span>
+                                    }
+                                    else if (rel.State == "released")
+                                    {
+                                        <span data-held-released data-utc>Released by @rel.ReleasedBy@(rel.ReleasedUtc is { } ru ? " " + Fmt.When(ru) : "") -- applies with the next run.</span>
+                                    }
+                                    else if (!rel.CanRelease(now))
+                                    {
+                                        <span>It can no longer be released.</span>
+                                    }
+                                    else if (!Model.MayRelease)
+                                    {
+                                        <span class="hint" data-release-readonly>A SuperAdmin can release it.</span>
+                                    }
+                                    else
+                                    {
+                                        <form method="post" asp-page-handler="@(collection ? "ReleaseCollection" : "Release")" class="stack-form" data-held-release-form="@rel.Id"
+                                              data-confirm-title="Release it?" data-confirm="@GuardReleaseText.IfRelease(rel)" data-confirm-ok="Release">
+                                            <input type="hidden" name="ReleaseId" value="@rel.Id" />
+                                            <input type="hidden" name="PlanHash" value="@rel.PlanHash" />
+                                            <input type="hidden" name="Valid" value="run" />
+                                            <label for="hr-@rel.Id" class="sr-only">Reason (optional)</label>
+                                            <input id="hr-@rel.Id" name="Reason" type="text" maxlength="1000" value="Released by @Model.Me" aria-label="Reason (optional)" />
+                                            <button type="submit">@(Model.SecondPerson ? "Ask a second SuperAdmin" : "Release")</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+    @* operator 2026-10-09 ("for a simple solution that pulls data and sync data to connectors"): CONTROL is one switch, two
+       limits and one mail switch with its recipients. Every other check is internal: it warns (badge and mail), never
+       holds, and is not configurable; a per-check switch an install already set is still read (an off check stays off). *@
+    <section class="card" aria-labelledby="gctl-h" data-guard-controls>
+        <h2 id="gctl-h">Control</h2>
+        <p class="hint">One switch, two limits and the mail. Every other check only warns. All settings: <a href="/Admin/Settings?cat=@Uri.EscapeDataString("Guards (safety checks)")" data-link-guard-settings>Settings &gt; Guards (safety checks)</a>.</p>
+        @if (Model.ControlFields.Count == 0)
+        {
+            <p class="hint" data-controls-missing>The settings could not be read here; use Settings &gt; Guards (safety checks).</p>
+        }
+        else
+        {
+            var on = Model.Field(GuardSwitches.Master);
+            var pct = Model.Field("SI_VulnSync_MaxClosePercent");
+            var cmdb = Model.Field("SI_AssetProperties_ChangeGuardPercent");
+            var mail = Model.Field("SI_GuardMail_Enabled");
+            var to = Model.Field("SI_GuardMail_To");
+            var dis = !Model.MayControl;
+            var limitsOff = dis || !Model.MasterOn;
+            <form method="post" asp-page-handler="SaveControl" class="stack-form guard-control-form" data-control-form>
+                @if (on is not null)
+                {
+                    <div class="set-line" data-control="master">
+                        <input type="hidden" name="v:@on.Setting.Name" value="false" disabled="@dis" />
+                        <label><input type="checkbox" name="v:@on.Setting.Name" value="true" checked="@Model.MasterOn" disabled="@dis" /> <strong>Safety checks</strong></label>
+                        <input type="hidden" name="ver:@on.Setting.Name" value="@on.Version" /><input type="hidden" name="scope:@on.Setting.Name" value="@on.Scope" />
+                        <details class="set-info"><summary>What's this?</summary><p>Safety checks pause a change that looks unusual, so a broken collection never closes or removes good data. Off: every change goes through.</p></details>
+                    </div>
+                }
+                @if (pct is not null)
+                {
+                    <div class="set-line" data-control="close-limit">
+                        <label for="ctl-pct">Close at most</label>
+                        <input id="ctl-pct" type="number" name="v:@pct.Setting.Name" value="@pct.Text" min="0" max="100" step="1" inputmode="numeric" disabled="@limitsOff" /> <span>% of open vulnerabilities in one run</span>
+                        <input type="hidden" name="ver:@pct.Setting.Name" value="@pct.Version" /><input type="hidden" name="scope:@pct.Setting.Name" value="@pct.Scope" />
+                        <span class="hint">(default 10)</span>
+                        @if (Model.StrictHint(pct.Setting.Name) is { Length: > 0 } sh1) { <span class="badge warn" data-strict-hint>@sh1</span> }
+                    </div>
+                }
+                @if (cmdb is not null)
+                {
+                    <div class="set-line" data-control="cmdb-limit">
+                        <label for="ctl-cmdb">Change at most</label>
+                        <input id="ctl-cmdb" type="number" name="v:@cmdb.Setting.Name" value="@cmdb.Text" min="1" max="100" step="1" inputmode="numeric" disabled="@limitsOff" /> <span>% of CMDB items in one run</span>
+                        <input type="hidden" name="ver:@cmdb.Setting.Name" value="@cmdb.Version" /><input type="hidden" name="scope:@cmdb.Setting.Name" value="@cmdb.Scope" />
+                        <span class="hint">(default 10)</span>
+                        @if (Model.StrictHint(cmdb.Setting.Name) is { Length: > 0 } sh2) { <span class="badge warn" data-strict-hint>@sh2</span> }
+                    </div>
+                }
+                @if (mail is not null)
+                {
+                    var mailOn = mail.Text != "false";
+                    <div class="set-line" data-control="mail">
+                        <input type="hidden" name="v:@mail.Setting.Name" value="false" disabled="@dis" />
+                        <label><input type="checkbox" name="v:@mail.Setting.Name" value="true" checked="@mailOn" disabled="@dis" /> Mail me when a safety check warns or holds</label>
+                        <input type="hidden" name="ver:@mail.Setting.Name" value="@mail.Version" /><input type="hidden" name="scope:@mail.Setting.Name" value="@mail.Scope" />
+                    </div>
+                }
+                @if (to is not null)
+                {
+                    <div class="set-line" data-control="mail-to">
+                        <label for="ctl-to">Recipients</label>
+                        <textarea id="ctl-to" name="v:@to.Setting.Name" rows="2" spellcheck="false" placeholder="One e-mail address per line" disabled="@dis">@string.Join("\n", to.Items)</textarea>
+                        <input type="hidden" name="ver:@to.Setting.Name" value="@to.Version" /><input type="hidden" name="scope:@to.Setting.Name" value="@to.Scope" />
+                    </div>
+                }
+                @if (Model.MayControl) { <button type="submit">Save</button> } else { <p class="hint" data-control-readonly>A SuperAdmin can change these.</p> }
+            </form>
+        }
+    </section>
+    <section class="card" aria-labelledby="guards-h" data-guards>
+        <h2 id="guards-h">@Fmt.Int(Model.Total) @(Model.Total == 1 ? (Model.ShowAcknowledged ? "event" : "open event") : (Model.ShowAcknowledged ? "events" : "open events"))@(Model.Total > 0 ? " · " + Fmt.Int(st.Skip + 1) + "-" + Fmt.Int(st.Skip + Model.Rows.Count) : "")</h2>
+        <form id="guards-f" method="get" action="/Admin/Guards" class="gridbar" role="search" aria-label="Search and filter the guard events">
+            <input type="hidden" name="sort" value="@st.Sort" /><input type="hidden" name="dir" value="@(st.Desc ? "desc" : "asc")" />
+            @if (Model.ShowAcknowledged) { <input type="hidden" name="ack" value="all" /> }
+            @* a filter on a column the table does not show (from a URL, e.g. the guard mail) is kept when the form is sent *@
+            @foreach (var hf in st.Filters.Where(f => !cols.Any(c => c.Key.Equals(f.Key, StringComparison.OrdinalIgnoreCase)) && !f.Key.Equals("Ack", StringComparison.OrdinalIgnoreCase)))
+            {
+                <input type="hidden" name="f.@hf.Key" value="@SI.Management.Web.Pages.Collection.CollectionPageModel.FilterText(hf)" />
+            }
+            <label for="guards-win">Time</label>
+            <select id="guards-win" name="win">
+                @foreach (var w in GuardsModel.Windows) { <option value="@w.Value" selected="@(w.Value == Model.WindowValue)">@w.Label</option> }
+            </select>
+            <label for="guards-q" class="sr-only">Search</label>
+            <input id="guards-q" type="search" name="q" value="@st.Search" placeholder="Search guard, numbers, where, detail" maxlength="200" data-search data-grid-search />
+            @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+            <input type="hidden" name="size" value="@st.Size" />
+            <button type="submit">Apply</button>
+            <a class="button secondary" href="/Admin/Guards">Clear</a>
+            @if (Model.ShowAcknowledged)
+            {
+                <a class="button secondary" href="@Model.Link(("ack", null), ("f.Ack", null))" data-ack-toggle="open">Hide acknowledged</a>
+            }
+            else
+            {
+                <a class="button secondary" href="@Model.Link(("ack", "all"), ("f.Ack", null))" data-ack-toggle="all">Show acknowledged</a>
+            }
+        </form>
+        @{
+            var chips = st.Filters.Where(f => !(f.Key.Equals("Ack", StringComparison.OrdinalIgnoreCase) && !Model.ShowAcknowledged && f.Values.SequenceEqual(new[] { "open" }))).ToList();
+        }
+        @if (chips.Count > 0 || st.Search is not null)
+        {
+            <ul class="chips" aria-label="Active filters">
+                @if (st.Search is not null) { <li><a href="@Model.Link(("q", null))" aria-label="Remove the search">Search: @st.Search ✕</a></li> }
+                @foreach (var f in chips)
+                {
+                    var c = SqlGuardEventStore.Spec.Column(f.Key)!;
+                    var remove = c.Key == "Ack" ? Model.Link(("f." + c.Key, null), ("ack", "all")) : Model.Link(("f." + c.Key, null));
+                    <li><a href="@remove" aria-label="Remove the filter on @c.Label">@c.Label: @(f.Values.Count > 0 ? string.Join(" or ", f.Values) : f.Kind == GridFilter.Range ? Fmt.RangeWords(f.Low, f.High) : f.Text ?? "") ✕</a></li>
+                }
+            </ul>
+        }
+        @if (Model.MayAcknowledge && Model.MayRelease && Model.Rows.Any(r => !r.Acknowledged))
+        {
+            @* operator 2026-10-07: "close all/acknowledge all so i can start a fresh" -- every OPEN event of this filter, one reason *@
+            <form method="post" action="@Model.Link(("handler", "AcknowledgeAll"))" asp-antiforgery="true" class="inline-form" data-ack-all-form
+                  data-confirm-title="Acknowledge every open event in this filter?"
+                  data-confirm="Every open event that matches the filter, search and time shown is acknowledged with your reason (on the audit trail). Nothing is released: what is held stays held.">
+                <label for="ack-all-reason">Acknowledge all open events in this filter -- why?</label>
+                <input id="ack-all-reason" name="Reason" type="text" required minlength="@GuardsModel.ReasonMin" maxlength="1000" placeholder="e.g. read and handled; start fresh" />
+                <button type="submit" class="secondary">Acknowledge all</button>
+                <span class="hint">Releases stay one at a time on purpose: a release loads or closes data.</span>
+            </form>
+        }
+        @if (!Model.CanAcknowledge)
+        {
+            <p class="hint" data-ack-missing>Acknowledging needs one more table in this database (apply <code>sql\si-pro-settings.sql</code> again -- it only adds). Until then every event is listed.</p>
+        }
+        @{
+            // #282: the pager above the table, in the shared grid toolbar
+            var toolbar = new GridToolbar
+            {
+                Id = "guards-tools", Total = Model.Total, Skip = st.Skip, Count = Model.Rows.Count, Noun = "events", Page = st.Page, Pages = pages,
+                PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))), PreviousLabel = "Newer", NextLabel = "Older", Size = st.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+            };
+        }
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+        <div class="table-wrap">
+            <table class="findings grid guards" data-grid="guards" aria-describedby="guards-h">
+                <thead>
+                    <tr>
+                        @foreach (var c in cols)
+                        {
+                            <th scope="col" aria-sort="@AriaSort(c)" data-col="@c.Key">
+                                @if (c.Sortable) { <a href="@SortLink(c)" data-sort="@c.Key">@HeadOf(c)@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @HeadOf(c) }
+                            </th>
+                        }
+                        <th scope="col">Action</th>
+                    </tr>
+                    <tr class="colfilters">
+                        @foreach (var c in cols)
+                        {
+                            filterOf.TryGetValue(c.Key, out var fv);
+                            var chosen = fv?.Values ?? (IReadOnlyList<string>)Array.Empty<string>();
+                            <td data-filter="@c.Key">
+                                @if (c.Filter == GridFilter.Values)
+                                {
+                                    <details class="colfilter" data-counts-url="@(Model.Link() + (Model.Link().Contains('?') ? "&" : "?") + "handler=ValueCounts&col=" + c.Key)">
+                                        <summary aria-label="Filter @HeadOf(c)" data-filter-summary="@c.Key">@(chosen.Count == 0 ? "any" : c.Key == "Ack" ? (chosen.SequenceEqual(new[] { "open" }) ? "open (holding)" : string.Join(", ", chosen)) : Fmt.Int(chosen.Count) + " chosen")</summary>
+                                        <div class="colfilter-list" role="group" aria-label="@HeadOf(c) values">
+                                            @foreach (var o in Model.Options(c).Union(chosen).Take(200))
+                                            {
+                                                <label><input form="guards-f" type="checkbox" name="f.@c.Key" value="@o" checked="@chosen.Contains(o)" /> @o</label>
+                                            }
+                                        </div>
+                                        <button form="guards-f" type="submit" class="small">Apply</button>
+                                    </details>
+                                }
+                            </td>
+                        }
+                        <td></td>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.Rows.Count == 0)
+                    {
+                        <tr><td colspan="@(cols.Count + 1)" class="hint">@(Model.ShowAcknowledged ? "No safety check tripped in this period." : "No open safety check events in this period. Show acknowledged lists the ones you have read.")</td></tr>
+                    }
+                    @foreach (var r in Model.Rows)
+                    {
+                        var parts = Model.Parts(r);
+                        var kind = parts.Kind;
+                        var word = GuardText.SeverityWord(r.Severity, kind);
+                        var rel = Model.ReleaseFor(r);
+                        var held = Model.CollectionsFor(r);
+                        var detailId = "guard-" + Fmt.Raw(r.Id);
+                        var openRelease = rel is not null && string.Equals(Model.ReleaseRun, rel.RunId, StringComparison.OrdinalIgnoreCase);
+                        <tr data-guard-row="@r.Id" data-guard="@r.GuardId" data-outcome="@r.Outcome" data-kind="@kind" data-ack="@r.Ack" class="@(r.Acknowledged ? "muted" : "")">
+                            <td>@Fmt.Time(r.TsUtc, zone: true)</td>
+                            <td class="wrap"><strong data-what>@parts.What</strong><div class="hint"><code class="tech" data-guard-id>@r.GuardId</code>@(r.Trips > 1 ? " · " + Fmt.Int(r.Trips) + " times" : "")</div></td>
+                            <td><span class="badge @ChipClass(word)" data-severity="@word">@word</span></td>
+                            <td data-status>@Model.StatusOf(r)</td>
+                            <td class="wrap" data-action-kind="@kind">
+                                @switch (kind)
+                                {
+                                    case GuardKinds.ReleaseHeldSet:
+                                        if (rel is not null && rel.CanRelease(now)) { <a href="@(Model.Link(("release", rel.RunId)) + "#gstate-h")" data-action-release>Release (SuperAdmin, once)</a> }
+                                        else if (rel is not null) { <span>Held set: @rel.State</span> }
+                                        else { <span>@GuardKinds.Label(kind)</span><div class="hint">No held set is stored for this run.</div> }
+                                        break;
+                                    case GuardKinds.ReleaseCollection:
+                                        if (held.FirstOrDefault(h => h.CanRelease(now)) is { } firstHeld) { <a href="@(Model.Link(("release", firstHeld.RunId)) + "#gstate-h")" data-action-release-collection>@GuardKinds.Label(kind)</a> }
+                                        else { <span>@(held.Count > 0 ? "Released" : "Resolved by the next complete run")</span> }
+                                        break;
+                                    case GuardKinds.FixSource:
+                                        <span data-not-releasable>@GuardKinds.Label(kind)</span>
+                                        break;
+                                    default:
+                                        <span>@GuardKinds.Label(kind)</span>
+                                        break;
+                                }
+                                @if (Model.MayAcknowledge && !r.Acknowledged)
+                                {
+                                    <form method="post" asp-page-handler="Acknowledge" class="inline-form" data-ack-form>
+                                        <input type="hidden" name="EventId" value="@r.Id" />
+                                        <button type="submit" class="small secondary">Acknowledge</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                        <tr class="guard-more" data-guard-detail-row="@r.Id">
+                            <td colspan="@(cols.Count + 1)">
+                                <details id="@detailId" class="guard-detail" data-guard-detail open="@(openRelease || held.Any(h => string.Equals(Model.ReleaseRun, h.RunId, StringComparison.OrdinalIgnoreCase)))">
+                                    <summary>Why it held, if you release, if you leave it, what to do</summary>
+                                    <dl class="guard-parts">
+                                        <dt>What happened</dt><dd data-part="what">@parts.What</dd>
+                                        @if (parts.Why.Length > 0) { <dt>Why it held</dt><dd data-part="why">@parts.Why</dd> }
+                                        @if (!string.IsNullOrEmpty(r.Attribution)) { <dt>Which release</dt><dd data-part="release">@r.Attribution</dd> }
+                                        @if ((r.Cleared || r.Taken) && !r.IsClear && !r.IsTaken && !string.IsNullOrEmpty(r.ClearedText)) { <dt>@(r.Taken ? "Taken as the new level" : "Cleared")</dt><dd data-part="cleared">@r.ClearedText</dd> }
+                                        @if (parts.IfRelease.Length > 0) { <dt>If you release</dt><dd data-part="ifrelease">@parts.IfRelease</dd> }
+                                        @if (parts.Consequence.Length > 0) { <dt>If you leave it</dt><dd data-part="consequence">@parts.Consequence</dd> }
+                                        <dt>What to do</dt>
+                                        <dd data-part="steps"><ol>@foreach (var s in parts.Steps) { <li>@s</li> }</ol></dd>
+                                    </dl>
+                                    <p class="guard-links">
+                                        @if (r.GuardId.StartsWith("datasync.", StringComparison.Ordinal) || r.Area is "risk-analysis" or "vulnerability-connector" or "cmdb-connector") { <a href="/Admin/RunHealth" data-link-runhealth>Open the Risk Analysis run health</a> }
+                                        @if (r.Area == "job-flow") { <span data-link-jobs>Open <nav-ref page="/Admin/Jobs" /></span> }
+                                    </p>
+
+                                    @if (rel is not null || held.Count > 0) { <p class="hint" data-release-pointer>What this held is under <a href="#gstate-h">Held now</a> at the top, with its Release -- as long as it is still the current hold.</p> }
+                                    <p class="hint tech" data-tech>
+                                        <code>@r.GuardId</code> · @r.Area · @r.Outcome@(string.IsNullOrEmpty(r.Version) ? "" : " · version " + r.Version)@(string.IsNullOrEmpty(r.Measured) ? "" : " · " + r.Measured)@(r.Held > 0 ? " · held " + Fmt.Int(r.Held) : "")@(string.IsNullOrEmpty(r.Subject) ? "" : " · where: " + r.Subject)
+                                        · mail <span data-mail="@r.MailState">@r.MailState</span> · reported <span data-telemetry="@r.TelemetryState">@r.TelemetryState</span>@(r.Acknowledged ? " · acknowledged by " + r.AckBy : "")
+                                    </p>
+                                </details>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}
+<partial name="_Query" model='QueryInfo.Sql(Model.Query, "Guard events")' />

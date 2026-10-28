@@ -1,0 +1,21 @@
+id:        JoomlaJoomla
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Joomla'
+category:  'CMS'
+description: ''
+displayNames:
+  - 'Joomla'
+
+detections:
+  - id: JoomlaJoomla
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'joomla*'
+    set:
+      Tier:     2
+      Purpose:  'CMS'
+      Category: 'CMS'

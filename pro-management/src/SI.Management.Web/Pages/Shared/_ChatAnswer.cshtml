@@ -1,0 +1,31 @@
+@*
+    One chat answer bubble (the Chat page; chat-panel.js builds the same markup for the panel). The answer HTML comes
+    from ChatAnswerRenderer -- escaped text plus its own whitelisted markup -- so Html.Raw is safe here and nowhere else.
+    The tool calls: SIWeb_Chat_ShowToolCalls on = the basis line + a COLLAPSED list under the answer; off (default) =
+    only "How was this answered?", which opens the same calls on demand. No tool call = the "no estate data" line.
+*@
+@model SI.Management.Web.ChatView.ChatAnswerView
+<div class="msg assistant chat-answer" data-chat-answer data-tool-calls="@(Model.Tools.Count == 0 ? "none" : Model.ShowToolCalls ? "shown" : "on-demand")">
+    <div class="who"><img class="chat-icon" src="/brand/invardia-icon.svg" alt="" width="16" height="16" /> SecurityInsight</div>
+    <div class="text chat-answer-body">@Html.Raw(Model.Html)</div>
+    @if (Model.Tools.Count == 0)
+    {
+        <p class="hint chat-basis">@Model.Basis</p>
+    }
+    else if (Model.ShowToolCalls)
+    {
+        <p class="hint chat-basis">@Model.Basis</p>
+        <details class="query tool-calls">
+            <summary>@Model.Tools.Count tool call@(Model.Tools.Count == 1 ? "" : "s") behind this answer</summary>
+            <partial name="_ChatToolCalls" model="Model.Tools" />
+        </details>
+    }
+    else
+    {
+        <details class="chat-how">
+            <summary>How was this answered?</summary>
+            <p class="hint chat-basis">@Model.Basis</p>
+            <partial name="_ChatToolCalls" model="Model.Tools" />
+        </details>
+    }
+</div>

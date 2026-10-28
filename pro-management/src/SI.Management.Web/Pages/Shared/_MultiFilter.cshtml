@@ -1,0 +1,26 @@
+@* THE filter of every view (MultiFilter.cs): a disclosure with one checkbox per value and its count. Nothing ticked = All;
+   ticked values of one filter are OR-ed, filters AND-ed. "All" unticks every value (js/app/multi-filter.js); without
+   script it is the plain list. The choices list (.colfilter-list) holds only value checkboxes -- the counts script and
+   the browser tests read exactly those. *@
+@model SI.Management.Web.Pages.MultiFilter
+@{
+    var f = Model;
+}
+<details class="colfilter multifilter@(f.Compact ? " compact" : "")" id="@f.Id" data-multifilter data-filter="@f.Name" data-counts-url="@f.CountsUrl" data-mf-fill="@(f.Fill ? f.Form ?? "" : null)">
+    <summary aria-label="Filter @f.Label: @f.Summary">@if (!f.Compact) { <span class="mf-name">@f.Label</span> }<span class="mf-summary" data-mf-summary>@f.Summary</span></summary>
+    <div class="mf-panel">
+        @* autocomplete="off": the ticks are what the server drew -- a browser restoring old ticks on a reload put "All" and
+           values ticked together (a customer 2026-10-20); the script re-syncs on pageshow too *@
+        <label class="mf-all"><input type="checkbox" data-mf-all form="@f.Form" name="@(f.AllValue is null ? null : f.Name)" value="@f.AllValue" checked="@(f.Chosen.Count == 0)" autocomplete="off" /> All</label>
+        <div class="colfilter-list" role="group" aria-label="@f.Label values">
+            @foreach (var c in f.Listed)
+            {
+                <label><input form="@f.Form" type="checkbox" name="@f.Name" value="@c.Value" checked="@f.IsChosen(c.Value)" autocomplete="off" /> @c.Label@if (c.Count is { } n) { <span class="value-count" data-value-count> (@Fmt.Int(n))</span> }</label>
+            }
+        </div>
+        <p class="hint">Tick one or more; none ticked shows all.</p>
+        @if (f.Note is { Length: > 0 } note) { <p class="hint" data-filter-note>@note</p> }
+        @if (f.ApplyCloses) { <button type="button" class="small" data-mf-close>@f.Apply</button> }
+        else { <button form="@f.Form" type="submit" class="small">@f.Apply</button> }
+    </div>
+</details>

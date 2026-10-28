@@ -1,0 +1,87 @@
+@page
+@model SI.Management.Web.Pages.Reports.IndexModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Report catalog";
+    var edit = Model.CanEdit;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports")" />
+<p class="lede">Every Risk Analysis report -- the vendor's and yours. Each report's severity and tier scope decides which of its findings are reported at all (e.g. untick Low); a report that is switched off leaves every report template.</p>
+<partial name="_Notices" model="Model" />
+
+@if (Model.State is not null)
+{
+    <form method="get" action="/Reports" class="filterbar" data-autosubmit aria-label="Filters">
+        <div class="wide"><label for="rq">Search</label><input id="rq" type="search" name="q" value="@Model.Q" maxlength="200" placeholder="report, purpose, table" /></div>
+        @* #287: every choice says how many reports it gives under the other filters; an empty one is dimmed and last *@
+        <div><label for="rd">Domain</label><select id="rd" name="domain"><option value="" data-count="@Model.CountWith(null, Model.Origin, Model.Show)">Every domain (@Fmt.Int(Model.CountWith(null, Model.Origin, Model.Show)))</option>@foreach (var c in Model.Choices(ReportVocabulary.Domains.Select(d => (d, d)), v => Model.CountWith(v, Model.Origin, Model.Show))) { <option value="@c.Value" selected="@(Model.Domain == c.Value)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option> }</select></div>
+        <div><label for="ro">Source</label><select id="ro" name="origin"><option value="" data-count="@Model.CountWith(Model.Domain, null, Model.Show)">Any (@Fmt.Int(Model.CountWith(Model.Domain, null, Model.Show)))</option>@foreach (var c in Model.Choices(new[] { ("vendor", "vendor"), ("changed", "changed"), ("yours", "yours") }, v => Model.CountWith(Model.Domain, v, Model.Show))) { <option value="@c.Value" selected="@(Model.Origin == c.Value)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option> }</select></div>
+        <div><label for="rs">Show</label><select id="rs" name="show"><option value="" data-count="@Model.CountWith(Model.Domain, Model.Origin, null)">All (@Fmt.Int(Model.CountWith(Model.Domain, Model.Origin, null)))</option>@foreach (var c in Model.Choices(new[] { ("on", "Switched on"), ("off", "Switched off"), ("scoped", "Narrowed scope") }, v => Model.CountWith(Model.Domain, Model.Origin, v))) { <option value="@c.Value" selected="@(Model.Show == c.Value)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option> }</select></div>
+        @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+        <input type="hidden" name="size" value="@Model.Size" />
+        <input type="hidden" name="sort" value="@Model.Sort" /><input type="hidden" name="dir" value="@Model.Dir" />
+        <div class="actions"><button type="submit" class="secondary">Apply</button></div>
+    </form>
+    <section class="card" aria-labelledby="h-cat">
+        <h2 id="h-cat"><span data-report-total>@Fmt.Int(Model.Total)</span> report(s)</h2>
+        @{
+            // #282: the bulk change of the ticked reports and the pager sit ABOVE the table, in the shared grid toolbar
+            Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> bulk = edit
+                ? @<div class="filters" data-bulk>
+                    <div><label for="bop">With the selected reports</label>
+                        <select id="bop" name="Op" data-bulk-op>
+                            <option value="untick-low">Untick Low (do not report Low findings)</option>
+                            <option value="disable">Switch off</option>
+                            <option value="enable">Switch on</option>
+                            <option value="reset">Back to the vendor's report</option>
+                        </select></div>
+                    <div class="wide"><label for="breason">Reason (recorded with the change)</label><input id="breason" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                    <div class="actions"><button type="submit" data-bulk-stage>Stage for Review &amp; commit</button></div>
+                </div>
+                : @<p class="hint">Read-only: an Admin changes report scopes.</p>;
+            var toolbar = new GridToolbar
+            {
+                Id = "reports-tools", Total = Model.Total, Skip = (long)(Model.P - 1) * Model.Size, Count = Model.Rows.Count, Noun = "report(s)", Page = Model.P, Pages = Model.Pages,
+                PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))), AlwaysShowPage = true, Actions = bulk,
+                Size = Model.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+            };
+        }
+        <form method="post" asp-page-handler="Bulk" data-catalog-form>
+            <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+            <div class="table-wrap">
+                <table class="findings" data-grid="reports">
+                    <thead><tr>
+                        @if (edit) { <th scope="col"><span class="visually-hidden">Select</span></th> }
+                        <th aria-sort="@Model.AriaSort("name")"><a href="@Model.SortLink("name")" data-sort="name">Report</a></th>
+                        <th aria-sort="@Model.AriaSort("domain")"><a href="@Model.SortLink("domain")" data-sort="domain">Domain</a></th>
+                        <th scope="col">Source tables</th>
+                        <th scope="col">Severity scope</th>
+                        <th scope="col">Tier scope</th>
+                        <th scope="col">In templates</th>
+                        <th aria-sort="@Model.AriaSort("enabled")"><a href="@Model.SortLink("enabled")" data-sort="enabled">On</a></th>
+                        <th aria-sort="@Model.AriaSort("origin")"><a href="@Model.SortLink("origin")" data-sort="origin">Source</a></th>
+                    </tr></thead>
+                    <tbody>
+                        @foreach (var r in Model.Rows)
+                        {
+                            var o = SI.Management.Web.Pages.Reports.ReportsPage.OriginLabel(r.Item.Origin);
+                            <tr data-report="@r.Name" data-enabled="@(r.Item.Enabled ? "1" : "0")">
+                                @if (edit) { <td><input type="checkbox" name="Selected" value="@r.Name" aria-label="Select @r.Name" data-select-report /></td> }
+                                <td class="wrap"><a href="/Reports/Report?name=@Uri.EscapeDataString(r.Name)">@r.Name</a><div class="hint">@(r.Purpose.Length > 160 ? r.Purpose[..160] + "..." : r.Purpose)</div></td>
+                                <td>@r.Domain</td>
+                                <td class="wrap">@string.Join(", ", r.Tables)</td>
+                                <td class="wrap" data-sev-scope="@string.Join("|", r.Severities)">@foreach (var s in ReportVocabulary.Severities) { <span class="badge @(r.Severities.Contains(s) ? "" : "muted")" title="@(r.Severities.Contains(s) ? "reported" : "not reported")">@(r.Severities.Contains(s) ? s : "no " + s)</span> }</td>
+                                <td class="wrap" data-tier-scope="@string.Join("|", r.Tiers)">@for (var t = 0; t < 4; t++) { <span class="badge @(r.Tiers.Contains(ReportVocabulary.Tiers[t]) ? "" : "muted")">@(r.Tiers.Contains(ReportVocabulary.Tiers[t]) ? "T" + t : "no T" + t)</span> }</td>
+                                <td class="wrap">@string.Join(", ", r.InTemplates)</td>
+                                <td>@(r.Item.Enabled ? "on" : "off")</td>
+                                <td><span class="badge @(o == "vendor" ? "good" : o == "changed" ? "warn" : "")" data-origin="@o">@o</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </form>
+        <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+    </section>
+}

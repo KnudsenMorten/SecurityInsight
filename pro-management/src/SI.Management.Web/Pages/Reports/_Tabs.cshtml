@@ -1,0 +1,21 @@
+@model string
+@* Configuration > Reports (owner 2026-10-19: "one for reports and one for connectors"): what people read -- the reports,
+   their templates, what they leave out and the workbooks with their fields and scope (what each connector sends is on
+   Configuration > Connectors). The last tab, Admin only, is every stored document (the former "Exclusions, weights,
+   rules" menu item, #388). *@
+@{
+    var tabs = new List<(string Page, string Text)>
+    {
+        ("/Reports", "Report catalog"), ("/Reports/Templates", "Report templates"), ("/Reports/Custom", "Custom reports"),
+        ("/Reports/Exclusions", "Exclusions"), ("/Reports/Weights", "Weights"), ("/Reports/Management", "Management summary"),
+        ("/Reports/OutputFields", "Workbook fields"), ("/Reports/Outputs", "Workbook scope"),
+    };
+    if (User.IsAdmin()) tabs.Add(("/Admin/Settings/Documents", "All stored documents"));
+}
+<nav class="tabs" aria-label="Reports" data-reports-tabs>
+    @foreach (var (p, t) in tabs)
+    {
+        <a href="@p" aria-current="@(Model == p ? "page" : "false")">@t</a>
+    }
+</nav>
+<p class="lede area-lede" data-area-lede="Reports">@SI.Management.Web.Navigation.NavModel.ReportsLede</p>

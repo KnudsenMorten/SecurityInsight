@@ -1,0 +1,220 @@
+@page
+@model SI.Management.Web.Pages.Findings.IndexModel
+@inject SI.Management.Web.Collection.IPartialCollections PartialMarks
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Findings";
+    // a collection an Admin released although its run was incomplete is MARKED PARTIAL wherever it is shown
+    var marks = await PartialMarks.MarksAsync(default);
+    var shownId = Model.C ?? Model.Collections.FirstOrDefault()?.CollectionId;
+    var shownMark = shownId is not null && marks.TryGetValue(shownId, out var sm) ? sm : null;
+    // per report (owner 2026-10-19): only when the findings shown can come from one of those reports (a report filter narrows it)
+    var partialNotice = SI.Management.Web.Collection.PartialNotice.For(shownMark, "/Findings", User.IsAdmin(), Model.Rep);
+    var isAdmin = User.MayChange();   // Delegated stages inside its scopes; the server checks role + scope (#253)
+    // #252: every reader may REQUEST an exemption; staging one follows the role framework (#253)
+    var canSelect = User.IsReader();
+    var r = Model.Results;
+    // #589: the list is THE data table; its exports keep this page's own handlers (every matching finding, the chosen columns)
+    var table = Model.TableView("findings");
+    // the page number travels too: "Export this page" exports the page shown (every other export ignores it)
+    var pageLink = Model.Link(("p", Model.P > 1 ? GridToolbar.PageParam(Model.P) : null));
+    var exportLink = pageLink + (pageLink.Contains('?') ? "&" : "?") + "handler=";
+    // the export choices: this page, the ticked findings (the selection form below), every matching finding
+    var exports = new SI.Management.Web.Columns.ViewExports(exportLink + "Csv", exportLink + "Xlsx", exportLink + "XlsxAll").ForGrid("findings-sel", "#quick");
+    var tiers = ProDataFilters.Tiers;
+    var cols = Model.PivotCols == "domain"
+        ? Model.Pivot.Select(p => p.Domain).Distinct().OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
+        : Model.Pivot.Select(p => p.Severity).Distinct().OrderBy(x => x, SeverityOrder.Comparer).ToList();
+    var max = Model.Pivot.Count == 0 ? 1 : Math.Max(1, Model.Pivot.GroupBy(p => (p.Tier, Model.PivotCols == "domain" ? p.Domain : p.Severity)).Max(g => g.Sum(x => x.Findings)));
+    string Heat(long n) => n == 0 ? "" : n * 4 > max * 3 ? "heat-4" : n * 2 > max ? "heat-3" : n * 4 > max ? "heat-2" : "heat-1";
+    string TierLabel(string t) => t == ProDataFilters.Unclassified ? "Unclassified" : "Tier " + t;
+    IReadOnlyList<string> Facet(string k) => Model.Facets.TryGetValue(k, out var v) ? v : Array.Empty<string>();
+    // a filter of several values reads "Tier: Tier 0 or Tier 1"
+    string Words(string key, Func<string, string>? label = null) => string.Join(" or ", Model.Chosen(key).Select(v => label?.Invoke(v) ?? v));
+    var active = new List<(string Label, string Key)>();
+    if (Model.Tier is { Length: > 0 }) active.Add(("Tier: " + Words("tier", TierLabel), "tier"));
+    if (Model.Sev is { Length: > 0 }) active.Add(("Severity: " + Words("sev"), "sev"));
+    if (Model.Dom is { Length: > 0 }) active.Add(("Domain: " + Words("dom"), "dom"));
+    if (Model.Rep is { Length: > 0 }) active.Add(("Report: " + Words("rep"), "rep"));
+    if (Model.Kind is { Length: > 0 }) active.Add(("Asset kind: " + Words("kind"), "kind"));
+    if (Model.Q is { Length: > 0 }) active.Add(("Search: " + Model.Q, "q"));
+    // THE shared filter (MultiFilter) for every filter: ticks OR-ed, filters AND-ed, counts read when a filter is first opened
+    SI.Management.Web.Pages.MultiFilter Filter(string key, string label, IEnumerable<string> values, Func<string, string>? words = null, string? note = null) => new()
+    {
+        Id = "f-" + key, Name = key, Label = label, Form = "findings-f", Chosen = Model.Chosen(key), CountsUrl = Model.CountsLink(key), Note = note,
+        Choices = SI.Management.Web.Pages.MultiFilter.Plain(values, words),
+    };
+    var filters = new[]
+    {
+        Filter("tier", "Asset tier", tiers, TierLabel),
+        Filter("sev", "Severity", Facet("severity").OrderBy(x => x, SeverityOrder.Comparer)),
+        Filter("dom", "Domain", Facet("domain")),
+        Filter("kind", "Asset kind", ProDataFilters.AssetKinds, note: ProDataSql.KindOverlapNote),
+        Filter("rep", "Report", Facet("report")),
+    };
+    var activeCount = new[] { Model.Tier, Model.Sev, Model.Dom, Model.Rep, Model.Kind }.Count(x => x is { Length: > 0 });
+}
+<h1>Findings</h1>
+<p class="lede">Every finding of one Risk Analysis collection, most important first: the most critical asset tier, then the highest risk score. Filter, pivot, drill down, and exempt what is accepted.</p>
+<details class="help">
+    <summary>How this page works</summary>
+    <p>The data is the Pro database's copy of each complete Risk Analysis run (a <em>collection</em>). Pick an older collection to see the estate as it was then. Filters and paging run in the database, so the page stays fast for any estate size. To exempt findings, select them (or take every finding matching the filter) and <strong>request an exemption</strong>: an approver of each finding's security domain approves or rejects it on <a href="/Exemptions">Exemptions</a>, and only an approved exemption counts, from the next run. Press <kbd>/</kbd> to jump to the search box. <a href="/Help">Glossary</a>.</p>
+</details>
+
+@{
+    // owner 2026-10-19: what the list shows, from its real state -- the run, the lifecycle, the exempted findings, a
+    // department scope, the filters and the search as chips, "Show everything"
+    var fRules = await ((SI.Management.Core.ProData.ICiLifecycleRulesReader)ViewContext.HttpContext.RequestServices.GetService(typeof(SI.Management.Core.ProData.ICiLifecycleRulesReader))!).ReadAsync(ViewContext.HttpContext.RequestAborted);
+    var shownRun = Model.Collections.FirstOrDefault(c => c.CollectionId == shownId);
+    var fDefaults = new List<string>();
+    if (Model.ExemptedState is { Ready: true } ex) { fDefaults.Add(ex.Include ? "exempted findings shown, marked" : "exempted findings hidden"); }
+    if (Model.Filter().Visibility is not null) { fDefaults.Add("only your departments' findings"); }
+    var fScope = new SI.Management.Web.Pages.ViewScope
+    {
+        RunTime = shownRun?.CollectionTime, RunKind = shownRun?.Kind,
+        // #855: the findings of the CI lifecycle this view counts -- ACTIVE CIs by default, said with the numbers in force
+        Lifecycle = Model.Lifecycle.Words(fRules, "Findings"), LifecycleDefaulted = Model.Lifecycle.IsDefault,
+        Defaults = fDefaults, Chips = active.Select(a => new SI.Management.Web.Pages.ScopeChip(a.Label, Model.Link((a.Key, null)))).ToList(),
+        ShowEverythingHref = active.Count > 0 || !Model.Lifecycle.IsAll || Model.ExemptedState is { Ready: true, Include: false } ? SI.Management.Web.Exemptions.ExemptedTick.Carry("/Findings?lifecycle=all" + (Model.C is { } fc ? "&c=" + Uri.EscapeDataString(fc) : ""), Model.ExemptedState is { Ready: true } ? "1" : null) : null,
+        Definitions = fRules.Definitions,
+    };
+}
+<partial name="~/Pages/Shared/_ViewScope.cshtml" model="fScope" />
+<partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="SI.Management.Web.Pages.LifecycleChoice.For(ViewContext.HttpContext.Request, Model.Lifecycle)" />
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@if (partialNotice is not null) { <partial name="~/Pages/Shared/_PartialNotice.cshtml" model="partialNotice" /> }
+
+@* the filter form: the collection is picked here (it submits on change); the search, the filters, the sort and the size
+   sit in the list's toolbar row (form attribute), the one row of every view (owner 2026-10-19) *@
+<form id="findings-f" method="get" action="/Findings" class="filterbar" data-autosubmit aria-label="Collection and filters">
+    @if (Model.Lifecycle.QueryValue is { } lcv) { <input type="hidden" name="lifecycle" value="@lcv" /> }
+    <div class="wide">
+        <label for="f-c">Collection</label>
+        <select id="f-c" name="c">
+            <option value="">Newest</option>
+            @foreach (var c in Model.Collections)
+            {
+                <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.C)">@Fmt.When(c.CollectionTime) · @c.Kind@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && pm.ShowsOn("/Findings", Model.Rep) ? " · " + pm.Badge : "")</option>
+            }
+        </select>
+    </div>
+    <input type="hidden" name="cols" value="@Model.Cols" />
+    @if (r is null)
+    {
+        @* no list shown (no collection yet, a refused filter): the filters stay reachable here *@
+        <div class="filters-panel">
+            @foreach (var mf in filters) { <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div> }
+            <div class="actions"><button type="submit">Apply</button> <a class="button secondary" href="/Findings">Clear</a></div>
+        </div>
+    }
+</form>
+
+@* the filters and the search are chips of the "What you're looking at" line above *@
+
+@if (r is not null)
+{
+    <section class="card" aria-labelledby="h-pivot">
+        <h2 id="h-pivot">Dimensions: asset tier × @(Model.PivotCols == "domain" ? "security domain" : "severity")</h2>
+        <p class="hint">Findings in the filtered view. A cell filters the list. Show columns by <a href="@Model.Link(("cols", null))" aria-current="@(Model.PivotCols == "severity" ? "true" : "false")">severity</a> · <a href="@Model.Link(("cols", "domain"))" aria-current="@(Model.PivotCols == "domain" ? "true" : "false")">domain</a></p>
+        <div class="table-wrap">
+            <table class="pivot" data-sortable>
+                <thead><tr><th>Tier</th>@foreach (var c in cols) { <th>@(c == "" ? "(none)" : c)</th> }<th>Total</th></tr></thead>
+                <tbody>
+                    @foreach (var t in tiers)
+                    {
+                        var rowCells = Model.Pivot.Where(p => p.Tier == t).ToList();
+                        if (rowCells.Count == 0) { continue; }
+                        <tr>
+                            <th scope="row"><span class="tierdot t@(t)"></span>@SI.Management.Web.Pages.Tiers.TierLinks.Label(t)</th>
+                            @foreach (var c in cols)
+                            {
+                                var n = rowCells.Where(p => (Model.PivotCols == "domain" ? p.Domain : p.Severity) == c).Sum(p => p.Findings);
+                                <td class="@Heat(n)">@if (n > 0) { <a href="@(Model.PivotCols == "domain" ? Model.Link(("tier", t), ("dom", c)) : Model.Link(("tier", t), ("sev", c)))">@Fmt.Int(n)</a> }</td>
+                            }
+                            <td><a href="@Model.Link(("tier", t))">@Fmt.Int(rowCells.Sum(p => p.Findings))</a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="hint">@Fmt.Int(Model.Pivot.Sum(p => p.Findings)) findings on @Fmt.Int(Model.Pivot.GroupBy(p => p.Tier).Sum(g => g.Max(x => x.Assets))) or more distinct assets.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-list">
+        <h2 id="h-list">@Fmt.Int(r.Total) @(r.Total == 1 ? "finding" : "findings")</h2>
+        @* THE view toolbar, one row (owner 2026-10-19): Search · Filters · Columns · Layout · Export. #589: the columns -- the
+           finding's context, its CI with identifiers and context, every finding field; outside the selection form (the
+           chooser is a form of its own) *@
+        <div class="data-toolbar" role="group" aria-label="Search, filters, columns, layout and export">
+            <div class="gridbar dt-search">
+                <label for="f-q" class="sr-only">Search</label>
+                <input form="findings-f" id="f-q" type="search" name="q" value="@Model.Q" placeholder="Search: asset, title, CVE, configuration id" data-search maxlength="200" />
+                <button form="findings-f" type="submit">Apply</button> <a class="button secondary" href="/Findings">Clear</a>
+            </div>
+            <details class="tool-menu filters-menu" data-filters-menu>
+                <summary class="tool-button">Filters@(activeCount > 0 ? " · " + Fmt.Int(activeCount) + " active" : "")</summary>
+                <div class="tool-panel filters-panel">
+                    @foreach (var mf in filters) { <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div> }
+                    <div>
+                        <label for="f-sort">Sort</label>
+                        <select form="findings-f" id="f-sort" name="sort">
+                            <option value="importance" selected="@(Model.Sort == FindingSorts.Importance)">Most important first</option>
+                            <option value="risk" selected="@(Model.Sort == FindingSorts.Risk)">Risk Score</option>
+                            <option value="severity" selected="@(Model.Sort == FindingSorts.Severity)">Severity, Very High first</option>
+                            <option value="severity-asc" selected="@(Model.Sort == FindingSorts.SeverityAscending)">Severity, Low first</option>
+                            <option value="asset" selected="@(Model.Sort == FindingSorts.Asset)">Asset name</option>
+                            <option value="report" selected="@(Model.Sort == FindingSorts.Report)">Report</option>
+                        </select>
+                    </div>
+                    @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+                    <input form="findings-f" type="hidden" name="size" value="@Model.Size" />
+                    <div class="actions"><button form="findings-f" type="submit">Apply</button> <a class="button secondary" href="/Findings">Clear</a></div>
+                </div>
+            </details>
+            @if (table is not null) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="table.Chooser" /> }
+            <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
+        </div>
+        @if (r.Rows.Count == 0)
+        {
+            <p class="hint">No finding matches these filters.</p>
+        }
+        else
+        {
+            // #282: the action bar (#272), the admin's staging and the pager sit ABOVE the table, in the shared toolbar
+            Func<object?, Microsoft.AspNetCore.Html.IHtmlContent>? adminStage = !isAdmin ? null :
+                @<details class="quickstrip-admin">
+                    <summary>Admin: stage an exemption of the selected for Review &amp; commit</summary>
+                    <div class="filterbar">
+                        <div>
+                            <label for="ex-scope">What</label>
+                            <select id="ex-scope" name="ExemptScope">
+                                <option value="finding">This finding on this asset</option>
+                                <option value="issue">This issue on every asset</option>
+                            </select>
+                        </div>
+                        <div class="wide"><label for="ex-reason">Reason (required, audited)</label><input id="ex-reason" type="text" name="ExemptReason" maxlength="400" required minlength="3" /></div>
+                        <div><label for="ex-until">Until (empty = the default period)</label><input id="ex-until" type="date" name="ExemptUntil" /></div>
+                        <div class="actions"><button type="submit">Stage exemption</button></div>
+                    </div>
+                </details>;
+            var toolbar = new GridToolbar
+            {
+                Id = "findings-tools", Total = r.Total, Skip = r.Skip, Count = r.Rows.Count, Noun = "finding(s)", Page = Model.P, Pages = Model.Pages,
+                PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))),
+                AlwaysShowPage = true, Bar = canSelect ? Model.ActionBar : null, Actions = adminStage,
+                Size = Model.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+            };
+            <form id="findings-sel" method="post" asp-page-handler="Exempt" data-selectable data-strip="#quick">
+                <input type="hidden" name="c" value="@Model.C" />
+                <input type="hidden" name="tier" value="@Model.Tier" /><input type="hidden" name="sev" value="@Model.Sev" /><input type="hidden" name="dom" value="@Model.Dom" />
+                <input type="hidden" name="rep" value="@Model.Rep" /><input type="hidden" name="kind" value="@Model.Kind" /><input type="hidden" name="q" value="@Model.Q" />
+                <input type="hidden" name="sort" value="@Model.Sort" /><input type="hidden" name="size" value="@Model.Size" /><input type="hidden" name="p" value="@Model.P" />
+                <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+                @if (table is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="table with { InForm = true }" /> }
+            </form>
+            <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+        }
+    </section>
+}
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

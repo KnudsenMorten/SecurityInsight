@@ -1,0 +1,18 @@
+{
+  "_purpose": "#679: which page of the shipped documentation explains a setting -- the 'Read in this version's documentation' link under a setting's More info. 'categories' maps a Settings-page category (config/settings.catalog.locked.json categories) to 'page' or 'page#anchor'; 'settings' maps one setting by its internal name and wins over its category. A link is shown only when its page and anchor exist in this folder (never a dead link); the web tests fail on any entry that does not resolve. SecurityInsight's own file: setup/Import-SIProductDocs.ps1 never replaces it.",
+  "categories": {
+    "Guards (safety checks)": "guards",
+    "Schedules & what runs": "pipeline#when-it-runs",
+    "Departments & owners": "departments#which-department-owns-an-asset",
+    "Connectors & CMDB": "cmdb-servicenow",
+    "Exemptions": "exemptions",
+    "Licence & updates": "settings#licence--updates",
+    "Sign-in & Azure resources": "identities-and-permissions"
+  },
+  "settings": {
+    "SI_InvardiaUpdate_Enabled": "upgrade#staying-in-control",
+    "SI_LicenseRequest_Auto": "upgrade#staying-in-control",
+    "SI_Telemetry_Enabled": "operations#status-reports-to-invardia",
+    "SI_LogRetentionDays": "operations#logs-and-records"
+  }
+}

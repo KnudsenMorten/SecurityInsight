@@ -1,0 +1,462 @@
+#Requires -Version 5.1
+<#
+    Get-SIRiskFactors.ps1
+
+    Profile-time derivation of risk-relevant boolean / count flags. Moves
+    "did this OS appear on the legacy list?" / "is this SPN cred about to
+    expire?" / "does this NSG allow internet on 3389?" logic OUT of every
+    Risk Analysis kusto query and INTO the row builder. The query then
+    just reads the flat column.
+
+    Why move it here:
+      * one canonical definition (no drift across 50 queries)
+      * faster queries (no parse_json on hot path)
+      * reusable in YAML rules + dashboards + workbooks
+      * customer can override individual derivations via a -RiskFactorOverride
+        hashtable on $global:SI_*  (TODO: hook in )
+
+    All functions:
+      * accept a $Record (post-Classify staging shape)
+      * return $true / $false / [int] / [string]
+      * never throw -- bad input -> $false / 0 / null
+      * are PURE (no side effects, safe to call N times per row)
+
+    Output columns surfaced:
+      ENDPOINT  UnsupportedOSDetected, UnsupportedOSReason, DefenderAvOutOfDate,
+                IsStaleAsset, DaysInactive, IsCmdbOrphan
+      IDENTITY  IsOrphanSPN, HasExpiringCredentials, CredentialExpiryDays,
+                HasNoMfa, HasPasswordNeverExpires, IsExternalIdentity,
+                IsHighRiskPermissionGrant, DaysInactive, IsCmdbOrphan
+      AZURE     HasOpenAdminPort, IsPubliclyExposed, HasNoSoftDelete,
+                UnencryptedTraffic, IsCmdbOrphan
+
+    Cross-engine link columns (LinkedAzureResourceId, LinkedEndpointDeviceId,
+    IsCrossEngineAsset) live on the row already from Collect; this file just
+    ensures they're emitted when the source data is present.
+#>
+
+# ----------------------------------------------------------------------------
+# Shared helpers
+# ----------------------------------------------------------------------------
+
+function Get-SIDaysInactive {
+    <# Days since the most-recent of EgLastSeen / LastSeen / LastSignInDateTime
+       on the asset. Returns 9999 when no signal is available (sortable
+       sentinel for "never seen"). #>
+    param([Parameter(Mandatory)]$Record)
+    $candidates = @(
+        Get-SIRecordValue -Record $Record -Name 'LastSignInDateTime'
+        Get-SIRecordValue -Record $Record -Name 'LastSeen'
+        Get-SIRecordValue -Record $Record -Name 'EgLastSeen'
+        Get-SIRecordValue -Record $Record -Name 'MDE_LastSeen'
+        Get-SIRecordValue -Record $Record -Name 'EG_LastSeen'
+    )
+    $best = $null
+    foreach ($c in $candidates) {
+        if ([string]::IsNullOrWhiteSpace([string]$c)) { continue }
+        try {
+            # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+            $dt = [DateTimeOffset]::Parse([string]$c, [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+            if ($null -eq $best -or $dt -gt $best) { $best = $dt }
+        } catch {}
+    }
+    if ($null -eq $best) { return 9999 }
+    return [int]([Math]::Max(0, ([datetime]::UtcNow - $best).TotalDays))
+}
+
+function Get-SIRecordValue {
+    <# Record / Verdict / Metadata top-level field reader -- shape-tolerant.
+       Walks $Record.<Name>, $Record.Verdict.<Name>, $Record.Metadata.<Name>. #>
+    param([Parameter(Mandatory)]$Record, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Record) { return $null }
+    foreach ($holder in @($Record, $Record.Verdict, $Record.Metadata)) {
+        if ($null -eq $holder) { continue }
+        if ($holder -is [System.Collections.IDictionary]) {
+            if ($holder.Contains($Name)) {
+                $v = $holder[$Name]
+                if ($null -ne $v -and "$v" -ne '') { return $v }
+            }
+        } else {
+            $p = $holder.PSObject.Properties[$Name]
+            if ($p -and $null -ne $p.Value -and "$($p.Value)" -ne '') { return $p.Value }
+        }
+    }
+    return $null
+}
+
+# ----------------------------------------------------------------------------
+# ENDPOINT derivations
+# ----------------------------------------------------------------------------
+
+# Legacy / out-of-support OS list. Update as Microsoft / distro vendors EOL releases.
+$script:_SIUnsupportedOS = @{
+    Windows = @(
+        '(?i)^Windows7',     '(?i)^Windows8($|\.)','(?i)^Windows8\.1',
+        '(?i)WindowsServer2003','(?i)WindowsServer2008','(?i)WindowsServer2012'
+    )
+    LinuxLiterals = @(
+        'CentOS 6','CentOS 7','RHEL 6','RHEL 7','SLES 11','SLES 12',
+        'Ubuntu 14.04','Ubuntu 16.04','Ubuntu 18.04','Debian 8','Debian 9','Debian 10',
+        'Fedora 30','Fedora 31','Fedora 32','Fedora 33','Fedora 34','Fedora 35'
+    )
+    macOSMajorBelow = 13   # macOS 12 (Monterey) and earlier are out of vendor security support
+}
+
+function Test-SIEndpointUnsupportedOS {
+    <# Returns @{ Unsupported=$true|$false; Reason='<vendor-EOL-text>' or '' } #>
+    param([Parameter(Mandatory)]$Record)
+    $os    = [string](Get-SIRecordValue -Record $Record -Name 'OsPlatform')
+    if (-not $os) { $os = [string](Get-SIRecordValue -Record $Record -Name 'MDE_OSPlatform') }
+    if (-not $os) { $os = [string](Get-SIRecordValue -Record $Record -Name 'EG_OS') }
+    if (-not $os) { $os = [string](Get-SIRecordValue -Record $Record -Name 'ENTRA_OS') }
+    $ver   = [string](Get-SIRecordValue -Record $Record -Name 'OsVersion')
+    if (-not $ver) { $ver = [string](Get-SIRecordValue -Record $Record -Name 'MDE_OSVersion') }
+    if (-not $ver) { $ver = [string](Get-SIRecordValue -Record $Record -Name 'EG_OSVersion') }
+
+    $combined = ($os + ' ' + $ver).Trim()
+    if ([string]::IsNullOrWhiteSpace($combined)) { return @{ Unsupported = $false; Reason = '' } }
+
+    foreach ($pat in $script:_SIUnsupportedOS.Windows) {
+        if ($combined -match $pat) { return @{ Unsupported = $true; Reason = ('Windows EOL: ' + $combined) } }
+    }
+    foreach ($lit in $script:_SIUnsupportedOS.LinuxLiterals) {
+        if ($combined -like ('*' + $lit + '*')) { return @{ Unsupported = $true; Reason = ('Linux EOL: ' + $lit) } }
+    }
+    if ($os -match '(?i)^macOS|^OSX|^Mac\sOS') {
+        if ($ver -match '^(\d+)') {
+            $major = [int]$matches[1]
+            if ($major -gt 0 -and $major -lt $script:_SIUnsupportedOS.macOSMajorBelow) {
+                return @{ Unsupported = $true; Reason = ('macOS EOL: ' + $combined) }
+            }
+        }
+    }
+    return @{ Unsupported = $false; Reason = '' }
+}
+
+function Test-SIDefenderAvOutOfDate {
+    param([Parameter(Mandatory)]$Record)
+    $st = [string](Get-SIRecordValue -Record $Record -Name 'DefenderAvStatus')
+    if (-not $st) { $st = [string](Get-SIRecordValue -Record $Record -Name 'MDE_DefenderAvStatus') }
+    if (-not $st) { return $false }
+    return ($st -inotmatch '^(Updated|Up\s*to\s*date|GoodHealth|HealthyAndUpToDate)$')
+}
+
+# Every field that can carry an operator's exclusion tag.
+# v2.2.430 -- MDE_MachineTags ADDED, and it was the important omission: tagging a device in the
+# Defender portal is the normal way an admin marks one, and those tags arrive as MDE_MachineTags. The
+# flat AssetTags column has always been built from MDE_MachineTags + EG_DeviceManualTags +
+# EG_DeviceDynamicTags, so a device could show '--Excluded--SI' in its own AssetTags text while
+# IsExcludedByTag stayed false -- the tag was visible in the output and did nothing. Reported by an
+# operator who had tagged "lots of devices" and saw them still in reports.
+# 'MachineTags' is kept as a defensive alias for record shapes that surface it unprefixed.
+$script:SIExclusionTagFields = @(
+    'MDE_MachineTags'
+    'EG_DeviceManualTags'
+    'EG_DeviceDynamicTags'
+    'EG_Tags'
+    'DeviceManualTags'
+    'DeviceDynamicTags'
+    'MachineTags'
+)
+$script:SIExclusionTagMarker = '--Excluded--SI'
+
+function Get-SIEndpointExclusionReason {
+    <# Returns WHICH tag excluded the device, as 'Field: tag' (multiple joined with '; '), or '' when
+       the device is not excluded.
+
+       Exists because exclusion was previously invisible: a device simply vanished from every report
+       with nothing saying it had been dropped or why. That is the silent-loss shape this codebase
+       fights everywhere else, and it is worse here because the operator cannot tell "excluded on
+       purpose" from "missing because collection broke".
+
+       Tolerates string-array, semicolon-joined-string, and single-string shapes -- the tag sources
+       genuinely arrive in all three. #>
+    param([Parameter(Mandatory)]$Record)
+
+    # PER-FIELD try/catch, on purpose. This runs for EVERY endpoint asset on every customer, inside the
+    # row builder -- so a single odd tag shape from any one source must not be able to kill the whole
+    # profile run. Losing the exclusion reason for one field costs a column; throwing here costs the
+    # customer their entire endpoint inventory for that run. Per-field rather than one outer catch so a
+    # bad MDE tag cannot also hide a good EG one.
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($field in $script:SIExclusionTagFields) {
+        try {
+            $val = Get-SIRecordValue -Record $Record -Name $field
+            if ($null -eq $val) { continue }
+            $items = @()
+            if     ($val -is [System.Array]) { $items = @($val) }
+            elseif ($val -is [string])       { $items = @($val -split ';') }
+            else                             { $items = @([string]$val) }
+            foreach ($item in $items) {
+                $s = ([string]$item).Trim()
+                if ($s -and $s -like ('*' + $script:SIExclusionTagMarker + '*')) {
+                    $entry = '{0}: {1}' -f $field, $s
+                    if (-not $hits.Contains($entry)) { $hits.Add($entry) }
+                }
+            }
+        } catch {
+            Write-Warning ("exclusion-tag read failed for field '{0}' ({1}) -- that field is skipped; other tag sources still count." -f $field, $_.Exception.Message)
+        }
+    }
+    if ($hits.Count -eq 0) { return '' }
+    ($hits -join '; ')
+}
+
+function Test-SIEndpointExcludedByTag {
+    <# Returns $true when any tag source carries the '--Excluded--SI' marker. Operator-driven opt-out --
+       a device tagged with that marker stays out of RA reports without code or query edits.
+       Now a thin wrapper over Get-SIEndpointExclusionReason so the flag and the REASON can never
+       disagree about what counts as excluded -- two functions applying the same rule separately is how
+       a column ends up contradicting the filter that uses it. #>
+    param([Parameter(Mandatory)]$Record)
+    -not [string]::IsNullOrEmpty((Get-SIEndpointExclusionReason -Record $Record))
+}
+
+function Get-SIEndpointRiskFactors {
+    <# Returns ordered hashtable of all endpoint-engine derived risk columns.
+       Caller stamps each entry on the row. #>
+    param([Parameter(Mandatory)]$Record)
+    $unsupported = Test-SIEndpointUnsupportedOS -Record $Record
+    $days        = Get-SIDaysInactive -Record $Record
+    # simplified -- old form ($days >= 30 -and $days < 9999) -or $days -eq 9999
+    # was equivalent to just $days >= 30 since 9999 is the "never seen" sentinel.
+    # Threshold 30d is aggressive; consider raising to 60-90 if false-positive rate is too high.
+    $stale       = ($days -ge 30)
+    # '' when not excluded, else 'Field: tag'. Drives BOTH IsExcludedByTag and ExcludedReason below.
+    $excludedReason = [string](Get-SIEndpointExclusionReason -Record $Record)
+
+    $CmdbMatchPhase = [string](Get-SIRecordValue -Record $Record -Name 'CmdbMatchPhase')
+    $tierVal    = Get-SIRecordValue -Record $Record -Name 'Tier'
+    $tier       = if ($null -ne $tierVal) { try { [int]$tierVal } catch { 3 } } else { 3 }
+    $cmdbOrphan = ($CmdbMatchPhase -eq 'orphan' -and $tier -le 1)
+
+    $avOutOfDate = Test-SIDefenderAvOutOfDate -Record $Record
+
+    # final: dropped IsTenantTakeoverRisk -- Tier 0 designation
+    # already implies tenant-takeover risk (rules / AI promote DC / ADCS /
+    # EntraSync to T0 anyway, and customer-promoted T0 is crown-jewel by
+    # definition). The RA weighted-score formula uses Tier directly.
+
+    # dropped RiskFactorCount -- queries derive the count via
+    # sum-of-iffs on the same risk-bool fields they already display.
+    [ordered]@{
+        UnsupportedOSDetected = [bool]$unsupported.Unsupported
+        UnsupportedOSReason   = [string]$unsupported.Reason
+        DefenderAvOutOfDate   = [bool]$avOutOfDate
+        DaysInactive          = [int64]$days   # Long, not Int -- matches existing DCR transform output type (avoids InvalidTransformOutput on schema migration)
+        IsStaleAsset          = [bool]$stale
+        IsCmdbOrphan          = [bool]$cmdbOrphan
+        # Computed ONCE and used for both, so the flag and the reason cannot disagree. Calling
+        # Test-SIEndpointExcludedByTag separately here would evaluate the same rule twice, which is
+        # how a "why" column drifts away from the filter it is supposed to explain.
+        IsExcludedByTag       = [bool]$excludedReason
+        ExcludedReason        = [string]$excludedReason
+    }
+}
+
+# ----------------------------------------------------------------------------
+# IDENTITY derivations
+# ----------------------------------------------------------------------------
+
+$script:_SIHighRiskAppPerms = @(
+    'Directory.ReadWrite.All','RoleManagement.ReadWrite.Directory',
+    'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All',
+    'Mail.ReadWrite','Mail.Send','Files.ReadWrite.All',
+    'User.ReadWrite.All','Group.ReadWrite.All',
+    'PrivilegedAccess.ReadWrite.AzureAD','Sites.FullControl.All',
+    'DeviceManagementConfiguration.ReadWrite.All',
+    'IdentityRiskyUser.ReadWrite.All'
+)
+
+function Get-SIIdentityRiskFactors {
+    param([Parameter(Mandatory)]$Record)
+    $upn      = [string](Get-SIRecordValue -Record $Record -Name 'Upn')
+    $isSpn    = [bool](Get-SIRecordValue -Record $Record -Name 'IsServicePrincipal')
+    $owner    = [string](Get-SIRecordValue -Record $Record -Name 'Owner')
+    $mfaState = [string](Get-SIRecordValue -Record $Record -Name 'MfaState')
+    $pwdPolicy= [string](Get-SIRecordValue -Record $Record -Name 'PasswordPolicies')
+
+    $isExternal = ($upn -match '#EXT#@' -or $upn -like '*#ext#*')
+    # ORPHANED = a service principal with NO owner, from the run's owners read (ENTRA_OwnerCount, Get-SISpOwnerCounts).
+    # Owners NOT read (a failed / partial read, an older record) = UNKNOWN ($null), never orphaned: 'Owner' was never set
+    # by any collector, so every service principal used to come out orphaned.
+    $isOrphanSpn = $false
+    if ($isSpn) {
+        $ownerCount = Get-SIRecordValue -Record $Record -Name 'ENTRA_OwnerCount'
+        if (-not [string]::IsNullOrWhiteSpace($owner)) { $isOrphanSpn = $false }
+        elseif ($null -ne $ownerCount -and "$ownerCount" -ne '') { $isOrphanSpn = ([int]$ownerCount -eq 0) }
+        else { $isOrphanSpn = $null }
+    }
+    # precedence bug fix. Was: A -or (B -and C) which made
+    # the SPN-exclusion guard ONLY apply to the empty-mfaState branch -- so
+    # an SPN with mfaState="notCapable" wrongly got HasNoMfa=true. Now the
+    # SPN guard wraps both conditions: not-an-SPN AND (no MFA registered).
+    $hasNoMfa = ((-not $isSpn) -and (
+        $mfaState -match '(?i)none|notRegistered|notCapable' -or
+        [string]::IsNullOrWhiteSpace($mfaState)))
+    $hasPwdNeverExpires = ($pwdPolicy -match '(?i)DisablePasswordExpiration|DisableExpiration')
+
+    # Credential expiry (days). SPNs publish keyCredentials / passwordCredentials
+    # with EndDateTime values; profiling stores the closest expiry as
+    # NextCredentialExpiryDateTime (when set upstream).
+    $nextExpiry = [string](Get-SIRecordValue -Record $Record -Name 'NextCredentialExpiryDateTime')
+    $credDays = $null
+    if ($nextExpiry) {
+        # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+        try { $credDays = [int](([DateTimeOffset]::Parse($nextExpiry, [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime - [datetime]::UtcNow).TotalDays) } catch {}
+    }
+    $hasExpiringCreds = ($null -ne $credDays -and $credDays -ge 0 -and $credDays -le 30)
+
+    # High-risk permissions — intersect EntraAppPermissions_Application (SPN)
+    # OR EntraRoles_Permanent (user/SPN) with the high-risk list.
+    $isHighRisk = $false
+    foreach ($listField in @('EntraAppPermissions_Application','EntraRoles_Permanent','EntraRoles_Eligible')) {
+        $raw = Get-SIRecordValue -Record $Record -Name $listField
+        if (-not $raw) { continue }
+        # A ONE-item list can arrive as the bare item ("Directory.Read.All", not ["Directory.Read.All"]): only a text that
+        # IS a JSON list is parsed -- parsing the bare item failed on every such identity (live: ~120 failed parses a run)
+        $arr = if ($raw -is [string]) {
+                   $s = $raw.Trim()
+                   if ($s.StartsWith('[')) { try { @($s | ConvertFrom-Json -ErrorAction Stop) } catch { @($s -split '[,;]\s*') } } else { @($s -split '[,;]\s*') }
+               } else { @($raw) }
+        foreach ($x in $arr) {
+            if ([string]$x -in $script:_SIHighRiskAppPerms) { $isHighRisk = $true; break }
+        }
+        if ($isHighRisk) { break }
+    }
+
+    $days = Get-SIDaysInactive -Record $Record
+
+    $CmdbMatchPhase = [string](Get-SIRecordValue -Record $Record -Name 'CmdbMatchPhase')
+    $tierVal    = Get-SIRecordValue -Record $Record -Name 'Tier'
+    $tier       = if ($null -ne $tierVal) { try { [int]$tierVal } catch { 3 } } else { 3 }
+    $cmdbOrphan = ($CmdbMatchPhase -eq 'orphan' -and $tier -le 1)
+
+    # final: dropped IsTenantTakeoverRisk -- Tier 0 implies it.
+    # Identity catalog already promotes Global Admin, Privileged Role Admin,
+    # Hybrid Sync, etc. to Tier 0; the RA weighted-score uses Tier directly.
+
+    # dropped RiskFactorCount -- queries derive the count via
+    # sum-of-iffs on the same risk-bool fields they already display.
+    [ordered]@{
+        IsOrphanSPN              = $(if ($null -eq $isOrphanSpn) { $null } else { [bool]$isOrphanSpn })
+        HasExpiringCredentials   = [bool]$hasExpiringCreds
+        CredentialExpiryDays     = if ($null -ne $credDays) { [int]$credDays } else { $null }
+        HasNoMfa                 = [bool]$hasNoMfa
+        HasPasswordNeverExpires  = [bool]$hasPwdNeverExpires
+        IsExternalIdentity       = [bool]$isExternal
+        IsHighRiskPermissionGrant= [bool]$isHighRisk
+        DaysInactive             = [int64]$days   # Long, not Int -- matches existing DCR transform output type
+        IsCmdbOrphan             = [bool]$cmdbOrphan
+    }
+}
+
+# ----------------------------------------------------------------------------
+# AZURE derivations
+# ----------------------------------------------------------------------------
+
+function Test-SIAzurePubliclyExposed {
+    <# Type-aware: each public-access posture flag has a different column
+       depending on the Azure resource type. Returns $true if ANY of them
+       indicates the resource is reachable from the public internet. #>
+    param([Parameter(Mandatory)]$Record)
+    foreach ($f in @(
+        'AllowBlobPublicAccess','StPublicNetworkAccess','AcrPublicNetworkAccess',
+        'AoaiPublicNetworkAccess','CogPublicNetworkAccess','FuncPublicNetworkAccess',
+        'KvPublicNetworkAccess','PublicNetworkAccess','SqlSrvPublicNetworkAccess',
+        'StPublicNetworkAccess','WebPublicNetworkAccess','PipAddress',
+        'EG_FuncAllowsPublicAccess','EG_WebAllowsPublicAccess'
+    )) {
+        $v = Get-SIRecordValue -Record $Record -Name $f
+        if ($null -eq $v) { continue }
+        if ($v -is [bool]) { if ($v) { return $true }; continue }
+        $s = [string]$v
+        if ($s -ieq 'true' -or $s -ieq 'enabled' -or ($s -match '^\d+\.\d+\.\d+\.\d+$')) { return $true }
+    }
+    return $false
+}
+
+function Test-SIAzureNoSoftDelete {
+    param([Parameter(Mandatory)]$Record)
+    $rt = [string](Get-SIRecordValue -Record $Record -Name 'ResourceType')
+    if ($rt -inotmatch 'keyvault') { return $false }
+    foreach ($f in @('KvEnableSoftDelete','EnableSoftDelete')) {
+        $v = Get-SIRecordValue -Record $Record -Name $f
+        if ($null -ne $v) {
+            if ($v -is [bool]) { return -not $v }
+            return ([string]$v -ieq 'false')
+        }
+    }
+    return $false   # field not stamped == unknown, not a finding
+}
+
+function Test-SIAzureUnencryptedTraffic {
+    param([Parameter(Mandatory)]$Record)
+    foreach ($f in @('AppHttpAllowed','SupportsHttpsTrafficOnly','StSupportsHttpsTrafficOnly','FuncHttpsOnly','WebHttpsOnly')) {
+        $v = Get-SIRecordValue -Record $Record -Name $f
+        if ($null -eq $v) { continue }
+        $b = if ($v -is [bool]) { $v } else { ([string]$v -ieq 'true') }
+        # AppHttpAllowed is "true means BAD" -- HTTPS-only flags are "false means BAD"
+        if ($f -eq 'AppHttpAllowed' -and $b)         { return $true }
+        if ($f -ne 'AppHttpAllowed' -and -not $b)    { return $true }
+    }
+    return $false
+}
+
+function Test-SIAzureOpenAdminPort {
+    <# True when the resource is an NSG that permits inbound traffic from
+       Internet / 0.0.0.0/0 / Any source on a management port (22, 3389, 5985).
+       Walks parsed AZ_PropertiesJson.securityRules[].properties for direction
+       == Inbound, access == Allow, sourceAddressPrefix in {Internet, *,
+       0.0.0.0/0}, and destinationPortRange overlapping 22|3389|5985. #>
+    param([Parameter(Mandatory)]$Record)
+    $rt = [string](Get-SIRecordValue -Record $Record -Name 'ResourceType')
+    if ($rt -inotmatch 'networksecuritygroups') { return $false }
+    $propsJson = [string](Get-SIRecordValue -Record $Record -Name 'AZ_PropertiesJson')
+    if (-not $propsJson) { return $false }
+    try { $p = $propsJson | ConvertFrom-Json -ErrorAction Stop } catch { return $false }
+    $rules = @()
+    if ($p.PSObject.Properties['securityRules'])        { $rules += @($p.securityRules) }
+    if ($p.PSObject.Properties['defaultSecurityRules']) { $rules += @($p.defaultSecurityRules) }
+    foreach ($r in $rules) {
+        $rp = if ($r.PSObject.Properties['properties']) { $r.properties } else { $r }
+        if ([string]$rp.access      -inotmatch '^Allow$')   { continue }
+        if ([string]$rp.direction   -inotmatch '^Inbound$') { continue }
+        $src = [string]$rp.sourceAddressPrefix
+        if ($src -notin @('Internet','*','0.0.0.0/0')) { continue }
+        $dst = [string]$rp.destinationPortRange
+        if ($dst -in @('22','3389','5985','*')) { return $true }
+        if ($dst -match '^(\d+)-(\d+)$') {
+            $lo = [int]$matches[1]; $hi = [int]$matches[2]
+            foreach ($p2 in @(22,3389,5985)) { if ($p2 -ge $lo -and $p2 -le $hi) { return $true } }
+        }
+    }
+    return $false
+}
+
+function Get-SIAzureRiskFactors {
+    param([Parameter(Mandatory)]$Record)
+    $publicExposed = Test-SIAzurePubliclyExposed -Record $Record
+    $noSoftDelete  = Test-SIAzureNoSoftDelete   -Record $Record
+    $unencTraffic  = Test-SIAzureUnencryptedTraffic -Record $Record
+    $openAdmin     = Test-SIAzureOpenAdminPort  -Record $Record
+
+    $CmdbMatchPhase = [string](Get-SIRecordValue -Record $Record -Name 'CmdbMatchPhase')
+    $tierVal    = Get-SIRecordValue -Record $Record -Name 'Tier'
+    $tier       = if ($null -ne $tierVal) { try { [int]$tierVal } catch { 3 } } else { 3 }
+    $cmdbOrphan = ($CmdbMatchPhase -eq 'orphan' -and $tier -le 1)
+
+    # final: dropped IsTenantTakeoverRisk -- Tier 0 implies it.
+    # KeyVault/ManagementGroups/PolicyDefinitions get promoted to T0 by the
+    # azure rule catalog; the RA weighted-score uses Tier directly.
+
+    # dropped RiskFactorCount -- queries derive the count via
+    # sum-of-iffs on the same risk-bool fields they already display.
+    [ordered]@{
+        IsPubliclyExposed   = [bool]$publicExposed
+        HasNoSoftDelete     = [bool]$noSoftDelete
+        UnencryptedTraffic  = [bool]$unencTraffic
+        HasOpenAdminPort    = [bool]$openAdmin
+        IsCmdbOrphan        = [bool]$cmdbOrphan
+    }
+}

@@ -1,0 +1,50 @@
+@page
+@model SI.Management.Web.Pages.DeniedModel
+@{
+    ViewData["Title"] = "No access";
+}
+<h1>No access</h1>
+@if (Model.IsAdmin)
+{
+    <div class="notice warn" role="alert" data-denied-role="Admin">
+        You have the <strong>Admin</strong> role. The page you opened assigns roles and scopes, and needs the <strong>SuperAdmin</strong> role
+        (it also covers the licence, updates, template releases and support access).
+        A SuperAdmin of this SecurityInsight Pro installation can assign it on <nav-ref page="/Admin/Access" />.
+    </div>
+    <p><a href="~/">Back to your start page</a></p>
+}
+else if (Model.IsDelegated)
+{
+    <div class="notice warn" role="alert" data-denied-role="Delegated">
+        You have the <strong>Delegated</strong> role, for <strong>@Model.Scopes</strong>. You can see every view, and change exemptions,
+        overrides, tier moves and reviews inside that scope. The page you opened is an Admin page and needs the <strong>Admin</strong> role.
+        Ask a SuperAdmin of this SecurityInsight Pro installation if you need more.
+    </div>
+    <p><a href="~/">Back to your start page</a></p>
+}
+else if (Model.IsViewer)
+{
+    <div class="notice warn" role="alert" data-denied-role="Reader">
+        You have the <strong>Reader</strong> role: every view, export and the chat, and no changes. The page you opened makes changes and needs
+        the <strong>Admin</strong> role -- or the <strong>Delegated</strong> role for the security domains you look after.
+        Ask a SuperAdmin of this SecurityInsight Pro installation if you need it.
+    </div>
+    <p><a href="~/">Back to your start page</a></p>
+}
+else if (Model.IsWallboard)
+{
+    <div class="notice warn" role="alert" data-denied-role="Wallboard">
+        This account has the <strong>Wallboard</strong> role, which opens the wall board and nothing else.
+    </div>
+    <p><a href="~/Wallboard">Open the wall board</a></p>
+}
+else
+{
+    <div class="notice warn" role="alert">
+        Your account is signed in but does not have the role this page needs.
+        The roles are <strong>Reader</strong> (every view, export and the chat), <strong>Delegated</strong> (changes inside assigned security domains),
+        <strong>Admin</strong> (everything in the installation) and <strong>SuperAdmin</strong> (also roles, licence, updates and template releases).
+        Ask a SuperAdmin of this SecurityInsight installation to give you a role on the Access page.
+        A role given while you are signed in applies within a few seconds.
+    </div>
+}

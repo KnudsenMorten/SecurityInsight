@@ -1,0 +1,461 @@
+@inject SI.Management.Web.Changes.IStagingStore Staging
+@inject SI.Management.Web.Collection.ISourceNotes SourceNotes
+@inject SI.Management.Web.Collection.ISyncNotices SyncNotices
+@inject SI.Management.Web.Collection.IPublishedRunNotices PublishedRunNotices
+@{
+    var current = ViewContext.RouteData.Values["page"] as string ?? "";
+    // the edition's logo, favicon and name (owner 2026-10-28): Pro only while the licence says Pro, else the Community edition
+    var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(Context.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, Context.RequestAborted);
+    var isAdmin = User.IsAdmin();
+    var mayChange = User.MayChange();
+    var isSuperAdmin = User.IsSuperAdmin();
+    var isReader = User.IsReader();
+    var wallboardOnly = User.IsWallboardOnly();
+    // a department sign-in link session (#258) is a magic link too, but it gets the menu of its department
+    var magic = User.IsMagic() && !DepartmentSessions.IsSession(User);
+    // a person of a department who is not a reader sees the department pages only (#254)
+    var deptMember = false;
+    if (!isReader && User.Identity?.IsAuthenticated == true && Context.RequestServices.GetService(typeof(SI.Management.Web.Departments.IDepartmentScopeResolver)) is SI.Management.Web.Departments.IDepartmentScopeResolver deptScope)
+    {
+        try { deptMember = (await deptScope.ResolveAsync(User, Context.RequestAborted)).Any; } catch (InvalidOperationException) { deptMember = false; }
+    }
+    var pending = 0;
+    if (mayChange)
+    {
+        try { pending = (await Staging.ListAsync(User, Context.RequestAborted)).Count; } catch (InvalidOperationException) { pending = 0; }
+    }
+    // #265: my open / overdue follow-up tasks (readers and department people; cached for seconds, never fails the page)
+    SI.Management.Web.Tasks.TaskCounts? taskCounts = null;
+    if ((isReader || deptMember) && !magic && Context.RequestServices.GetService(typeof(SI.Management.Web.Tasks.FindingTaskService)) is SI.Management.Web.Tasks.FindingTaskService taskSvc)
+    {
+        try { if (await taskSvc.Store.ReadyAsync(Context.RequestAborted)) taskCounts = await taskSvc.CountsAsync(User, Context.RequestAborted); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { taskCounts = null; }
+    }
+    // framework PENDING-1: what waits for a person and blocks work (guard holds, second-SuperAdmin requests, held template
+    // packs) -- counted on every load, a count badge on the top menu AND the entry, in the attention colour; every reader
+    // sees it (read-only for who cannot act: the tooltip says who can). Never fails the page.
+    var blocking = BlockingSummary.None;
+    if (isReader && !magic && Context.RequestServices.GetService(typeof(IBlockingItemSource)) is IBlockingItemSource blockingSource)
+    {
+        try { blocking = await blockingSource.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { blocking = BlockingSummary.None; }
+    }
+    // framework LICENCE-DIMENSION: Pro Business / Pro Enterprise in the header, and the device banner from 90 % of what a
+    // Business licence covers -- a warning, never a stop. Never fails the page.
+    SI.Management.Web.Changes.LicenceUsage? licUsage = null;
+    if (User.Identity?.IsAuthenticated == true && !magic && Context.RequestServices.GetService(typeof(SI.Management.Web.Changes.ILicenceUsageSource)) is SI.Management.Web.Changes.ILicenceUsageSource usageSource)
+    {
+        try { licUsage = await usageSource.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { licUsage = null; }
+    }
+    string Cur(string page) => NavModel.IsCurrent(page, current) ? "page" : "false";
+    // THE MENU is Navigation/NavModel.cs -- the one source; a text that names a menu path renders it from there (<nav-ref>).
+    var links = NavModel.Items;
+    var navAccess = new NavAccess(isReader, isAdmin, isSuperAdmin, mayChange, User.IsInRole(Roles.Wallboard), deptMember);
+    bool Shown(string need) => navAccess.Shown(need);
+    // ONE WEB APP, BOTH VERSIONS (owner 2026-10-18): without a Pro licence the paid pages (Licensing/ProFeatures.cs) are left
+    // out of the menu and the tab strips -- the server refuses them anyway (ProFeaturePageFilter). With a licence: as before.
+    var isPro = true;
+    if (User.Identity?.IsAuthenticated == true && Context.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) is SI.Management.Web.Licensing.IProLicence proLicence)
+    {
+        try { isPro = await proLicence.IsProAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { isPro = false; }
+    }
+    bool Licensed(string page) => isPro || SI.Management.Web.Licensing.ProFeatures.ForPage(page) is null;
+    bool OpenTo(string page, string need) => Shown(need) && Licensed(page);
+    bool ItemShown(NavItem item) => Shown(item.Need) && (isPro || SI.Management.Web.Licensing.ProFeatures.FirstOpenPage(item, OpenTo) is not null);
+    string ItemPage(NavItem item) => isPro ? item.Page : (SI.Management.Web.Licensing.ProFeatures.FirstOpenPage(item, OpenTo) ?? item.Page);
+    bool MayOpen(string? page) => page is not null && Licensed(page) && NavModel.Find(page) is { } openItem && Shown(openItem.Need) && (NavModel.TabOf(page) is not { } openTab || Shown(openTab.Need));
+    var toast = TempData["toast"] as string;
+    var toastKind = TempData["toastKind"] as string ?? "ok";
+    var numberChoice = DisplayCulture.ChosenBy(Context);
+    var here = Context.Request.Path.Value + Context.Request.QueryString.Value;
+    // #285 (BRAND-2, PIM's header is the reference): environment, mode, update ring, tenant + id, the data source. From the
+    // install's own settings / configuration / update state; a value that is not known is left out, never guessed.
+    HeaderInfo? hdr = null;
+    if (User.Identity?.IsAuthenticated == true && Context.RequestServices.GetService(typeof(HeaderContext)) is HeaderContext hc)
+    {
+        try { hdr = await hc.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { hdr = null; }
+    }
+    var roleText = isReader || User.IsDepartmentScoped() ? AccessClaims.Badge(User) : User.IsInRole(Roles.Wallboard) ? "Wallboard" : magic ? "One page" : "No role";
+    // owner 2026-10-19: the layouts pinned to the menu -- the person's own "My views" and the ones an Admin pinned for
+    // everyone (one keyed read; never fails the page)
+    IReadOnlyList<SI.Management.Web.Cis.PinnedView> pinnedViews = Array.Empty<SI.Management.Web.Cis.PinnedView>();
+    if ((isReader || deptMember) && !magic && Context.RequestServices.GetService(typeof(SI.Management.Web.Cis.IColumnLayoutStore)) is SI.Management.Web.Cis.IColumnLayoutStore pinStore)
+    {
+        try { pinnedViews = await pinStore.PinnedAsync(User.ChangeName(), Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { pinnedViews = Array.Empty<SI.Management.Web.Cis.PinnedView>(); }
+    }
+}
+<!DOCTYPE html>
+@* data-number-locale: the ONE locale every number on the page is written in -- the server's Fmt and the browser's
+   charts and sortable tables alike (BRAND-2.6). Dates stay ISO.
+   data-app-build / data-app-version (#345): the build this page was served from, signed-in only -- version-check.js
+   compares it with /about and offers "a new version is available" (BRAND-2.11, as Invardia and PIM Manager). *@
+@{ var signedIn = User.Identity?.IsAuthenticated == true; }
+<html lang="en" data-number-locale="@DisplayCulture.Locale" data-app-build="@(signedIn ? AppInfo.Build.Id : null)" data-app-version="@(signedIn ? AppInfo.Version : null)">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>@(ViewData["Title"] is string t ? t + " - " : "")@brand.Product@(hdr?.EnvironmentName is { } envTitle ? " (" + envTitle + ")" : "")</title>
+    @if (ViewData["RefreshSeconds"] is int refresh && refresh > 0) { <meta http-equiv="refresh" content="@refresh" /> }
+    @Html.Raw(brand.IconLinks())
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/app.css" asp-append-version="true" />
+    <script src="~/js/theme.js" asp-append-version="true"></script>
+    <script src="~/js/link-area.js" asp-append-version="true"></script>
+</head>
+<body>
+    <a class="skip" href="#main">Skip to content</a>
+    @* The brand bar (BRAND-2.2): always dark (brand-ink) in light AND dark mode, so the REVERSED Pro logo; the version
+       pill; on the right ONE line (#909): the environment (its details card holds mode, licence, update ring, guard mode,
+       tenant, tenant ID), data health, search, pending, tasks, theme, the user menu (preferences, sign out). *@
+    <header class="topbar" data-brandbar>
+        <a class="brand" href="/" aria-label="@brand.Product home" data-edition="@(brand.Pro ? "pro" : "community")">
+            <img class="logo" src="@brand.HeaderLogo" alt="" width="167" height="36" />
+            <span class="sr-only">@brand.LogoAlt</span>
+        </a>
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+            @* owner 2026-10-19: the release this install RUNS (what the updater read back), not the build number baked into a
+               content-hashed web image that a release without web changes keeps; the image's version only without it *@
+            string? installedRelease = null;
+            if (Context.RequestServices.GetService(typeof(SI.Management.Web.Changes.InstalledRelease)) is SI.Management.Web.Changes.InstalledRelease ir)
+            {
+                try { installedRelease = await ir.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { installedRelease = null; }
+            }
+            var pillVersion = SI.Management.Web.Changes.InstalledRelease.Shown(installedRelease, AppInfo.Version);
+            if (pillVersion.Length > 0)
+            {
+                <span class="version-pill" title="@SI.Management.Web.Changes.InstalledRelease.Tooltip(installedRelease, new SI.Management.Web.Changes.BuildIdentityText(AppInfo.Version, AppInfo.Build.Known ? AppInfo.Build.ShortCommit : AppInfo.Build.Id, AppInfo.Build.BuiltText))" data-version-source="@(installedRelease is null ? "image" : "installed")" data-version>v@(pillVersion)</span>
+            }
+        }
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+            <div class="brand-right" data-hdr-band>
+                @* #909 (owner 2026-10-27: "page header looks bad on a laptop"): ONE line at laptop width. On the band: the
+                   environment (with its ring), data health, search (takes the free space), pending, tasks, theme, the user.
+                   Mode, licence, update ring, guard mode, tenant and tenant ID moved into the details card that opens from
+                   the environment (click, Enter/Space, or hover with a mouse) -- in the same order as before (PIM's), and
+                   kept on Settings > Licence & updates. Nothing is lost: everything that left the band is one click away. *@
+                @if (hdr is not null)
+                {
+                    <details class="brand-group hdr-env" data-hdr-env data-hdr-details data-named="@(hdr.EnvironmentNamed ? "true" : "false")">
+                        <summary title="@hdr.EnvironmentDetail" aria-label="Environment @hdr.Environment@(hdr.Ring is { } ringAria ? ", " + ringAria : ""): show mode, licence, update ring, tenant and tenant ID">
+                            <span class="brand-cap">Environment</span>
+                            <span class="brand-val"><b class="hdr-env-name @(hdr.EnvironmentNamed ? null : "hdr-default")">@hdr.Environment</b>@if (hdr.Ring is { } ringChip)
+                            {<span class="hdr-ring-chip" data-hdr-env-ring>@ringChip</span>}</span>
+                        </summary>
+                        <div class="hdr-details-panel" role="group" aria-label="Environment details">
+                            <div class="hdr-details-env">
+                                <b>@hdr.Environment</b>@if (!hdr.EnvironmentNamed && isAdmin)
+                                {<a class="hdr-nameit" href="@HeaderContext.NameItUrl" data-hdr-nameit>name it</a>}
+                                <span class="hdr-details-hint">@hdr.EnvironmentDetail</span>
+                            </div>
+                            <div class="brand-group" title="@hdr.ModeDetail" data-hdr-mode>
+                                <span class="brand-cap">Mode</span>
+                                <span class="brand-val"><b>@hdr.Mode</b></span>
+                            </div>
+                            @if (licUsage is not null)
+                            {
+                                <div class="brand-group" title="@(licUsage.Message.Length > 0 ? licUsage.Message : "The licence this install runs on (Settings: Licence)")" data-hdr-licence="@licUsage.Dimension">
+                                    <span class="brand-cap">Licence</span>
+                                    <span class="brand-val"><b>@licUsage.DimensionText</b></span>
+                                </div>
+                            }
+                            <div class="brand-group" title="@hdr.RingDetail" data-hdr-ring data-utc>
+                                <span class="brand-cap">Update ring</span>
+                                <span class="brand-val"><b>@(hdr.Ring ?? "not recorded")</b></span>
+                            </div>
+                            @* CR4 (#654, framework §12.11b): the guard mode, to SuperAdmins -- only while it says something (strict,
+                               or a stricter period a SuperAdmin ended early); normal is not shown *@
+                            @if (isSuperAdmin && Context.RequestServices.GetService(typeof(SI.Management.Web.Guards.GuardModeReader)) is SI.Management.Web.Guards.GuardModeReader gmr)
+                            {
+                                SI.Management.Web.Guards.GuardModeState? gmNow = null;
+                                try { gmNow = await gmr.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { gmNow = null; }
+                                if (SI.Management.Web.Guards.GuardModeRules.HeaderText(gmNow) is { } gmText)
+                                {
+                                    <a class="brand-group" href="/Admin/Guards#gstrict-h" title="@gmText" data-hdr-guard-mode="@gmNow!.Mode">
+                                        <span class="brand-cap">Guard mode</span>
+                                        <span class="brand-val"><b class="@(gmNow.IsStrict ? "hdr-warn" : null)">@(gmNow.IsStrict ? "Strict" : "Normal")</b></span>
+                                    </a>
+                                }
+                            }
+                            @* always shown: the override, else the tenant's own name as setup read it from Entra ID, else its
+                               onmicrosoft.com domain, else "not recorded" with a tooltip saying how it gets filled *@
+                            <div class="brand-group" title="@hdr.TenantDetail" data-hdr-tenant data-known="@(hdr.TenantKnown ? "true" : "false")">
+                                <span class="brand-cap">Tenant</span>
+                                <span class="brand-val"><b class="@(hdr.TenantKnown ? null : "hdr-default")">@hdr.Tenant</b></span>
+                            </div>
+                            @if (hdr.TenantId is { } tenantId)
+                            {
+                                <div class="brand-group" title="Tenant ID of the connected tenant" data-hdr-tenant-id>
+                                    <span class="brand-cap">Tenant ID</span>
+                                    <span class="brand-val"><span class="tenant-guid">@tenantId</span></span>
+                                </div>
+                            }
+                            @if (isAdmin)
+                            {
+                                <a class="hdr-details-more" href="@HeaderContext.LicenceUpdatesUrl" data-hdr-details-settings>Settings &gt; Licence &amp; updates</a>
+                            }
+                        </div>
+                    </details>
+                    @* CR2 (#656): the data health state, to readers -- only once a daily check has run (an older install shows
+                       nothing); #909: a compact status chip, its link and its colour kept *@
+                    if (isReader && Context.RequestServices.GetService(typeof(SI.Management.Web.DataHealth.IDataHealthStore)) is SI.Management.Web.DataHealth.IDataHealthStore dhs)
+                    {
+                        SI.Management.Web.DataHealth.DataHealthState? dhNow = null;
+                        try { dhNow = await dhs.StateAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { dhNow = null; }
+                        if (SI.Management.Web.DataHealth.DataHealthRules.HeaderText(dhNow) is { } dhText)
+                        {
+                            <a class="hdr-chip hdr-health@(dhNow!.IsUnhealthy ? " hdr-warn" : "")" href="/Admin/DataHealth" title="@dhText" aria-label="Data health: @dhNow.State" data-hdr-data-health="@dhNow.State">
+                                <span class="hdr-dot" aria-hidden="true"></span><span class="sr-only">Data health: </span><b>@dhNow.State</b>
+                            </a>
+                        }
+                    }
+                }
+                @if (isReader && !magic)
+                {
+                    @* #909: takes the free width; below ~1100 px it is an icon that opens into the box when it gets the focus
+                       (clicking the icon focuses the box: CSS only, works without script) *@
+                    <form class="hdr-search" method="get" action="/Search" role="search" aria-label="Search assets, findings, CVEs, people and reports" data-hdr-search>
+                        <label class="hdr-search-icon" for="hdr-q" title="Search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.83l3.65 3.64-1.06 1.06-3.64-3.65A5.5 5.5 0 1 1 6.5 1Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" fill="currentColor" /></svg><span class="sr-only">Search</span></label>
+                        <input id="hdr-q" type="search" name="q" placeholder="Search assets, findings, CVEs, people, reports..." maxlength="200" autocomplete="off" />
+                    </form>
+                }
+                @if (mayChange)
+                {
+                    <a class="hdr-chip pending@(pending > 0 ? " has-count" : "")" href="/Changes" title="Pending changes: staged, not written yet" aria-label="Pending changes: @Fmt.Int(pending)">
+                        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><path d="M3 1.5h7.5L13 4v10.5H3Zm1.5 1.5v10h7V4.6L9.9 3ZM6 7h4v1.4H6Zm0 2.6h4V11H6Z" fill="currentColor" /></svg>
+                        <span class="hdr-chip-label">Pending</span><span class="badge @(pending > 0 ? "warn" : "")" data-pending-count>@Fmt.Int(pending)</span>
+                    </a>
+                }
+                @if (taskCounts is { } tc)
+                {
+                    <a class="hdr-chip task-count@(tc.Open > 0 ? " has-count" : "")" href="/Tasks" title="My follow-up tasks: @Fmt.Int(tc.Open) open@(tc.Overdue > 0 ? ", " + Fmt.Int(tc.Overdue) + " overdue" : "")" aria-label="My tasks: @Fmt.Int(tc.Open) open@(tc.Overdue > 0 ? ", " + Fmt.Int(tc.Overdue) + " overdue" : "")" data-task-header>
+                        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><path d="M2 2.5h12V14H2Zm1.5 1.5v8.5h9V4ZM5 8.3l1-1 1.4 1.4L10.9 5.2l1 1-4.5 4.5Z" fill="currentColor" /></svg>
+                        <span class="hdr-chip-label">Tasks</span><span class="badge" data-task-open>@Fmt.Int(tc.Open)</span>@if (tc.Overdue > 0) { <span class="badge warn" data-task-overdue>@Fmt.Int(tc.Overdue)</span><span class="sr-only"> overdue</span> }
+                    </a>
+                }
+                @* light / dark: Auto follows the operating system; remembered per browser, applied before first paint (theme.js).
+                   #909: a small icon + the select (a native select: keyboard and screen readers work as they did) *@
+                <div class="theme-pick" title="Theme: Auto follows your operating system">
+                    <label for="theme-choice"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 1.5v11a5.5 5.5 0 0 1 0-11Z" fill="currentColor" /></svg><span class="sr-only">Theme</span></label>
+                    <select id="theme-choice" class="brand-select" data-theme-choice>
+                        <option value="auto">Auto</option>
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                    </select>
+                </div>
+                <details class="brand-group usermenu" data-user-menu>
+                    <summary>
+                        <span class="brand-cap">Signed in</span>
+                        <span class="brand-val">
+                            <span class="who-name" title="@User.ChangeName()">@(magic ? "Link access" : User.ChangeName())</span>
+                            @* the EFFECTIVE role (#253): Reader / Delegated (Identity, Azure) / Admin / SuperAdmin *@
+                            <span class="badge" data-role-badge title="@(AccessClaims.SourceOf(User) is { } src ? "From the " + src : "")">@roleText</span>
+                        </span>
+                    </summary>
+                    <div class="usermenu-panel">
+                        @* #285: the number format moved to the sub-bar ("numbers:"), as in PIM -- one setting, one place *@
+                        <span class="usermenu-who" data-user-full>@(magic ? "Link access" : User.ChangeName())</span>
+                        <a href="/Preferences">Your preferences</a>
+                        <a href="/signout">Sign out</a>
+                    </div>
+                </details>
+            </div>
+        }
+    </header>
+    @* The navigation (BRAND-2.2, PIM Manager's grouped tab bar): one row of top-level groups on surface-alt; each opens
+       its menu of pages. The group holding the current page carries the accent underline, the page itself is marked
+       (aria-current + accent). <details> works without script; nav.js closes the others and handles Escape. On a phone
+       the groups stack as full-width accordions. The ITEMS are still filtered per role on the server (#253). *@
+    @if (User.Identity?.IsAuthenticated == true && !magic)
+    {
+        <nav class="navgroups" aria-label="Main" data-navgroups>
+            @* #415: Home first -- a direct link (no menu) to "/", which sends each role to its start (the wall board) *@
+            @if (Shown(NavModel.Home.Need))
+            {
+                <a class="nav-group-btn nav-home@(current == "/Wallboard" ? " active" : "")" href="@NavModel.Home.Href" data-nav-home><svg class="nav-home-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M8 1.6 1.2 7.4l.9 1 .9-.8V14h3.8v-4h2.4v4H13V7.6l.9.8.9-1Z" fill="currentColor" /></svg><span>@NavModel.Home.Label</span></a>
+            }
+            @* Get Started (Admin): the red ! is filled in by getstarted-badge.js shortly after the page loads, while a required
+               step is open -- it is never stored, and it goes by itself when the step is done *@
+            @if (Shown(NavModel.GetStarted.Need))
+            {
+                <a class="nav-group-btn nav-home nav-getstarted@(current == NavModel.GetStarted.Page ? " active" : "")" href="@NavModel.GetStarted.Href" aria-current="@(current == NavModel.GetStarted.Page ? "page" : "false")" data-nav-getstarted><span>@NavModel.GetStarted.Label</span><span class="gs-nav-badge" data-getstarted-badge hidden title="A required setup step is still open">!</span></a>
+            }
+            @foreach (var g in links.Where(l => ItemShown(l)).GroupBy(l => l.Section))
+            {
+                var groupActive = g.Any(l => Cur(l.Page) == "page");
+                var groupBlocking = blocking.CountFor(g);
+                var groupBlockingTitle = string.Join(" ", g.Select(it => blocking.TitleFor(it)).Where(x => x.Length > 0));
+                <details class="nav-group@(groupActive ? " active" : "")" data-nav-group="@g.Key">
+                    <summary class="nav-group-btn">
+                        <span>@g.Key</span>
+                        @if (groupBlocking > 0) { <span class="badge attn" data-blocking-count="@g.Key" title="@groupBlockingTitle">@Fmt.Int(groupBlocking)</span> }
+                        @if (g.Key == "Admin" && pending > 0) { <span class="badge warn">@Fmt.Int(pending)</span> }
+                        <span class="nav-caret" aria-hidden="true">▾</span>
+                    </summary>
+                    @* owner 2026-10-19: a group whose items carry a stage (Configuration: the pipeline's stage titles, then Platform)
+                       lists them under those headings, each heading a labelled list *@
+                    <ul class="nav-group-menu@(g.Count() > 9 ? " cols-2" : "")@(g.Any(l => l.Stage is not null) ? " staged" : "")">
+                        @foreach (var stage in g.GroupBy(l => l.Stage))
+                        {
+                            if (stage.Key is { } heading)
+                            {
+                                var hid = "nav-stage-" + System.Text.RegularExpressions.Regex.Replace(heading.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+                                <li class="nav-stage" data-nav-stage="@heading">
+                                    <span class="nav-stage-head" id="@hid">@heading</span>
+                                    <ul aria-labelledby="@hid">
+                                        @foreach (var l in stage)
+                                        {
+                                            var itemBlocking = blocking.CountFor(l);
+                                            <li><a class="nav-group-item" href="@SI.Management.Web.Columns.ViewState.MenuHref(Url.Page(ItemPage(l)), ItemPage(l))" aria-current="@Cur(l.Page)">@l.Label@if (itemBlocking > 0) { <span class="badge attn" data-blocking-count="@l.Label" title="@blocking.TitleFor(l)">@Fmt.Int(itemBlocking)</span> }</a></li>
+                                        }
+                                    </ul>
+                                </li>
+                                continue;
+                            }
+                            foreach (var l in stage)
+                            {
+                                var itemBlocking = blocking.CountFor(l);
+                                <li><a class="nav-group-item" href="@SI.Management.Web.Columns.ViewState.MenuHref(Url.Page(ItemPage(l)), ItemPage(l))" aria-current="@Cur(l.Page)">@l.Label@if (itemBlocking > 0) { <span class="badge attn" data-blocking-count="@l.Label" title="@blocking.TitleFor(l)">@Fmt.Int(itemBlocking)</span> }@if (l.Page == "/Changes/Index" && pending > 0) { <span class="badge warn">@Fmt.Int(pending)</span> }</a></li>
+                            }
+                        }
+                    </ul>
+                </details>
+            }
+            @if (pinnedViews.Count > 0)
+            {
+                <details class="nav-group" data-nav-group="Views" data-nav-pinned>
+                    <summary class="nav-group-btn"><span>Views</span><span class="nav-caret" aria-hidden="true">▾</span></summary>
+                    <ul class="nav-group-menu staged">
+                        @foreach (var pg in pinnedViews.GroupBy(p => p.ForAll).OrderBy(pg => pg.Key))
+                        {
+                            var pHeading = pg.Key ? "For everyone" : "My views";
+                            var pid = pg.Key ? "nav-pinned-all" : "nav-pinned-mine";
+                            <li class="nav-stage" data-nav-stage="@pHeading">
+                                <span class="nav-stage-head" id="@pid">@pHeading</span>
+                                <ul aria-labelledby="@pid">
+                                    @foreach (var pv in pg) { <li><a class="nav-group-item" href="/Columns?handler=Open&amp;id=@pv.Id" data-pinned-view="@pv.Id">@pv.Name</a></li> }
+                                </ul>
+                            </li>
+                        }
+                    </ul>
+                </details>
+            }
+            <partial name="_ContextBar" model="(hdr, roleText, numberChoice, here)" />
+        </nav>
+    }
+    else if (User.Identity?.IsAuthenticated == true)
+    {
+        <div class="navgroups ctx-only"><partial name="_ContextBar" model="(hdr, roleText, numberChoice, here)" /></div>
+    }
+    <div class="shell">
+        <div>
+            <main id="main">
+                @* a menu item that brings several pages together (Navigation/NavModel.cs): its tabs, on every page of it *@
+                @if (User.Identity?.IsAuthenticated == true && !magic && NavModel.TabGroupOf(current) is { } tabGroup && Shown(tabGroup.Need))
+                {
+                    var shownTabs = tabGroup.Tabs!.Where(t => OpenTo(t.Page, t.Need)).ToList();
+                    // owner 2026-10-19: the CI tabs say how many CIs each holds ("All CIs · 19.847", "At risk (with findings) · 9.903")
+                    var tabCounts = shownTabs.Any(t => SI.Management.Web.Navigation.TabCounts.Of(new(1, 1), t.Page) is not null) && Context.RequestServices.GetService(typeof(SI.Management.Web.Navigation.TabCounts)) is SI.Management.Web.Navigation.TabCounts tc
+                        ? await tc.CiAsync(User, Context.RequestServices, Context.RequestAborted) : null;
+                    if (shownTabs.Count > 1)
+                    {
+                        <nav class="tabs page-tabs" aria-label="@tabGroup.Label" data-nav-tabs="@tabGroup.Label">
+                            @foreach (var t in shownTabs)
+                            {
+                                var tabBlocking = blocking.CountFor(t);
+                                <a href="@SI.Management.Web.Columns.ViewState.MenuHref(t.Href, t.Page)" aria-current="@(NavModel.IsTab(t, current, k => Context.Request.Query[k].FirstOrDefault()) ? "page" : "false")">@t.Label@if (tabCounts is not null && SI.Management.Web.Navigation.TabCounts.Of(tabCounts, t.Page) is { } tabN) { <span class="tab-count" data-tab-count="@t.Page"> · @Fmt.Int(tabN)</span> }@if (tabBlocking > 0) { <span class="badge attn" data-blocking-count="@t.Label">@Fmt.Int(tabBlocking)</span> }</a>
+                            }
+                        </nav>
+                    }
+                    @* the one line an area says about itself (Configuration > Connectors) *@
+                    @if (tabGroup.Lede is { Length: > 0 } areaLede) { <p class="lede area-lede" data-area-lede="@tabGroup.Label">@areaLede</p> }
+                }
+                @* PENDING-1: the one line on Home (the wall board) and the Overview's first page -- what blocks, who decides it,
+                   and a link to where it is decided for whoever may open that page *@
+                @if (licUsage is { ShowsBanner: true })
+                {
+                    <div class="notice @licUsage.Tone" role="status" data-licence-banner="@licUsage.State">@licUsage.Message</div>
+                }
+                @if (blocking.Total > 0 && (current == "/Wallboard" || current == "/Management/Index"))
+                {
+                    <div class="notice attn" role="status" data-blocking-line>
+                        <strong>@blocking.Line</strong>
+                        @foreach (var bi in blocking.Items.Where(i => MayOpen(i.Page)).GroupBy(i => i.Page!))
+                        {
+                            <a href="@NavModel.HrefOf(bi.Key)" data-blocking-link>Open @NavModel.PathOf(bi.Key)</a>
+                        }
+                    </div>
+                }
+                @* a source whose newest collection did not complete: every page says from when that source's data is (the run
+                   went on with its last good collection; nothing of it is shown as gone or fixed) *@
+                @if (User.Identity?.IsAuthenticated == true && !magic)
+                {
+                    foreach (var sourceNote in await SourceNotes.CurrentAsync(default))
+                    {
+                        <div class="notice warn" role="status" data-utc data-source-note="@sourceNote.Source">@(sourceNote.Text(t => Fmt.When(t)))</div>
+                    }
+                }
+                @* a data sync is running: the pages show the data from before it until it has finished (what the web app has
+                   read stays as it is while the run stores its data) -- one calm line, gone by itself when the run ends *@
+                @if (User.Identity?.IsAuthenticated == true && !magic && await SyncNotices.CurrentAsync(default) is { } syncNotice)
+                {
+                    <div class="notice" role="status" data-sync-notice>@(SI.Management.Web.Collection.SyncNotice.Before)@Fmt.Time(syncNotice.StartedUtc, "time")@(SI.Management.Web.Collection.SyncNotice.After)</div>
+                }
+                @* ONE TRUSTED RUN (owner 2026-10-19): every page shows the same, last trusted run -- which one, and whether a newer run
+                   is going or did not complete, in one plain line (an admin gets the way to the pipeline) *@
+                @if (User.Identity?.IsAuthenticated == true && !magic && await PublishedRunNotices.CurrentAsync(default) is { ShownTime: { } shownUtc } shownRun)
+                {
+                    <div class="notice@(shownRun.RefusedAt is not null && !shownRun.Running ? " warn" : "")" role="status" data-utc data-published-run>@(SI.Management.Web.Collection.PublishedRunNoticeText.Lead)@Fmt.When(shownUtc)@(SI.Management.Web.Collection.PublishedRunNoticeText.Tail(shownRun))@if (shownRun.CiFindingsTime is { } ciFindingsUtc)
+                        {
+                            <span data-ci-findings-asof>@(SI.Management.Web.Collection.PublishedRunNoticeText.CiFindingsAsOf)@Fmt.When(ciFindingsUtc)</span>
+                        }@if (SI.Management.Web.Collection.PublishedRunNoticeText.LinkToPipeline(shownRun, isAdmin))
+                        {
+                            <text> </text><a href="@NavModel.HrefOf("/Admin/Jobs")" data-published-run-link>Open @NavModel.PathOf("/Admin/Jobs")</a>
+                        }</div>
+                }
+                <partial name="_Exempted" />
+                @RenderBody()
+                @* every query the page ran, ONCE, at the bottom (the _Query partials recorded them while the body rendered) *@
+                <partial name="_PageQueries" />
+            </main>
+            @* the status bar (BRAND-2.3): product + release on the left, support on the right *@
+            <footer class="footer" data-footer>
+                <span>@AppInfo.Vendor @brand.Product@(User.Identity?.IsAuthenticated == true && AppInfo.Version.Length > 0 ? " · v" + AppInfo.Version : "")</span>
+                <span class="spacer"></span>
+                <a href="@AppInfo.SupportUrl" rel="noopener" target="_blank">Support · portal.invardia.com</a>
+                <a href="mailto:@AppInfo.SupportEmail">@AppInfo.SupportEmail</a>
+            </footer>
+        </div>
+    </div>
+    <partial name="_ChatPanel" view-data='new ViewDataDictionary(ViewData) { ["ChatPanelHost"] = "layout" }' />
+    <div class="toasts" aria-live="polite" data-toasts>
+        @if (!string.IsNullOrEmpty(toast))
+        {
+            <div class="toast @toastKind" role="status" data-utc>@toast</div>
+        }
+    </div>
+    <dialog class="modal" data-confirm-dialog aria-labelledby="confirm-title">
+        <form method="dialog">
+            <h2 id="confirm-title" data-confirm-title>Are you sure?</h2>
+            <p data-confirm-text></p>
+            <div class="actions">
+                <button type="submit" value="ok" data-confirm-ok>Continue</button>
+                <button type="submit" value="cancel" class="secondary">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+    <script src="~/lib/chart.umd.js"></script>
+    @* BRAND-2.10 (#313): every time on the page in the browser's own zone -- before site.js, which uses it for chart labels *@
+    <script src="~/js/local-time.js" asp-append-version="true"></script>
+    <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="~/js/exempted.js" asp-append-version="true"></script>
+    <script src="~/js/version-check.js" asp-append-version="true"></script>
+    @if (User.Identity?.IsAuthenticated == true && !magic && Shown(NavModel.GetStarted.Need))
+    {
+        <script src="~/js/getstarted-badge.js" asp-append-version="true"></script>
+    }
+    <script type="module" src="~/js/app/main.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

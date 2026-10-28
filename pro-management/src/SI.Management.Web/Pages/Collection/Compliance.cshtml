@@ -1,0 +1,6 @@
+@page
+@model SI.Management.Web.Pages.Collection.ComplianceModel
+<partial name="_Header" model="Model" />
+@if (Model.Tags is not null) { <partial name="_FacetTable" model="Model.Tags" /> }
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

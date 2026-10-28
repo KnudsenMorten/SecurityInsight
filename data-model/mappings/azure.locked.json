@@ -1,0 +1,1474 @@
+{
+  "$comment": "Field mapping for provider 'azure': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/azure.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "azure",
+  "version": "1.0.0",
+  "description": "Azure Resource Graph: resources of the in-scope types (collection-scope template), verbatim ARG rows.",
+  "objects": [
+    {
+      "recordType": "azure_resource",
+      "class": "cloud_resource",
+      "parts": {
+        "resource": "Azure Resource Graph: resources | where type in (scope)",
+        "derived": "computed when the record is assembled (engine/data-model/SI-RecordDerived.ps1) from the resource part: isPubliclyExposed (publicNetworkAccess Enabled, blob public access, a network ACL that allows by default, a public IP with an address), inboundRdpFromInternet / inboundSshFromInternet (an NSG's own rules); managementGroupPath from the mg part the Azure discovery writes (resourcecontainers); childResources and one list per child type (si_vm_extensions, si_disks, ...) from the children part",
+        "children": "the Azure child resources that roll up into this resource (collection-scope azureResourceTypes rollUpInto): id, type, name and the shape the child type names -- written by the record capture, never a record of their own",
+        "mg": "the subscription's name, tenant (id + name) and management group (id + name, the chain as names and as ids) -- written by the Azure discovery from the subscription list (resourcecontainers); the derived part turns it into the name fields",
+        "backup": "Azure Backup: protected, last status and time, vault (id + name), policy (id + name) -- recoveryservicesresources, the newest item per resource (engine/asset-profiling/discovery/Get-SIAzureContext.ps1)",
+        "access": "who holds Owner / Contributor / User Access Administrator / Role Based Access Control Administrator directly at the resource or its resource group: principal id + name + type, role id + name -- authorizationresources",
+        "policy": "Azure Policy: how many definitions the resource does not comply with and up to three of them (id + name) -- policyresources, summarised in the query",
+        "change": "the resource's last change of the last 14 days: when, by whom (id + name), how, and the number of changes -- resourcechanges",
+        "patch": "a machine's newest update assessment: pending critical / security updates, reboot pending -- patchassessmentresources",
+        "defender": "the Defender for Cloud plan covering the resource type in its subscription (plan, tier, sub-plan) and the subscription's posture tier -- securityresources pricings",
+        "diag": "diagnostic settings (enabled, each setting's destinations) -- one Azure Resource Manager read per resource, tier 0 and tier 1 resources only"
+      },
+      "key": "resource.id",
+      "timestamp": "$collection_time",
+      "gone": "the resource returns 404"
+    },
+    {
+      "recordType": "public_ip",
+      "class": "public_ip",
+      "parts": {
+        "resource": "Azure Resource Graph: microsoft.network/publicipaddresses",
+        "mg": "as on azure_resource",
+        "attached": "the resource the address is attached to (id, name, type) -- from its IP configuration and the capture's child map (a network interface -> its virtual machine)",
+        "access": "as on azure_resource",
+        "policy": "as on azure_resource",
+        "change": "as on azure_resource",
+        "defender": "as on azure_resource",
+        "diag": "as on azure_resource"
+      },
+      "key": "resource.id",
+      "timestamp": "$collection_time",
+      "gone": "the resource returns 404"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "azure_resource_id",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.name"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_azure_resource_type",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.type"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_type",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.type"
+      ],
+      "normalize": [
+        "lower",
+        "regex_extract:([^/]+)$"
+      ]
+    },
+    {
+      "field": "si_azure_subscription_id",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.subscriptionId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_azure_resource_group",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.resourceGroup"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_azure_location",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.location"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_management_group_path",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.managementGroupPath"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_tags",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "resource.tags"
+      ],
+      "normalize": [
+        "tags:azure"
+      ]
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.tagOwner",
+        "resource.tags.owner",
+        "resource.tags.Owner"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_created",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.timeCreated",
+        "resource.properties.creationTime",
+        "resource.systemData.createdAt"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_internet_exposed",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.isPubliclyExposed"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_azure_parent_tags",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "parentTags"
+      ],
+      "normalize": [
+        "tags:azure-parent"
+      ]
+    },
+    {
+      "field": "azure_vm_id",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.vmId"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines",
+        "microsoft.compute/virtualmachinescalesets/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_hostname",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.osProfile.computerName"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.storageProfile.osDisk.osType"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_public_network_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.publicNetworkAccess"
+      ],
+      "normalize": [
+        "enum:public_access"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts",
+        "microsoft.keyvault/vaults",
+        "microsoft.sql/servers",
+        "microsoft.web/sites",
+        "microsoft.cognitiveservices/accounts",
+        "microsoft.containerregistry/registries",
+        "microsoft.documentdb/databaseaccounts",
+        "microsoft.dbforpostgresql/flexibleservers",
+        "microsoft.dbformysql/flexibleservers"
+      ]
+    },
+    {
+      "field": "si_public_network_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.publicNetworkAccessForIngestion"
+      ],
+      "normalize": [
+        "enum:public_access"
+      ],
+      "resourceTypes": [
+        "microsoft.operationalinsights/workspaces"
+      ]
+    },
+    {
+      "field": "si_network_default_action",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.networkAcls.defaultAction",
+        "resource.properties.networkRuleSet.defaultAction"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_anonymous_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.allowBlobPublicAccess"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_anonymous_access",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.anonymousPullEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.containerregistry/registries"
+      ]
+    },
+    {
+      "field": "si_local_auth_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.allowSharedKeyAccess"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_local_auth_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.adminUserEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.containerregistry/registries"
+      ]
+    },
+    {
+      "field": "si_local_auth_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.disableLocalAuth"
+      ],
+      "normalize": [
+        "bool",
+        "not"
+      ],
+      "resourceTypes": [
+        "microsoft.cognitiveservices/accounts",
+        "microsoft.operationalinsights/workspaces",
+        "microsoft.documentdb/databaseaccounts"
+      ]
+    },
+    {
+      "field": "si_min_tls_version",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.minimumTlsVersion"
+      ],
+      "normalize": [
+        "enum:tls"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_min_tls_version",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.minimalTlsVersion"
+      ],
+      "normalize": [
+        "enum:tls"
+      ],
+      "resourceTypes": [
+        "microsoft.sql/servers"
+      ]
+    },
+    {
+      "field": "si_min_tls_version",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.siteConfig.minTlsVersion"
+      ],
+      "normalize": [
+        "enum:tls"
+      ],
+      "resourceTypes": [
+        "microsoft.web/sites"
+      ]
+    },
+    {
+      "field": "si_https_only",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.supportsHttpsTrafficOnly"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_https_only",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.httpsOnly"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.web/sites"
+      ]
+    },
+    {
+      "field": "si_waf_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.webApplicationFirewallConfiguration.enabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.network/applicationgateways"
+      ]
+    },
+    {
+      "field": "si_fqdn",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.fullyQualifiedDomainName",
+        "resource.properties.defaultHostName",
+        "resource.properties.fqdn",
+        "resource.properties.loginServer",
+        "resource.properties.vaultUri"
+      ],
+      "normalize": [
+        "lower",
+        "host_from_url"
+      ]
+    },
+    {
+      "field": "si_nsg_open_rdp",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.inboundRdpFromInternet"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_nsg_open_ssh",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.inboundSshFromInternet"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_ip_address",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "resource.properties.ipAddress"
+      ],
+      "normalize": [
+        "ip"
+      ]
+    },
+    {
+      "field": "si_bound_resource_id",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "resource.properties.ipConfiguration.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_fqdn",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "resource.properties.dnsSettings.fqdn"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_ddos_protection",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "resource.properties.ddosSettings.protectionMode"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_sql_vm_resource_id",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.virtualMachineResourceId"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "resourceTypes": [
+        "microsoft.sqlvirtualmachine/sqlvirtualmachines"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_child_resources",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.childResources"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_vm_extensions",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_vm_extensions"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_disks",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_disks"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_network_interfaces",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_network_interfaces"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_public_ip_addresses",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_public_ip_addresses"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_subnets",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_subnets"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_sql_databases",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_sql_databases"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_sql_firewall_rules",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_sql_firewall_rules"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_ai_deployments",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.si_ai_deployments"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_azure_subscription_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.subscriptionName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_azure_tenant_id",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tenantId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_azure_tenant_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tenantName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_management_group_id",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.managementGroupId"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_management_group_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.managementGroupName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_management_group_id_path",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.managementGroupIdPath"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_environment",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagEnvironment"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cost_center",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagCostCenter"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_app_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagAppName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagOwner"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_encryption_at_host",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.securityProfile.encryptionAtHost"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_vm_security_type",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.securityProfile.securityType"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_secure_boot",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.securityProfile.uefiSettings.secureBootEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_vtpm_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.securityProfile.uefiSettings.vTpmEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_patch_mode",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.osProfile.windowsConfiguration.patchSettings.patchMode",
+        "resource.properties.osProfile.linuxConfiguration.patchSettings.patchMode"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_power_state",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.extended.instanceView.powerState.code"
+      ],
+      "normalize": [
+        "lower",
+        "regex_extract:([^/]+)$"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_vm_size",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.hardwareProfile.vmSize"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "resourceTypes": [
+        "microsoft.compute/virtualmachines"
+      ]
+    },
+    {
+      "field": "si_soft_delete_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.enableSoftDelete"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.keyvault/vaults"
+      ]
+    },
+    {
+      "field": "si_purge_protection",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.enablePurgeProtection"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.keyvault/vaults"
+      ]
+    },
+    {
+      "field": "si_rbac_authorization",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.enableRbacAuthorization"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.keyvault/vaults"
+      ]
+    },
+    {
+      "field": "si_entra_only_auth",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.administrators.azureADOnlyAuthentication"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.sql/servers",
+        "microsoft.sql/managedinstances"
+      ]
+    },
+    {
+      "field": "si_cross_tenant_replication",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.allowCrossTenantReplication"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_sftp_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.isSftpEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_local_users_enabled",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.isLocalUserEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "resourceTypes": [
+        "microsoft.storage/storageaccounts"
+      ]
+    },
+    {
+      "field": "si_private_endpoint_count",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.privateEndpointCount"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_arc_status",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.status"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "resourceTypes": [
+        "microsoft.hybridcompute/machines"
+      ]
+    },
+    {
+      "field": "si_arc_last_status_change",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.lastStatusChange"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "resourceTypes": [
+        "microsoft.hybridcompute/machines"
+      ]
+    },
+    {
+      "field": "si_arc_agent_version",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.properties.agentVersion"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "resourceTypes": [
+        "microsoft.hybridcompute/machines"
+      ]
+    },
+    {
+      "field": "si_mde_extension",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.mdeExtension"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_ama_extension",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.amaExtension"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_disk_encryption",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "derived.diskEncryption"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_backup_protected",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.protected"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_backup_last_status",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.lastStatus"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_backup_last_time",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.lastTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_backup_vault_id",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.vaultId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_backup_vault_name",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.vaultName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_backup_policy_id",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.policyId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_backup_policy_name",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "backup.policyName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_pending_critical_patches",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "patch.critical"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_pending_security_patches",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "patch.security"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_reboot_pending",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "patch.rebootPending"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_patch_assessed_at",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "patch.assessedAt"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_privileged_access",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "access.assignments"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_privileged_access_count",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "access.total"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_policy_noncompliant_count",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "policy.nonCompliant"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_policy_noncompliant_top",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "policy.top"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_last_change_time",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "change.lastTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_changed_by",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "change.changedBy"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_last_changed_by_name",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "change.changedByName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_last_change_type",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "change.changeType"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_change_count_14d",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "change.changes"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_defender_plan",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "defender.plan"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_defender_plan_tier",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "defender.tier"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_defender_plan_sub_plan",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "defender.subPlan"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_defender_cspm_tier",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "defender.cspmTier"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_diagnostic_settings_enabled",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "diag.enabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_diagnostic_settings",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "diag.settings"
+      ],
+      "normalize": [
+        ""
+      ]
+    },
+    {
+      "field": "si_attached_resource_id",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "attached.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_attached_resource_name",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "attached.name"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_attached_resource_type",
+      "recordTypes": [
+        "public_ip"
+      ],
+      "sources": [
+        "attached.type"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    }
+  ]
+}

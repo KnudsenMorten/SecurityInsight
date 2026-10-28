@@ -1,0 +1,61 @@
+id:        AssetProfileByDefaultTier
+appliesTo: any
+mode:      locked
+fallback:  true
+purpose:   'The tier an asset gets when no other tier rule or tier source matches it'
+category:  'Default'
+description: |
+  The DEFAULT tier, as a rule. It applies only when nothing else gave the asset a tier: no tier rule,
+  no role or permission catalog hit, no logon, no owner, no pin. It never lowers a tier another source
+  set, and it is never combined with them -- it is the fallback, not one more vote.
+  One detection per asset kind (endpoint, identity, azure, publicip), so each kind can have its own
+  default. The shipped default is Tier 3 for every kind.
+  Change it like any other rule: a custom copy of this file (AssetProfileByDefaultTier.custom.yaml in
+  the shared folder, or the Rules page in SecurityInsight Pro) with other Tier values, or move the whole
+  rule to another tier on the Tier board. Turning it off (mode: disable) leaves assets that nothing
+  else classifies as Unclassified -- they are then listed on the Tier board to be given a tier.
+  Risk Analysis uses the same rule for findings on assets no profiler has seen (for example an Azure
+  resource outside the subscriptions the Azure profiler reads): their name is checked against the
+  name rules and pins first, and this default applies only when none of them matches.
+
+detections:
+
+  - id: DefaultTier-endpoint
+    detect:
+      any:
+        - kind: assetKind
+          kinds: [endpoint]
+    set:
+      Tier:     3
+      Purpose:  'Default tier for devices'
+      Category: 'Default'
+
+  - id: DefaultTier-identity
+    detect:
+      any:
+        - kind: assetKind
+          kinds: [identity]
+    set:
+      Tier:     3
+      Purpose:  'Default tier for identities'
+      Category: 'Default'
+
+  - id: DefaultTier-azure
+    detect:
+      any:
+        - kind: assetKind
+          kinds: [azure]
+    set:
+      Tier:     3
+      Purpose:  'Default tier for Azure resources'
+      Category: 'Default'
+
+  - id: DefaultTier-publicip
+    detect:
+      any:
+        - kind: assetKind
+          kinds: [publicip]
+    set:
+      Tier:     3
+      Purpose:  'Default tier for public IP addresses'
+      Category: 'Default'

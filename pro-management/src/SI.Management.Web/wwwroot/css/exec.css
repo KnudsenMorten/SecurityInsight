@@ -1,0 +1,106 @@
+/* Overview > Risk Analysis (executive), #288: the Risk Analysis mail, in the web app. Built on the site.css tokens; the
+   few colours of its own (the band greens, the Medium yellow) are tokens here with a dark value, so light, dark and the
+   explicit theme switch all work. Full width, mobile first; @media print gives a clean page for paper or PDF. */
+:root {
+  --exec-band-very-good: #1b5e20; --exec-band-good: #2e7d32; --exec-band-moderate: #c25e00; --exec-band-at-risk: #c62828; --exec-band-unknown: #546e7a;
+  --exec-tile-very-good: #e8f5e9; --exec-tile-good: #f1f8f1; --exec-tile-moderate: #fff4e5; --exec-tile-at-risk: #fdecea; --exec-tile-unknown: var(--surface-2);
+  /* the severity scale is app.css's ONE definition (--rs-*, owner 2026-10-20: no green for any severity -- every severity
+     is a risk); its dark values follow from there */
+  --exec-sev-critical-bg: var(--rs-critical-bg); --exec-sev-critical: var(--rs-critical);
+  --exec-sev-high-bg: var(--rs-high-bg); --exec-sev-high: var(--rs-high);
+  --exec-sev-medium-bg: var(--rs-medium-bg); --exec-sev-medium: var(--rs-medium);
+  --exec-sev-low-bg: var(--rs-low-bg); --exec-sev-low: var(--rs-low);
+  --exec-banner-from: #1a3a5e; --exec-banner-to: #2c5a8e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --exec-band-very-good: #5fd08f; --exec-band-good: #7fdba3; --exec-band-moderate: #f0a24a; --exec-band-at-risk: #ff8a80; --exec-band-unknown: #97a0b8;
+    --exec-tile-very-good: #12301f; --exec-tile-good: #163626; --exec-tile-moderate: #33260f; --exec-tile-at-risk: #3a1717; --exec-tile-unknown: var(--surface-2);
+  }
+}
+:root[data-theme="dark"] {
+  --exec-band-very-good: #5fd08f; --exec-band-good: #7fdba3; --exec-band-moderate: #f0a24a; --exec-band-at-risk: #ff8a80; --exec-band-unknown: #97a0b8;
+  --exec-tile-very-good: #12301f; --exec-tile-good: #163626; --exec-tile-moderate: #33260f; --exec-tile-at-risk: #3a1717; --exec-tile-unknown: var(--surface-2);
+}
+
+.exec-grain { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: 12px; }
+.exec-grain .seg { margin: 0; }   /* the Summary / Detailed segmented control itself is site.css's .seg */
+.exec-mode a { margin-left: .4rem; }
+
+.exec-mail { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 14px; }
+.exec-banner { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem 1rem; padding: 18px 22px;
+  background: linear-gradient(135deg, var(--exec-banner-from) 0%, var(--exec-banner-to) 100%); color: #fff; }
+.exec-title { font-size: 1.3rem; font-weight: 600; }
+.exec-meta { text-align: right; font-size: .82rem; color: #cfdce8; overflow-wrap: anywhere; }
+.exec-sub { color: #b9cbe0; }
+
+.exec-hero { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 20px 22px 6px; align-items: center; }
+@media (min-width: 900px) { .exec-hero { grid-template-columns: minmax(220px, 30%) 1fr; } }
+.exec-label { font-size: .75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; overflow-wrap: anywhere; }
+/* the Protection Score (owner 2026-10-20: "make the headline bigger and the % Very good smaller (balanced)"): the headline
+   is the largest words of the card, the value follows at a balanced size; the Actual Risks pair below it in the same balance
+   (its value in the band colour: app.css .band-*) */
+.exec-cap { font-size: 1.15rem; font-weight: 700; color: var(--text-heading); line-height: 1.25; overflow-wrap: anywhere; }
+.exec-score { font-size: 1.9rem; font-weight: 700; line-height: 1.1; margin: 6px 0 4px; font-variant-numeric: tabular-nums; }
+.exec-also { margin-top: 10px; line-height: 1.3; }
+.exec-also .exec-cap { display: block; font-size: 1rem; }
+.exec-also-score { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.exec-kpi .ps-explain { font-size: .85rem; }
+.exec-of { font-size: 1.2rem; color: var(--text-muted); font-weight: 400; }
+.exec-band { display: inline-block; color: #fff; padding: .2rem .75rem; border-radius: 999px; font-size: .78rem; font-weight: 600; letter-spacing: .05em; }
+.exec-legend { font-size: .72rem; color: var(--text-muted); margin-top: 6px; }
+.exec-score.band-very-good { color: var(--exec-band-very-good); } .exec-band.band-very-good { background: var(--exec-band-very-good); }
+.exec-score.band-good { color: var(--exec-band-good); } .exec-band.band-good { background: var(--exec-band-good); }
+.exec-score.band-moderate { color: var(--exec-band-moderate); } .exec-band.band-moderate { background: var(--exec-band-moderate); }
+.exec-score.band-at-risk { color: var(--exec-band-at-risk); } .exec-band.band-at-risk { background: var(--exec-band-at-risk); }
+.exec-score.band-unknown { color: var(--exec-band-unknown); } .exec-band.band-unknown { background: var(--exec-band-unknown); }
+:root[data-theme="dark"] .exec-band { color: #0d1117; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .exec-band { color: #0d1117; } }
+
+table.exec-sev { width: 100%; border-collapse: collapse; font-size: .9rem; }
+table.exec-sev thead th { background: var(--exec-banner-from); color: #fff; text-transform: uppercase; font-size: .72rem; letter-spacing: .05em; position: static; box-shadow: none; }
+table.exec-sev td.sev-critical { background: var(--exec-sev-critical-bg); color: var(--exec-sev-critical); }
+table.exec-sev td.sev-high { background: var(--exec-sev-high-bg); color: var(--exec-sev-high); }
+table.exec-sev td.sev-medium { background: var(--exec-sev-medium-bg); color: var(--exec-sev-medium); }
+table.exec-sev td.sev-low { background: var(--exec-sev-low-bg); color: var(--exec-sev-low); }
+table.exec-sev tr.exec-total td { font-weight: 700; border-top: 2px solid var(--text-heading); }
+table.exec-sev td.num, table.exec-sev th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.exec-grain-note { font-size: .8rem; color: var(--text-secondary); margin: 6px 22px 0; max-width: none; }
+.exec-h3 { font-size: .85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 22px 6px; }
+.exec-h2 { margin: 22px 22px 8px; padding-bottom: 6px; border-bottom: 2px solid var(--border); font-size: 1.15rem; }
+.exec-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 22px; }
+@media (min-width: 760px) { .exec-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.exec-tile { border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; min-width: 0; }
+.exec-tile.band-very-good { background: var(--exec-tile-very-good); } .exec-tile.band-good { background: var(--exec-tile-good); }
+.exec-tile.band-moderate { background: var(--exec-tile-moderate); } .exec-tile.band-at-risk { background: var(--exec-tile-at-risk); }
+.exec-tile-score { font-size: 1.9rem; font-weight: 600; color: var(--text-heading); font-variant-numeric: tabular-nums; }
+progress.exec-bar { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border: 0; border-radius: 3px; background: var(--surface-1); margin-top: 8px; }
+progress.exec-bar::-webkit-progress-bar { background: var(--surface-1); border-radius: 3px; }
+progress.exec-bar::-webkit-progress-value { border-radius: 3px; background: var(--exec-band-unknown); }
+progress.exec-bar::-moz-progress-bar { border-radius: 3px; background: var(--exec-band-unknown); }
+.exec-tile.band-very-good progress.exec-bar::-webkit-progress-value { background: var(--exec-band-very-good); } .exec-tile.band-very-good progress.exec-bar::-moz-progress-bar { background: var(--exec-band-very-good); }
+.exec-tile.band-good progress.exec-bar::-webkit-progress-value { background: var(--exec-band-good); } .exec-tile.band-good progress.exec-bar::-moz-progress-bar { background: var(--exec-band-good); }
+.exec-tile.band-moderate progress.exec-bar::-webkit-progress-value { background: var(--exec-band-moderate); } .exec-tile.band-moderate progress.exec-bar::-moz-progress-bar { background: var(--exec-band-moderate); }
+.exec-tile.band-at-risk progress.exec-bar::-webkit-progress-value { background: var(--exec-band-at-risk); } .exec-tile.band-at-risk progress.exec-bar::-moz-progress-bar { background: var(--exec-band-at-risk); }
+
+.exec-ai { padding: 0 22px; font-size: .92rem; line-height: 1.55; }
+.exec-ai h3 { font-size: 1rem; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.exec-ai h4 { font-size: .9rem; margin: 14px 0 4px; }
+.exec-ai ul { margin: 4px 0 10px 1.1rem; padding: 0; }
+.exec-ai li.sub { list-style: none; }
+.exec-ai li.sub ul { color: var(--text-secondary); }
+.exec-top { margin: 0; }
+.exec-small { font-size: .78rem; color: var(--text-muted); margin: 10px 22px 0; max-width: none; }
+.exec-foot { margin-top: 14px; padding: 12px 22px 16px; border-top: 1px solid var(--border); font-size: .78rem; color: var(--text-muted); }
+
+@media print {
+  .exec-grain, .exec-mode a, .exec .noprint { display: none !important; }
+  .exec-mail { border: 0; }
+  .exec-banner { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .exec-band, .exec-tile, table.exec-sev td, table.exec-sev thead th, progress.exec-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .exec-hero { grid-template-columns: 30% 1fr; }
+  .exec-tiles { grid-template-columns: repeat(4, 1fr); }
+  .exec-top, .exec-tile, table.exec-sev tr { break-inside: avoid; }
+  .exec .table-wrap { overflow: visible !important; max-height: none !important; }
+}

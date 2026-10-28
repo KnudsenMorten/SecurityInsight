@@ -1,0 +1,131 @@
+@model SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel
+@using SI.Management.Web.Cmdb
+@{
+    var pack = SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel.Samples;
+    var nameQ = Uri.EscapeDataString(Model.Name ?? "");
+    var kindQ = Uri.EscapeDataString(Model.Kind ?? "");
+    string CaseTitle(string id) => pack.CaseOf(id)?.Title ?? "";
+}
+<section class="card" aria-labelledby="h-snow-samples" id="servicenow-samples">
+    <h2 id="h-snow-samples">Sample data for your ServiceNow team</h2>
+    <p class="lede">What SecurityInsight hands to ServiceNow, row by row, on fictional demo data (contoso.test). Your ServiceNow developers can build the import set tables, transform maps and IRE rules against these rows, and test and approve them before SecurityInsight runs against your instance. The values are exactly as ServiceNow receives them, so times are in UTC.</p>
+    <div class="actions">
+        <a class="button" href="/Admin/ConnectorSetup/Edit?name=@nameQ&amp;handler=TestPack" data-testpack-download>Download test pack (zip)</a>
+        <a class="button secondary" href="/Admin/ConnectorSetup/Edit?name=@nameQ&amp;kind=@kindQ&amp;preview=true#servicenow-preview">Preview with your data</a>
+    </div>
+    <p class="hint">The zip holds a CSV per object (as a JDBC data source reads it), the Import Set request bodies, a column dictionary, the same data as JSON and a how-to with the approval checklist.</p>
+
+    <details class="help" id="snow-steps">
+        <summary>How your ServiceNow team tests it</summary>
+        <ol>
+            @foreach (var s in SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel.TestPackSteps) { <li>@s</li> }
+        </ol>
+    </details>
+
+    <details class="help" id="snow-cases">
+        <summary>The cases and the result to expect (@pack.Cases.Count)</summary>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Case</th><th>What SecurityInsight sends</th><th>What to expect in ServiceNow</th></tr></thead>
+                <tbody>
+                    @foreach (var c in pack.Cases)
+                    {
+                        <tr>
+                            <td>@c.Title @if (c.Coming) { <span class="badge warn">coming</span> }</td>
+                            <td class="wrap">@c.What</td>
+                            <td class="wrap">@c.Expect</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </details>
+
+    @foreach (var o in pack.Objects.OrderBy(x => x.Coming))
+    {
+        <details class="help" id="snow-@o.Id" data-snow-object="@o.Id">
+            <summary>@o.Title &middot; @(o.Channel == "sql" ? "SQL" : "Import Set (REST)") &middot; @o.Rows.Count example rows @if (o.Coming) { <span class="badge warn">coming</span> }</summary>
+            <p class="hint"><strong>From:</strong> <code>@o.Source</code>@if (!string.IsNullOrEmpty(o.StagingTable)) { <text> &middot; <strong>staging table:</strong> <code>@o.StagingTable</code></text> } &middot; <strong>file:</strong> <code>@o.File</code></p>
+            <p class="hint"><strong>Where it goes:</strong> @o.Target</p>
+            <h3>Example rows</h3>
+            <div class="table-wrap">
+                <table class="grid" data-sortable>
+                    <thead><tr><th>Case</th>@foreach (var c in o.Columns) { <th>@c.Name</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var r in o.Rows)
+                        {
+                            <tr>
+                                <td>@CaseTitle(r.Case)</td>
+                                @foreach (var c in o.Columns)
+                                {
+                                    var v = r.Values.TryGetValue(c.Name, out var x) ? x : null;
+                                    <td class="mono wrap">@(v ?? "")</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <h3>Columns</h3>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Column</th><th>Type</th><th>Filled</th><th>Meaning</th><th>ServiceNow</th><th>Example</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in o.Columns)
+                        {
+                            <tr>
+                                <td class="mono">@c.Name</td><td class="mono">@c.Type</td><td>@c.Required</td>
+                                <td class="wrap">@c.Meaning</td><td class="wrap">@c.ServiceNow</td><td class="mono wrap">@c.Example</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    }
+
+    <details class="help" id="snow-checklist">
+        <summary>Approval checklist for your ServiceNow team</summary>
+        <ul>
+            @foreach (var c in pack.Checklist) { <li>@c</li> }
+        </ul>
+    </details>
+    <p class="hint">When SecurityInsight no longer sees an asset, its CI row says so in <code>u_si_state</code> (<em>not-seen</em>, then <em>retired</em> after the grace period of its kind) and its <code>u_changed_at</code> moves, so a delta import picks it up; the open vulnerabilities of a retired asset close as <em>AssetRetired</em> (never as fixed). What a not-seen or retired CI means in your CMDB is your transform's decision -- SecurityInsight never retires or deletes a CI in ServiceNow.</p>
+    @if (pack.Objects.Any(o => o.Coming) || pack.Cases.Any(c => c.Coming))
+    {
+        <p class="hint">Rows marked <span class="badge warn">coming</span> show changes that are decided but not built yet. They let your team plan the transform now.</p>
+    }
+</section>
+
+@if (Model.Preview)
+{
+    <section class="card" aria-labelledby="h-snow-preview" id="servicenow-preview">
+        <h2 id="h-snow-preview">Preview with your data</h2>
+        <p class="lede">The first @SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel.PreviewRows rows of this install's own hand-off views in the Pro database, newest change first. Read only. A hand-off database of your own carries the same columns, plus the owner and batch columns at the end.</p>
+        @if (Model.PreviewProblem is not null) { <div class="notice error" role="alert">@Model.PreviewProblem</div> }
+        else if (Model.PreviewViews is null) { <p class="hint">Only an Admin can preview the hand-off data.</p> }
+        else
+        {
+            foreach (var v in Model.PreviewViews)
+            {
+                <h3 class="mono">@v.View</h3>
+                if (!v.Exists) { <p class="hint" data-preview-missing>This view does not exist yet in the Pro database: the SQL CMDB job creates the hand-off views on its first run.</p> }
+                else if (v.Rows.Count == 0) { <p class="hint">No rows yet.</p> }
+                else
+                {
+                <div class="table-wrap">
+                    <table class="grid" data-sortable>
+                        <thead><tr>@foreach (var c in v.Columns) { <th>@c</th> }</tr></thead>
+                        <tbody>
+                            @foreach (var r in v.Rows)
+                            {
+                                <tr>@foreach (var c in v.Columns) { <td class="mono wrap">@(r.TryGetValue(c, out var x) ? x : "")</td> }</tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                }
+            }
+        }
+    </section>
+}

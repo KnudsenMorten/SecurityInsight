@@ -1,0 +1,5 @@
+@model SI.Management.Web.Pages.Reports.ReportsPage
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@SI.Management.Web.Reports.SqlReportStore.MissingSchemaMessage</div> }
+@if (Model.State is { } st) { foreach (var n in st.Notes) { <div class="notice warn" role="status">@n</div> } }
+@foreach (var m in Model.Messages) { <div class="notice @(m.StartsWith("Not ", StringComparison.Ordinal) ? "error" : "ok")" role="status" data-message>@m</div> }

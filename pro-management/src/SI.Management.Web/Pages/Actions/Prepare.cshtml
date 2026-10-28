@@ -1,0 +1,38 @@
+@page
+@model SI.Management.Web.Pages.Actions.PrepareModel
+@using SI.Management.Web.Actions
+@{
+    ViewData["Title"] = Model.Action?.Label ?? "Actions on findings";
+    var targets = Model.Resolved?.Targets ?? Array.Empty<SI.Management.Web.Departments.GovernanceTarget>();
+}
+<h1>@(Model.Action?.Label ?? "Actions on findings")</h1>
+@if (Model.Action is not null) { <p class="lede">@Model.Action.Hint</p> }
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-action-error>@Model.Error</div> }
+@if (Model.Action is not null && Model.Bar is not null && targets.Count > 0 && Model.Error is null)
+{
+    <section class="card" aria-labelledby="h-sel">
+        <h2 id="h-sel"><span data-action-count>@Fmt.Int(targets.Count)</span> finding(s)@(Model.Selection?.All == true ? " matching the filter" : " selected")</h2>
+        @if (Model.Resolved?.Expansion is { } exp) { <p class="notice" role="status" data-action-expansion>@exp</p> }
+        <div class="table-wrap">
+            <table class="findings" data-sortable>
+                <thead><tr><th scope="col">Asset</th><th scope="col">Finding</th><th scope="col">Severity</th><th scope="col">Domain</th><th scope="col">Department</th></tr></thead>
+                <tbody>
+                    @foreach (var t in targets.Take(50))
+                    {
+                        <tr><td class="wrap">@t.Finding.AssetName</td><td class="wrap">@t.Finding.Title</td><td>@t.Finding.Severity</td><td>@t.Finding.SecurityDomain</td><td>@(t.DepartmentName ?? (t.DepartmentId is null ? "Unassigned" : ""))</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (targets.Count > 50) { <p class="hint">... and @Fmt.Int(targets.Count - 50) more.</p> }
+    </section>
+    <section class="card" aria-labelledby="h-form">
+        <h2 id="h-form" data-action-title>@Model.Action.Title(SelectionSummary.Of(targets.Select(t => t.Finding).ToList(), Model.Resolved?.Rows, Model.Resolved?.RowNoun).What)</h2>
+        <form method="post" asp-page="/Actions/Apply" class="stack" data-action-form="@Model.Action.Key">
+            <input type="hidden" name="action" value="@Model.Action.Key" />
+            @foreach (var (k, v) in Model.Carry) { <input type="hidden" name="@k" value="@v" /> }
+            <partial name="@Model.Action.FormPartial" model="new ActionFormModel(Model.Action, Model.Bar) { Targets = targets }" />
+            <div class="actions"><button type="submit" data-action-submit>@Model.Action.Label</button></div>
+        </form>
+    </section>
+}

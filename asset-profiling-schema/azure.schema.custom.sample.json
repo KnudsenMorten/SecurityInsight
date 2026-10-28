@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+
+  "_purpose": "REFERENCE FILE -- not loaded by the engine. Copy parts you need into: asset-profiling-schema/azure.schema.custom.json. Loaded automatically by Get-SISchemaWithCustomMerge.ps1 and merged on top of asset-profiling-schema/azure.schema.locked.json.",
+
+  "_loadingNotes": [
+    "Locked schema:   asset-profiling-schema/azure.schema.locked.json   (shipped, do NOT edit)",
+    "Custom overlay:  asset-profiling-schema/azure.schema.custom.json   (you create -- this file is a sample of that)",
+    "Merge semantics: see asset-profiling-schema/endpoint.schema.custom.sample.json for the full table -- identical merge model."
+  ],
+
+
+  "fields": [
+    {
+      "_comment": "EXAMPLE 1: brand-new bool field with purpose=risk -- auto-included in every Azure RA report's RiskFactor_Probability + RiskFactor_Probability_Detailed.",
+      "name": "IsCustomerInternetExposed",
+      "type": "bool",
+      "purpose": "risk",
+      "stage": { "writtenBy": "profile" },
+      "default": false,
+      "description": "Customer-defined exposure check: combines NSG analysis + Front Door + App Gateway + custom WAF state. True when the resource is reachable from the public internet by ANY path."
+    },
+
+    {
+      "_comment": "EXAMPLE 2: brand-new bool field for compliance tagging.",
+      "name": "FailedLastQuarterlyAudit",
+      "type": "bool",
+      "purpose": "audit",
+      "stage": { "writtenBy": "enrich" },
+      "default": false,
+      "description": "True when the resource was flagged in our SOC 2 quarterly audit and the finding is still open."
+    },
+
+    {
+      "_comment": "EXAMPLE 3: brand-new string field for cost-center routing.",
+      "name": "BusinessOwner",
+      "type": "string",
+      "purpose": "context",
+      "stage": { "writtenBy": "enrich" },
+      "default": "",
+      "description": "Email of the named business owner. Sourced from the Azure tag 'Owner' OR from CMDB if present."
+    },
+
+    {
+      "_comment": "EXAMPLE 4: REPLACE an existing locked field. Same name -> takes over the locked field entirely.",
+      "name": "Environment",
+      "type": "string",
+      "purpose": "context",
+      "stage": { "writtenBy": "enrich" },
+      "default": "Production",
+      "description": "Customer override -- our default is Production (most workloads are prod) rather than empty string."
+    }
+  ],
+
+  "aggregator": {
+    "contributors": [
+      {
+        "_comment": "Combine NSG + Front Door + App Gateway state into the IsCustomerInternetExposed bool.",
+        "id": "IsCustomerInternetExposed",
+        "source": "exposureGraph",
+        "fromExpression": "(IsPubliclyExposed or NicHasPublicIp) and not(IsBehindWaf)"
+      },
+      {
+        "id": "FailedLastQuarterlyAudit",
+        "source": "cmdb",
+        "fromColumn": "AuditStatus",
+        "transform": "equals:Failed"
+      },
+      {
+        "id": "BusinessOwner",
+        "source": "arm",
+        "fromColumn": "tags.Owner"
+      }
+    ]
+  },
+
+  "rawPayload": {
+    "sources": {
+      "arm": {
+        "_comment": "Surface extra ARM tag values into Properties.collect.arm.tags.<key>.",
+        "includePaths": [
+          "tags.Owner",
+          "tags.CostCenter",
+          "tags.Compliance"
+        ]
+      },
+      "exposureGraph": {
+        "_comment": "Surface extra Defender Exposure Graph fields.",
+        "includePaths": [
+          "edges.exposedToInternet.via",
+          "node.properties.criticalityScore"
+        ]
+      }
+    }
+  }
+}

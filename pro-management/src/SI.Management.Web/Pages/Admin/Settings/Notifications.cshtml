@@ -1,0 +1,97 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.NotificationsModel
+@using SI.Management.Web.Notify
+@{
+    ViewData["Title"] = "Notifications";
+    var st = Model.State!;
+    var entries = Model.Lines.Select(l => l.Entry).ToList();
+    var n = 0;
+}
+<h1>Notifications</h1>
+<p class="lede">Every mail recipient on one page: where the blue button in their mails leads (their audience), which reports and alerts they get, and whether they can open the links. A recipient who is not a user of SecurityInsight yet is added as <strong>Reader</strong> when you add them here, so the links in their mails open; a role is never raised or taken away here. Who is on each report's list is set on <a href="/Admin/Settings/Reports">Reports and alerts</a>.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-notify-error>@Model.Error</div> }
+<div class="notice info" role="status" data-notify-scope>The choices apply now to the mails the web app composes (the management summaries and the Get Started reminder). The Risk Analysis, daily vulnerability and safety-check mails are composed by the jobs and follow the choices once their mail step reads them -- each line on <a href="/Admin/Settings/Reports">Reports and alerts</a> says which.</div>
+
+@if (Model.CanEdit)
+{
+    <section class="card" aria-labelledby="add-h" data-notify-add>
+        <h2 id="add-h">Add a recipient</h2>
+        <form method="post" asp-page-handler="Add" class="inline-form" data-add-form>
+            <input type="hidden" name="Version" value="@st.Version" />
+            <label for="add-address">Mail address</label>
+            <input id="add-address" name="Address" type="email" required maxlength="254" autocomplete="off" />
+            <label for="add-audience">Audience</label>
+            <select id="add-audience" name="Audience">
+                @foreach (var a in MailAudience.All) { <option value="@a">@MailAudience.Label(a)</option> }
+            </select>
+            <button type="submit">Add</button>
+        </form>
+        <p class="hint">SOC analyst = the button opens the findings; Posture / risk = the risk overview; Manager = the management summary.</p>
+    </section>
+}
+
+<section class="card" id="recipients" aria-labelledby="rec-h" data-notify-recipients="@Model.Recipients.Count">
+    <h2 id="rec-h">Recipients (@Fmt.Int(Model.Recipients.Count))</h2>
+    @if (Model.Recipients.Count == 0)
+    {
+        <p class="hint" data-no-recipients>No report or alert has a recipient yet. Put addresses on the reports on <a href="/Admin/Settings/Reports">Reports and alerts</a>, or add one above.</p>
+    }
+    else
+    {
+        @if (Model.CanEdit)
+        {
+            <form method="post" asp-page-handler="Readers" class="inline-form" data-readers-form>
+                <button type="submit" class="secondary">Add everyone who is not a user yet as Reader</button>
+            </form>
+        }
+        @foreach (var r in Model.Recipients)
+        {
+            n++;
+            var p = st.Prefs.For(r);
+            Model.Access.TryGetValue(r, out var acc);
+            var lists = Model.ListsOf(r).Select(l => l.Entry.Title).ToList();
+            <details class="restore-area" id="@NotificationsModel.Anchor(r)" data-recipient="@r" data-audience="@p.Audience" open="@(n <= 3)">
+                <summary><strong>@r</strong>@if (Model.ForwardOf.TryGetValue(r, out var fwdTo)) { <span data-forward-to="@fwdTo"> &rarr; @fwdTo</span> } -- @MailAudience.Label(p.Audience) · @(Fmt.Int(entries.Count(e => p.Wants(e.Id)))) of @Fmt.Int(entries.Count) on
+                    @if (acc is not null) { <span class="badge @(acc.State is "reader+" or "added" ? "good" : acc.State == "none" ? "warn" : "info")" data-access="@acc.State">@acc.Words</span> }
+                </summary>
+                <p class="hint">On the list of: @(lists.Count == 0 ? "no report yet" : string.Join(", ", lists))</p>
+                <form method="post" asp-page-handler="Save" class="stack-form" data-save-form>
+                    <input type="hidden" name="Address" value="@r" />
+                    <input type="hidden" name="Version" value="@st.Version" />
+                    <label for="aud-@n">Audience (where the button leads)</label>
+                    <select id="aud-@n" name="Audience" disabled="@(!Model.CanEdit)">
+                        @foreach (var a in MailAudience.All) { <option value="@a" selected="@(a == p.Audience)">@MailAudience.Label(a)</option> }
+                    </select>
+                    <div class="table-wrap">
+                        <table class="findings grid" data-sortable data-list="notify-@n">
+                            <thead><tr><th scope="col">Gets it</th><th scope="col">Report or alert</th><th scope="col">Kind</th><th scope="col">When</th></tr></thead>
+                            <tbody>
+                                @foreach (var e in entries)
+                                {
+                                    <tr data-entry="@e.Id">
+                                        <td><label class="sr-only" for="on-@n-@e.Id">@e.Title</label><input id="on-@n-@e.Id" type="checkbox" name="On" value="@e.Id" checked="@p.Wants(e.Id)" disabled="@(!Model.CanEdit)" /></td>
+                                        <td class="wrap">@e.Title</td><td>@(e.IsAlert ? "alert" : "report")</td><td class="wrap">@e.Cadence</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <label for="floor-@n">Alerts from this severity up</label>
+                    <select id="floor-@n" name="Floor" disabled="@(!Model.CanEdit)">
+                        <option value="" selected="@(p.SeverityFloor is null)">Every alert</option>
+                        @foreach (var f in NotificationPrefs.SeverityFloors) { <option value="@f" selected="@(f == p.SeverityFloor)">@f and above</option> }
+                    </select>
+                    @if (Model.CanEdit) { <button type="submit" data-save>Save</button> }
+                </form>
+                @if (Model.CanEdit && st.Prefs.Recipients.Any(x => x.Address.Equals(r, StringComparison.OrdinalIgnoreCase)))
+                {
+                    <form method="post" asp-page-handler="Remove" class="inline-form" data-remove-form>
+                        <input type="hidden" name="Address" value="@r" />
+                        <input type="hidden" name="Version" value="@st.Version" />
+                        <button type="submit" class="secondary">Forget these choices</button>
+                    </form>
+                }
+            </details>
+        }
+    }
+</section>

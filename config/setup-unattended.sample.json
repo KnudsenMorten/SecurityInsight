@@ -1,0 +1,74 @@
+{
+  "_comment": "Setup-SecurityInsight-Unattended.ps1 configuration. Copy to setup-unattended.json (gitignored) in this folder, then edit. null = use script default. CLI switches override anything set here.",
+
+  "Flavour": "Community",
+  "_Flavour_options": "'Community' (the only flavour) = SecurityInsight signs in itself (browser / Cloud Shell, or an app from SI_SPN_*), renders inline custom.ps1. 'Internal' (the AutomateIT platform module sign-in) is retired and refused (#524).",
+
+  "Sub": {
+    "TenantId":       null,
+    "SubscriptionId": null,
+    "Location":       null
+  },
+  "_Sub_comment": "TenantId/SubscriptionId: both REQUIRED. Location: ALWAYS REQUIRED (no implicit default -- solution is used worldwide). Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth.",
+
+  "Naming": {
+    "Ring":    "prod",
+    "Edition": null,
+    "Owner":   ""
+  },
+  "_Naming_comment": "Default names follow <type>-si-<ring>-<edition>-<hosting>, e.g. rg-si-prod-community-vm. Ring: prod (one production install) or r0/r1/r2. Edition null -> pro when Licence.Path is set, else community. Hosting is ca when Container.Enabled is true, else vm. Owner goes into the 'owner' tag of the resource group setup creates (with product, ring, edition, hosting, tenant, purpose).",
+
+  "Resources": {
+    "ResourceGroupName":  null,
+    "WorkspaceName":      null,
+    "DceName":            null,
+    "StorageAccountName": null,
+    "NamingSuffix":       null
+  },
+  "_Resources_comment": "null -> the default name from Naming (rg-si-prod-community-vm, log-si-prod-community-vm, dce-si-prod-community-vm, stsiprodcommunityvm01). Set your own names to override. With your own ResourceGroupName and StorageAccountName null, the storage account is derived from the RG as before. NamingSuffix appended to RG, workspace and DCE names if set (e.g. '-test' -> rg-si-prod-community-vm-test).",
+
+  "Licence": {
+    "Path":      null,
+    "VaultName": null
+  },
+  "_Licence_comment": "SecurityInsight Pro only. Path to the licence file you received (.silicense). Installed into the Key Vault named by Licence.VaultName (else Auth_Community.KeyVaultName) as secret SI-License by setup\\Set-SILicense.ps1, which verifies it first. null = no licence = the Community edition (complete on its own).",
+
+  "Auth_Community": {
+    "DisplayName":  null,
+    "CredKind":     null,
+    "CredStorage":  null,
+    "KeyVaultName": null,
+    "VmName":              null,
+    "VmResourceGroup":     null,
+    "ManagedIdentityName": null,
+    "IncludeTagContributor": false
+  },
+  "_Auth_Community_comment": "Used only when Flavour=Community. CredKind null (the default) -> a MANAGED IDENTITY: with Container.Enabled the Container Apps jobs' identity; on an Azure VM a user-assigned identity (ManagedIdentityName, null -> id-si-<ring>-<edition>-vm, or uami-securityinsight in your own RG) created in the install's resource group, attached to VmName in VmResourceGroup (null -> this VM) and granted the read-only permissions; on an Azure Arc server its own identity. Outside Azure no managed identity is possible: CredKind null -> a service principal by certificate. CredKind: ManagedIdentity|Cert|Secret (a client secret stays supported). DisplayName (service principal only) null -> 'SecurityInsight (<ring>-<edition>-<hosting>)', e.g. 'SecurityInsight (prod-community-vm)'. CredStorage: KeyVault|LocalCertStore|Inline (null -> LocalCertStore for Cert, Inline for Secret). KeyVaultName required when CredStorage=KeyVault. IncludeTagContributor=true also grants a service principal Tag Contributor -- needed ONLY by the asset-tagging engine, the one engine that can write.",
+
+  "EntraDiag": {
+    "Enabled": false
+  },
+  "_EntraDiag_comment": "false (default) for Sentinel customers -- their existing Diagnostic Setting already streams the same categories. true for non-Sentinel customers.",
+
+  "Container": {
+    "Enabled":         false,
+    "AcrName":         null,
+    "EnvName":         null,
+    "UseKEDA":         true,
+    "KedaMaxReplicas": 30
+  },
+  "_Container_comment": "Enabled=true provisions ACR + Container Apps Environment + KEDA-scaled Jobs. AcrName / EnvName null -> in a default-named RG acrsi<ring><edition>ca01 / cae-si-<ring>-<edition>-ca (and the jobs' identity id-si-<ring>-<edition>-ca); in your own RG the names earlier releases used (acr<rg>, cae-securityinsight, uami-securityinsight). Requires `az` CLI installed + `az login`.",
+
+  "Smtp": {
+    "Server":     null,
+    "Port":       587,
+    "User":       null,
+    "Password":   null,
+    "From":       null,
+    "UseSsl":     true,
+    "MailTo":     [],
+    "DetailedTo": [],
+    "SummaryTo":  []
+  },
+  "_Smtp_comment": "Community ONLY (Internal flavour reads SMTP from PlatformConfiguration/config/platform-defaults.ps1 -- leave Server null on Internal). Server null -> SMTP block is NOT written to custom.ps1 (customer must add manually). Port: 25=plain/STARTTLS, 465=SMTPS, 587=submission-with-STARTTLS (default). MailTo is the cross-engine default recipient list (RA + asset-tagging + ad-hoc); DetailedTo/SummaryTo override per RA mode (use MailTo when both are empty)."
+}

@@ -1,0 +1,123 @@
+#Requires -Version 5.1
+<#
+    RA-UnprofiledTier.ps1 -- a finding on an asset NO PROFILER HAS SEEN still gets a tier, from the same rule set.
+
+    CriticalityTier comes from SI_*_Profile_CL.Tier. But Risk Analysis also reports on assets no profiler ever profiled:
+    an Azure resource in a subscription the Azure profiler does not read (the Exposure Graph sees the whole tenant), a
+    subscription scope node, an identity type a profiler skips. Those rows came back with NO tier, and every page then
+    counted them as "Unclassified" -- measured on a live install 2026-10-05: 95 of 96 Unclassified findings.
+
+    For such a row the tier is resolved from what the finding itself knows -- the asset's kind and its name -- through
+    the rule set (engine/asset-profiling/shared/Resolve-SIDefaultTier.ps1):
+      1. the rules a NAME can decide (nameMatches arms -- which is also what a Tier board pin is), MIN as always;
+      2. else the default tier RULE for that kind (asset-profiling-enrichment/shared/AssetProfileByDefaultTier.locked.yaml).
+    Nothing here is a constant: turn the default rule off and such a row stays without a tier (Unclassified, listed on the
+    Tier board to be given one).
+
+    Left alone, on purpose:
+      * a row that HAS a tier (the profile's tier is never second-guessed);
+      * an ATTACK-PATH row -- its CriticalityTier is the path's TARGET tier and its asset is the SOURCE, so a name lookup
+        would put the wrong asset's tier on it (the Pro data load gives such a finding its asset's tier instead);
+      * a Summary row (one row per tier x severity bucket, many assets -- not one asset with one name);
+      * a row whose asset kind cannot be told (no tier is better than a guessed one).
+    PS 5.1 safe. Never throws: a failure leaves the rows as they came.
+#>
+
+if (-not (Get-Command -Name Resolve-SIUnprofiledTier -ErrorAction SilentlyContinue)) {
+    $__raDefaultTier = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'asset-profiling/shared/Resolve-SIDefaultTier.ps1'
+    if (Test-Path -LiteralPath $__raDefaultTier) { . $__raDefaultTier }
+}
+
+$script:RATierLevelLabels = @{ 0 = 'Critical - tier 0'; 1 = 'High - tier 1'; 2 = 'Medium - tier 2'; 3 = 'Low - tier 3' }
+
+function Get-RARowValue {
+    param($Row, [string]$Name)
+    if ($null -eq $Row) { return $null }
+    if ($Row -is [System.Collections.IDictionary]) { if ($Row.Contains($Name)) { return $Row[$Name] } else { return $null } }
+    $p = $Row.PSObject.Properties[$Name]
+    if ($p) { $p.Value } else { $null }
+}
+
+function Set-RARowValue {
+    param($Row, [string]$Name, $Value)
+    if ($Row -is [System.Collections.IDictionary]) { $Row[$Name] = $Value; return }
+    # (a new column through the row's own property list, not the Add-Member command: this runs several times per row)
+    if ($Row.PSObject.Properties[$Name]) { $Row.$Name = $Value } else { $Row.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($Name, $Value)) }
+}
+
+function Get-RAAssetKindOfRow {
+    <#
+        PURE. The asset kind (endpoint / identity / azure / publicip) of one finding row, or '' when it cannot be told.
+        The row's AssetType first (it names the asset; a VM in an Azure report is an Endpoint), then the shape of its id
+        (an ARM id is an Azure resource), then the report's security domain.
+    #>
+    param([Parameter(Mandatory)]$Row)
+    $type = ([string](Get-RARowValue $Row 'AssetType')).Trim()
+    if ($type) {
+        # #562 the SI asset types (dimension asset_type) are recognised too: the profiles now carry them
+        if ($type -match '^(?i)microsoft\.' -or $type -match '^(?i)(AzureResource|subscriptions?|resourcegroups?|Database|Storage|Web app|Key vault|Network|Container|Compute|Monitoring|AI|Integration|Backup|Security|Management)$') { return 'azure' }
+        if ($type -match '^(?i)(Endpoint|Device|Workstation|Server|IoT|Mobile|macOS|Linux|Windows|NetworkDevice|Network device|Printer|VirtualMachine)$') { return 'endpoint' }
+        if ($type -match '^(?i)(User|Guest|Group|ManagedIdentity|Managed identity|ServicePrincipal|Service principal|Application|.*SP)$') { return 'identity' }
+        if ($type -match '^(?i)Public ?IP') { return 'publicip' }
+    }
+    foreach ($c in 'AssetId', 'SI_AssetId', 'AzureResourceId') {
+        if (([string](Get-RARowValue $Row $c)) -match '^(?i)(az:)?/subscriptions/') { return 'azure' }
+    }
+    switch -Regex (([string](Get-RARowValue $Row 'SecurityDomain')).Trim()) {
+        '^(?i)azure$'     { return 'azure' }
+        '^(?i)endpoint$'  { return 'endpoint' }
+        '^(?i)identity$'  { return 'identity' }
+        '^(?i)public ?ip$' { return 'publicip' }
+    }
+    ''
+}
+
+function Test-RAPathRow {
+    <# PURE. An attack-path row (keyed to the path's source, its tier is the target's) -- same test as the Pro data load. #>
+    param([Parameter(Mandatory)]$Row, [string]$ReportName)
+    $rep = [string](Get-RARowValue $Row 'AssetDetectedInReportName'); if (-not $rep) { $rep = $ReportName }
+    $cat = [string](Get-RARowValue $Row 'Category')
+    ($rep -like 'Attack_Paths*') -or ($cat -like 'AttackPath*') -or ($cat -eq 'Attack Paths')
+}
+
+function Set-RAUnprofiledTiers {
+    <#
+        Every row of one report, the rows without a tier given one from the rule set (see the file header). Returns the
+        rows (call it as @(Set-RAUnprofiledTiers ...)); -Stats (a hashtable) receives Resolved / ByRule / ByDefault /
+        Left counts for the run's summary line.
+    #>
+    [CmdletBinding()]
+    param([Parameter()][AllowNull()]$Rows, [Parameter(Mandatory)][string]$ReportName,
+          [string]$TierColumn = 'CriticalityTier', [string]$LevelColumn = 'CriticalityTierLevel', [hashtable]$Stats)
+    if ($null -eq $Rows) { return @() }
+    $all = @($Rows)
+    if ($all.Count -eq 0) { return $all }
+    if ($ReportName -notmatch '(?i)_Detailed') { return $all }
+    if (-not (Get-Command -Name Resolve-SIUnprofiledTier -ErrorAction SilentlyContinue)) { return $all }
+    if ($null -eq $Stats) { $Stats = @{} }
+    foreach ($k in 'Resolved', 'ByRule', 'ByDefault', 'Left') { if (-not $Stats.ContainsKey($k)) { $Stats[$k] = 0 } }
+    $memo = @{}
+    foreach ($row in $all) {
+        if ($null -eq $row) { continue }
+        try {
+            $cur = Get-RARowValue $row $TierColumn
+            $n = 0
+            if ($null -ne $cur -and [int]::TryParse(([string]$cur).Trim(), [ref]$n) -and $n -ge 0 -and $n -le 3) { continue }
+            if (Test-RAPathRow -Row $row -ReportName $ReportName) { continue }
+            $kind = Get-RAAssetKindOfRow -Row $row
+            $name = [string](Get-RARowValue $row 'AssetName')
+            if (-not $name) { $name = [string](Get-RARowValue $row 'SI_AssetName') }
+            $mk = '{0}|{1}' -f $kind, $name.ToLowerInvariant()
+            if (-not $memo.ContainsKey($mk)) { $memo[$mk] = Resolve-SIUnprofiledTier -Engine $kind -Name $name }
+            $r = $memo[$mk]
+            if ($null -eq $r) { $Stats.Left++; continue }
+            Set-RARowValue $row $TierColumn ([int]$r.Tier)
+            if ($LevelColumn) { Set-RARowValue $row $LevelColumn $script:RATierLevelLabels[[int]$r.Tier] }
+            $Stats.Resolved++
+            if ($r.SetBy -eq 'rule') { $Stats.ByRule++ } else { $Stats.ByDefault++ }
+        } catch {
+            Write-Verbose ("unprofiled tier: a row was left as it came ({0})" -f $_.Exception.Message)
+        }
+    }
+    $all
+}

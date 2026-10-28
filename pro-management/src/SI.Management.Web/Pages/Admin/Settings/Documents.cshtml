@@ -1,0 +1,107 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.DocumentsModel
+@{
+    ViewData["Title"] = "All stored documents";
+    // exclusions and weights are edited on their own Reports tabs (one place each, #388); the raw editor stays
+    // for the other kinds (tier rules, the CMDB ownership map)
+    string EditLink(string kind, string key) => kind switch
+    {
+        "exclusions" => "/Reports/Exclusions?key=" + Uri.EscapeDataString(key),
+        "weights" => "/Reports/Weights" + (key == "solution" ? "" : "?scope=" + Uri.EscapeDataString(key)),
+        _ => "/Admin/Settings/Document?kind=" + Uri.EscapeDataString(kind) + "&key=" + Uri.EscapeDataString(key),
+    };
+    var ownKind = SI.Management.Web.Changes.OwnershipMapValidator.Kind;
+    var kinds = new[] { "exclusions", "weights", "rule" }.Concat(Model.Documents.Select(d => d.Kind)).Where(k => k != ownKind).Distinct().ToList();
+    var ownership = Model.Documents.FirstOrDefault(d => d.Kind == ownKind);
+    string Describe(SI.Management.Web.Changes.ExemptionRow e) => e.Scope + ": " + string.Join(" ", new[] { e.Cve ?? e.ConfigurationId, e.AssetKey, e.ReportName }.Where(x => !string.IsNullOrEmpty(x)));
+}
+<h1>Reports</h1>
+<partial name="~/Pages/Reports/_Tabs.cshtml" model="@("/Admin/Settings/Documents")" />
+<p class="lede">Every setting document Pro keeps in its database -- exclusions and weights (edited on their own tabs), tier rules and the CMDB ownership map -- each checked, staged and written on <a href="/Changes">Review &amp; commit</a>.</p>
+<details class="help">
+    <summary>Why the checks are strict</summary>
+    <p>At run start the engines re-check every document; a document they refuse <strong>stops the run</strong>. So this page refuses the same things first: unknown report names, unknown exclusion settings, weights that are not whole numbers in range, tier rules that do not parse or use a detection kind the engine does not know.</p>
+</details>
+@foreach (var e in Model.Errors) { <div class="notice error" role="alert">@e</div> }
+
+<section class="card" aria-labelledby="h-new">
+    <h2 id="h-new">New or edit</h2>
+    <form method="get" action="/Admin/Settings/Document" class="filterbar">
+        <div>
+            <label for="n-kind">Kind</label>
+            <select id="n-kind" name="kind">
+                <option value="exclusions">exclusions</option>
+                <option value="weights">weights</option>
+                <option value="rule">rule</option>
+                <option value="cmdbownership">cmdbownership</option>
+            </select>
+        </div>
+        <div class="wide">
+            <label for="n-key">Key</label>
+            <input id="n-key" type="text" name="key" placeholder="global | a report name | solution | endpoint/my-rule-id" maxlength="128" required />
+        </div>
+        <div class="actions"><button type="submit">Open</button></div>
+    </form>
+    <p class="hint">exclusions: <code>global</code> or a Risk Analysis report name · weights: <code>solution</code> · rule: <code>&lt;engine&gt;/&lt;rule id&gt;</code> (engine endpoint, identity, azure or shared) · cmdbownership: <code>map</code>.</p>
+</section>
+
+<section class="card" aria-labelledby="h-cmdbownership" data-ownership-map="@(ownership is null ? "0" : "1")">
+    <h2 id="h-cmdbownership">CMDB ownership</h2>
+    <p class="hint">Configuration that is yours: per asset type, which import connector already owns it in your CMDB -- SecurityInsight only matches those, reports a connector that is late, and creates nothing you did not allow. Setup puts the shipped default here; a template release never changes it.</p>
+    @if (ownership is null) { <p>Not in the database -- the shipped default applies. <a href="/Admin/Settings/Document?kind=cmdbownership&key=map">Create it</a></p> }
+    else { <p>Last changed by @ownership.UpdatedBy, @Fmt.Time(ownership.UpdatedAt). <a href="/Admin/Settings/Document?kind=cmdbownership&key=map">Edit</a></p> }
+</section>
+
+@foreach (var k in kinds)
+{
+    var docs = Model.Documents.Where(d => d.Kind == k).ToList();
+    <section class="card" aria-labelledby="h-@k">
+        <h2 id="h-@k">@k <span class="badge">@Fmt.Int(docs.Count)</span></h2>
+        @if (docs.Count == 0) { <p class="hint">None in the database -- the shipped files apply.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Key</th><th>Changed by</th><th>When</th><th data-sort="off"><span class="sr-only">Edit</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var d in docs)
+                        {
+                            <tr><td class="mono">@d.Key</td><td class="wrap">@d.UpdatedBy</td><td>@Fmt.Time(d.UpdatedAt)</td><td><a href="@EditLink(d.Kind, d.Key)">Edit</a></td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+
+<section class="card" aria-labelledby="h-ex">
+    <h2 id="h-ex">Active exemptions <span class="badge">@Fmt.Int(Model.Exemptions.Count)</span></h2>
+    @if (Model.Exemptions.Count == 0) { <p class="hint">No active exemption. Exempt a finding from the <a href="/Findings">findings browser</a>.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>What</th><th>Reason</th><th>By</th><th>Until</th><th data-sort="off">Revoke</th></tr></thead>
+                <tbody>
+                    @foreach (var e in Model.Exemptions)
+                    {
+                        <tr>
+                            <td class="wrap">@Describe(e)</td><td class="wrap">@e.Reason</td><td class="wrap">@e.CreatedBy, @Fmt.Time(e.CreatedAt)</td><td data-utc>@(e.ExpiresAt is { } x ? Fmt.When(x) : "no expiry")</td>
+                            <td>
+                                <form method="post" asp-page-handler="Revoke" class="row-actions">
+                                    <input type="hidden" name="ExemptionId" value="@e.ExemptionId" />
+                                    <input type="hidden" name="Describe" value="@Describe(e)" />
+                                    <input type="text" name="Reason" placeholder="why" required minlength="3" maxlength="400" aria-label="Reason to revoke" />
+                                    <button type="submit" class="small secondary">Stage revoke</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+<partial name="_Query" model='QueryInfo.Sql(Model.DocumentQuery, "Exclusions, weights and rules")' />
+<partial name="_Query" model='QueryInfo.Sql(Model.ExemptionQuery, "Active exemptions")' />

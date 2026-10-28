@@ -1,0 +1,35 @@
+@model SI.Management.Web.Settings.MailBannerView
+@using SI.Management.Web.Settings
+@* The home page's mail banner (like PIM Manager's "Core functionality is BLOCKED" banner): RED when mail is not set up,
+   AMBER when it works but should move (SMTP relay -> shared mailbox; Application Access Policy -> RBAC for Applications),
+   nothing when the shared mailbox is verified. The verdict is MailHealth -- the same one Settings > E-mail + links shows. *@
+@{
+    var h = Model.Overview.Health;
+}
+@if (!h.IsOk)
+{
+    <div class="mail-banner notice @(h.IsRed ? "error" : "warn")" role="@(h.IsRed ? "alert" : "status")" data-mail-banner="@h.Level">
+        <div class="mail-banner-text">
+            <strong data-mail-banner-title>@h.Title</strong>
+            @if (h.IsAmber && h.Reason is not null) { <span> -- @h.Reason.</span> }
+            <div class="mail-banner-detail" data-utc data-mail-banner-detail>@h.Detail</div>
+            @if (Model.Message is not null) { <div data-mail-verify-message>@Model.Message</div> }
+        </div>
+        <div class="mail-banner-actions">
+            @if (Model.CanSetup) { <a class="button" href="/Admin/Settings/Email#mail" data-mail-banner-setup>Set up mail</a> }
+            @if (Model.CanVerify)
+            {
+                <form method="post" asp-page="/Wallboard" asp-page-handler="Verify">
+                    <button type="submit" data-mail-banner-verify>Verify</button>
+                </form>
+            }
+            @* the SMTP amber only: keep the relay by choice (Admin) -- the hint goes; Undo on Settings > E-mail *@
+            @if (h.IsSmtpMove && Model.CanSetup)
+            {
+                <form method="post" asp-page="/Wallboard" asp-page-handler="Ignore">
+                    <button type="submit" class="secondary" data-mail-banner-ignore title="Keep your own SMTP relay: the hint to move to a shared mailbox is no longer shown (Undo on Settings > E-mail)">Ignore</button>
+                </form>
+            }
+        </div>
+    </div>
+}

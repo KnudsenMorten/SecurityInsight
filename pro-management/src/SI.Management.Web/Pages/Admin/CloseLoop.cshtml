@@ -1,0 +1,69 @@
+@page
+@model SI.Management.Web.Pages.Admin.CloseLoopModel
+@using SI.Management.Web.Data
+@{
+    ViewData["Title"] = "Close-loop state";
+    var st = Model.State;
+    var statuses = new[] { "Open", "Reopened", "Closed" };
+}
+<h1>Close-loop state</h1>
+<p class="lede">The vulnerability close-loop (read-only): what SecurityInsight opened, what is closed and why, and what was reopened because it is still seen.</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+@if (st is not null)
+{
+    <div class="tiles">
+        @foreach (var s in statuses)
+        {
+            <div class="tile"><div class="label">@s</div><div class="value">@Fmt.Int(st.Buckets.Where(b => b.Status == s).Sum(b => b.Items))</div></div>
+        }
+    </div>
+
+    <section class="card" aria-labelledby="h-reasons">
+        <h2 id="h-reasons">By status and reason</h2>
+        @if (st.Buckets.Count == 0)
+        {
+            <p class="hint">The close-loop holds no items yet.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Status</th><th>Reason</th><th>Severity</th><th class="num">Items</th></tr></thead>
+                    <tbody>
+                        @foreach (var g in st.Buckets.OrderBy(b => Array.IndexOf(statuses, b.Status)).ThenByDescending(b => b.Items))
+                        {
+                            <tr><td>@g.Status</td><td class="wrap">@(g.Reason == "" ? "–" : g.Reason)</td><td>@g.Severity</td><td class="num" data-value="@Fmt.Raw(g.Items)">@Fmt.Int(g.Items)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <partial name="_Query" model='QueryInfo.Sql(st.BucketQuery, "By status and reason")' />
+    </section>
+
+    <section class="card" aria-labelledby="h-events">
+        <h2 id="h-events">Latest state changes</h2>
+        @if (st.Recent.Count == 0)
+        {
+            <p class="hint">No state changes yet.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>When</th><th>Action</th><th>Asset</th><th>CVE</th><th>From → to</th><th>Reason</th><th>By</th></tr></thead>
+                    <tbody>
+                        @foreach (var e in st.Recent)
+                        {
+                            <tr><td>@Fmt.Time(e.At)</td><td>@e.Action</td><td class="wrap">@e.AssetName</td><td>@e.Cve</td><td>@e.FromState → @e.ToState</td><td class="wrap">@e.Reason</td><td class="wrap">@(e.RunId is null ? e.Actor : e.Actor + " (run " + e.RunId + ")")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <partial name="_Query" model='QueryInfo.Sql(st.EventQuery, "Latest state changes")' />
+    </section>
+}

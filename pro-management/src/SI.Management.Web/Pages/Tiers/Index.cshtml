@@ -1,0 +1,103 @@
+@page
+@model SI.Management.Web.Pages.Tiers.IndexModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Tier board";
+    var mayStage = User.MayChange();   // Delegated stages inside its scopes; the server checks role + scope (#253)
+}
+<h1>Tier board</h1>
+<p class="lede">Every asset by tier, who decided the tier, and why. Click a tier -- or who decided it, or a kind of asset inside it -- to filter the table below; click it again to stop. Click a row to see every claim on its tier. @if (mayStage) { <text>There you pin it to a tier or exclude it; nothing is written until <a href="/Changes">Review &amp; commit</a>.</text> }</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.NotLoaded)
+{
+    <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText</div>
+}
+@if (Model.TilesError is not null) { <div class="notice warn" role="status" data-tiles-error>@Model.TilesError</div> }
+
+@if (Model.Tiles.Count > 0)
+{
+    @* the tiles: one per tier. A tile and each chip in it is a LINK that toggles the table's filter in the address. *@
+    <section class="tier-tiles" id="tier-tiles" aria-label="Assets per tier" data-tier-board>
+        @foreach (var t in Model.Tiles)
+        {
+            var staged = t.StagedIn + t.StagedOut + t.StagedExclusions;
+            <article class="tier-tile@(t.On ? " on" : "")" id="tier-@(t.Tier)" data-tier-tile="@t.Tier" data-count="@t.Count" aria-label="@t.Label">
+                <h2>
+                    <a class="tier-toggle" href="@t.Href" data-tier-toggle aria-current="@(t.On ? "true" : null)" title="@(t.On ? "Stop filtering the table on " + t.Label : "Show only " + t.Label + " in the table")">
+                        <span class="tierdot t@(t.Tier)"></span><span class="tier-name">@t.Label</span>
+                        <span class="tier-count" data-tier-count>@Fmt.Int(t.Count)</span>
+                    </a>
+                </h2>
+                @if (t.SetBy.Count > 0 || t.NotRecorded > 0)
+                {
+                    <div class="tier-chips" role="group" aria-label="@t.Label, by who decided the tier">
+                        <span class="tier-chips-label">Decided by</span>
+                        @foreach (var c in t.SetBy)
+                        {
+                            <a class="tier-chip@(c.On ? " on" : "")" href="@c.Href" data-chip="tiersetby" data-value="@c.Value" aria-current="@(c.On ? "true" : null)" title="@(c.On ? "Stop filtering on this" : "Show only the " + Fmt.Int(c.Count) + " of " + t.Label + " decided by " + c.Label)">@c.Label · @Fmt.Int(c.Count)</a>
+                        }
+                        @if (t.NotRecorded > 0)
+                        {
+                            <span class="tier-chip plain" data-unrecorded="@t.NotRecorded" title="The CI build did not record who decided the tier of these. It fills in with the next run and data sync.">not recorded · @Fmt.Int(t.NotRecorded)</span>
+                        }
+                    </div>
+                }
+                @if (t.Classes.Count > 0)
+                {
+                    <div class="tier-chips" role="group" aria-label="@t.Label, by kind of asset">
+                        <span class="tier-chips-label">Kind of asset</span>
+                        @foreach (var c in t.Classes)
+                        {
+                            <a class="tier-chip@(c.On ? " on" : "")" href="@c.Href" data-chip="class" data-value="@c.Value" aria-current="@(c.On ? "true" : null)" title="@(c.On ? "Stop filtering on this" : "Show only the " + Fmt.Int(c.Count) + " " + c.Label + " of " + t.Label)">@c.Label · @Fmt.Int(c.Count)</a>
+                        }
+                    </div>
+                }
+                @if (staged > 0)
+                {
+                    <p class="hint" data-tier-staged="@staged">
+                        Staged, not committed:
+                        @if (t.StagedIn > 0) { <span data-staged-in="@t.StagedIn">@Fmt.Int(t.StagedIn) pinned to this tier</span> }
+                        @if (t.StagedOut > 0) { <span data-staged-out="@t.StagedOut">@Fmt.Int(t.StagedOut) pinned to another tier</span> }
+                        @if (t.StagedExclusions > 0) { <span data-staged-excluded="@t.StagedExclusions">@Fmt.Int(t.StagedExclusions) excluded</span> }
+                        -- <a href="/Changes">review &amp; commit</a>
+                    </p>
+                }
+                @if (t.MovedRules.Count > 0)
+                {
+                    <p class="hint" data-moved-rules>
+                        Rules moved to @t.Label:
+                        @foreach (var m in t.MovedRules) { <span class="mono" data-moved-rule="@m">@m</span> }
+                    </p>
+                }
+                @if (t.Tier == ProDataFilters.Unclassified)
+                {
+                    var uf = Model.UnclassifiedFindings;
+                    <p class="hint" data-unclassified-note>No tier rule, pin or default tier rule gave these assets a tier.@if (mayStage) { <text> Open one and use <em>Pin to a tier</em>; the next run uses it.</text> }</p>
+                    @if (uf is not null && uf.Findings > 0)
+                    {
+                        <p class="hint" data-unclassified-findings="@uf.Findings">Newest run: @Fmt.Int(uf.Findings) Unclassified finding(s) -- @Fmt.Int(uf.Findings - uf.WithoutAsset) on @Fmt.Int(uf.Assets) asset(s)@if (uf.WithoutAsset > 0) { <text>, @Fmt.Int(uf.WithoutAsset) naming no asset (they cannot be listed here)</text> }.</p>
+                    }
+                }
+            </article>
+        }
+    </section>
+}
+
+@* one asset's panel on the page: what a row's drawer shows, reachable without script (?ci=<CI id>#panel) *@
+@if (Model.Panel is not null)
+{
+    <section class="card panel" id="@SI.Management.Web.Pages.Tiers.IndexModel.PanelAnchor" aria-label="How the tier of one asset was decided" data-tier-panel-plain>
+        <partial name="_TierPanel" model="Model.Panel" />
+    </section>
+}
+else if (Model.PanelMissing)
+{
+    <div class="notice" role="status" id="@SI.Management.Web.Pages.Tiers.IndexModel.PanelAnchor" data-tier-panel-missing>That asset is not among the CIs in the Pro database (it may have been retired, or it arrives with the next data sync).</div>
+}
+
+@* the drawer a row opens in place (js/app/row-drawer.js reads the fragment of ?handler=Drawer) *@
+<aside class="drawer" data-drawer role="dialog" aria-modal="false" aria-label="How the tier of one asset was decided" hidden></aside>
+
+@* ONE table: THE CI grid, filtered by the tiles, with its view bar, column chooser and exports *@
+<partial name="~/Pages/Cis/_CiGrid.cshtml" model="Model" />
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

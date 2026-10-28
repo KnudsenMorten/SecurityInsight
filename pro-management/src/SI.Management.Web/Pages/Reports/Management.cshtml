@@ -1,0 +1,102 @@
+@page
+@model SI.Management.Web.Pages.Reports.ManagementModel
+@using SI.Management.Web.MgmtReports
+@{
+    ViewData["Title"] = "Management summary";
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model='"/Reports/Management"' />
+<p class="lede">A management summary report: the Risk Analysis KPI and its summary, risk by domain, and the vulnerabilities opened and closed per week over the last month and the last 3 months -- mailed on a schedule in the Risk Analysis mail's look. The same report is on <nav-ref page="/Management/Summary" />.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (!Model.Ready && Model.Error is null)
+{
+    <div class="notice warn" role="status" data-mgmt-notready>The Pro database does not carry the management summary tables yet. They appear when the Pro setup applies the settings schema.</div>
+}
+else
+{
+    <section class="card" aria-labelledby="h-list" data-mgmt-list>
+        <div class="split"><h2 id="h-list">Reports</h2>@if (Model.CanEdit) { <a class="button small" href="?new=true" data-mgmt-new>Add a report</a> }</div>
+        @if (Model.Reports.Count == 0) { <p class="hint">No management summary report yet.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Name</th><th>Data</th><th>Sections</th><th>Schedule</th><th>Next</th><th>Last sent</th><th>Recipients</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var r in Model.Reports)
+                        {
+                            <tr data-mgmt-report="@r.Id">
+                                <td>@r.Name @if (!r.Enabled) { <span class="badge warn">paused</span> }</td>
+                                <td>@r.Grain report</td>
+                                <td>@string.Join(", ", new[] { r.Kpi ? "Risk Analysis KPI" : null, r.Domains ? "risk by domain" : null, r.Timeline ? "timeline" : null }.Where(x => x is not null))</td>
+                                <td>@MgmtSchedule.Describe(r)</td>
+                                <td data-utc>@(r.Enabled ? Fmt.When(MgmtSchedule.NextSlot(r, Model.Now)) : "–")</td>
+                                <td data-utc>@(r.LastSentAt is { } s ? Fmt.When(s) + " (" + r.LastPeriodKey + ")" : "never")</td>
+                                <td class="wrap">@string.Join(", ", r.Recipients)</td>
+                                <td class="nowrap">
+                                    <a href="?handler=Preview&amp;id=@r.Id" target="mgmt-preview" data-mgmt-preview>Preview</a>
+                                    @if (Model.CanEdit)
+                                    {
+                                        <a href="?id=@r.Id">Edit</a>
+                                        <form method="post" class="inline-form" asp-page-handler="Send" asp-route-id="@r.Id"><button type="submit" class="small secondary" data-mgmt-send>Send now</button></form>
+                                        <form method="post" class="inline-form" asp-page-handler="Remove" asp-route-id="@r.Id"><button type="submit" class="small danger" data-confirm="Remove this report? Nothing more is sent.">Remove</button></form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    @if (Model.CanEdit && (Model.Editing is not null || Model.Problems.Count > 0))
+    {
+        <section class="card" aria-labelledby="h-edit" data-mgmt-edit>
+            <h2 id="h-edit">@(Model.Id is > 0 ? "Change the report" : "A new report")</h2>
+            @foreach (var p in Model.Problems) { <div class="notice error" role="alert">@p</div> }
+            <form method="post" asp-page-handler="Save">
+                <input type="hidden" name="Id" value="@(Model.Id ?? 0)" />
+                <div><label for="m-name">Name</label><input id="m-name" name="Name" value="@Model.Name" maxlength="100" /></div>
+                <div>
+                    <label for="m-grain">Data</label>
+                    <select id="m-grain" name="Grain">
+                        @if (Model.SummaryOn || Model.Grain == "Summary") { <option value="Summary" selected="@(Model.Grain == "Summary")">The Summary report (counts distinct assets)</option> }
+                        <option value="Detailed" selected="@(Model.Grain == "Detailed")">The Detailed report (counts asset findings)</option>
+                    </select>
+                    <p class="hint">When the reports are set to agree, both show the leading report's Risk Analysis KPI -- as in the Risk Analysis mails.</p>
+                </div>
+                <fieldset>
+                    <legend>Sections</legend>
+                    <label><input type="checkbox" name="Kpi" value="true" checked="@Model.Kpi" /> Risk Analysis KPI and summary (the AI-written analysis when AI is on, else a short plain summary)</label>
+                    <label><input type="checkbox" name="Domains" value="true" checked="@Model.Domains" /> Risk by domain (scores and the severity table)</label>
+                    <label><input type="checkbox" name="Timeline" value="true" checked="@Model.Timeline" /> Vulnerabilities opened and closed per week: last month and last 3 months</label>
+        <fieldset class="kf-choice" data-key-blocks><legend>Key figures (the blocks of the Executive report)</legend>
+        @foreach (var (key, title) in SI.Management.Web.RiskExec.ExecutiveFigures.Blocks) { <label><input type="checkbox" name="KeyBlocks" value="@key" checked="@Model.KeyBlocks.Contains(key)" /> @title</label> }
+        </fieldset>
+                </fieldset>
+                <div><label for="m-to">Recipients (one mail address per line; a group's mailbox works too)</label><textarea id="m-to" name="Recipients" spellcheck="false">@Model.Recipients</textarea></div>
+                <div>
+                    <label for="m-cad">Schedule</label>
+                    <select id="m-cad" name="Cadence">
+                        <option value="monthly" selected="@(Model.Cadence == "monthly")">Monthly</option>
+                        <option value="weekly" selected="@(Model.Cadence == "weekly")">Weekly</option>
+                    </select>
+                    <label for="m-day">Day (monthly: 1 to 28; weekly: 1 = Monday .. 7 = Sunday)</label>
+                    <input id="m-day" name="Day" type="number" min="1" max="28" value="@Model.Day" />
+                    <label for="m-time">Time (UTC, HH:mm)</label>
+                    <input id="m-time" name="TimeUtc" value="@Model.TimeUtc" maxlength="5" />
+                    <p class="hint">Each period is sent once. If the app was not running at the time, the report is sent once when it is back -- never once per missed period.</p>
+                </div>
+                <label><input type="checkbox" name="Enabled" value="true" checked="@Model.Enabled" /> Send on the schedule</label>
+                <div class="actions"><button type="submit" data-mgmt-save>Save</button> <a href="/Reports/Management">Cancel</a></div>
+            </form>
+        </section>
+    }
+
+    <section class="card" aria-labelledby="h-prev">
+        <h2 id="h-prev">Preview</h2>
+        <p class="hint">Choose Preview on a report to see the mail as it would be sent now.</p>
+        <iframe name="mgmt-preview" title="Report preview" class="mgmt-preview" sandbox="" src="@(Model.Reports.Count > 0 ? "?handler=Preview&id=" + Model.Reports[0].Id : "about:blank")"></iframe>
+    </section>
+}

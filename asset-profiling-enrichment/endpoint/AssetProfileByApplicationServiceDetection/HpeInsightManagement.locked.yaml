@@ -1,0 +1,22 @@
+id:        HpeInsightManagement
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'HP Insight Management Agents'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'HP Insight Management Agents'
+  - 'HPE Insight Management'
+
+detections:
+  - id: HpeInsightManagement
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'insight_management*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

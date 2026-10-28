@@ -1,0 +1,8 @@
+@page
+@model SI.Management.Web.Pages.Connectors.FieldsModel
+@{
+    ViewData["Title"] = "Connector fields";
+}
+<h1>Connectors</h1>
+<p class="lede">Which columns each connector sends -- the ServiceNow hand-offs and the other connector outputs -- from which SecurityInsight field, and under which name. A ServiceNow import reads columns by name: agree renames and removals with the ServiceNow team first.</p>
+<partial name="~/Pages/Reports/_OutputFieldsBody.cshtml" model="Model" />

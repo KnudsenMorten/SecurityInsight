@@ -1,0 +1,22 @@
+id:        CyberarkEndpointPrivilegeManager
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'CyberArk Endpoint Privilege Manager'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'CyberArk Endpoint Privilege Manager'
+  - 'CyberArk EPM'
+
+detections:
+  - id: CyberarkEndpointPrivilegeManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_privilege_manager*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

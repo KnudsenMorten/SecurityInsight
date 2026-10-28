@@ -1,0 +1,13 @@
+@page
+@model SI.Management.Web.Pages.ProOnlyModel
+@{
+    ViewData["Title"] = "Part of SecurityInsight Pro";
+}
+<h1>Part of SecurityInsight Pro</h1>
+<div class="notice warn" role="status" data-pro-only="@Model.Feature">
+    <strong>@Model.Title</strong> is part of SecurityInsight Pro. This installation has no Pro licence, so the page is not
+    available here and nothing was done. Everything that shows your risk -- the collection, the assets, Risk Analysis and its
+    views, settings and jobs -- works without one.
+</div>
+<p>Licences: <a href="https://portal.invardia.com/" rel="noopener">portal.invardia.com</a> &gt; Licences, or info@@invardia.com.</p>
+<p><a href="~/">Back to your start page</a></p>

@@ -1,0 +1,7 @@
+@model SI.Management.Web.Pages.ChangeSince
+@* #636: the ONE change line of a tile -- judged on the value as shown (a change that rounds to 0 is "no change", neutral),
+   green / red by the measure's own direction. Nothing when there is no earlier value. *@
+@if (Model.Tone != "none")
+{
+    <div class="delta chg @Model.Tone" data-change="@Model.Tone">@Model.Text</div>
+}

@@ -1,0 +1,9 @@
+@page
+@model SI.Management.Web.Pages.Departments.UnassignedModel
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Grid is not null && User.IsAdmin())
+{
+    <p class="hint" data-bulk-assign>Select rows (or narrow the filter) and choose <strong>Assign to department</strong> in the bar under the grid: by the asset (every finding on it) or by the recommendation (this issue on every asset).@if (Model.Targets.Count == 0) { <text> There is no department yet -- define one under <nav-ref page="/Admin/Departments/Index" /> first.</text> }</p>
+}
+@if (Model.Grid is not null) { <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" /> }
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

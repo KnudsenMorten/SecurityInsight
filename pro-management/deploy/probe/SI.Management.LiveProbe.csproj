@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The post-deploy probe (deploy\Test-SIManagementDeployment.ps1). It runs as a one-off Container Apps job INSIDE the
+       environment, because both apps have internal ingress. Not part of SI.Management.sln: it is a deployment check, not
+       a product component, and it ships in no image but its own. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SI.Management.LiveProbe</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SI.Management.Core\SI.Management.Core.csproj" />
+  </ItemGroup>
+
+</Project>

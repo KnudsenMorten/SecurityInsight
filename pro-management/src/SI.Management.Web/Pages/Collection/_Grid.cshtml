@@ -1,0 +1,281 @@
+@* THE grid of every collection view: sort on any column (the header), a per-column filter row, free-text search, row
+   selection (multi-select) with "show only selected" and "export selected", server-side paging, export of the whole
+   view to Excel / CSV. Every bit of state is in the URL. Two forms, linked by the form attribute: the filter form
+   (search + column filters) and the selection form (the row checkboxes), so ticking rows never filters by accident. *@
+@model SI.Management.Web.Pages.Collection.CollectionPageModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+@{
+    var plan = Model.Plan!;
+    var g = Model.Grid!;
+    var st = g.State;
+    // #589: the chosen columns in the chosen order -- own and extra (the CI, identifiers, sources, the finding context)
+    var cols = Model.DisplayColumns.Count > 0 ? Model.DisplayColumns : CollectionPageModel.Visible(plan.Spec);
+    var keyCol = plan.Spec.KeyColumn;
+    var pages = g.Total == 0 ? 1 : (int)Math.Ceiling(g.Total / (double)st.Size);
+    var filterOf = st.Filters.ToDictionary(f => f.Key, StringComparer.OrdinalIgnoreCase);
+    IReadOnlyList<string> Opts(GridColumn c) =>
+        plan.Options is not null && plan.Options.TryGetValue(c.Key, out var o) ? o
+        : c.Type == GridType.Flag ? CollectionPageModel.Flags : c.Type == GridType.Tier ? CollectionPageModel.TierValues : Array.Empty<string>();
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")));
+    string AriaSort(GridColumn c) => st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    // an element id (and a CSS selector): a department-restricted grid is named "department@dept" -- "@" breaks a selector
+    var gid = "grid-" + System.Text.RegularExpressions.Regex.Replace(plan.Spec.Name, "[^A-Za-z0-9_-]", "-");
+    // #272: a grid that lists findings carries THE shared action bar (exemption, comment, task, status, department,
+    // vendor, export -- for the selected rows or, guarded by #264, every row matching the filter)
+    var bar = Model.ActionBar(gid + "-strip");
+    // #282: the selection form (the view's state + the action bar, or a CI grid's own "export selected") is the
+    // toolbar's left slot; the toolbar puts it above the table with the pager
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> selection =
+        @<form id="@gid-s" method="get" action="@Model.PagePath">
+            @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
+            @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
+            <input type="hidden" name="sort" value="@st.Sort" /><input type="hidden" name="dir" value="@(st.Desc ? "desc" : "asc")" />
+            @* the selection keeps the view's search and filters: "only these" and "export selected" are of the rows you see *@
+            @if (st.Search is not null) { <input type="hidden" name="q" value="@st.Search" /> }
+            @foreach (var f in st.Filters)
+            {
+                if (f.Kind is GridFilter.Values or GridFilter.Tokens) { foreach (var v in f.Values) { <input type="hidden" name="f.@f.Key" value="@v" /> } }
+                else { <input type="hidden" name="f.@f.Key" value="@CollectionPageModel.FilterText(f)" /> }
+            }
+            @if (bar is not null)
+            {
+                <partial name="~/Pages/Shared/_FindingActions.cshtml" model="bar" />
+            }
+            else
+            {
+                @* the selected-rows exports sit with the other export choices (owner 2026-10-19) *@
+                <div class="quickstrip" id="@gid-strip" data-action-strip>
+                    <strong><span data-selected-count>0</span> selected</strong>
+                    <div class="actions">
+                        <button type="submit" data-show-selected>Show only these</button>
+                    </div>
+                </div>
+            }
+        </form>;
+    var noun = Model.RowNoun;
+    var toolbar = new GridToolbar
+    {
+        Id = gid + "-tools", Total = g.Total, Skip = st.Skip, Count = g.Rows.Count, Page = st.Page, Pages = pages, Noun = noun,
+        PageLink = n => Model.Link(("p", GridToolbar.PageParam(n))),
+        Size = st.Size, SizeLink = n => Model.Link(("size", GridToolbar.SizeParam(n))),
+        FirstLast = true, AlwaysShowPage = true, Actions = selection,
+    };
+    // the filters of the header row a column offers (the "Filters" button shows or hides that row)
+    var activeFilters = st.Filters.Count;
+    var opening = Model.OpeningCounts;
+    // the export choices with this page and the selected rows (the selection form, the strip that counts the ticks)
+    var exports = Model.Exports.ForGrid(gid + "-s", "#" + gid + "-strip");
+}
+<section class="card" aria-labelledby="@gid-h">
+    <h2 id="@gid-h">@Fmt.Int(g.Total) @(g.Total == 1 ? GridToolbar.Singular(noun) : GridToolbar.Plural(noun))</h2>
+
+    @if (opening is not null)
+    {
+        @* owner 2026-10-19 (agreed): raw rows without a filter -- the counts that narrow it, the grid still below *@
+        <div class="opening-counts" data-opening-counts>
+            <p class="opening-line"><strong>@Fmt.Int(g.Total) @GridToolbar.Plural(noun)</strong> — pick a domain, severity or asset to narrow</p>
+            @foreach (var grp in opening)
+            {
+                <div class="opening-group" role="group" aria-label="@grp.Label">
+                    <span class="opening-label">@grp.Label</span>
+                    @foreach (var v in grp.Values) { <a class="opening-value" href="@v.Href" data-opening-value="@v.Value">@v.Label <span class="value-count">@Fmt.Int(v.Findings)</span></a> }
+                </div>
+            }
+        </div>
+    }
+
+    @* THE view toolbar, one row (owner 2026-10-19): Search · Filters · Columns · Layout · Export *@
+    <div class="data-toolbar" role="group" aria-label="Search, filters, columns, layout and export">
+        <form id="@gid-f" method="get" action="@Model.PagePath" class="gridbar dt-search" role="search" aria-label="Search and filter">
+            @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
+            @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
+            <input type="hidden" name="sort" value="@st.Sort" /><input type="hidden" name="dir" value="@(st.Desc ? "desc" : "asc")" />
+            @foreach (var s in st.Selected) { <input type="hidden" name="sel" value="@s" /> }
+            <label for="@gid-q" class="sr-only">Search</label>
+            <input id="@gid-q" type="search" name="q" value="@st.Search" placeholder="Search every text column" maxlength="200" data-search data-grid-search />
+            @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+            <input type="hidden" name="size" value="@st.Size" />
+            <button type="submit">Apply</button>
+            <a class="button secondary" href="@(Model.ViewLink(Model.PagePath, Model.ExtraState().Select(e => (e.Key, (string?)e.Value)).ToArray()))">Clear</a>
+        </form>
+        <button type="button" class="tool-button" data-filters-toggle aria-controls="@gid-colfilters" aria-expanded="true" title="Show or hide the filter of each column, under the column headers">Filters@(activeFilters > 0 ? " · " + Fmt.Int(activeFilters) + " active" : "")</button>
+        @{
+            // owner 2026-10-19 ("i need more filters of most common fields"): "+ Add filter" -- every column of this grid's
+            // statement that filters in SQL (a typed column of the view) and is not shown now, with the control of its type:
+            // a list = the multi-select with counts, a number = from..to, text = contains, yes / no = both / yes / no
+            var shownKeys = cols.Select(c => c.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // a date column filters only here (its header keeps the filter), shown or not
+            var addable = plan.Spec.Columns.Where(c => c.Filter != GridFilter.None && (!shownKeys.Contains(c.Key) || c.Filter == GridFilter.Dates)).ToList();
+        }
+        @if (addable.Count > 0)
+        {
+            <details class="tool-menu add-filter" data-add-filter>
+                <summary class="tool-button">+ Add filter</summary>
+                <div class="tool-panel filters-panel">
+                    <p class="hint add-filter-hint">The columns this view filters on without showing them. A filter added here is in the address, in a saved layout and in every export, like any other.</p>
+                    @foreach (var c in addable)
+                    {
+                        filterOf.TryGetValue(c.Key, out var afv);
+                        <div data-add-filter-column="@c.Key">
+                            @switch (c.Filter)
+                            {
+                                case GridFilter.Values or GridFilter.Tokens:
+                                    var aopts = Opts(c);
+                                    if (aopts.Count == 0 && c.Filter == GridFilter.Tokens)
+                                    {
+                                        <label for="@gid-af-@c.Key">@c.Label</label>
+                                        <input form="@gid-f" id="@gid-af-@c.Key" type="text" name="f.@c.Key" value="@string.Join("|", afv?.Values ?? Array.Empty<string>())" placeholder="a|b" maxlength="400" />
+                                    }
+                                    else if (aopts.Count == 0)
+                                    {
+                                        // the values are not known when the page is drawn: the filter lists the view's own values,
+                                        // with their counts, when it is first opened
+                                        var fmf = new SI.Management.Web.Pages.MultiFilter
+                                        {
+                                            Id = gid + "-af-" + c.Key, Name = "f." + c.Key, Label = c.Label, Form = gid + "-f", Note = c.FilterNote, Fill = true,
+                                            Chosen = afv?.Values ?? Array.Empty<string>(), CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key,
+                                        };
+                                        <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="fmf" />
+                                    }
+                                    else
+                                    {
+                                        var amf = new SI.Management.Web.Pages.MultiFilter
+                                        {
+                                            Id = gid + "-af-" + c.Key, Name = "f." + c.Key, Label = c.Label, Form = gid + "-f", Note = c.FilterNote,
+                                            Choices = SI.Management.Web.Pages.MultiFilter.Plain(aopts, o => Model.ValueLabel(c, o)), Chosen = afv?.Values ?? Array.Empty<string>(),
+                                            CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key,
+                                        };
+                                        <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="amf" />
+                                    }
+                                    break;
+                                case GridFilter.Range:
+                                    <label for="@gid-af-@c.Key">@c.Label (from..to)</label>
+                                    <input form="@gid-f" id="@gid-af-@c.Key" type="text" name="f.@c.Key" value="@(afv is null ? null : CollectionPageModel.FilterText(afv))" placeholder="e.g. 7..10, 7.. or ..10" maxlength="40" inputmode="decimal" />
+                                    break;
+                                case GridFilter.Contains:
+                                    <label for="@gid-af-@c.Key">@c.Label (contains)</label>
+                                    <input form="@gid-f" id="@gid-af-@c.Key" type="search" name="f.@c.Key" value="@afv?.Text" maxlength="200" />
+                                    break;
+                                case GridFilter.Dates:
+                                    var dfm = new SI.Management.Web.Pages.DateFilter(gid + "-af-" + c.Key, "f." + c.Key, c.Label, gid + "-f", afv?.Text, v => Model.Link(("f." + c.Key, v)));
+                                    <partial name="~/Pages/Shared/_DateFilter.cshtml" model="dfm" />
+                                    break;
+                            }
+                        </div>
+                    }
+                    <div class="actions"><button form="@gid-f" type="submit">Apply</button></div>
+                </div>
+            </details>
+        }
+        @if (Model.Chooser is { } chooser) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="chooser" /> }
+        <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
+    </div>
+
+    @* the active filters, the search and the selection are chips of the view's "What you're looking at" line (_Header) *@
+
+    @* #282: the actions and the pager sit ABOVE the table, in the one shared toolbar (sticky). The selection form lives
+       in the toolbar; the row checkboxes reach it through their form attribute. *@
+    <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+
+    <div class="table-wrap" data-selectable data-strip="#@gid-strip">
+        <table class="findings grid" data-grid="@plan.Spec.Name" aria-describedby="@gid-h">
+            <thead>
+                <tr>
+                    <th class="sel"><input type="checkbox" data-select-all aria-label="Select every row on this page" /></th>
+                    @foreach (var c in cols)
+                    {
+                        <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key">
+                            @if (c.Sortable) { <a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @c.Label }
+                        </th>
+                    }
+                </tr>
+                <tr class="colfilters" id="@gid-colfilters">
+                    <td class="sel"></td>
+                    @foreach (var c in cols)
+                    {
+                        filterOf.TryGetValue(c.Key, out var fv);
+                        <td data-filter="@c.Key" class="@(c.Type == GridType.Number ? "num" : null)">
+                            @switch (c.Filter)
+                            {
+                                case GridFilter.Contains:
+                                    <input form="@gid-f" type="search" name="f.@c.Key" value="@fv?.Text" aria-label="Filter @c.Label (contains)" placeholder="contains" maxlength="200" />
+                                    break;
+                                case GridFilter.Range:
+                                    @* #321: a number column sorts only -- no min..max box. A number filter from a URL (a
+                                       drilldown, a saved link) still applies, shows as a chip in words, and is kept when
+                                       the search / other filters are applied. *@
+                                    if (fv is not null) { <input form="@gid-f" type="hidden" name="f.@c.Key" value="@CollectionPageModel.FilterText(fv)" /> }
+                                    break;
+                                case GridFilter.Dates:
+                                    @* a date column filters from "+ Add filter" (last 7 / 30 / 90 days, or from..to); here its filter is kept *@
+                                    if (fv is not null) { <input form="@gid-f" type="hidden" name="f.@c.Key" value="@CollectionPageModel.FilterText(fv)" /> }
+                                    break;
+                                case GridFilter.Values:
+                                case GridFilter.Tokens:
+                                    var opts = Opts(c);
+                                    var chosen = fv?.Values ?? (IReadOnlyList<string>)Array.Empty<string>();
+                                    if (opts.Count == 0)
+                                    {
+                                        <input form="@gid-f" type="text" name="f.@c.Key" value="@string.Join("|", chosen)" aria-label="Filter @c.Label (values separated by |)" placeholder="a|b" maxlength="400" />
+                                    }
+                                    else
+                                    {
+                                        // THE shared filter (MultiFilter): ticks OR-ed, counts read when it is first opened
+                                        var mf = new SI.Management.Web.Pages.MultiFilter
+                                        {
+                                            Id = gid + "-f-" + c.Key, Name = "f." + c.Key, Label = c.Label, Form = gid + "-f", Compact = true,
+                                            Choices = SI.Management.Web.Pages.MultiFilter.Plain(opts, o => Model.ValueLabel(c, o)), Chosen = chosen,
+                                            CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key, Note = c.FilterNote,
+                                        };
+                                        <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" />
+                                    }
+                                    break;
+                            }
+                        </td>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @if (g.Rows.Count == 0)
+                {
+                    <tr><td colspan="@(cols.Count + 1)" class="hint">No row matches.</td></tr>
+                }
+                @foreach (var row in g.Rows)
+                {
+                    var key = row.TryGetValue(keyCol, out var kv) ? Convert.ToString(kv, System.Globalization.CultureInfo.InvariantCulture) : null;
+                    // the row's start tag is written out: the row-click hook (data-row-drawer) is on a row ONLY when the page
+                    // gives it an address -- an empty one would mark every row of every grid as clickable
+                    var drawer = Model.RowDrawer(row);
+                    <text>@Html.Raw("<tr data-key=\"" + HtmlEncoder.Encode(key ?? "") + "\"" + (string.IsNullOrEmpty(drawer) ? "" : " data-row-drawer=\"" + HtmlEncoder.Encode(drawer) + "\"") + ">")</text>
+                        <td class="sel"><input form="@gid-s" type="checkbox" name="sel" value="@key" data-select-row data-expand="@Model.RowExpand(row)" checked="@(st.Selected.Contains(key ?? ""))" aria-label="Select this row" /></td>
+                        foreach (var c in cols)
+                        {
+                            var text = Model.CellText(c, row);
+                            if (SI.Management.Web.Columns.GridLayout.IsExtra(c))
+                            {
+                                @* #589 an extra column: the CI, its identifiers, a source property, the finding context -- links kept *@
+                                <td class="wrap" data-col="@c.Key" data-extra title="@(text.Length > SI.Management.Web.Columns.DataCellHtml.MaxShown ? text : null)">@SI.Management.Web.Columns.DataCellHtml.Render(text)</td>
+                                continue;
+                            }
+                            var title = Model.CellTitle(c, row);
+                            var href = text.Length == 0 ? null : Model.CellLink(c.Key, row);
+                            <td class="@(c.Type == GridType.Number ? "num" : "wrap")" data-col="@c.Key" title="@title">
+                                @if (c.Type == GridType.Tier && text.Length > 0 && text != ChangeWording.NoValue) { <span class="tierdot t@(CollectionPageModel.Cell0(row, c.Key))"></span> }
+                                @if (c.Type == GridType.Date && CollectionPageModel.Moment(c, row) is { } when)
+                                {
+                                    @* a time: shown in the viewer's own zone (#313) *@
+                                    if (href is not null) { <a href="@href">@Fmt.Time(when)</a> } else { @Fmt.Time(when) }
+                                }
+                                else if (text.Length > 0 && Model.CellTone(c.Key, row) is { } tone) { <span class="badge @tone" data-tone="@tone">@text</span> }
+                                else if (href is not null) { <a href="@href">@text</a> } else { @(text.Length > 160 ? text[..160] + "…" : text) }
+                            </td>
+                        }
+                    <text>@Html.Raw("</tr>")</text>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" />
+</section>

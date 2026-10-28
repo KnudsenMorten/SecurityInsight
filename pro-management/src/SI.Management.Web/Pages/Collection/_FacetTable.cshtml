@@ -1,0 +1,42 @@
+@* One pre-computed aggregate of the collection (sidata.FindingFacet): a value per row, its findings, CIs and score,
+   a bar relative to the largest. A value links to the grid filtered to it. *@
+@model SI.Management.Web.Pages.Collection.FacetTable
+@{
+    var max = Model.Rows.Count == 0 ? 1 : Math.Max(1, Model.Rows.Max(r => Model.ByScore ? r.Row.ScoreTotal : r.Row.Findings));
+}
+<section class="card" aria-labelledby="@Model.Id-h">
+    <h2 id="@Model.Id-h">@Model.Title</h2>
+    @if (Model.Hint is not null) { <p class="hint">@Model.Hint</p> }
+    @if (Model.Rows.Count == 0)
+    {
+        <p class="hint">@(Model.Empty ?? "Nothing to show for this collection.")</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="facet-table" data-sortable data-facet="@Model.Id">
+                <thead><tr><th scope="col">@Model.ValueHeader</th><th scope="col" class="num">Findings</th><th scope="col" class="num">Assets (CIs)</th><th scope="col" class="num">Risk total</th>@if (Model.Weighted) { <th scope="col" class="num">Weighted total</th> }<th scope="col" data-sort="off"><span class="sr-only">Share</span></th></tr></thead>
+                <tbody>
+                    @foreach (var (r, href) in Model.Rows)
+                    {
+                        var share = (Model.ByScore ? r.ScoreTotal : r.Findings) / max;
+                        <tr>
+                            @{
+                                // a score bucket is stored invariant ("2254", "12.5"): shown in the viewer's format, sorted on the raw number
+                                double? nv = Model.NumericValue && double.TryParse(r.Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+                                var shown = nv is { } x ? SI.Management.Core.ProData.ScoreFormat.Number(x) : r.Value;
+                            }
+                            <th scope="row" data-value="@(nv is { } y ? Fmt.Raw(y) : null)">@if (href is not null) { <a href="@href">@shown</a> } else { @shown }</th>
+                            <td class="num" data-value="@Fmt.Raw(r.Findings)">@Fmt.Int(r.Findings)</td>
+                            <td class="num" data-value="@Fmt.Raw(r.Assets)">@Fmt.Int(r.Assets)</td>
+                            <td class="num" data-value="@Fmt.Raw(r.ScoreTotal)">@Fmt.Score(r.ScoreTotal)</td>
+                            @if (Model.Weighted) { <td class="num" data-value="@Fmt.Raw(r.WeightedTotal)">@(r.WeightedTotal is { } w ? Fmt.Score(w) : "")</td> }
+                            @* a meter, not a styled span: the content security policy allows no inline style *@
+                            <td class="bar"><meter class="barfill" min="0" max="100" value="@((share * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))" aria-hidden="true"></meter></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>

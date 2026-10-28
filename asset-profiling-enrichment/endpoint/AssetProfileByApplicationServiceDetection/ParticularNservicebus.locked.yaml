@@ -1,0 +1,21 @@
+id:        ParticularNservicebus
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'NServiceBus'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'NServiceBus'
+
+detections:
+  - id: ParticularNservicebus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nservicebus*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

@@ -1,0 +1,421 @@
+{
+  "$comment": "Field mapping for provider 'intune': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/intune.custom.json, per (field, recordTypes).",
+  "kind": "field-mapping",
+  "provider": "intune",
+  "version": "1.0.0",
+  "description": "Intune managed devices (Microsoft Graph deviceManagement/managedDevices).",
+  "objects": [
+    {
+      "recordType": "device",
+      "class": "device",
+      "parts": {
+        "device": "GET /deviceManagement/managedDevices on the beta version of Microsoft Graph (it adds autopilotEnrolled); the stable version when beta refuses, fails or answers rows without an id -- the same properties without autopilotEnrolled",
+        "compliance": "the compliance policies the device does not meet (id, name, state) -- GET /deviceManagement/deviceCompliancePolicies and each policy's deviceStatuses (DeviceManagementConfiguration.Read.All)",
+        "updateRings": "the Windows update rings assigned to the device (id, name, state) -- GET /deviceManagement/deviceConfigurations (update rings) and each ring's deviceStatuses (DeviceManagementConfiguration.Read.All)"
+      },
+      "key": "device.id",
+      "timestamp": "device.lastSyncDateTime"
+    }
+  ],
+  "mappings": [
+    {
+      "field": "intune_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.id"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "entra_device_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.azureADDeviceId",
+        "device.azureActiveDirectoryDeviceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.deviceName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_hostname",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.deviceName"
+      ],
+      "normalize": [
+        "lower",
+        "split:.",
+        "first"
+      ]
+    },
+    {
+      "field": "si_serial_number",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.serialNumber"
+      ],
+      "normalize": [
+        "upper"
+      ]
+    },
+    {
+      "field": "si_mac_addresses",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.wiFiMacAddress",
+        "device.ethernetMacAddress"
+      ],
+      "normalize": [
+        "mac"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_os_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.operatingSystem"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_os_platform",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.operatingSystem"
+      ],
+      "normalize": [
+        "enum:os_family"
+      ]
+    },
+    {
+      "field": "si_os_version",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.osVersion"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_is_compliant",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.complianceState"
+      ],
+      "normalize": [
+        "equals:compliant"
+      ]
+    },
+    {
+      "field": "si_managed_by",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.managementAgent"
+      ],
+      "normalize": [
+        "enum:managed_by"
+      ]
+    },
+    {
+      "field": "si_join_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.joinType"
+      ],
+      "normalize": [
+        "enum:join_type"
+      ]
+    },
+    {
+      "field": "si_owner",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.userPrincipalName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_first_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.enrolledDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.lastSyncDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_is_encrypted",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.isEncrypted"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_autopilot_enrolled",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.autopilotEnrolled"
+      ],
+      "normalize": [
+        "bool"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_primary_user_id",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.userId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_primary_user_upn",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.userPrincipalName"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_primary_user_name",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.userDisplayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_primary_user_mail",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.emailAddress"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_device_owner_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.managedDeviceOwnerType",
+        "device.ownerType"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_intune_last_sync",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.lastSyncDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_compliance_grace_expiry",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.complianceGracePeriodExpirationDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_is_jailbroken",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.jailBroken"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_device_manufacturer",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.manufacturer"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_device_model",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.model"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_enrollment_type",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.deviceEnrollmentType"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_partner_threat_state",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.partnerReportedThreatState"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_intune_category",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.deviceCategoryDisplayName"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_intune_status",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "device.managementState"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_noncompliant_policies",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "compliance.policies"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_update_rings",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "updateRings.rings"
+      ],
+      "normalize": []
+    }
+  ]
+}

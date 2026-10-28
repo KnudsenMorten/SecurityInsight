@@ -1,0 +1,13 @@
+/* Risks > Summary (#583): the tier sections, their headline and the risk rating badges (status colours, always with the word). */
+.badge.rating-critical { background: var(--rs-critical-bg); color: var(--rs-critical); border-color: transparent; font-weight: 700; }
+.badge.rating-high { background: var(--rs-high-bg); color: var(--rs-high); border-color: transparent; font-weight: 600; }
+.badge.rating-moderate { background: var(--rs-medium-bg); color: var(--rs-medium); border-color: transparent; }
+.badge.rating-low { background: var(--rs-low-bg); color: var(--rs-low); border-color: transparent; }
+.summary-head { font-size: 1.02rem; margin: .2rem 0 .6rem; }
+.summary-jump { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin: .5rem 0 1rem; }
+.summary-table td[data-assets] a { white-space: nowrap; }
+.summary-more { font-weight: 600; }
+.summary-facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: .6rem 0 1rem; }
+.summary-facts dt { color: var(--text-secondary); }
+.summary-facts dd { margin: 0; }
+.summary-pager a { margin-left: .6rem; }

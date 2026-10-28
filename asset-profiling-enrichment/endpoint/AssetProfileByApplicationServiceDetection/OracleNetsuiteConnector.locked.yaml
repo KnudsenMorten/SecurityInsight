@@ -1,0 +1,21 @@
+id:        OracleNetsuiteConnector
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'NetSuite Connector'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'NetSuite Connector'
+
+detections:
+  - id: OracleNetsuiteConnector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'netsuite_connector*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

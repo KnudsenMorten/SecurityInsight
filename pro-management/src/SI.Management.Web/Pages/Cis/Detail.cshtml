@@ -1,0 +1,416 @@
+@page
+@model SI.Management.Web.Pages.Cis.DetailModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Cis
+@{
+    var d = Model.Ci;
+    var ci = d?.Ci;
+    // #856 a CI without a name: its best identifier, marked as a fallback (never written back as its name)
+    var noName = string.IsNullOrWhiteSpace(ci?.Name) ? d?.Doc.NameFallback : null;
+    ViewData["Title"] = !string.IsNullOrWhiteSpace(ci?.Name) ? ci!.Name : noName?.Value ?? "CI";
+}
+<p class="split"><a href="/Cis">&larr; CIs</a></p>
+@if (noName is not null)
+{
+    <h1 data-name-fallback="@noName.Kind"><span class="@CiDisplayName.CssClass" title="@noName.Title">@noName.Value</span> <span class="hint">@noName.Hint</span></h1>
+}
+else
+{
+    <h1>@(string.IsNullOrWhiteSpace(ci?.Name) ? Model.Id : ci!.Name)</h1>
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.NotLoaded) { <div class="notice" role="status" data-not-loaded>@IndexModel.NotLoadedText</div> }
+@if (d is not null && ci is not null)
+{
+    var doc = d.Doc;
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-summary" data-ci="@ci.CiId">
+            <h2 id="h-summary">Summary</h2>
+            <dl class="kv">
+                <dt>Class</dt><dd>@ci.Class</dd>
+                <dt>Type</dt><dd>@ci.AssetType</dd>
+                <dt>Tier</dt><dd><span class="tierdot t@(DetailModel.TierDot(ci.Tier))"></span>@DetailModel.TierText(ci.Tier)</dd>
+                <dt>Risk score</dt><dd>@Fmt.Score(ci.RiskScore)</dd>
+                <dt>Weighted risk score</dt><dd>@Fmt.Score(ci.WeightedRiskScore)</dd>
+                <dt>Open findings</dt><dd>@Fmt.Int(ci.OpenFindings)</dd>
+                <dt>Internet exposed</dt><dd>@(ci.InternetExposed is null ? "" : ci.InternetExposed.Value ? "yes" : "no")</dd>
+                @* #406 the lifecycle with its evidence: since when, how many days not seen, and why (V3-DATA-MODEL 2.5.5) *@
+                <dt>Lifecycle</dt><dd data-ci-lifecycle-state="@ci.Lifecycle">@CiLifecycleDefinitions.Label(ci.Lifecycle)@if (doc.LifecycleSince is { } lsince) { <text> since </text><span data-ci-lifecycle-since>@Fmt.Time((DateTime?)lsince)</span> }@if (ci.Lifecycle is "not_seen" or "retired" && doc.NotSeenDays is { } nsd) { <text> -- not seen for </text><span data-ci-not-seen-days>@Fmt.Int(nsd)</span><text> day(s)</text> }</dd>
+                @if (!string.IsNullOrEmpty(doc.LifecycleReason)) { <dt>Why</dt><dd data-ci-lifecycle-reason>@doc.LifecycleReason</dd> }
+                <dt>Last seen</dt><dd>@Fmt.Time(ci.LastSeen)</dd>
+                <dt>Collected</dt><dd>@Fmt.Time(ci.CollectionTime)</dd>
+                <dt>Linked objects</dt><dd>@Fmt.Int(ci.LinkCount)</dd>
+                <dt>CI id</dt><dd class="mono">@ci.CiId</dd>
+            </dl>
+        </section>
+
+        <section class="card" aria-labelledby="h-crit" data-criticality>
+            <h2 id="h-crit">Criticality</h2>
+            @{ var crit = doc.Criticality; }
+            <dl class="kv">
+                <dt>CMDB</dt><dd>@(crit?.Cmdb ?? "")</dd>
+                <dt>CMDB id</dt><dd class="mono">@ci.CmdbId</dd>
+                <dt>CMDB name</dt><dd>@ci.CmdbName</dd>
+                <dt>Business criticality</dt><dd data-crit-value>@(crit?.Value ?? ci.CmdbCriticality ?? "not set")</dd>
+                <dt>Read from</dt><dd class="mono">@(crit?.Field ?? "")</dd>
+                <dt>Mapping used</dt><dd data-crit-mapping>@DetailModel.MappingText(crit?.Mapping)</dd>
+                @if (crit?.DataSensitivity is { } sens)
+                {
+                    <dt>Data sensitivity</dt><dd>@sens @if (crit.DataSensitivityFactor is { } sf) { <text> (factor @Fmt.Num(sf, 2))</text> }</dd>
+                }
+                <dt>Criticality factor</dt><dd data-crit-factor>@((crit?.Factor ?? ci.CriticalityFactor) is { } factor ? Fmt.Num(factor, 2) : "")</dd>
+            </dl>
+            <p class="hint">The weighted risk score is the risk score times this factor.</p>
+        </section>
+    </div>
+
+    var gr = Model.Graph;
+    @if (Model.GraphError is not null) { <div class="notice warn" role="status">@Model.GraphError</div> }
+    <section class="card" aria-labelledby="h-services" data-ci-services>
+        <h2 id="h-services">Business services (@Fmt.Int(gr.Services.Count))</h2>
+        @if (!gr.Schema.Services) { <p class="hint">Not available yet: the CI build of this release has not run.</p> }
+        else if (gr.Services.Count == 0) { <p class="hint" data-unowned>No business service owns this CI: it is listed among the unowned CIs. Link it to a service on the CMDB page, or add a service model rule that matches it.</p> }
+        else
+        {
+            <p class="hint">The CI inherits the owner, criticality, data sensitivity and environment of the services that own it. In several services it takes the strictest; the service marked decides its criticality.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Service</th><th>Placed by</th><th>Owner</th><th>Criticality</th><th>Data sensitivity</th><th>Environment</th><th>Department</th><th>Since</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in gr.Services)
+                        {
+                            <tr data-service="@s.ServiceKey"><td class="wrap">@(s.ServiceName ?? s.ServiceKey) <span class="muted mono">@s.ServiceKey</span>@if (s.Strictest) { <text> </text><span class="badge info">decides the criticality</span> }</td>
+                                <td class="wrap">@DetailModel.ServiceSourceText(s.Source)@if (!string.IsNullOrEmpty(s.MatchedBy) && s.Source == "service_model") { <br /><span class="muted">@s.MatchedBy</span> }</td>
+                                <td>@s.Owner</td><td>@s.Criticality</td><td>@s.DataSensitivity</td><td>@s.Environment</td><td>@s.Department</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(s.FirstSeen)">@Fmt.Time(s.FirstSeen)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-tier" data-tier-trace>
+        <h2 id="h-tier">Tier and how it was decided</h2>
+        @if (!string.IsNullOrWhiteSpace(doc.Explanation))
+        {
+            <p class="lede" data-tier-explanation>@doc.Explanation</p>
+            <p class="hint">Decided by @CiColumns.TierSetByText(ci.TierSetBy). An SI rule decides when one matches (the lowest tier wins); your tag counts only when no SI rule decides; the default applies only when nothing claims; a manual override wins over everything.</p>
+        }
+        else
+        {
+            <p>@DetailModel.TierText(ci.Tier), set by @DetailModel.SetByText(ci.TierSetBy).@if (!string.IsNullOrWhiteSpace(ci.TierReason)) { <text> Reason: @ci.TierReason.</text> }</p>
+        }
+        @{ var tierClaims = doc.Claims.Where(c => c.Tier is not null).OrderByDescending(c => c.Winner).ThenByDescending(c => c.Admissible).ThenBy(c => c.Tier ?? 99).ToList(); }
+        @if (tierClaims.Count > 0 && tierClaims.Any(c => c.Kind is not null))
+        {
+            <div class="table-wrap">
+                <table data-sortable data-tier-claims-summary>
+                    <caption class="hint">The claims on the tier</caption>
+                    <thead><tr><th>Claim</th><th>Who</th><th>Tier</th><th>Matched</th><th>Outcome</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in tierClaims)
+                        {
+                            <tr class="@(c.Winner ? "winner" : null)" data-claim-summary="@c.Rule">
+                                <td class="wrap">@(c.Label ?? c.Name ?? c.Rule)</td>
+                                <td>@DetailModel.ClaimKindText(c.Kind)</td>
+                                <td data-value="@(c.Tier?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")">@DetailModel.TierText(c.Tier)</td>
+                                <td class="wrap">@string.Join("; ", c.Matched)</td>
+                                <td>@if (c.Winner) { <span class="badge good">@DetailModel.Decided(c)</span> } else if (c.Admissible) { <span class="badge info">@DetailModel.Decided(c)</span> } else { <span class="badge warn">@DetailModel.Decided(c)</span> }</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (doc.Claims.Count == 0)
+        {
+            <p class="hint">No tier rule matched this CI, so no claim is recorded.</p>
+        }
+        else
+        {
+            <p class="hint">Every rule that matched this CI. Only an allowed claim can decide; the lowest tier among the allowed claims wins. A claim that is not allowed (a rule still in testing, a source that is not trusted, or evidence that is too old) is recorded and shown, never used.</p>
+            <div class="table-wrap">
+                <table data-sortable data-claims>
+                    <thead><tr><th>Rule</th><th>Stage</th><th>Mechanism</th><th>Claimed tier</th><th>Outcome</th><th>Why not used</th><th>Evidence</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in doc.Claims.OrderByDescending(c => c.Winner).ThenByDescending(c => c.Admissible).ThenBy(c => c.Tier ?? 99))
+                        {
+                            <tr class="@(c.Winner ? "winner" : null)" data-claim="@c.Rule" data-winner="@(c.Winner ? "1" : "0")">
+                                <td class="wrap"><span class="mono">@c.Rule</span>@if (!string.IsNullOrEmpty(c.Label ?? c.Name)) { <br /><span class="muted">@(c.Label ?? c.Name)</span> }</td>
+                                <td>@c.Stage</td>
+                                <td>@c.Mechanism</td>
+                                <td data-value="@(c.Tier?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")">@(c.Tier is null ? "–" : "Tier " + c.Tier)</td>
+                                <td>@if (c.Winner) { <span class="badge good">@DetailModel.Decided(c)</span> } else if (c.Admissible) { <span class="badge info">@DetailModel.Decided(c)</span> } else { <span class="badge warn">@DetailModel.Decided(c)</span> }</td>
+                                <td class="wrap">@c.Reason</td>
+                                <td class="wrap mono">@string.Join(", ", c.Evidence)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    @* #462 the manual overrides of this CI: who set them, why, until when; an expired one is marked and no longer wins *@
+    <section class="card" aria-labelledby="h-overrides" data-ci-overrides>
+        <h2 id="h-overrides">Manual overrides</h2>
+        @if (Model.Overrides is null) { <p class="hint">The manual overrides could not be read (or this database has none yet).</p> }
+        else if (Model.Overrides.Count == 0) { <p class="hint">No manual override: the rules decide every field of this CI.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Field</th><th>Value</th><th>Set by</th><th>Why</th><th>Until</th><th>State</th></tr></thead>
+                    <tbody>
+                        @foreach (var o in Model.Overrides)
+                        {
+                            var st = o.StateText(Model.NowUtc);
+                            <tr data-ci-override="@o.Id" data-state="@st">
+                                <td>@OverridesModel.FieldText(o.Field)</td>
+                                <td>@o.Value</td>
+                                <td>@o.SetBy<br /><span class="muted">@Fmt.Time(o.SetAt)</span></td>
+                                <td class="wrap">@o.Reason</td>
+                                <td>@Fmt.Time(o.ExpiresAt, "date", empty: "no end")</td>
+                                <td><span class="badge @OverridesModel.Badge(st)">@st</span>@if (st == "expired") { <div class="hint">no longer wins: the rules decide again</div> }</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <p><a href="/Cis/Overrides?ci=@Uri.EscapeDataString(ci.CiId)" data-manage-overrides>@(User.IsAdmin() ? "Set or change an override" : "See every override of this CI")</a></p>
+    </section>
+
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-factors" data-factors>
+            <h2 id="h-factors">Risk factors</h2>
+            @if (doc.Factors.Count == 0) { <p class="hint">No risk factor applies to this CI.</p> }
+            else
+            {
+                <p class="hint">Each enabled factor adds its impact (1 very low .. 5 very high) to its side of the score: an asset factor to the asset side, a vulnerability factor to the vulnerability side. A factor recorded before the current model as testing is shown with impact 0: it does not count.</p>
+                <div class="table-wrap">
+                    <table data-sortable>
+                        <thead><tr><th>Factor</th><th>Side</th><th>Impact</th><th>State</th></tr></thead>
+                        <tbody>
+                            @foreach (var f in doc.Factors)
+                            {
+                                <tr data-factor="@f.Id"><td class="wrap">@(f.ShortName ?? f.Name ?? f.Id)<br /><span class="muted">@(f.Name ?? "")</span> <span class="muted mono">@f.Id</span></td><td>@(f.Side ?? f.Axis)</td><td class="num" data-value="@Fmt.Raw(f.Impact)">@Fmt.Num(f.Impact, 1)</td><td>@(f.State ?? f.Stage ?? "enabled")@if (!f.Counts) { <text> </text><span class="badge warn">does not count</span> }</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+        <section class="card" aria-labelledby="h-gaps" data-gaps>
+            <h2 id="h-gaps">Coverage gaps</h2>
+            @if (doc.Gaps.Count == 0) { <p class="hint">No coverage gap: every check on this CI passed.</p> }
+            else
+            {
+                <ul>@foreach (var gp in doc.Gaps) { <li data-gap="@gp.Id">@(gp.Name ?? gp.Id) <span class="muted mono">@gp.Id</span></li> }</ul>
+            }
+        </section>
+    </div>
+
+    <section class="card" aria-labelledby="h-links" data-links>
+        <h2 id="h-links">Linked objects</h2>
+        @if (d.Links.Count == 0) { <p class="hint">No linked object is recorded for this CI.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Provider</th><th>Type</th><th>Id</th><th>Primary</th><th>State</th><th>Last seen</th></tr></thead>
+                    <tbody>
+                        @foreach (var l in d.Links)
+                        {
+                            <tr><td>@l.Provider</td><td>@l.RecordType</td><td class="wrap mono">@l.NativeId</td><td>@(l.IsPrimary ? "yes" : "no")</td><td>@l.State</td><td data-value="@SI.Management.Web.Pages.LocalTime.Iso(l.LastSeen)">@Fmt.Time(l.LastSeen)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-relations" data-ci-relations>
+        <h2 id="h-relations">Relations (@Fmt.Int(gr.Relations.Count(r => r.State == "active")) active)</h2>
+        @if (!gr.Schema.Relations) { <p class="hint">Not available yet: the CI build of this release has not run.</p> }
+        else if (gr.Relations.Count == 0) { <p class="hint">No relation to another CI is recorded for this CI.</p> }
+        else
+        {
+            <p class="hint">How this CI is connected: who owns it and signs in to it, its public IP, subscription and resource group, its groups and roles. <em>To</em> rows start at this CI; <em>from</em> rows start at another CI and point at this one. A relation that ended is kept, marked ended.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Direction</th><th>Relation</th><th>Other end</th><th>Detail</th><th>Source</th><th>Confidence</th><th>State</th><th>First seen</th><th>Last seen</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in gr.Relations)
+                        {
+                            <tr data-relation="@r.Kind" data-direction="@r.Direction" data-state="@r.State">
+                                <td>@(r.Direction == "out" ? "to" : "from")</td>
+                                <td>@DetailModel.KindText(r.Kind)</td>
+                                <td class="wrap">@if (!string.IsNullOrEmpty(r.OtherCiId)) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(r.OtherCiId)">@(r.OtherName ?? r.OtherCiId)</a> } else { <span>@r.ToValue</span> <span class="muted">(@DetailModel.KindText(r.ToType ?? ""))</span> }</td>
+                                <td class="wrap">@r.Detail</td><td>@r.Source</td><td>@r.Confidence</td>
+                                <td>@if (r.State == "active") { <span class="badge good">active</span> } else { <span class="badge">ended</span> }</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(r.FirstSeen)">@Fmt.Time(r.FirstSeen)</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(r.LastSeen)">@Fmt.Time(r.LastSeen)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (gr.Relations.Count >= SI.Management.Core.ProData.CiGraphSql.MaxRelations) { <p class="hint">The first @Fmt.Int(SI.Management.Core.ProData.CiGraphSql.MaxRelations) relations.</p> }
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-sources" data-sources>
+        <h2 id="h-sources">Field sources</h2>
+        @if (doc.Sources.Count == 0) { <p class="hint">No field source is recorded for this CI.</p> }
+        else
+        {
+            <p class="hint">Which provider each value came from. A stale value had no fresh source: the newest value is kept and marked. <em>Other sources say</em>: fresh providers that hold a different value -- shown, never deciding.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Field</th><th>Provider</th><th>Record</th><th>Observed</th><th>Stale</th><th>Other sources say</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in doc.Sources)
+                        {
+                            var observed = DateTime.TryParse(s.ObservedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : (DateTime?)null;
+                            <tr data-source="@s.Field"><td class="mono">@s.Field</td><td>@s.Provider</td><td class="wrap mono">@s.Record</td><td data-value="@(s.ObservedAt ?? "")">@if (observed is not null) { @Fmt.Time(observed) } else { @s.ObservedAt }</td><td>@if (s.Stale) { <span class="badge warn">stale</span> } else { <text>no</text> }</td><td class="wrap" data-conflicts="@(s.Conflicts?.Count ?? 0)">@if (s.Conflicts is { Count: > 0 }) { @string.Join("; ", s.Conflicts) }</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-findings" data-ci-findings>
+        <h2 id="h-findings">Findings (@Fmt.Int(d.Findings.Count))</h2>
+        @if (d.Findings.Count == 0) { <p class="hint">No finding of the newest collection is on this CI.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Finding</th><th>Type</th><th>Severity</th><th>Risk rating</th><th>Risk score</th><th>Weighted</th><th>Domain</th><th>Detected by</th><th>Risk factors</th><th>Exempted</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in d.Findings)
+                        {
+                            <tr><td class="wrap">@(f.Title ?? f.FindingKey)<br /><span class="muted mono">@f.FindingKey</span></td><td>@f.FindingType</td><td>@f.Severity</td><td>@f.RiskRating</td>
+                                <td class="num" data-value="@Fmt.Raw(f.RiskScore)">@Fmt.Score(f.RiskScore)</td><td class="num" data-value="@Fmt.Raw(f.WeightedRiskScore)">@Fmt.Score(f.WeightedRiskScore)</td>
+                                <td>@f.SecurityDomain</td><td class="wrap">@f.DetectedBy</td><td class="wrap">@f.RiskFactors</td><td>@(string.IsNullOrEmpty(f.ExemptionId) ? "no" : "yes")</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-lifecycle" data-ci-lifecycle>
+        <h2 id="h-lifecycle">Findings and their lifecycle (@Fmt.Int(gr.Findings.Count(f => f.Status is "open" or "reopened")) open, @Fmt.Int(gr.Findings.Count(f => f.Overdue)) overdue)</h2>
+        @if (!gr.Schema.FindingModel) { <p class="hint">Not available yet: the data sync of this release has not run.</p> }
+        else if (gr.Findings.Count == 0) { <p class="hint">No finding has been recorded on this CI.</p> }
+        else
+        {
+            <p class="hint">Every finding on this CI from when it was first found: who owns it, when it is due, whether it is exempted, fixed or reopened, and its ticket. A finding of a disabled account or device that a setting leaves out is kept as it was -- marked excluded, never closed.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th>First found</th><th>Last seen</th><th>Due</th><th>Owner</th><th>Exemption</th><th>Fixed or closed</th><th>Ticket</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in gr.Findings)
+                        {
+                            <tr data-finding="@f.FindingKey" data-status="@f.Status" data-overdue="@(f.Overdue ? "1" : "0")">
+                                <td class="wrap">@(f.Title ?? f.FindingKey)<br /><span class="muted mono">@f.FindingKey</span></td>
+                                <td>@SI.Management.Core.ProData.SeverityOrder.Label(f.Severity)</td>
+                                <td>@DetailModel.StatusText(f.Status)@if (f.ReopenCount > 0) { <text> </text><span class="muted">(reopened @Fmt.Int(f.ReopenCount)x)</span> }@if (f.Excluded) { <text> </text><span class="badge">excluded</span> }</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(f.FirstDetected)">@Fmt.Time(f.FirstDetected)</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(f.LastSeen)">@Fmt.Time(f.LastSeen)</td>
+                                <td data-value="@SI.Management.Web.Pages.LocalTime.Iso(f.DueAt)">@Fmt.Time(f.DueAt, "date")@if (f.Overdue) { <text> </text><span class="badge warn">overdue</span> }</td>
+                                <td class="wrap">@(f.Owner)@if (!string.IsNullOrEmpty(f.OwnerSource)) { <br /><span class="muted">@DetailModel.OwnerSourceText(f.OwnerSource)</span> }</td>
+                                <td class="wrap">@(f.ExemptionReason)@if (f.ExemptedUntil is not null) { <br /><span class="muted">until @Fmt.Time(f.ExemptedUntil, "date")</span> }</td>
+                                <td class="wrap">@Fmt.Time(f.ClosedAt)@if (!string.IsNullOrEmpty(f.CloseReason)) { <br /><span class="muted">@(f.CloseReason?.Replace('_', ' '))</span> }</td>
+                                <td>@f.TicketState</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-trend" data-trend>
+        <h2 id="h-trend">Trend</h2>
+        @if (Model.TrendChart is null) { <p class="hint">No daily rows are recorded for this CI yet; they start with the next data sync.</p> }
+        else
+        {
+            <partial name="_Chart" model="Model.TrendChart" />
+            <details>
+                <summary>The days as a table</summary>
+                <div class="table-wrap">
+                    <table data-sortable>
+                        <thead><tr><th>Day</th><th>Tier</th><th>Risk score</th><th>Weighted risk score</th><th>Open findings</th></tr></thead>
+                        <tbody>
+                            @foreach (var t in d.Trend)
+                            {
+                                <tr><td>@Fmt.Day(t.Day)</td><td>@DetailModel.TierText(t.Tier)</td><td class="num" data-value="@Fmt.Raw(t.RiskScore)">@Fmt.Score(t.RiskScore)</td><td class="num" data-value="@Fmt.Raw(t.WeightedRiskScore)">@Fmt.Score(t.WeightedRiskScore)</td><td class="num" data-value="@(t.OpenFindings is { } n ? Fmt.Raw(n) : "")">@Fmt.Int(t.OpenFindings)</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-history" data-ci-history>
+        <h2 id="h-history">What changed (@Fmt.Int(gr.Changes.Count))</h2>
+        @if (!gr.Schema.Changes) { <p class="hint">Not available yet: the CI build of this release has not run.</p> }
+        else if (gr.Changes.Count == 0) { <p class="hint">No change has been recorded on this CI since it was first built.</p> }
+        else
+        {
+            <p class="hint">Every change of this CI, newest first: its tier, owner and business services, exposure, software, linked objects, relations and findings -- the value before, the value now, and where the change came from.</p>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>When</th><th>What</th><th>Before</th><th>Now</th><th>Source</th><th>Reason</th></tr></thead>
+                    <tbody>
+                        @foreach (var c in gr.Changes)
+                        {
+                            <tr data-change="@c.Field"><td data-value="@SI.Management.Web.Pages.LocalTime.Iso(c.ChangedAt)">@Fmt.Time(c.ChangedAt)</td><td>@DetailModel.FieldText(c.Field)</td>
+                                <td class="wrap">@c.OldValue</td><td class="wrap">@c.NewValue</td><td>@c.Source</td><td class="wrap">@c.Reason</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (gr.Changes.Count >= SI.Management.Core.ProData.CiGraphSql.MaxChanges) { <p class="hint">The newest @Fmt.Int(SI.Management.Core.ProData.CiGraphSql.MaxChanges) changes.</p> }
+        }
+    </section>
+
+    @if (d.Records.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-records" data-ci-records>
+            <h2 id="h-records">Records per source</h2>
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Provider</th><th>Type</th><th>Name</th><th>Last seen by the source</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in d.Records)
+                        {
+                            <tr><td>@r.Provider</td><td>@r.RecordType</td><td class="wrap"><a href="/Records?key=@Uri.EscapeDataString(r.RecordKey)#record">@(r.Name ?? r.RecordKey)</a></td><td data-value="@SI.Management.Web.Pages.LocalTime.Iso(r.SourceLastSeen)">@Fmt.Time(r.SourceLastSeen)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+
+    <details class="card" data-all-fields>
+        <summary>Every field of this CI (@Fmt.Int(doc.Fields.Count))</summary>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Field</th><th>Value</th><th>From</th></tr></thead>
+                <tbody>
+                    @foreach (var f in doc.Fields)
+                    {
+                        var src = doc.Sources.FirstOrDefault(s => s.Field == f.Field);
+                        <tr><td class="mono">@f.Field</td><td class="wrap">@DetailModel.Value(f.Text)</td><td>@(src?.Provider ?? "")</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </details>
+}
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

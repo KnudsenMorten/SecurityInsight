@@ -1,0 +1,119 @@
+@page
+@model SI.Management.Web.Pages.SchemaOverlay.EditModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.SchemaOverlay
+@{
+    var isAdmin = User.IsAdmin();
+    var e = Model.Entry;
+    var f = Model.Form;
+    ViewData["Title"] = "Schema overlay " + Model.Engine;
+}
+<div class="split"><h1>Schema overlay: @Model.Engine</h1><a class="button secondary" href="/SchemaOverlay">All overlays</a></div>
+@if (e is not null)
+{
+    <p class="lede">@(e.Body is null ? "No overlay: the profile table has the shipped layout." : "Your overlay of the " + e.Engine + " profile table.") <span class="hint">2.2 file: <code>@e.FileName</code></span>
+        @if (e.UpdatedBy is not null) { <span class="hint">last changed by @e.UpdatedBy @Fmt.Time(e.UpdatedAt)</span> }</p>
+}
+<details class="help">
+    <summary>Columns, contributors and raw payload</summary>
+    <p><strong>Columns</strong>: a name, a type (string, bool, int, real, datetime, dynamic), what it is for (purpose -- a <em>risk</em> column is added to every Risk Analysis report's risk factors), the stage that writes it, a default and a description. A column named like a shipped one replaces it completely. <strong>Contributors</strong> fill a column from a source (e.g. a CMDB column): an id and its settings, each a value -- text in quotes, a number, true / false, a list or an object. <strong>Raw payload</strong>: extra paths of a source's raw data to keep, one per line.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (!Model.Schema && Model.Error is null) { <div class="notice warn" role="status">@SqlItemSource.MissingSchemaMessage</div> }
+@foreach (var m in Model.Messages) { <div class="notice @(m.StartsWith("Not ", StringComparison.Ordinal) ? "error" : "ok")" role="status" data-message>@m</div> }
+@if (Model.Problems.Count > 0) { <div class="notice error" role="alert" data-problems><strong>Problems</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div> }
+@if (Model.CannotShow is not null) { <div class="notice warn" role="status" data-cannot-show>This overlay is shown as text only: @Model.CannotShow. Remove it and build it again here, or correct it at import.</div> }
+
+@if (e is not null && Model.Schema)
+{
+    @if (!isAdmin || Model.CannotShow is not null)
+    {
+        <section class="card" aria-labelledby="h-text"><h2 id="h-text">The overlay in force</h2><pre class="code" data-overlay-text>@(e.Body ?? "(none)")</pre></section>
+    }
+    @if (isAdmin)
+    {
+        <form method="post" data-overlay-form>
+            <input type="hidden" name="Engine" value="@Model.Engine" />
+            @if (Model.CannotShow is null)
+            {
+                <input type="hidden" name="Form.Original" value="@f.Original" />
+                <section class="card" aria-labelledby="h-cols">
+                    <h2 id="h-cols">Columns <span class="badge">@Fmt.Int(f.Fields.Count)</span></h2>
+                    <div class="table-wrap">
+                        <table data-static="the rows are the overlay's columns in order" data-fields-table>
+                            <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Purpose</th><th scope="col">Written by</th><th scope="col">Default</th><th scope="col">Description</th><th scope="col">Actions</th></tr></thead>
+                            <tbody>
+                                @for (var i = 0; i < f.Fields.Count; i++)
+                                {
+                                    var x = f.Fields[i];
+                                    var n = $"Form.Fields[{i}]";
+                                    <tr data-field="@x.Name">
+                                        <td><input type="hidden" name="@(n).Raw" value="@x.Raw" /><input type="text" name="@(n).Name" value="@x.Name" maxlength="100" aria-label="Column name, row @(i + 1)" /></td>
+                                        <td><select name="@(n).Type" aria-label="Type, row @(i + 1)">@foreach (var t in OverlayFormModel.Types) { <option value="@t" selected="@(t == x.Type ? "selected" : null)">@t</option> }</select></td>
+                                        <td><input type="text" name="@(n).Purpose" value="@x.Purpose" list="ov-purposes" aria-label="Purpose, row @(i + 1)" /></td>
+                                        <td><input type="text" name="@(n).WrittenBy" value="@x.WrittenBy" list="ov-stages" aria-label="Written by, row @(i + 1)" /></td>
+                                        <td><input type="text" name="@(n).Default" value="@x.Default" aria-label="Default, row @(i + 1)" /></td>
+                                        <td><input type="text" name="@(n).Description" value="@x.Description" maxlength="1000" aria-label="Description, row @(i + 1)" /></td>
+                                        <td><button type="submit" name="Op" value="remove-field:@i" asp-page-handler="Edit" class="small secondary">Remove</button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="actions"><button type="submit" name="Op" value="add-field" asp-page-handler="Edit" class="small secondary" data-add-field>Add a column</button></div>
+                    <datalist id="ov-purposes">@foreach (var p in OverlayFormModel.Purposes) { <option value="@p"></option> }</datalist>
+                    <datalist id="ov-stages">@foreach (var s in OverlayFormModel.Stages) { <option value="@s"></option> }</datalist>
+                </section>
+                <section class="card" aria-labelledby="h-con">
+                    <h2 id="h-con">Contributors <span class="badge">@Fmt.Int(f.Contributors.Count)</span></h2>
+                    @for (var i = 0; i < f.Contributors.Count; i++)
+                    {
+                        var c = f.Contributors[i];
+                        <fieldset class="condition" data-contributor="@c.Id">
+                            <legend>Contributor @(i + 1)</legend>
+                            <div class="filters"><div><label for="ov-c-@i">Id</label><input id="ov-c-@i" type="text" name="Form.Contributors[@i].Id" value="@c.Id" maxlength="100" /></div>
+                                <div class="actions"><button type="submit" name="Op" value="remove-contributor:@i" asp-page-handler="Edit" class="small danger">Remove contributor</button></div></div>
+                            @for (var j = 0; j < c.Settings.Count; j++)
+                            {
+                                <div class="param-row">
+                                    <div><label for="ov-c-@i-@j-n">Setting</label><input id="ov-c-@i-@j-n" type="text" name="Form.Contributors[@i].Settings[@j].Name" value="@c.Settings[j].Name" maxlength="100" /></div>
+                                    <div class="wide"><label for="ov-c-@i-@j-v">Value</label><textarea id="ov-c-@i-@j-v" name="Form.Contributors[@i].Settings[@j].Value" rows="@(Math.Clamp(c.Settings[j].Value.Split('\n').Length, 1, 10))" class="code">@c.Settings[j].Value</textarea></div>
+                                    <div class="actions"><button type="submit" name="Op" value="remove-setting:@i:@j" asp-page-handler="Edit" class="small secondary">Remove</button></div>
+                                </div>
+                            }
+                            <div class="actions"><button type="submit" name="Op" value="add-setting:@i" asp-page-handler="Edit" class="small secondary">Add a setting</button></div>
+                        </fieldset>
+                    }
+                    <div class="actions"><button type="submit" name="Op" value="add-contributor" asp-page-handler="Edit" class="small secondary">Add a contributor</button></div>
+                </section>
+                <section class="card" aria-labelledby="h-src">
+                    <h2 id="h-src">Raw payload <span class="badge">@Fmt.Int(f.Sources.Count)</span></h2>
+                    @for (var i = 0; i < f.Sources.Count; i++)
+                    {
+                        var s = f.Sources[i];
+                        <div class="param-row" data-source="@s.Name">
+                            <input type="hidden" name="Form.Sources[@i].Raw" value="@s.Raw" />
+                            <div><label for="ov-s-@i">Source</label><input id="ov-s-@i" type="text" name="Form.Sources[@i].Name" value="@s.Name" maxlength="100" /></div>
+                            <div class="wide"><label for="ov-s-@i-p">Include paths (one per line)</label><textarea id="ov-s-@i-p" name="Form.Sources[@i].IncludePaths" rows="4">@s.IncludePaths</textarea></div>
+                            <div class="actions"><button type="submit" name="Op" value="remove-source:@i" asp-page-handler="Edit" class="small secondary">Remove</button></div>
+                        </div>
+                    }
+                    <div class="actions"><button type="submit" name="Op" value="add-source" asp-page-handler="Edit" class="small secondary">Add a source</button></div>
+                </section>
+            }
+            <section class="card" aria-labelledby="h-stage" data-stage>
+                <h2 id="h-stage">Check and stage</h2>
+                <div class="filters"><div class="wide"><label for="ov-reason">Reason (recorded with the change)</label><input id="ov-reason" type="text" name="Reason" maxlength="400" value="@Model.Reason" placeholder="why" /></div></div>
+                <div class="actions">
+                    @if (Model.CannotShow is null)
+                    {
+                        <button type="submit" name="Op" value="check" asp-page-handler="Edit" class="secondary" data-check>Check</button>
+                        <button type="submit" name="Act" value="save" asp-page-handler="Stage" data-stage-save>Stage for Review &amp; commit</button>
+                    }
+                    @if (e.Body is not null) { <button type="submit" name="Act" value="remove" asp-page-handler="Stage" class="danger" data-stage-remove>Remove the overlay</button> }
+                </div>
+            </section>
+        </form>
+        @if (Model.Checked is not null) { <section class="card" aria-labelledby="h-checked" data-checked><h2 id="h-checked">What will be stored</h2><pre class="code">@Model.Checked</pre></section> }
+    }
+}

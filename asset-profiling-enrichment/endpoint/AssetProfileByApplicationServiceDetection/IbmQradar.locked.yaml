@@ -1,0 +1,21 @@
+id:        IbmQradar
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'IBM QRadar'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'IBM QRadar'
+
+detections:
+  - id: IbmQradar
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'qradar*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

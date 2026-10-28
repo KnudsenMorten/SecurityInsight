@@ -1,0 +1,148 @@
+@page
+@model SI.Management.Web.Pages.Templates.IndexModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Templates
+@{
+    ViewData["Title"] = "Template conformance";
+    var isAdmin = User.IsAdmin();
+    var sel = Model.Selected;
+}
+<div class="split"><h1>Template conformance</h1><partial name="_ExportExcel" /></div>
+<p class="lede">Every configuration template this install runs on, and what you did with it: follow it, override it, switch it off -- or a newer template is waiting for your decision.</p>
+<details class="help">
+    <summary>How this page works</summary>
+    <p>A template is compared by what it <strong>does</strong>: comments, key order and descriptions do not count, so a wording edit in a new release is not a change. <strong>Upgrade available</strong> means the template changed since your version was made; nothing is merged for you. @(isAdmin ? "Open the item to see what changed, then stage \"Take the new template\" (your version is removed and the template applies) or \"Keep mine\" (your version stays and the new template is acknowledged). Both are written on Review & commit, in your name." : "An Admin decides each one.")</p>
+    <p>The <strong>template fingerprint</strong> is recorded when a release's templates are published and verified. A release whose templates would change it is not published until someone accepts the change.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.SchemaMissing) { <div class="notice warn" role="status" data-preparing>@TemplateConformance.MissingSchemaMessage</div> }
+
+@if (Model.Summary is { } s)
+{
+    <section class="card" aria-labelledby="h-sum">
+        <h2 id="h-sum">This install <span class="badge @(s.Conformant ? "good" : "warn")" data-conformant="@(s.Conformant ? "1" : "0")">@(s.Conformant ? "conformant" : s.UpgradeAvailable + " upgrade(s) waiting")</span></h2>
+        <div class="tiles">
+            @foreach (var st in TemplateConformance.States)
+            {
+                <a class="tile" href="/Templates?state=@st@(Model.Kind is null ? "" : "&kind=" + Model.Kind)" data-state="@st"><div class="label">@IndexModel.Label(st)</div><div class="value">@Fmt.Int(s.Counts[st])</div></a>
+            }
+        </div>
+        <p data-compared-with="@(Model.ComparedWith?.Version ?? "")">@(Model.ComparedWith is { } cw ? "Compared with: " + cw.Describe : TemplateReleases.NoInstalledMessage)</p>
+        <p class="hint" data-utc>@Fmt.Int(s.Total) item(s). Template fingerprint: <code>@IndexModel.Short(s.Fingerprint)</code>@(s.Fingerprint is null ? " -- not recorded yet" : " (" + s.FingerprintVersion + ", " + Fmt.When(s.FingerprintAt) + ", " + s.FingerprintBy + ")")</p>
+    </section>
+
+    @* #405: an update never changes what you edited -- where SecurityInsight's default changed under it, you decide *@
+    <section class="card" aria-labelledby="h-changed" data-default-changed="@Model.DefaultChanged.Count">
+        <h2 id="h-changed">SecurityInsight's default changed</h2>
+        @if (Model.DefaultChanged.Count == 0)
+        {
+            <p class="hint">None of your edited items has a newer default from Invardia.</p>
+        }
+        else
+        {
+            <p>SecurityInsight's template changed under @Fmt.Int(Model.DefaultChanged.Count) item(s) you edited. Your version stays in force until you decide: compare, then keep yours or take ours.</p>
+            <div class="table-wrap">
+                <table data-sortable data-default-changed-list>
+                    <thead><tr><th>Item</th><th>Kind of change</th><th>SecurityInsight's template</th><th>Your version made against</th><th>Changed by</th><th>When</th><th>Decide</th></tr></thead>
+                    <tbody>
+                        @foreach (var (r, cls) in Model.DefaultChanged)
+                        {
+                            <tr data-item="@r.Name" data-class="@cls">
+                                <td class="wrap mono">@r.Name</td>
+                                <td>@TemplateClasses.Label(cls)</td>
+                                <td>@r.TemplateVersion</td>
+                                <td>@r.BaseVersion</td>
+                                <td class="wrap">@r.UpdatedBy</td>
+                                <td>@Fmt.Time(r.UpdatedAt)</td>
+                                <td><a href="/Templates?kind=@Uri.EscapeDataString(r.Kind)&key=@Uri.EscapeDataString(r.ItemKey)&state=@TemplateConformance.UpgradeAvailable">Compare: keep yours or take ours</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <form method="get" class="filters">
+        @* THE shared filter (MultiFilter): several values at once, none ticked = all (owner 2026-10-19) *@
+        @{
+            var kindFilter = new SI.Management.Web.Pages.MultiFilter { Id = "t-kind", Name = "kind", Label = "Kind", Chosen = Model.Kinds, Choices = SI.Management.Web.Pages.MultiFilter.Plain(TemplateConformance.TemplatedKinds), Apply = "Filter" };
+            var stateFilter = new SI.Management.Web.Pages.MultiFilter { Id = "t-state", Name = "state", Label = "State", Chosen = Model.ChosenStates, Choices = SI.Management.Web.Pages.MultiFilter.Plain(TemplateConformance.States, IndexModel.Label), Apply = "Filter" };
+        }
+        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="kindFilter" /></div>
+        <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="stateFilter" /></div>
+        <div class="actions"><button type="submit">Filter</button> <a class="button secondary" href="/Templates">Clear</a></div>
+    </form>
+}
+
+@if (sel is not null)
+{
+    var r = sel.Row;
+    <section class="card" aria-labelledby="h-item">
+        <h2 id="h-item"><span class="mono">@r.Name</span> <span class="badge @IndexModel.Badge(r.Conformance)" data-conformance-text>@(r.AdditionsApplied ? TemplateConformance.AdditionsAppliedText : IndexModel.Label(r.Conformance))</span>@if (MandatoryControls.Shipped.IsMandatory(r.Kind, r.ItemKey)) { <text> </text><span class="badge" data-mandatory title="SecurityInsight requires parts of this item: they cannot be switched off or weakened">Required by SecurityInsight</span> }</h2>
+        @if (r.AdditionsApplied && sel.BaseBody is not null)
+        {
+            var add = TemplateConformance.Additive(sel.BaseBody, sel.TemplateBody, sel.OverrideBody, sel.Format);
+            <p class="notice" data-additions-applied>SecurityInsight's new version of this item only adds to it. The additions are applied to your version at every run; your own values are never changed.</p>
+            @if (add.Added.Count > 0) { <ul class="hint">@foreach (var a in add.Added) { <li class="mono">@a</li> }</ul> }
+        }
+        <p class="hint">Template @(r.TemplateVersion ?? "(none)") · content <code>@IndexModel.Short(r.ContentHash)</code>@if (r.State is not null) { <text> · your version (@r.State) made against @(r.BaseVersion ?? "(unknown)") · base <code>@IndexModel.Short(r.BaseHash)</code> · by @r.UpdatedBy</text> }</p>
+        @if (r.Conformance == TemplateConformance.UpgradeAvailable)
+        {
+            <p class="notice warn" data-default-changed-item>SecurityInsight's default changed since you edited this item (@TemplateClasses.Label(TemplateClasses.Shipped.Of(r.Kind, r.ItemKey)).ToLowerInvariant()). Your version stays in force -- compare below, then keep yours or take ours.</p>
+            <h3>What the template changed since your version</h3>
+            @if (sel.BaseBody is null) { <p class="hint">The template your version was made against is not kept (it predates template versioning) -- compare your version with the current template below.</p> }
+            else if (Model.TemplateChanges.Count == 0) { <p class="hint">Nothing that changes what the item does.</p> }
+            else { <partial name="_ContentChanges" model="Model.TemplateChanges" /> }
+        }
+        @if (r.Conformance is TemplateConformance.UpgradeAvailable or TemplateConformance.Overridden)
+        {
+            <h3>How your version differs from the current template</h3>
+            @if (Model.YourChanges.Count == 0) { <p class="hint">No difference in what it does.</p> }
+            else { <partial name="_ContentChanges" model="Model.YourChanges" /> }
+        }
+        @if (isAdmin && r.Conformance is TemplateConformance.UpgradeAvailable or TemplateConformance.Overridden or TemplateConformance.Disabled)
+        {
+            <form method="post" asp-page-handler="Stage" class="filters" data-confirm-title="Stage a template decision" data-confirm="This only stages the decision. It is written on Review & commit, in your name.">
+                <input type="hidden" name="kind" value="@r.Kind" />
+                <input type="hidden" name="key" value="@r.ItemKey" />
+                <input type="hidden" name="state" value="@Model.State" />
+                <div class="wide"><label for="t-reason">Reason</label><input id="t-reason" type="text" name="reason" maxlength="400" placeholder="why" /></div>
+                <div class="actions">
+                    <button type="submit" name="decision" value="take">Take the new template</button>
+                    @if (r.Conformance == TemplateConformance.UpgradeAvailable) { <button type="submit" name="decision" value="keep" class="secondary">Keep mine and acknowledge</button> }
+                </div>
+            </form>
+        }
+    </section>
+}
+
+@if (Model.Summary is not null)
+{
+    <section class="card" aria-labelledby="h-list">
+        <h2 id="h-list">@Fmt.Int(Model.Rows.Count) item(s)</h2>
+        @if (Model.Rows.Count == 0) { <p class="hint">No item matches the filter.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Item</th><th>State</th><th>Template</th><th>Your version made against</th><th>Changed by</th><th>When</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in Model.Rows)
+                        {
+                            <tr>
+                                <td class="wrap mono"><a href="/Templates?kind=@Uri.EscapeDataString(r.Kind)&key=@Uri.EscapeDataString(r.ItemKey)@(Model.State is null ? "" : "&state=" + Model.State)">@r.Name</a></td>
+                                <td><span class="badge @IndexModel.Badge(r.Conformance)">@(r.AdditionsApplied ? TemplateConformance.AdditionsAppliedText : IndexModel.Label(r.Conformance))</span></td>
+                                <td>@r.TemplateVersion</td>
+                                <td>@r.BaseVersion</td>
+                                <td class="wrap">@r.UpdatedBy</td>
+                                <td>@Fmt.Time(r.UpdatedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }
+    </section>
+}

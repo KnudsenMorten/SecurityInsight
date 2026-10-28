@@ -1,0 +1,145 @@
+function Filter-ObjectsByColumn {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][AllowNull()]
+    [object[]] $InputObject,
+
+    [Parameter(Mandatory)]
+    [string] $ColumnToFilter,
+
+    [Parameter(Mandatory)][AllowNull()]
+    [object[]] $InScopeData,
+
+    [switch] $CaseInsensitive,
+
+    # If true (default), blank/null values are treated as "in scope" and kept.
+    [bool] $IncludeBlank = $true,
+
+    # If set, return a PSCustomObject with Kept/Removed arrays (and mark removed with __FilterReason)
+    [switch] $ReturnAudit,
+
+    # Optional label used in __FilterReason
+    [string] $FilterName = "Filter"
+  )
+
+  if ($null -eq $InputObject -or $InputObject.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@(); Removed=@() } }
+    return @()
+  }
+
+  # If scope is empty, everything is in scope
+  if ($null -eq $InScopeData -or $InScopeData.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@($InputObject); Removed=@() } }
+    return @($InputObject)
+  }
+
+  function _Normalize([object] $val, [bool] $ci) {
+    if ($null -eq $val) { return $null }
+    $s = ([string]$val).Trim()
+    if ($ci) { return $s.ToLowerInvariant() }
+    return $s
+  }
+
+  # normalize scope (ignore blanks)
+  $normalizedScope = @()
+  foreach ($x in $InScopeData) {
+    $nx = _Normalize -val $x -ci:$CaseInsensitive.IsPresent
+    if ($null -ne $nx -and $nx -ne '') { $normalizedScope += $nx }
+  }
+  if ($normalizedScope.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@($InputObject); Removed=@() } }
+    return @($InputObject)
+  }
+
+  $kept    = New-Object System.Collections.Generic.List[object]
+  $removed = New-Object System.Collections.Generic.List[object]
+
+  foreach ($obj in $InputObject) {
+    if ($null -eq $obj) { continue }
+
+    # Missing column => keep (generic safe default)
+    if (-not ($obj.PSObject.Properties.Name -contains $ColumnToFilter)) {
+      $kept.Add($obj) | Out-Null
+      continue
+    }
+
+    $val = $obj.$ColumnToFilter
+
+    # Null/blank => keep when IncludeBlank
+    if ($null -eq $val) {
+      if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+      else {
+        if ($ReturnAudit) {
+          $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} is null" -f $FilterName,$ColumnToFilter) -Force
+          $removed.Add($obj) | Out-Null
+        }
+      }
+      continue
+    }
+
+    if ($val -is [string]) {
+      if ($val.Trim() -eq "") {
+        if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+        else {
+          if ($ReturnAudit) {
+            $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} is blank" -f $FilterName,$ColumnToFilter) -Force
+            $removed.Add($obj) | Out-Null
+          }
+        }
+        continue
+      }
+    }
+
+    # Build candidates (array, comma-separated string, or scalar)
+    $candidates = @()
+    if ($val -is [System.Collections.IEnumerable] -and -not ($val -is [string])) {
+      foreach ($item in $val) { $candidates += $item }
+    } else {
+      $s = [string]$val
+      if ($s -like "*,*") { $candidates = $s -split '\s*,\s*' }
+      else { $candidates = @($s) }
+    }
+
+    # If candidates are effectively empty, treat as blank
+    $hasNonEmptyCandidate = $false
+    foreach ($cand in $candidates) {
+      $ncTmp = _Normalize -val $cand -ci:$CaseInsensitive.IsPresent
+      if ($null -ne $ncTmp -and $ncTmp -ne '') { $hasNonEmptyCandidate = $true; break }
+    }
+    if (-not $hasNonEmptyCandidate) {
+      if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+      else {
+        if ($ReturnAudit) {
+          $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} has no non-empty candidates" -f $FilterName,$ColumnToFilter) -Force
+          $removed.Add($obj) | Out-Null
+        }
+      }
+      continue
+    }
+
+    # Match if any candidate is in scope
+    $match = $false
+    foreach ($cand in $candidates) {
+      $nc = _Normalize -val $cand -ci:$CaseInsensitive.IsPresent
+      if ($null -ne $nc -and $nc -ne '' -and $normalizedScope -contains $nc) { $match = $true; break }
+    }
+
+    if ($match) {
+      $kept.Add($obj) | Out-Null
+    } else {
+      if ($ReturnAudit) {
+        $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} out-of-scope (value='{2}')" -f $FilterName,$ColumnToFilter,([string]$val)) -Force
+        $removed.Add($obj) | Out-Null
+      }
+    }
+  }
+
+  if ($ReturnAudit) {
+    return [pscustomobject]@{
+      Kept    = @($kept.ToArray())
+      Removed = @($removed.ToArray())
+    }
+  }
+
+  return @($kept.ToArray())
+}

@@ -1,0 +1,91 @@
+@page
+@model SI.Management.Web.Pages.Management.ClosureModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Vulnerabilities over time";
+    var sev = Model.Open.Select(o => o.Severity).Distinct().OrderBy(x => x, SeverityOrder.Comparer).ToList();
+}
+<div class="split"><h1>Vulnerabilities over time</h1><partial name="_ExportExcel" /></div>
+<p class="lede">How many vulnerabilities were opened, closed and reopened per day, week or month, and what is open now.</p>
+<p class="hint" data-exempted-scope-note>Exempted findings: <em>Open now</em> follows the exempted tick (an item whose finding the newest collection marks exempted is left out unless included). The new / closed / reopened flow is the close-loop's own history per vulnerability item and is not split by exemption -- an exempted vulnerability stays open there; it is never closed as fixed.</p>
+<details class="help">
+    <summary>How to read this page</summary>
+    <p><strong>New</strong> = opened that day/week/month. <strong>Closed</strong> = closed by the close-loop, split by why: <strong>fixed</strong> = remediated (SecurityInsight no longer sees it after a fix -- the only close that is fixed work), <strong>asset retired</strong> = its asset was not seen past its grace period (never fixed work), <strong>other reason</strong> = out of scope, no longer monitored, closed by an engineer for another reason. <strong>Reopened</strong> = closed earlier, then seen again (a fix that did not hold, or a flapping detection). Numbers come from the daily aggregate the data sync writes after each run.</p>
+</details>
+@foreach (var e in Model.Errors) { <div class="notice error" role="alert">@e</div> }
+@* #865: never a bare 0 -- why the close-loop recorded nothing *@
+@if (Model.CloseLoopStatus is { } cls) { <div class="notice warn" role="status" data-closeloop-status>@cls</div> }
+
+<ul class="range" aria-label="Period">
+    @foreach (var d in new[] { 30, 90, 180, 365 }) { <li><a href="@Model.RangeLink(d)" aria-current="@(d == Model.Days ? "true" : "false")">@d days</a></li> }
+</ul>
+<ul class="range" aria-label="Grouping">
+    @foreach (var g in Grains.All) { <li><a href="@Model.GrainLink(g)" aria-current="@(g == Model.Grain ? "true" : "false")">per @g</a></li> }
+</ul>
+
+<div class="tiles">
+    <div class="tile"><div class="label">New (@Model.Days d)</div><div class="value">@Fmt.Int(Model.Opened)</div></div>
+    @if (Model.ReasonsKnown)
+    {
+        <div class="tile" data-closed-fixed><div class="label">Fixed (@Model.Days d)</div><div class="value">@Fmt.Int(Model.ClosedFixed ?? 0)</div></div>
+        <div class="tile" data-closed-retired><div class="label">Closed: asset retired (@Model.Days d)</div><div class="value">@Fmt.Int(Model.ClosedRetired ?? 0)</div></div>
+        <div class="tile" data-closed-other><div class="label">Closed: other reason (@Model.Days d)</div><div class="value">@Fmt.Int(Model.ClosedOther ?? 0)</div></div>
+    }
+    else { <div class="tile" data-closed-any><div class="label">Closed, any reason (@Model.Days d)</div><div class="value">@Fmt.Int(Model.Closed)</div></div> }
+    <div class="tile"><div class="label">Reopened (@Model.Days d)</div><div class="value">@Fmt.Int(Model.Reopened)</div></div>
+    <div class="tile"><div class="label">Open now</div><div class="value">@(Model.OpenNow is { } o ? Fmt.Int(o) : "–")</div></div>
+</div>
+
+<div class="grid-2">
+    <section class="card" aria-labelledby="h-flow">
+        <h2 id="h-flow">New vs closed per @Model.Grain</h2>
+        @if (Model.Flow is not null) { <partial name="_Chart" model="Model.Flow" /> }
+    </section>
+    <section class="card" aria-labelledby="h-open">
+        <h2 id="h-open">Open backlog</h2>
+        @if (Model.Backlog is not null) { <partial name="_Chart" model="Model.Backlog" /> }
+    </section>
+</div>
+
+<section class="card" aria-labelledby="h-table">
+    <h2 id="h-table">Per @Model.Grain</h2>
+    <div class="table-wrap">
+        <table data-sortable>
+            <thead><tr><th>@Model.Grain</th><th class="num">New</th><th class="num">Closed</th><th class="num">Fixed</th><th class="num">Asset retired</th><th class="num">Other reason</th><th class="num">Reopened</th><th class="num">Open at end</th></tr></thead>
+            <tbody>
+                @foreach (var b in Model.Buckets.Reverse())
+                {
+                    <tr><td>@b.Label</td><td class="num">@Fmt.Int(b.Opened)</td><td class="num">@Fmt.Int(b.Closed)</td><td class="num">@(b.ClosedFixed is { } cf ? Fmt.Int(cf) : "–")</td><td class="num">@(b.ClosedRetired is { } cr ? Fmt.Int(cr) : "–")</td><td class="num">@(b.ClosedOther is { } co ? Fmt.Int(co) : "–")</td><td class="num">@Fmt.Int(b.Reopened)</td><td class="num">@(b.OpenAtEnd is { } x ? Fmt.Int(x) : "–")</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<div class="grid-2">
+    <section class="card" aria-labelledby="h-sev">
+        <h2 id="h-sev">Open now by severity and asset tier</h2>
+        @if (!Model.OpenKnown) { <p class="hint" data-open-pending>@SI.Management.Web.Pages.Management.ClosureModel.OpenPendingText</p> }
+        else if (Model.Open.Count == 0) { <p class="hint">No open vulnerability.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table class="pivot" data-sortable>
+                    <thead><tr><th>Tier</th>@foreach (var s in sev) { <th>@s</th> }<th>Total</th></tr></thead>
+                    <tbody>
+                        @foreach (var t in ProDataFilters.Tiers)
+                        {
+                            var row = Model.Open.Where(o => o.Tier == t).ToList();
+                            if (row.Count == 0) { continue; }
+                            <tr><th scope="row"><span class="tierdot t@(t)"></span>@SI.Management.Web.Pages.Tiers.TierLinks.Label(t)</th>
+                                @foreach (var s in sev) { var n = row.Where(o => o.Severity == s).Sum(o => o.Items); <td>@(n > 0 ? Fmt.Int(n) : "")</td> }
+                                <td>@Fmt.Int(row.Sum(o => o.Items))</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p class="hint">"Unclassified" = the vulnerability's asset is not (yet) in the asset table, or has no tier.@if (Model.OpenCountedAt is { } at) { <span data-open-counted-at data-utc> Counted by the data sync at @Fmt.When(at).</span> }</p>
+        }
+    </section>
+</div>
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

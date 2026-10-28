@@ -1,0 +1,9 @@
+@model string
+@if (Model == SI.Management.Web.Estate.NotConfiguredEstateQueries.Source)
+{
+    <div class="notice warn" role="status">The estate query layer is not configured for this installation, so there is no data to show yet.</div>
+}
+else if (Model == SI.Management.Web.Estate.ResilientEstateQueries.Source)
+{
+    <div class="notice error" role="alert">The data for this page could not be read right now. The reason is in the application log.</div>
+}

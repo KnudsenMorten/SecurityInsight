@@ -1,0 +1,68 @@
+@page
+@model SI.Management.Web.Pages.Reports.WeightsModel
+@using SI.Management.Core.ProData
+@{
+    ViewData["Title"] = "Weights";
+    var edit = Model.CanEdit;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/Weights")" />
+<p class="lede">The weighted risk score: per engine, the fields whose values raise a finding's weight (e.g. cmdbCriticality = Critical -> 150 = 1.5x). Multipliers are whole numbers on a basis of 100. A report's own weights replace the solution's for that report.</p>
+<partial name="_Notices" model="Model" />
+
+@if (Model.State is not null)
+{
+    <form method="get" action="/Reports/Weights" class="filterbar" data-autosubmit aria-label="Which weights">
+        <div class="wide"><label for="w-scope">Weights of</label>
+            <select id="w-scope" name="scope" data-weights-scope>
+                <option value="solution" selected="@Model.IsSolution">The whole solution</option>
+                @foreach (var r in Model.ReportNames) { <option value="report/@r" selected="@(Model.Scope == "report/" + r)">Report @r@(Model.State.Weights.ContainsKey("report/" + r) ? " -- set" : "")</option> }
+            </select></div>
+        <div class="actions"><button type="submit" class="secondary">Open</button></div>
+    </form>
+    <form method="post" data-weights="@(edit ? "edit" : "read")">
+        <input type="hidden" name="Scope" value="@Model.Scope" />
+        @for (var i = 0; i < Model.E.Count; i++)
+        {
+            var e = Model.E[i];
+            <section class="card" aria-labelledby="h-w-@e.Engine" data-weight-engine="@e.Engine">
+                <h2 id="h-w-@e.Engine">@e.Engine</h2>
+                <input type="hidden" name="E[@i].Engine" value="@e.Engine" />
+                <fieldset class="filters" disabled="@(!edit)">
+                    <div><label for="w-c-@i">Combine</label><select id="w-c-@i" name="E[@i].Combine"><option value="">(default: product)</option>@foreach (var c in WeightsDocument.Combines) { <option value="@c" selected="@(e.Combine == c)">@c</option> }</select></div>
+                    <div><label for="w-m-@i">Cap (100 = 1.0x, 0 = none)</label><input id="w-m-@i" type="number" min="0" max="10000" step="1" name="E[@i].Max" value="@e.Max" /></div>
+                </fieldset>
+                <div class="table-wrap">
+                    <table data-weight-grid="@e.Engine" data-static="an editing grid: one row per field of the weights document, in the document's own order">
+                        <thead><tr><th scope="col">Field</th><th scope="col">Value = multiplier (one per line)</th><th scope="col" class="num">Default</th></tr></thead>
+                        <tbody>
+                            @for (var j = 0; j < e.Fields.Count; j++)
+                            {
+                                var f = e.Fields[j];
+                                <tr data-weight-field="@f.Field">
+                                    <td><input type="text" name="E[@i].Fields[@j].Field" value="@f.Field" maxlength="64" placeholder="@(string.IsNullOrEmpty(f.Field) ? "add a field" : "")" readonly="@(!edit)" aria-label="Field name, @e.Engine row @(j + 1)" /></td>
+                                    <td><textarea name="E[@i].Fields[@j].Map" rows="4" class="code" readonly="@(!edit)" aria-label="Values and multipliers, @e.Engine row @(j + 1)" placeholder="Critical = 150">@f.Map</textarea></td>
+                                    <td class="num"><input type="number" min="1" max="1000" step="1" name="E[@i].Fields[@j].Default" value="@f.Default" readonly="@(!edit)" aria-label="Default multiplier, @e.Engine row @(j + 1)" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+        @if (edit)
+        {
+            <div class="filters">
+                <div class="wide"><label for="w-reason">Reason (recorded with the change)</label><input id="w-reason" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                <div class="actions"><button type="submit" asp-page-handler="Stage" data-stage-button>Stage for Review &amp; commit</button></div>
+            </div>
+        }
+        else { <p class="hint">Read-only: an Admin changes the weights.</p> }
+    </form>
+    @if (Model.ModelBody is not null)
+    {
+        <details class="card" data-model-sections><summary>Risk-model sections imported from v2.2 (read-only)</summary>
+            <p class="hint">Carried over from a v2.2 weights file. Risk Analysis v3 reads only the weighted risk factors above; these sections are kept for reference.</p>
+            <pre class="code">@Model.ModelBody</pre></details>
+    }
+}

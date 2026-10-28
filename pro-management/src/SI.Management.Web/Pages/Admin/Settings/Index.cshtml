@@ -1,0 +1,113 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.IndexModel
+@using SI.Management.Web.Settings
+@{
+    ViewData["Title"] = "Settings";
+    var filtered = Model.Filtered;
+
+    // One field: the label above the editor, a short hint only where the label is not enough, what it needs, and a
+    // small (i) with everything else (what it does, the default, the internal name) -- closed until asked for.
+    async Task Field(SettingField f)
+    {
+        await Html.RenderPartialAsync("_SettingField", new SettingFieldView(f, Model.CanSuperAdmin, ShowWhen: SI.Management.Web.GetStarted.GetStartedGuide.MailFieldMode(f.Setting.Name) is { } m ? "SI_Mail_Mode=" + m : null,
+            Unavailable: Model.Unavailable(f.Setting.Name)));
+    }
+
+    // One card: one topic, one sentence, its fields side by side, one Save.
+    async Task Card(SettingsCategory cat, SettingsCard c)
+    {
+        var editableNames = c.Fields.Where(f => f.Editor != EditorKind.Elsewhere && (!f.Setting.NeedsSuperAdmin || Model.CanSuperAdmin) && !f.Setting.SetupOnly && Model.Unavailable(f.Setting.Name) is null).Select(f => f.Setting.Name).ToList();
+        <form method="post" asp-page-handler="SaveCard" class="set-card" id="card-@c.Id" data-card="@c.Id" novalidate>
+            <input type="hidden" name="card" value="@c.Id" />
+            <input type="hidden" name="cat" value="@cat.Id" />
+            <input type="hidden" name="names" value="@string.Join(",", c.Fields.Select(f => f.Setting.Name))" />
+            <h3>@c.Name</h3>
+            @if (!string.IsNullOrWhiteSpace(c.Description)) { <p class="set-card-desc">@c.Description</p> }
+            <div class="set-fields">
+                @foreach (var f in c.Fields) { await Field(f); }
+            </div>
+            <div class="set-actions">
+                @if (editableNames.Count > 0)
+                {
+                    <button type="submit">Save</button>
+                }
+                else if (c.Fields.Any(f => f.Setting.NeedsSuperAdmin))
+                {
+                    <span class="set-hint">(SuperAdmin required to change)</span>
+                }
+                <span class="set-msg" data-card-msg role="status" aria-live="polite"></span>
+            </div>
+        </form>
+    }
+}
+<h1>Settings</h1>
+<p class="lede">Change a value in any category and press Save on its card; it applies from the next run, and secrets are stored only as Key Vault secret <em>names</em>.</p>
+<p class="hint" data-settings-riskrating>The thresholds of the risk rating (Critical / High / Moderate) are yours to set on <a href="/Admin/Settings/RiskRating">Risk rating</a>.</p>
+<p class="hint" data-settings-mappings>ServiceNow: which sub-CI each finding is linked under (OS / SQL / Other by default) is set on <a href="/Admin/Settings/Mapping/servicenow-subci">Sub-CI mapping</a>; the OS family of every asset (Windows, Linux, ...) on <a href="/Admin/Settings/Mapping/os-family">OS family mapping</a>.</p>
+
+@if (!string.IsNullOrEmpty(Model.Saved))
+{
+    <div class="notice ok" role="status">Saved: @Model.Saved</div>
+}
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+
+<form method="get" class="set-find" role="search">
+    <div>
+        <label for="q">Find a setting</label>
+        <input id="q" type="search" name="q" value="@Model.Q" placeholder="a name or any word" data-settings-filter />
+    </div>
+    <div>
+        <label for="onlyset">Show</label>
+        <select id="onlyset" name="onlySet">
+            <option value="false" selected="@(!Model.OnlySet)">All settings</option>
+            <option value="true" selected="@Model.OnlySet">Only those changed here</option>
+        </select>
+    </div>
+    <div class="actions"><button type="submit" class="secondary">Find</button></div>
+</form>
+<p class="hint">@Fmt.Int(Model.Shown) of @Fmt.Int(Model.Total) settings · @Fmt.Int(Model.InDatabase) changed in the database ·
+    @if (Model.Advanced) { <a id="advanced-toggle" href="@Url.Page("Index", new { q = Model.Q, onlySet = Model.OnlySet })">Fold the advanced settings</a> }
+    else { <a id="advanced-toggle" href="@Url.Page("Index", new { q = Model.Q, onlySet = Model.OnlySet, advanced = true })">Show every advanced setting</a> }</p>
+
+<nav class="set-catbar" aria-label="Settings categories" data-settings-catbar>
+    @foreach (var c in Model.Categories)
+    {
+        <a class="set-catbtn" href="@Url.Page("Index", new { cat = c.Id })#cat-@c.Id" data-cat="@c.Id">@c.Name <span class="badge">@Fmt.Int(c.Count)</span></a>
+    }
+    <a class="set-catbtn" href="#settings-areas" data-cat="*">Show all</a>
+</nav>
+
+<section id="settings-areas" aria-label="Settings by category" data-settings data-open-cat="@Model.OpenCategory" data-filtered="@(filtered ? "true" : "false")">
+    @if (Model.Categories.Count == 0)
+    {
+        <p class="hint">No setting matches.</p>
+    }
+    @foreach (var cat in Model.Categories)
+    {
+        <section class="set-cat" id="cat-@cat.Id" data-cat="@cat.Id" data-area="@cat.Name" aria-labelledby="h-@cat.Id">
+            <h2 id="h-@cat.Id">@cat.Name</h2>
+            @if (!string.IsNullOrWhiteSpace(cat.Description)) { <p class="set-cat-desc">@cat.Description</p> }
+            @if (cat.Name == SI.Management.Web.Pages.Admin.Settings.IndexModel.LicenceCategory)
+            {
+                <partial name="_LicenceUpdates" model="Model" />
+            }
+            @foreach (var c in cat.Common) { await Card(cat, c); }
+            @if (cat.Advanced.Count > 0)
+            {
+                var n = cat.Advanced.Sum(c => c.Fields.Count);
+                <details class="set-advanced" data-advanced-of="@cat.Name" open="@(Model.Advanced || filtered || cat.AllAdvanced && Model.Cat == cat.Id)">
+                    <summary>Show advanced <span class="badge">@Fmt.Int(n)</span> <span class="hint">tuning most installs never change</span></summary>
+                    @foreach (var c in cat.Advanced) { await Card(cat, c); }
+                </details>
+            }
+        </section>
+    }
+</section>
+
+@if (Model.Query is not null)
+{
+    <partial name="_Query" model='QueryInfo.Sql(Model.Query, "Settings")' />
+}

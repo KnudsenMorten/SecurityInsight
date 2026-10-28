@@ -1,0 +1,39 @@
+@page
+@model SI.Management.Web.Pages.SearchModel
+@{
+    ViewData["Title"] = Model.Q is { Length: > 0 } q ? "Search: " + q : "Search";
+}
+<h1>Search</h1>
+<p class="lede">CIs (assets), findings, CVEs, people and reports -- in the newest collection, and only what you may see.</p>
+<form method="get" action="/Search" class="gridbar" role="search" aria-label="Search everything">
+    <label for="search-q" class="sr-only">Search</label>
+    <input id="search-q" type="search" name="q" value="@Model.Q" placeholder="assets, findings, CVEs, people, reports..." maxlength="200" data-search />
+    <button type="submit">Search</button>
+</form>
+@if (Model.Notice is not null) { <div class="notice" role="status" data-search-notice>@Model.Notice</div> }
+@if (Model.Q is { Length: >= SI.Management.Web.Pages.SearchModel.MinLength } && Model.Sections.Count > 0)
+{
+    <p class="hint" data-search-found>@Fmt.Int(Model.Found) result(s) for "@Model.Q".</p>
+    <div class="grid-2">
+        @foreach (var s in Model.Sections)
+        {
+            <section class="card" aria-labelledby="sr-@s.Key" data-search-section="@s.Key">
+                <div class="split">
+                    <h2 id="sr-@s.Key">@s.Title <span class="badge" data-search-count>@Fmt.Int(s.Total ?? s.Hits.Count)</span></h2>
+                    @if (s.AllLink is not null && (s.Total ?? 0) > s.Hits.Count) { <a class="button secondary small" href="@s.AllLink">See all</a> }
+                </div>
+                @if (s.Note is not null) { <p class="hint">@s.Note</p> }
+                else if (s.Hits.Count == 0) { <p class="hint">Nothing matches.</p> }
+                else
+                {
+                    <ul class="search-hits">
+                        @foreach (var h in s.Hits)
+                        {
+                            <li><a href="@h.Href" data-search-hit>@h.Text</a>@if (h.Detail is not null) { <span class="muted"> -- @h.Detail</span> }</li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+    </div>
+}

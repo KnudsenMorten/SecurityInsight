@@ -1,0 +1,274 @@
+@* THE SERVICENOW GUIDE of one ServiceNow connector (owner 2026-10-20: "i connect to servicenow + verify connection. verify
+   table schema matches + get alerts + set api key in keyvault + url to instance and what is needed"; "count of rows that
+   will be send with current filter and rows in excel format and csv fomat" -- "so servicenow can test"). #903 (owner
+   2026-10-26): ONE ServiceNow data-out connector feeds BOTH ServiceNow outputs -- the connector's part once (the instance, how
+   it signs in: an API key OR a user and a password, each with its Set value box; Verify; switch on), then each output's
+   table, check, schema and rows; and "For your ServiceNow team" with Copy and a text download. Never a secret value: only
+   names, states and times -- and the team text not even a secret's name. *@
+@model SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel
+@using SI.Management.Web.Outputs
+@{
+    string Tick(bool? done) => done switch { true => "state ok", false => "state bad", _ => "state" };
+    string TickWord(bool? done) => done switch { true => "Done", false => "Missing", _ => "Not known yet" };
+    string Lvl(string level) => level switch { "red" => "state bad", "amber" => "state warn", "ok" => "state ok", _ => "state" };
+    string Done(bool? d) => d switch { true => "yes", false => "no", _ => "unknown" };
+    var names = Model.SnowDefaultNames;
+    var cur = SI.Management.Web.Outputs.ServiceNowCredential.NamesOf(Model.Current?.SecretRefsJson);
+}
+<section class="card" aria-labelledby="h-snow-guide" data-snow-guide="@Model.Name" data-snow-data-out="@(Model.IsDataOut ? "yes" : "no")">
+    <h2 id="h-snow-guide">ServiceNow: set up and verify</h2>
+    @if (Model.DataOutProblem is { } twoOn) { <div class="notice error" role="alert" data-data-out-two-on>@twoOn</div> }
+    @if (Model.IsDataOut)
+    {
+        <p class="hint">The ServiceNow data-out connector: switched on, it feeds <strong>both</strong> ServiceNow outputs -- @string.Join(" and ", Model.SnowInfos.Select(i => i.Label)) -- each to its own Import Set table on this instance, through the ServiceNow Import Set API; your transform maps move the rows on. Only one data-out connector can be switched on (for example a Test and a Prod instance: one at a time). The vulnerability close-loop never runs it.</p>
+        if (Model.Current is not null)
+        {
+            if (Model.SwitchProblem is { } swp) { <div class="notice error" role="alert" data-snow-switch-problem>@swp</div> }
+            <form method="post" asp-page-handler="Switch" class="inline-form" data-snow-switch-form>
+                <input type="hidden" name="Name" value="@Model.Name" />
+                <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+                @if (Model.Current.Enabled)
+                {
+                    <span class="state ok" data-snow-switched="on">Switched on -- it sends.</span>
+                    <input type="hidden" name="SwitchOn" value="false" />
+                    <input type="text" name="Reason" maxlength="400" placeholder="why (recorded with the change)" aria-label="Reason" />
+                    <button type="submit" class="secondary" data-snow-switch="off">Stage switch off</button>
+                }
+                else
+                {
+                    <span class="state" data-snow-switched="off">Switched off -- nothing is sent.</span>
+                    <input type="hidden" name="SwitchOn" value="true" />
+                    foreach (var i in Model.SnowInfos)
+                    {
+                        <label><input type="checkbox" name="SwitchOutputs" value="@i.Output" checked /> send @i.Label</label>
+                    }
+                    <input type="text" name="Reason" maxlength="400" placeholder="why (recorded with the change)" aria-label="Reason" />
+                    <button type="submit" data-snow-switch="on">Stage switch on</button>
+                }
+            </form>
+            <p class="hint">Switching on stages the connector on and the outputs ticked on (both by default), as one change on Review &amp; commit. Each output can still be switched off on its own on <a href="/Connectors/Fields">Fields sent</a>.</p>
+        }
+    }
+    else
+    {
+        <p class="hint" data-snow-not-data-out>This ServiceNow connector (direction @Model.Direction) is not used to send: SecurityInsight sends to ServiceNow only through the data-out connector. The ServiceNow Import Set data out (the CIs and the vulnerable items) sends only through the ServiceNow <strong>data-out</strong> connector (direction data-out)@(Model.DataOutOn.Count == 1 ? ": " : ".")
+            @if (Model.DataOutOn.Count == 1) { <a href="/Admin/ConnectorSetup/Edit?name=@Uri.EscapeDataString(Model.DataOutOn[0])" data-snow-data-out-link>@Model.DataOutOn[0]</a><text>.</text> }</p>
+    }
+
+    <h3>What is needed</h3>
+    <ul class="checklist" data-snow-checklist>
+        @foreach (var item in Model.SnowConnectorChecklist)
+        {
+            <li data-snow-need="@item.Key" data-snow-done="@Done(item.Done)">
+                <span class="@Tick(item.Done)">@TickWord(item.Done)</span> @item.Text
+                @if (item.Hint is { Length: > 0 } h) { <div class="hint">@h</div> }
+            </li>
+        }
+    </ul>
+
+    <h3>Instance address</h3>
+    @if (Model.InstanceProblem is { } ip) { <div class="notice error" role="alert" data-snow-instance-problem>@ip</div> }
+    @if (Model.Current is null)
+    {
+        <p class="hint">Stage the connector first (above); then set its instance address here.</p>
+    }
+    else
+    {
+        <form method="post" asp-page-handler="Instance" class="inline-form" data-snow-instance-form>
+            <input type="hidden" name="Name" value="@Model.Name" />
+            <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+            <label for="snow-instance">Instance URL</label>
+            <input id="snow-instance" type="url" name="InstanceUrl" value="@Model.InstanceUrl" placeholder="@ServiceNowInstanceUrl.Example" maxlength="300" spellcheck="false" />
+            <input type="text" name="Reason" maxlength="400" placeholder="why (recorded with the change)" aria-label="Reason" />
+            <button type="submit" class="secondary">Stage address</button>
+        </form>
+        <p class="hint">https only: your instance on service-now.com or your own domain, without a path. It is kept in the connector's settings (no secret) and written on Review &amp; commit.</p>
+    }
+
+    <h3 id="h-snow-signin">How SecurityInsight signs in</h3>
+    <p class="hint">Use what your ServiceNow team gave you: <strong>an API key</strong> (ServiceNow's REST API Key for the integration user), <strong>or a user and a password</strong> (the integration user -- Basic sign-in over https). Not both. Not sure? If you were given a user name and a password, choose "A user and a password": a password stored as an API key is refused by ServiceNow (401).</p>
+    @if (Model.SnowCredentialProblem is { } wrong) { <div class="notice error" role="alert" data-snow-credential-problem>@wrong.</div> }
+    @if (Model.CredentialProblem is { } cp) { <div class="notice error" role="alert" data-snow-credential-stage-problem>@cp</div> }
+    @if (Model.SnowSharedWith.Count > 0) { <div class="notice warn" role="status" data-snow-credential-shared>The connector @string.Join(", ", Model.SnowSharedWith) names the same Key Vault secret for its sign-in. A Test and a Prod instance almost always have their own credentials -- give this connector its own names below.</div> }
+    @if (Model.SnowSecrets.Count > 0)
+    {
+        <p data-snow-credential-way="@Model.SnowCredentialWay">Now: @(Model.SnowCredentialWay switch { "apikey" => "an API key.", "user-password" => "a user and a password.", _ => "not chosen yet." })</p>
+        foreach (var (r, secret) in Model.SnowSecrets)
+        {
+            <vc:secret-set target="@SI.Management.Web.Settings.SecretAllowList.ConnectorTarget(Model.Name!, r)" secret-name="@secret" label="@(r switch { "apikey" => "API key", "user" => "User name", "password" => "Password", _ => r })" own-form="true" />
+        }
+        <p class="hint">A SuperAdmin pastes the value; it is handed to the updater encrypted and stored in your Key Vault. This page never sees it again -- only when it was set and by whom.</p>
+    }
+    @if (Model.Current is null)
+    {
+        <p class="hint" data-snow-no-secret>Stage the connector first (above); then choose how it signs in here.</p>
+    }
+    else
+    {
+        <div class="grid-2" data-snow-credential-choice>
+            <form method="post" asp-page-handler="Credential" class="stack" data-snow-credential-form="apikey">
+                <input type="hidden" name="Name" value="@Model.Name" />
+                <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+                <input type="hidden" name="CredentialChoice" value="apikey" />
+                <fieldset>
+                    <legend>An API key@(Model.SnowCredentialWay == "apikey" ? " (in use)" : "")</legend>
+                    <label for="snow-apikey-name">Key Vault secret name of the API key</label>
+                    <input id="snow-apikey-name" type="text" name="ApiKeyName" value="@(cur.ApiKey ?? names.ApiKey)" maxlength="127" spellcheck="false" class="mono" />
+                    <input type="text" name="Reason" maxlength="400" placeholder="why (recorded with the change)" aria-label="Reason" />
+                    <button type="submit" class="secondary" data-snow-credential-choose="apikey">@(Model.SnowCredentialWay == "apikey" ? "Stage the name" : "Use an API key")</button>
+                </fieldset>
+            </form>
+            <form method="post" asp-page-handler="Credential" class="stack" data-snow-credential-form="user-password">
+                <input type="hidden" name="Name" value="@Model.Name" />
+                <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+                <input type="hidden" name="CredentialChoice" value="user-password" />
+                <fieldset>
+                    <legend>A user and a password@(Model.SnowCredentialWay == "user-password" ? " (in use)" : "")</legend>
+                    <label for="snow-user-name">Key Vault secret name of the user name</label>
+                    <input id="snow-user-name" type="text" name="UserName" value="@(cur.User ?? names.User)" maxlength="127" spellcheck="false" class="mono" />
+                    <label for="snow-password-name">Key Vault secret name of the password</label>
+                    <input id="snow-password-name" type="text" name="PasswordName" value="@(cur.Password ?? names.Password)" maxlength="127" spellcheck="false" class="mono" />
+                    <input type="text" name="Reason" maxlength="400" placeholder="why (recorded with the change)" aria-label="Reason" />
+                    <button type="submit" class="secondary" data-snow-credential-choose="user-password">@(Model.SnowCredentialWay == "user-password" ? "Stage the names" : "Use a user and a password")</button>
+                </fieldset>
+            </form>
+        </div>
+        <p class="hint">Only the secret NAMES are staged (Review &amp; commit); then a SuperAdmin sets each value here. Switching the way removes the other way's names from the connector -- no Key Vault secret is deleted.</p>
+    }
+
+    @if (Model.IsDataOut)
+    {
+        <h3>Verify</h3>
+        if (Model.Current is not null)
+        {
+            <form method="post" asp-page-handler="Verify" class="actions" data-snow-verify-form>
+                <input type="hidden" name="Name" value="@Model.Name" />
+                <button type="submit" class="secondary" name="What" value="connection" data-snow-verify="connection">Verify connection</button>
+                <button type="submit" class="secondary" name="What" value="schema" data-snow-verify="schema">Verify table schema</button>
+            </form>
+            <p class="hint">Both start the same check of BOTH outputs on SecurityInsight's mail job, with its own identity and the stored credential -- the same way the connector signs in when it sends: the connection, each Import Set table, its columns and the column mapping. The results appear below in a few minutes. The check also runs before every run of an output and every day; a failure is a warning on Data health, in the daily mail and to Invardia, and the run sends nothing until it is fixed.</p>
+        }
+        if (Model.SnowUnreadKeys.Count > 0)
+        {
+            <div class="notice warn" role="status" data-snow-unread-keys>This connector's settings name @string.Join(" and ", Model.SnowUnreadKeys) -- nothing reads them there: each output's Import Set table is its setting (shown below). The next update moves a value the setting does not have yet; remove the key from the settings above.</div>
+        }
+
+        foreach (var o in Model.SnowOutputs)
+        {
+            var l = o.Latest;
+            <section class="sub" aria-labelledby="h-snow-@o.Info.Output" data-snow-output="@o.Info.Output">
+                <h3 id="h-snow-@o.Info.Output">@o.Info.Label <span class="badge @(o.On ? "ok" : "")" data-snow-output-on="@(o.On ? "1" : "0")">@(o.On ? "on" : "off")</span></h3>
+                <p class="hint">Its Import Set table is the setting <a href="/Admin/Settings?q=@Uri.EscapeDataString(o.Info.TableSetting)">@o.Info.TableSetting</a>@(o.Table is { } t ? ": " + t : " (not set)") ·
+                    <a href="/Connectors/Fields?handler=Schema&amp;output=@Uri.EscapeDataString(o.Info.Output)" data-snow-guide-schema="@o.Info.Output">ServiceNow schema (JSON)</a> ·
+                    <a href="/Connectors/Fields?handler=TeamPack&amp;output=@Uri.EscapeDataString(o.Info.Output)" data-snow-guide-pack="@o.Info.Output">ServiceNow team pack (Excel)</a>.</p>
+                <ul class="checklist" data-snow-checklist="@o.Info.Output">
+                    @foreach (var item in o.Checklist)
+                    {
+                        <li data-snow-need="@item.Key" data-snow-done="@Done(item.Done)" data-snow-for="@o.Info.Output">
+                            <span class="@Tick(item.Done)">@TickWord(item.Done)</span> @item.Text
+                            @if (item.Hint is { Length: > 0 } h) { <div class="hint">@h</div> }
+                        </li>
+                    }
+                </ul>
+                @if (l is null)
+                {
+                    <p class="hint" data-snow-check="none" data-snow-for="@o.Info.Output">Not checked yet.</p>
+                }
+                else
+                {
+                    <div class="notice @(l.Outcome == "ok" ? "ok" : l.Outcome == "failed" ? "error" : "warn")" role="status" data-snow-check="@l.Outcome" data-snow-for="@o.Info.Output">
+                        <strong>@(l.Outcome == "ok" ? "OK" : l.Outcome == "failed" ? "Failed" : "Warning")</strong> --
+                        checked @Fmt.Time(l.CheckedAt) (@(l.Trigger switch { "verify" => "Verify" + (string.IsNullOrWhiteSpace(l.RequestedBy) ? "" : " by " + l.RequestedBy), "daily" => "the daily check", _ => "before a run" }))@(l.Table is { Length: > 0 } tt ? ", table " + tt : ""):
+                        @l.Summary
+                        @if (l.Outcome != "ok" && l.NotOkSince is { } since) { <div class="hint">Not ok since @Fmt.Time(since).</div> }
+                    </div>
+                    @if (l.Facts.ConnectionText.Length > 0) { <p data-snow-connection="@l.Facts.ConnectionKind">Connection: @l.Facts.ConnectionText</p> }
+                    @if (l.Facts.ColumnsText.Length > 0 && !l.Facts.ColumnsRead) { <p data-snow-columns-unread>Columns: @l.Facts.ColumnsText</p> }
+                }
+                @if (o.SchemaProblem is { } sp) { <div class="notice warn" role="status">@sp</div> }
+                @if (o.Schema.Count > 0)
+                {
+                    var worst = ServiceNowSchemaCompare.Worst(o.Schema);
+                    <h4 data-snow-schema-worst="@worst">Table schema: the columns in force against @(l?.Table ?? "the table") (@(worst == "red" ? "does not match" : worst == "amber" ? "matches, with notes" : "matches"))</h4>
+                    <div class="table-wrap">
+                        <table class="grid" data-snow-schema-table="@o.Info.Output" data-sortable>
+                            <thead><tr><th scope="col">Column</th><th scope="col">Result</th><th scope="col">What</th></tr></thead>
+                            <tbody>
+                                @foreach (var sl in o.Schema)
+                                {
+                                    <tr data-snow-schema-line="@sl.Kind" data-snow-level="@sl.Level"><td class="mono">@(sl.Column.Length > 0 ? sl.Column : "(column mapping)")</td><td><span class="@Lvl(sl.Level)">@sl.Kind</span></td><td class="wrap">@sl.Text</td></tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="hint">Red: a value would be lost or cut, or rows land empty -- the run holds the push until it is fixed. Amber: worth a look. Info: a column of the table SecurityInsight does not send.</p>
+                }
+                <h4>The rows it would send</h4>
+                <p data-snow-rows="@o.Info.Output">@(o.Count ?? "Not counted.")</p>
+                <p class="actions" data-snow-rows-export="@o.Info.Output">
+                    <a class="button secondary" href="?name=@Uri.EscapeDataString(Model.Name ?? "")&amp;handler=Export&amp;output=@Uri.EscapeDataString(o.Info.Output)" data-snow-rows-xlsx="@o.Info.Output">Export every row (Excel)</a>
+                    <a class="button secondary" href="?name=@Uri.EscapeDataString(Model.Name ?? "")&amp;handler=Export&amp;output=@Uri.EscapeDataString(o.Info.Output)&amp;format=csv" data-snow-rows-csv="@o.Info.Output">Export every row (CSV)</a>
+                </p>
+                <p class="hint">Every row the filter lets through, with the columns in force and each value exactly as the connector sends it -- for the ServiceNow team to test the table and the transform map. Every sync sends every row in scope, each with its u_action, in one batch per output.</p>
+            </section>
+        }
+
+        <h3 id="h-snow-team">For your ServiceNow team</h3>
+        <p class="hint">What your ServiceNow team must still do, from this connector and the newest checks of both outputs. Send it to them: Copy, or download it as text. It holds no secret and no secret name.</p>
+        <p class="actions">
+            <button type="button" class="secondary" data-copy="@Model.TeamBriefText" data-snow-team-copy aria-label="Copy the text for your ServiceNow team">Copy</button>
+            <a class="button secondary" href="?name=@Uri.EscapeDataString(Model.Name ?? "")&amp;handler=TeamBrief" data-snow-team-download>Download (text)</a>
+        </p>
+        <ul class="checklist" data-snow-team>
+            @foreach (var g in Model.TeamBrief.GroupBy(x => x.Section))
+            {
+                <li><strong>@g.Key</strong>
+                    <ul>
+                        @foreach (var line in g)
+                        {
+                            <li data-snow-team-line="@line.Key" data-snow-done="@Done(line.Done)"><span class="@Tick(line.Done)">@(line.Done switch { true => "Done", false => "To do", _ => "Not known yet" })</span> @line.Text</li>
+                        }
+                    </ul>
+                </li>
+            }
+        </ul>
+
+        @* #912 THE TABLES TO CREATE: all three -- the two data staging tables and the staging status table -- each with every
+           column (name, label, type, length, meaning), a JSON definition to download and the REST Insert Multiple setting. *@
+        <h4 id="h-snow-team-tables">Tables to create in ServiceNow</h4>
+        <p class="hint" data-snow-team-tables-intro>Each table extends Import Set Row (<span class="mono">sys_import_set_row</span>). Create every column with exactly the name below (the label is free) and at least the length shown. The same definitions are in the text above (Copy / Download) and as JSON per table.</p>
+        @if (Model.StagingStatusTable.Length == 0)
+        {
+            <div class="notice warn" role="status" data-snow-status-unset>Until your ServiceNow team creates the staging status table, SecurityInsight sends the rows without it and shows a warning here: nothing tells your importer when a push is complete. Create <span class="mono">@ServiceNowStagingStatus.DefaultTable</span> below, then set <a href="/Admin/Settings?q=@Uri.EscapeDataString(ServiceNowStagingStatus.Setting)">@ServiceNowStagingStatus.Setting</a>.</div>
+        }
+        @foreach (var td in Model.TeamTables)
+        {
+            <section class="sub" aria-labelledby="h-snow-table-@td.Key" data-snow-team-table="@td.Key">
+                <h4 id="h-snow-table-@td.Key">@td.Title: <span class="mono">@(td.Table ?? "name not agreed yet")</span></h4>
+                <p class="hint">Label <strong>@td.Label</strong> · extends <span class="mono">@td.Extends</span> · @td.Columns.Count column(s)@if (td.Download is { Length: > 0 } dl) { <text> · </text><a href="@dl" data-snow-team-table-download="@td.Key">definition (JSON)</a> }</p>
+                <div class="table-wrap">
+                    <table class="grid" data-snow-team-table-columns="@td.Key" data-sortable>
+                        <thead><tr><th scope="col">Column name</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col">Max length</th><th scope="col">Meaning</th></tr></thead>
+                        <tbody>
+                            @foreach (var col in td.Columns)
+                            {
+                                <tr data-snow-team-column="@col.Name"><td class="mono">@col.Name</td><td>@col.Label</td><td class="mono">@col.Type</td><td class="num">@col.MaxLength</td><td class="wrap">@col.Meaning</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="hint">@td.Note</p>
+                @if (td.Key == "staging-status")
+                {
+                    <h4>Create it in the ServiceNow UI</h4>
+                    <ol data-snow-status-steps>
+                        @foreach (var step in ServiceNowStagingStatus.Steps(td.Table)) { <li>@step</li> }
+                    </ol>
+                    <p class="actions">
+                        <button type="button" class="secondary" data-copy="@ServiceNowStagingStatus.PlainText(td.Table)" data-snow-status-copy aria-label="Copy the staging status table's definition">Copy the definition</button>
+                    </p>
+                }
+            </section>
+        }
+    }
+</section>

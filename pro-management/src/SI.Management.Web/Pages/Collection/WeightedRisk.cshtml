@@ -1,0 +1,71 @@
+@page
+@model SI.Management.Web.Pages.Collection.WeightedRiskModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Collection
+<partial name="_Header" model="Model" />
+@if (Model.Current is not null)
+{
+    <nav class="tabs" aria-label="Weighted risk views" data-weighted-tabs>
+        <a href="@Model.TabLink(WeightedRiskModel.TabService)" aria-current="@(Model.CurrentTab == WeightedRiskModel.TabService ? "page" : "false")">By service</a>
+        <a href="@Model.TabLink(WeightedRiskModel.TabPivot)" aria-current="@(Model.CurrentTab == WeightedRiskModel.TabPivot ? "page" : "false")">Pivot</a>
+        <a href="@Model.TabLink(WeightedRiskModel.TabDistribution)" aria-current="@(Model.CurrentTab == WeightedRiskModel.TabDistribution ? "page" : "false")">Score distribution</a>
+    </nav>
+}
+@if (Model.CurrentTab == WeightedRiskModel.TabService && Model.Current is not null && !Model.ScopedFallback)
+{
+    @if (Model.Svc is not null || Model.Ci is not null)
+    {
+        <p><a href="@Model.GroupLink(Model.AssetFirst)" data-back>&larr; Every @(Model.AssetFirst ? "asset" : "service")</a></p>
+        @if (Model.Service is { } s)
+        {
+            <section class="card" aria-label="This service" data-service="@s.ServiceKey">
+                <dl class="kv">
+                    <dt>Weighted total</dt><dd>@ScoreFormat.Whole(s.WeightedTotal)</dd>
+                    <dt>Assets</dt><dd>@Fmt.Int(s.Assets)@(s.SharedAssets > 0 ? $" ({Fmt.Int(s.SharedAssets)} also in another service)" : "")</dd>
+                    <dt>Findings</dt><dd>@Fmt.Int(s.Findings): @Fmt.Int(s.Critical) Very High, @Fmt.Int(s.High) high, @Fmt.Int(s.Medium) medium, @Fmt.Int(s.Low) low</dd>
+                    @if (!s.IsNoService) { <dt>Service id</dt><dd>@s.ServiceKey</dd> }
+                </dl>
+            </section>
+        }
+    }
+    else
+    {
+        <div class="split weighted-switches" data-weighted-switches>
+            <div class="seg" role="group" aria-label="Sort by">
+                <span class="seg-label">Sort by:</span>
+                <a href="@Model.SortLink(true)" class="button small @(Model.SortedByCriticality ? "" : "secondary")" aria-pressed="@(Model.SortedByCriticality ? "true" : "false")" data-sort-by="criticality">Service criticality</a>
+                <a href="@Model.SortLink(false)" class="button small @(Model.SortedByCriticality ? "secondary" : "")" aria-pressed="@(Model.SortedByCriticality ? "false" : "true")" data-sort-by="weighted">Weighted risk</a>
+            </div>
+            <div class="seg" role="group" aria-label="Group by">
+                <span class="seg-label">Group by:</span>
+                <a href="@Model.GroupLink(false)" class="button small @(Model.AssetFirst ? "secondary" : "")" aria-pressed="@(Model.AssetFirst ? "false" : "true")" data-group-by="service">Service &rarr; Asset</a>
+                <a href="@Model.GroupLink(true)" class="button small @(Model.AssetFirst ? "" : "secondary")" aria-pressed="@(Model.AssetFirst ? "true" : "false")" data-group-by="asset">Asset &rarr; Service</a>
+            </div>
+        </div>
+        @if (Model.CmdbHint is { } hint)
+        {
+            <div class="notice" role="status" data-cmdb-empty>@hint <a href="/Cmdb">Open the CMDB page</a></div>
+        }
+        @if (Model.State is { } st && st.DerivedAt is not null && st.Services == 0 && !Model.AssetFirst)
+        {
+            <p class="hint" data-no-services>No CMDB service has an asset with a finding in this collection yet. Import your CMDB (and link its services to assets) to see the weighted risk per service.</p>
+        }
+        @if (Model.NoService is { } ns && !Model.AssetFirst)
+        {
+            <section class="card no-service" aria-label="@SI.Management.Core.ProData.WeightedServiceSql.NoServiceName" data-no-service>
+                <div class="split">
+                    <h2>@SI.Management.Core.ProData.WeightedServiceSql.NoServiceName</h2>
+                    <span class="actions">
+                        <a class="button small secondary" href="@Model.ViewLink(Model.PagePath, ("svc", CollectionViewSql.NoServiceKey))" data-no-service-assets>Show the @Fmt.Int(ns.Assets) asset(s)</a>
+                        <a class="button small secondary" href="@Model.NotInCmdbLink" data-not-in-cmdb>Not in the CMDB (correlation)</a>
+                    </span>
+                </div>
+                <p class="hint">@Fmt.Int(ns.Assets) asset(s) with @Fmt.Int(ns.Findings) finding(s) belong to no CMDB service: weighted total @ScoreFormat.Whole(ns.WeightedTotal)@(ns.TopAssetName is { } top ? ", the highest: " + top : ""). They are not in the list below.</p>
+            </section>
+        }
+    }
+}
+@if (Model.CurrentTab == WeightedRiskModel.TabDistribution && Model.Distribution is not null) { <partial name="_FacetTable" model="Model.Distribution" /> }
+@if (Model.CurrentTab == WeightedRiskModel.TabPivot && Model.Current is not null) { <partial name="_Pivot" model="Model" /> }
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

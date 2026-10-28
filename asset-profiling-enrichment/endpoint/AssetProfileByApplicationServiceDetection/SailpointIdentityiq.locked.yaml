@@ -1,0 +1,21 @@
+id:        SailpointIdentityiq
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'SailPoint IdentityIQ'
+category:  'Identity Governance'
+description: ''
+displayNames:
+  - 'SailPoint IdentityIQ'
+
+detections:
+  - id: SailpointIdentityiq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'identityiq*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Governance'
+      Category: 'Identity Governance'

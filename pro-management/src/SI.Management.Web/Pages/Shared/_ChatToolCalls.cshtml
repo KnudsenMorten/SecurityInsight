@@ -1,0 +1,10 @@
+@* The tool calls behind one chat answer: each tool, its source, its arguments and its query (as text). *@
+@model IReadOnlyList<ToolCallTrace>
+@foreach (var tc in Model)
+{
+    <div class="tool">
+        <div><strong class="tool-name">@tc.Tool</strong> <span class="badge">@tc.Source</span></div>
+        <p class="meta">Arguments: <code>@tc.ArgumentsJson</code></p>
+        <pre><code>@tc.Query</code></pre>
+    </div>
+}

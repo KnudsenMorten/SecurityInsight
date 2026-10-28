@@ -1,0 +1,122 @@
+@page
+@model SI.Management.Web.Pages.Departments.DetailModel
+@using SI.Management.Core.ProData
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Department is not null)
+{
+    var s = Model.Summary;
+    <div class="tiles" data-department-tiles>
+        <div class="tile">
+            <div class="label">Weighted risk</div>
+            <div class="value" data-weighted>@(s is null ? "0" : Model.Weighted(s))</div>
+            @if (Model.Change is { } c)
+            {
+                <div class="delta"><span class="@(c > 0 ? "up" : c < 0 ? "down" : "")">@Fmt.Signed(c)</span> since @Fmt.Time(Model.Trend[0].CollectionTime)@(c > 0 ? " (worse)" : c < 0 ? " (better)" : "")</div>
+            }
+        </div>
+        <div class="tile"><div class="label">Open findings</div><div class="value">@Fmt.Int(s?.Findings ?? 0)</div></div>
+        <div class="tile"><div class="label">Assets owned</div><div class="value">@Fmt.Int(Model.OwnedAssets.TryGetValue(Model.Department.DepartmentId, out var owned) ? owned : 0)</div>
+            <div class="delta">@Fmt.Int(s?.FindingAssets ?? 0) with findings</div></div>
+        @if (Model.Mine is null)
+        {
+            <div class="tile"><div class="label">Unassigned (everyone)</div><div class="value" data-unassigned>@Fmt.Int(Model.Unassigned?.Findings ?? 0)</div>
+                <div class="delta"><a href="@Model.ViewLink("/Departments/Unassigned")">Triage the Unassigned queue</a></div></div>
+        }
+    </div>
+
+    <section class="card" aria-labelledby="trend-h">
+        <h2 id="trend-h">Trend</h2>
+        @if (Model.Chart is not null) { <partial name="_Chart" model="Model.Chart" /> } else { <p class="hint">No resolved collection yet.</p> }
+    </section>
+
+    <div class="split">
+        <section class="card" aria-labelledby="sev-h">
+            <h2 id="sev-h">Open findings by severity</h2>
+            <table class="findings" data-sortable data-by-severity>
+                <thead><tr><th scope="col">Severity</th><th scope="col" class="num">Findings</th></tr></thead>
+                <tbody>
+                    @foreach (var kv in (s?.BySeverity ?? new Dictionary<string, long>()).OrderBy(k => SI.Management.Web.Pages.Departments.DetailModel.SeverityRank(k.Key)))
+                    {
+                        <tr><td>@kv.Key</td><td class="num"><a href="@Model.Link(("f.Severity", kv.Key))">@Fmt.Int(kv.Value)</a></td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+        <section class="card" aria-labelledby="tier-h">
+            <h2 id="tier-h">Open findings by tier</h2>
+            <table class="findings" data-sortable data-by-tier>
+                <thead><tr><th scope="col">Tier</th><th scope="col" class="num">Findings</th></tr></thead>
+                <tbody>
+                    @foreach (var kv in (s?.ByTier ?? new Dictionary<string, long>()).OrderBy(k => k.Key == ProDataFilters.Unclassified ? "9" : k.Key))
+                    {
+                        <tr><td>@SI.Management.Web.Pages.Tiers.TierLinks.Label(kv.Key)</td><td class="num"><a href="@Model.Link(("f.Tier", kv.Key))">@Fmt.Int(kv.Value)</a></td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    @if (Model.Governance is { } gov)
+    {
+        <section class="card" aria-labelledby="gov-h" data-department-governance>
+            <h2 id="gov-h">Governance</h2>
+            @if (gov.Note is not null) { <p class="hint">@gov.Note</p> }
+            else
+            {
+                @if (gov.Counts.Count == 0) { <p class="hint">No finding of the department has a status yet. Open a finding to comment on it, set its status or apply its remediation flow.</p> }
+                else
+                {
+                    <table class="findings" data-sortable data-governance-counts>
+                        <thead><tr><th scope="col">Status</th><th scope="col" class="num">Findings</th></tr></thead>
+                        <tbody>
+                            @foreach (var st in GovernanceStatuses.All.Where(x => gov.Counts.ContainsKey(x)))
+                            {
+                                <tr data-status="@st"><td>@GovernanceStatuses.Label(st)</td><td class="num">@Fmt.Int(gov.Counts[st])</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                @if (gov.Planned.Count > 0)
+                {
+                    <h3>Planned for a maintenance window</h3>
+                    <ul data-governance-planned>
+                        @foreach (var p in gov.Planned.Take(25))
+                        {
+                            <li>@p.RecommendationKey on <span class="mono">@p.AssetKey</span> -- @Fmt.Time(p.ScheduledFor)@(p.ScheduledFor < DateTime.UtcNow ? " (window passed: the next collections show whether it was fixed)" : "")</li>
+                        }
+                    </ul>
+                }
+                <h3>Newest entries</h3>
+                <partial name="_GovernanceLog" model="gov.Recent" />
+            }
+        </section>
+    }
+
+    <section class="card" aria-labelledby="svc-h">
+        <h2 id="svc-h">Services</h2>
+        @if (Model.Services.Count == 0)
+        {
+            <p class="hint">None of the department's assets is placed in a CMDB / business service.</p>
+        }
+        else
+        {
+            <table class="findings" data-sortable data-services>
+                <thead><tr><th scope="col">Service</th><th scope="col" class="num">Assets</th><th scope="col" class="num">Findings</th><th scope="col" class="num">Weighted risk</th></tr></thead>
+                <tbody>
+                    @foreach (var svc in Model.Services)
+                    {
+                        <tr><td>@svc.Service</td><td class="num" data-value="@Fmt.Raw(svc.Assets)">@Fmt.Int(svc.Assets)</td><td class="num" data-value="@Fmt.Raw(svc.Findings)">@Fmt.Int(svc.Findings)</td><td class="num" data-value="@Fmt.Raw(svc.Weighted)">@(svc.Weighted is { } w ? SI.Management.Web.Pages.Collection.CollectionPageModel.Num(w) : "–")</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
+@if (Model.Department is not null && User.IsAdmin())
+{
+    @* #258: an Admin sends an advisor or a person of the department a sign-in link from here too *@
+    var panel = new SI.Management.Web.Pages.Admin.Departments.AdvisorPanel(Model.Department.DepartmentId, "/Departments/Detail?id=" + Model.Department.DepartmentId, Compact: true);
+    <partial name="~/Pages/Admin/Departments/_Advisors.cshtml" model="panel" />
+}
+@if (Model.Grid is not null) { <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" /> }
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

@@ -1,0 +1,31 @@
+@model SI.Management.Web.Actions.ActionFormModel
+@* #693 Link as one: which finding stays (the script fills the choices from the count's preview; the no-script page here) *@
+@{
+    var choices = new List<(string Id, string Label)>();
+    string? problem = null;
+    string? pick = null;
+    if (Model.Targets is { Count: > 0 } t && Model.Action is SI.Management.Web.Actions.LinkFindingsAction la)
+    {
+        problem = SI.Management.Web.Actions.LinkFindingsAction.Collections(t);
+        if (problem is null)
+        {
+            var c = await la.CandidatesAsync(t, Context.RequestAborted);
+            if (c is null) problem = SI.Management.Web.Changes.FindingLinks.MissingKeyMessage;
+            else
+            {
+                foreach (var x in c.Where(x => x.Key is not null).GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase).Select(g => g.First()))
+                    choices.Add((x.FindingId, x.Key + " -- " + x.Title + (x.ReportName.Length > 0 ? " (" + x.ReportName + ")" : "") + " · " + x.Severity));
+                pick = c.Where(x => x.Key is not null).OrderByDescending(x => SI.Management.Web.Changes.FindingLinks.SeverityRank(x.Severity)).ThenByDescending(x => x.RiskScore).Select(x => x.FindingId).FirstOrDefault();
+            }
+        }
+    }
+}
+<p class="notice error" role="alert" data-link-problem hidden="@(problem is null)">@problem</p>
+<label for="@Model.Id("canonical")">The finding that stays (its key, title and severity; the others become its evidence)</label>
+<select id="@Model.Id("canonical")" name="a.canonical" data-link-canonical>
+    <option value="">the most severe of the selection</option>
+    @foreach (var (id, label) in choices) { <option value="@id" selected="@(id == pick)">@label</option> }
+</select>
+<label for="@Model.Id("reason")">Why are they one finding? (kept with the link and in the change history)</label>
+<textarea id="@Model.Id("reason")" name="a.reason" rows="3" maxlength="400" required minlength="3" placeholder="e.g. Defender for Cloud re-publishes the Defender for Endpoint vulnerability"></textarea>
+<p class="hint">Only findings of one CI can be linked. They become one finding from the next Risk Analysis run: one first-detected date, one state, one item in ServiceNow.</p>

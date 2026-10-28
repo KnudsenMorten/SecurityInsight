@@ -1,0 +1,152 @@
+@model SI.Management.Web.Settings.SettingFieldView
+@using SI.Management.Web.Settings
+@inject SettingsCatalog DocsCatalog
+@* ONE setting's editor -- the Settings page's cards AND a Get Started step (#446: "all fields must be in the get started,
+   writing to the same setting"). Same names (v: / ver: / scope: / reset:), so both post to SettingsSaver. *@
+@{
+    var f = Model.F;
+var s = f.Setting;
+var n = s.Name;
+var id = "f-" + n;
+var editable = (!s.NeedsSuperAdmin || Model.CanSuperAdmin) && !s.SetupOnly && Model.Unavailable is null;
+var search = string.Join(" ", new[] { s.Title, s.Hint, s.Name, s.PurposeText, f.Setting.Card }.Where(t => !string.IsNullOrWhiteSpace(t))).ToLowerInvariant();
+var info = s.MoreInfo;
+@* SETTING-INFO-1: a destructive or security-reducing value asks first -- the page's save reads data-confirm-when /
+   data-confirm and compares data-current with the value about to be saved (wwwroot/js/app/settings.js) *@
+<div class="set-field@(f.Editor == EditorKind.Chips ? " wide" : "")" id="s-@n" data-show-when="@Model.ShowWhen" hidden="@Model.Hidden" data-setting="@n" data-search="@search" data-changed="@(f.Changed ? "true" : "false")"
+     data-confirm-when="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.ConfirmWhen)" data-confirm="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.Confirm)" data-current="@(f.Text ?? "")" data-title="@s.Title">
+    <label class="set-label" for="@id">@s.Title@if (f.Changed) {<span class="set-dot" title="Changed from the default"><span class="sr-only"> (changed from the default)</span></span>}</label>
+    @switch (f.Editor)
+    {
+        case EditorKind.Toggle:
+            <span class="set-switch">
+                <input type="hidden" name="v:@n" value="false" disabled="@(!editable)" />
+                @{ var on = string.Equals(f.Text?.Trim(), "true", StringComparison.OrdinalIgnoreCase); }
+                <input type="checkbox" id="@id" name="v:@n" value="true" checked="@on" disabled="@(!editable)" />
+                @* the words follow the box: the same value here, and live in the browser (main.js) *@
+                <span class="set-switch-text" aria-live="polite">@(on ? (Model.Unavailable is null ? "On" : "On -- not applied") : "Off")</span>
+            </span>
+            break;
+        case EditorKind.TriState:
+            <select id="@id" name="v:@n" disabled="@(!editable)">
+                <option value="" selected="@(f.Row is null)">Not set</option>
+                <option value="true" selected="@(f.Row is not null && f.Text == "true")">On</option>
+                <option value="false" selected="@(f.Row is not null && f.Text == "false")">Off</option>
+            </select>
+            break;
+        case EditorKind.Number:
+            <span class="set-number">
+                <input type="number" id="@id" name="v:@n" value="@f.Text" min="@(s.Min is { } mn ? Fmt.Raw(mn) : null)" max="@(s.Max is { } mx ? Fmt.Raw(mx) : null)"
+                       step="@(s.Type == "int" ? "1" : "any")" inputmode="@(s.Type == "int" ? "numeric" : "decimal")" placeholder="@SettingsLayout.Placeholder(s)" disabled="@(!editable)" />
+                @if (!string.IsNullOrWhiteSpace(s.Unit)) { <span class="set-unit">@s.Unit</span> }
+            </span>
+            break;
+        case EditorKind.Select when s.Editor == "radio" && s.Values is { Count: > 0 }:
+        @* #446: a choice the catalog marks "editor": "radio" is a set of radio buttons -- every option visible, not hidden in a list *@
+        <div class="set-radios" role="radiogroup" aria-label="@s.Title">
+            @foreach (var v in s.Values!)
+            {
+                <label class="set-radio"><input type="radio" name="v:@n" value="@v" checked="@(string.Equals(v, f.Text, StringComparison.OrdinalIgnoreCase))" disabled="@(!editable)" data-choice-of="@n" /> @s.ChoiceLabel(v)</label>
+            }
+        </div>
+        break;
+    case EditorKind.Select:
+            var values = s.Values ?? Array.Empty<string>();
+            var known = values.Any(v => string.Equals(v, f.Text, StringComparison.OrdinalIgnoreCase));
+            <select id="@id" name="v:@n" disabled="@(!editable)">
+                @if (f.Row is null && SettingsLayout.DefaultRaw(s) is null) { <option value="" selected="selected">Default (@SettingsLayout.Placeholder(s))</option> }
+                @if (!known && !string.IsNullOrEmpty(f.Text)) { <option value="@f.Text" selected="selected">@f.Text (not one of the choices)</option> }
+                @foreach (var v in values)
+                {
+                    <option value="@v" selected="@(string.Equals(v, f.Text, StringComparison.OrdinalIgnoreCase))">@s.ChoiceLabel(v)</option>
+                }
+            </select>
+            break;
+        case EditorKind.Chips:
+            <div class="set-chips" data-chips data-mail="@(s.IsMailList ? "true" : "false")">
+                <textarea id="@id" name="v:@n" rows="3" spellcheck="false" disabled="@(!editable)"
+                          placeholder="@(s.IsMailList ? "One e-mail address per line" : "One per line")">@string.Join("\n", f.Items)</textarea>
+            </div>
+            break;
+        case EditorKind.Secret:
+            <input type="text" id="@id" name="v:@n" value="@f.Text" autocomplete="off" spellcheck="false" placeholder="Key Vault secret name" disabled="@(!editable)" />
+            <p class="set-hint">@(f.Row is null ? "Not set." : "Set.") The name of the secret in your Key Vault -- never the secret itself.</p>
+            @* #822: the secrets a person may set here get "Set value" (the value goes to Key Vault through the updater) *@
+            if (SI.Management.Web.Settings.SecretAllowList.Settings.TryGetValue(n, out var kvName))
+            {
+                <vc:secret-set target="@n" secret-name="@kvName" label="@s.Label" />
+            }
+            break;
+        case EditorKind.Elsewhere:
+            <p class="set-elsewhere">@SettingsDiff.Display(f.Row?.ValueJson ?? SettingsLayout.DefaultRaw(s), f.Row?.KeyVaultSecretName) -- <a href="@f.ElsewhereUrl">change it here</a></p>
+            break;
+        default:
+            <input type="text" id="@id" name="v:@n" value="@f.Text" spellcheck="false" placeholder="@SettingsLayout.Placeholder(s)" disabled="@(!editable)" />
+            break;
+    }
+    @if (f.Editor != EditorKind.Elsewhere)
+    {
+        <input type="hidden" name="ver:@n" value="@f.Version" />
+        <input type="hidden" name="scope:@n" value="@f.Scope" />
+    }
+    @if (Model.Unavailable is { } unavailable) { <p class="set-hint set-unavailable" data-unavailable>@(DetailedWorkbookLimit.IsOn(f.Text) ? "On, but not applied. " : "")@unavailable</p> }
+    @if (!string.IsNullOrWhiteSpace(s.Hint)) { <p class="set-hint">@s.Hint</p> }
+    @if (f.Needs is { } nd)
+    {
+        <p class="set-needs@(nd.Met ? "" : " unmet")" data-needs="@nd.Other.Name">Needs <a href="#s-@nd.Other.Name">@nd.Other.Title</a> @(nd.WantOn ? "on" : "off")@(nd.Met ? "" : " -- it is " + (nd.WantOn ? "off" : "on") + " now").</p>
+    }
+    @if (f.OtherRows.Count > 0)
+    {
+        <p class="set-hint">Also set for @string.Join(", ", f.OtherRows.Select(r => r.Scope == "solution" ? "every engine" : r.Scope.Replace("engine:", "") + " only")) -- <a href="@Url.Page("/Admin/Settings/Edit", new { name = n })">see every scope</a>.</p>
+    }
+    @if (s.NeedsSuperAdmin && !Model.CanSuperAdmin) { <p class="set-hint">(SuperAdmin required to change)</p> }
+    @if (s.SetupOnly) { <p class="set-hint" data-setup-only>@CatalogSetting.SetupOnlyNote -- shown here read-only; a value saved here would change nothing until setup runs again.</p> }
+    <p class="set-error" data-field-error hidden="@(string.IsNullOrEmpty(Model.Error))">@Model.Error</p>
+    <div class="set-foot">
+        @if (f.Row is not null && editable && f.Editor != EditorKind.Elsewhere)
+        {
+            <button type="submit" class="link small" name="reset:@n" value="1" formnovalidate data-reset="@n">Reset to default</button>
+        }
+        <details class="set-info">
+            <summary title="More info about this setting"><span>More info</span><span class="sr-only"> about @s.Title</span></summary>
+            <dl data-more-info>
+                <dt>What it does</dt><dd>@info.What</dd>
+                @if (s.Type == "bool")
+                {
+                    <dt>When on</dt><dd>@info.WhenOn</dd>
+                    <dt>When off</dt><dd>@info.WhenOff</dd>
+                }
+                else
+                {
+                    <dt>If you change it</dt><dd>@info.WhenChanged</dd>
+                }
+                <dt>Risk &amp; security</dt><dd class="@(info.ConfirmWhen is null ? "" : "risk")">@info.Risk</dd>
+                <dt>Requires</dt><dd>@info.Requires</dd>
+                <dt>Default</dt><dd class="default">@info.Default</dd>
+                <dt>Recommended</dt><dd>@info.Recommended</dd>
+                <dt>Now</dt>
+                <dd class="status">@if (f.Row is null) { <text>Using the default</text> } else { <text>Set in the database (@(f.Scope == "solution" ? "every engine" : f.Scope)) by @f.Row.UpdatedBy, @Fmt.Time(f.Row.UpdatedAt)</text> }</dd>
+                @foreach (var r in f.OtherRows)
+                {
+                    <dt>Also · @r.Scope</dt><dd><code>@s.WithUnit(SettingsDiff.Display(r.ValueJson, r.KeyVaultSecretName))</code></dd>
+                }
+                <dt>Internal name</dt>
+                <dd><code class="name">@n</code> <button type="button" class="copy secondary small" data-copy="@n" aria-label="Copy the internal name @n">Copy</button></dd>
+                @if (s.Engines.Count > 0) { <dt>Engines</dt><dd>@string.Join(", ", s.Engines)</dd> }
+                @if (!string.IsNullOrWhiteSpace(s.Description) && !string.Equals(s.Description, s.PurposeText, StringComparison.Ordinal))
+                {
+                    <dt>From the configuration file</dt><dd class="desc">@s.Description</dd>
+                }
+            </dl>
+            <p class="set-links"><a href="@Url.Page("/Admin/History", new { name = n })">Change history</a> · <a href="@Url.Page("/Admin/Settings/Edit", new { name = n })">Edit every scope</a></p>
+            @* #679: the page of THIS version's shipped documentation that explains the setting (ProductDocs\more-info.json,
+               by setting, else by its Settings-page category) -- only when that page and anchor are shipped, never a dead link *@
+            @if (SI.Management.Web.Docs.ProductDocLibrary.Shipped.MoreInfoFor(n, SettingsLayout.CategoryOf(DocsCatalog, s)) is { } docLink)
+            {
+                <p class="set-readmore" data-doc-link="@docLink.Href"><a href="@docLink.Href">Read in this version's documentation: @docLink.Text</a></p>
+            }
+            <p class="set-readmore"><a href="@info.DocUrl" target="_blank" rel="noopener">Read more on invardia.com</a></p>
+        </details>
+    </div>
+</div>
+}

@@ -1,0 +1,23 @@
+@page
+@model SI.Management.Web.Pages.Collection.TopFindingsModel
+<link rel="stylesheet" href="~/css/exec.css" asp-append-version="true" />
+<partial name="_Header" model="Model" />
+@if (Model.Exec is { } e)
+{
+    <div data-exec data-grain="@e.View.Grain" data-mode="@e.View.Mode">
+        @await Html.PartialAsync("_ExecSelector", (e.View, "/Collection/TopFindings"))
+        <partial name="_ExecEmpty" model="e" />
+        @* #863: a run that kept no list (the AI summary off) is said, with where the findings are -- never an empty "Top 50" *@
+        @if (e.View.Figures is { AISummaryEnabled: false, TopFindings.Count: 0 })
+        {
+            <partial name="~/Pages/Management/_AiSummaryOff.cshtml" model="@("This run kept no Top 50 findings list. " + SI.Management.Web.Navigation.NavModel.PathOf(SI.Management.Web.Navigation.NamedViews.SummaryPage) + ", view Critical and High, lists the findings from the database by rating, then Weighted Risk Score.")" />
+            <p class="hint" data-top-list-note><a href="@SI.Management.Web.Navigation.NamedViews.SummaryPage?view=critical-high">@SI.Management.Web.Navigation.NavModel.PathOf(SI.Management.Web.Navigation.NamedViews.SummaryPage): Critical and High</a></p>
+        }
+    </div>
+}
+@if (Model.Grid is not null)
+{
+    <p class="hint">The rank, severity, affected assets and Weighted Risk Score are the mail's. "Findings in this collection" counts this collection's findings of that CVE or configuration; a selected row acts on all of them.</p>
+    <partial name="_Grid" model="Model" />
+}
+<partial name="_Queries" model="Model" />

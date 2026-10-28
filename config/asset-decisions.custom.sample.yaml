@@ -1,0 +1,92 @@
+# =============================================================================
+#  asset-decisions.custom.sample.yaml   --   SecurityInsight #61
+#
+#  OPERATOR DECISIONS: override / exception / exemption.
+#
+#  TO USE THIS FILE: copy it to  asset-decisions.custom.yaml  in this same
+#  config\ folder. Everything under config\ is customer-owned: it is
+#  gitignored, never published to the public mirror, and never overwritten by
+#  an update. This .custom.sample.yaml is the documentation and ships with the
+#  solution.
+#
+#  Alternative locations:
+#    1. $global:SI_AssetDecisionsPath = 'D:\si-data\asset-decisions.custom.yaml'
+#       -- names one file outright. Nothing else is then read.
+#    2. $global:SI_EnrichmentDataRoot = 'D:\si-data'
+#       -- the operator-data overlay. The file is read from the ROOT of that
+#          folder: D:\si-data\asset-decisions.custom.yaml
+#    3. This folder (what you get by just copying the file here).
+#  Options 2 and 3 are ADDITIVE -- both are read when both exist.
+#
+#  NOTE ON WHERE THIS FILE MUST *NOT* GO:
+#  do not place it under asset-profiling-enrichment\. That tree is the
+#  DETECTION RULE tree, and the rule loader allow-lists *.custom.yaml there --
+#  so a decisions file dropped in it is picked up and parsed as a broken
+#  detection rule. Decisions are configuration, not rules; they live here.
+# =============================================================================
+#
+#  THE THREE WORDS, AND THE LINE THAT MATTERS
+#
+#    override    "the computed answer is WRONG -- use this instead"
+#                no expiry (it is a correction, not a deviation)
+#                *** CHANGES THE TIER ***
+#
+#    exception   "the answer is RIGHT, but treat this asset differently for
+#                 control X"                    expiry MANDATORY   tier: no
+#
+#    exemption   "this asset is OUT OF SCOPE for SecurityInsight"
+#                                               expiry MANDATORY   tier: n/a
+#
+#  ONLY `override` TOUCHES THE TIER. An `exception` or `exemption` that tries
+#  to set a tier is REJECTED, on purpose: collapsing "out of scope" into "just
+#  set it to tier 3" is how an estate fills with fake T3s that nobody can
+#  audit and nothing reports.
+#
+#  PROVENANCE IS MANDATORY ON EVERY ENTRY -- `by` and `at`. Without who and
+#  when, an override IS the undated machine tag this whole model exists to
+#  replace.
+#
+#  AN EXPIRED exception/exemption LAPSES AND IS REPORTED. It stops applying,
+#  the asset returns to normal treatment, and the run names it. Note the
+#  consequence: a lapse makes assets REAPPEAR in reports.
+#
+#  MACHINE TAGS KEEP WORKING. Where a tag and this file name the same asset,
+#  THE FILE WINS -- it can say who, when and why, and a tag cannot.
+#
+#  SELECTORS are exact or wildcard, case-insensitive. A short name matches an
+#  FQDN, so `SRV-01` also matches `SRV-01.corp.example`. Where several entries
+#  match one asset: most specific wins (an exact name beats a wildcard), then
+#  the most recent `at`.
+#
+#  EVERY RUN REPORTS what it loaded, what it REJECTED and what has LAPSED.
+#  If you expected a tier to move and it did not, check that report first --
+#  a selector matching nothing is the usual cause.
+# =============================================================================
+
+# ---- override: the engine got the tier wrong, and here is the right one -----
+- asset: SRV-APP-14
+  kind: override
+  tier: 1
+  reason: "AD CS role was moved to this host in July; the catalog cannot see it yet"
+  by: someone@example.com
+  at: 2026-08-13
+  # NO `expires:` on an override. An override with an expiry is REJECTED, and
+  # the error will suggest that you probably meant kind: exception.
+
+# ---- exemption: out of scope for SI entirely --------------------------------
+- asset: LAB-*
+  kind: exemption
+  reason: "lab segment on an isolated VLAN -- not part of the production estate"
+  by: someone@example.com
+  at: 2026-08-13
+  expires: 2026-11-30          # MANDATORY. On this date the lab hosts REAPPEAR.
+
+# ---- exception: in scope, tier is right, but one control is handled ---------
+- asset: SRV-LEGACY-03
+  kind: exception
+  reason: "vendor-locked OS; replacement project PRJ-4471 closes 2026-Q4"
+  by: someone@example.com
+  at: 2026-08-13
+  expires: 2026-12-31          # MANDATORY.
+  # NOTE: no `tier:` here. An exception does not change the tier -- the answer
+  # is right, you are recording how this asset is treated for a control.

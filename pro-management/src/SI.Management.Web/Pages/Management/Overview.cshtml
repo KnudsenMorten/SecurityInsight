@@ -1,0 +1,70 @@
+@page
+@model SI.Management.Web.Pages.Management.OverviewModel
+@using SI.Management.Web.RiskExec
+@{
+    ViewData["Title"] = "Executive overview";
+    var f = Model.Figures;
+}
+<h1>Executive overview</h1>
+<p class="scope-line muted" data-scope>@if (f.Current is { } cur) { <text>What you're looking at: the collection of </text><time data-utc datetime="@cur.CollectionTime.ToString("o")">@Fmt.When(cur.CollectionTime)</time><text>, open findings (exempted ones left out), active assets; accepted lifecycle: </text>@f.Grace<text> (per your settings); change since </text>@(f.Since ?? "the last report (none yet)")<text>.</text> } else { @f.Missing }</p>
+@if (f.Error is not null) { <div class="notice error" role="alert">@f.Error</div> }
+<partial name="_RunPicker" model="Model.Picker()" />
+<partial name="_KeyHeadline" model="f" />
+
+<nav class="topic-board" aria-label="Topics" data-topics>
+    @foreach (var (key, label) in ExecutiveFigures.Topics)
+    {
+        <a class="topic-button" href="@Model.Href(topic: key, pivot: "matrix")" data-topic="@key" aria-current="@(key == Model.TopicKey ? "page" : "false")">@label</a>
+    }
+</nav>
+
+@if (Model.TopicKey == "protection")
+{
+    <nav class="seg-row" aria-label="Protection Score view" data-protection-views>
+        <span class="muted">View</span>
+        <span class="seg" role="group">
+            @foreach (var (code, label) in ExecutiveFigures.ProtectionViews)
+            {
+                <a href="@Model.Href(view: code)" data-view="@code" aria-current="@(code == Model.ViewKey ? "true" : "false")">@label</a>
+            }
+        </span>
+    </nav>
+}
+@if (Model.HasCycles)
+{
+    <nav class="seg-row" aria-label="Patch cycle" data-cycles>
+        <span class="muted">Patch cycle</span>
+        <span class="seg" role="group">
+            @foreach (var (code, label) in ExecutiveFigures.Cycles)
+            {
+                <a href="@Model.Href(cycle: code)" data-cycle="@code" aria-current="@(code == Model.CycleKey ? "true" : "false")">@label</a>
+            }
+        </span>
+        <span class="muted">Findings</span>
+        <span class="seg" role="group">
+            <a href="@Model.Href(mode: "cve")" data-mode="cve" aria-current="@(Model.ModeKey == "cve" ? "true" : "false")">CVEs only</a>
+            <a href="@Model.Href(mode: "all")" data-mode="all" aria-current="@(Model.ModeKey == "all" ? "true" : "false")">All security findings</a>
+        </span>
+    </nav>
+}
+@if (Model.HasPivots)
+{
+    <nav class="seg-row" aria-label="Pivot" data-pivots>
+        <span class="muted">Show</span>
+        <span class="seg" role="group">
+            @foreach (var (key, label) in OverviewModel.Pivots)
+            {
+                <a href="@Model.Href(pivot: key)" data-pivot="@key" aria-current="@(key == Model.PivotKey ? "true" : "false")">@label</a>
+            }
+        </span>
+    </nav>
+}
+@foreach (var b in Model.TopicBlocks())
+{
+    <partial name="_ReportBlock" model="b" />
+}
+@if (!Model.HasPivots && f.Ready)
+{
+    <p class="hint" data-pivots-later>Pivots by tier, domain and department come with the stored groupings of the summary builder; the numbers open the views behind them.</p>
+}
+@foreach (var q in f.Queries) { <partial name="_Query" model="q" /> }

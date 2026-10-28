@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- #574: the ONE PDF builder (SIMailPdf.cs) as a library for the web app. The PowerShell engines compile the SAME
+       source at run time (engine/_shared/SI-MailPdf.ps1). The package versions equal SI.Pdf.packages.json (a test
+       keeps them equal). PDFsharp + MigraDoc: MIT. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>SecurityInsight.Pdf</RootNamespace>
+    <AssemblyName>SI.Pdf</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PDFsharp-MigraDoc" Version="6.2.4" />
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+  </ItemGroup>
+
+</Project>

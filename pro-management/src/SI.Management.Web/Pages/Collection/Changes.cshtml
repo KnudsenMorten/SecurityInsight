@@ -1,0 +1,51 @@
+@page
+@model SI.Management.Web.Pages.Collection.ChangesModel
+@{
+    ViewData["Title"] = Model.Heading;
+    var baseId = Model.Base?.CollectionId ?? Model.A;
+}
+<h1>@Model.Heading</h1>
+<p class="lede">@Model.Lede</p>
+@* owner 2026-10-19: what the view shows, with the filters as chips -- as on every view (_Header) *@
+@if (Model.Current is not null) { <partial name="~/Pages/Shared/_ViewScope.cshtml" model="await Model.ScopeAsync(ViewContext.HttpContext.RequestAborted)" /> }
+@if (Model.Collections.Count > 0)
+{
+    <form method="get" action="/Collection/Changes" class="picker" data-autosubmit aria-label="The two collections">
+        @if (Model.AssetsMode) { <input type="hidden" name="show" value="assets" /> }
+        <div>
+            <label for="pick-a">From (the earlier collection)</label>
+            <select id="pick-a" name="a">
+                @foreach (var c in Model.Collections) { <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == baseId)">@Fmt.When(c.CollectionTime)</option> }
+            </select>
+        </div>
+        <div>
+            <label for="pick-c">To (the later collection)</label>
+            <select id="pick-c" name="c">
+                @foreach (var c in Model.Collections) { <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c == Model.Collections[0] ? " · newest" : "")</option> }
+            </select>
+        </div>
+        <noscript><button type="submit">Compare</button></noscript>
+    </form>
+}
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@if (Model.Base is not null && Model.Current is not null && Model.Base.CollectionId != Model.Current.CollectionId)
+{
+    @if (Model.Base.CollectionTime > Model.Current.CollectionTime) { <div class="notice warn" role="status">"From" is the later of the two: new and no longer reported read backwards.</div> }
+    <div class="stat-row" data-change-summary>
+        @foreach (var (what, label) in new[] { ("findings", "findings"), ("assets", "assets (CIs)") })
+        {
+            @foreach (var k in new[] { "new", "gone", "changed" })
+            {
+                <div class="stat" data-what="@what" data-change="@k" title="@SI.Management.Web.Pages.Collection.ChangeWording.Tooltip(k, asset: what == "assets")"><div class="n">@Fmt.Int(Model.Count(what, k))</div><div class="l">@label @SI.Management.Web.Pages.Collection.ChangesModel.SummaryWord(k)</div></div>
+            }
+        }
+    </div>
+    <ul class="tabs" aria-label="Show">
+        <li><a href="/Collection/Changes?c=@Uri.EscapeDataString(Model.Current.CollectionId)&a=@Uri.EscapeDataString(Model.Base.CollectionId)" aria-current="@(!Model.AssetsMode ? "true" : "false")">Findings</a></li>
+        <li><a href="/Collection/Changes?c=@Uri.EscapeDataString(Model.Current.CollectionId)&a=@Uri.EscapeDataString(Model.Base.CollectionId)&show=assets" aria-current="@(Model.AssetsMode ? "true" : "false")">Assets (CIs)</a></li>
+    </ul>
+    <p class="hint">Unchanged rows are hidden; pick "Unchanged" in the Change column to see them too. "No longer reported" means not in the newer collection -- not that it was fixed; hover a row's Change for what is known about it. A finding is the same finding when the CI, the CVE or configuration and the report are the same.</p>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

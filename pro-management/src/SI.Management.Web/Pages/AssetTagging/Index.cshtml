@@ -1,0 +1,67 @@
+@page
+@model SI.Management.Web.Pages.AssetTagging.IndexModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.AssetTagging
+@{
+    ViewData["Title"] = "Asset tagging";
+    var isAdmin = User.IsAdmin();
+    var cat = Model.Catalog;
+}
+<div class="split"><h1>Asset tagging</h1>
+    @if (isAdmin && cat is { Schema: true }) { <span><a class="button" href="/AssetTagging/Edit" data-add-tag>Add a tag</a></span> }
+</div>
+<p class="lede">The tags the tagging run writes on assets (CIs) in Microsoft Defender -- a tier tag, or an "excluded" tag that keeps an asset out of the reports -- and the switches that turn the automatic exclusion tags on.</p>
+<details class="help" data-tagging-help>
+    <summary>How asset tagging works, and what you can change</summary>
+    <p><strong>A tag rule</strong> runs its query (in the Defender exposure graph, Azure Resource Graph or Log Analytics) and writes its tag on every asset the query returns. Its name says what it sets: <em>&lt;name&gt;--tier&lt;N&gt;--SI</em> sets a tier, <em>&lt;name&gt;--Excluded--SI</em> excludes the asset. A rule of yours with the same name part replaces the vendor's (change only the tier, for example). <strong>Mode</strong>: a Test tag runs only when the run is asked for test tags.</p>
+    <p><strong>Gates.</strong> A tag that names a gate runs only while that switch is on. The four automatic exclusions (devices that can be onboarded, have too little information, are unsupported, or match your device-name patterns) are off until you switch them on. This is v2.2's asset-tagging.config.json.</p>
+    <p><strong>Saving.</strong> Nothing is written on these pages; changes go through Review &amp; commit.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@foreach (var m in Model.Messages) { <div class="notice error" role="status" data-message>@m</div> }
+@if (cat is not null)
+{
+    @foreach (var n in cat.Notes) { <div class="notice warn" role="status" data-note>@n</div> }
+    @if (cat.Schema)
+    {
+        <section class="card" aria-labelledby="h-tags">
+            <h2 id="h-tags">Tag rules <span class="badge" data-tag-count>@Fmt.Int(cat.Tags.Count)</span></h2>
+            @* #589: every field of a rule (the query too, to add), the chooser, the all-rows exports *@
+            @if (Model.TableView("tags") is { } tv) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" /> }
+        </section>
+
+        <section class="card" aria-labelledby="h-gates" data-gates>
+            <h2 id="h-gates">Gates and device-name patterns</h2>
+            @if (cat.ConfigBody is null) { <p class="hint" data-no-gates>No gates are stored: every gated tag is off.</p> }
+            else if (cat.ConfigUpdatedBy is not null) { <p class="hint">Last changed by @cat.ConfigUpdatedBy @Fmt.Time(cat.ConfigUpdatedAt)</p> }
+            <form method="post" asp-page-handler="Gates" data-gates-form>
+                <input type="hidden" name="Gates.Original" value="@Model.Gates.Original" />
+                <fieldset class="filters">
+                    <legend>Switches</legend>
+                    @for (var i = 0; i < Model.Gates.Switches.Count; i++)
+                    {
+                        var s = Model.Gates.Switches[i];
+                        <input type="hidden" name="Gates.Switches[@i].Path" value="@s.Path" />
+                        <label data-switch="@s.Path"><input type="checkbox" name="Gates.Switches[@i].On" value="true" checked="@(s.On ? "checked" : null)" disabled="@(isAdmin ? null : "disabled")" /> @s.Path</label>
+                        <input type="hidden" name="Gates.Switches[@i].On" value="false" />
+                    }
+                </fieldset>
+                <div class="filters">
+                    <div><label for="g-sw">Device names starting with (one per line)</label><textarea id="g-sw" name="Gates.StartsWith" rows="3" readonly="@(isAdmin ? null : "readonly")">@Model.Gates.StartsWith</textarea></div>
+                    <div><label for="g-co">Device names containing (one per line)</label><textarea id="g-co" name="Gates.Contains" rows="3" readonly="@(isAdmin ? null : "readonly")">@Model.Gates.Contains</textarea></div>
+                    <div><label for="g-rx">Device names matching (.NET patterns, one per line)</label><textarea id="g-rx" name="Gates.MatchesRegex" rows="3" readonly="@(isAdmin ? null : "readonly")">@Model.Gates.MatchesRegex</textarea></div>
+                </div>
+                @if (isAdmin)
+                {
+                    <div class="filters">
+                        <div class="wide"><label for="g-reason">Reason (recorded with the change)</label><input id="g-reason" type="text" name="Reason" maxlength="400" value="@Model.Reason" placeholder="why" /></div>
+                    </div>
+                    <div class="actions">
+                        <button type="submit" name="Act" value="save" data-gates-stage>Stage the gates for Review &amp; commit</button>
+                        @if (cat.ConfigVersion is not null) { <button type="submit" name="Act" value="reset" class="secondary" data-gates-reset>Remove the stored gates</button> }
+                    </div>
+                }
+            </form>
+        </section>
+    }
+}

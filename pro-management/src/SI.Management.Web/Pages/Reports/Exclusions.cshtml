@@ -1,0 +1,55 @@
+@page
+@model SI.Management.Web.Pages.Reports.ExclusionsModel
+@{
+    ViewData["Title"] = "Exclusions";
+    var edit = Model.CanEdit;
+    string Label(string k) => k == "global" ? "Every report (global)" : k;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/Exclusions")" />
+<p class="lede">What Risk Analysis never reports: assets carrying an excluded tag (every report), and per report CVEs, configuration ids, tags and a minimum CVE age. These are your "never report" rules -- an exemption of one finding is a different thing (Exemptions).</p>
+<partial name="_Notices" model="Model" />
+
+@if (Model.State is not null)
+{
+    <form method="get" action="/Reports/Exclusions" class="filterbar" data-autosubmit aria-label="Which exclusions">
+        <div class="wide"><label for="ex-key">Exclusions of</label>
+            <select id="ex-key" name="key" data-exclusion-key>
+                <option value="global" selected="@Model.Global">@Label("global")@(Model.All.Any(d => d.Key == "global") ? " -- set" : "")</option>
+                @foreach (var r in Model.ReportNames) { <option value="@r" selected="@(Model.Key == r)">@r@(Model.All.Any(d => d.Key == r) ? " -- set" : "")</option> }
+            </select></div>
+        <div class="actions"><button type="submit" class="secondary">Open</button></div>
+    </form>
+    <section class="card" aria-labelledby="h-ex">
+        <h2 id="h-ex">@Label(Model.Key ?? "global") @if (Model.Document is null) { <span class="badge" data-no-document>none set</span> } else { <span class="badge good">set by @Model.Document.UpdatedBy</span> } @if (Model.Edited) { <span class="badge warn" data-edited>edited, not staged</span> }</h2>
+        <form method="post" enctype="multipart/form-data" data-exclusions="@(edit ? "edit" : "read")">
+            <input type="hidden" name="Key" value="@Model.Key" />
+            <label for="ex-search">Search the lists</label><input id="ex-search" type="search" placeholder="CVE, id or tag" data-list-search />
+            @if (!Model.Global)
+            {
+                <div class="list-editor" data-list-editor="Cves"><label for="ex-cves">Excluded CVEs</label>
+                    <textarea id="ex-cves" name="Cves" rows="6" class="code" readonly="@(!edit)" data-list-source placeholder="CVE-2024-12345 (one per line)">@Model.Cves</textarea></div>
+                <div class="list-editor" data-list-editor="ConfigurationIds"><label for="ex-ids">Excluded configuration ids</label>
+                    <textarea id="ex-ids" name="ConfigurationIds" rows="6" class="code" readonly="@(!edit)" data-list-source placeholder="scid-2090 (one per line)">@Model.ConfigurationIds</textarea></div>
+            }
+            <div class="list-editor" data-list-editor="AssetTags"><label for="ex-tags">Excluded asset tags</label>
+                <textarea id="ex-tags" name="AssetTags" rows="4" class="code" readonly="@(!edit)" data-list-source placeholder="--Excluded--SI (one per line)">@Model.AssetTags</textarea></div>
+            @if (!Model.Global)
+            {
+                <div><label for="ex-age">Only report CVEs older than (days, 0 = all)</label><input id="ex-age" type="number" min="0" max="3650" step="1" name="CveMinAgeDays" value="@Model.CveMinAgeDays" readonly="@(!edit)" /></div>
+            }
+            @if (edit)
+            {
+                <div class="filters">
+                    <div><label for="ex-up">Import a v2.2 exclusions file (.json)</label><input id="ex-up" type="file" name="Upload" accept=".json,application/json" /></div>
+                    <div class="actions"><button type="submit" asp-page-handler="Import" class="secondary" data-import>Import into the lists</button></div>
+                </div>
+                <div class="filters">
+                    <div class="wide"><label for="ex-reason">Reason (recorded with the change)</label><input id="ex-reason" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                    <div class="actions"><button type="submit" asp-page-handler="Stage" data-stage-button>Stage for Review &amp; commit</button> <a class="button secondary" href="/Reports/Exclusions?key=@Uri.EscapeDataString(Model.Key ?? "global")">Discard edits</a></div>
+                </div>
+            }
+            else { <p class="hint">Read-only: an Admin changes exclusions.</p> }
+        </form>
+    </section>
+}

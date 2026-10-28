@@ -1,0 +1,132 @@
+@page
+@model SI.Management.Web.Pages.Admin.DeviationsModel
+@using SI.Management.Web.Deviations
+@{
+    ViewData["Title"] = "Deviations";
+    var f = Model.Filter;
+    var route = new { kind = f.Kind, owner = f.Owner, age = f.Age, expiry = f.Expiry };
+}
+<h1>Deviations</h1>
+<p class="lede">Everything that differs from the shipped defaults, in one place: what was exempted, excluded, turned off, moved to another tier, overridden or set differently -- by whom, when, why, and until when.</p>
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+
+<div class="tiles">
+    <div class="tile"><div class="label">Deviations</div><div class="value" data-count="all">@Fmt.Int(Model.All.Count)</div></div>
+    <div class="tile"><div class="label">Expiring within 30 days</div><div class="value" data-count="expiring">@Fmt.Int(Model.Expiring)</div></div>
+    <div class="tile"><div class="label">Expired</div><div class="value" data-count="expired">@Fmt.Int(Model.Expired)</div></div>
+    @if (Model.ReviewOverdue.Count > 0)
+    {
+        <a class="tile" href="/Exemptions?view=overdue"><div class="label">Exemption review overdue</div><div class="value" data-count="review-overdue">@Fmt.Int(Model.ReviewOverdue.Count)</div></a>
+    }
+    @foreach (var k in DeviationReport.Kinds)
+    {
+        var n = Model.All.Count(r => r.Kind == k);
+        if (n > 0)
+        {
+            <div class="tile" data-kind-tile="@k"><div class="label">@DeviationReport.KindLabel(k)</div><div class="value">@Fmt.Int(n)</div></div>
+        }
+    }
+</div>
+
+<form method="get" class="filters">
+    <div>
+        <label for="kind">Kind</label>
+        <select id="kind" name="kind">
+            @* #287: each choice with how many it gives under the other filters; an empty one dimmed and last *@
+            <option value="" data-count="@Model.AnyKind">All kinds (@Fmt.Int(Model.AnyKind))</option>
+            @foreach (var c in Model.KindChoices)
+            {
+                <option value="@c.Value" selected="@(c.Value == f.Kind)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option>
+            }
+        </select>
+    </div>
+    <div>
+        <label for="owner">Owner or changed by contains</label>
+        <input id="owner" type="search" name="owner" value="@f.Owner" />
+    </div>
+    <div>
+        <label for="age">Age</label>
+        <select id="age" name="age">
+            <option value="" data-count="@Model.AnyAge">Any age (@Fmt.Int(Model.AnyAge))</option>
+            @foreach (var c in Model.AgeChoices)
+            {
+                <option value="@c.Value" selected="@(c.Value == f.Age)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option>
+            }
+        </select>
+    </div>
+    <div>
+        <label for="expiry">Expiry</label>
+        <select id="expiry" name="expiry">
+            <option value="" data-count="@Model.AnyExpiry">Any (@Fmt.Int(Model.AnyExpiry))</option>
+            @foreach (var c in Model.ExpiryChoices)
+            {
+                <option value="@c.Value" selected="@(c.Value == f.Expiry)" class="@(c.Count == 0 ? "value-empty" : null)" data-count="@c.Count">@c.Label (@Fmt.Int(c.Count))</option>
+            }
+        </select>
+    </div>
+    <div class="actions">
+        <button type="submit">Filter</button>
+        <a class="button" href="@Url.Page("/Admin/Deviations", "Csv", route)" data-export="csv">Export CSV</a>
+        @if (Model.ExcelAvailable)
+        {
+            <a class="button" href="@Url.Page("/Admin/Deviations", "Xlsx", route)" data-export="xlsx">Export to Excel</a>
+        }
+    </div>
+</form>
+
+<section class="card">
+    <p class="meta">@Fmt.Int(Model.Rows.Count) of @Fmt.Int(Model.All.Count) deviation(s) shown.</p>
+    @if (Model.Rows.Count == 0)
+    {
+        <p class="hint">@(Model.All.Count == 0 ? "Nothing deviates from the shipped defaults." : "No deviation matches the filter.")</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead>
+                    <tr><th>Kind</th><th>Item</th><th>Scope</th><th>Shipped / default</th><th>Current</th><th>Reason</th><th>Owner</th><th>Changed by</th><th>Changed</th><th>Expires</th><th>Status</th><th>History</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in Model.Rows)
+                    {
+                        <tr data-kind="@r.Kind" data-status="@r.Status">
+                            <td>@DeviationReport.KindLabel(r.Kind)</td>
+                            <td class="wrap"><code>@r.Item</code></td>
+                            <td class="wrap">@r.Scope</td>
+                            <td class="wrap"><code>@r.ShippedDefault</code></td>
+                            <td class="wrap"><code>@r.Current</code></td>
+                            <td class="wrap">@r.Reason</td>
+                            <td class="wrap">@r.Owner</td>
+                            <td class="wrap">@r.ChangedBy</td>
+                            <td>@Fmt.Time(r.ChangedAtUtc)</td>
+                            <td>@Fmt.Time(r.ExpiresAtUtc)</td>
+                            <td>
+                                @switch (r.Status)
+                                {
+                                    case "expired": <span class="badge bad">expired</span> break;
+                                    case "expiring": <span class="badge warn">expiring</span> break;
+                                    default: <span class="badge good">active</span> break;
+                                }
+                                @if (Model.ReviewOverdue.Contains(r.HistoryName)) { <span class="badge warn" data-review-overdue>review overdue</span> }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(r.HistoryName))
+                                {
+                                    <a href="@Url.Page("/Admin/History", new { name = r.HistoryName })" data-history="@r.HistoryName">history</a>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    @foreach (var q in Model.Queries)
+    {
+        <partial name="_Query" model="QueryInfo.Sql(q, SqlDeviationSource.LabelOf(q))" />
+    }
+</section>

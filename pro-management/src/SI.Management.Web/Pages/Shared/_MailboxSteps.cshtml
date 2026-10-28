@@ -1,0 +1,57 @@
+@model (SI.Management.Web.Settings.SharedMailboxSteps Steps, string ReturnTo, bool CanAct)
+@using SI.Management.Web.Settings
+@* #503: the shared mailbox in TWO steps -- Settings > E-mail and Get Started's mail step. Step 1 names the mailbox (the
+   company's own naming) and builds the command from the fields, shown once the name is filled in (mailbox-steps.js
+   builds the same string as SharedMailboxSteps.Command); Save remembers the address. Step 2 knows the address: one button
+   saves it as the sender, runs the check and sends a test mail. The address is typed in ONE place. *@
+@{
+    var st = Model.Steps;
+    var cmd = st.CommandText;
+}
+<section class="card mailbox-steps" aria-labelledby="h-mailbox-steps" data-mailbox-steps>
+    <h3 id="h-mailbox-steps">Office 365 shared mailbox -- in two steps</h3>
+
+    <h4 id="mailbox-step1">Step 1 -- Name and create</h4>
+    <form method="post" asp-page="/Admin/Settings/Email" asp-page-handler="MailboxName" class="form-grid" data-mailbox-step1 data-sub="@st.SubscriptionId" data-rg="@st.ResourceGroup">
+        <input type="hidden" name="ReturnTo" value="@Model.ReturnTo" />
+        <div><label for="mb-name">Mailbox name</label><input id="mb-name" type="text" name="MailboxName" value="@st.MailboxName" maxlength="64" pattern="[A-Za-z0-9._-]{1,64}" autocomplete="off" spellcheck="false" data-mb-name /><span class="hint">Your company's own naming -- the part before the &#64;.</span></div>
+        @* the domains SecurityInsight knows (the remembered one, yours, the tenant's initial domain) -- or another one, typed *@
+        <div>
+            <label for="mb-domain">Domain</label>
+            <select id="mb-domain" name="MailDomainPick" data-mb-domain-pick>
+                @foreach (var d in st.Domains) { <option value="@d" selected="@(string.Equals(d, st.Domain, StringComparison.OrdinalIgnoreCase))">@d</option> }
+                <option value="@SharedMailboxSteps.OtherDomain" selected="@(st.Domains.Count == 0)">Another domain...</option>
+            </select>
+            <input id="mb-domain-other" type="text" name="MailDomainOther" maxlength="253" autocomplete="off" spellcheck="false" placeholder="contoso.com" aria-label="Another domain" hidden="@(st.Domains.Count > 0)" data-mb-domain-other />
+        </div>
+        <div><label for="mb-display">Display name</label><input id="mb-display" type="text" name="MailDisplayName" value="@st.DisplayName" maxlength="64" data-mb-display /></div>
+        <fieldset>
+            <legend>The mailbox</legend>
+            <label><input type="radio" name="MailboxExists" value="false" checked="@(!st.Exists)" data-mb-exists /> Create it</label>
+            <label><input type="radio" name="MailboxExists" value="true" checked="@st.Exists" data-mb-exists /> It already exists</label>
+        </fieldset>
+        <div class="wide" data-mb-command-block hidden="@(cmd is null)">
+            <p>Your Exchange administrator runs this (it shows the plan first without <code>-Apply</code>):</p>
+            <pre class="mono" data-mail-command>@cmd</pre>
+            <p class="hint"><a href="@SharedMailboxSteps.DocUrl" target="_blank" rel="noopener">@SI.Management.Web.Links.ScriptDocs.LinkText</a> · <a href="@MailSetupFlow.ScriptUrl">Download Set-SIMail.ps1</a></p>
+        </div>
+        @if (Model.CanAct) { <div class="actions"><button type="submit" data-mb-save>Save the mailbox name</button></div> }
+    </form>
+
+    <h4 id="mailbox-step2">Step 2 -- Validate</h4>
+    @if (st.Remembered is { } addr)
+    {
+        <p data-mb-remembered>The shared mailbox: <strong>@addr</strong></p>
+        @if (Model.CanAct)
+        {
+            <form method="post" asp-page="/Admin/Settings/Email" asp-page-handler="MailboxValidate" data-mailbox-step2>
+                <input type="hidden" name="ReturnTo" value="@Model.ReturnTo" />
+                <button type="submit" data-mb-validate>Use it as the sender, check it and send a test mail</button>
+            </form>
+        }
+    }
+    else
+    {
+        <p class="muted" data-mb-no-address>Save the mailbox name in step 1 first -- step 2 then knows the address.</p>
+    }
+</section>

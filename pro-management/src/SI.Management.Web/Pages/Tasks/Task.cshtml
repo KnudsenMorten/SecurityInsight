@@ -1,0 +1,89 @@
+@page
+@model SI.Management.Web.Pages.Tasks.TaskModel
+@using SI.Management.Web.Tasks
+@{
+    var t = Model.Item;
+    ViewData["Title"] = t?.Title ?? "Task";
+}
+<p class="split"><a href="/Tasks">&larr; My tasks</a> <a href="/Tasks/Delegated">Delegated tasks</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (t is not null)
+{
+    var bucket = TaskDue.Bucket(t.Status, DateOnly.FromDateTime(t.DueDate), t.CompletedAt, Model.Today);
+    <h1>@t.Title</h1>
+    <p class="lede"><span class="badge @(bucket == "overdue" ? "bad" : bucket == "soon" ? "warn" : bucket is "recent" or "done" ? "good" : "")" data-task-state="@t.Status" data-bucket="@bucket">@TaskDue.Label(bucket)</span>
+        · for @t.AssigneeName · due @t.DueDate.ToString("yyyy-MM-dd")</p>
+    @if (t.IsOpen && t.FindingResolved)
+    {
+        <div class="notice ok" role="status" data-resolved data-utc>The vulnerability close-loop closed this finding@(t.ResolvedAt is { } ra ? " on " + Fmt.When(ra) : "")@(t.ResolvedReason is { Length: > 0 } rr ? " (" + rr + ")" : ""). Finding resolved -- close the task? It is not closed automatically.</div>
+    }
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-t">
+            <h2 id="h-t">The task</h2>
+            <dl class="kv">
+                <dt>For</dt><dd>@t.AssigneeName <span class="kind-tag">@AssigneeKinds.Label(t.AssigneeKind)</span>@if (t.AssigneeMail is { Length: > 0 } m) { <span class="muted"> @m</span> }</dd>
+                <dt>Due</dt><dd>@t.DueDate.ToString("yyyy-MM-dd")</dd>
+                @if (t.RemindAt is { } rem) { <dt>Reminder</dt><dd>@rem.ToString("yyyy-MM-dd")</dd> }
+                <dt>Status</dt><dd>@TaskStatuses.Label(t.Status)@if (t.CompletedAt is { } ca) { <span class="muted"> -- @t.CompletedBy, @Fmt.Time(ca)</span> }</dd>
+                @if (t.CompletionNote is { Length: > 0 } cn) { <dt>Note on @TaskStatuses.Label(t.Status).ToLowerInvariant()</dt><dd class="wrap">@cn</dd> }
+                <dt>Created</dt><dd>@t.CreatedBy, @Fmt.Time(t.CreatedAt)</dd>
+                @if (t.Note is { Length: > 0 } n) { <dt>Note</dt><dd class="wrap">@n</dd> }
+            </dl>
+        </section>
+        <section class="card" aria-labelledby="h-f">
+            <h2 id="h-f">The finding</h2>
+            <dl class="kv">
+                <dt>Finding</dt><dd><a href="/Departments/Finding?asset=@Uri.EscapeDataString(t.AssetKey)&amp;rec=@Uri.EscapeDataString(t.RecommendationKey)" data-task-finding>@(t.FindingTitle ?? t.RecommendationKey)</a></dd>
+                <dt>Recommendation</dt><dd class="mono">@t.RecommendationKey</dd>
+                <dt>Asset</dt><dd>@(t.AssetName ?? t.AssetKey)</dd>
+                <dt>Department</dt><dd>@(t.DepartmentName ?? "Unassigned")</dd>
+            </dl>
+        </section>
+    </div>
+
+    <section class="card" aria-labelledby="h-a">
+        <h2 id="h-a">Follow up</h2>
+        @if (t.IsOpen)
+        {
+            @if (Model.CanComplete?.Allowed == true)
+            {
+                <form method="post" asp-page-handler="Complete" asp-route-id="@t.TaskId" class="stack" data-task-complete>
+                    <label for="c-note">What came back (optional)</label>
+                    <textarea id="c-note" name="note" rows="2" maxlength="2000"></textarea>
+                    <button type="submit">Complete the task</button>
+                </form>
+            }
+            @if (Model.CanCancel?.Allowed == true)
+            {
+                <details class="more">
+                    <summary>Cancel the task</summary>
+                    <form method="post" asp-page-handler="Cancel" asp-route-id="@t.TaskId" class="stack" data-task-cancel>
+                        <label for="x-note">Why (required, audited)</label>
+                        <input id="x-note" name="note" maxlength="2000" required minlength="3" />
+                        <button type="submit" class="secondary">Cancel the task</button>
+                    </form>
+                </details>
+            }
+            @if (Model.CanComplete?.Allowed != true && Model.CanCancel?.Allowed != true) { <p class="hint" data-task-readonly>@Model.CanComplete?.Reason</p> }
+        }
+        else if (Model.CanReopen?.Allowed == true)
+        {
+            <form method="post" asp-page-handler="Reopen" asp-route-id="@t.TaskId" class="stack" data-task-reopen>
+                <label for="o-note">Why (optional)</label>
+                <input id="o-note" name="note" maxlength="2000" />
+                <button type="submit" class="secondary">Reopen the task</button>
+            </form>
+        }
+        else { <p class="hint" data-task-readonly>@Model.CanReopen?.Reason</p> }
+    </section>
+
+    <section class="card" aria-labelledby="h-h">
+        <h2 id="h-h">History</h2>
+        <ol class="thread" data-task-history>
+            @foreach (var h in Model.History)
+            {
+                <li data-action="@h.Action"><strong>@TaskActions.Label(h.Action)</strong> -- @h.ChangedBy <span class="hint">@Fmt.Time(h.ChangedAt)</span>@if (h.Note is { Length: > 0 } hn) { <p class="wrap">@hn</p> }</li>
+            }
+        </ol>
+    </section>
+}

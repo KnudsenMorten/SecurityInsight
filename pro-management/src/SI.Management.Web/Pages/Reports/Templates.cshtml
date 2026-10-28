@@ -1,0 +1,118 @@
+@page
+@model SI.Management.Web.Pages.Reports.TemplatesModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Reports
+@{
+    ViewData["Title"] = "Report templates";
+    var edit = Model.CanEdit;
+    var sel = Model.Selected;
+}
+<h1>Reports</h1>
+<partial name="_Tabs" model="@("/Reports/Templates")" />
+<p class="lede">A report template is the set of reports one Risk Analysis run produces, in order. Drag reports from the catalog into a template, reorder them and take them out; create, copy, rename and retire templates.</p>
+<partial name="_Notices" model="Model" />
+
+@if (Model.State is { } st)
+{
+    <section class="card" aria-labelledby="h-tpls">
+        <h2 id="h-tpls">Templates</h2>
+        <p class="hint">Choose the template to work on. The selected one is highlighted; its reports are listed below.</p>
+        @* #312: one row per template (was one flowing line of pills); the selected row is marked in colour, with a check and
+           the word "Selected", and its link carries aria-current. Job names in plain words, the resource name in a tooltip. *@
+        <table class="template-picker" data-template-list data-sortable>
+            <thead><tr><th scope="col">Template</th><th scope="col">Kind</th><th scope="col">Used by</th><th scope="col" class="num">Reports</th><th scope="col" data-sort="off"><span class="sr-only">Action</span></th></tr></thead>
+            <tbody>
+                @foreach (var t in st.Templates)
+                {
+                    var isSel = sel?.Key == t.Key;
+                    var href = "/Reports/Templates?name=" + Uri.EscapeDataString(t.Name);
+                    <tr data-template="@t.Name" class="@(isSel ? "is-selected" : null)" data-selected="@(isSel ? "true" : "false")">
+                        <th scope="row" data-label="Template"><a href="@href" aria-current="@(isSel ? "page" : "false")">@t.Name</a>
+                            @if (!t.Enabled) { <span class="badge bad">Retired</span> }</th>
+                        <td data-label="Kind"><span class="badge @(t.Origin == ReportOrigin.Vendor ? "good" : t.Origin == ReportOrigin.Changed ? "warn" : "")" data-kind>@TemplatesModel.KindLabel(t.Origin)</span></td>
+                        <td data-label="Used by">@if (Model.Jobs.TryGetValue(t.Name, out var job)) { <span data-job="@t.Name" title="@TemplatesModel.JobTooltip(job)">@TemplatesModel.JobCell(job)</span> } else { <span class="hint">Not run by a job</span> }</td>
+                        <td data-label="Reports" class="num">@Fmt.Int(ReportBody.Included(t.Json).Count)</td>
+                        <td class="pick">@if (isSel) { <span class="selected-mark" data-selected-mark>&#10003; Selected</span> } else { <a class="button small secondary" href="@href" aria-label="Open @t.Name">Open</a> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+
+    <form method="post" data-template-builder="@(edit ? "edit" : "read")" id="tb-form">
+        <input type="hidden" name="Name" value="@sel?.Name" />
+        <input type="hidden" name="Draft" value="@Model.DraftJson()" data-draft />
+        <input type="hidden" value="@Model.CatalogJson()" data-catalog />
+        <div class="split builder" data-builder>
+            <section class="card" aria-labelledby="h-catalog" data-builder-catalog>
+                <h2 id="h-catalog">Catalog</h2>
+                <label for="tb-search">Search reports</label>
+                <input id="tb-search" type="search" placeholder="report name or domain" data-catalog-search />
+                <label class="check-inline"><input type="checkbox" data-hide-added /> Hide reports already in the template</label>
+                @* #312: a report already in the selected template shows "Added ✓" (disabled, muted row) instead of Add; the
+                   browser flips it the moment a report is added or removed on the right. *@
+                <ul class="builder-list" data-catalog-list aria-label="Reports in the catalog">
+                    @foreach (var r in st.Reports)
+                    {
+                        var added = Model.IsIncluded(r.Name);
+                        <li draggable="@(edit ? "true" : "false")" data-catalog-item="@r.Name" data-domain="@ReportBody.Text(r.Json, "SecurityDomain")" data-added="@(added ? "true" : "false")" class="@(added ? "is-added" : null)">
+                            <span>@r.Name</span> <span class="hint">@ReportBody.Text(r.Json, "SecurityDomain")@(r.Enabled ? "" : " (off)")</span>
+                            @if (edit)
+                            {
+                                if (added) { <button type="button" class="small secondary" data-add-report="@r.Name" disabled aria-label="@r.Name is already in the template">Added &#10003;</button> }
+                                else { <button type="button" class="small secondary" data-add-report="@r.Name" aria-label="Add @r.Name to the template">Add</button> }
+                            }
+                            else if (added) { <span class="added-mark" data-added-mark>In template &#10003;</span> }
+                        </li>
+                    }
+                </ul>
+            </section>
+            <section class="card" aria-labelledby="h-in" data-builder-template>
+                <h2 id="h-in">@if (sel is null) { <text>New template</text> } else { <text>Reports in @sel.Name</text> } (<span data-included-count>@Fmt.Int(Model.Included.Count)</span>)</h2>
+                @if (sel is not null)
+                {
+                    <p class="run-by" data-run-by>@if (Model.Jobs.TryGetValue(sel.Name, out var selJob)) { <text>Run by </text><span title="@TemplatesModel.JobTooltip(selJob)">@selJob</span><text>.</text> } else { <text>No scheduled job runs this template.</text> }</p>
+                    <p class="hint">@ReportBody.Text(sel.Json, "ReportPurpose")</p>
+                }
+                <ol class="builder-list" data-included-list aria-label="Reports in this template, in order">
+                    @for (var i = 0; i < Model.Included.Count; i++)
+                    {
+                        var n = Model.Included[i];
+                        <li draggable="@(edit ? "true" : "false")" data-included="@n" tabindex="@(edit ? "0" : null)">
+                            <span>@n</span>
+                            @if (edit)
+                            {
+                                <button type="button" class="small secondary icon" data-move-up aria-label="Move @n up" title="Move up">&#8593;</button>
+                                <button type="button" class="small secondary icon" data-move-down aria-label="Move @n down" title="Move down">&#8595;</button>
+                                <button type="button" class="small quiet-danger" data-remove aria-label="Remove @n from the template">Remove</button>
+                            }
+                        </li>
+                    }
+                </ol>
+                @if (edit) { <p class="hint" data-drop-hint>Drag reports here from the catalog, or use Add. Reorder by dragging, the &#8593; / &#8595; buttons, or Alt + Up / Alt + Down on a focused report; Delete takes it out.</p> }
+            </section>
+        </div>
+        @if (edit)
+        {
+            <section class="card" aria-labelledby="h-tb-actions">
+                <h2 id="h-tb-actions">Save or manage</h2>
+                <div class="filters">
+                    <div class="wide"><label for="tb-purpose">Purpose</label><input id="tb-purpose" type="text" name="Purpose" maxlength="400" value="@(sel is null ? "" : ReportBody.Text(sel.Json, "ReportPurpose"))" /></div>
+                    <div><label for="tb-new">New name (create, copy, rename)</label><input id="tb-new" type="text" name="NewName" maxlength="100" pattern="[A-Za-z0-9_]{1,100}" /></div>
+                    <div class="wide"><label for="tb-reason">Reason (recorded with the change)</label><input id="tb-reason" type="text" name="Reason" maxlength="400" placeholder="why" /></div>
+                </div>
+                <div class="actions">
+                    @if (sel is not null) { <button type="submit" asp-page-handler="Stage" data-stage-button>Stage this template</button> }
+                    <button type="submit" asp-page-handler="Create" class="secondary" data-create>Create a new template from this list</button>
+                    @if (sel is not null)
+                    {
+                        <button type="submit" asp-page-handler="Copy" class="secondary" data-copy>Copy</button>
+                        @if (sel.Origin == ReportOrigin.Own) { <button type="submit" asp-page-handler="Rename" class="secondary" data-rename>Rename</button> }
+                        @if (sel.Enabled) { <button type="submit" asp-page-handler="Retire" class="danger" data-retire>Retire</button> }
+                    }
+                </div>
+            </section>
+        }
+        else { <p class="hint">Read-only: an Admin builds report templates.</p> }
+    </form>
+}

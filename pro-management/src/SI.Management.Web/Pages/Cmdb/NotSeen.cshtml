@@ -1,0 +1,55 @@
+@page
+@model SI.Management.Web.Pages.Cmdb.NotSeenModel
+@using SI.Management.Web.Pages.Cmdb
+@using SI.Management.Web.Cmdb
+@{
+    ViewData["Title"] = "Not seen anymore";
+    var isAdmin = User.IsAdmin();
+    var v = Model.View;
+    var notSeen = Model.TableView("notseen");
+    var retired = Model.TableView("retired");
+    if (isAdmin && notSeen is not null)
+    {
+        // the early retirement of one asset (Admin): its own form in the row, antiforgery included
+        notSeen.Table.Html["Retire"] = @<form method="post" asp-page-handler="Retire" class="stack-form" data-retire-form
+                  data-confirm-title="Retire @(string.IsNullOrEmpty(((NotSeenAsset)item).Name) ? ((NotSeenAsset)item).CiKey : ((NotSeenAsset)item).Name) now?"
+                  data-confirm="Its @Fmt.Int(((NotSeenAsset)item).OpenFindings) open finding(s) close as Asset retired (not as fixed) in the vulnerability connector's next run, and ServiceNow gets the state retired. If the asset is seen again it becomes active again.">
+                <input type="hidden" name="CiKey" value="@(((NotSeenAsset)item).CiKey)" />
+                <label class="sr-only">Why retire it now? (on the audit trail) <input name="Reason" required maxlength="400" placeholder="Why (audited)" /></label>
+                <button type="submit" class="secondary">Retire now</button>
+            </form>;
+    }
+}
+<h1>Not seen anymore</h1>
+<p class="lede">Assets SecurityInsight no longer sees. Each one is retired automatically when the grace period of its kind has passed -- its open findings then close as <em>Asset retired</em>, never as fixed. Until then it is listed here.</p>
+<details class="help">
+    <summary>How retiring works</summary>
+    <p>The list is the CIs' own lifecycle -- the one the CI list and every view count (a CI's lifecycle <em>not seen</em> or <em>retired</em>). An asset is <strong>not seen</strong> when no source has seen it for @SI.Management.Core.ProData.CiLifecycleRules.Days(Model.LifecycleRules.SeenWithinDays) (the seen window in force). After the <strong>grace period of its kind</strong> -- client PCs, servers, service principals, users, Azure VMs, other Azure resources; in force now: @Model.LifecycleRules.GraceText, each can be changed on the Settings page (card <em>Assets no longer seen</em>) -- it is <strong>retired</strong>: its open vulnerabilities close with the reason <em>Asset retired</em> (not a fix), its CI in the CI table is retired, and ServiceNow gets the state (<code>u_si_state</code>) to act on with its own rules. SecurityInsight never retires or deletes anything in ServiceNow.</p>
+    <p><strong>If the asset is seen again</strong>, it is active again and its findings reopen -- whoever retired it. An Admin may retire an asset in its grace period early (a laptop that is known to be scrapped); the reason is on the audit trail.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTable) { <div class="notice" role="status" data-no-table>This database has no CIs yet. The CI build and the data sync fill them on their next run.</div> }
+else
+{
+    <section class="card" aria-labelledby="h-ns" data-not-seen>
+        <div class="split">
+            <h2 id="h-ns">@Fmt.Int(v.NotSeen.Count) asset(s) in their grace period</h2>
+            <span class="muted">@Fmt.Int(v.Active) active</span>
+        </div>
+        @if (v.NotSeen.Count == 0)
+        {
+            <p class="hint">Every asset SecurityInsight tracks was seen recently.</p>
+        }
+        @* #589: the CI, its identifiers and context, every field -- the chooser and the all-rows exports *@
+        @if (notSeen is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="notSeen" /> }
+    </section>
+
+    <section class="card" aria-labelledby="h-ret" data-retired>
+        <h2 id="h-ret">Retired in the last @NotSeenModel.RetiredDays days (@Fmt.Int(v.Retired.Count))</h2>
+        @if (retired is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="retired" /> }
+        @if (v.Retired.Count > 0)
+        {
+            <p class="hint">"Still open" are findings the vulnerability connector has not closed yet -- it closes them as Asset retired on its next run, within the close limit.</p>
+        }
+    </section>
+}

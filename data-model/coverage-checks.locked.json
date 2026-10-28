@@ -1,0 +1,194 @@
+{
+  "$comment": "Verification service (Pro): checks that a vital Defender plan or sensor is in place. scope = tenant | subscription | ci. A failed CI-scoped check with a riskFactor raises that factor on the CI; tenant / subscription results stay in their own view. Each result can be Ignored or Accepted, and is reviewed again after reviewDays. Customer overrides: coverage-checks.custom.json, per check id.",
+  "kind": "coverage-check",
+  "version": "1.0.0",
+  "reviewDays": 180,
+  "checks": [
+    {
+      "id": "dfc_servers_plan",
+      "scope": "subscription",
+      "name": "Defender for Servers is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'VirtualMachines'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_storage_plan",
+      "scope": "subscription",
+      "name": "Defender for Storage is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'StorageAccounts'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_sql_plan",
+      "scope": "subscription",
+      "name": "Defender for SQL is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'SqlServers'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_keyvault_plan",
+      "scope": "subscription",
+      "name": "Defender for Key Vault is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'KeyVaults'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_appservice_plan",
+      "scope": "subscription",
+      "name": "Defender for App Service is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'AppServices'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_containers_plan",
+      "scope": "subscription",
+      "name": "Defender for Containers is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'Containers'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "dfc_arm_plan",
+      "scope": "subscription",
+      "name": "Defender for Resource Manager is on",
+      "source": "azure",
+      "query": "securityresources | where type == 'microsoft.security/pricings' and name == 'Arm'",
+      "pass": {
+        "field": "properties.pricingTier",
+        "op": "eq",
+        "value": "Standard"
+      }
+    },
+    {
+      "id": "azure_vm_not_onboarded",
+      "scope": "ci",
+      "name": "Azure VM is onboarded to Defender for Endpoint",
+      "riskFactor": "not_onboarded",
+      "fail": {
+        "all": [
+          {
+            "field": "si_link_azure",
+            "op": "not_empty"
+          },
+          {
+            "field": "si_azure_resource_type",
+            "op": "in",
+            "value": [
+              "microsoft.compute/virtualmachines",
+              "microsoft.hybridcompute/machines"
+            ]
+          },
+          {
+            "field": "si_link_mde",
+            "op": "is_empty"
+          }
+        ]
+      }
+    },
+    {
+      "id": "device_not_onboarded",
+      "scope": "ci",
+      "name": "Managed device is onboarded to Defender for Endpoint",
+      "riskFactor": "not_onboarded",
+      "fail": {
+        "all": [
+          {
+            "field": "si_class",
+            "op": "eq",
+            "value": "device"
+          },
+          {
+            "field": "si_link_mde",
+            "op": "is_empty"
+          },
+          {
+            "any": [
+              {
+                "field": "si_link_intune",
+                "op": "not_empty"
+              },
+              {
+                "field": "si_link_entra",
+                "op": "not_empty"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "sensor_silent",
+      "scope": "ci",
+      "name": "Defender sensor reports",
+      "fail": {
+        "all": [
+          {
+            "field": "si_link_mde",
+            "op": "not_empty"
+          },
+          {
+            "field": "si_sensor_health",
+            "op": "in",
+            "value": [
+              "inactive",
+              "no_signal",
+              "misconfigured"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "av_passive",
+      "scope": "ci",
+      "name": "Antivirus is in active mode",
+      "fail": {
+        "all": [
+          {
+            "field": "si_av_mode",
+            "op": "in",
+            "value": [
+              "passive",
+              "disabled"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "provider_incomplete",
+      "scope": "tenant",
+      "name": "Every provider collected completely",
+      "source": "run_health"
+    }
+  ]
+}

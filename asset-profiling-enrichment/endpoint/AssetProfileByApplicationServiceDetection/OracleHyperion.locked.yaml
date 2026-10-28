@@ -1,0 +1,21 @@
+id:        OracleHyperion
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Oracle Hyperion'
+category:  'BI'
+description: ''
+displayNames:
+  - 'Oracle Hyperion'
+
+detections:
+  - id: OracleHyperion
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hyperion*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

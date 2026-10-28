@@ -1,0 +1,25 @@
+@model SI.Management.Web.Pages.Tiers.ClaimChangeForm
+@using SI.Management.Web.Changes
+@* The buttons of ONE tier claim: turn the rule that made it off, move every asset that rule claims to another tier, or put
+   a moved rule back. The rule is named by the key the claim carries -- nothing is typed or picked. Each button posts to
+   the board's Stage handler exactly as every other change of the drawer: staged, written only on Review & commit. With
+   script the button stays in place and answers with a toast (js/app/tier-board.js); without it the form posts and the
+   page comes back with the same message. *@
+@{
+    var tiers = new[] { "0", "1", "2", "3" };
+}
+<form method="post" asp-page="/Tiers/Index" asp-page-handler="Stage" class="claim-change" data-tier-stage="claim" data-rule-key="@Model.Key">
+    <input type="hidden" name="RuleKey" value="@Model.Key" /><input type="hidden" name="@Model.AssetField" value="@Model.AssetValue" /><input type="hidden" name="Return" value="@Model.Return" />
+    @if (Model.MovedTo is { } movedTo) { <span class="hint" data-claim-moved="@movedTo">Moved to Tier @movedTo from the next run.</span> }
+    <label for="tp-cr-@Model.IdSuffix">Reason</label>
+    <input id="tp-cr-@Model.IdSuffix" type="text" name="Reason" maxlength="400" required minlength="3" />
+    <label for="tp-ct-@Model.IdSuffix">Tier (when moving)</label>
+    <select id="tp-ct-@Model.IdSuffix" name="Tier">@foreach (var t in tiers) { <option value="@t">Tier @t</option> }</select>
+    <div class="actions">
+        @* a rule whose id a rule document cannot carry is moved, not turned off, from here *@
+        @if (SI.Management.Web.Pages.Tiers.IndexModel.CanTurnOff(Model.Key)) { <button type="submit" name="Action" value="@ChangeKinds.RuleDisable" class="secondary" data-claim-action="off">Turn off</button> }
+        <button type="submit" name="Action" value="@ChangeKinds.RuleTier" class="secondary" data-claim-action="move">Move to tier</button>
+        @if (Model.MovedTo is not null) { <button type="submit" name="Action" value="@ChangeKinds.RuleTierReset" class="secondary" data-claim-action="back">Put back</button> }
+    </div>
+    @if (Model.Staged is not null) { <span class="badge warn" data-claim-staged>@Model.Staged</span> }
+</form>

@@ -1,0 +1,81 @@
+@page
+@model SI.Management.Web.Pages.Admin.DomainRolesModel
+@using SI.Management.Web.Exemptions
+@{
+    ViewData["Title"] = "Security owners";
+    string AddLink(string domain, string? category) => "/Admin/DomainRoles?domain=" + Uri.EscapeDataString(domain) + (category is null ? "" : "&category=" + Uri.EscapeDataString(category)) + "#h-add";
+}
+<h1>Security owners</h1>
+<p class="lede">Who owns, and so decides, the exemptions of each part of the estate. <strong>Domain Owners</strong> own a security domain (level 1: Identity, Endpoint, Azure, ...); <strong>Category Owners</strong> own one category inside it (level 2: the finding's Category, as the Risk Analysis reports carry it -- e.g. Identity / Authentication). An exemption request is asked of the most specific owners -- the category's, or the domain's when the category has none; a Domain Owner may always decide too, and one approval is enough. Owners at both levels get one monthly review of everything they own. Name people by their sign-in name (UPN) / e-mail address.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.CategoriesNotice is not null) { <div class="notice warn" role="status" data-categories-preparing>@Model.CategoriesNotice</div> }
+
+<section class="card" aria-labelledby="h-add">
+    <h2 id="h-add">Add a person</h2>
+    <form method="post" asp-page-handler="Add" class="filterbar" data-add-role>
+        <div>
+            <label for="dr-domain">Security domain</label>
+            <select id="dr-domain" name="Domain">@foreach (var d in Model.Domains) { <option value="@d" selected="@(string.Equals(d, Model.Domain, StringComparison.OrdinalIgnoreCase))">@DomainRoles.Label(d)</option> }</select>
+        </div>
+        <div class="wide">
+            <label for="dr-category">Category (blank = the whole domain)</label>
+            <input id="dr-category" type="text" name="Category" value="@Model.Category" maxlength="128" list="dr-categories" placeholder="e.g. Authentication" />
+            <datalist id="dr-categories">@foreach (var c in Model.Categories) { <option value="@c"></option> }</datalist>
+        </div>
+        <div>
+            <label for="dr-role">Role</label>
+            <select id="dr-role" name="Role"><option value="owner">Owner (decides + reviews)</option><option value="approver">Approver (domain only, decides)</option></select>
+        </div>
+        <div class="wide"><label for="dr-principal">UPN / e-mail</label><input id="dr-principal" type="email" name="Principal" required maxlength="256" placeholder="name@contoso.com" /></div>
+        <div class="actions"><button type="submit">Add</button></div>
+    </form>
+    <p class="hint">The categories offered are the ones the latest collection carries; any other can be typed. A category has owners only; the approver role is per domain and kept for existing set-ups.</p>
+</section>
+
+<section class="card" aria-labelledby="h-list">
+    <h2 id="h-list">Per domain and category</h2>
+    <p class="hint">@Fmt.Int(Model.Tree.Count(n => n.NobodyDecides && n.Domain != DomainRoles.AnyDomain)) node(s) have nobody to decide them -- an Admin decides their requests until an owner is set. A category without its own owner goes to its domain's owners.</p>
+    <div class="table-wrap">
+        <table data-roles data-sortable>
+            <thead><tr><th>Security domain</th><th>Category</th><th>Level</th><th>Owners</th><th>Approvers</th><th>Decided by</th><th data-sort="off"></th></tr></thead>
+            <tbody>
+                @foreach (var n in Model.Tree)
+                {
+                    <tr data-domain="@n.Domain" data-category="@(n.Category ?? "")" data-node="@(n.IsCategory ? "category" : "domain")" data-no-owner="@(n.NoOwner ? "1" : "0")">
+                        <td>@DomainRoles.Label(n.Domain)</td>
+                        <td class="wrap">@if (n.IsCategory) { <span><span class="muted" aria-hidden="true">&#8627;</span> @n.Category @if (!n.InData) { <span class="badge" title="not in the latest collection">entered</span> }</span> } else { <span class="muted">--</span> }</td>
+                        <td>@(n.IsCategory ? "Category" : "Domain")</td>
+                        <td class="wrap">
+                            @if (n.Owners.Count == 0)
+                            {
+                                if (n.Domain == DomainRoles.AnyDomain) { <span class="muted">--</span> }
+                                else { <span class="badge warn" data-no-owner-badge>no owner</span> }
+                            }
+                            @foreach (var p in n.Owners)
+                            {
+                                <form method="post" asp-page-handler="Remove" class="inline" data-confirm-title="Remove @p.Principal" data-confirm="@p.Principal stops being @DomainRoles.RoleLabel(DomainRoles.Owner, n.Category) of @n.Label.">
+                                    <input type="hidden" name="Domain" value="@n.Domain" /><input type="hidden" name="Category" value="@(n.Category ?? "")" /><input type="hidden" name="Role" value="owner" /><input type="hidden" name="Principal" value="@p.Principal" />
+                                    <span data-owner>@p.Principal</span> <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
+                                </form>
+                            }
+                        </td>
+                        <td class="wrap">
+                            @if (n.IsCategory) { <span class="muted">--</span> }
+                            else if (n.Approvers.Count == 0) { <span class="muted">none</span> }
+                            @foreach (var p in n.Approvers)
+                            {
+                                <form method="post" asp-page-handler="Remove" class="inline" data-confirm-title="Remove @p.Principal" data-confirm="@p.Principal stops being Approver of @n.Label.">
+                                    <input type="hidden" name="Domain" value="@n.Domain" /><input type="hidden" name="Category" value="" /><input type="hidden" name="Role" value="approver" /><input type="hidden" name="Principal" value="@p.Principal" />
+                                    <span>@p.Principal</span> <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
+                                </form>
+                            }
+                        </td>
+                        <td class="wrap" data-deciders>@if (n.Deciders.Count == 0) { <span class="badge warn">an Admin</span> } else { <span>@string.Join(", ", n.Deciders)</span> }</td>
+                        <td>@if (!(n.IsCategory && n.Domain == DomainRoles.AnyDomain)) { <a class="button small secondary" href="@AddLink(n.Domain, n.Category)">Add</a> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="hint">"Decided by" = everyone who may approve a request there (besides an Admin): its category's owners, its domain's owners and approvers. "Every domain" owners own every domain. Every change is in <a href="/Admin/History?name=domain-role">Change history</a>.</p>
+</section>

@@ -1,0 +1,21 @@
+id:        CohesityHelios
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Cohesity Helios'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Cohesity Helios'
+
+detections:
+  - id: CohesityHelios
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'helios*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

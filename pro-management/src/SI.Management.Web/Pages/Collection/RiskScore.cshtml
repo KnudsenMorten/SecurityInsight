@@ -1,0 +1,11 @@
+@page
+@model SI.Management.Web.Pages.Collection.RiskScoreModel
+<partial name="_Header" model="Model" />
+@if (Model.Distribution is not null) { <partial name="_FacetTable" model="Model.Distribution" /> }
+@if (Model.Current is not null)
+{
+    <p class="hint" data-risk-view="@(Model.Explain ? "explain" : "asset")">@if (Model.Explain) { <text>One row per finding, explained -- </text><a href="@Model.ViewHref(false)">per asset</a> } else { <text>One row per asset -- </text><a href="@Model.ViewHref(true)">each finding's score, explained</a> }.</p>
+}
+@if (Model.ExplainHasDerived) { <p class="notice" data-explain-derived>@SI.Management.Web.Pages.Collection.RiskScoreModel.DerivedText</p> }
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

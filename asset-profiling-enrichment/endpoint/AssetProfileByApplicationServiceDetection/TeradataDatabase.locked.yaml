@@ -1,0 +1,21 @@
+id:        TeradataDatabase
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Teradata Database'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Teradata Database'
+
+detections:
+  - id: TeradataDatabase
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'database*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

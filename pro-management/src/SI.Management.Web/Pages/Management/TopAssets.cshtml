@@ -1,0 +1,33 @@
+@page
+@model SI.Management.Web.Pages.Management.TopAssetsModel
+@{
+    ViewData["Title"] = "Top 50 risky assets";
+    var d = Model.Data!;
+    var f = d.View.Figures;
+}
+<link rel="stylesheet" href="~/css/exec.css" asp-append-version="true" />
+<div class="exec" data-exec data-grain="@d.View.Grain" data-mode="@d.View.Mode">
+<h1>Top 50 risky assets</h1>
+<partial name="_ExportPdf" model="@("Top 50 risky assets")" />
+<p class="lede">The riskiest assets of the last Risk Analysis run, as the mail lists them: Criticality Tier first (Tier 0 highest), then Weighted Risk Score.</p>
+@await Html.PartialAsync("_ExecSelector", (d.View, "/Management/TopAssets"))
+<partial name="_ExecEmpty" model="d" />
+@if (f is not null)
+{
+    @* #863: the AI summary off is said first, with what turns it on -- never "Top 0" as if there were no risk *@
+    @if (!f.AISummaryEnabled) { <partial name="_AiSummaryOff" model="@(Model.FromDatabase ? SI.Management.Web.RiskExec.AiSummaryNote.ListFromDatabase : SI.Management.Web.RiskExec.AiSummaryNote.ListFromRun)" /> }
+    <section class="card" aria-labelledby="h-ta" data-exec-top data-from-database="@(Model.FromDatabase ? "1" : "0")">
+        <h2 id="h-ta">@(Model.Assets.Count > 0 ? $"Top {Fmt.Int(Model.Assets.Count)} risky assets" : "Top 50 risky assets")</h2>
+        @if (Model.ListNote is { } ln) { <p class="hint" data-top-list-note>@ln <a href="/Cis">The CI list (by Weighted Risk Score)</a></p> }
+        @if (Model.Assets.Count == 0) { if (Model.ListNote is null) { <p class="hint" data-top-list-empty>This run listed no assets.</p> } }
+        else if (Model.TableView("topassets") is { } tv)
+        {
+            @* #589: each asset's CI with its identifiers and context -- the chooser and the all-rows exports *@
+            <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv" />
+        }
+    </section>
+    <p class="hint noprint"><a href="/Management/RiskAnalysis?grain=@d.View.Grain.ToLowerInvariant()">The whole Risk Analysis summary</a> · <a href="/Management/Drilldown?grain=@d.View.Grain.ToLowerInvariant()">Top 10 asset drilldown</a> · <a href="/Collection/TopFindings?grain=@d.View.Grain.ToLowerInvariant()">Top 50 critical findings</a></p>
+}
+@if (d.Query is { } q) { <partial name="_Query" model='QueryInfo.From(q, "Risk Analysis views")' /> }
+@if (Model.DatabaseQuery is { } dq) { <partial name="_Query" model='QueryInfo.From(dq, "The riskiest active CIs (the database)")' /> }
+</div>

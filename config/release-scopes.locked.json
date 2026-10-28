@@ -1,0 +1,203 @@
+{
+  "_": "THE COMPONENTS OF A RELEASE (CR3, SI #657; framework DOCS/REQUIREMENTS.md 12.11e item 3). SecurityInsight's components -- the collections per source, the correlation, Risk Analysis per report and data out per channel -- each with the engine files that are its code. engine/_shared/SI-ReleaseControl.ps1 reads this file: (1) the publish call says which components a release changed (changedScopes), (2) the updater fingerprints each component of the code it installed and marks a changed one 'Testing' (cfg.ReleaseScope), (3) a component is 'Stable' again after 3 good daily runs with no code change. Matching: a path is relative to the solution root with '/' separators; '*' is any text inside one folder level, '**' any number of levels. The FIRST list that matches wins, in this order: 'none' (not code of any component: samples, read-me files, and the jobs that are not one of the components -- verification, trend, schema discovery, the hourly status report), 'scopes' (one component), 'groups' (every component whose id starts with the group's prefix), 'core'. A file in the engine folders that matches nothing counts as CORE: a change to it marks EVERY component Testing (the same rule as PIM's: a core file = all scopes). Risk Analysis per report: each report block of 'raReports.file' is its own component '<prefix><ReportName>'; the rest of that file belongs to the group 'raReports.group'.",
+  "schema": 1,
+  "folders": [ "engine", "launcher", "risk-analysis-detection" ],
+  "raReports": { "file": "risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml", "prefix": "risk-analysis.", "group": "risk-analysis." },
+  "none": [
+    "**/*.sample",
+    "**/*.sample.*",
+    "**/*.custom.sample.*",
+    "**/README.md",
+    "**/*.md",
+    "engine/verification/**",
+    "engine/heartbeat/**",
+    "engine/_shared/SI-HeartbeatJob.ps1",
+    "engine/asset-trend/**",
+    "launcher/asset-trend/**",
+    "engine/asset-profiling/stages/Invoke-Schema*.ps1",
+    "engine/asset-profiling/lint/**"
+  ],
+  "scopes": [
+    {
+      "id": "collection.identity",
+      "label": "Collection: identities (Entra ID)",
+      "engines": [ "identity" ],
+      "patterns": [
+        "launcher/identity/**",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromEntra*.ps1",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromIdentityExposureGraph.ps1",
+        "engine/asset-profiling/discovery/Get-SIEntraContext.ps1",
+        "engine/asset-profiling/shared/Build-IdentityProfileRow.ps1",
+        "engine/asset-profiling/shared/IdentityCatalogTierComputer.ps1",
+        "engine/asset-profiling/shared/IdentityRoleFetcher.ps1",
+        "engine/asset-profiling/shared/SI-AuthMethodsRead.ps1",
+        "engine/asset-profiling/shared/SI-IdentityPublishScope.ps1"
+      ]
+    },
+    {
+      "id": "collection.endpoint",
+      "label": "Collection: devices (Defender for Endpoint, Intune)",
+      "engines": [ "endpoint" ],
+      "patterns": [
+        "launcher/endpoint/**",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromMDE.ps1",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromEndpointViaEG.ps1",
+        "engine/asset-profiling/discovery/Get-SIDefender*.ps1",
+        "engine/asset-profiling/discovery/Get-SIIntuneContext.ps1",
+        "engine/asset-profiling/shared/Build-EndpointProfileRow.ps1",
+        "engine/asset-profiling/shared/EndpointCatalogTierComputer.ps1",
+        "engine/asset-profiling/shared/EndpointAzureCorrelationCache.ps1",
+        "engine/asset-profiling/shared/endpoint-tiering.json",
+        "engine/asset-profiling/shared/server-applications.json"
+      ]
+    },
+    {
+      "id": "collection.azure",
+      "label": "Collection: Azure resources and Defender for Cloud",
+      "engines": [ "azure" ],
+      "patterns": [
+        "launcher/azure/**",
+        "engine/asset-profiling/discovery/*Azure*.ps1",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromARG.ps1",
+        "engine/asset-profiling/discovery/Invoke-SIArgPaged.ps1",
+        "engine/asset-profiling/discovery/Get-SIMdc*.ps1",
+        "engine/asset-profiling/shared/Build-AzureProfileRow.ps1",
+        "engine/asset-profiling/shared/AzureParentScopeCache.ps1",
+        "engine/data-model/SI-AzureChildren.ps1"
+      ]
+    },
+    {
+      "id": "collection.publicip",
+      "label": "Collection: public IP addresses",
+      "engines": [ "publicip" ],
+      "patterns": [
+        "launcher/publicip/**",
+        "engine/asset-profiling/discovery/Get-DiscoveryFromShodan.ps1",
+        "engine/asset-profiling/shared/Build-PublicIpProfileRow.ps1",
+        "engine/asset-profiling/storage/ShodanCache.ps1"
+      ]
+    },
+    {
+      "id": "collection.privilege-tier",
+      "label": "Collection: privilege tiers",
+      "engines": [ "privilege-tier-classifier" ],
+      "patterns": [
+        "launcher/privilege-tier-classifier/**",
+        "engine/privilege-tier-classifier/**"
+      ]
+    },
+    {
+      "id": "collection.asset-properties",
+      "label": "Collection: asset properties",
+      "engines": [ "asset-properties" ],
+      "patterns": [
+        "launcher/asset-properties/**",
+        "engine/asset-properties/**"
+      ]
+    },
+    {
+      "id": "correlation",
+      "label": "Correlation",
+      "engines": [ "asset-correlation", "correlation" ],
+      "patterns": [
+        "launcher/asset-correlation/**",
+        "engine/asset-correlation/**",
+        "engine/data-model/SI-Ci*.ps1",
+        "engine/data-model/identity/**"
+      ]
+    },
+    {
+      "id": "data-out.cmdb",
+      "label": "Data out: CMDB hand-off",
+      "engines": [ "asset-cmdb", "cmdb", "asset-cmdb-sql" ],
+      "patterns": [
+        "launcher/asset-cmdb/**",
+        "engine/asset-cmdb/Invoke-SICmdb*.ps1",
+        "engine/asset-cmdb/_shared/SI-Cmdb*.ps1",
+        "engine/asset-cmdb/_shared/SI-ServiceNowClient.ps1",
+        "engine/asset-cmdb/_shared/SI-SnowImportSet.ps1",
+        "engine/asset-cmdb/_shared/SI-SnowTestPack.ps1",
+        "engine/asset-cmdb/_shared/SI-ServiceModel.ps1",
+        "engine/asset-cmdb/_shared/SI-AssetLifecycle.ps1",
+        "engine/asset-cmdb/_shared/SI-CollectionSend.ps1",
+        "engine/asset-cmdb/_shared/SI-ReconcileGuards.ps1"
+      ]
+    },
+    {
+      "id": "data-out.vulnerabilities",
+      "label": "Data out: vulnerability tickets",
+      "engines": [ "vuln-closeloop", "asset-vulnerabilities", "asset-vulnerabilities-servicenow" ],
+      "patterns": [
+        "engine/asset-cmdb/Invoke-SIVulnLoop.ps1",
+        "engine/asset-cmdb/_shared/SI-Vuln*.ps1"
+      ]
+    },
+    {
+      "id": "data-out.mail",
+      "label": "Data out: mail (close-loop, exemptions, governance, digests)",
+      "engines": [ "close-loop-mail" ],
+      "patterns": [
+        "engine/asset-cmdb/Invoke-SICloseLoopMail.ps1",
+        "engine/asset-cmdb/_shared/SI-CloseLoopMail.ps1",
+        "engine/asset-cmdb/_shared/SI-ExemptionMail.ps1",
+        "engine/pro-data/Invoke-SIGovernanceMail.ps1",
+        "engine/pro-data/Invoke-SITaskDigest.ps1",
+        "engine/pro-data/Invoke-SIDepartmentReport.ps1",
+        "engine/pro-data/_shared/SI-GovernanceMail.ps1",
+        "engine/pro-data/_shared/SI-TaskDigest.ps1",
+        "engine/pro-data/_shared/SI-DepartmentReport.ps1"
+      ]
+    },
+    {
+      "id": "data-out.sql",
+      "label": "Data out: the data sync to SQL",
+      "engines": [ "datasync", "asset-datasync" ],
+      "patterns": [
+        "engine/pro-data/Invoke-SIDataSync.ps1",
+        "engine/pro-data/_shared/SI-Data*.ps1",
+        "engine/pro-data/_shared/SI-ExemptedView.ps1"
+      ]
+    },
+    {
+      "id": "data-out.outputs",
+      "label": "Data out: listed outputs (workbooks, ServiceNow import sets)",
+      "engines": [ "data-out" ],
+      "patterns": [
+        "engine/data-out/**",
+        "engine/data-model/SI-OutputMapper.ps1"
+      ]
+    },
+    {
+      "id": "data-out.tagging",
+      "label": "Data out: asset tags",
+      "engines": [ "asset-tagging" ],
+      "patterns": [
+        "launcher/asset-tagging/**",
+        "engine/asset-tagging/**",
+        "engine/asset-profiling/stages/Invoke-Tagging.ps1"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "risk-analysis.",
+      "label": "Risk Analysis (every report)",
+      "engines": [ "risk-analysis", "risk-analysis-detailed" ],
+      "patterns": [
+        "launcher/risk-analysis/**",
+        "engine/risk-analysis/**",
+        "risk-analysis-detection/**"
+      ]
+    }
+  ],
+  "core": [
+    "engine/_shared/**",
+    "engine/asset-profiling/**",
+    "engine/data-model/**",
+    "engine/pro-settings/**",
+    "engine/pro-data/**",
+    "engine/flow/**",
+    "launcher/_lib/**",
+    "engine/SI-FeatureCatalog.ps1"
+  ]
+}

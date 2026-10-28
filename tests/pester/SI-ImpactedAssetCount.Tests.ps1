@@ -1,0 +1,455 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Pester v5 -- audit #25: ImpactedAssetCount must be the length of ImpactedAssetsList.
+
+.DESCRIPTION
+    The defect an operator noticed before any suite did: a count sitting next to a list it does
+    not describe. Neither number is wrong on its own -- they measure different things -- so
+    nothing looks broken, and the report quietly lies about how many assets are impacted.
+
+    There are TWO places that produce these columns, and audit #25 named only the first:
+
+      1. KQL, in the catalog. 5 Summary reports compute ImpactedAssetCount inside a summarize,
+         e.g. `dcount(DeviceKey)` beside `ImpactedAssetsList = make_set(AssetName)`. Different
+         columns, and dcount is approximate besides.
+
+      2. THE ENGINE -- RA-RiskScore.ps1. For every Summary report whose KQL does NOT emit these
+         columns (55 of them), the engine fills them itself, and it used distinct
+         ConfigurationId for the count while building the list from distinct AssetName. Same
+         defect, far wider blast radius, and not mentioned in the finding at all.
+
+    The engine deliberately PRESERVES a YAML-computed value and only injects its own when the
+    query did not provide one, so the two paths are complementary rather than competing --
+    which is why both halves need fixing.
+#>
+
+BeforeAll {
+    $si = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'engine\_shared\SI-Yaml.ps1')   # SecurityInsight's own YAML reader
+    $script:Catalog = Get-Content -Raw -LiteralPath (Join-Path $si 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml') | ConvertFrom-SIYaml
+    $script:RiskScoreText = Get-Content -Raw -LiteralPath (Join-Path $si 'engine\risk-analysis\_shared\RA-RiskScore.ps1')
+}
+
+# ============================================================================
+Describe 'audit #25 -- the KQL half: the count is derived from the list' {
+# ============================================================================
+
+    It 'no report computes ImpactedAssetCount with dcount while it also builds a list' {
+        # The exact shape of the defect: a count aggregate beside a set aggregate.
+        $bad = @()
+        foreach ($r in $script:Catalog.Reports) {
+            $q = [string]$r.ReportQuery
+            if ($q -notmatch 'ImpactedAssetsList\s*=\s*make_set') { continue }
+            if ($q -match 'ImpactedAssetCount\s*=\s*dcount\(') { $bad += $r.ReportName }
+        }
+        $bad | Should -BeNullOrEmpty -Because "these report a count over a different column than the list they display: $($bad -join ', ')"
+    }
+
+    It 'every report that builds a list derives the count from THAT list' {
+        $missing = @()
+        foreach ($r in $script:Catalog.Reports) {
+            $q = [string]$r.ReportQuery
+            if ($q -notmatch 'ImpactedAssetsList\s*=\s*make_set') { continue }
+            if ($q -notmatch 'ImpactedAssetCount\s*=\s*array_length\(\s*ImpactedAssetsList\s*\)') { $missing += $r.ReportName }
+        }
+        $missing | Should -BeNullOrEmpty -Because "missing array_length derivation: $($missing -join ', ')"
+    }
+
+    It 'covers the seven reports the fix was applied to' {
+        # Pins the blast radius so a report cannot quietly drop out of the invariant.
+        # 4 -> 6 on 2026-08-13: Endpoint_ExcludedAssets_Summary and
+        # Endpoint_ActiveCompromise_Detected_Summary both joined when their regressions were fixed.
+        # 6 -> 7 on 2026-08-21: Endpoint_ConflictingTierTags_Summary is NEW, and was written to the
+        # invariant from the start rather than joining after a regression -- which is exactly what
+        # pinning the number is for. A new Summary that builds a list must derive its count from THAT
+        # list, and this test turns forgetting into a failure instead of a discrepancy somebody
+        # notices in an export months later.
+        # 7 -> 8 on 2026-09-28: Azure_DefenderRecommendations_Summary is NEW (every Defender for Cloud
+        # recommendation, not only those the Exposure Graph carries) and was written to the invariant.
+        $derived = @($script:Catalog.Reports | Where-Object {
+            ([string]$_.ReportQuery) -match 'ImpactedAssetCount\s*=\s*array_length\(\s*ImpactedAssetsList\s*\)'
+        } | ForEach-Object { $_.ReportName })
+        # 8 -> 11 on 2026-10-11: three NEW endpoint Summary reports (end-of-support software, certificates,
+        # browser extensions), each written to the invariant: ImpactedAssetsList = make_set(AssetName) and
+        # the count is array_length of that list. Every report of the set is named below, so the number
+        # can only move together with a name.
+        $expected = @('Device_Missing_CVEs_Summary','Device_Recommendations_Summary','Azure_Recommendations_Summary',
+                      'Endpoint_ExcludedAssets_Summary','Endpoint_ActiveCompromise_Detected_Summary',
+                      'Endpoint_ConflictingTierTags_Summary','Azure_DefenderRecommendations_Summary',
+                      'Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure',
+                      'Device_EndOfSupport_Software_Summary','Device_Certificates_Summary','Device_BrowserExtensions_Summary')
+        $derived.Count | Should -Be $expected.Count -Because ("the reports that derive the count from the list are: " + ($derived -join ', '))
+        foreach ($n in $expected) {
+            $derived | Should -Contain $n
+        }
+    }
+
+    # ------------------------------------------------------------------------
+    # RE-KEYED 2026-08-13, and this is the important part of the file.
+    #
+    # Every check above opens with `if ($q -notmatch 'ImpactedAssetsList\s*=\s*make_set') { continue }`
+    # -- it selects on the LIST. Endpoint_ExcludedAssets_Summary (v2.2.431) built
+    # `ImpactedAssets = strcat_array(array_sort_asc(make_set(AssetName)), ";")` beside
+    # `ImpactedAssetCount = dcount(PrimaryEntityId)`: a different column name AND a different shape,
+    # so it failed the selector on both counts and was skipped in SILENCE. This suite reported PASS
+    # while walking past the one report that violated it, for six days, and only SI-OutputIntegrity
+    # against a real export (count=19, listLen=17) caught it.
+    #
+    # A guard whose selector is narrower than its invariant reports success for what it never
+    # inspected. So the checks below select on the COUNT -- the thing being defended -- and make the
+    # inspected set itself assertable.
+    # ------------------------------------------------------------------------
+
+    # The selector is "does this report project an impacted-ASSET list at all", under either name and
+    # in either shape. Deliberately NOT a bare `make_set(` -- several reports build sets for unrelated
+    # columns (ExcludedReasons, MITRE tags), and a guard that fires on those would be noise, which is
+    # its own way of going unread.
+    It 'no report counts with dcount/count while ALSO projecting an asset list -- under either name' {
+        # The regression shape, stated without pinning the list column's name or its wrapper. This is
+        # the assertion that would have failed on 2026-08-12 instead of silently passing.
+        $bad = @()
+        foreach ($r in $script:Catalog.Reports) {
+            $q = [string]$r.ReportQuery
+            if ($q -notmatch 'ImpactedAssetCount\s*=\s*(dcount|count)\s*\(') { continue }
+            if ($q -match 'ImpactedAssets(List)?\s*=\s*\w+\s*\(')            { $bad += $r.ReportName }
+        }
+        $bad | Should -BeNullOrEmpty -Because ("these count one column while listing another, which is audit #25 " +
+                                               "regardless of what the list column is named: $($bad -join ', ')")
+    }
+
+    It 'every report computing ImpactedAssetCount is accounted for -- none is silently skipped' {
+        # Turns "0 violations" into "N inspected, and here is why each is acceptable". A new report
+        # computing a count in some third shape lands in $unexplained and FAILS, instead of slipping
+        # past a selector that never matched it.
+        $derivesFromList = @()   # count = array_length(<its own list>)
+        $noListAtAll     = @()   # projects no asset list; the engine supplies one (see the engine half)
+        $unexplained     = @()
+        foreach ($r in $script:Catalog.Reports) {
+            $q = [string]$r.ReportQuery
+            if ($q -notmatch 'ImpactedAssetCount\s*=') { continue }
+            if ($q -match 'ImpactedAssetCount\s*=\s*array_length\(')  { $derivesFromList += $r.ReportName; continue }
+            if ($q -notmatch 'ImpactedAssets(List)?\s*=\s*\w+\s*\(')  { $noListAtAll     += $r.ReportName; continue }
+            $unexplained += $r.ReportName
+        }
+        $unexplained | Should -BeNullOrEmpty -Because ("each of these computes ImpactedAssetCount in a shape this " +
+                                                       "suite does not recognise, so it is neither proven correct nor " +
+                                                       "reported as unchecked: $($unexplained -join ', ')")
+        # The count-carrying population is small and known; if it grows, that is a deliberate act.
+        (@($derivesFromList).Count + @($noListAtAll).Count) | Should -BeGreaterThan 0
+        # Every KQL-computed count now derives from that report's own list. There is no longer a
+        # report claiming a count with no list to justify it -- the last such claim turned out to be
+        # a misreading rather than an exception.
+        $noListAtAll | Should -BeNullOrEmpty -Because ("a count with no list beside it cannot be checked by " +
+                                                       "anything: $($noListAtAll -join ', ')")
+    }
+
+    It 'the "report with NO list" was a misreading, and it is fixed' {
+        # SUPERSEDED 2026-08-13. This assertion used to say Endpoint_ActiveCompromise_Detected_Summary
+        # emits no list, so array_length had nothing to derive from and the audit's prescription was
+        # "impossible" there. That was true only of the NAME: the report always projected the same
+        # set as `ImpactedAssets = strcat_array(array_sort_asc(make_set(AssetName)), ";")`, beside
+        # `dcount(PrimaryEntityId)` -- audit #25 verbatim, sitting behind an exemption this suite
+        # granted it. It returns 0 rows on this estate, so the export-based test could never catch it
+        # either: the invariant is vacuous on an empty report, and it would first have misstated its
+        # numbers on the day a real compromise was detected.
+        #
+        # The lesson is about exemptions, not this report: an exemption justified by a claim nobody
+        # re-checked is indistinguishable from a gap.
+        $r = $script:Catalog.Reports | Where-Object { $_.ReportName -eq 'Endpoint_ActiveCompromise_Detected_Summary' }
+        ([string]$r.ReportQuery) | Should -Match 'ImpactedAssetsList\s*=\s*make_set'
+        ([string]$r.ReportQuery) | Should -Match 'ImpactedAssetCount\s*=\s*array_length\(\s*ImpactedAssetsList\s*\)'
+        ([string]$r.ReportQuery) | Should -Not -Match 'ImpactedAssetCount\s*=\s*dcount\('
+    }
+}
+
+# ============================================================================
+Describe 'audit #25 -- the ENGINE half (55 reports, unmentioned by the finding)' {
+# ============================================================================
+
+    It 'no longer counts distinct ConfigurationId as an asset count' {
+        # ConfigurationId identifies the finding / configuration item, not the asset, so the
+        # old value was closer to an issue count than an asset count despite its name.
+        $script:RiskScoreText | Should -Not -Match "\`$tmp2\['ImpactedAssetCount'\]\s*=\s*\[int\]\`$assetIds\.Count"
+        $script:RiskScoreText | Should -Match '\$configIdCount\s*=\s*\$assetIds\.Count'
+    }
+
+    It 'derives the injected count from the same set it puts in the list' {
+        $script:RiskScoreText | Should -Match '\$assetCount\s*=\s*if\s*\(\s*\$impactedAssets\.Count\s*-gt\s*0\s*\)\s*\{\s*\$impactedAssets\.Count\s*\}'
+    }
+
+    It 'falls back rather than reporting zero impacted assets' {
+        # If no row carried a resolvable AssetName the list is empty; reporting 0 for a report
+        # that clearly has findings would be a new lie in place of the old one.
+        $script:RiskScoreText | Should -Match 'else\s*\{\s*\$configIdCount\s*\}'
+    }
+
+    It 'still only injects when the query did not supply the value' {
+        # The two halves must stay complementary: a KQL-computed count wins, so the catalog
+        # fix above is not silently overwritten by the engine. The condition now reads through
+        # $yamlSuppliedCount, which is captured BEFORE the injection for exactly this reason.
+        $script:RiskScoreText | Should -Match "if \(-not \`$yamlSuppliedCount\) \{"
+        $script:RiskScoreText | Should -Match "\`$yamlSuppliedCount\s*=\s*\(\`$tmp2\.Contains\('ImpactedAssetCount'\) -and -not \[string\]::IsNullOrWhiteSpace"
+    }
+
+    It 'still restricts these aggregates to Summary reports' {
+        # Whole-report scalars are meaningless per-asset in Detailed reports.
+        $script:RiskScoreText | Should -Match '\$isSummaryReport\s*=\s*\$ReportName\s+-and'
+    }
+
+    It 'corrects the count when the LIST came from the report but the count did not' {
+        # The third shape of #25, found by measuring a completed run rather than by reading code:
+        # the list is per-summarize-group (this row's assets) while the injected count is a
+        # whole-report aggregate, so they describe different things. Live example --
+        # Identity_SPN_RoleManagementWrite_Summary showed ImpactedAssetCount = 1 beside a list of
+        # 5 SPNs; 14 of 99 rows across the run disagreed this way.
+        # 📌 2026-08-29 -- the condition GAINED a term and this assertion was updated with it, not
+        # around it. `$_pairReplacedList` fires when ImpactedAssetPairs replaced the list, and the
+        # count must then follow the pair-derived list even where the report computed its own: its
+        # count described the list that existed BEFORE the replacement. Measured --
+        # Device_Recommendations_Summary published 232 names against 250 ids.
+        $script:RiskScoreText | Should -Match "if \(\`$_pairReplacedList -or \(\`$hasYamlImpacted -and -not \`$yamlSuppliedCount\)\) \{"
+        $script:RiskScoreText | Should -Match "\`$tmp2\['ImpactedAssetCount'\] = \[int\]@\(\`$existingImpacted\)\.Count"
+    }
+
+    It 'a count the REPORT computed still wins over the engine' {
+        # Same precedence rule as the injection above: only a count this engine supplied may be
+        # corrected. A report that deliberately computes its own count keeps it.
+        $script:RiskScoreText | Should -Match '\$yamlSuppliedCount\s*=\s*\(\$tmp2\.Contains\(''ImpactedAssetCount''\)'
+    }
+}
+
+# ============================================================================
+Describe 'audit #25 -- the FOURTH shape: a make_set list arrives in two different shapes' {
+# ============================================================================
+<#
+    Found by measuring run 20260813T204314Z, after the KQL half of #25 was fixed.
+
+    `ImpactedAssetsList = make_set(AssetName)` does not produce one shape at the engine. It
+    depends on which ROUTE the query took:
+
+      * XDR Advanced Hunting  -> the dynamic column is materialized as an object[]
+      * LA-direct (any report reading a *_CL table) -> it comes back as JSON TEXT
+
+    The normalizer only understood "semicolon-joined string" and "already an array", so the JSON
+    text was split on ';', found no separator, and became a SINGLE element holding the whole
+    document. Endpoint_ExcludedAssets_Summary published [["a","b",... 17 items ...]] -- a list
+    whose length reads 1 -- beside a KQL-computed count of 17.
+
+    These tests execute the REAL normalizer block, extracted from the shipped file by AST. A copy
+    would drift; the self-check below fails the suite if the extraction stops matching, so this
+    can never pass by inspecting nothing.
+#>
+
+    BeforeAll {
+        $si  = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        $src = Join-Path $si 'engine\risk-analysis\_shared\RA-RiskScore.ps1'
+
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($src, [ref]$tokens, [ref]$errors)
+        if ($errors.Count) { throw "RA-RiskScore.ps1 has parse errors: $($errors[0].Message)" }
+
+        # The two sibling `if` statements that normalize $existingImpacted, in source order.
+        $script:NormalizerAsts = @($ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.IfStatementAst] -and
+            $n.Clauses[0].Item1.Extent.Text -match '\$existingImpacted -is \[string\]'
+        }, $true))
+
+        $script:NormalizerText = ($script:NormalizerAsts | ForEach-Object { $_.Extent.Text }) -join "`n"
+
+        # 🔴 THE EXTRACTED FRAGMENT HAS DEPENDENCIES, AND ISOLATION HIDES THEM. This harness lifts the
+        # normalizer out of RA-RiskScore.ps1 and evaluates it in a bare scope, so anything the real file
+        # dot-sources is absent. When the culture-sensitive `Sort-Object -Unique` in these two blocks was
+        # replaced with the shared ORDINAL sorter (2026-08-28 -- da-DK collates "aa" as "å", so the list
+        # ORDER a customer read differed by host locale), all three cases failed with
+        # "Sort-SIOrdinal is not recognized" -- the extraction, not the change.
+        # 📌 Load what the engine loads, so the fragment is exercised in the scope it really runs in.
+        . (Join-Path $si 'engine\_shared\SI-AssetIdentity.ps1')
+
+        function script:Invoke-Normalizer {
+            param($Value)
+            $existingImpacted = $Value
+            . ([scriptblock]::Create($script:NormalizerText))
+            return $existingImpacted
+        }
+    }
+
+    It 'ImpactedAssetIds is POSITIONALLY ALIGNED to ImpactedAssetsList, not a second independent walk' {
+        # 🔴 THE DEFECT THIS PINS. The two lists used to be built by TWO separate passes over $out, each
+        # into its own HashSet -- and a HashSet is UNORDERED by definition -- then sorted separately. So
+        # the Nth name had no relationship to the Nth id, and the lists came out different LENGTHS
+        # (measured on the live workspace: 555 names against 50 ids). A consumer could not take a
+        # Summary row back to the asset it names, which is the entire purpose of the id column.
+        # Operator, 2026-08-28: "they must be consistent".
+        $src = $script:RiskScoreText
+
+        # The ids must be produced by walking the NAMES, which is what makes alignment structural
+        # rather than coincidental.
+        $src | Should -Match '\$impactedAssetIds\s*=\s*@\(foreach\s*\(\$_n\s+in\s+\$impactedAssets\)'
+
+        # And the old second pass must be GONE -- if it came back, both could be green while silently
+        # diverging again.
+        $src | Should -Not -Match '\$assetIdVals'
+    }
+
+    It 'the paired walk still refuses ConfigurationId as an asset id' {
+        # audit #25's original confusion: ConfigurationId identifies the FINDING, not the asset. It is
+        # legitimately in the ISSUE chain and must never enter the asset-id chain.
+        $src = $script:RiskScoreText
+        $m = [regex]::Match($src, "foreach \(\`$candidate in @\('SI_AssetId'[^\)]*\)")
+        $m.Success | Should -BeTrue -Because 'the asset-id candidate chain must exist'
+        $m.Value | Should -Not -Match 'ConfigurationId'
+    }
+
+    It 'the extraction found the normalizer (self-check -- absence must not read as success)' {
+        $script:NormalizerAsts.Count | Should -BeGreaterOrEqual 2
+        $script:NormalizerText | Should -Match 'ConvertFrom-Json'
+    }
+
+    It 'LA-direct shape: a JSON array in TEXT becomes a real array of that many items' {
+        $json = (1..17 | ForEach-Object { "asset$_" }) | ConvertTo-Json -Compress
+        $out  = script:Invoke-Normalizer -Value $json
+        @($out).Count | Should -Be 17
+        @($out)[0]    | Should -Be 'asset1'
+    }
+
+    It 'the parsed list is EXACTLY what array_length counted -- order and duplicates preserved' {
+        # Not re-sorted and not blank-filtered on this path: KQL already counted this array, so
+        # any tidying here would recreate the mismatch from the other direction.
+        $json = '["zebra","alpha","","alpha"]'
+        $out  = script:Invoke-Normalizer -Value $json
+        @($out).Count | Should -Be 4
+        @($out)[0]    | Should -Be 'zebra'
+    }
+
+    It 'XDR shape: an array is passed through untouched' {
+        $arr = @('b','a','c')
+        $out = script:Invoke-Normalizer -Value $arr
+        @($out).Count | Should -Be 3
+        @($out)[0]    | Should -Be 'b'
+    }
+
+    It 'strcat_array shape: a semicolon-joined string still splits, dedupes and sorts' {
+        $out = script:Invoke-Normalizer -Value 'charlie; alpha ;bravo;;alpha'
+        @($out).Count | Should -Be 3
+        @($out)[0]    | Should -Be 'alpha'
+    }
+
+    It 'a single plain name is still one item, not one character' {
+        $out = script:Invoke-Normalizer -Value 'SRV-01'
+        @($out).Count | Should -Be 1
+        @($out)[0]    | Should -Be 'SRV-01'
+    }
+
+    It 'text that only LOOKS like JSON falls back to the semicolon split instead of throwing' {
+        # A hostname list is not a document. If ConvertFrom-Json fails the row must still ship.
+        $out = script:Invoke-Normalizer -Value '[not json; really'
+        @($out).Count | Should -BeGreaterThan 0
+    }
+
+    It 'an empty JSON array yields an empty list, not a one-element list holding "[]"' {
+        $out = script:Invoke-Normalizer -Value '[]'
+        @($out).Count | Should -Be 0
+    }
+}
+
+# DISCOVERY-TIME. `-Skip:` is evaluated during discovery, so this cannot live in a BeforeAll -- put it
+# there and every 5.1 test silently SKIPS on a runner that has PowerShell 5.1, which is the one place
+# they must run. Verified by counting: skipped=2 before this moved out, skipped=0 after.
+$script:Ps51Path  = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$script:HasPs51   = Test-Path -LiteralPath $script:Ps51Path
+
+Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the host the ENGINE runs on' {
+<#
+    v2.2.440. The fourth-shape fix (v2.2.438) was correct, tested, green -- and INERT in production
+    for six days, because of the HOST rather than the data.
+
+        PS 5.1   @($json | ConvertFrom-Json).Count  ->  1
+        pwsh 7   @($json | ConvertFrom-Json).Count  ->  4
+
+    Windows PowerShell 5.1 writes a deserialized JSON array to the pipeline as ONE object; PowerShell
+    7 enumerates it. Every SI engine runs under 5.1 (the launcher starts powershell.exe); the Pester
+    suite and the pre-publish gate both run under pwsh 7 (`shell: pwsh`). So the tests above exercised
+    the REAL engine block, passed honestly, and proved nothing about production -- the list kept
+    collapsing to a single element beside a KQL count of 69.
+
+    THE GENERAL LESSON, which is bigger than this column: a suite that runs on a different host from
+    the product cannot see host-sensitive defects. These tests re-run the SAME extracted block in a
+    real PS 5.1 child process, so the assertion is made where the engine actually lives.
+#>
+
+    BeforeAll {
+        $si  = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        $src = Join-Path $si 'engine\risk-analysis\_shared\RA-RiskScore.ps1'
+
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($src, [ref]$tokens, [ref]$errors)
+        if ($errors.Count) { throw "RA-RiskScore.ps1 has parse errors: $($errors[0].Message)" }
+        $script:Norm51 = (@($ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.IfStatementAst] -and
+            $n.Clauses[0].Item1.Extent.Text -match '\$existingImpacted -is \[string\]'
+        }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`n"
+
+        # Re-resolved for the RUN phase. The copy above the Describe is what -Skip reads at DISCOVERY
+        # time; discovery-scope variables are not visible inside It blocks, so both are needed and
+        # neither is redundant.
+        $script:Ps51Path = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+    }
+
+    It 'the extraction still matches (absence must not read as success)' {
+        $script:Norm51 | Should -Match 'ConvertFrom-Json'
+    }
+
+    It 'THE SOURCE MUST NOT PIPE INTO ConvertFrom-Json -- that is the 5.1 trap, in one line' {
+        # Host-independent, so this guard holds even on a runner with no PS 5.1. Assign the result
+        # to a variable and wrap that; never `@($s | ConvertFrom-Json)`.
+        $script:Norm51 | Should -Not -Match '\|\s*ConvertFrom-Json'
+        $script:Norm51 | Should -Match 'ConvertFrom-Json\s+-InputObject'
+    }
+
+    It 'a JSON array normalizes to 17 items under REAL PowerShell 5.1, not 1' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
+        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
+        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
+        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
+        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
+        $json = ((1..17 | ForEach-Object { "asset$_" }) | ConvertTo-Json -Compress)
+        $probe = @"
+`$existingImpacted = '$json'
+$script:Norm51
+Write-Output @(`$existingImpacted).Count
+"@
+        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
+        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
+        try {
+            $out = & $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f
+            [int](@($out)[-1]) | Should -Be 17
+        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'and the two hosts AGREE -- the property that was silently untrue' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
+        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
+        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
+        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
+        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
+        $json = '["a","b","c","d"]'
+        $existingImpacted = $json
+        . ([scriptblock]::Create($script:Norm51))
+        $here = @($existingImpacted).Count
+
+        $probe = @"
+`$existingImpacted = '$json'
+$script:Norm51
+Write-Output @(`$existingImpacted).Count
+"@
+        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
+        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
+        try {
+            $there = [int](@(& $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f)[-1])
+            $there | Should -Be $here
+            $here  | Should -Be 4
+        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+}

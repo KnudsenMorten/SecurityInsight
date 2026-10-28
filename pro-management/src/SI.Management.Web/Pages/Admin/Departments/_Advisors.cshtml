@@ -1,0 +1,135 @@
+@model SI.Management.Web.Pages.Admin.Departments.AdvisorPanel
+@using SI.Management.Web.Advisors
+@inject IAdvisorStore Advisors
+@inject DepartmentSignInService SignIn
+@*
+    The ADVISORS and SIGN-IN LINKS of one department (#258), on its admin page (full) and its department page (compact:
+    send a link only). Every form posts to /Admin/Departments/Advisors (Admin). Reads fail soft: a database without the
+    #258 tables says how to add them.
+*@
+@{
+    IReadOnlyList<AdvisorRow> advisors = Array.Empty<AdvisorRow>();
+    IReadOnlyList<DepartmentPerson> people = Array.Empty<DepartmentPerson>();
+    IReadOnlyList<SignInRow> links = Array.Empty<SignInRow>();
+    (bool On, string? Why) avail = (false, null);
+    string? problem = null;
+    try
+    {
+        if (!await Advisors.ReadyAsync(Context.RequestAborted)) problem = "The Pro database does not have the advisor / sign-in tables yet: apply sql\\si-pro-settings.sql again (it only adds).";
+        else
+        {
+            advisors = await Advisors.ListAsync(Model.DepartmentId, true, Context.RequestAborted);
+            people = await Advisors.MailablePeopleAsync(Model.DepartmentId, Context.RequestAborted);
+            links = await SignIn.ListAsync(Model.DepartmentId, Context.RequestAborted);
+            avail = await SignIn.AvailableAsync(Context.RequestAborted);
+        }
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { problem = "The advisors could not be read: " + ex.Message; }
+    var now = SignIn.Now;
+    var id = Model.DepartmentId;
+}
+<section class="card" aria-labelledby="adv-h-@id" data-advisors-panel="@id">
+    <h2 id="adv-h-@id">@(Model.Compact ? "Sign-in links" : "Advisors and sign-in links")</h2>
+    @if (problem is not null) { <div class="notice warn" role="status">@problem</div> }
+    else
+    {
+        @if (!Model.Compact)
+        {
+            <p class="hint">An advisor is an outside consultant or consultancy the department's owners trust: they see this department only and may comment, recommend and -- after a second check -- approve. They sign in with a personal link, or as a guest of this organisation (Entra B2B) with their own company account.</p>
+            @if (advisors.Count == 0) { <p class="hint">No advisor yet.</p> }
+            else
+            {
+                <table data-advisors data-sortable>
+                    <thead><tr><th>Advisor</th><th>Mail</th><th>Company</th><th>Guest object id</th><th>State</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody>
+                        @foreach (var a in advisors)
+                        {
+                            <tr data-advisor="@a.AdvisorId" data-active="@(a.Active ? "true" : "false")">
+                                <td>@a.DisplayName <span class="badge">@AdvisorKinds.Label(a.Kind)</span>@if (a.IsExternal) { <span class="badge">external</span> }</td>
+                                <td>@a.Mail</td>
+                                <td>@a.Company</td>
+                                <td class="wrap">@a.ObjectId</td>
+                                <td>@if (a.Active) { <text>active</text> } else { <text>revoked </text>@Fmt.Time(a.RevokedAt, "date")<text> by @a.RevokedBy: @a.RevokeReason</text> }</td>
+                                <td>
+                                    @if (a.Active)
+                                    {
+                                        <form method="post" asp-page="/Admin/Departments/Advisors" asp-page-handler="Revoke" asp-route-id="@id" asp-route-returnUrl="@Model.ReturnUrl" class="row-actions">
+                                            <input type="hidden" name="advisorId" value="@a.AdvisorId" />
+                                            <input type="text" name="reason" required minlength="3" maxlength="400" placeholder="why" aria-label="Reason to revoke @a.DisplayName" />
+                                            <button type="submit" class="small secondary">Revoke</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            <h3>Add an advisor</h3>
+            <form method="post" asp-page="/Admin/Departments/Advisors" asp-page-handler="Add" asp-route-id="@id" asp-route-returnUrl="@Model.ReturnUrl" class="stack" data-add-advisor>
+                <label for="adv-kind-@id">Kind</label>
+                <select id="adv-kind-@id" name="kind">@foreach (var k in AdvisorKinds.All) { <option value="@k">@AdvisorKinds.Label(k)</option> }</select>
+                <label for="adv-name-@id">Name (the person, or the company)</label>
+                <input id="adv-name-@id" name="displayName" required maxlength="256" />
+                <label for="adv-co-@id">Company (optional)</label>
+                <input id="adv-co-@id" name="company" maxlength="256" />
+                <label for="adv-mail-@id">Mail address (sign-in links and codes go here)</label>
+                <input id="adv-mail-@id" name="mail" type="email" maxlength="256" />
+                <label for="adv-oid-@id">Guest object id in this tenant (optional: after the B2B invitation is accepted)</label>
+                <input id="adv-oid-@id" name="objectId" maxlength="36" placeholder="00000000-0000-0000-0000-000000000000" />
+                <label for="adv-note-@id">Note (optional)</label>
+                <input id="adv-note-@id" name="note" maxlength="400" />
+                <label><input type="checkbox" name="isExternal" value="true" checked /> From outside the organisation</label>
+                <button type="submit">Add advisor</button>
+            </form>
+            <details class="hint">
+                <summary>Sign-in with their own company account (Entra B2B guest)</summary>
+                <p>1. Invite the advisor as a guest: Entra admin center &gt; Users &gt; Invite external user (their work address). 2. Give the guest the app role <strong>SecurityInsight Department</strong> on the SecurityInsight enterprise application (earlier: SecurityInsight Management) (it lets them sign in and grants nothing by itself). 3. Optional, stronger: once they accepted, put their guest object id on the advisor here. They are matched by that object id, or by the address Entra signs them in with. Remove the guest (or revoke the advisor here) to end it.</p>
+            </details>
+        }
+        <h3>Send a sign-in link</h3>
+        @if (!avail.On) { <p class="hint" data-links-off>@avail.Why</p> }
+        else if (people.Count == 0) { <p class="hint">Nobody of this department has a mail address yet.</p> }
+        else
+        {
+            <form method="post" asp-page="/Admin/Departments/Advisors" asp-page-handler="SendLink" asp-route-id="@id" asp-route-returnUrl="@Model.ReturnUrl" class="row-actions" data-send-link>
+                <label for="sl-person-@id" class="sr-only">Person</label>
+                <select id="sl-person-@id" name="person">
+                    @foreach (var p in people)
+                    {
+                        <option value="@(p.Kind):@(p.PersonId)">@p.DisplayName (@(p.IsAdvisor ? "advisor" : p.Role)) -- @p.Mail</option>
+                    }
+                </select>
+                <button type="submit">Send link</button>
+            </form>
+            <p class="hint">Personal, works once, expires after the magic-link lifetime. Approving through it needs a one-time code mailed to the same address.</p>
+        }
+        @if (links.Count > 0)
+        {
+            <table data-signin-links data-sortable>
+                <thead><tr><th>Sent to</th><th>Issued</th><th>By</th><th>State</th><th data-sort="off"><span class="sr-only">Actions</span></th></tr></thead>
+                <tbody>
+                    @foreach (var l in links)
+                    {
+                        var state = l.State(now);
+                        <tr data-signin="@l.SignInId" data-state="@state">
+                            <td>@(l.PersonName ?? l.Mail) <span class="hint">@l.Mail</span></td>
+                            <td>@Fmt.Time(l.IssuedAt)</td>
+                            <td>@l.IssuedBy</td>
+                            <td>@state</td>
+                            <td>
+                                @if (l.RevokedAt is null && state is not ("expired" or "ended"))
+                                {
+                                    <form method="post" asp-page="/Admin/Departments/Advisors" asp-page-handler="RevokeLink" asp-route-id="@id" asp-route-returnUrl="@Model.ReturnUrl" class="row-actions">
+                                        <input type="hidden" name="signInId" value="@l.SignInId" />
+                                        <button type="submit" class="small secondary">Revoke</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+</section>

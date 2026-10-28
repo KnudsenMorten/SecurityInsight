@@ -1,0 +1,47 @@
+@* #818 (owner 2026-10-20: "why can i not select previous data collection sets ... it shoud be possible so we can easily compare"):
+   the run a key-figure page shows (the published one by default, any earlier COMPLETE run -- the list never holds a loading or
+   stopped one) and the run it is compared with (the run before, or another earlier one): every headline and line then shows
+   the change between the two. The lists of what is new / no longer reported / changed are What changed (the stored pair of a
+   run and the run before it -- the same definition). *@
+@model SI.Management.Web.Pages.Management.RunPickerModel
+@{
+    var f = Model.Figures;
+    var cols = f.Collections;
+    var cur = f.Current;
+}
+@if (cols.Count > 0 && cur is not null)
+{
+    <form method="get" action="@Model.Path" class="picker noprint" data-autosubmit aria-label="Run" data-run-picker>
+        @foreach (var (k, v) in Model.Keep) { <input type="hidden" name="@k" value="@v" /> }
+        <div>
+            <label for="pick-run">Run</label>
+            <select id="pick-run" name="c">
+                @foreach (var c in cols)
+                {
+                    <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == cur.CollectionId)">@Fmt.When(c.CollectionTime)@(c == cols[0] ? " · shown by default" : "")</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="pick-vs">Compare with</label>
+            <select id="pick-vs" name="vs" data-compare>
+                <option data-utc value="" selected="@(!f.Compared)">the run before@(f.Previous is { } p && !f.Compared ? " (" + Fmt.When(p.CollectionTime) + ")" : "")</option>
+                @foreach (var c in cols.Where(c => c.CollectionId != cur.CollectionId))
+                {
+                    <option data-utc value="@c.CollectionId" selected="@(f.Compared && c.CollectionId == f.Previous?.CollectionId)">@Fmt.When(c.CollectionTime)</option>
+                }
+            </select>
+        </div>
+        <noscript><button type="submit">Open</button></noscript>
+    </form>
+    @if (f.Previous is { } prev)
+    {
+        <p class="hint noprint" data-compare-line>Changes are shown against the run of <time data-utc datetime="@prev.CollectionTime.ToString("o")">@Fmt.When(prev.CollectionTime)</time>.
+        @if (prev.CollectionTime < cur.CollectionTime)
+        {
+            <a href="/Collection/Changes?c=@Uri.EscapeDataString(cur.CollectionId)&amp;a=@Uri.EscapeDataString(prev.CollectionId)" data-what-changed>What is new, no longer reported or changed between the two runs</a>
+        }
+        </p>
+    }
+    @if (f.CompareNote is { } note) { <p class="hint" data-compare-note>@note</p> }
+}

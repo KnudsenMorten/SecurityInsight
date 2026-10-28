@@ -1,0 +1,2 @@
+# byte-equality fixtures (#274): the materialiser writes LF; never convert
+* -text

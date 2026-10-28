@@ -1,0 +1,21 @@
+id:        ProgressWhatsupGold
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'WhatsUp Gold'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'WhatsUp Gold'
+
+detections:
+  - id: ProgressWhatsupGold
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'whatsup_gold*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

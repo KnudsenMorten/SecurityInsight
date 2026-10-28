@@ -1,0 +1,17 @@
+@* THE date filter of "+ Add filter" (DateFilter.cs): quick picks as links, a from..to box, "Any time" when one is set. *@
+@model SI.Management.Web.Pages.DateFilter
+@{
+    var d = Model;
+}
+<div class="date-filter" role="group" aria-labelledby="@d.Id-l" data-date-filter="@d.Name">
+    <span class="date-filter-label" id="@d.Id-l">@d.Label</span>
+    <span class="date-picks">
+        @foreach (var (value, words) in d.Picks)
+        {
+            <a class="button secondary small" href="@d.Href(value)" aria-current="@(d.Current == value ? "true" : "false")" data-date-pick="@value">@words</a>
+        }
+        @if (d.Current is not null) { <a class="button secondary small" href="@d.Href(null)" data-date-pick="">Any time</a> }
+    </span>
+    <label for="@d.Id">From..to (yyyy-MM-dd), or the last N days (30d)</label>
+    <input form="@d.Form" id="@d.Id" type="text" name="@d.Name" value="@d.Current" placeholder="2026-10-01..2026-10-19" maxlength="23" pattern="[0-9]{1,4}d|[0-9]{4}-[0-9]{2}-[0-9]{2}(\.\.([0-9]{4}-[0-9]{2}-[0-9]{2})?)?|\.\.[0-9]{4}-[0-9]{2}-[0-9]{2}" />
+</div>

@@ -1,0 +1,74 @@
+@page
+@model SI.Management.Web.Pages.Changes.IndexModel
+@using SI.Management.Web.Settings
+@{
+    ViewData["Title"] = "Review & commit";
+}
+<h1>Review &amp; commit</h1>
+<p class="lede">Every change staged from the findings browser, the tier board and the settings documents waits here. Nothing below is written yet. Commit writes each selected change in its own transaction, with your name and its reason in the change history.</p>
+<details class="help">
+    <summary>How this page works</summary>
+    <p>A change is <strong>refused at review</strong> when it would not be accepted (an invalid value, a document that changed since you staged it, a schema that lacks the table or kind). A refused change cannot be selected; discard it and stage it again. Committed changes take effect from the next engine run. Pending changes are kept for 8 hours.</p>
+</details>
+
+@if (Model.Outcomes.Count > 0)
+{
+    <section class="card" aria-labelledby="h-out">
+        <h2 id="h-out">Result</h2>
+        <ul>
+            @foreach (var o in Model.Outcomes)
+            {
+                <li><span class="badge @(o.Status == WriteStatus.Saved ? "good" : "bad")">@(o.Status == WriteStatus.Saved ? "written" : o.Status == WriteStatus.Stale ? "not written (changed)" : "refused")</span> @o.Change.Title -- @o.Message</li>
+            }
+        </ul>
+    </section>
+}
+
+@if (Model.Previews.Count == 0)
+{
+    <div class="notice ok" role="status">No pending changes. Stage one from <nav-ref page="/Collection/Rows" />, the <a href="/Tiers">Tier board</a> or <nav-ref page="/Reports/Index" />.</div>
+}
+else
+{
+    <form method="post" data-selectable data-confirm-title="The selected changes" data-confirm="Commit writes the selected changes now, each with your name and reason in the change history. Discard drops them without writing anything.">
+        <section class="card" aria-labelledby="h-p">
+            <div class="split">
+                <h2 id="h-p">@Model.Previews.Count pending change(s)</h2>
+                <label class="nowrap"><input type="checkbox" data-select-all /> Select all</label>
+            </div>
+            @{
+                // #282: Commit / Discard sit ABOVE the list of changes, in the shared toolbar -- never under the last card
+                Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> commit =
+                    @<div class="actions">
+                        <button type="submit" asp-page-handler="Commit" formnovalidate>Commit selected</button>
+                        <button type="submit" asp-page-handler="Discard" class="secondary" formnovalidate>Discard selected</button>
+                    </div>;
+                var toolbar = new GridToolbar { Id = "changes-tools", Total = Model.Previews.Count, Count = Model.Previews.Count, Noun = "pending change(s)", Actions = commit };
+            }
+            <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
+            @foreach (var p in Model.Previews)
+            {
+                var c = p.Change;
+                <div class="change">
+                    <div class="head">
+                        <input type="checkbox" name="Ids" value="@c.Id" data-select-row checked="@p.CanCommit" disabled="@(!p.CanCommit)" aria-label="Select: @c.Title" />
+                        <strong>@c.Title</strong>
+                        <span class="badge">@c.Kind</span>
+                        <span class="muted">staged @Fmt.Time(c.StagedAt)</span>
+                        @if (!p.CanCommit) { <span class="badge bad">refused at review</span> }
+                    </div>
+                    @if (p.Problems.Count > 0) { <ul class="problems">@foreach (var w in p.Problems) { <li>@w</li> }</ul> }
+                    @if (p.Warnings.Count > 0) { <ul class="warnings">@foreach (var w in p.Warnings) { <li>@w</li> }</ul> }
+                    @if (c.Get("reason") is { Length: > 0 } reason) { <p class="hint">Reason: @reason</p> }
+                    <details>
+                        <summary>Before → after</summary>
+                        <div class="diff">
+                            <div class="old"><h3>Now</h3><pre><code>@p.Old</code></pre></div>
+                            <div class="new"><h3>After commit</h3><pre><code>@p.New</code></pre></div>
+                        </div>
+                    </details>
+                </div>
+            }
+        </section>
+    </form>
+}

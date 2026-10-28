@@ -1,0 +1,152 @@
+@model SI.Management.Web.Pages.Admin.Settings.IndexModel
+@inject SI.Management.Web.Changes.ILicenceUsageSource LicenceUsageSource
+@* The licence request (#239) and the update state (#240) the updater job keeps (cfg.InstallState); read-only. Shown first
+   in the Licence & updates category, above the switches that turn either off. *@
+<section class="set-card set-status" id="licence-request" aria-label="Licence">
+    <h3>Licence</h3>
+    @* the INSTALLED licence first (SI-License, as the updater last verified it with the engines' own checks), then the
+       renewal request as a second line *@
+    <div id="licence-installed">
+    @if (Model.InstalledError is not null)
+    {
+        <p class="notice error" role="alert">The installed licence could not be read: @Model.InstalledError</p>
+    }
+    else if (Model.Installed is null)
+    {
+        var (nt, ntone) = SI.Management.Web.Changes.InstalledLicence.Describe(SI.Management.Web.Changes.LicenceState.NotChecked);
+        <p class="set-licence"><span class="badge @ntone" data-licence-state="NotChecked">@nt</span> The updater job has not recorded the installed licence yet. It checks it every night.</p>
+    }
+    else
+    {
+        var il = Model.Installed;
+        var st = il.StateOn(Model.TodayUtc);
+        var (text, tone) = SI.Management.Web.Changes.InstalledLicence.Describe(st);
+        <p class="set-licence"><span class="badge @tone" data-licence-state="@st">@text</span>
+            @if (!string.IsNullOrEmpty(il.Customer)) { <strong>@il.Customer</strong> }
+            @if (!string.IsNullOrEmpty(il.Sku)) { <span>· @il.Sku</span> }
+            @if (il.ValidTo is { } vt) { <span>· valid until <time datetime="@SI.Management.Web.Changes.InstalledLicence.Day(vt)">@SI.Management.Web.Changes.InstalledLicence.Day(vt)</time></span> }
+        </p>
+        @* LICENCE-DIMENSION: Pro Business (signed limits) or Pro Enterprise (none); the device use of a Business licence *@
+        <p class="set-licence" data-licence-dimension="@SI.Management.Web.Changes.LicenceDimension.Of(il, Model.TodayUtc)">Dimension: <strong>@SI.Management.Web.Changes.LicenceDimension.Text(il, Model.TodayUtc)</strong>@(SI.Management.Web.Changes.LicenceDimension.Of(il, Model.TodayUtc) == SI.Management.Web.Changes.LicenceDimension.Enterprise ? " -- no limits" : "")</p>
+        @if (await LicenceUsageSource.ReadAsync(Context.RequestAborted) is { Cap: not null } usage && usage.Message.Length > 0)
+        {
+            <p class="@(usage.ShowsBanner ? "notice " + usage.Tone : "set-hint")" role="status" data-licence-usage="@usage.State">@usage.Message</p>
+        }
+        @if (il.NextStep(st) is { } next)
+        {
+            <p class="notice @(tone == "bad" ? "error" : "warn")" role="status">@next</p>
+        }
+        <details class="set-info">
+            <summary title="About the licence"><span aria-hidden="true">i</span><span class="sr-only">About the licence</span></summary>
+            <dl>
+                @if (!string.IsNullOrEmpty(il.LicenceId)) { <dt>Licence id</dt><dd>@il.LicenceId</dd> }
+                @if (!string.IsNullOrEmpty(il.Features)) { <dt>Features</dt><dd>@il.Features</dd> }
+                @if (il.ValidFrom is { } vf) { <dt>Valid from</dt><dd>@SI.Management.Web.Changes.InstalledLicence.Day(vf)</dd> }
+                @if (il.GraceUntil is { } gu) { <dt>Grace until</dt><dd>@SI.Management.Web.Changes.InstalledLicence.Day(gu)</dd> }
+                @if (!string.IsNullOrEmpty(il.Reason)) { <dt>Check</dt><dd>@il.Reason</dd> }
+                <dt>Verified</dt><dd>@Fmt.Time(il.VerifiedUtc) by the updater job</dd>
+            </dl>
+        </details>
+    }
+    </div>
+    @* the renewal request: one secondary line *@
+    <div class="set-request" id="licence-renewal">
+    @if (!Model.LicenceAutoOn)
+    {
+        <p class="notice warn" role="status" data-auto="off">Automatic licence request is off -- the updater job does not ask Invardia for a licence. Renew it by hand (setup\Request-SILicense.ps1) before it ends, or turn <a href="#s-SI_LicenseRequest_Auto">Automatic licence request</a> on again.</p>
+    }
+    @if (Model.LicenceError is not null)
+    {
+        <p class="notice error" role="alert">The licence request state could not be read: @Model.LicenceError</p>
+    }
+    else if (Model.Licence is null)
+    {
+        <p class="set-hint">Renewal: no licence request recorded. The updater job asks Invardia for this install's licence when it has none, and renews it before it ends.</p>
+    }
+    else
+    {
+        var lr = Model.Licence;
+        <p class="@(lr.Status == "rejected" ? "notice error" : "set-hint")" data-status="@lr.Status">Renewal: <strong>@lr.Status</strong> -- @lr.Summary Last check @Fmt.Time(lr.LastCheckUtc ?? lr.UpdatedAt)@(string.IsNullOrEmpty(lr.LastError) ? "." : "; last problem: " + lr.LastError)</p>
+    }
+    </div>
+</section>
+
+<section class="set-card set-status" id="updates" aria-label="Updates">
+    <h3>Updates</h3>
+    @if (!Model.InvardiaUpdatesOn)
+    {
+        <p class="notice warn" role="status" data-auto="off">Pro updates from Invardia are off -- the updater job does not check Invardia or apply anything, and this installation stays on its current version. Turn <a href="#s-SI_InvardiaUpdate_Enabled">Pro updates from Invardia</a> on again to receive updates.</p>
+    }
+    @if (Model.UpdatesError is not null)
+    {
+        <p class="notice error" role="alert">The update state could not be read: @Model.UpdatesError</p>
+    }
+    else if (Model.Updates is null)
+    {
+        <p class="set-card-desc">No update check recorded. The updater job checks for new SecurityInsight releases and template packs every night.</p>
+    }
+    else
+    {
+        var us = Model.Updates;
+        <dl class="set-facts" data-source="@us.Source">
+            <dt>Update source</dt><dd>@us.SourceText</dd>
+            <dt>Last check</dt><dd>@Fmt.Time(us.LastCheckUtc ?? us.UpdatedAt)</dd>
+            @if (us.Code is not null) { <dt>Code</dt><dd data-kind="code">@us.Code.Summary</dd> }
+            @* CR3 (#657): a pre-release wave -- the version runs here early, with no ring move; never moved back *@
+            @if (us.Code?.Wave is { } wave)
+            {
+                <dt>Pre-release</dt>
+                <dd data-wave="@wave"><strong>@SI.Management.Web.Pages.HeaderContext.WaveText(us.Code.WaveRing ?? us.Code.Ring ?? 0, wave)</strong> -- this install runs @(us.Code.WaveVersion ?? "a version") early, before its ring gets it. It keeps that version and follows its ring again once the ring reaches it; it is never moved back.</dd>
+            }
+            @if (us.Templates is not null) { <dt>Template packs</dt><dd data-kind="templates">@us.Templates.Summary</dd> }
+            @if (Model.InstallKey is { } ik)
+            {
+                <dt>Install key</dt>
+                <dd data-install-key="@ik.State"><span class="badge @ik.Tone">@ik.State.Replace('-', ' ')</span> @ik.Text
+                    @if (ik.State is "refused-again" or "claimed" && us.ClaimAgainUtc is { } tried) { <span class="hint">Last claim again: @Fmt.Time(tried).</span> }
+                </dd>
+            }
+            @if (!string.IsNullOrEmpty(us.Error)) { <dt>Last problem</dt><dd>@us.Error</dd> }
+        </dl>
+        @if (Model.InstallKey is { CanClaimAgain: true })
+        {
+            <form method="post" asp-page-handler="ClaimAgain" class="actions" id="claim-again" data-claim-again="true">
+                <input type="hidden" name="cat" value="@Model.LicenceCategoryId" />
+                <button type="submit">Invardia reset this install's key -- claim it again</button>
+                <span class="hint">The updater job claims the key once on its next run. Another refusal (409) holds it again; it is never retried by itself.</span>
+            </form>
+        }
+        @foreach (var h in us.Holds)
+        {
+            <p class="notice warn" role="status" data-hold="true"><strong>On hold</strong> -- @h</p>
+        }
+        @if (us.Refused)
+        {
+            <p class="notice error" role="alert">An update from Invardia was refused -- it did not verify. Nothing was applied.</p>
+        }
+    }
+    @* CR3 (#657): the components of the installed code -- Testing after a release changed them, Stable after 3 good daily runs *@
+    @{
+        SI.Management.Web.Changes.ReleaseComponents? comps = null;
+        if (Context.RequestServices.GetService(typeof(SI.Management.Web.Changes.ReleaseComponentsReader)) is SI.Management.Web.Changes.ReleaseComponentsReader rcr)
+        {
+            try { comps = await rcr.ReadAsync(Context.RequestAborted); } catch (Exception ex) when (ex is not OperationCanceledException) { comps = null; }
+        }
+    }
+    @if (comps is not null)
+    {
+        var testing = comps.Testing;
+        <div id="release-components" data-testing="@testing.Count" data-stable="@comps.Stable">
+            <p class="set-hint" role="status">Components: @comps.Summary</p>
+            @if (testing.Count > 0)
+            {
+                <details class="set-info">
+                    <summary title="The components in testing"><span aria-hidden="true">i</span><span class="sr-only">The components in testing</span></summary>
+                    <ul>
+                        @foreach (var c in testing) { <li data-component="@c.Scope">@SI.Management.Web.Changes.ReleaseComponents.Line(c)</li> }
+                    </ul>
+                </details>
+            }
+        </div>
+    }
+</section>

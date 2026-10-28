@@ -1,0 +1,29 @@
+@page
+@model SI.Management.Web.Pages.Departments.ConfirmModel
+@{
+    ViewData["Title"] = "Confirm your sign-in";
+}
+<h1>Confirm your sign-in</h1>
+@if (!Model.LinkSession)
+{
+    <div class="notice ok" role="status">You signed in with your organisation account: that already counts as the strong sign-in. No code is needed.</div>
+    <p><a href="@Model.Back">Back</a></p>
+}
+else if (Model.Method == SI.Management.Web.Auth.AuthMethods.MagicLinkOtp)
+{
+    <div class="notice ok" role="status" data-confirmed>This sign-in is confirmed: you can approve until it ends.</div>
+    <p><a href="@Model.Back">Back</a></p>
+}
+else
+{
+    <p class="lede">You signed in with a link. Before you approve, confirm it is you: we mail a one-time code to the same address the link went to.</p>
+    <form method="post" asp-page-handler="Send" asp-route-returnUrl="@Model.Back" class="row-actions" data-send-code>
+        <button type="submit">Mail me a code</button>
+    </form>
+    <form method="post" asp-page-handler="Code" asp-route-returnUrl="@Model.Back" class="stack" data-enter-code>
+        <label for="o-code">The six-digit code</label>
+        <input id="o-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required />
+        <button type="submit">Confirm</button>
+    </form>
+    <p class="hint">The code works once, for 10 minutes. Or <a href="/signout">sign out</a> and sign in with your organisation account.</p>
+}

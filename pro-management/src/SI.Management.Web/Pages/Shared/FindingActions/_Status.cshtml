@@ -1,0 +1,9 @@
+@model SI.Management.Web.Actions.ActionFormModel
+@using SI.Management.Core.ProData
+<label for="@Model.Id("status")">Status</label>
+<select id="@Model.Id("status")" name="a.status" required>
+    @foreach (var s in GovernanceStatuses.Settable) { <option value="@s">@GovernanceStatuses.Label(s)</option> }
+</select>
+<p class="hint">Risk accepted and Escalated to the vendor are set by their own actions (Request exemption, Escalate to vendor).</p>
+<label for="@Model.Id("comment")">Why (kept in each finding's governance log, audited)</label>
+<textarea id="@Model.Id("comment")" name="a.comment" rows="2" maxlength="2000" required minlength="3"></textarea>

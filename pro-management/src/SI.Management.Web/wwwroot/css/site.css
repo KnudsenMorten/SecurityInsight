@@ -1,0 +1,542 @@
+/* SecurityInsight Pro management -- MOBILE FIRST: the base rules are the phone layout (~360px, no sideways scroll);
+   the desktop layout is the min-width block further down. Both ship together. Light/dark via prefers-color-scheme.
+   THE LOOK IS THE FRAMEWORK'S (BRAND-2, PIM Manager is the reference): the brand tokens, an always-dark brand bar with
+   the reversed logo, a surface-alt navigation with an accent active marker, a surface-alt status-bar footer. */
+
+:root {
+  color-scheme: light;
+  /* BRAND-2.1 -- the same in light and dark: the brand bar never changes colour */
+  --brand-blue: #1B4FE4;
+  --brand-sky: #18B4F2;
+  --brand-ink: #0B1633;
+  --brand-wordmark: #9FC3FF;
+  --on-ink: #ffffff;
+  --notice-fill: #bc4c00;       /* the "session expired" bar (#345, BRAND-2.11): PIM Manager's orange, white text on it */
+  --on-notice: #ffffff;
+  --accent: #0969da;            /* accent TEXT: links, the current tab, sorted column */
+  --accent-fill: #0969da;       /* accent FILL under white text: buttons, the current pager / range chip */
+  /* older names the components use, mapped onto the brand tokens */
+  --brand: var(--accent-fill);
+  --brand-2: var(--brand-sky);
+  --ink: var(--brand-ink);
+  --field-bg: #ffffff;           /* BRAND-2.12 white input fields (owner 2026-10-09); the rule itself is LAST in app.css */
+  --field-border: #8c959f;       /* 3:1 against the page, so the field's edge is visible */
+  --field-placeholder: #6e7781;
+  --surface-0: #ffffff;          /* page (BRAND-2.1 surface) */
+  --surface-1: #ffffff;          /* cards */
+  --surface-2: #f6f8fa;          /* surface-alt: navigation, footer, table heads, chips */
+  --border: #d0d7de;
+  --seg-line: #6e7781;           /* the outline of an unselected toggle: 3:1+ against the surface, so it reads as a button */
+  --text-primary: #1a1a1a;
+  --text-heading: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #57606a;
+  --link: var(--accent);
+  --code-bg: #f6f8fa;
+  --grid: #eaeef2;
+  /* chart categorical slots, fixed order (validated reference palette) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  /* status -- reserved, always with a label */
+  --good: #1a7f37;
+  --warning: #9a6700;
+  --critical: #cf222e;
+  --good-bg: #dafbe1;
+  --warning-bg: #fff8c5;
+  --critical-bg: #ffebe9;
+  --radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --field-bg: #21262d; --field-border: #6e7681; --field-placeholder: #9198a1;   /* one step lighter than the card (BRAND-2.12) */
+    --accent: #4493f8;
+    --accent-fill: #1f6feb;
+    --surface-0: #0d1117;
+    --surface-1: #161b22;
+    --surface-2: #1c2230;
+    --border: #30363d;
+    --seg-line: #6e7681;
+    --text-primary: #e6edf3;
+    --text-heading: #f0f6fc;
+    --text-secondary: #b1bac4;
+    --text-muted: #9198a1;
+    --link: #79b8ff;
+    --code-bg: #0d1117;
+    --grid: #30363d;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --good: #5fd08f;
+    --warning: #f0b84a;
+    --critical: #ff8a80;
+    --good-bg: #12301f;
+    --warning-bg: #33280f;
+    --critical-bg: #3a1717;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  /* BRAND-2.4: the system UI font, no web fonts. 14px on a phone (readability), 13px in the dense desktop UI. */
+  font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;           /* belt and braces: nothing may push the page sideways */
+}
+a { color: var(--link); }
+img, canvas, svg { max-width: 100%; }
+h1, h2, h3 { color: var(--text-heading); }
+h1 { font-size: 1.4rem; margin: 0 0 .25rem; font-weight: 600; }
+h2 { font-size: 1.1rem; margin: 1.25rem 0 .5rem; font-weight: 600; }
+h3 { font-size: 1rem; margin: 1rem 0 .4rem; font-weight: 600; }
+p.lede { color: var(--text-secondary); margin: 0 0 1rem; }
+
+/* ---- the brand bar (BRAND-2.2): one row, brand-ink in light AND dark, reversed logo, version pill, caption groups ---- */
+.topbar {
+  background: var(--brand-ink);
+  color: var(--on-ink);
+  border-bottom: 1px solid var(--brand-blue);
+  padding: 8px 16px;
+  /* #909: one line -- never a second row above a phone's width; the search shrinks first, then collapses to an icon */
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 8px 14px; min-width: 0;
+}
+.topbar a { color: var(--on-ink); }
+.topbar .brand { display: inline-flex; align-items: center; text-decoration: none; }
+.topbar .logo { display: block; height: 36px; width: auto; }
+.version-pill {
+  display: inline-block; font-weight: 600; font-size: 11px; color: var(--on-ink); background: rgba(255, 255, 255, .25);
+  border: 1px solid rgba(255, 255, 255, .55); padding: 2px 8px; border-radius: 10px; letter-spacing: .3px; white-space: nowrap;
+}
+.brand-right { margin-left: auto; display: flex; flex: 1 1 auto; flex-wrap: nowrap; justify-content: flex-end; align-items: center; gap: 14px; min-width: 0; }
+.topbar .brand, .version-pill { flex: none; }
+.brand-group { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; color: var(--on-ink); text-decoration: none; min-width: 0; }
+.brand-cap { font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px; opacity: .8; color: var(--on-ink); }
+.brand-val { font-size: 12px; color: var(--on-ink); white-space: nowrap; display: inline-flex; gap: .35rem; align-items: center; min-width: 0; }
+.brand-val .who-name { overflow: hidden; text-overflow: ellipsis; max-width: 18ch; font-weight: 600; }
+.topbar .badge { background: rgba(255, 255, 255, .15); color: var(--on-ink); border-color: rgba(255, 255, 255, .55); }
+.topbar .badge.warn { background: #fff8c5; color: #9a6700; border-color: transparent; }
+/* a select on the dark bar: PIM's instance switcher (translucent white); the open list paints its own colours */
+.topbar select.brand-select {
+  width: auto; background: rgba(255, 255, 255, .15); color: var(--on-ink); border: 1px solid rgba(255, 255, 255, .55);
+  border-radius: 5px; padding: 2px 6px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.topbar select.brand-select option { background: #ffffff; color: #1a1a1a; font-weight: 400; }
+.topbar label.brand-cap { font-weight: 400; margin: 0; display: block; }
+/* the user menu: a disclosure under the "Signed in" group */
+.usermenu { position: relative; }
+.usermenu > summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
+.usermenu > summary::-webkit-details-marker { display: none; }
+.usermenu > summary .brand-val::after { content: "\25BE"; opacity: .8; }
+.usermenu-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; width: min(280px, calc(100vw - 32px));
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%); padding: 10px 12px; display: grid; gap: .55rem; font-size: 13px;
+}
+.usermenu-panel a { color: var(--link); }
+.usermenu-panel label { font-size: 12px; }
+.usermenu-panel button.secondary { justify-self: start; }
+
+/* ---- navigation: PIM Manager's grouped tab bar (BRAND-2.2) -- top-level groups on surface-alt, each a menu of pages.
+   Group text is text-muted (#57606a on #f6f8fa = 5.9:1, WCAG AA); hover / the current group = accent (#0969da = 4.7:1)
+   with a 2px accent underline; the current page in the menu = accent, 600, a tinted row. ---- */
+/* The row WRAPS when it does not fit (an Admin has the most entries: on a 1280 px laptop the groups and the sub-bar at the
+   right are wider than the window) -- a second row, never a page that scrolls sideways. */
+.navgroups {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 2px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border); padding: 0 6px; position: relative; z-index: 45; min-width: 0;
+}
+.nav-group { position: relative; flex: 0 0 auto; }
+.nav-group > summary { list-style: none; }
+.nav-group > summary::-webkit-details-marker { display: none; }
+.nav-group-btn {
+  cursor: pointer; font-size: 12.5px; color: var(--text-muted); padding: 9px 14px; border-bottom: 2px solid transparent;
+  white-space: nowrap; display: flex; align-items: center; gap: 6px; user-select: none;
+}
+.nav-group-btn:hover, .nav-group-btn:focus-visible, .nav-group[open] > .nav-group-btn { color: var(--accent); }
+.nav-group.active > .nav-group-btn { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.nav-caret { font-size: 9px; color: var(--text-muted); }
+/* #415: Home -- the first entry, a direct link styled as a group button, with a home icon */
+.nav-home { text-decoration: none; flex: 0 0 auto; }
+.nav-home.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.nav-home-icon { flex: none; }
+.nav-group-menu {
+  position: absolute; top: 100%; left: 0; min-width: 260px; margin: 0; padding: 4px 0; list-style: none;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 0 0 8px 8px; box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+.nav-group-menu.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); min-width: 460px; }
+/* a menu that would stick out of the window at the right opens leftwards from its group (js/site.js sets the class when
+   the menu opens: which group is near the edge depends on the role's menu and on where the row wraps) */
+.nav-group-menu.to-left { left: auto; right: 0; }
+.nav-group-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 14px; font-size: 12.5px;
+  color: var(--text-heading); text-decoration: none;
+}
+.nav-group-item:hover, .nav-group-item:focus-visible { background: var(--surface-2); color: var(--accent); outline: none; }
+.nav-group-item[aria-current="page"] { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--accent) 9%, var(--surface-1)); box-shadow: inset 2px 0 0 var(--accent); }
+/* #285 the context bar (BRAND-2, PIM's header): the brand bar's groups wrap instead of overflowing; the search box sits on
+   the dark bar like PIM's; the light sub-bar ("data: ... | you: ... | numbers: [...]") sits at the right of the navigation */
+.brand-val .tenant-guid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+/* ENVIRONMENT / TENANT while no name is set: the fallback value reads lighter, and admins get a small "name it" link */
+.brand-val .hdr-default { font-weight: 400; font-style: italic; opacity: .85; }
+.brand-val .hdr-nameit { font-size: 10.5px; color: var(--on-ink); opacity: .85; text-decoration: underline; }
+.brand-val .hdr-nameit:hover, .brand-val .hdr-nameit:focus-visible { opacity: 1; }
+/* #909 the search takes the band's free width (between a floor and a ceiling) */
+.hdr-search { margin: 0; flex: 1 1 260px; min-width: 110px; max-width: 460px; display: flex; align-items: center; position: relative; }
+.hdr-search-icon {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: #57606a; display: inline-flex; margin: 0;
+  cursor: pointer; z-index: 1;
+}
+.hdr-search input[type=search] {
+  width: 100%; max-width: none; padding: 4px 8px 4px 26px; font-size: 12px; border-radius: 6px;
+  background: #ffffff; color: #1a1a1a; border: 1px solid #d0d7de; min-height: 0;
+}
+.hdr-search input[type=search]::placeholder { color: #6e7781; }
+/* #909 compact chips on the dark band: data health, pending, tasks -- a link each, the count in a badge */
+.hdr-chip {
+  display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 3px 8px; border-radius: 12px; font-size: 12px;
+  color: var(--on-ink); text-decoration: none; border: 1px solid rgba(255, 255, 255, .35); background: rgba(255, 255, 255, .08);
+  white-space: nowrap; line-height: 1.3;
+}
+.hdr-chip:hover, .hdr-chip:focus-visible { background: rgba(255, 255, 255, .18); }
+.hdr-chip .badge { padding: 0 6px; font-size: 11px; }
+.hdr-chip b { font-weight: 600; }
+.hdr-chip.pending:not(.has-count), .hdr-chip.task-count:not(.has-count) { opacity: .8; }
+.hdr-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; flex: none; }
+.hdr-chip.hdr-warn { background: #fff8c5; color: #9a6700; border-color: transparent; }
+.hdr-chip.hdr-warn .hdr-dot { background: #d29922; }
+.brand-val .hdr-warn, .hdr-details-panel .hdr-warn { color: #d29922; }
+/* #909 theme: a small icon beside the native select */
+.theme-pick { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--on-ink); }
+.theme-pick label { display: inline-flex; margin: 0; cursor: pointer; color: var(--on-ink); }
+/* #909 the environment and its details card (mode, licence, update ring, guard mode, tenant, tenant ID) */
+.hdr-env { position: relative; flex: 0 1 auto; }
+.hdr-env > summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.hdr-env > summary::-webkit-details-marker { display: none; }
+.hdr-env > summary .brand-val::after { content: "\25BE"; opacity: .8; }
+.hdr-env-name { overflow: hidden; text-overflow: ellipsis; max-width: 24ch; }
+.hdr-ring-chip {
+  font-size: 10.5px; padding: 0 6px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .45); opacity: .9; font-weight: 600;
+}
+.hdr-details-panel {
+  position: absolute; left: 0; top: calc(100% + 8px); z-index: 60; width: min(340px, calc(100vw - 32px));
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%); padding: 10px 12px; display: grid; gap: .55rem; font-size: 13px;
+}
+.hdr-details-panel .brand-group { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--text-primary); }
+.hdr-details-panel .brand-cap { color: var(--text-muted); opacity: 1; font-size: 10.5px; }
+.hdr-details-panel .brand-val { color: var(--text-primary); font-size: 12.5px; white-space: normal; text-align: right; }
+.hdr-details-panel a.brand-group:hover .brand-val, .hdr-details-panel a.brand-group:focus-visible .brand-val { text-decoration: underline; }
+.hdr-details-panel .tenant-guid { overflow-wrap: anywhere; }
+.hdr-details-env { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.topbar .hdr-details-env .hdr-nameit { color: var(--link); font-size: 11.5px; }
+.hdr-details-hint { flex-basis: 100%; font-size: 11.5px; color: var(--text-muted); }
+.topbar .hdr-details-panel .hdr-details-more { color: var(--link); font-size: 12px; border-top: 1px solid var(--border); padding-top: 6px; }
+.usermenu-who { font-weight: 600; overflow-wrap: anywhere; }
+/* a laptop (< 1440 px): tighter gaps, a shorter name; < 1280 px the chips drop their words (the icon, the count and the
+   tooltip / aria-label stay) */
+@media (max-width: 1439.98px) {
+  .brand-right { gap: 10px; }
+  .brand-val .who-name { max-width: 14ch; }
+  .hdr-env-name { max-width: 18ch; }
+}
+@media (max-width: 1279.98px) {
+  .hdr-chip-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .topbar .logo { height: 30px; }
+}
+/* below ~1100 px the search is an icon; it opens into the box while the box has the focus (clicking the icon focuses it) */
+@media (max-width: 1099.98px) {
+  .hdr-search { flex: 0 0 auto; min-width: 0; max-width: none; }
+  .hdr-search-icon { position: static; transform: none; color: var(--on-ink); padding: 4px; border: 1px solid rgba(255, 255, 255, .35); border-radius: 6px; }
+  .hdr-search input[type=search] { width: 0; padding: 0; border-width: 0; opacity: 0; transition: width .15s ease; }
+  .hdr-search:focus-within .hdr-search-icon { display: none; }
+  .hdr-search:focus-within input[type=search] { width: 200px; padding: 4px 8px; border-width: 1px; opacity: 1; }
+  .hdr-ring-chip { display: none; }
+  .hdr-env > summary .brand-cap, .usermenu > summary .brand-cap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .hdr-env > summary, .usermenu > summary { flex-direction: row; }
+}
+.ctxbar {
+  margin-left: auto; padding: 6px 10px; font-size: 11px; color: var(--text-muted); align-self: center;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0;
+}
+.ctxbar b { color: var(--text-primary); font-weight: 500; }
+.ctxbar .sep { opacity: .6; }
+.ctxbar form { margin: 0; display: inline-flex; align-items: center; gap: 4px; }
+.ctxbar label { font-size: 11px; color: var(--text-muted); margin: 0; }
+.ctxbar select { width: auto; font-size: 11px; padding: 0 2px; min-height: 0; }
+.navgroups.ctx-only { justify-content: flex-end; }
+/* narrower screens: the groups wrap; the menus open in place */
+@media (max-width: 880px) {
+  .navgroups { flex-wrap: wrap; }
+  .nav-group { flex: 1 0 auto; }
+  .nav-group-btn { padding: 9px 8px; font-size: 12px; }
+  .nav-group-menu, .nav-group-menu.cols-2 { position: static; box-shadow: none; border: 0; border-radius: 0; min-width: 0; padding: 2px 0 8px 12px; display: block; }
+}
+/* phone (~360px): the groups stack one per row as full-width accordions, every item a comfortable tap target */
+@media (max-width: 560px) {
+  .navgroups { padding: 0 4px; }
+  .nav-group { flex: 1 1 100%; }
+  .nav-group-btn { justify-content: space-between; padding: 11px 10px; font-size: 13px; }
+  .nav-group-item { padding: 11px 14px; font-size: 13px; }
+  /* #285: the context groups and the sub-bar wrap to full width on a phone */
+  /* #909: a phone is the one width where the band may take two rows (the logo, then the controls) */
+  .topbar { flex-wrap: wrap; }
+  .brand-right { justify-content: flex-start; margin-left: 0; width: 100%; gap: 6px 10px; flex-wrap: wrap; }
+  .ctxbar { flex: 1 1 100%; margin-left: 0; padding: 6px 4px; }
+}
+
+/* the page is as wide as the window (operator 2026-10-04: "we have large screens"); only text-heavy blocks keep a line length */
+main { padding: 16px; max-width: none; margin: 0; min-width: 0; }
+.card p, .card .hint, .card dl.setting-help, p.lede, details.help { max-width: 110ch; }
+/* the status bar (BRAND-2.3) */
+.footer {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 18px; background: var(--surface-2);
+  border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-muted); margin-top: 1rem;
+}
+.footer .spacer { flex: 1; }
+.footer a { color: var(--link); }
+
+/* ---- cards, tiles ---- */
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; min-width: 0; }
+.card > h2:first-child, .card > h3:first-child { margin-top: 0; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; min-width: 0; }
+.tile .label { font-size: .78rem; color: var(--text-secondary); }
+.tile .value { font-size: 1.6rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.tile .delta { font-size: .8rem; color: var(--text-secondary); }
+.grid-2 { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }
+.grid-2 > .card { margin-bottom: 0; }
+.chart-box { position: relative; height: 240px; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .82rem; color: var(--text-secondary); margin: .4rem 0 0; padding: 0; list-style: none; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: .35rem; vertical-align: middle; }
+.legend .s1 { background: var(--series-1); } .legend .s2 { background: var(--series-2); }
+.legend .s3 { background: var(--series-3); } .legend .s4 { background: var(--series-4); }
+
+/* ---- segmented control: the range chooser (.range), the Summary / Detailed report selector (.seg) ----
+   One component for every "pick one of a few" toggle. A surface-alt track; each choice an outlined segment with
+   full-strength text; the chosen one FILLED with the accent and white text; hover and keyboard focus visible. Every
+   colour is a token, so light, dark and the explicit theme switch all work. (2026-10-05: the unselected chip used to be
+   white-on-white with a hairline border -- hard to read and hard to see as a button.) */
+.range, .seg { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; width: fit-content; max-width: 100%; margin: 0 0 12px; padding: 3px;
+  list-style: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
+.range li { margin: 0; }
+.range a, .seg a { display: inline-block; padding: .3rem .8rem; border: 1px solid var(--seg-line); border-radius: 6px; text-decoration: none;
+  font-size: .85rem; font-weight: 500; line-height: 1.3; color: var(--text-primary); background: var(--surface-1); }
+.range a:hover, .seg a:hover { border-color: var(--accent); color: var(--accent); background: var(--surface-0); }
+.range a:focus-visible, .seg a:focus-visible { outline: var(--focus, 2px solid var(--accent)); outline-offset: 2px; }
+.range a[aria-current="true"], .seg a[aria-current="true"] { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; font-weight: 600; }
+.range a[aria-current="true"]:hover, .seg a[aria-current="true"]:hover { color: #fff; }
+
+/* ---- tables: they scroll INSIDE their own box, never the page ---- */
+/* The wrapper scrolls BOTH ways with its own height, so the sticky header + filter row work inside it even when the
+   table is wider than the window (an overflow ancestor would otherwise break page-level sticky). */
+.table-wrap { width: 100%; overflow: auto; max-height: min(78vh, 1400px); -webkit-overflow-scrolling: touch; }
+/* sticky header row AND filter row (item 8): solid background + a hairline shadow so rows never show through. The filter
+   row sits under the header: its offset (--thead-h) is measured by tables.js / the grid; 2.3rem until then. */
+thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); box-shadow: inset 0 -1px 0 var(--border); }
+thead tr.colfilters td, thead tr[data-filter-row] td { position: sticky; top: var(--thead-h, 2.3rem); z-index: 2; background: var(--surface-1); box-shadow: inset 0 -1px 0 var(--border); }
+th .th-sort { all: unset; cursor: pointer; display: inline-flex; gap: .2rem; align-items: center; font-weight: 600; color: inherit; }
+th .th-sort:focus-visible { outline: var(--focus, 2px solid var(--accent)); outline-offset: 2px; }
+th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color: var(--accent); }
+.range-filter { display: flex; gap: .2rem; align-items: center; }
+.range-filter input { width: 4.5rem; min-width: 0; font-size: .78rem; padding: .15rem .3rem; }
+thead tr[data-filter-row] input, thead tr[data-filter-row] select { font-size: .78rem; padding: .15rem .3rem; min-width: 4.5rem; }
+.table-tools { margin-top: .25rem; }
+/* the active client-side filters (tables.js), each removable */
+.filter-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .2rem 0 .5rem; padding: 0; list-style: none; }
+.filter-chips[hidden] { display: none; }
+.filter-chips .chip { font-weight: 400; font-size: .8rem; padding: .15rem .55rem; border-radius: 999px; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; white-space: nowrap; background: var(--surface-2); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* #321: a number column (#, counts, scores) has no filter box -- it sorts only -- so it is only as wide as its numbers */
+th.col-num, table.grid th.num, table[data-sortable] th.num { width: 1%; white-space: nowrap; }
+table.grid td.num, table[data-sortable] td.num { white-space: nowrap; }
+td.wrap { overflow-wrap: anywhere; }
+
+/* ---- traceability: the query behind every chart/table ---- */
+details.query { margin-top: .25rem; }
+/* the page's ONE query disclosure (_PageQueries): every query, labelled with the section it feeds */
+.page-queries { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 8px; }
+.page-queries .query-item + .query-item { border-top: 1px dashed var(--border); margin-top: .7rem; padding-top: .5rem; }
+.page-queries .query-label { font-size: .88rem; margin: .5rem 0 .1rem; }
+/* a disclosure that is not a query (a table view, the asset's properties) */
+details.more { margin-top: .75rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
+details.more > summary { cursor: pointer; font-size: .82rem; color: var(--text-secondary); }
+details.query summary { cursor: pointer; font-size: .82rem; color: var(--text-secondary); }
+details.query .meta { font-size: .78rem; color: var(--text-muted); margin: .4rem 0; overflow-wrap: anywhere; }
+pre, code { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: .8rem; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: .6rem; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+
+/* ---- badges + notices (status colours always come with words) ---- */
+.badge { display: inline-block; font-size: .72rem; padding: .05rem .45rem; border-radius: 999px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); white-space: nowrap; }
+.badge.secret { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+.badge.pro { background: var(--brand); color: #fff; border-color: transparent; }
+.notice { border-radius: var(--radius); padding: .7rem .9rem; margin: 0 0 14px; border: 1px solid var(--border); background: var(--surface-1); }
+.notice.ok { background: var(--good-bg); color: var(--good); border-color: transparent; }
+.notice.warn { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+.notice.error { background: var(--critical-bg); color: var(--critical); border-color: transparent; }
+/* framework PENDING-1: a BLOCKING item (waits for a person) -- the attention colour; an informational count (pending
+   staged changes, tasks) keeps the warning colour, never this one */
+.badge.attn { background: var(--critical); color: #fff; border-color: transparent; font-weight: 700; margin-left: .3rem; }
+.notice.attn { background: var(--critical-bg); color: var(--critical); border-color: transparent; display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: baseline; }
+.notice.attn a { color: inherit; text-decoration: underline; }
+.up { color: var(--critical); } .down { color: var(--good); }
+
+/* ---- settings ---- */
+.setting { border-top: 1px solid var(--border); padding: .7rem 0; }
+.setting:first-of-type { border-top: 0; }
+.setting .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; }
+.setting .name { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-weight: 600; overflow-wrap: anywhere; }
+.setting .desc { color: var(--text-secondary); font-size: .87rem; margin: .2rem 0; }
+.setting dl { display: grid; grid-template-columns: auto 1fr; gap: .15rem .6rem; margin: .3rem 0 0; font-size: .85rem; }
+.setting dt { color: var(--text-muted); }
+.setting dd { margin: 0; overflow-wrap: anywhere; }
+.setting-iname .name { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: .85rem; color: var(--text-muted); user-select: all; overflow-wrap: anywhere; }
+dl.setting-help { display: grid; grid-template-columns: auto 1fr; gap: .2rem .7rem; font-size: .9rem; margin: .4rem 0 1rem; }
+dl.setting-help dt { color: var(--text-muted); }
+dl.setting-help dd { margin: 0; }
+.badge.engine { background: var(--surface-2, transparent); }
+/* ---- Settings page (PIM Manager's settings page is the model): a category bar, one card per topic with one Save,
+   fields side by side with the label above the input; a short hint only where needed, the rest behind a small (i).
+   Phone first: fields stack at ~360px and sit side by side from there up. ---- */
+.set-find { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; margin-bottom: 8px; }
+.set-find > div { flex: 1 1 12rem; min-width: 0; }
+.set-catbar { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: 0; z-index: 5; background: var(--surface-0); padding: 6px 0; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
+.set-catbtn { display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .65rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text-primary); text-decoration: none; font-size: .85rem; }
+.set-catbtn[aria-current="true"] { border-color: var(--accent); font-weight: 700; color: var(--accent); }
+.set-cat { margin-bottom: 18px; }
+.set-cat[hidden] { display: none; }
+.set-cat > h2 { margin: 0 0 .15rem; font-size: 1.15rem; }
+.set-cat-desc, .set-card-desc { color: var(--text-secondary); font-size: .85rem; margin: 0 0 .6rem; max-width: 110ch; }
+.set-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0 0 16px; }
+.set-card > h3 { margin: 0 0 .2rem; font-size: .95rem; }
+.set-fields { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-start; }
+.set-field { flex: 1 1 100%; min-width: 0; position: relative; }
+.set-field[hidden] { display: none; }
+.set-label { display: block; font-size: .82rem; font-weight: 600; color: var(--text-secondary); margin: 0 0 .25rem; padding-right: 6rem; overflow-wrap: anywhere; } /* clear of the "More info" pill (top right): a long label wraps instead of running under it */
+.set-field input[type="text"], .set-field input[type="number"], .set-field select, .set-field textarea { width: 100%; max-width: 100%; }
+.set-number { display: flex; align-items: center; gap: .4rem; }
+.set-number input { max-width: 10rem; }
+.set-unit { color: var(--text-muted); font-size: .85rem; }
+.set-switch { display: inline-flex; align-items: center; gap: .45rem; min-height: 2rem; }
+.set-switch input[type="checkbox"] { width: 1.15rem; height: 1.15rem; margin: 0; }
+.set-switch-text { font-size: .85rem; color: var(--text-secondary); }
+.set-dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: var(--accent); margin-left: .35rem; vertical-align: middle; }
+.set-hint, .set-needs { color: var(--text-muted); font-size: .78rem; margin: .25rem 0 0; }
+.set-needs.unmet { color: var(--warning); }
+.set-error { color: var(--critical); font-size: .8rem; margin: .25rem 0 0; }
+.set-elsewhere { margin: .2rem 0; font-size: .88rem; overflow-wrap: anywhere; }
+.set-foot { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem; margin-top: .2rem; }
+.set-foot button.link { background: none; border: 0; padding: 0; min-height: 0; color: var(--link); text-decoration: underline; font-size: .78rem; font-weight: 400; cursor: pointer; }
+/* the (i) sits at the top right of its field, beside the label; opened, its text runs below the field */
+.set-info > summary { position: absolute; top: 0; right: 0; list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: .05rem .5rem; border: 1px solid var(--border); border-radius: 999px; font-size: .72rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.set-info dd.risk { color: var(--critical); font-weight: 600; }
+.set-readmore { margin: .35rem 0 0; font-size: .82rem; }
+.set-info > summary::-webkit-details-marker { display: none; }
+.set-info[open] { flex-basis: 100%; }
+.set-info dl { display: grid; grid-template-columns: 1fr; gap: .1rem; margin: .4rem 0 0; font-size: .82rem; }
+.set-info dt { color: var(--text-muted); margin-top: .25rem; }
+.set-info dd { margin: 0; overflow-wrap: anywhere; }
+.set-info code.name { font-family: Consolas, "Cascadia Mono", Menlo, monospace; user-select: all; }
+.set-info .copy { font-size: .72rem; padding: .05rem .45rem; min-height: 0; }
+.set-links { font-size: .8rem; margin: .4rem 0 0; }
+.set-chips textarea { min-height: 4.5rem; font-family: inherit; }
+.set-chipbox { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; border: 1px solid var(--field-border); border-radius: var(--radius); padding: 4px; background: var(--field-bg); min-height: 2.3rem; }
+.set-chipbox:focus-within { outline: var(--focus, 2px solid var(--accent)); outline-offset: 1px; }
+.set-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 2px 1px 9px; font-size: .82rem; overflow-wrap: anywhere; }
+.set-chip.bad { border-color: var(--critical); color: var(--critical); background: var(--critical-bg); }
+.set-chip button { background: none; border: 0; color: inherit; padding: 0 .35rem; min-height: 0; font-size: 1rem; line-height: 1; cursor: pointer; }
+.set-chipbox input { flex: 1 1 10rem; min-width: 6rem; border: 0; outline: none; background: transparent; padding: .25rem; }
+.set-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-top: 12px; }
+.set-msg { font-size: .85rem; }
+.set-msg.ok { color: var(--good); }
+.set-msg.error { color: var(--critical); }
+.set-advanced { border-top: 1px dashed var(--border); margin: .4rem 0 .6rem; }
+.set-advanced > summary { cursor: pointer; padding: .55rem 0; font-weight: 600; font-size: .92rem; }
+.set-advanced > summary .hint { font-weight: 400; margin-left: .3rem; }
+.set-status dl.set-facts { display: grid; grid-template-columns: auto 1fr; gap: .15rem .7rem; font-size: .88rem; margin: .3rem 0 0; }
+.set-status dt { color: var(--text-muted); }
+.set-status dd { margin: 0; overflow-wrap: anywhere; }
+@media (min-width: 720px) {
+  .set-field { flex: 1 1 15rem; max-width: 24rem; }
+  .set-field.wide { flex-basis: 100%; max-width: 48rem; }
+}
+.diff { display: grid; grid-template-columns: 1fr; gap: .5rem; }
+.diff .old pre { border-left: 4px solid var(--critical); }
+.diff .new pre { border-left: 4px solid var(--good); }
+
+/* ---- forms ---- */
+form.stack { display: grid; gap: .8rem; }
+label { font-weight: 600; font-size: .88rem; display: block; margin-bottom: .2rem; }
+input[type=text], input[type=search], input[type=number], select, textarea {
+  width: 100%; max-width: 100%; font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: .45rem .55rem;   /* the disabled look; enabled fields: BRAND-2.12, last in app.css */
+}
+textarea { min-height: 7rem; }
+.hint { font-size: .8rem; color: var(--text-muted); margin-top: .2rem; }
+/* #856 a CI without a name, shown by its IP / MAC address or source id: italic and muted, never mistaken for a name */
+.ci-noname { font-style: italic; color: var(--text-muted); font-family: ui-monospace, Consolas, monospace; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+button, .button {
+  font: inherit; font-weight: 600; border: 1px solid var(--accent-fill); background: var(--accent-fill); color: #fff;
+  border-radius: 6px; padding: .4rem .9rem; cursor: pointer; text-decoration: none; display: inline-block;
+}
+button:hover, .button:hover { filter: brightness(.94); }
+/* PIM's neutral button */
+button.secondary, .button.secondary { background: var(--surface-2); color: var(--text-primary); border-color: var(--border); }
+.filters { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; margin-bottom: 12px; }
+.filters > div { flex: 1 1 12rem; min-width: 0; }
+
+/* ---- chat ---- */
+.chat-log { display: grid; gap: .6rem; margin-bottom: 1rem; }
+.msg { border-radius: var(--radius); padding: .6rem .8rem; border: 1px solid var(--border); background: var(--surface-1); overflow-wrap: anywhere; }
+.msg.user { background: var(--surface-2); }
+.msg .who { font-size: .75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.msg .text { white-space: pre-wrap; }
+.tool { border-top: 1px dashed var(--border); margin-top: .5rem; padding-top: .5rem; }
+
+/* ---- the narrowest phones (~360px): tighter type and a single tile column for long numbers ---- */
+@media (max-width: 360px) {
+  body { font-size: 14px; }
+  main { padding: 12px; }
+  .topbar { padding: 6px 12px; }
+  .topbar .logo { height: 28px; }
+  .tile .value { font-size: 1.3rem; }
+  .chart-box { height: 210px; }
+  th, td { padding: .4rem .35rem; }
+}
+
+/* ---- desktop: two-column cards, four tiles ---- */
+@media (min-width: 720px) {
+  body { font-size: 13px; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); }
+  .chart-box { height: 300px; }
+  .diff { grid-template-columns: 1fr 1fr; }
+  main { padding: 20px 24px; }
+}
+@media (max-width: 719.98px) {
+  .brand-val .who-name { max-width: 10ch; }
+}
+
+/* The asset kind beside an asset name (endpoint / identity / azure / publicip): a small quiet tag, not body text
+   (operator 2026-10-04: "make the font smaller for this here endpoint, identity etc"). */
+.kind-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 0.72em; line-height: 1.6; letter-spacing: 0.02em; color: var(--text-muted, var(--muted)); vertical-align: 0.1em; white-space: nowrap; }
+
+/* The home page mail banner (red: mail is not set up; amber: it works but should move) -- text left, actions right. */
+.mail-banner { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.mail-banner-text { flex: 1 1 320px; min-width: 0; }
+.mail-banner-detail { font-size: 0.9em; margin-top: 4px; overflow-wrap: anywhere; }
+.mail-banner-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mail-banner-actions form { margin: 0; }
+.mail-setup-steps li[data-state="failed"] { color: var(--critical); }
+.mail-setup-steps li[data-state="ok"] { color: var(--good); }

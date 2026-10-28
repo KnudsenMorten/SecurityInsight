@@ -1,0 +1,105 @@
+@page
+@model SI.Management.Web.Pages.Exemptions.RequestModel
+@using SI.Management.Web.Exemptions
+@{
+    ViewData["Title"] = "Request exemption";
+    var now = DateTime.UtcNow;
+}
+<h1>Request exemption</h1>
+<p class="lede">The same reason, period and approver for every finding below. The owners of each finding's category -- or, when the category has none, of its security domain -- approve or reject the request; one approval is enough. Only an approved exemption applies, from the next Risk Analysis run.</p>
+
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Problems.Count > 0)
+{
+    <div class="notice error" role="alert" data-problems><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+}
+
+@if (Model.Items.Count > 0)
+{
+    <section class="card" aria-labelledby="h-what">
+        <h2 id="h-what" data-item-count="@Model.Items.Count">@Fmt.Int(Model.Items.Count) finding(s) @(Model.All ? "matching the filter" : "selected")</h2>
+        <p class="hint">Per security domain:
+            @string.Join(" · ", Model.Domains.Select(d => $"{d.Domain} {Fmt.Int(d.Findings)}"))</p>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Asset</th><th>Finding</th><th>Domain</th><th>Category</th><th>Report</th></tr></thead>
+                <tbody>
+                    @foreach (var i in Model.Items.Take(20))
+                    {
+                        <tr><td class="wrap">@i.AssetName</td><td class="wrap">@i.Title <span class="badge">@(string.IsNullOrEmpty(i.Cve) ? i.ConfigurationId : i.Cve)</span></td><td>@i.Domain</td><td class="wrap">@i.Category</td><td class="wrap">@i.ReportName</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (Model.Items.Count > 20) { <p class="hint">... and @Fmt.Int(Model.Items.Count - 20) more.</p> }
+    </section>
+
+    <section class="card" aria-labelledby="h-who">
+        <h2 id="h-who">Who decides</h2>
+        <p class="hint">One request per security domain -- or per category, where the category has its own owners. Each request is asked of the most specific owners; the domain's owners may decide it too, and one approval is enough.</p>
+        <div class="table-wrap">
+            <table data-sortable data-who-decides>
+                <thead><tr><th>Request for</th><th class="num">Findings</th><th>Asked of</th><th>May also decide</th></tr></thead>
+                <tbody>
+                    @foreach (var g in Model.Groups)
+                    {
+                        var also = g.Deciders.Except(g.Asked).ToList();
+                        <tr data-group-domain="@g.Domain" data-group-category="@(g.Category ?? "")">
+                            <td>@g.Label</td>
+                            <td class="num">@Fmt.Int(g.Findings)</td>
+                            <td class="wrap" data-asked>@if (g.Asked.Count == 0) { <span class="badge warn">no owner -- an Admin decides</span> } else { <span>@string.Join(", ", g.Asked)</span> }</td>
+                            <td class="wrap">@(also.Count == 0 ? "--" : string.Join(", ", also))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-form">
+        <h2 id="h-form">The request</h2>
+        <form method="post" asp-page-handler="Submit" class="stack" data-exemption-request>
+            @foreach (var (k, v) in Model.Origin) { <input type="hidden" name="o.@k" value="@v" /> }
+            <fieldset>
+                <legend>What</legend>
+                <label><input type="radio" name="Scope" value="finding" checked="@(Model.Scope == "finding")" /> Each finding on its asset</label>
+                <label><input type="radio" name="Scope" value="issue" checked="@(Model.Scope == "issue")" /> Each issue (CVE / configuration) on every asset</label>
+                <label><input type="radio" name="Scope" value="asset" checked="@(Model.Scope == "asset")" /> Every finding on each asset</label>
+            </fieldset>
+            <div><label for="ex-reason">Reason (required, audited -- the approver sees it)</label><input id="ex-reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" required minlength="3" /></div>
+            <div class="filterbar">
+                <div>
+                    <label for="ex-period">Period</label>
+                    <select id="ex-period" name="Period">
+                        @foreach (var (v, l) in ExemptionPeriods.Choices(Model.Settings.AllowOpenEnded)) { <option value="@v" selected="@(v == Model.Period)">@l</option> }
+                    </select>
+                </div>
+                <div>
+                    <label for="ex-date">Custom end date</label>
+                    <input id="ex-date" type="date" name="CustomDate" value="@(Model.CustomDate?.ToString("yyyy-MM-dd") ?? ExemptionPeriods.DefaultCustomDate(Model.Settings.DefaultMonths, now))" />
+                </div>
+                <div class="wide">
+                    <label for="ex-approver">Approver</label>
+                    <select id="ex-approver" name="Approver">
+                        <option value="">The owners shown above</option>
+                        @foreach (var a in Model.Approvers) { <option value="@a" selected="@(a == Model.Approver)">@a</option> }
+                    </select>
+                </div>
+            </div>
+            <p class="hint">The custom end date counts only with "Custom end date". Default period: @Model.Settings.DefaultMonths months@(Model.Settings.AllowOpenEnded ? "" : "; every exemption has an end date").</p>
+            @if (Model.MayApproveAny)
+            {
+                <label><input type="checkbox" name="ApproveNow" value="true" checked="@Model.ApproveNow" /> Approve now -- I decide @string.Join(", ", Model.MineToDecide.Select(g => g.Label)) (recorded as approved by me)</label>
+            }
+            @if (Model.Groups.Any(g => g.Asked.Count == 0))
+            {
+                <p class="notice warn">No owner is set for @string.Join(", ", Model.Groups.Where(g => g.Asked.Count == 0).Select(g => g.Label)) -- an Admin can decide those requests (<nav-ref page="/Admin/DomainRoles" /> sets owners).</p>
+            }
+            <div class="actions"><button type="submit">Request exemption</button> <a class="button secondary" href="@Model.Back">Back</a></div>
+        </form>
+    </section>
+}
+else
+{
+    <p><a class="button secondary" href="@Model.Back">Back</a></p>
+}

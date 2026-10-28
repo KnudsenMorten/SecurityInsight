@@ -1,0 +1,127 @@
+{
+  "$comment": "#692 STRUCTURE-ONLY CHANGES OF THE REPORT QUERIES, DECLARED (owner 2026-10-19: \"let every report carry the generated output block (one-time fingerprint change), plus the bucket filter on the two Defender recommendation reports (also a one-time fingerprint change)\" -> \"Yes, both, in one release\"). A report's fingerprint (Get-RAReportQueryFingerprint) hashes its query as authored, so such a change gives every report a new one -- and a finding that leaves a report whose fingerprint changed closes as 'report changed'. Per change: what it wrote, so Risk Analysis can compute the fingerprint the report had BEFORE it (Get-RAReportQueryFingerprintCarry) and store it with the verdict (sidata.RaReportStatus QueryHashCarry). The finding lifecycle and the close loop read a fingerprint that carries the one at a finding's last sighting as UNCHANGED: FirstDetected and history stay, nothing closes as 'report changed' or 'remediated' because of the change. removeBlocks (every report): generated blocks the change added (//__<name>_BEGIN__ ... //__<name>_END__). reports.<name>.restoreText: { now (the text the change wrote), was (what it replaced) }, white space made one. A change is never edited after it shipped: a later change is a new item. tests/pester/SIv3-ReportFingerprintCarry.Tests.ps1 proves, for every report, that the carry of the query today is the fingerprint the query had before the change (tests/pester/fixtures/report-fingerprints-before-692.json).",
+  "kind": "report-fingerprint-carry",
+  "version": "1.0.0",
+  "changes": [
+    {
+      "id": "report-structure-2026-10-19",
+      "decided": "owner 2026-10-19",
+      "description": "Every report carries the generated data-out block; the two Defender recommendation reports carry the bucket filter (one slice per hash of the resource), and the Summary builds its owners with an extend so a group the slices split is merged into one row again. No row and no output column changes.",
+      "removeBlocks": [
+        "SI_OUT"
+      ],
+      "reports": {
+        "Azure_DefenderRecommendations_Summary": {
+          "restoreText": [
+            {
+              "now": "| extend _k = tolower(tostring(ResourceIdLower)) // #692 the slices of a large tenant -- one per hash of the recommendation's resource (every row has a key) | extend DeviceKey = iff(isnotempty(_k), _k, strcat(\"rec|\", tolower(tostring(Recommendation)), \"|\", tolower(tostring(SubscriptionId)))) //__BUCKET_FILTER_BEGIN__ | where 1 == 1 //__BUCKET_FILTER_END__ ;",
+              "was": "| extend _k = tolower(tostring(ResourceIdLower));"
+            },
+            {
+              "now": "| extend ImpactedAssetCount = array_length(ImpactedAssetsList) // #692 the owners as an extend (not inside the project) -- a group the slices split is merged into one row again | extend si_fix_owner = strcat_array(_fixOwners, \", \") | project",
+              "was": "| extend ImpactedAssetCount = array_length(ImpactedAssetsList) | project"
+            },
+            {
+              "now": "si_attack_path_count, si_fix_owner, si_fix_due_date",
+              "was": "si_attack_path_count, si_fix_owner = strcat_array(_fixOwners, \", \"), si_fix_due_date"
+            }
+          ]
+        },
+        "Azure_DefenderRecommendations_Detailed": {
+          "restoreText": [
+            {
+              "now": "| extend _k = tolower(tostring(ResourceIdLower)) // #692 the slices of a large tenant -- one per hash of the recommendation's resource (every row has a key) | extend DeviceKey = iff(isnotempty(_k), _k, strcat(\"rec|\", tolower(tostring(Recommendation)), \"|\", tolower(tostring(SubscriptionId)))) //__BUCKET_FILTER_BEGIN__ | where 1 == 1 //__BUCKET_FILTER_END__ ;",
+              "was": "| extend _k = tolower(tostring(ResourceIdLower));"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report-slice-tvm-2026-10-22",
+      "decided": "owner 2026-10-22 (#880: \"i feel things are becoming worse and time are becoming higher\" -- fixes must go out)",
+      "description": "The two CVE reports read Defender vulnerability management only for the devices of the slice being asked (_sliceTvmDevices, the same key and hash as the slice filter on the union) before the joins, instead of the whole table in every slice. The rows are the same: the slice filter at the end already kept only those devices; without slices the filter is a no-op. No row and no output column changes.",
+      "reports": {
+        "Device_Missing_CVEs_Summary": {
+          "restoreText": [
+            {
+              "now": "// #880 -- THE SLICE'S OWN DEVICES: vulnerability management is read for the devices of THIS slice only (the same key // and hash as the slice filter on the union below), so a slice reads its own share of the table, not all of it before // the joins. Without slices the block is a no-op and every device is kept -- the rows are the same either way. let _sliceTvmDevices = DeviceTvmSoftwareVulnerabilities | summarize by DeviceKey = tolower(tostring(DeviceId)) //__BUCKET_FILTER_BEGIN__ | where 1 == 1 //__BUCKET_FILTER_END__ | project DeviceKey; let _TvmOnly = DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "let _TvmOnly = DeviceTvmSoftwareVulnerabilities"
+            },
+            {
+              "now": "| join kind=leftouter (DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "| join kind=leftouter (DeviceTvmSoftwareVulnerabilities"
+            }
+          ]
+        },
+        "Device_Missing_CVEs_Detailed": {
+          "restoreText": [
+            {
+              "now": "// #880 -- THE SLICE'S OWN DEVICES: vulnerability management is read for the devices of THIS slice only (the same key // and hash as the slice filter on the union below), so a slice reads its own share of the table, not all of it before // the joins. Without slices the block is a no-op and every device is kept -- the rows are the same either way. let _sliceTvmDevices = DeviceTvmSoftwareVulnerabilities | summarize by DeviceKey = tolower(tostring(DeviceId)) //__BUCKET_FILTER_BEGIN__ | where 1 == 1 //__BUCKET_FILTER_END__ | project DeviceKey; let _TvmOnly = DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "let _TvmOnly = DeviceTvmSoftwareVulnerabilities"
+            },
+            {
+              "now": "| join kind=leftouter (DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "| join kind=leftouter (DeviceTvmSoftwareVulnerabilities"
+            },
+            {
+              "now": "| join kind=leftouter (DeviceTvmSoftwareInventory | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "| join kind=leftouter (DeviceTvmSoftwareInventory"
+            },
+            {
+              "now": "(DeviceTvmSoftwareEvidenceBeta) | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)",
+              "was": "(DeviceTvmSoftwareEvidenceBeta)"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report-target-tier-2026-10-23",
+      "decided": "owner 2026-10-23 (\"build what is needed to fix all and include in the release\" -- data quality first; nothing may close suddenly)",
+      "description": "The two managed-identity attack-path reports give a target no CI links the tier of its own resource tree: its top-level resource's CI, else its subscription's most critical CI (12,052 findings had no tier at the largest install). The rows and their keys are the same; only the tier column is filled -- so a finding last seen before this change is the same finding, never closed as report changed.",
+      "reports": {
+        "Attack_Paths_Summary_Workload_ManagedIdentity_to_Azure_Resources": {
+          "restoreText": [
+            {
+              "now": "//__SI_CI_PEER_END__ // a target no CI links takes the tier its own resource tree gives it -- the top-level resource it belongs to (#190), // else its subscription's most critical CI (#192) -- read on its own, never from a slice's share (#675) //__SI_CI_SUBTIER_BEGIN__ let _subTierG = SI_CI_CL | where TimeGenerated > ago(30d) | extend _ciId = tostring(si_ci_id), _ciT = todatetime(si_collection_time), _ciKind = tostring(column_ifexists(\"si_row_kind\", \"\")) | where isnotempty(_ciId) | summarize _ciBuild = max(_ciT), arg_max(iff(_ciKind == \"seen\", datetime(1900-01-01), _ciT), *) by _ciId | where _ciKind != \"seen\" | where _ciBuild == toscalar(SI_CI_CL | where TimeGenerated > ago(30d) | summarize max(todatetime(si_collection_time))) | where tostring(si_class) in (\"cloud_resource\", \"device\") | extend _ciKeys = set_union(extract_all(@'\"id\"\\s*:\\s*\"([^\"]+)\"', tolower(tostring(column_ifexists(\"si_linked_objects\", dynamic([]))))), pack_array(tolower(tostring(column_ifexists(\"si_link_mde\", \"\"))), tolower(tostring(column_ifexists(\"si_link_entra\", \"\"))), tolower(tostring(column_ifexists(\"si_link_azure\", \"\"))), tolower(tostring(column_ifexists(\"si_link_eg\", \"\"))), tolower(tostring(column_ifexists(\"si_link_ad\", \"\"))), tolower(tostring(column_ifexists(\"si_link_intune\", \"\"))))) | mv-expand _ciKey = _ciKeys to typeof(string) | where _ciKey startswith \"/subscriptions/\" | summarize arg_max(_ciBuild, *) by _ciKey | extend _sub = tostring(split(_ciKey, \"/\")[2]) | where isnotempty(_sub) | summarize Tier_BySub = min(toint(column_ifexists(\"si_tier\", int(null)))) by _sub; //__SI_CI_SUBTIER_END__ let WorkloadIdentity =",
+              "was": "//__SI_CI_PEER_END__ let WorkloadIdentity ="
+            },
+            {
+              "now": "| extend TargetParentCiKey = iff(TargetCiKey startswith \"/subscriptions/\" and array_length(split(TargetCiKey, \"/\")) > 9, strcat_array(array_slice(split(TargetCiKey, \"/\"), 0, 8), \"/\"), \"\") | join kind=leftouter (_ciPeer) on $left.SourceCiKey == $right._peerKey",
+              "was": "| join kind=leftouter (_ciPeer) on $left.SourceCiKey == $right._peerKey"
+            },
+            {
+              "now": "| join kind=leftouter (_ciPeer | where isnotempty(_peerKey) | project TargetParentCiKey = _peerKey, Tier_ByParent = peer_tier) on TargetParentCiKey | extend _tSub = iff(TargetCiKey startswith \"/subscriptions/\", tostring(split(TargetCiKey, \"/\")[2]), \"\") | join kind=leftouter (_subTierG) on $left._tSub == $right._sub | extend TargetTierFrom = case(isnotnull(TargetCriticalityTier), \"ci\", isnotnull(Tier_ByParent), \"parent resource\", isnotnull(Tier_BySub), \"subscription\", \"\") | extend TargetCriticalityTier = coalesce(toint(TargetCriticalityTier), toint(Tier_ByParent), toint(Tier_BySub)) | project-away TargetParentCiKey1, _tSub, _sub, Tier_ByParent, Tier_BySub | where coalesce(Source_in_scope, true) and coalesce(Target_in_scope, true)",
+              "was": "| where coalesce(Source_in_scope, true) and coalesce(Target_in_scope, true)"
+            },
+            {
+              "now": "// the tier is the TARGET's (what the path reaches) -- its CI's, else its top-level resource's, else its subscription's // most critical CI -- a target none of them gives a tier keeps an empty level",
+              "was": "// the tier is the TARGET's CI tier (what the path reaches) -- a target without a tier keeps an empty level"
+            }
+          ]
+        },
+        "Attack_Paths_Detailed_Workload_ManagedIdentity_to_Azure_Resources": {
+          "restoreText": [
+            {
+              "now": "//__SI_CI_PEER_END__ // a target no CI links takes the tier its own resource tree gives it -- the top-level resource it belongs to (#190), // else its subscription's most critical CI (#192) -- read on its own, never from a slice's share (#675) //__SI_CI_SUBTIER_BEGIN__ let _subTierG = SI_CI_CL | where TimeGenerated > ago(30d) | extend _ciId = tostring(si_ci_id), _ciT = todatetime(si_collection_time), _ciKind = tostring(column_ifexists(\"si_row_kind\", \"\")) | where isnotempty(_ciId) | summarize _ciBuild = max(_ciT), arg_max(iff(_ciKind == \"seen\", datetime(1900-01-01), _ciT), *) by _ciId | where _ciKind != \"seen\" | where _ciBuild == toscalar(SI_CI_CL | where TimeGenerated > ago(30d) | summarize max(todatetime(si_collection_time))) | where tostring(si_class) in (\"cloud_resource\", \"device\") | extend _ciKeys = set_union(extract_all(@'\"id\"\\s*:\\s*\"([^\"]+)\"', tolower(tostring(column_ifexists(\"si_linked_objects\", dynamic([]))))), pack_array(tolower(tostring(column_ifexists(\"si_link_mde\", \"\"))), tolower(tostring(column_ifexists(\"si_link_entra\", \"\"))), tolower(tostring(column_ifexists(\"si_link_azure\", \"\"))), tolower(tostring(column_ifexists(\"si_link_eg\", \"\"))), tolower(tostring(column_ifexists(\"si_link_ad\", \"\"))), tolower(tostring(column_ifexists(\"si_link_intune\", \"\"))))) | mv-expand _ciKey = _ciKeys to typeof(string) | where _ciKey startswith \"/subscriptions/\" | summarize arg_max(_ciBuild, *) by _ciKey | extend _sub = tostring(split(_ciKey, \"/\")[2]) | where isnotempty(_sub) | summarize Tier_BySub = min(toint(column_ifexists(\"si_tier\", int(null)))) by _sub; //__SI_CI_SUBTIER_END__ let WorkloadIdentity =",
+              "was": "//__SI_CI_PEER_END__ let WorkloadIdentity ="
+            },
+            {
+              "now": "| extend TargetParentCiKey = iff(TargetCiKey startswith \"/subscriptions/\" and array_length(split(TargetCiKey, \"/\")) > 9, strcat_array(array_slice(split(TargetCiKey, \"/\"), 0, 8), \"/\"), \"\") | join kind=leftouter (_ciPeer) on $left.SourceCiKey == $right._peerKey",
+              "was": "| join kind=leftouter (_ciPeer) on $left.SourceCiKey == $right._peerKey"
+            },
+            {
+              "now": "| join kind=leftouter (_ciPeer | where isnotempty(_peerKey) | project TargetParentCiKey = _peerKey, Tier_ByParent = peer_tier) on TargetParentCiKey | extend _tSub = iff(TargetCiKey startswith \"/subscriptions/\", tostring(split(TargetCiKey, \"/\")[2]), \"\") | join kind=leftouter (_subTierG) on $left._tSub == $right._sub | extend TargetTierFrom = case(isnotnull(TargetCriticalityTier), \"ci\", isnotnull(Tier_ByParent), \"parent resource\", isnotnull(Tier_BySub), \"subscription\", \"\") | extend TargetCriticalityTier = coalesce(toint(TargetCriticalityTier), toint(Tier_ByParent), toint(Tier_BySub)) | project-away TargetParentCiKey1, _tSub, _sub, Tier_ByParent, Tier_BySub | where coalesce(Source_in_scope, true) and coalesce(Target_in_scope, true)",
+              "was": "| where coalesce(Source_in_scope, true) and coalesce(Target_in_scope, true)"
+            },
+            {
+              "now": "// the tier is the TARGET's (what the path reaches) -- its CI's, else its top-level resource's, else its subscription's // most critical CI -- a target none of them gives a tier keeps an empty level",
+              "was": "// the tier is the TARGET's CI tier (what the path reaches) -- a target without a tier keeps an empty level"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

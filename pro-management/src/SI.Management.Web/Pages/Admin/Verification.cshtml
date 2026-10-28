@@ -1,0 +1,185 @@
+@page
+@model SI.Management.Web.Pages.Admin.VerificationModel
+@using SI.Management.Web.Pages.Admin
+@{
+    ViewData["Title"] = "Verification";
+    var isAdmin = User.IsAdmin();
+    var v = Model.View;
+    var results = v.Checks.ToDictionary(c => c.CheckId, StringComparer.Ordinal);
+}
+<h1>Verification</h1>
+<p class="lede">Settings and plans SecurityInsight's data depends on that are not on in your Microsoft estate. A gap here means part of the reports is <em>unknown</em>, not clean. The verification job only reads -- it never changes a setting.</p>
+<details class="help">
+    <summary>How decisions work</summary>
+    <p>Each gap is <strong>open</strong> until it is fixed (the next run then marks it <strong>resolved</strong>) or an Admin decides on it: <strong>Ignore</strong> -- it is not a gap for this organisation (for example: no other cloud is used); <strong>Accept</strong> -- a known gap whose risk is accepted for now. A decision needs a reason and names a reviewer, and is due for review after @Model.Catalog.ReviewDays days: the review queue lists it, and reviewing it saves a new decision with a new review date. Every decision is on the audit trail and in the gap's history.</p>
+    <p>A check that could not read its source is <strong>not checked</strong>, with the reason -- never "no gaps" -- and the gaps it found before stay as they were.</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database has no verification tables yet. Run the Pro schema (setup) once; the verification job fills them on its next run.</div> }
+else
+{
+    <section class="card" aria-labelledby="h-checks" data-verification-checks>
+        <div class="split">
+            <h2 id="h-checks">Checks</h2>
+            <span class="muted">@(v.LastRun is { } run ? $"Last run {Fmt.Time(run.FinishedAt ?? run.StartedAt)} -- {run.Outcome}" : "The verification job has not finished a run yet.")</span>
+        </div>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Check</th><th>Severity</th><th>Scope</th><th>Last run</th><th class="num">Gaps</th><th>Why it matters</th><th>Fix</th></tr></thead>
+                <tbody>
+                    @foreach (var c in Model.Catalog.Checks)
+                    {
+                        results.TryGetValue(c.Id, out var r);
+                        <tr data-check="@c.Id">
+                            <td><a href="?check=@c.Id&status=all">@c.Title</a><br /><span class="muted mono">@c.Id</span></td>
+                            <td>@c.Severity</td>
+                            <td>@c.Scope</td>
+                            <td data-state="@(r?.State ?? "none")">@(r is null ? "--" : VerificationModel.StateLabel(r.State))@if (r?.Reason is { Length: > 0 } why) { <br /><span class="muted">@why</span> }</td>
+                            <td class="num" data-value="@(r?.Findings ?? 0)">@Fmt.Int(r?.Findings ?? 0)</td>
+                            <td>@c.Why</td>
+                            <td>@c.Fix</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-queue" data-review-queue>
+        <h2 id="h-queue">Review queue (@Fmt.Int(Model.Queue.Count))</h2>
+        @if (Model.Queue.Count == 0)
+        {
+            <p class="hint">No decision is due for review in the next @VerificationModel.ReviewWithinDays days.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>Gap</th><th>Decision</th><th>Reviewer</th><th>Review by</th><th>Why</th></tr></thead>
+                    <tbody>
+                        @foreach (var q in Model.Queue)
+                        {
+                            var d = q.Decision!;
+                            <tr data-finding="@q.FindingKey" data-due="@(d.ReviewDue(Model.NowUtc) ? "overdue" : "soon")">
+                                <td><a href="?status=all&key=@Uri.EscapeDataString(q.FindingKey)#h-history">@(q.ScopeName ?? q.ScopeKey)</a><br /><span class="muted">@Model.TitleOf(q.CheckId)</span></td>
+                                <td>@VerificationModel.DecisionLabel(d.Decision)</td>
+                                <td>@(d.Owner ?? d.DecidedBy)</td>
+                                <td data-value="@LocalTime.Iso(d.ReviewDueAt)">@Fmt.Time(d.ReviewDueAt, "date")@(d.ReviewDue(Model.NowUtc) ? " (due)" : "")</td>
+                                <td>@d.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card" aria-labelledby="h-gaps" data-verification-gaps>
+        <h2 id="h-gaps">Gaps (@Fmt.Int(Model.Rows.Count))</h2>
+        <form method="get" class="filters" data-verification-filter>
+            @* THE shared filter (MultiFilter) for check, decision and severity: several values at once, none ticked = all *@
+            @{
+                var checkFilter = new SI.Management.Web.Pages.MultiFilter { Id = "v-check", Name = "check", Label = "Check", Chosen = SI.Management.Core.ProData.ProDataFilters.Values(Model.Check),
+                    Choices = Model.Catalog.Checks.Select(c => new SI.Management.Web.Pages.FilterChoice(c.Id, c.Title)).ToList(), Apply = "Filter" };
+                var decisionFilter = new SI.Management.Web.Pages.MultiFilter { Id = "v-dec", Name = "dec", Label = "Decision", Chosen = SI.Management.Core.ProData.ProDataFilters.Values(Model.DecisionFilter), Apply = "Filter",
+                    Choices = [new("none", "No decision"), new("ignored", "Ignored"), new("accepted", "Accepted"), new("due", "Review due")] };
+                var severityFilter = new SI.Management.Web.Pages.MultiFilter { Id = "v-sev", Name = "severity", Label = "Severity", Chosen = SI.Management.Core.ProData.ProDataFilters.Values(Model.Severity),
+                    Choices = SI.Management.Web.Pages.MultiFilter.Plain(new[] { "high", "medium", "low", "info" }), Apply = "Filter" };
+            }
+            <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="checkFilter" /></div>
+            <label>Status
+                <select name="status">
+                    <option value="open" selected="@(string.IsNullOrEmpty(Model.Status) || Model.Status == "open")">Open</option>
+                    <option value="resolved" selected="@(Model.Status == "resolved")">Resolved (last @VerificationModel.ResolvedDays days)</option>
+                    <option value="all" selected="@(Model.Status == "all")">All</option>
+                </select>
+            </label>
+            <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="decisionFilter" /></div>
+            <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="severityFilter" /></div>
+            <button type="submit" class="secondary">Filter</button>
+        </form>
+        @if (Model.Rows.Count == 0)
+        {
+            <p class="hint">No gap matches the filter.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable data-gaps-table>
+                    <thead><tr><th>Gap</th><th>Check</th><th>Severity</th><th>Seen since</th><th>Status</th><th>Decision</th>@if (isAdmin) { <th>Decide</th> }</tr></thead>
+                    <tbody>
+                        @foreach (var (g, i) in Model.Rows.Select((x, n) => (x, n)))
+                        {
+                            <tr data-finding="@g.FindingKey">
+                                <td><a href="?check=@Model.Check&status=@Model.Status&dec=@Model.DecisionFilter&severity=@Model.Severity&key=@Uri.EscapeDataString(g.FindingKey)#h-history">@(g.ScopeName ?? g.ScopeKey)</a><br /><span class="muted">@g.Detail</span></td>
+                                <td>@Model.TitleOf(g.CheckId)</td>
+                                <td>@g.Severity</td>
+                                <td data-value="@LocalTime.Iso(g.FirstSeenAt)">@Fmt.Time(g.FirstSeenAt, "date")</td>
+                                <td>@(g.Status == "resolved" && g.ResolvedAt is { } ra ? "Resolved " + Fmt.Time(ra, "date") : "Open")</td>
+                                <td>
+                                    @if (g.Decision is { } d)
+                                    {
+                                        <span data-decision="@d.Decision">@VerificationModel.DecisionLabel(d.Decision)</span><br />
+                                        <span class="muted">@d.DecidedBy, @Fmt.Time(d.DecidedAt, "date"): @d.Reason -- review by @Fmt.Time(d.ReviewDueAt, "date")@(d.Owner is { Length: > 0 } o ? " (" + o + ")" : "")</span>
+                                    }
+                                    else { <span class="muted">--</span> }
+                                </td>
+                                @if (isAdmin)
+                                {
+                                    <td>
+                                        <form method="post" asp-page-handler="Decide" class="stack-form" data-decide-form>
+                                            <input type="hidden" name="FindingKey" value="@g.FindingKey" />
+                                            <input type="hidden" name="Check" value="@Model.Check" /><input type="hidden" name="Status" value="@Model.Status" />
+                                            <input type="hidden" name="dec" value="@Model.DecisionFilter" /><input type="hidden" name="Severity" value="@Model.Severity" />
+                                            <label for="vd-@i" class="sr-only">Decision</label>
+                                            <select id="vd-@i" name="Decision">
+                                                <option value="ignored" selected="@(g.Decision?.Decision == "ignored")">Ignore</option>
+                                                <option value="accepted" selected="@(g.Decision?.Decision == "accepted")">Accept</option>
+                                            </select>
+                                            <label for="vr-@i" class="sr-only">Why (audited)</label>
+                                            <input id="vr-@i" name="Reason" required minlength="3" maxlength="2000" placeholder="Why (audited)" value="@g.Decision?.Reason" />
+                                            <label for="vo-@i" class="sr-only">Reviewer</label>
+                                            <input id="vo-@i" name="Owner" maxlength="256" placeholder="Reviewer" value="@g.Decision?.Owner" />
+                                            <button type="submit" class="secondary">@(g.Decision is null ? "Save" : "Review (save again)")</button>
+                                        </form>
+                                        @if (g.Decision is not null)
+                                        {
+                                            <form method="post" asp-page-handler="Revoke" data-revoke-form data-confirm-title="Withdraw the decision?" data-confirm="The gap is open again.">
+                                                <input type="hidden" name="FindingKey" value="@g.FindingKey" />
+                                                <input type="hidden" name="Check" value="@Model.Check" /><input type="hidden" name="Status" value="@Model.Status" />
+                                                <input type="hidden" name="dec" value="@Model.DecisionFilter" /><input type="hidden" name="Severity" value="@Model.Severity" />
+                                                <button type="submit" class="link">Withdraw</button>
+                                            </form>
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    @if (!string.IsNullOrEmpty(Model.Key))
+    {
+        <section class="card" aria-labelledby="h-history" data-gap-history>
+            <h2 id="h-history">History of @Model.Key</h2>
+            @if (Model.History.Count == 0) { <p class="hint">No history.</p> }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable>
+                        <thead><tr><th>When</th><th>What</th><th>Detail</th><th>By</th></tr></thead>
+                        <tbody>
+                            @foreach (var h in Model.History)
+                            {
+                                <tr><td data-value="@LocalTime.Iso(h.At)">@Fmt.Time(h.At)</td><td>@h.Kind</td><td>@h.Text</td><td>@(h.By ?? "the verification job")</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+}

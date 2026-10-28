@@ -1,0 +1,6 @@
+@page
+@model SI.Management.Web.Pages.Remediations.IndexModel
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Preparing) { <p class="hint" data-remediations-preparing><a href="@Model.ViewLink(SI.Management.Web.Navigation.NamedViews.DetailedPage)">Open Detailed</a></p> }
+@if (Model.Grid is not null) { <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" /> }
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

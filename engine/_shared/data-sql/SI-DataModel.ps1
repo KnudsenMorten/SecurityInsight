@@ -1,0 +1,833 @@
+#Requires -Version 5.1
+<#
+    SecurityInsight Pro -- the data sync's decisions, as PURE functions (REQUIREMENTS §9.3.3 phase B).
+
+    Everything the sync decides is here and provable offline: which collections to load (only COMPLETE ones, each
+    once), which key an asset gets, how a CI is assembled from its members, how rows become JSON chunks, how big the
+    next chunk / delete batch / query partition is, and where retention cuts off. The SQL and Log Analytics calls are
+    elsewhere and only fetch / write.
+
+    🔑 ASSET KEY (decision 5, operator 2026-10-03: "one CI key = SI_CorrelationId"). AssetKey is the identity ledger's
+    SI_CorrelationId when the correlation map carries one marked SI_IdSource = 'ledger' for the asset; otherwise the
+    asset's own SI_AssetId. A 'derived-provisional' correlation id is NEVER used as a key: it moves when a member joins
+    or leaves the group, and a key that moves splits an asset's history into two CIs. When the ledger is switched on
+    later an asset's key changes once (asset id -> ledger id); Asset.KeySource says which kind each key is.
+    #468: this is THE CI-key rule of every consumer -- Get-SIDataAssetKey calls Resolve-SICiKey (engine/asset-cmdb/_shared/
+    SI-CiKey.ps1), the function the CMDB hand-off and the vulnerability rows use, so there is one rule, not two.
+
+    PS 5.1 safe: no ?. / ??, no ternary. No Set-StrictMode (it leaks into the caller's scope).
+#>
+
+if (-not (Get-Command -Name 'Resolve-SICiKey' -ErrorAction SilentlyContinue)) {
+    . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-CiKey.ps1'))
+}
+# the database's own load paces the large batched writers (SI-SqlPacing.ps1: Invoke-SISqlPacing before each batch)
+if (-not (Get-Command -Name 'Invoke-SISqlPacing' -ErrorAction SilentlyContinue)) {
+    . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-SqlPacing.ps1'))
+}
+
+$script:SIDataInvariant = [Globalization.CultureInfo]::InvariantCulture
+# Members of one CI, most descriptive first: the CI takes its name and kind from the first present.
+$script:SIDataKindPriority = @('endpoint', 'azure', 'identity', 'publicip')
+
+function ConvertTo-SIDataUtc {
+    <# PURE. A Log Analytics time (ISO text or [datetime]) as a UTC [datetime]; $null for empty. Text without a zone is UTC. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    if ($Value -is [datetime]) {
+        $d = [datetime]$Value
+        if ($d.Kind -eq [DateTimeKind]::Local) { return $d.ToUniversalTime() }
+        return [datetime]::SpecifyKind($d, [DateTimeKind]::Utc)
+    }
+    $s = ([string]$Value).Trim()
+    if (-not $s) { return $null }
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    $d = [datetime]::MinValue
+    if (-not [datetime]::TryParse($s, $script:SIDataInvariant, $styles, [ref]$d)) { throw ("not a date/time: '{0}'" -f $s) }
+    [datetime]::SpecifyKind($d, [DateTimeKind]::Utc)
+}
+
+function Format-SIDataSqlTime {
+    <# PURE. A UTC time as the text SQL receives (ISO 8601, millisecond precision, no zone -- datetime2 reads it as is). #>
+    param([Parameter(Mandatory)][datetime]$Time)
+    $Time.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fff', $script:SIDataInvariant)
+}
+
+function ConvertTo-SIDataTier {
+    <# PURE. A tier 0..9 as [int], anything else (empty, text, negative) as $null. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    $n = 0
+    if ([int]::TryParse(([string]$Value).Trim(), [Globalization.NumberStyles]::Integer, $script:SIDataInvariant, [ref]$n) -and $n -ge 0 -and $n -le 9) { return $n }
+    return $null
+}
+
+function ConvertTo-SIDataNumber {
+    <# PURE. A finite number as [double], anything else as $null. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    if ($Value -is [double] -or $Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [single]) { $d = [double]$Value }
+    else {
+        $d = 0.0
+        if (-not [double]::TryParse(([string]$Value).Trim(), [Globalization.NumberStyles]::Float, $script:SIDataInvariant, [ref]$d)) { return $null }
+    }
+    if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { return $null }
+    $d
+}
+
+function ConvertTo-SIDataLong {
+    <# PURE. A positive whole number (an id) as [long], anything else (empty, text, 0, negative) as $null. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    $n = [long]0
+    if ([long]::TryParse(([string]$Value).Trim(), [Globalization.NumberStyles]::Integer, $script:SIDataInvariant, [ref]$n) -and $n -gt 0) { return $n }
+    return $null
+}
+
+function ConvertTo-SIDataDay {
+    <# PURE. A date (yyyy-MM-dd, or any time Log Analytics wrote) as the SQL text of that day, or $null when empty / not a date. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull] -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+    try { $d = ConvertTo-SIDataUtc $Value } catch { return $null }
+    if ($null -eq $d) { return $null }
+    $d.Date.ToString('yyyy-MM-ddTHH:mm:ss.fff', $script:SIDataInvariant)
+}
+
+function ConvertTo-SIDataJsonString {
+    <#
+        PURE. One JSON string literal (with quotes), or null. Written by hand because ConvertTo-Json on PS 5.1 takes
+        minutes for a 100k-row collection; the escaping is the JSON minimum: backslash, quote, control characters.
+    #>
+    param([AllowNull()][AllowEmptyString()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return 'null' }
+    $Value = [string]$Value
+    if ($Value -notmatch '[\\"\x00-\x1f]') { return '"' + $Value + '"' }
+    $s = $Value.Replace('\', '\\').Replace('"', '\"')
+    # the control-character pass only when there is one: building its evaluator costs about a millisecond per call, and a
+    # finding's stored row (already JSON) never carries a raw control character -- the text is the same either way
+    if ($s.IndexOfAny($script:SIDataJsonControlChars) -ge 0) { $s = [regex]::Replace($s, '[\x00-\x1f]', { param($m) '\u{0:x4}' -f [int][char]$m.Value }) }
+    '"' + $s + '"'
+}
+
+function ConvertTo-SIDataJsonObject {
+    <# PURE. An ordered name -> value map as one JSON object: $null -> null, bool, number (invariant), [datetime] -> SQL time text, else text. #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Values)
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($k in $Values.Keys) {
+        $v = $Values[$k]
+        if ($null -eq $v -or $v -is [System.DBNull]) { $j = 'null' }
+        elseif ($v -is [bool]) { $j = $(if ($v) { 'true' } else { 'false' }) }
+        elseif ($v -is [int] -or $v -is [long] -or $v -is [byte] -or $v -is [int16]) { $j = ([long]$v).ToString($script:SIDataInvariant) }
+        elseif ($v -is [double] -or $v -is [single] -or $v -is [decimal]) {
+            $d = [double]$v
+            $j = $(if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { 'null' } else { $d.ToString('R', $script:SIDataInvariant) })
+        }
+        elseif ($v -is [datetime]) { $j = ConvertTo-SIDataJsonString (Format-SIDataSqlTime -Time $v) }
+        else {
+            # PERFORMANCE (Risk Analysis writes every row through here): text with nothing to escape is quoted here, without
+            # a call -- the same test ConvertTo-SIDataJsonString makes first; text that needs escaping goes through it
+            $s = [string]$v
+            $j = $(if (-not $script:SIDataJsonEscapeNeeded.IsMatch($s)) { '"' + $s + '"' } else { ConvertTo-SIDataJsonString $s })
+        }
+        $ks = [string]$k
+        $parts.Add($(if (-not $script:SIDataJsonEscapeNeeded.IsMatch($ks)) { '"' + $ks + '"' } else { ConvertTo-SIDataJsonString $ks }) + ':' + $j)
+    }
+    '{' + ($parts -join ',') + '}'
+}
+# the characters a JSON string literal escapes (ConvertTo-SIDataJsonString): backslash, quote, control characters
+$script:SIDataJsonEscapeNeeded = [regex]::new('[\\"\x00-\x1f]')
+$script:SIDataJsonControlChars = [char[]](0..31)
+
+function Get-SIDataNextSize {
+    <#
+        PURE. The next chunk / batch size from the last one's measured time: aim for -TargetMs per call, shrink at once
+        when slower, grow at most double per call. A measurement, not a ceiling (working rule 5).
+    #>
+    param([Parameter(Mandatory)][long]$Current, [Parameter(Mandatory)][long]$ElapsedMs, [long]$TargetMs = 5000, [long]$Minimum = 1)
+    if ($Current -lt $Minimum) { $Current = $Minimum }
+    # worked out in [double] and held to double the current size BEFORE it becomes a whole number: a fast call on a large
+    # size must never overflow (live 2026-10-13: "Cannot convert value 4.294967296E+19 to type System.Int64" failed 20+
+    # Risk Analysis reports -- the size had doubled on every call of the run)
+    $limit = [double][Math]::Min([double]([long]::MaxValue / 2), 2.0 * [double]$Current)
+    $want = if ($ElapsedMs -le 0) { $limit } else { [Math]::Min($limit, [Math]::Floor([double]$Current * ([double]$TargetMs / [double]$ElapsedMs))) }
+    $want = [long]$want
+    if ($want -lt $Minimum) { $want = $Minimum }
+    $want
+}
+
+function Get-SIDataPartitionCount {
+    <#
+        PURE. How many hash partitions one collection is read in, from its MEASURED size. A Log Analytics query
+        returns at most 64 MB / 500,000 rows (service limits, not tuning), and the rows come back with DetailJson -- the
+        whole row again -- so the estimated bytes are scaled by -Expansion. -TargetBytes keeps each answer well under
+        the limit. A response that is still too large doubles the count (the reader does that).
+    #>
+    param([Parameter(Mandatory)][long]$Rows, [Parameter(Mandatory)][double]$Bytes, [double]$TargetBytes = 16MB,
+          [double]$Expansion = 2.5, [long]$MaxRowsPerQuery = 500000)
+    if ($Rows -le 0) { return 1 }
+    $byBytes = [long][Math]::Ceiling(($Bytes * $Expansion) / $TargetBytes)
+    $byRows  = [long][Math]::Ceiling([double]$Rows / ($MaxRowsPerQuery / 2))
+    [int][Math]::Max(1, [Math]::Max($byBytes, $byRows))
+}
+
+function Test-SIDataResponseTooLarge {
+    <# PURE. Did a Log Analytics query fail because its ANSWER was too large (the one failure a smaller partition fixes)? #>
+    param([AllowNull()][string]$Text)
+    if (-not $Text) { return $false }
+    # also the service's own codes for an answer over its size limit (ResponsePayloadTooLarge, ResponseSizeError)
+    [bool]($Text -match '(?i)E_QUERY_RESULT_SET_TOO_LARGE|ResponsePayloadTooLarge|ResponseSizeError|result set (is )?too large|exceeds? the (maximum )?(response|result) size|response size .*exceed|too many (records|rows)|64 ?MB|500,?000 (records|rows)')
+}
+
+function Select-SIDataCoveringRun {
+    <#
+        PURE. The Risk Analysis run whose window contains the snapshot -- the same window rule as the close-loop's
+        completeness check (Test-SIVulnSnapshotComplete). Several can (Summary and Detailed overlap): the one that
+        started last before the snapshot. $null when none.
+    #>
+    param([Parameter(Mandatory)][datetime]$SnapshotTime, [AllowEmptyCollection()][object[]]$Runs = @(), [int]$SlackMinutes = 15)
+    $snap = $SnapshotTime.ToUniversalTime()
+    $best = $null; $bestStart = [datetime]::MinValue
+    foreach ($r in @($Runs)) {
+        if ($null -eq $r -or -not $r.StartedAt) { continue }
+        $st = ConvertTo-SIDataUtc $r.StartedAt
+        $dur = ConvertTo-SIDataNumber $r.DurationSec; if ($null -eq $dur) { $dur = 0 }
+        if ($st -le $snap.AddMinutes($SlackMinutes) -and $st.AddSeconds($dur).AddMinutes($SlackMinutes) -ge $snap -and $st -ge $bestStart) {
+            $best = $r; $bestStart = $st
+        }
+    }
+    $best
+}
+
+function Get-SIDataHoldDetail {
+    <#
+        PURE. Why a collection was held, in the words of the runs that produced it: each covering Risk Analysis run that did
+        not end 'success' -> "its run ended '<verdict>': <its run-health message>" (e.g. which bucket or report was
+        incomplete). Empty when no covering run says more than its verdict.
+    #>
+    param([Parameter(Mandatory)][datetime]$SnapshotTime, [AllowEmptyCollection()][object[]]$Runs = @(), [int]$SlackMinutes = 15)
+    $snap = $SnapshotTime.ToUniversalTime()
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($r in @($Runs)) {
+        if ($null -eq $r -or -not $r.StartedAt) { continue }
+        $st = ConvertTo-SIDataUtc $r.StartedAt
+        $dur = ConvertTo-SIDataNumber $r.DurationSec; if ($null -eq $dur) { $dur = 0 }
+        if (-not ($st -le $snap.AddMinutes($SlackMinutes) -and $st.AddSeconds($dur).AddMinutes($SlackMinutes) -ge $snap)) { continue }
+        $exit = [string]$r.ExitReason
+        if ($exit -eq 'success') { continue }
+        $msg = ''; if ($r.PSObject.Properties['Detail']) { $msg = ([string]$r.Detail).Trim() }
+        # internal reference numbers never reach a customer (working rule 3)
+        $msg = ([regex]::Replace($msg, '\s*\((?:audit\s*)?#\d+\)', '')).Trim()
+        if ($msg.Length -gt 400) { $msg = $msg.Substring(0, 397) + '...' }
+        $parts.Add($(if ($msg) { "its Risk Analysis run ended '$exit': $msg" } else { "its Risk Analysis run ended '$exit'" }))
+    }
+    (@($parts | Select-Object -Unique) -join ' | ')
+}
+
+function Get-SIDataLoadPlan {
+    <#
+        PURE. What to do with each Log Analytics collection:
+          Skip      -- already loaded (a 'Complete' row exists): a re-run loads nothing twice
+          Load      -- not in SQL, and the Risk Analysis run that produced it ended 'success'
+          Reload    -- a 'Loading' row exists (a load that died part way): its rows are removed and it is loaded again
+          Hold      -- the producing run is not shown complete (failed, partial, still running, or no run-health record):
+                       NOT loaded. Partial data is never stored as a collection (working rule 4); a later run loads it
+                       once its run is shown complete, while it is inside the look-back window.
+          Refuse    -- #294: rows of the collection lack their finding id (ConfigurationId, -Collections' NoConfigurationId):
+                       NEVER loaded, whatever its run says -- a broken snapshot is not a day.
+        -Collections: CollectionTime, Rows, Bytes, SolutionVersion (Log Analytics). -Loaded: CollectionId, CollectionTime,
+        Status (SQL). -Runs: StartedAt, DurationSec, ExitReason, RunId (run health).
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Collections,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Loaded,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Runs,
+        [datetime]$Now = [datetime]::UtcNow,
+        [int]$LookbackDays = 3
+    )
+    $byTime = @{}
+    foreach ($l in @($Loaded)) {
+        if ($null -eq $l) { continue }
+        $t = ConvertTo-SIDataUtc $l.CollectionTime
+        if ($null -ne $t) { $byTime[(Format-SIDataSqlTime -Time $t)] = $l }
+    }
+    # the run must be shown complete; age is not the question here (the close-loop's 26 h limit protects CLOSES), so
+    # the limit is the look-back window itself
+    $maxAge = ($LookbackDays * 24) + 26
+    $plan = [System.Collections.Generic.List[object]]::new()
+    foreach ($c in @($Collections | Sort-Object { ConvertTo-SIDataUtc $_.CollectionTime })) {
+        if ($null -eq $c) { continue }
+        $t = ConvertTo-SIDataUtc $c.CollectionTime
+        if ($null -eq $t) { continue }
+        $key = Format-SIDataSqlTime -Time $t
+        $rows = [long](ConvertTo-SIDataNumber $c.Rows); $bytes = ConvertTo-SIDataNumber $c.Bytes; if ($null -eq $bytes) { $bytes = 0 }
+        $item = [ordered]@{ CollectionTime = $t; Rows = $rows; Bytes = [double]$bytes; SolutionVersion = [string]$c.SolutionVersion
+                            Action = ''; Reason = ''; Run = $null; ExistingId = $null; RunDetail = ''; Partial = $false; PartialReason = ''; ReleasedBy = ''; Release = $null }
+        $existing = $byTime[$key]
+        # #717: a collection whose rows the retention removed (a newer collection is complete) is never loaded again
+        if ($existing -and $existing.PSObject.Properties['Retired'] -and [bool]$existing.Retired) {
+            $item.Action = 'Skip'; $item.Reason = 'its rows were removed by the retention -- a newer collection is complete'; $item.ExistingId = $existing.CollectionId
+            $plan.Add([pscustomobject]$item); continue
+        }
+        # #638: a collection Risk Analysis wrote itself is never loaded from Log Analytics (it would be loaded twice); the data
+        # sync completes it from what Risk Analysis wrote (Invoke-SIDataAdoptRaCollection)
+        if ($existing -and $existing.PSObject.Properties['Source'] -and [string]$existing.Source -eq 'risk-analysis') {
+            $item.Action = 'Skip'; $item.Reason = 'written by Risk Analysis itself'; $item.ExistingId = $existing.CollectionId
+            $plan.Add([pscustomobject]$item); continue
+        }
+        if ($existing -and [string]$existing.Status -eq 'Complete') {
+            $item.Action = 'Skip'; $item.Reason = 'already loaded'; $item.ExistingId = $existing.CollectionId
+            $plan.Add([pscustomobject]$item); continue
+        }
+        # #294: a collection whose rows lack their finding id (ConfigurationId) is never loaded as a day -- not even when
+        # its run says success. Measured on ring 1: a run posted 14,624 rows through a rule that dropped every key column.
+        $noCfg = $null
+        if ($c.PSObject.Properties['NoConfigurationId']) { $noCfg = ConvertTo-SIDataNumber $c.NoConfigurationId }
+        if ($null -ne $noCfg -and [long]$noCfg -gt 0) {
+            $item.Action = 'Refuse'
+            $item.Reason = if ([long]$noCfg -ge $rows) { ("every one of its {0} row(s) lacks its finding id (ConfigurationId) -- the Risk Analysis run did not deliver its key columns" -f $rows) }
+                           else { ("{0} of its {1} row(s) lack their finding id (ConfigurationId) -- an incomplete snapshot is never shown as a day" -f [long]$noCfg, $rows) }
+            $plan.Add([pscustomobject]$item); continue
+        }
+        $verdict = Test-SIVulnSnapshotComplete -SnapshotTime $t -Runs @($Runs) -Now $Now -MaxAgeHours $maxAge
+        if (-not $verdict.Complete) {
+            $item.Action = 'Hold'; $item.Reason = [string]$verdict.Reason
+            # what was incomplete, in the run's own words (its run-health message) -- shown with the guard event and the release
+            $item.RunDetail = Get-SIDataHoldDetail -SnapshotTime $t -Runs @($Runs)
+            $plan.Add([pscustomobject]$item); continue
+        }
+        $item.Run = Select-SIDataCoveringRun -SnapshotTime $t -Runs @($Runs)
+        if ($existing) { $item.Action = 'Reload'; $item.ExistingId = $existing.CollectionId; $item.Reason = 'a previous load did not finish -- its rows are removed and it is loaded again' }
+        else { $item.Action = 'Load'; $item.Reason = [string]$verdict.Reason }
+        $plan.Add([pscustomobject]$item)
+    }
+    , $plan.ToArray()
+}
+
+function Set-SIDataSupersededPlan {
+    <#
+        PURE. #414 (ring 1, 2026-10-06: collections of 2026-10-03 and 2026-10-05 stayed held -- and mailed -- on every data
+        sync although newer COMPLETE collections were loaded): a HELD collection that is SUPERSEDED by a newer complete one
+        (a newer collection that is loaded, or is loaded in this run, and is not partial) is no longer a guard event.
+        Its Action becomes 'Superseded': not loaded (the newer collection is the current state), not offered for release,
+        not mailed. A held collection an Admin released (-Released, Find-SIDataReleasedCollection) stays as it is, and a
+        held collection with no newer complete one stays held -- that is the #347 protection, unchanged.
+    #>
+    param([AllowEmptyCollection()][object[]]$Plan = @(), [AllowEmptyCollection()][object[]]$Released = @())
+    $newest = $null
+    foreach ($p in @($Plan)) {
+        if ($null -eq $p -or [string]$p.Action -notin @('Load', 'Reload', 'Skip') -or [bool]$p.Partial) { continue }
+        if ($null -eq $newest -or $p.CollectionTime -gt $newest) { $newest = $p.CollectionTime }
+    }
+    foreach ($p in @($Plan)) {
+        if ($null -eq $p) { continue }
+        if ($null -ne $newest -and [string]$p.Action -eq 'Hold' -and $p.CollectionTime -lt $newest) {
+            $rel = $null
+            if (@($Released).Count -and (Get-Command -Name Find-SIDataReleasedCollection -ErrorAction SilentlyContinue)) { $rel = Find-SIDataReleasedCollection -Released $Released -CollectionTime $p.CollectionTime }
+            if (-not $rel) {
+                $p.Action = 'Superseded'
+                $p.Reason = [string]::Format([Globalization.CultureInfo]::InvariantCulture, 'superseded by the complete collection of {0:yyyy-MM-dd HH:mm} UTC -- not loaded and no longer held ({1})', $newest, [string]$p.Reason)
+            }
+        }
+        $p
+    }
+}
+
+function Test-SIDataRealFailure {
+    <#
+        PURE. #448 (operator 2026-10-09: "noone can use the system due to these blockings" -- warn on suspicion, hold only on a
+        REAL failure): is a held collection's cause a real failure? A Risk Analysis run that ended 'success-partial' (some
+        reports failed or returned nothing, empty buckets, a new column not stored yet) is NOT: its collection is loaded,
+        marked partial. A run that failed outright, is still running, or has no run-health record at all IS (it stays held).
+    #>
+    param([string]$Reason, [string]$RunDetail)
+    $all = ('{0} {1}' -f $Reason, $RunDetail)
+    if ($all -notmatch 'success-partial') { return $true }
+    # a partial run AND an outright failure around the same time: the failure decides
+    [bool]($all -match "ended '(failed|failure|error|cancelled|timeout|timed-out)'")
+}
+
+function Set-SIDataPartialRunPlan {
+    <#
+        PURE. #448: every collection held ONLY because its Risk Analysis run was partial ('success-partial') is LOADED,
+        MARKED PARTIAL in the web app with the reason (what it missed stays unknown, not resolved) -- the same load as a
+        release, without anybody having to release it. A real failure (Test-SIDataRealFailure) stays held.
+    #>
+    param([AllowEmptyCollection()][object[]]$Plan = @(), [AllowEmptyCollection()][object[]]$Loaded = @(), [AllowEmptyCollection()][object[]]$Runs = @())
+    foreach ($p in @($Plan)) {
+        if ($null -eq $p) { continue }
+        if ([string]$p.Action -eq 'Hold' -and -not (Test-SIDataRealFailure -Reason ([string]$p.Reason) -RunDetail ([string]$p.RunDetail))) {
+            $was = [string]$p.Reason
+            $key = Format-SIDataSqlTime -Time $p.CollectionTime
+            $existing = @($Loaded | Where-Object { $_ -and (ConvertTo-SIDataUtc $_.CollectionTime) -and (Format-SIDataSqlTime -Time (ConvertTo-SIDataUtc $_.CollectionTime)) -eq $key }) | Select-Object -First 1
+            $p.Partial = $true; $p.ReleasedBy = 'the current rules (a partial run is loaded, marked partial)'; $p.Release = $null
+            $p.PartialReason = (@($was, [string]$p.RunDetail) | Where-Object { "$_".Trim() }) -join ' -- '
+            $p.Run = Select-SIDataCoveringRun -SnapshotTime $p.CollectionTime -Runs @($Runs)
+            if ($existing) { $p.Action = 'Reload'; $p.ExistingId = $existing.CollectionId } else { $p.Action = 'Load' }
+            $p.Reason = ('loaded although {0} -- a partial run is loaded and marked partial; what it missed is unknown, not resolved' -f $was)
+        }
+        $p
+    }
+}
+
+function Set-SIDataGuardOffPlan {
+    <#
+        PURE. #414: the guard datasync.collection.held switched OFF (Settings > Guards) -- every collection still held is
+        loaded anyway, MARKED PARTIAL in the web app with the reason (as a release would, without the Admin).
+    #>
+    param([AllowEmptyCollection()][object[]]$Plan = @(), [AllowEmptyCollection()][object[]]$Loaded = @(), [AllowEmptyCollection()][object[]]$Runs = @())
+    foreach ($p in @($Plan)) {
+        if ($null -eq $p) { continue }
+        if ([string]$p.Action -eq 'Hold') {
+            $was = [string]$p.Reason
+            $key = Format-SIDataSqlTime -Time $p.CollectionTime
+            $existing = @($Loaded | Where-Object { $_ -and (ConvertTo-SIDataUtc $_.CollectionTime) -and (Format-SIDataSqlTime -Time (ConvertTo-SIDataUtc $_.CollectionTime)) -eq $key }) | Select-Object -First 1
+            $p.Partial = $true; $p.ReleasedBy = 'the guard setting (off)'; $p.Release = $null
+            $p.PartialReason = (@($was, [string]$p.RunDetail) | Where-Object { "$_".Trim() }) -join ' -- '
+            $p.Run = Select-SIDataCoveringRun -SnapshotTime $p.CollectionTime -Runs @($Runs)
+            if ($existing) { $p.Action = 'Reload'; $p.ExistingId = $existing.CollectionId } else { $p.Action = 'Load' }
+            $p.Reason = ('loaded although {0} -- the guard is off (setting); marked partial' -f $was)
+        }
+        $p
+    }
+}
+
+function New-SIDataIdentityIndex {
+    <#
+        PURE. The correlation map rows -> lower(SI_AssetId) -> @{ SIAssetId; CorrelationId; IdSource; Engine; Identifiers }.
+        Identifiers are (Type, Value, IsJoinBasis) triples, values lower-cased, de-duplicated. #299: the correlation
+        engine's own verdict travels too -- JoinConfidence (single-source | deterministic | graph-inferred, the group's)
+        and, per identifier, IsJoinBasis (it is the key that actually held two records together) -- so the evidence a CI
+        page shows is the engine's reasoning, not a second guess. A map written before these columns reads them empty.
+    #>
+    param([AllowEmptyCollection()][object[]]$MapRows = @())
+    $idx = @{}
+    foreach ($r in @($MapRows)) {
+        if ($null -eq $r) { continue }
+        $aid = ([string]$r.SI_AssetId).Trim()
+        if (-not $aid) { continue }
+        $k = $aid.ToLowerInvariant()
+        if (-not $idx.ContainsKey($k)) {
+            $idx[$k] = @{ SIAssetId = $aid; CorrelationId = ''; IdSource = ''; Engine = ''; JoinConfidence = ''; Identifiers = ([System.Collections.Generic.List[object]]::new()); Seen = @{} }
+        }
+        $e = $idx[$k]
+        if (-not $e.CorrelationId -and [string]$r.SI_CorrelationId) { $e.CorrelationId = ([string]$r.SI_CorrelationId).Trim(); $e.IdSource = ([string]$r.SI_IdSource).Trim() }
+        if (-not $e.Engine -and [string]$r.SI_MemberEngine) { $e.Engine = ([string]$r.SI_MemberEngine).Trim().ToLowerInvariant() }
+        if (-not $e.JoinConfidence -and $r.PSObject.Properties['SI_JoinConfidence'] -and [string]$r.SI_JoinConfidence) { $e.JoinConfidence = ([string]$r.SI_JoinConfidence).Trim().ToLowerInvariant() }
+        $basis = $false
+        if ($r.PSObject.Properties['SI_IsJoinBasis']) { $bv = [string]$r.SI_IsJoinBasis; $basis = ($bv -eq 'true' -or $bv -eq 'True' -or $bv -eq '1') }
+        $t = ([string]$r.SI_IdentifierType).Trim(); $v = ([string]$r.SI_IdentifierValue).Trim().ToLowerInvariant()
+        if ($t -and $v) {
+            $ik = $t.ToLowerInvariant() + '|' + $v
+            if (-not $e.Seen.ContainsKey($ik)) { $e.Seen[$ik] = $true; $e.Identifiers.Add([pscustomobject]@{ Type = $t; Value = $v; IsJoinBasis = $basis }) }
+            elseif ($basis) { foreach ($x in $e.Identifiers) { if (($x.Type.ToLowerInvariant() + '|' + $x.Value) -eq $ik) { $x.IsJoinBasis = $true } } }
+        }
+    }
+    $idx
+}
+
+function Get-SIDataAssetKey {
+    <#
+        PURE. The CI key for one SI_AssetId: the ledger's SI_CorrelationId when the map marks it 'ledger', else the
+        SI_AssetId itself (see the header). Returns @{ Key; Source = 'ledger' | 'asset' }; Key '' for an empty id.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$SIAssetId, [hashtable]$Index = @{})
+    $aid = ([string]$SIAssetId).Trim()
+    if (-not $aid) { return [pscustomobject]@{ Key = ''; Source = 'asset' } }
+    $e = $Index[$aid.ToLowerInvariant()]
+    # #468: THE rule (Resolve-SICiKey) -- the same one the CMDB hand-off and the vulnerability rows key by
+    $k = if ($e) { Resolve-SICiKey -AssetId $aid -CorrelationId ([string]$e.CorrelationId) -IdSource ([string]$e.IdSource) } else { Resolve-SICiKey -AssetId $aid }
+    [pscustomobject]@{ Key = [string]$k.Key; Source = [string]$k.IdSource }
+}
+
+function Get-SIDataKindHint {
+    <#
+        PURE (#428). The asset kind a FINDING row implies for an asset no profile table and no correlation map names:
+        an Azure resource id ('az:...' or '/subscriptions/...') is azure; otherwise the row's SecurityDomain
+        (Azure -> azure, Endpoint -> endpoint, Identity -> identity, PublicIP -> publicip). '' when neither says.
+        Live ring 1 2026-10-07: subscriptions, Defender plans, role definitions and SQL encryption protectors carry
+        Azure findings but are not in SI_Azure_Profile_CL -- they were stored with NO kind (160 findings / 24 CIs per
+        collection, among them the tier-0 subscription), so the "azure" kind filter showed 0 on tier 0.
+        Only a fallback: a profile's kind and the correlation map's engine always win.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$SIAssetId, [AllowNull()][AllowEmptyString()][string]$SecurityDomain)
+    $aid = ([string]$SIAssetId).Trim().ToLowerInvariant()
+    if ($aid.StartsWith('az:') -or $aid.StartsWith('/subscriptions/')) { return 'azure' }
+    switch (([string]$SecurityDomain).Trim().ToLowerInvariant()) {
+        'azure'    { return 'azure' }
+        'endpoint' { return 'endpoint' }
+        'identity' { return 'identity' }
+        'publicip' { return 'publicip' }
+    }
+    ''
+}
+
+function Get-SIDataKindCoverage {
+    <#
+        PURE (#428). The asset-kind count check of ONE loaded collection: what the findings imply against what was stored.
+          -FindingAssets  the collection's finding assets (SI_AssetId, SecurityDomain)
+          -Set            Build-SIDataAssets output (Assets, KeyOf)
+        Returns @{ Implied (kind -> finding assets that imply it); Stored (kind -> CIs of that kind among the findings' CIs);
+        Kindless (CIs with findings and no kind); Dropped (kinds the findings imply that arrived as 0 CIs) }.
+        Dropped or Kindless is the anomaly: findings of an asset kind that the web app's kind filter cannot show -- the
+        2026-10-07 "azure (0)" class. A kind with no findings at all is not a drop.
+    #>
+    param([AllowEmptyCollection()][object[]]$FindingAssets = @(), [Parameter(Mandatory)]$Set)
+    $implied = [ordered]@{}; $stored = [ordered]@{}
+    foreach ($k in $script:SIDataKindPriority) { $implied[$k] = 0; $stored[$k] = 0 }
+    $ciKeys = @{}
+    foreach ($f in @($FindingAssets)) {
+        if ($null -eq $f) { continue }
+        $aid = ([string]$f.SI_AssetId).Trim(); if (-not $aid) { continue }
+        $sd = ''; if ($f.PSObject.Properties['SecurityDomain']) { $sd = [string]$f.SecurityDomain }
+        $h = Get-SIDataKindHint -SIAssetId $aid -SecurityDomain $sd
+        if ($h -and $implied.Contains($h)) { $implied[$h]++ }
+        $ck = [string]$Set.KeyOf[$aid.ToLowerInvariant()]; if (-not $ck) { $ck = $aid }
+        $ciKeys[$ck.ToLowerInvariant()] = $true
+    }
+    $kindless = 0
+    foreach ($a in @($Set.Assets)) {
+        if ($null -eq $a -or -not $ciKeys.ContainsKey(([string]$a.AssetKey).ToLowerInvariant())) { continue }
+        $k = ([string]$a.AssetKind).ToLowerInvariant()
+        if (-not $k) { $kindless++ } elseif ($stored.Contains($k)) { $stored[$k]++ }
+    }
+    $dropped = @($implied.Keys | Where-Object { $implied[$_] -gt 0 -and $stored[$_] -eq 0 })
+    [pscustomobject]@{ Implied = $implied; Stored = $stored; Kindless = $kindless; Dropped = $dropped }
+}
+
+function Get-SIDataKindCoverageSummary {
+    <# PURE (#428). The run-health sentence for the kind check of this sync's loads (empty when every kind arrived). #>
+    param($Result)
+    if ($null -eq $Result -or -not $Result.PSObject.Properties['Loaded']) { return '' }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($l in @($Result.Loaded | Where-Object { $_ })) {
+        if (-not $l.PSObject.Properties['KindCoverage'] -or $null -eq $l.KindCoverage) { continue }
+        $c = $l.KindCoverage
+        foreach ($k in @($c.Dropped)) { $parts.Add(('the collection of {0:yyyy-MM-dd HH:mm} UTC has findings on {1} {2} asset(s) but stored 0 CIs of kind {2}' -f $l.CollectionTime, $c.Implied[$k], $k)) }
+        if ($c.Kindless -gt 0) { $parts.Add(('the collection of {0:yyyy-MM-dd HH:mm} UTC stored {1} CI(s) with findings but no asset kind' -f $l.CollectionTime, $c.Kindless)) }
+    }
+    ($parts -join ' | ')
+}
+
+function Build-SIDataAssets {
+    <#
+        PURE. The CIs of one load. Members = every asset a profile table knows (-Profiles: Kind, SI_AssetId,
+        SI_AssetName, Tier, CollectionTime) plus every asset in the collection's findings (-FindingAssets: SI_AssetId,
+        AssetName, Tier). Members with the same AssetKey are ONE CI: kind and name from the most descriptive member
+        (endpoint, azure, identity, publicip), tier = the most critical (lowest), LastSeen = the newest sighting
+        (-SeenAt for a member in the findings), properties from the first member that has any.
+        Returns @{ Assets; Identifiers; KeyOf (lower SI_AssetId -> AssetKey); TierOf (AssetKey -> tier); Skipped; Members
+        (AssetKey -> the CI's members, most descriptive first -- the correlation evidence's source records, #299) }.
+        Skipped counts identifiers too long for the column (256): reported, never silently cut.
+    #>
+    param(
+        [AllowEmptyCollection()][object[]]$Profiles = @(),
+        [AllowEmptyCollection()][object[]]$FindingAssets = @(),
+        [hashtable]$Index = @{},
+        [hashtable]$Properties = @{},
+        [Parameter(Mandatory)][datetime]$SeenAt,
+        [int]$MaxIdentifierLength = 256
+    )
+    $members = @{}   # lower SI_AssetId -> member
+    $add = {
+        param([string]$aid, [string]$kind, [string]$name, $tier, $seen, $attr)
+        $aid = $aid.Trim(); if (-not $aid) { return }
+        $k = $aid.ToLowerInvariant()
+        if (-not $members.ContainsKey($k)) { $members[$k] = @{ SIAssetId = $aid; Kind = ''; Name = ''; Tier = $null; LastSeen = $null; Attr = $null } }
+        $m = $members[$k]
+        if ($kind -and -not $m.Kind) { $m.Kind = $kind }
+        if ($name -and -not $m.Name) { $m.Name = $name }
+        if ($null -ne $tier -and ($null -eq $m.Tier -or $tier -lt $m.Tier)) {
+            $m.Tier = $tier
+            # #244: who set the tier travels WITH the tier -- a lower tier from elsewhere drops an attribution that no
+            # longer explains it (a finding row carries a tier but never its source)
+            $m.Attr = $attr
+        }
+        elseif ($null -ne $attr -and $null -eq $m.Attr -and $null -ne $tier -and $tier -eq $m.Tier) { $m.Attr = $attr }
+        if ($null -ne $seen -and ($null -eq $m.LastSeen -or $seen -gt $m.LastSeen)) { $m.LastSeen = $seen }
+    }
+    foreach ($p in @($Profiles)) {
+        if ($null -eq $p) { continue }
+        & $add ([string]$p.SI_AssetId) ([string]$p.Kind).ToLowerInvariant() ([string]$p.SI_AssetName) (ConvertTo-SIDataTier $p.Tier) (ConvertTo-SIDataUtc $p.CollectionTime) (Get-SIDataTierAttribution -Profile $p)
+        # #299: a member a profile knows is a SOURCE RECORD; one known only from a finding row is not
+        $pk = ([string]$p.SI_AssetId).Trim().ToLowerInvariant()
+        if ($pk -and $members.ContainsKey($pk)) { $members[$pk].Profiled = $true }
+    }
+    foreach ($f in @($FindingAssets)) {
+        if ($null -eq $f) { continue }
+        & $add ([string]$f.SI_AssetId) '' ([string]$f.AssetName) (ConvertTo-SIDataTier $f.Tier) $SeenAt.ToUniversalTime()
+        # #428: the kind the finding implies -- applied below only when neither a profile nor the map names one
+        $fk = ([string]$f.SI_AssetId).Trim().ToLowerInvariant()
+        if ($fk -and $members.ContainsKey($fk) -and -not $members[$fk].Hint) {
+            $sd = ''; if ($f.PSObject.Properties['SecurityDomain']) { $sd = [string]$f.SecurityDomain }
+            $members[$fk].Hint = Get-SIDataKindHint -SIAssetId $fk -SecurityDomain $sd
+        }
+    }
+    $keyOf = @{}; $cis = @{}
+    foreach ($k in @($members.Keys)) {
+        $m = $members[$k]
+        $ak = Get-SIDataAssetKey -SIAssetId $m.SIAssetId -Index $Index
+        $keyOf[$k] = $ak.Key
+        $ck = $ak.Key.ToLowerInvariant()
+        if (-not $cis.ContainsKey($ck)) { $cis[$ck] = @{ Key = $ak.Key; Source = $ak.Source; Members = ([System.Collections.Generic.List[object]]::new()) } }
+        $e = $Index[$k]
+        if (-not $m.Kind -and $e -and $e.Engine) { $m.Kind = $e.Engine }
+        if (-not $m.Kind -and $m.Hint) { $m.Kind = $m.Hint }
+        $cis[$ck].Members.Add($m)
+    }
+    $assets = [System.Collections.Generic.List[object]]::new()
+    $ids = [System.Collections.Generic.List[object]]::new()
+    $tierOf = @{}
+    $ciMembers = @{}   # #299: AssetKey -> the CI's members (SIAssetId, Kind, Name, LastSeen, Profiled), most descriptive first
+    $skipped = 0
+    foreach ($ck in @($cis.Keys | Sort-Object)) {
+        $ci = $cis[$ck]
+        $ordered = @($ci.Members | Sort-Object { $i = [array]::IndexOf($script:SIDataKindPriority, [string]$_.Kind); if ($i -lt 0) { 99 } else { $i } }, { [string]$_.SIAssetId })
+        $ciMembers[$ci.Key] = $ordered
+        $primary = $ordered[0]
+        $name = ''; foreach ($m in $ordered) { if ($m.Name) { $name = $m.Name; break } }
+        $tier = $null; $last = $null; $props = $null
+        foreach ($m in $ordered) {
+            if ($null -ne $m.Tier -and ($null -eq $tier -or $m.Tier -lt $tier)) { $tier = $m.Tier }
+            if ($null -ne $m.LastSeen -and ($null -eq $last -or $m.LastSeen -gt $last)) { $last = $m.LastSeen }
+            if ($null -eq $props) { $pj = $Properties[([string]$m.SIAssetId).ToLowerInvariant()]; if ($pj) { $props = [string]$pj } }
+        }
+        if ($null -eq $last) { $last = $SeenAt.ToUniversalTime() }
+        # #244: the CI's tier source = the attribution of the (most descriptive) member whose tier IS the CI's tier.
+        # None when the CI tier came from a member that recorded no source -- the board then draws no wire.
+        $ciAttr = $null
+        foreach ($m in $ordered) { if ($null -ne $m.Attr -and $null -ne $tier -and $m.Tier -eq $tier) { $ciAttr = $m.Attr; break } }
+        if ($null -ne $ciAttr) { $props = Merge-SIDataTierAttribution -PropertiesJson $props -Attribution $ciAttr }
+        $tierOf[$ck] = $tier
+        # #431 (operator 2026-10-07, "Match any part"): EVERY kind the CI is made of, most descriptive first, ';'-joined.
+        # The web app's asset-kind filter matches any of them (a tier-0 Azure VM correlated into its MDE endpoint shows
+        # under endpoint AND azure); AssetKind stays the one most descriptive kind, for display.
+        $kinds = @($ordered | ForEach-Object { ([string]$_.Kind).ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+        $assets.Add([pscustomobject]@{ AssetKey = $ci.Key; AssetName = $name; AssetKind = [string]$primary.Kind; AssetKinds = ($kinds -join ';'); Tier = $tier
+                                       KeySource = $ci.Source; LastSeen = $last; PropertiesJson = $props })
+        $seenIds = @{}
+        foreach ($m in $ordered) {
+            $pairs = [System.Collections.Generic.List[object]]::new()
+            $pairs.Add([pscustomobject]@{ Type = 'SI_AssetId'; Value = ([string]$m.SIAssetId).ToLowerInvariant() })
+            $e = $Index[([string]$m.SIAssetId).ToLowerInvariant()]
+            if ($e) { foreach ($i in $e.Identifiers) { $pairs.Add($i) } }
+            foreach ($p in $pairs) {
+                $ik = ([string]$p.Type).ToLowerInvariant() + '|' + [string]$p.Value
+                if ($seenIds.ContainsKey($ik)) { continue }
+                $seenIds[$ik] = $true
+                if (([string]$p.Value).Length -gt $MaxIdentifierLength -or ([string]$p.Type).Length -gt 64) { $skipped++; continue }
+                $ids.Add([pscustomobject]@{ AssetKey = $ci.Key; IdentifierType = [string]$p.Type; IdentifierValue = [string]$p.Value; SeenAt = $last })
+            }
+        }
+    }
+    [pscustomobject]@{ Assets = $assets.ToArray(); Identifiers = $ids.ToArray(); KeyOf = $keyOf; TierOf = $tierOf; Skipped = $skipped; Members = $ciMembers }
+}
+
+function Get-SIDataTierAttribution {
+    <#
+        PURE. #244 -- the tier attribution one profile row carries (SI_TierSetBy / SI_TierReason / SI_TierClaims), or
+        $null when the row recorded no source (a profiler that predates the columns, or an empty value). 'unattributed'
+        is kept: it is what the profiler said, and the board treats it as unknown.
+    #>
+    param([AllowNull()]$Profile)
+    if ($null -eq $Profile) { return $null }
+    $get = { param($n) $pp = $Profile.PSObject.Properties[$n]; if ($pp -and $null -ne $pp.Value) { ([string]$pp.Value).Trim() } else { '' } }
+    $setBy = & $get 'SI_TierSetBy'
+    if (-not $setBy) { return $null }
+    [pscustomobject]@{ SetBy = $setBy; Reason = (& $get 'SI_TierReason'); Claims = (& $get 'SI_TierClaims') }
+}
+
+function Merge-SIDataTierAttribution {
+    <#
+        PURE. #244 -- puts the tier attribution at the TOP of an asset's PropertiesJson, where the Pro web app reads it
+        (JSON_VALUE '$.SI_TierSetBy' / '$.SI_TierReason', JSON_QUERY '$.SI_TierClaims'). The rest of the bag (one
+        object per source system, from SI_AssetProperties_CL) is kept as it is.
+        ROOT CAUSE this closes: the bag is keyed by source system ({ "mde": {...}, "entra": {...} }), so a top-level
+        '$.SI_TierSetBy' never existed in it, and the profile read carried only name and tier -- every asset on the
+        tier board read "set by (not recorded)".
+        SI_TierClaims goes in as a JSON array when it is one (so JSON_QUERY returns it), else as text. A bag that is
+        not a JSON object is wrapped as { "properties": <text> } rather than lost or made invalid.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$PropertiesJson, [AllowNull()]$Attribution)
+    if ($null -eq $Attribution -or -not [string]$Attribution.SetBy) { return $PropertiesJson }
+    $claimsJson = 'null'
+    $c = ([string]$Attribution.Claims).Trim()
+    if ($c) {
+        $isArray = $false
+        if ($c.StartsWith('[') -and $c.EndsWith(']')) {
+            if ($c -eq '[]') { $isArray = $true }
+            else { try { $null = ConvertFrom-Json -InputObject $c -ErrorAction Stop; $isArray = $true } catch { $isArray = $false } }
+        }
+        $claimsJson = $(if ($isArray) { $c } else { ConvertTo-SIDataJsonString $c })
+    }
+    $head = '"SI_TierSetBy":' + (ConvertTo-SIDataJsonString ([string]$Attribution.SetBy)) +
+            ',"SI_TierReason":' + (ConvertTo-SIDataJsonString ([string]$Attribution.Reason)) +
+            ',"SI_TierClaims":' + $claimsJson
+    $p = ([string]$PropertiesJson).Trim()
+    if (-not $p) { return '{' + $head + '}' }
+    if (-not ($p.StartsWith('{') -and $p.EndsWith('}'))) { return '{' + $head + ',"properties":' + (ConvertTo-SIDataJsonString $p) + '}' }
+    $inner = $p.Substring(1, $p.Length - 2).Trim()
+    if (-not $inner) { return '{' + $head + '}' }
+    '{' + $head + ',' + $inner + '}'
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+#  AT LOAD
+# ---------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataReportNameFromDetail {
+    <#
+        PURE (#296). The report a finding came from, read from its DetailJson (the whole Log Analytics row):
+        AssetDetectedInReportName, else ReportName. '' when neither is there. Read with a JSON-aware pattern (no full
+        parse of a large document per row).
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$DetailJson)
+    if ([string]::IsNullOrWhiteSpace($DetailJson)) { return '' }
+    foreach ($n in 'AssetDetectedInReportName', 'ReportName') {
+        $m = [regex]::Match($DetailJson, ('"{0}"\s*:\s*"((?:[^"\\]|\\.)*)"' -f $n))
+        if ($m.Success -and $m.Groups[1].Value.Trim()) {
+            try { return ([string](ConvertFrom-Json -InputObject ('"' + $m.Groups[1].Value + '"'))).Trim() } catch { return $m.Groups[1].Value.Trim() }
+        }
+    }
+    ''
+}
+
+function New-SIDataIdentifierOwners {
+    <#
+        PURE (#297/#298). From the correlation index (New-SIDataIdentityIndex) and the profiled assets:
+          Known  -- every SI_AssetId (lower) that IS an asset (the map's members and the profiles' assets)
+          Owners -- identifier value (lower) -> the ONE SI_AssetId that carries it; '' when several carry it (ambiguous:
+                    never resolved to either)
+    #>
+    param([hashtable]$Index = @{}, [AllowEmptyCollection()][object[]]$Profiles = @())
+    $known = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $owners = @{}
+    foreach ($k in @($Index.Keys)) { [void]$known.Add([string]$k) }
+    foreach ($p in @($Profiles)) { if ($p -and [string]$p.SI_AssetId) { [void]$known.Add(([string]$p.SI_AssetId).Trim()) } }
+    foreach ($k in @($Index.Keys)) {
+        $e = $Index[$k]
+        foreach ($i in $e.Identifiers) {   # a List[object] -- never wrapped in @() (it throws)
+            $v = ([string]$i.Value).Trim().ToLowerInvariant()
+            if (-not $v) { continue }
+            if (-not $owners.ContainsKey($v)) { $owners[$v] = [string]$e.SIAssetId }
+            elseif ($owners[$v] -and -not [string]::Equals($owners[$v], [string]$e.SIAssetId, [StringComparison]::OrdinalIgnoreCase)) { $owners[$v] = '' }
+        }
+    }
+    [pscustomobject]@{ Known = $known; Owners = $owners }
+}
+
+function Resolve-SIDataFindingAssetId {
+    <#
+        PURE (#297/#298). The SI_AssetId a finding belongs to. An id that IS an asset stays; an id that is only an
+        IDENTIFIER of exactly one asset (an Entra device id, a Defender device id, an SI_AssetId stored before the ledger)
+        becomes that asset's SI_AssetId; anything else stays as it is (a new asset, as before). Returns @{ Id; Resolved }.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Id, $Owners)
+    $aid = ([string]$Id).Trim()
+    if (-not $aid -or $null -eq $Owners) { return [pscustomobject]@{ Id = $aid; Resolved = $false } }
+    if ($Owners.Known.Contains($aid)) { return [pscustomobject]@{ Id = $aid; Resolved = $false } }
+    $o = $Owners.Owners[$aid.ToLowerInvariant()]
+    if ($o) { return [pscustomobject]@{ Id = [string]$o; Resolved = $true } }
+    [pscustomobject]@{ Id = $aid; Resolved = $false }
+}
+
+function Get-SIDataRowTiers {
+    <#
+        PURE (#297). The tiers one finding row gives: FindingTier (stored on the finding: the tier of the asset it is on)
+        and AssetTier (what the row may tell about its asset's tier). An ATTACK-PATH row is keyed to its SOURCE asset but
+        its CriticalityTier is the path's TARGET tier (the path is scored by what it reaches): the finding takes the
+        source's tier (SourceCriticalityTier) when the row has it, and the target's tier never becomes the asset's tier.
+        Every other row: both are its CriticalityTier, as before.
+    #>
+    param([Parameter(Mandatory)]$Row)
+    $get = { param($n) $p = $Row.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } }
+    $t = ConvertTo-SIDataTier (& $get 'Tier')
+    $isPath = ([string](& $get 'IsPath')) -match '^(?i:true|1)$'
+    if (-not $isPath) { return [pscustomobject]@{ FindingTier = $t; AssetTier = $t; IsPath = $false } }
+    $src = ConvertTo-SIDataTier (& $get 'SourceTier')
+    [pscustomobject]@{ FindingTier = $(if ($null -ne $src) { $src } else { $t }); AssetTier = $src; IsPath = $true }
+}
+
+function ConvertTo-SIDataFindingJson {
+
+    <# PURE. One Log Analytics finding row -> the JSON object the Finding insert reads (AssetKey from -KeyOf). #>
+    param([Parameter(Mandatory)]$Row, [hashtable]$KeyOf = @{})
+    $aid = ([string]$Row.SI_AssetId).Trim()
+    $key = ''
+    if ($aid) { $key = [string]$KeyOf[$aid.ToLowerInvariant()]; if (-not $key) { $key = $aid } }
+    $v = [ordered]@{
+        AssetKey = $(if ($key) { $key } else { $null })
+        # #296: the report is ALWAYS set -- from the row, else from the row's own detail (AssetDetectedInReportName)
+        AssetName = [string]$Row.AssetName; ReportName = $(if (([string]$Row.ReportName).Trim()) { [string]$Row.ReportName } else { Get-SIDataReportNameFromDetail -DetailJson ([string]$Row.DetailJson) })
+        SecurityDomain = [string]$Row.SecurityDomain
+        ConfigurationId = [string]$Row.ConfigurationId; Cve = [string]$Row.Cve; Title = [string]$Row.Title; Severity = [string]$Row.Severity
+        Tier = (ConvertTo-SIDataTier $Row.Tier); RiskScore = (ConvertTo-SIDataNumber $Row.RiskScore)
+        # #264: the exemption MARK Risk Analysis put on the row (the finding is always loaded; the views decide)
+        ExemptionId = (ConvertTo-SIDataLong $Row.ExemptionId); ExemptedUntil = (ConvertTo-SIDataDay $Row.ExemptedUntil); ExemptionRequestId = (ConvertTo-SIDataLong $Row.ExemptionRequestId)
+        DetailJson = $(if ($null -eq $Row.DetailJson) { $null } else { [string]$Row.DetailJson })
+    }
+    ConvertTo-SIDataJsonObject -Values $v
+}
+
+function ConvertTo-SIDataRecommendationJson {
+    <#
+        PURE. One recommendation row -> the JSON the Recommendation insert reads. The resource is mapped to its CI
+        through -AssetOfId (lower identifier value -> SI_AssetId, from the correlation map and the profile ids) and
+        -KeyOf; a resource SI does not know keeps its own lower-cased resource id as the key.
+    #>
+    param([Parameter(Mandatory)]$Row, [hashtable]$AssetOfId = @{}, [hashtable]$KeyOf = @{}, [hashtable]$TierOf = @{})
+    $rid = ([string]$Row.ResourceId).Trim().ToLowerInvariant()
+    $key = $null
+    if ($rid) {
+        $aid = $AssetOfId[$rid]
+        if ($aid) { $key = [string]$KeyOf[([string]$aid).ToLowerInvariant()] }
+        if (-not $key) { $key = $rid }
+    }
+    $tier = $null; if ($key) { $tier = $TierOf[$key.ToLowerInvariant()] }
+    $v = [ordered]@{ AssetKey = $key; RecommendationId = [string]$Row.RecommendationId; Name = [string]$Row.Name; Severity = [string]$Row.Severity
+                     Tier = $tier; DetailJson = $(if ($null -eq $Row.DetailJson) { $null } else { [string]$Row.DetailJson }) }
+    ConvertTo-SIDataJsonObject -Values $v
+}
+
+function Resolve-SIDataSettings {
+    <#
+        PURE. The data sync's settings from a name -> value map (the live globals; the Pro settings layer has already
+        set cfg.Setting values as globals by then):
+          SI_Pro_DataSqlServer / SI_Pro_DataSqlDatabase   default: SI_ProSqlServer / SI_ProSqlDatabase (one Pro database)
+          SI_Pro_DataRetentionDays                        default 90; a whole number of days, 1 or more
+          SI_Pro_DataLookbackDays                         default 3; how far back unloaded collections are caught up
+        An invalid value is a Problem (the run refuses), never silently replaced by the default.
+    #>
+    param([hashtable]$Globals = @{})
+    $g = { param($n) if ($Globals.ContainsKey($n) -and $null -ne $Globals[$n] -and "$($Globals[$n])".Trim() -ne '') { "$($Globals[$n])".Trim() } else { '' } }
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $server = & $g 'SI_Pro_DataSqlServer'; if (-not $server) { $server = & $g 'SI_ProSqlServer' }
+    $db = & $g 'SI_Pro_DataSqlDatabase'; if (-not $db) { $db = & $g 'SI_ProSqlDatabase' }
+    $int = {
+        param([string]$name, [int]$default, [int]$min)
+        $raw = & $g $name
+        if (-not $raw) { return $default }
+        $n = 0
+        if (-not [int]::TryParse($raw, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$n) -or $n -lt $min) {
+            $problems.Add(("{0} = '{1}' is not a whole number of {2} or more" -f $name, $raw, $min)); return $default
+        }
+        $n
+    }
+    $retention = & $int 'SI_Pro_DataRetentionDays' 90 1
+    $lookback = & $int 'SI_Pro_DataLookbackDays' 3 1
+    if (-not $server -or -not $db) { $problems.Add('no Pro database: set SI_ProSqlServer and SI_ProSqlDatabase (or SI_Pro_DataSqlServer / SI_Pro_DataSqlDatabase)') }
+    # #301: the full asset metadata's own (short) retention in the Pro database -- never a Problem (a wrong value must
+    # not stop the data sync; it falls back to 3 days).
+    $apDays = 3
+    if (Get-Command -Name Get-SIDataAssetPropertiesRetentionDays -ErrorAction SilentlyContinue) { $apDays = Get-SIDataAssetPropertiesRetentionDays -Globals $Globals }
+    # #408: the level of asset metadata this install runs -- 'full' stores the full metadata (sidata.AssetMetadata), else none
+    $apMode = 'security'
+    if (Get-Command -Name Get-SIDataAssetMetadataMode -ErrorAction SilentlyContinue) { $apMode = Get-SIDataAssetMetadataMode -Globals $Globals }
+    [pscustomobject]@{ Server = $server; Database = $db; RetentionDays = $retention; LookbackDays = $lookback; AssetPropertiesRetentionDays = $apDays; AssetPropertiesMode = $apMode; Problems = $problems.ToArray() }
+}
+
+function Get-SIDataRetentionCutoff {
+    <# PURE. Collections taken before this UTC time are purged. #>
+    param([Parameter(Mandatory)][int]$RetentionDays, [datetime]$Now = [datetime]::UtcNow)
+    if ($RetentionDays -lt 1) { throw 'Get-SIDataRetentionCutoff: retention must be 1 day or more' }
+    $Now.ToUniversalTime().AddDays(-$RetentionDays)
+}

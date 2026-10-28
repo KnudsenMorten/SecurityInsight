@@ -1,0 +1,8 @@
+@page
+@model SI.Management.Web.Pages.Connectors.ScopeModel
+@{
+    ViewData["Title"] = "Connector scope";
+}
+<h1>Connectors</h1>
+<p class="lede">What each connector receives of what Risk Analysis finds. Nothing ticked = everything, as today. A scope never closes or retires anything: what is already in a connector's target and falls outside the scope is left exactly as it is.</p>
+<partial name="~/Pages/Reports/_OutputScopeBody.cshtml" model="Model" />

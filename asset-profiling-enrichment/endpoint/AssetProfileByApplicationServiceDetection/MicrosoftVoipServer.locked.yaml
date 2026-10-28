@@ -1,0 +1,21 @@
+id:        MicrosoftVoipServer
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft VOIP / Skype Server'
+category:  'VoIP'
+description: ''
+displayNames:
+  - 'Microsoft VOIP / Skype Server'
+
+detections:
+  - id: MicrosoftVoipServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'voip_server*'
+    set:
+      Tier:     3
+      Purpose:  'VoIP'
+      Category: 'VoIP'

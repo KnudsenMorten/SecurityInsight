@@ -1,0 +1,86 @@
+# SecurityInsight -- public repo .gitignore
+#
+# Protects customer secrets + run output from being:
+#   - accidentally committed via `git add .`
+#   - destroyed by `git clean -fd`
+#
+# This file ships to the public repo via the AutomateIT publish workflow
+# (the source AutomateIT/.gitignore covers the same paths from the monorepo
+# side; this file covers them from the customer-VM side).
+
+# ---------------------------------------------------------------------------
+#  Customer secrets / config -- NEVER commit
+# ---------------------------------------------------------------------------
+config/SecurityInsight.custom.ps1
+launcher/*/LauncherConfig.custom.ps1
+# Your own risk index rows (read before the shipped riskscore.index.locked.csv). Until 3.0 this name was the shipped
+# index; it is never shipped now, so a git pull can never overwrite or stop on it.
+risk-analysis-detection/riskscore.index.custom.csv
+
+# ---------------------------------------------------------------------------
+#  Developer-only experimental queries -- NEVER sync to customers
+# ---------------------------------------------------------------------------
+# RiskAnalysis_Queries_Dev.yaml lets a developer stage problematic queries
+# locally (engine merges it BETWEEN locked and custom). Customers must never
+# pull this file via the public-mirror publish workflow.
+risk-analysis-detection/RiskAnalysis_Queries_Dev.yaml
+risk-analysis-detection/dev/RiskAnalysis_Queries_Dev.yaml
+
+# ---------------------------------------------------------------------------
+#  Run output -- regenerated each run, no value in git
+# ---------------------------------------------------------------------------
+logs/
+OUTPUT/
+# The build stamp (engine/_shared/SI-BuildInfo.ps1) is written at image/package build time, never committed: a committed
+# one would say the wrong build for every later commit.
+/BUILD.json
+DATA/
+staging/
+SOLUTIONS/SecurityInsight/DATA/
+SOLUTIONS/SecurityInsight/LOGS/
+
+# ---------------------------------------------------------------------------
+#  Tracked: privilege-tier-catalog.locked.json
+# ---------------------------------------------------------------------------
+# The catalog JSON is a generic Microsoft-roles -> tier mapping (built by
+# PrivilegeTierClassifier from Azure OpenAI, then reviewed). It ships in the
+# repo so customers get tier-definition updates via `git pull` and the
+# Identity engine works on first run with no extra steps. Customers who
+# want to customise tier assignments for their tenant can re-run
+# PrivilegeTierClassifier locally; the regenerated file will show as
+# modified in `git status` (expected).
+
+# ---------------------------------------------------------------------------
+#  Local IDE / OS noise
+# ---------------------------------------------------------------------------
+.vs/
+.idea/
+*.suo
+.DS_Store
+Thumbs.db
+
+# Safety-net backups produced by the 2026-06-11 .custom.yaml description-block
+# repair pass. Keep them for diff but never commit.
+*.corrupted
+
+# Per-tenant asset-tagging knobs (AutoExcludeRules.*). Never commit -- belongs only
+# in the operator's working copy. Sample stays tracked for schema reference.
+config/asset-tagging.config.json
+
+
+# ---------------------------------------------------------------------------------------------
+# CUSTOMER AUTHORITY OVERLAYS -- the "custom" half of every locked+custom pair in config/.
+#
+# Listed individually until 2026-08-31, which meant each NEW overlay had to remember to add
+# itself: cmdb-source-ownership.custom.json, correlation-decisions.custom.yaml and
+# asset-decisions.custom.yaml were all committable by omission. A pattern cannot forget.
+#
+# 🔑 `*.custom.json` does NOT match `*.custom.sample.json`, so the shipped samples -- which are the
+# schema reference customers copy from -- stay tracked. That distinction is the whole reason this is
+# three narrow patterns rather than one broad `*custom*`.
+config/*.custom.json
+config/*.custom.yaml
+config/*.custom.ps1
+
+# v3 data model: customer overrides of the data-model templates live on the customer, never in the repo
+data-model/**/*.custom.json

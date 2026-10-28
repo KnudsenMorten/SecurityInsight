@@ -1,0 +1,179 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.EditModel
+@using SI.Management.Web.Settings
+@{
+    var s = Model.Setting!;
+    ViewData["Title"] = "Edit " + s.Title;
+}
+<p><a href="@Url.Page("Index", new { q = s.Name })">&larr; Settings</a></p>
+<h1>@s.Title</h1>
+<p class="setting-iname"><code class="name" title="Internal name -- for support and scripts">@s.Name</code> <span class="badge">@s.Type@(string.IsNullOrWhiteSpace(s.Unit) ? "" : ", " + s.Unit)</span> @if (s.Secret) { <span class="badge secret">secret · Key Vault name only</span> }</p>
+@if (!string.IsNullOrWhiteSpace(s.PurposeText)) { <p class="lede">@s.PurposeText</p> }
+@{ var info = s.MoreInfo; }
+<dl class="setting-help" data-more-info>
+    @if (s.Type == "bool")
+    {
+        <dt>When on</dt><dd>@info.WhenOn</dd>
+        <dt>When off</dt><dd>@info.WhenOff</dd>
+    }
+    else
+    {
+        <dt>If you change it</dt><dd>@info.WhenChanged</dd>
+    }
+    <dt>Risk &amp; security</dt><dd>@info.Risk</dd>
+    <dt>Requires</dt><dd>@info.Requires</dd>
+    <dt>Default</dt><dd>@info.Default</dd>
+    <dt>Recommended</dt><dd>@info.Recommended</dd>
+</dl>
+<p class="set-readmore"><a href="@info.DocUrl" target="_blank" rel="noopener">Read more on invardia.com</a></p>
+
+<section class="card">
+    <h2>Now in the database</h2>
+    @if (Model.Rows.Count == 0)
+    {
+        <p>Using the default: @s.DefaultPlain</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>Scope</th><th>Value</th><th>Changed by</th><th>When</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.Rows)
+                    {
+                        <tr><td>@r.Scope</td><td class="wrap"><code>@SettingsDiff.Display(r.ValueJson, r.KeyVaultSecretName)</code></td><td class="wrap">@r.UpdatedBy</td><td>@Fmt.Time(r.UpdatedAt)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    <p class="hint"><a href="@Url.Page("/Admin/History", new { name = s.Name })">Change history of @s.Name</a></p>
+</section>
+
+@if (Model.Stale)
+{
+    <div class="notice error" role="alert">
+        This setting changed since you opened it, so nothing was written. <a href="@Url.Page("Edit", new { name = s.Name, scope = Model.Scope })">Reload it</a> and review the change again.
+    </div>
+}
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+
+@if (Model.Diff is { } d)
+{
+    <section class="card" aria-labelledby="h-review">
+        <h2 id="h-review">Review the change</h2>
+        <p><strong>@d.Name</strong> at <code>@d.Scope</code>: <span class="badge">@d.Kind</span></p>
+        <div class="diff">
+            <div class="old"><h3>Now</h3><pre><code>@d.Old</code></pre></div>
+            <div class="new"><h3>After saving</h3><pre><code>@d.New</code></pre></div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(Model.Reason)) { <p class="hint">Reason: @Model.Reason</p> }
+        @{
+            // SETTING-INFO-1: a destructive or security-reducing value shows its consequence here, before Save -- the same
+            // rule the Settings page asks with (SettingInfo.NeedsConfirmation): the value now at this scope against the new one
+            static string Raw(string? json) => json is null ? "" : json.Trim().Trim('"');
+            var nowRow = Model.Rows.FirstOrDefault(r => string.Equals(r.Scope, Model.Scope, StringComparison.OrdinalIgnoreCase));
+            var defaultRaw = s.Default is { } dj ? Raw(dj.GetRawText()) : "";
+            var riskyNow = nowRow is not null ? Raw(nowRow.ValueJson) : defaultRaw;
+            var riskyNext = Model.ChangeAction == "Set" ? (Model.ValueText ?? "").Trim() : defaultRaw;
+            var risky = !s.Secret && info.NeedsConfirmation(riskyNow, riskyNext);
+        }
+        @if (risky)
+        {
+            <div class="notice error" role="alert" data-risk-confirm="@info.ConfirmWhen"><strong>Confirm this change.</strong> @info.Confirm</div>
+        }
+        <form method="post" asp-page-handler="Save" class="actions">
+            <input type="hidden" name="Name" value="@s.Name" />
+            <input type="hidden" name="Scope" value="@Model.Scope" />
+            <input type="hidden" name="ChangeAction" value="@Model.ChangeAction" />
+            <input type="hidden" name="ValueText" value="@Model.ValueText" />
+            <input type="hidden" name="KeyVaultSecretName" value="@Model.KeyVaultSecretName" />
+            <input type="hidden" name="Reason" value="@Model.Reason" />
+            <input type="hidden" name="ReadVersions" value="@Model.ReadVersions" />
+            <button type="submit">@(risky ? "Save anyway" : "Save")</button>
+            <a class="button secondary" href="@Url.Page("Edit", new { name = s.Name, scope = Model.Scope })">Back to the form</a>
+        </form>
+        <p class="hint">The change applies from the next engine run. It is recorded in the change history with your name.</p>
+    </section>
+}
+else
+{
+    <form method="post" asp-page-handler="Review" class="stack card">
+        <h2>Change</h2>
+        <input type="hidden" name="Name" value="@s.Name" />
+        <input type="hidden" name="ReadVersions" value="@Model.ReadVersions" />
+        <div>
+            <label for="scope">Scope</label>
+            <select id="scope" name="Scope">
+                @foreach (var sc in Model.Scopes)
+                {
+                    <option value="@sc" selected="@(sc == Model.Scope)">@(sc == "solution" ? "solution (every engine)" : sc)</option>
+                }
+            </select>
+            <p class="hint">An engine row wins over the solution row for that engine.</p>
+        </div>
+        <div>
+            <label for="act">Action</label>
+            <select id="act" name="ChangeAction">
+                <option value="Set" selected="@(Model.ChangeAction == "Set")">Set a value</option>
+                <option value="Reset" selected="@(Model.ChangeAction == "Reset")">Reset (remove the row -- the files / default apply)</option>
+            </select>
+        </div>
+        @if (s.Secret)
+        {
+            <div>
+                <label for="kv">Key Vault secret name</label>
+                <input id="kv" type="text" name="KeyVaultSecretName" value="@Model.KeyVaultSecretName" autocomplete="off" spellcheck="false" />
+                <p class="hint">The NAME of the secret in the installation's Key Vault -- never the secret itself. The engines read the value from Key Vault at run start.</p>
+            </div>
+        }
+        else
+        {
+            <div>
+                <label for="val">Value</label>
+                @switch (s.Type)
+                {
+                    case "bool":
+                        <select id="val" name="ValueText">
+                            <option value="true" selected="@(Model.ValueText == "true")">true</option>
+                            <option value="false" selected="@(Model.ValueText == "false")">false</option>
+                        </select>
+                        break;
+                    case "list":
+                        <textarea id="val" name="ValueText" spellcheck="false">@Model.ValueText</textarea>
+                        <p class="hint">One item per line.</p>
+                        break;
+                    case "int":
+                        <input id="val" type="text" inputmode="numeric" name="ValueText" value="@Model.ValueText" />
+                        @* the range is written the way the value must be TYPED (plain digits, a point as decimal separator): Fmt.Raw, not the display format *@
+                        <p class="hint">A whole number@(s.Min is { } mn ? ", at least " + Fmt.Raw(mn) : "")@(s.Max is { } mx ? ", at most " + Fmt.Raw(mx) : "").</p>
+                        break;
+                    case "number":
+                        <input id="val" type="text" inputmode="decimal" name="ValueText" value="@Model.ValueText" />
+                        <p class="hint">A number, with a point as the decimal separator (0.01)@(s.Min is { } nmn ? ", at least " + Fmt.Raw(nmn) : "")@(s.Max is { } nmx ? ", at most " + Fmt.Raw(nmx) : "").</p>
+                        break;
+                    case "enum":
+                        <select id="val" name="ValueText">
+                            @foreach (var v in s.Values ?? Array.Empty<string>())
+                            {
+                                <option value="@v" selected="@(string.Equals(Model.ValueText, v, StringComparison.OrdinalIgnoreCase))">@s.ChoiceLabel(v)</option>
+                            }
+                        </select>
+                        <p class="hint">Choose one: @string.Join("; ", (s.Values ?? Array.Empty<string>()).Select(v => s.ChoiceLabel(v) == v ? v : v + " = " + s.ChoiceLabel(v))).</p>
+                        break;
+                    default:
+                        <input id="val" type="text" name="ValueText" value="@Model.ValueText" spellcheck="false" />                        break;
+                }
+                <p class="hint">Default: @s.DefaultPlain@(string.IsNullOrWhiteSpace(s.Unit) ? "" : " · value in " + s.Unit)</p>
+            </div>
+        }
+        <div>
+            <label for="reason">Reason (recorded in the change history)</label>
+            <input id="reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" />
+        </div>
+        <div class="actions"><button type="submit">Review</button></div>
+    </form>
+}

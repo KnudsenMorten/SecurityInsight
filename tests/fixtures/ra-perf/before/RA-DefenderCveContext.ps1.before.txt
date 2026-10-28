@@ -1,0 +1,175 @@
+#Requires -Version 5.1
+<#
+    THE EXPLOIT DETAILS OF A CVE THAT ADVANCED HUNTING DOES NOT CARRY -- from the Defender vulnerability API
+    (GET https://api.securitycenter.microsoft.com/api/vulnerabilities, application permission Vulnerability.Read.All on
+    WindowsDefenderATP, READ ONLY), put on the vulnerability rows of Risk Analysis before they are scored and stored:
+
+      si_exploit_verified   the exploit is verified to work            (exploitVerified)
+      si_in_exploit_kit     the exploit is part of an exploit kit      (exploitInKit)
+      si_exploit_types      the kinds of exploit known, ';'-joined     (exploitTypes)
+      si_exposed_devices    devices in the tenant exposed to the CVE   (exposedMachines)
+    and, only where the row has none: si_epss (epss), si_cvss_vector (cvssVector), si_published (publishedOn).
+
+    WHY. The rows Defender vulnerability management adds beside the Exposure Graph (a CVE the graph does not carry) know
+    "an exploit exists" and nothing more -- verified / in a kit were written as false, which reads as a fact. The API
+    states them per CVE.
+
+    ONE READ PER RUN, NO CALL PER CVE: the list is paged (8,000 per page) and only the CVEs that expose at least one
+    device of the tenant are kept, so the memory follows the tenant's own CVEs, not the size of the catalogue.
+
+    CONTEXT ONLY: nothing here changes a risk factor or a score -- those stay the report's (the Risk Analysis scoring
+    block). A value the API does not give is left out (unknown), never written as false / 0.
+
+    NEVER BLOCKS: a refused read (the permission is not granted yet) or a read that does not complete is said ONCE in
+    plain words and the rows go on unchanged. PURE except Get-RADefenderCveIndex. PowerShell 7, REST only.
+#>
+
+$script:RADefenderCveUrl = 'https://api.securitycenter.microsoft.com/api/vulnerabilities'
+$script:RADefenderCvePageSize = 8000
+
+function ConvertTo-RADefenderCveEntry {
+    <# PURE. One vulnerability object of the API as the values a row takes: only what the API states. $null when it has no id. #>
+    param($Item)
+    if ($null -eq $Item) { return $null }
+    $g = { param($n) $p = $Item.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } }
+    $id = ([string](& $g 'id')).Trim().ToUpperInvariant()
+    if (-not $id) { return $null }
+    $e = [ordered]@{ Id = $id }
+    foreach ($pair in @(@('exploitVerified', 'si_exploit_verified'), @('exploitInKit', 'si_in_exploit_kit'))) {
+        $v = & $g $pair[0]
+        if ($v -is [bool]) { $e[$pair[1]] = $v }
+        elseif ($null -ne $v -and "$v" -match '^(?i)(true|false)$') { $e[$pair[1]] = ("$v" -ieq 'true') }
+    }
+    $types = @(@(& $g 'exploitTypes') | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+    if ($types.Count -gt 0) { $e['si_exploit_types'] = ($types -join ';') }
+    $n = 0
+    if ($null -ne (& $g 'exposedMachines') -and [int]::TryParse(([string](& $g 'exposedMachines')), [ref]$n)) { $e['si_exposed_devices'] = $n }
+    $d = 0.0
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    $ep = & $g 'epss'
+    if ($ep -is [double] -or $ep -is [decimal] -or $ep -is [single] -or $ep -is [int] -or $ep -is [long]) { $e['si_epss'] = [Math]::Round([double]$ep, 5) }
+    elseif ($null -ne $ep -and [double]::TryParse(([string]$ep), [System.Globalization.NumberStyles]::Float, $inv, [ref]$d)) { $e['si_epss'] = [Math]::Round($d, 5) }
+    $vec = ([string](& $g 'cvssVector')).Trim(); if ($vec) { $e['si_cvss_vector'] = $vec }
+    $pub = & $g 'publishedOn'
+    if ($pub -is [datetime]) { $e['si_published'] = $pub.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) }
+    elseif ($null -ne $pub -and "$pub".Trim()) { $e['si_published'] = "$pub".Trim() }
+    return $e
+}
+
+function Get-RADefenderCveIndex {
+    <#
+    .SYNOPSIS  The run's CVE index (CVE id, upper case -> entry), read once and cached; @{ Index; Complete; Error; Read }.
+               Kept: the CVEs that expose at least one device of the tenant. Never throws.
+    .PARAMETER Fetch  test seam: { param($url) @{ Rows; Complete; Error } } instead of the Defender API.
+    #>
+    param([scriptblock]$Fetch, [switch]$Refresh)
+    if ($null -ne $global:RA_DefenderCveIndex -and -not $Refresh) { return $global:RA_DefenderCveIndex }
+    # names no helper on the call path uses: the page block below runs inside the pager and finds them by scope
+    $raCveState = @{ Index = @{}; Complete = $false; Error = $null; Read = 0; PageRows = 0; PageFirst = '' }
+    $raCveKeep = {
+        param($raCvePage)
+        foreach ($raCveItem in @($raCvePage)) {
+            if ($null -eq $raCveItem) { continue }
+            $raCveState.Read++
+            $raCveState.PageRows++
+            if ($raCveState.PageRows -eq 1) { $p0 = $raCveItem.PSObject.Properties['id']; if ($p0) { $raCveState.PageFirst = [string]$p0.Value } }
+            $raCveExposed = 0
+            $raCveProp = $raCveItem.PSObject.Properties['exposedMachines']
+            if (-not $raCveProp -or -not [int]::TryParse(([string]$raCveProp.Value), [ref]$raCveExposed) -or $raCveExposed -le 0) { continue }
+            $raCveEntry = ConvertTo-RADefenderCveEntry -Item $raCveItem
+            if ($null -ne $raCveEntry) { $raCveState.Index[[string]$raCveEntry.Id] = $raCveEntry }
+        }
+    }
+    try {
+        $token = $null
+        if (-not $Fetch) {
+            $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+            if (-not (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1') }
+            if (-not (Get-Command -Name Invoke-SIPagedRest -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine\asset-profiling\shared\Invoke-SIPagedRest.ps1') }
+            $token = Get-SIGraphToken -Resource Defender
+            if (-not $token) { throw 'no token for the Defender API' }
+        }
+        # the first call follows the service's own next links to the end; a service that gives none returns exactly one
+        # full page, and the read goes on by position until a page comes back short
+        $skip = 0
+        while ($true) {
+            $url = '{0}?$top={1}' -f $script:RADefenderCveUrl, $script:RADefenderCvePageSize
+            if ($skip -gt 0) { $url += ('&$skip={0}' -f $skip) }
+            $raCveState.PageRows = 0
+            $firstBefore = [string]$raCveState.PageFirst; $raCveState.PageFirst = ''
+            $ok = $false; $err = $null; $pages = 1
+            if ($Fetch) {
+                $r = & $Fetch $url
+                if ($null -ne $r) { $ok = [bool]$r.Complete; $err = $r.Error; & $raCveKeep $r.Rows }
+                else { $err = 'no answer' }
+            } else {
+                $r = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'Defender vulnerabilities' -OnPage { param($raCveRows) & $raCveKeep $raCveRows } -WarningAction SilentlyContinue
+                $ok = [bool]$r.Complete; $err = $r.Error
+                if ([int]$r.Pages -gt 0) { $pages = [int]$r.Pages }
+            }
+            if (-not $ok) { $raCveState.Error = [string]$err; break }
+            $got = [int]$raCveState.PageRows
+            if ($pages -gt 1 -or $got -lt $script:RADefenderCvePageSize) { $raCveState.Complete = $true; break }
+            # a service that ignores the position would hand the same full page for ever: the read must have moved on
+            if ($skip -gt 0 -and $firstBefore -and [string]$raCveState.PageFirst -eq $firstBefore) { $raCveState.Error = 'the vulnerability list did not move past its first page'; break }
+            $skip += $got
+        }
+    } catch {
+        $raCveState.Error = $_.Exception.Message
+    }
+    $raCveState.Remove('PageRows')
+    $raCveState.Remove('PageFirst')
+    $global:RA_DefenderCveIndex = $raCveState
+    return $raCveState
+}
+
+function Get-RADefenderCveReadMessage {
+    <# PURE. What to tell the operator when the read did not complete -- plain words, no internals. '' when it did. #>
+    param([hashtable]$State)
+    if ($null -eq $State -or $State.Complete) { return '' }
+    $err = [string]$State.Error
+    if ($err -match '(?i)\b403\b|Forbidden|Unauthorized|\b401\b|does not have any of the required') {
+        return 'The exploit details of the vulnerabilities (verified exploit, exploit kit, exposed devices) were not read from Defender: the permission Vulnerability.Read.All is not granted to SecurityInsight yet -- run the permission setup again and give admin consent. The vulnerability findings are complete without them; those columns stay empty.'
+    }
+    return ('The exploit details of the vulnerabilities (verified exploit, exploit kit, exposed devices) could not be read from Defender in this run ({0}). The vulnerability findings are complete without them; those columns stay empty.' -f $err)
+}
+
+function Add-RADefenderCveContext {
+    <#
+    .SYNOPSIS  Puts the API's exploit details on every row whose ConfigurationId is a CVE id. Returns the rows. Rows of
+               other reports, and a run whose read did not complete, come back unchanged (the reason said once per run).
+    .PARAMETER Index  test seam: the state of Get-RADefenderCveIndex.
+    .PARAMETER Log    { param($message) } for the one message (default Write-Warning).
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [hashtable]$Index, [scriptblock]$Log)
+    if ($global:SI_RA_DefenderCveContext -and ([string]$global:SI_RA_DefenderCveContext).Trim().ToLowerInvariant() -in 'off', 'false', '0') { return , @($Rows) }
+    $cveRows = @(@($Rows) | Where-Object { $null -ne $_ -and $_.PSObject.Properties['ConfigurationId'] -and [string]$_.ConfigurationId -match '^(?i)CVE-\d{4}-\d+$' })
+    if ($cveRows.Count -eq 0) { return , @($Rows) }
+    if ($null -eq $Index) { $Index = Get-RADefenderCveIndex }
+    if ($null -eq $Index -or -not $Index.Complete) {
+        if (-not $global:RA_DefenderCveSaid) {
+            $global:RA_DefenderCveSaid = $true
+            $msg = Get-RADefenderCveReadMessage -State $Index
+            if ($msg) { if ($Log) { & $Log $msg } else { Write-Warning $msg } }
+        }
+        return , @($Rows)
+    }
+    $ix = $Index.Index
+    foreach ($r in $cveRows) {
+        $k = ([string]$r.ConfigurationId).Trim().ToUpperInvariant()
+        if (-not $ix.ContainsKey($k)) { continue }
+        $e = $ix[$k]
+        foreach ($name in 'si_exploit_verified', 'si_in_exploit_kit', 'si_exploit_types', 'si_exposed_devices') {
+            if (-not $e.Contains($name)) { continue }
+            if ($r.PSObject.Properties[$name]) { $r.$name = $e[$name] } else { Add-Member -InputObject $r -MemberType NoteProperty -Name $name -Value $e[$name] -Force }
+        }
+        # only where the row has none: the report's own value (advanced hunting) wins
+        foreach ($name in 'si_epss', 'si_cvss_vector', 'si_published') {
+            if (-not $e.Contains($name)) { continue }
+            $cur = $r.PSObject.Properties[$name]
+            if ($cur -and $null -ne $cur.Value -and "$($cur.Value)".Trim() -ne '') { continue }
+            if ($cur) { $r.$name = $e[$name] } else { Add-Member -InputObject $r -MemberType NoteProperty -Name $name -Value $e[$name] -Force }
+        }
+    }
+    return , @($Rows)
+}

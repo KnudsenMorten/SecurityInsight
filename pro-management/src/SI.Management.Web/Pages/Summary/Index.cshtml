@@ -1,0 +1,147 @@
+@page
+@model SI.Management.Web.Pages.Summary.IndexModel
+@using SI.Management.Web.Summary
+@{
+    ViewData["Title"] = "Summary";
+    var st = Model.State;
+    var f = Model.Filter;
+    string Plural(long n, string one, string many) => n == 1 ? one : many;
+}
+<link rel="stylesheet" href="~/css/summary.css" asp-append-version="true" />
+@if (Model.Grouped)
+{
+    @* #636: the Risk Analysis Summary step is off (or ?view=groups): the grouped view of the Detailed findings *@
+    <partial name="_SummaryGroups" model="Model" />
+    return;
+}
+<h1>Summary</h1>
+<p class="lede">The Risk Analysis summary, grouped as in the RiskAnalysis_Summary workbook: one row per recommendation, tier, severity, risk factors and CMDB group, with the assets it impacts. Tier 0 comes first, and inside each tier the most critical risk (rating Critical, High, Moderate, Low, then the highest risk score). One row per finding key, with actions on its findings, is on <nav-ref page="/Cis/Summary" />. The same groupings over every detailed finding: <a href="/Summary?view=groups" data-grouped-link>the grouped view</a>.</p>
+
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.Error is null && !st.HasTables) { <div class="notice" role="status" data-no-tables>@SI.Management.Web.Pages.Summary.IndexModel.NoTablesText</div> }
+else if (Model.Error is null && st.Latest is null) { <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Summary.IndexModel.NotLoadedText</div> }
+
+@if (st.Latest is { } load && Model.One is { } one)
+{
+    <p class="noprint"><a href="@Model.Link()" data-back>&larr; Back to the summary</a></p>
+    <section class="card" aria-labelledby="sum-one-h" data-summary-row="@one.RowNo">
+        <h2 id="sum-one-h">@one.ConfigurationName</h2>
+        <p class="hint">@SummaryReport.Path(one)@(string.IsNullOrWhiteSpace(one.ConfigurationId) ? "" : " · " + one.ConfigurationId)</p>
+        <dl class="summary-facts">
+            <dt>Tier</dt><dd>@(one.CriticalityTierLevel ?? SummaryReport.TierLabel(one.TierGroup))</dd>
+            <dt>Severity</dt><dd>@one.SecuritySeverity</dd>
+            <dt>Risk rating</dt><dd><span class="badge @SummaryReport.RatingClass(one.RiskRating)" data-rating="@one.RiskRating">@one.RiskRating</span></dd>
+            <dt>Risk score</dt><dd>@Fmt.Score(one.RiskScoreTotal) (consequence @Fmt.Score(one.RiskConsequenceScore) &times; probability @Fmt.Score(one.RiskProbabilityScore))</dd>
+            <dt>Weighted risk score</dt><dd>@Fmt.Score(one.RiskScoreTotalWeighted)@(string.IsNullOrWhiteSpace(one.RiskScoreWeightDetailed) ? "" : " -- " + one.RiskScoreWeightDetailed)</dd>
+            <dt>Risk factors</dt><dd>@SummaryReport.FactorsText(one)</dd>
+            <dt>CMDB group</dt><dd>@one.CmdbName@(string.IsNullOrWhiteSpace(one.CmdbCriticality) ? "" : " · criticality " + one.CmdbCriticality)@(string.IsNullOrWhiteSpace(one.CmdbDataSensitivity) ? "" : " · data " + one.CmdbDataSensitivity)</dd>
+            <dt>Impact</dt><dd>@one.Impact</dd>
+            <dt>MITRE ATT&amp;CK</dt><dd>@one.MitreTactics @one.MitreTechniques</dd>
+            <dt>Report</dt><dd>@one.ReportName</dd>
+        </dl>
+        <h3>@Fmt.Int(Math.Max(one.ImpactedAssetCount, Model.OneAssets.Count)) impacted @Plural(Math.Max(one.ImpactedAssetCount, Model.OneAssets.Count), "asset", "assets")</h3>
+        <div class="table-wrap">
+            <table class="findings" data-summary-assets data-sortable>
+                <thead><tr><th scope="col" class="num">#</th><th scope="col">Asset</th><th scope="col">Id</th><th scope="col">CI</th></tr></thead>
+                <tbody>
+                    @foreach (var a in Model.OneAssets)
+                    {
+                        <tr>
+                            <td class="num">@Fmt.Int(a.Ordinal + 1)</td>
+                            <td class="wrap"><a href="@a.Href" data-asset-link>@a.Label</a></td>
+                            <td class="wrap mono small">@a.AssetId</td>
+                            <td>@(a.CiId is null ? "not matched -- the link searches the CIs" : "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+else if (st.Latest is { } latest && Model.Error is null)
+{
+    <p class="hint">The newest Risk Analysis Summary collection: @Fmt.Time(latest.CollectionTime)@(latest.Rows is { } n ? " -- " + Fmt.Int(n) + " rows" : "").</p>
+    <section class="card" aria-label="Search and filter">
+        <div class="split">
+            <h2>Filters</h2>
+            <partial name="~/Pages/Shared/_ViewExports.cshtml" model="SI.Management.Web.Columns.ViewExports.Of(Model.HandlerLink)" />
+        </div>
+        @* #589: one layout for every tier's table -- the recommendation's context (description, fix, remediation, the
+           affected software), every column of the workbook *@
+        @if (Model.Chooser is { } chooser) { <partial name="~/Pages/Shared/_ColumnChooser.cshtml" model="chooser" /> }
+        <form method="get" action="@SI.Management.Web.Pages.Summary.IndexModel.Route" class="board-tools" role="search" aria-label="Search and filter" data-summary-filters>
+            <div><label for="sum-q">Search</label><input id="sum-q" type="search" name="q" value="@f.Search" placeholder="Recommendation, asset or CMDB group" maxlength="200" data-search /></div>
+            @{
+                // THE shared filter (MultiFilter) for every filter (owner 2026-10-19); a choice's count is the rows holding
+                // it, shown while nothing else narrows the summary (then it is exactly what ticking it gives)
+                var narrowed = f.Any;
+                var tierChoices = new[] { 0, 1, 2, 3, SummaryReport.NoTier }.Select(t => new SI.Management.Web.Pages.FilterChoice(SI.Management.Web.Pages.Summary.IndexModel.TierParam(t), SummaryReport.TierLabel(t))).ToList();
+                var tierFilter = new SI.Management.Web.Pages.MultiFilter
+                {
+                    Id = "sum-tier", Name = "tier", Label = "Tier", Choices = tierChoices, Chosen = f.AllTiers.Select(SI.Management.Web.Pages.Summary.IndexModel.TierParam).ToList(),
+                };
+            }
+            <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="tierFilter" /></div>
+            @foreach (var (param, facet, label, chosen) in new[] { ("rating", "rating", "Risk rating", f.Rating), ("severity", "severity", "Severity", f.Severity), ("domain", "domain", "Security domain", f.Domain),
+                ("category", "category", "Category", f.Category), ("subcategory", "subcategory", "Subcategory", f.Subcategory), ("cmdb", "cmdb", "CMDB group", f.Cmdb), ("report", "report", "Report", f.Report) })
+            {
+                var values = Model.FacetValues(facet).ToList();
+                if (param == "rating") values = values.OrderBy(SummaryReport.RatingRank).ToList();
+                var mf = new SI.Management.Web.Pages.MultiFilter
+                {
+                    Id = "sum-" + param, Name = param, Label = label, Chosen = SI.Management.Core.ProData.ProDataFilters.Values(chosen),
+                    Choices = SI.Management.Web.Pages.MultiFilter.Plain(values, null, v => narrowed ? null : Model.Facets.FirstOrDefault(x => x.Facet == facet && x.Value == v)?.N),
+                };
+                <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" /></div>
+            }
+            <div>
+                <label for="sum-size">Rows per tier</label>
+                <select id="sum-size" name="size">@foreach (var s in SummaryReport.Sizes) { <option selected="@(s == Model.Size)">@s</option> }</select>
+            </div>
+            <div class="actions"><button type="submit">Apply</button> <a class="button secondary" href="@SI.Management.Web.Pages.Summary.IndexModel.Route">Clear</a></div>
+        </form>
+    </section>
+
+    @if (Model.Heads.Count == 0) { <p class="hint" data-no-rows>No row matches the filters.</p> }
+    else if (Model.Heads.Count > 1)
+    {
+        <nav class="summary-jump noprint" aria-label="Tiers">
+            @foreach (var h in Model.Heads) { <a href="#tier-@SI.Management.Web.Pages.Summary.IndexModel.TierParam(h.TierGroup)">@SummaryReport.TierLabel(h.TierGroup) (@Fmt.Int(h.Recommendations))</a> }
+        </nav>
+    }
+    @foreach (var h in Model.Heads)
+    {
+        var tp = SI.Management.Web.Pages.Summary.IndexModel.TierParam(h.TierGroup);
+        var rows = Model.RowsOf(h.TierGroup).ToList();
+        var first = f.Tier is not null ? (Model.PageNo - 1) * Model.Size : 0;
+        <section class="card summary-tier" id="tier-@tp" aria-labelledby="tier-@tp-h" data-summary-tier="@tp">
+            <h2 id="tier-@tp-h">@SummaryReport.TierLabel(h.TierGroup)</h2>
+            <p class="summary-head" data-tier-head>
+                @if (h.Critical + h.High > 0)
+                {
+                    <span><strong>@Fmt.Int(h.Critical)</strong> Critical and <strong>@Fmt.Int(h.High)</strong> High @Plural(h.Critical + h.High, "recommendation", "recommendations") on <strong>@Fmt.Int(h.CriticalHighAssets)</strong> @Plural(h.CriticalHighAssets, "asset", "assets")</span>
+                    <span class="muted"> -- of @Fmt.Int(h.Recommendations) @Plural(h.Recommendations, "recommendation", "recommendations") on @Fmt.Int(h.Assets) @Plural(h.Assets, "asset", "assets") in this tier.</span>
+                }
+                else
+                {
+                    <span>No Critical or High recommendation. @Fmt.Int(h.Recommendations) @Plural(h.Recommendations, "recommendation", "recommendations") on @Fmt.Int(h.Assets) @Plural(h.Assets, "asset", "assets").</span>
+                }
+            </p>
+            @* #589: the tier's rows as THE data table, the columns chosen above (one layout for every tier) *@
+            @if (Model.TableView("tier-" + tp) is { } tv) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="tv with { InForm = true }" /> }
+            @if (f.Tier is null && h.Recommendations > rows.Count)
+            {
+                <p class="noprint"><a href="@Model.Link(("tier", tp))" data-show-all="@tp">Show all @Fmt.Int(h.Recommendations) of @SummaryReport.TierLabel(h.TierGroup)</a> <span class="hint">(the first @Fmt.Int(rows.Count) are shown)</span></p>
+            }
+            else if (f.Tier is not null && h.Recommendations > Model.Size)
+            {
+                var pages = (int)Math.Ceiling(h.Recommendations / (double)Model.Size);
+                <p class="noprint summary-pager" data-pager>
+                    Rows @Fmt.Int(first + 1)–@Fmt.Int(first + rows.Count) of @Fmt.Int(h.Recommendations).
+                    @if (Model.PageNo > 1) { <a href="@Model.Link(("p", (Model.PageNo - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)))" rel="prev">Previous</a> }
+                    @if (Model.PageNo < pages) { <a href="@Model.Link(("p", (Model.PageNo + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)))" rel="next">Next</a> }
+                </p>
+            }
+        </section>
+    }
+}

@@ -1,0 +1,21 @@
+id:        RedisRedis
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Redis'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Redis'
+
+detections:
+  - id: RedisRedis
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'redis*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

@@ -1,0 +1,35 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.AssumptionsModel
+@{
+    ViewData["Title"] = "Assumptions";
+}
+<h1>Assumptions</h1>
+<p class="lede">Every assumption behind the numbers, the views and the reports, in one place and in plain words -- with the value in force on this installation and a link to where it is set. Nothing here is written by hand: each value is read the same way the pages that use it read it.</p>
+@foreach (var n in Model.Notes) { <div class="notice warn" role="status" data-assumptions-note>@n</div> }
+<nav class="toc" aria-label="On this page">
+    <ul>
+        @foreach (var s in Model.View) { <li><a href="#a-@s.Id">@s.Title</a></li> }
+    </ul>
+</nav>
+@foreach (var s in Model.View)
+{
+    <section class="card" id="a-@s.Id" aria-labelledby="h-a-@s.Id" data-assumption-section="@s.Id">
+        <h2 id="h-a-@s.Id">@s.Title</h2>
+        <p>@s.Lede</p>
+        <div class="table-wrap">
+            <table class="grid" data-sortable>
+                <thead><tr><th scope="col">Assumption</th><th scope="col">In force</th><th scope="col"></th></tr></thead>
+                <tbody>
+                    @foreach (var l in s.Lines)
+                    {
+                        <tr data-assumption="@l.Key" data-setting="@l.Setting">
+                            <td class="wrap">@l.What@if (l.Setting is not null) { <br /><span class="muted mono">@l.Setting</span> }</td>
+                            <td class="wrap"><strong data-value>@l.Value</strong>@if (l.IsDefault == true) { <span class="hint"> (default)</span> }</td>
+                            <td>@if (l.Href is not null) { <a href="@l.Href" data-assumption-link>@l.HrefText</a> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}

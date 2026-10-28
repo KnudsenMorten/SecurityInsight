@@ -1,0 +1,39 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.ReportsModel
+@using SI.Management.Web.Notify
+@{
+    ViewData["Title"] = "Reports and alerts";
+}
+<h1>Reports and alerts</h1>
+<p class="lede">Every report and alert SecurityInsight mails, on one page: when it goes out, to whom, when it was last sent and goes next. Change the recipients or the schedule with the line's Configure link; each recipient's own choices (audience, on / off) are on <a href="/Admin/Settings/Notifications">Notifications</a>.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-reports-error>@Model.Error</div> }
+<div class="tiles" data-report-tiles>
+    <div class="tile"><div class="label">Reports and alerts</div><div class="value" data-count="entries">@Fmt.Int(Model.Lines.Count)</div></div>
+    <div class="tile"><div class="label">Recipients</div><div class="value" data-count="recipients">@Fmt.Int(Model.Recipients)</div></div>
+    <div class="tile"><div class="label">Without a recipient</div><div class="value" data-count="empty">@(Fmt.Int(Model.Lines.Count(l => l.Recipients.Count == 0 && l.Entry.RecipientsText is null)))</div></div>
+</div>
+<section class="card" aria-labelledby="all-h">
+    <h2 id="all-h">All reports and alerts</h2>
+    <div class="table-wrap">
+        <table class="findings grid" data-sortable data-list="mail-reports">
+            <thead><tr><th scope="col">Report or alert</th><th scope="col">Kind</th><th scope="col">When</th><th scope="col">Recipients</th><th scope="col">Last sent</th><th scope="col">Next</th><th scope="col">PDF</th><th scope="col">Follows Notifications</th><th scope="col"></th></tr></thead>
+            <tbody>
+                @foreach (var l in Model.Lines)
+                {
+                    <tr data-entry="@l.Entry.Id" data-recipients="@l.Recipients.Count">
+                        <td class="wrap"><strong>@l.Entry.Title</strong>@if (!l.Enabled) { <span class="badge info">paused</span> }</td>
+                        <td>@(l.Entry.IsAlert ? "alert" : "report")</td>
+                        <td class="wrap">@l.Entry.Cadence</td>
+                        <td class="wrap">@if (l.Entry.RecipientsText is { } t) { @t } else if (l.Recipients.Count == 0) { <span class="badge warn">nobody</span> } else { @string.Join(", ", l.Recipients) }</td>
+                        <td>@Fmt.Time(l.LastSentUtc, empty: "–")</td>
+                        <td>@Fmt.Time(l.NextUtc, empty: "–")</td>
+                        <td class="wrap">link only</td>
+                        <td>@(l.Entry.HonoursNotifications ? "yes" : "not yet (sent by a job)")</td>
+                        <td><a href="@l.Entry.ConfigurePath">Configure</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="hint">PDF: every report links to its page in SecurityInsight, which has Export PDF; attaching the PDF to the mail itself needs a renderer in the mail job and is not built yet.</p>
+</section>

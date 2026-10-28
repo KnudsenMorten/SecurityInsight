@@ -1,0 +1,22 @@
+id:        MicrosoftMessageQueuing
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft Message Queuing'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'Microsoft Message Queuing'
+  - 'MSMQ'
+
+detections:
+  - id: MicrosoftMessageQueuing
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'message_queuing*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

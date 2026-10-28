@@ -1,0 +1,592 @@
+{
+  "$comment": "Field mapping for provider 'mdc' (Microsoft Defender for Cloud): SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below). Customer overrides: mappings/mdc.custom.json, per (field, recordTypes). The same fact has a different field name in every source: Defender for Endpoint says deviceInfo.IsInternetFacing, Exposure Graph exposedToInternet, Defender for Cloud an unhealthy internet-exposure assessment -- all of them land on si_internet_exposed, and the risk factor internet_exposed reads only that.",
+  "kind": "field-mapping",
+  "provider": "mdc",
+  "version": "1.0.0",
+  "description": "Defender for Cloud internet-exposure assessments: Azure Resource Graph securityresources (microsoft.security/assessments, status Unhealthy), one object per assessed resource. REST, read with the Reader / Security Reader access the Azure collector already has.",
+  "objects": [
+    {
+      "recordType": "azure_resource",
+      "class": "cloud_resource",
+      "parts": {
+        "resource": "resourceId -- the record's key; written by both collectors below, so a resource is ONE Defender for Cloud record whether it has an exposure, an assessment summary or both",
+        "exposure": "collector (Get-SIMdcExposure): securityresources | where type == 'microsoft.security/assessments' and the assessment is an internet-exposure one and Unhealthy -> resourceId, internetExposed, assessments",
+        "assessments": "collector (Get-SIMdcAssessmentSummary): securityresources | where type == 'microsoft.security/assessments', SUMMARISED per resource: Assessed, Unhealthy, High / Medium / Low (unhealthy, by severity), OldestUnhealthy (first evaluation), NewestChange (status change), Top (id = the assessment key, name, severity), TopText"
+      },
+      "key": "resource.resourceId",
+      "timestamp": "$collection_time"
+    },
+    {
+      "recordType": "multicloud_resource",
+      "class": "cloud_resource",
+      "parts": {
+        "resource": "collector (Get-SIMulticloudResources): the resources Defender for Cloud's AWS / GCP connectors report, one per resource -- resourceId (Defender for Cloud's id of it, the record's key), nativeId (the AWS ARN / GCP resource name), cloud (AWS / GCP), name, type, region, account (the AWS account / GCP project), connector. Read only when the tenant has a multicloud connector; none = the source is not present",
+        "assessments": "the same collector, the resource's assessments SUMMARISED (the shape of the azure_resource part 'assessments'): Assessed, Unhealthy, High / Medium / Low, OldestUnhealthy, NewestChange, Top, TopText. The FINDINGS themselves arrive through Risk Analysis (the Defender for Cloud recommendation report), on this CI"
+      },
+      "key": "resource.resourceId",
+      "timestamp": "$collection_time",
+      "note": "#500 non-Azure clouds. Every path is to be confirmed on live rows (verify)."
+    },
+    {
+      "recordType": "assessment",
+      "class": "finding",
+      "parts": {
+        "assessment": "Azure Resource Graph securityresources | where type == microsoft.security/assessments (id, name = the assessment key, properties.displayName, properties.status, properties.metadata, properties.links)",
+        "governance": "Azure Resource Graph securityresources | where type == microsoft.security/assessments/governanceassignments -- who owns the fix and when it is due (properties.owner, properties.remediationDueDate, properties.isGracePeriod)",
+        "compliance": "Azure Resource Graph securityresources | where type == microsoft.security/regulatorycompliancestandards/regulatorycompliancecontrols/regulatorycomplianceassessments -- the standard / control each failed assessment belongs to (standard, control)"
+      },
+      "key": "assessment.name",
+      "timestamp": "$collection_time",
+      "note": "#560 the generic SI finding fields of a Defender for Cloud recommendation. Every path is to be confirmed on live rows (verify)."
+    }
+  ],
+  "mappings": [
+    {
+      "field": "azure_resource_id",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "resource.resourceId",
+        "exposure.resourceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "mdc_native_resource_id",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.nativeId",
+        "resource.resourceId"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.name",
+        "resource.nativeId"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_cloud_provider",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.cloud"
+      ],
+      "normalize": [
+        "enum:cloud"
+      ]
+    },
+    {
+      "field": "si_cloud_resource_type",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.type"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cloud_region",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.region"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cloud_account_id",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.account"
+      ],
+      "normalize": [
+        "lower"
+      ]
+    },
+    {
+      "field": "si_cloud_connector",
+      "recordTypes": [
+        "multicloud_resource"
+      ],
+      "sources": [
+        "resource.connector"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_internet_exposed",
+      "recordTypes": [
+        "azure_resource"
+      ],
+      "sources": [
+        "exposure.internetExposed"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_finding_key",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.name"
+      ],
+      "normalize": [
+        "lower"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_title",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.displayName",
+        "assessment.properties.metadata.displayName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_description",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.description"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_remediation",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.remediationDescription"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_remediation",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.remediationDescription"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_remediation_type",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.remediationDescription"
+      ],
+      "normalize": [
+        "present",
+        "if_true:configuration"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_available",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.remediationDescription"
+      ],
+      "normalize": [
+        "present"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_severity",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.severity"
+      ],
+      "normalize": [
+        "enum:mdc_severity"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_category",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.categories[*]"
+      ],
+      "normalize": [
+        "first"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mitre_tactics",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.tactics[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_mitre_techniques",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.techniques[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_user_impact",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.userImpact"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_remediation_effort",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.implementationEffort"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_portal_link",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.links.azurePortal"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_first_detected",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.status.firstEvaluationDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_last_seen",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.status.statusChangeDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_compliance_tags",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "compliance[*].standard",
+        "compliance[*].control"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true,
+      "note": "Regulatory compliance: the standards and controls the failed assessment belongs to."
+    },
+    {
+      "field": "si_source_first_detected",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.status.firstEvaluationDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true,
+      "note": "RECORD CAPTURE (owner 2026-10-11: both, in two steps): the resource record carries its assessments SUMMARISED per resource (part assessments); no record is written per assessment row -- these fields reach the findings through the Risk Analysis reports (Azure_DefenderRecommendations_*), from SI_AzureRecommendation_CL."
+    },
+    {
+      "field": "si_policy_definition_id",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.metadata.policyDefinitionId"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_status_cause",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.status.cause",
+        "assessment.properties.status.description"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_owner",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "governance.properties.owner"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_fix_due_date",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "governance.properties.remediationDueDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_attack_path_count",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.risk.attackPathsReferences"
+      ],
+      "normalize": [
+        "count"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_assessed_count",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.Assessed"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true,
+      "note": "Summarised per resource in the query (never one record per assessment); the findings themselves arrive through Risk Analysis."
+    },
+    {
+      "field": "si_mdc_unhealthy_count",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.Unhealthy"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_high_count",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.High"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_medium_count",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.Medium"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_low_count",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.Low"
+      ],
+      "normalize": [
+        "int"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_oldest_unhealthy",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.OldestUnhealthy"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_newest_change",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.NewestChange"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true
+    },
+    {
+      "field": "si_mdc_top",
+      "recordTypes": [
+        "azure_resource",
+        "multicloud_resource"
+      ],
+      "sources": [
+        "assessments.TopText[*]"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "combine": "union",
+      "verify": true
+    },
+    {
+      "field": "si_source_first_seen",
+      "recordTypes": [
+        "assessment"
+      ],
+      "sources": [
+        "assessment.properties.status.firstEvaluationDate"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ],
+      "verify": true,
+      "note": "#636: the one source first-seen field of a finding (the protection score's age); the same date as si_source_first_detected."
+    }
+  ]
+}

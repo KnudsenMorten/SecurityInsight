@@ -1,0 +1,47 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.DocumentModel
+@{
+    ViewData["Title"] = $"{Model.Kind}/{Model.Key}";
+}
+<p><a href="/Admin/Settings/Documents">&larr; All stored documents</a></p>
+<h1 class="name">@Model.Kind / @Model.Key</h1>
+@if (Model.KeyProblem is not null)
+{
+    <div class="notice error" role="alert">@Model.KeyProblem</div>
+}
+else
+{
+    @if (Model.IsOwnershipMap)
+    {
+        <p class="lede" data-ownership-map>CMDB ownership -- configuration that is yours: per asset type, which import connector already owns it in your CMDB (SecurityInsight only matches it), how long that connector may take before a missing asset is reported, and whether SecurityInsight may create it. Setup put the shipped default here; a template release never changes it.</p>
+    }
+    <p class="lede" data-utc>@(Model.Current is null ? (Model.IsOwnershipMap ? "Not in the database -- the shipped default applies. The text below is a starting point." : "Not in the database yet -- the shipped files apply. The text below is a starting point.") : $"Last changed by {Model.Current.UpdatedBy}, {Fmt.When(Model.Current.UpdatedAt)}.")</p>
+    @if (Model.Checked && Model.Problems.Count == 0) { <div class="notice ok" role="status">The engines would accept this document.</div> }
+    @if (Model.Problems.Count > 0)
+    {
+        <div class="notice error" role="alert"><strong>Not accepted:</strong><ul>@foreach (var p in Model.Problems) { <li>@p</li> }</ul></div>
+    }
+    <form method="post" class="stack">
+        <input type="hidden" name="kind" value="@Model.Kind" />
+        <input type="hidden" name="key" value="@Model.Key" />
+        <input type="hidden" name="ReadVersion" value="@Model.VersionText" />
+        <div>
+            <label for="body">@(Model.Kind == "rule" ? "Rule (YAML)" : "Document (JSON)")</label>
+            <textarea id="body" name="Body" rows="18" spellcheck="false" class="mono">@Model.Body</textarea>
+        </div>
+        <div><label for="reason">Reason (audited)</label><input id="reason" type="text" name="Reason" value="@Model.Reason" maxlength="400" /></div>
+        <div class="actions">
+            <button type="submit" asp-page-handler="Check" class="secondary">Check</button>
+            <button type="submit" asp-page-handler="Stage">Stage change</button>
+            @if (Model.Current is not null)
+            {
+                <button type="submit" asp-page-handler="Remove" class="secondary">@(Model.IsOwnershipMap ? "Stage: back to the shipped default" : "Stage removal")</button>
+            }
+        </div>
+        <p class="hint">Nothing is written here. A staged change is written on <a href="/Changes">Review &amp; commit</a>, and takes effect from the next run.</p>
+    </form>
+    @if (Model.Current is not null)
+    {
+        <p class="hint"><a href="/Admin/History?name=@Uri.EscapeDataString(Model.Key ?? "")">Change history of @Model.Key</a></p>
+    }
+}

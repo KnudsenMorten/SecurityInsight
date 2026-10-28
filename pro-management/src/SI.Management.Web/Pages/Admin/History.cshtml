@@ -1,0 +1,263 @@
+@page
+@model SI.Management.Web.Pages.Admin.HistoryModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Audit
+@{
+    ViewData["Title"] = "Audit trail";
+    var st = Model.State;
+    var cols = AuditTrailReader.Spec.Columns.Where(c => !c.Hidden).ToList();
+    var filterOf = st?.Filters.ToDictionary(f => f.Key, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, GridFilterValue>(StringComparer.OrdinalIgnoreCase);
+    var pages = st is null || Model.Total == 0 ? 1 : (int)Math.Ceiling(Model.Total / (double)st.Size);
+    IReadOnlyList<string> Opts(GridColumn c) => c.Key switch
+    {
+        "Category" => Model.Categories, "Outcome" => HistoryModel.Outcomes, "Source" => Model.Sources, "Domain" => HistoryModel.Domains,
+        "WhatIf" => new[] { "1", "0" }, _ => Array.Empty<string>(),
+    };
+    string OptLabel(GridColumn c, string v) => c.Key == "WhatIf" ? (v == "1" ? "plan (WhatIf)" : "change") : v;
+    string SortLink(GridColumn c) => Model.Link(("sort", c.Key), ("dir", st is not null && st.Sort == c.Key ? (st.Desc ? "asc" : "desc") : (c.Type is GridType.Number or GridType.Date ? "desc" : "asc")));
+    string AriaSort(GridColumn c) => st is null || st.Sort != c.Key ? "none" : st.Desc ? "descending" : "ascending";
+    string OutcomeClass(string o) => o switch { "ok" => "good", "refused" => "warn", "held" => "warn", _ => "bad" };
+}
+@if (Model.PrintView)
+{
+    <section class="card print-head" data-print-head>
+        <h1>Audit trail -- evidence print</h1>
+        <dl class="kv">
+            <dt>Filter</dt><dd data-print-filter>@Model.FilterText()</dd>
+            <dt>Time range</dt><dd data-print-range data-utc>@Model.WindowText(Model.FromUtc, Model.ToUtc)</dd>
+            <dt>Visible to the printer</dt><dd>@Model.Visibility?.Describe()</dd>
+            <dt>Printed by</dt><dd data-print-by>@AuditScope.ActorOf(User)</dd>
+            <dt>Printed at</dt><dd data-print-at>@Fmt.Time(DateTime.UtcNow, zone: true)</dd>
+            <dt>Rows</dt><dd>@Fmt.Int(Model.Events.Count) of @Fmt.Int(Model.Total)@(Model.Total > Model.Events.Count ? " -- the CSV export carries every row" : "")</dd>
+        </dl>
+        <p class="noprint"><button type="button" data-print>Print</button> <a class="button secondary" href="@Model.Link()">Back to the audit trail</a></p>
+    </section>
+}
+else
+{
+    <h1>Audit trail</h1>
+    <p class="lede">Every action in this install, newest first: who did it, from where, on what, why, how it ended and what changed. The trail is append-only: nothing can edit or remove an entry. @(Model.Visibility is { All: false } v ? "You see " + v.Describe() + "." : "")</p>
+}
+@if (Model.Health.Failed > 0 && !Model.PrintView)
+{
+    <div class="notice warn" role="alert" data-audit-health>@Fmt.Int(Model.Health.Failed) audit row(s) could not be written since the app started (last: @Model.Health.LastError, @Fmt.Time(Model.Health.LastFailureUtc)). The actions themselves were not affected; see the application log.</div>
+}
+@if (Model.Error is not null)
+{
+    <div class="notice error" role="alert">@Model.Error</div>
+}
+
+@if (!Model.HasTrail)
+{
+    @if (Model.Error is null)
+    {
+        <div class="notice warn" role="status" data-audit-missing>The audit trail is not set up in this database yet (apply <code>sql\si-pro-settings.sql</code> -- it only adds). Until then this page shows the settings change log.</div>
+        <form method="get" class="filters">
+            <div>
+                <label for="name">Setting name contains</label>
+                <input id="name" type="search" name="name" value="@Model.Name" />
+            </div>
+            <div>
+                <label for="top">Rows</label>
+                <select id="top" name="top">
+                    @foreach (var n in new[] { 50, 200, 1000 })
+                    {
+                        <option value="@n" selected="@(n == Model.Top)">@Fmt.Int(n)</option>
+                    }
+                </select>
+            </div>
+            <div class="actions"><button type="submit">Filter</button></div>
+        </form>
+        <section class="card">
+            @if (Model.Rows.Count == 0)
+            {
+                <p class="hint">No changes@(string.IsNullOrWhiteSpace(Model.Name) ? "" : " for a name containing \"" + Model.Name + "\"").</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable>
+                        <thead><tr><th>When</th><th>Setting</th><th>Scope</th><th>Action</th><th>From</th><th>To</th><th>By</th><th>Reason</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in Model.Rows)
+                            {
+                                <tr>
+                                    <td>@Fmt.Time(r.ChangedAt, zone: true)</td>
+                                    <td class="wrap"><a href="@Url.Page("/Admin/Settings/Edit", new { name = r.Name })">@r.Name</a></td>
+                                    <td>@r.Scope</td>
+                                    <td>@r.Action</td>
+                                    <td class="wrap"><code>@(r.OldValue ?? "(not set)")</code></td>
+                                    <td class="wrap"><code>@(r.NewValue ?? "(removed)")</code></td>
+                                    <td class="wrap">@r.ChangedBy</td>
+                                    <td class="wrap">@r.Reason</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            <partial name="_Query" model='QueryInfo.Sql(Model.Query, "Change history")' />
+        </section>
+    }
+}
+else if (st is not null)
+{
+    <section class="card" aria-labelledby="audit-h" data-audit>
+        <div class="split">
+            <h2 id="audit-h">@Fmt.Int(Model.Total) event(s)@(Model.Total > 0 && !Model.PrintView ? " · " + Fmt.Int(st.Skip + 1) + "-" + Fmt.Int(st.Skip + Model.Events.Count) : "")</h2>
+            @if (!Model.PrintView)
+            {
+                <span class="actions">
+                    <a class="button secondary small" href="@Model.HandlerLink("Csv")" data-export="csv" title="Every row of the filtered trail, as CSV (the export is recorded on the trail)">Export (CSV)</a>
+                    <a class="button secondary small" href="@Model.HandlerLink("Xlsx")" data-export="xlsx" title="Every row of the filtered trail, as an Excel workbook (recorded on the trail)">Export to Excel</a>
+                    <a class="button secondary small" href="@Model.HandlerLink("Print")" data-export="print" title="A print-friendly page with the filter, the time range, who printed it and when (recorded on the trail)">Print view</a>
+                </span>
+            }
+        </div>
+
+        @if (!Model.PrintView)
+        {
+            <form id="audit-f" method="get" action="/Admin/History" class="gridbar" role="search" aria-label="Search and filter the audit trail">
+                <input type="hidden" name="sort" value="@st.Sort" /><input type="hidden" name="dir" value="@(st.Desc ? "desc" : "asc")" />
+                <label for="audit-win">Time</label>
+                <select id="audit-win" name="win">
+                    @foreach (var w in HistoryModel.Windows) { <option value="@w.Value" selected="@(w.Value == Model.WindowValue)">@w.Label</option> }
+                </select>
+                <label for="audit-from">From</label>
+                <input id="audit-from" type="date" name="from" value="@Model.From" />
+                <label for="audit-to">To</label>
+                <input id="audit-to" type="date" name="to" value="@Model.To" />
+                <input type="hidden" name="tz" value="@Model.Tz" data-browser-tz />
+                <label for="audit-q" class="sr-only">Search</label>
+                <input id="audit-q" type="search" name="q" value="@st.Search" placeholder="Search actor, action, target, outcome, change" maxlength="200" data-search data-grid-search />
+                @* #857: the rows per page is chosen in the grid toolbar; the filter form keeps it *@
+                <input type="hidden" name="size" value="@st.Size" />
+                <button type="submit">Apply</button>
+                <a class="button secondary" href="/Admin/History">Clear</a>
+            </form>
+
+            @if (st.Filters.Count > 0 || st.Search is not null)
+            {
+                <ul class="chips" aria-label="Active filters">
+                    @if (st.Search is not null) { <li><a href="@Model.Link(("q", null))" aria-label="Remove the search">Search: @st.Search ✕</a></li> }
+                    @foreach (var f in st.Filters)
+                    {
+                        var c = AuditTrailReader.Spec.Column(f.Key)!;
+                        <li><a href="@Model.Link(("f." + c.Key, null), ("name", null))" aria-label="Remove the filter on @c.Label">@c.Label: @(f.Values.Count > 0 ? string.Join(" or ", f.Values.Select(v => OptLabel(c, v))) : f.Kind == GridFilter.Range ? Fmt.RangeWords(f.Low, f.High) : f.Text ?? "") ✕</a></li>
+                    }
+                </ul>
+            }
+        }
+
+        @{
+            // #282: the pager above the table, in the shared grid toolbar (not on the print view)
+            var toolbar = new GridToolbar
+            {
+                Id = "audit-tools", Total = Model.Total, Skip = st.Skip, Count = Model.Events.Count, Noun = "event(s)", Page = st.Page, Pages = pages,
+                PageLink = Model.PrintView ? null : (Func<int, string>)(n => Model.Link(("p", GridToolbar.PageParam(n)))), PreviousLabel = "Newer", NextLabel = "Older",
+                Size = st.Size, SizeLink = Model.PrintView ? null : (Func<int, string>)(n => Model.Link(("size", GridToolbar.SizeParam(n)))),
+            };
+        }
+        @if (!Model.PrintView) { <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" /> }
+        <div class="table-wrap">
+            <table class="findings grid" data-grid="audit" aria-describedby="audit-h">
+                <thead>
+                    <tr>
+                        @foreach (var c in cols)
+                        {
+                            <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key">
+                                @if (c.Sortable && !Model.PrintView) { <a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @c.Label }
+                            </th>
+                        }
+                        <th scope="col">Change</th>
+                    </tr>
+                    @if (!Model.PrintView)
+                    {
+                        <tr class="colfilters">
+                            @foreach (var c in cols)
+                            {
+                                filterOf.TryGetValue(c.Key, out var fv);
+                                <td data-filter="@c.Key" class="@(c.Type == GridType.Number ? "num" : null)">
+                                    @switch (c.Filter)
+                                    {
+                                        case GridFilter.Contains:
+                                            <input form="audit-f" type="search" name="f.@c.Key" value="@fv?.Text" aria-label="Filter @c.Label (contains)" placeholder="contains" maxlength="200" />
+                                            break;
+                                        case GridFilter.Range:
+                                            @* #321: a number column sorts only -- no min..max box; a number filter from a URL still applies (chip) and is kept *@
+                                            if (fv is not null) { <input form="audit-f" type="hidden" name="f.@c.Key" value="@SI.Management.Web.Pages.Collection.CollectionPageModel.FilterText(fv)" /> }
+                                            break;
+                                        case GridFilter.Values:
+                                            var chosen = fv?.Values ?? (IReadOnlyList<string>)Array.Empty<string>();
+                                            <details class="colfilter" data-counts-url="@(Model.HandlerLink("ValueCounts") + "&col=" + c.Key)">
+                                                <summary aria-label="Filter @c.Label">@(chosen.Count == 0 ? "any" : Fmt.Int(chosen.Count) + " chosen")</summary>
+                                                <div class="colfilter-list" role="group" aria-label="@c.Label values">
+                                                    @foreach (var o in Opts(c).Union(chosen).Take(200))
+                                                    {
+                                                        <label><input form="audit-f" type="checkbox" name="f.@c.Key" value="@o" checked="@chosen.Contains(o)" /> @OptLabel(c, o)</label>
+                                                    }
+                                                </div>
+                                                <button form="audit-f" type="submit" class="small">Apply</button>
+                                            </details>
+                                            break;
+                                    }
+                                </td>
+                            }
+                            <td></td>
+                        </tr>
+                    }
+                </thead>
+                <tbody>
+                    @if (Model.Events.Count == 0)
+                    {
+                        <tr><td colspan="@(cols.Count + 1)" class="hint">No event matches.</td></tr>
+                    }
+                    @foreach (var e in Model.Events)
+                    {
+                        var changes = e.CorrelationId is not null && Model.Changes.TryGetValue(e.CorrelationId, out var ch) ? ch : Array.Empty<AuditRow>();
+                        var diff = AuditDiff.Of(e.BeforeJson, e.AfterJson);
+                        <tr data-audit-row="@e.Id" data-action="@e.Action" data-outcome="@e.Outcome">
+                            <td class="num">@Fmt.Raw(e.Id)</td>
+                            <td>@Fmt.Time(e.TsUtc, zone: true)</td>
+                            <td>@e.Category</td>
+                            <td class="wrap"><code>@e.Action</code>@(e.RecordType == "change" ? " (change)" : "")</td>
+                            <td class="wrap">@e.Actor</td>
+                            <td>@e.ActorSource</td>
+                            <td class="wrap">@e.Target</td>
+                            <td><span class="badge @OutcomeClass(e.Outcome)">@e.Outcome</span>@if (!string.IsNullOrEmpty(e.OutcomeText)) { <div class="hint wrap">@e.OutcomeText</div> }</td>
+                            <td class="wrap">@e.Reason</td>
+                            <td>@e.ScopeDomain</td>
+                            <td>@(e.WhatIf ? "plan" : "")</td>
+                            <td class="num">@(e.Changes > 0 ? Fmt.Int(e.Changes) : "")</td>
+                            <td class="wrap">
+                                @if (diff.Count > 0 || changes.Count > 0)
+                                {
+                                    <details @(Model.PrintView ? "open" : "") data-change-summary>
+                                        <summary>@(changes.Count > 0 ? Fmt.Int(changes.Count) + " change(s)" : diff.Count + " field(s)")</summary>
+                                        @if (diff.Count > 0)
+                                        {
+                                            <ul class="diff">
+                                                @* the event's own state: a request (after only) reads as field: value; a before -> after as a change *@
+                                                @foreach (var d in diff) { <li>@(d.Field.Length > 0 ? d.Field + ": " : "")@if (d.Before is not null) { <del>@d.Before</del><text> → </text> }<ins>@(d.After ?? "(removed)")</ins></li> }
+                                            </ul>
+                                        }
+                                        @foreach (var c in changes)
+                                        {
+                                            <div class="hint" data-change-row="@c.Id"><code>@c.Action</code> @c.Target</div>
+                                            <ul class="diff">
+                                                @foreach (var d in AuditDiff.Of(c.BeforeJson, c.AfterJson)) { <li>@(d.Field.Length > 0 ? d.Field + ": " : "")<del>@(d.Before ?? "(not set)")</del> → <ins>@(d.After ?? "(removed)")</ins></li> }
+                                            </ul>
+                                        }
+                                    </details>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (!Model.PrintView) { <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar.AsBottom()" /> }
+        <partial name="_Query" model='QueryInfo.Sql(Model.Query, "Audit trail")' />
+    </section>
+}

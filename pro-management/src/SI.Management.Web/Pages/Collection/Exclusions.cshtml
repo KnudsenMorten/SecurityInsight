@@ -1,0 +1,48 @@
+@page
+@model SI.Management.Web.Pages.Collection.ExclusionsModel
+@{
+    var isAdmin = User.IsAdmin();
+}
+<partial name="_Header" model="Model" />
+<div class="notice" role="note">
+    Risk Analysis leaves excluded and exempted findings out <strong>before</strong> it writes a collection, so they are not rows of it.
+    This view shows the rules that did it: the exemptions in force when the collection was taken, and the exclusion rules.
+    Requests, reviews and exemptions whose review is overdue are on <a href="/Exemptions">Exemptions</a> (<a href="/Exemptions?view=overdue">review overdue</a>).
+    @if (isAdmin) { <span>Every deviation from the shipped defaults, with who and why, is on <nav-ref page="/Admin/Deviations" /> (<a href="/Admin/Deviations?kind=Exemption">exemptions</a>, <a href="/Admin/Deviations?kind=Exclusion">exclusions</a>).</span> }
+    else { <span>An Admin sees every deviation, with who and why, on <nav-ref page="/Admin/Deviations" link="false" />.</span> }
+</div>
+@if (Model.Current is not null)
+{
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-st">
+            <h2 id="h-st">Exemptions at @Fmt.Time(Model.Current.CollectionTime)</h2>
+            @if (Model.StateCounts.Count == 0) { <p class="hint">No exemption has been made.</p> }
+            else
+            {
+                <div class="table-wrap">
+                    <table data-sortable data-states>
+                        <thead><tr><th scope="col">State then</th><th scope="col">Scope</th><th scope="col" class="num">Exemptions</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in Model.StateCounts.OrderBy(r => Array.IndexOf(SI.Management.Web.Pages.Collection.ExclusionsModel.States, r.Group)).ThenBy(r => r.Key))
+                            {
+                                <tr><td><a href="@Model.Link(("f.StateAtCollection", r.Group))">@r.Group</a></td><td>@r.Key</td><td class="num">@Fmt.Int(r.N)</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+        <section class="card" aria-labelledby="h-doc">
+            <h2 id="h-doc">Risk Analysis exclusion rules</h2>
+            @if (Model.DocNote is not null) { <p class="hint">@Model.DocNote</p> }
+            else if (Model.Documents.Count == 0) { <p class="hint">No exclusion rule is set in the Pro database (the shipped defaults apply).</p> }
+            else
+            {
+                <p class="hint">The rules as they are now; their history is on <nav-ref page="/Admin/History" />.</p>
+                <ul>@foreach (var d in Model.Documents) { <li>@(d.Key == "global" ? "Every report" : d.Key) <span class="muted">-- @d.UpdatedBy, @Fmt.Time(d.UpdatedAt)</span>@if (isAdmin) { <text> · </text><a href="/Admin/Settings/Document?kind=exclusions&amp;key=@Uri.EscapeDataString(d.Key)">open</a> }</li> }</ul>
+            }
+        </section>
+    </div>
+}
+@if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
+<partial name="_Queries" model="Model" />

@@ -1,0 +1,21 @@
+id:        PrimekeyEjbca
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'EJBCA Enterprise'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'EJBCA Enterprise'
+
+detections:
+  - id: PrimekeyEjbca
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ejbca*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

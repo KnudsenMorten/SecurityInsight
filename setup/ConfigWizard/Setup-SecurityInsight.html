@@ -1,0 +1,962 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SecurityInsight -- Config Wizard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<link rel="icon" href="favicon.ico" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- =================================================================== -->
+  <!-- LEFT RAIL: branding + page navigation                               -->
+  <!-- =================================================================== -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <!-- Invardia SecurityInsight Community logo (reversed: for the dark rail). Local file -- works offline. -->
+      <img class="rail-logo" src="brand/invardia-securityinsight-community-horizontal-reversed.svg" alt="Invardia SecurityInsight Community" />
+    </div>
+    <div class="rail-tag">Config Wizard</div>
+
+    <div class="rail-section" id="setup-rail-title">Setup</div>
+    <ul class="rail-nav" id="rail-nav">
+      <!-- Populated by app.js. Each <li> has data-page="<id>". -->
+    </ul>
+
+    <div class="rail-foot">
+      Built by <a href="https://mortenknudsen.net" target="_blank" rel="noopener">Morten Knudsen</a><br/>
+      Microsoft MVP &middot; <a href="https://github.com/KnudsenMorten" target="_blank" rel="noopener">GitHub</a><br/><br/>
+      All input stays in your browser. Nothing is uploaded.
+    </div>
+  </aside>
+
+  <!-- =================================================================== -->
+  <!-- MAIN CONTENT AREA -- one section per page, hidden/shown by app.js   -->
+  <!-- =================================================================== -->
+  <main class="main">
+
+    <!-- ---------------- PAGE 1: WELCOME ----------------------------- -->
+    <section class="page" data-page="welcome" hidden>
+      <div class="hero">
+        <div class="page-eyebrow" style="color:#9fdde7;">SecurityInsight</div>
+        <h2>Configure your tenant in 8 short steps.</h2>
+        <p>This wizard generates every <code>*.custom.*</code> override file the SecurityInsight engines need -- tenant identity, workspace, CMDB cache, asset tagging, risk-analysis exclusions, Shodan, and more. Answers persist in your browser so you can stop and resume anytime.</p>
+        <div class="hero-actions">
+          <button class="btn primary" id="btn-start">Start configuring &rarr;</button>
+          <button class="btn ghost-light" id="btn-reset">Reset all answers</button>
+        </div>
+      </div>
+
+<h3 style="margin: 28px 0 6px; color: var(--navy); font-size: 18px;">Before you begin -- have these handy</h3>
+      <p style="color: var(--muted); margin: 0 0 8px;">Most cards depend on choices you make in the wizard -- the badges below tell you when each value is needed. <b>Newcomers picking all defaults need only the &quot;Always&quot; cards.</b></p>
+
+      <h4 style="margin: 18px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Always required</h4>
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Entra tenant ID</div>
+          <div class="prereq-body">Azure portal &rarr; Microsoft Entra ID &rarr; Overview &rarr; "Tenant ID" GUID. <b>Auto-prefilled</b> from the wizard's own Azure sign-in (the tenant you signed in to when the wizard started).</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Subscription ID</div>
+          <div class="prereq-body">Sub that hosts Log Analytics + DCE + Storage. <b>Auto-prefilled</b> from the wizard's Azure sign-in.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Azure region</div>
+          <div class="prereq-body">Where workspace + DCE + storage land. Pick from the dropdown on Step 2 (53 regions); default is West Europe.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>A user / SPN with the right roles</div>
+          <div class="prereq-body">The wizard's own Azure sign-in (Azure Cloud Shell or the browser -- no Azure CLI, no PowerShell module) as an account with <b>Owner</b>/<b>Contributor</b> at the target sub, reaching Microsoft Graph with <b>Application.ReadWrite.All</b> + <b>AppRoleAssignment.ReadWrite.All</b> + <b>Directory.ReadWrite.All</b>. Pre-flight checks both before <b>Apply</b>.</div>
+        </div>
+      </div>
+
+      <h4 style="margin: 22px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Only if you pick &quot;Use existing&quot; on a step</h4>
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Service principal app ID <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN)</span></div>
+          <div class="prereq-body">App registration in Entra with the SI Graph permissions already consented. <b>Skip</b> if Step 1 = "Create new SPN" -- the wizard creates + consents it for you.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Key Vault name + secret name <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN + KV storage)</span></div>
+          <div class="prereq-body">Where the existing SPN's secret lives in Key Vault. <b>Skip</b> if Step 1 = "Create new SPN" (wizard creates the cred + stores it for you), or if cred storage = Local cert store / Inline.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Certificate thumbprint <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN + cert auth)</span></div>
+          <div class="prereq-body">40-hex-char thumbprint of the cert in the launcher's local cert store. <b>Skip</b> if Step 1 = "Create new SPN" -- wizard generates a self-signed cert and writes its thumbprint to the config.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Existing OpenAI endpoint + key <span style="font-size:11px;color:#888;font-weight:400;">(Step 5 -- Use existing OpenAI + AI summary on)</span></div>
+          <div class="prereq-body">Resource endpoint URL + deployment name + API key from your existing Azure OpenAI resource. <b>Skip</b> if Step 5 = "Create new" (wizard creates the resource on Apply) or AI summary = off.</div>
+        </div>
+      </div>
+
+      <h4 style="margin: 22px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Only if you enable optional features</h4>
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>SMTP relay details <span style="font-size:11px;color:#888;font-weight:400;">(Step 3 -- Mail enabled)</span></div>
+          <div class="prereq-body">Server hostname + port + From address + recipients. Plus user/password if authenticated relay (a relay that needs sign-in). Skip entirely if mail mode = Off.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>CMDB CSV path <span style="font-size:11px;color:#888;font-weight:400;">(Step 4 -- CMDB enabled)</span></div>
+          <div class="prereq-body">Local or UNC path to your CMDB asset export with at minimum AssetName + Tier + Owner columns.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Shodan API key <span style="font-size:11px;color:#888;font-weight:400;">(Step 6 -- Shodan enabled)</span></div>
+          <div class="prereq-body">From account.shodan.io. Free tier (~100 lookups/month) works for &lt;200 assets; Membership ($49) needed for larger tenants + CVE history.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Defender XDR / Sentinel workspace ResourceId <span style="font-size:11px;color:#888;font-weight:400;">(Step 7 -- Defender linkage enabled)</span></div>
+          <div class="prereq-body">Full ARM ResourceId of the Log Analytics workspace ingesting Defender XDR data &mdash; in most tenants this is your <b>Microsoft Sentinel workspace</b>. Find it in Defender XDR portal &gt; Settings &gt; Microsoft Sentinel, or Azure portal &gt; your Sentinel workspace &gt; Properties &gt; ResourceId.</div>
+        </div>
+      </div>
+
+      <div class="note" style="margin-top: 22px;">
+        <strong>How this wizard works.</strong> Each page collects a slice of config and renders the matching PowerShell or YAML snippet on the right side of the page. Copy it into the indicated <code>*.custom.*</code> file path. A future iteration will write the files for you via the launcher script -- for now you copy + paste.
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 2: TENANT IDENTITY --------------------- -->
+    <section class="page" data-page="tenant" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 1 of 8 &middot; Tenant identity</div>
+        <h2 class="page-title">How will the SecurityInsight engines authenticate?</h2>
+        <p class="page-lead">SecurityInsight engines sign in to Entra and Azure once per run. The default is a <b>managed identity</b>: no secret or certificate to create, store or rotate. A service principal (by certificate, or by client secret) is still available when you choose it &mdash; and it is the only option on a server outside Azure.</p>
+      </div>
+
+      <div class="card">
+        <h3>Engine host + bootstrap auth</h3>
+        <p class="card-sub">Where will the SecurityInsight engines run, and how will they prove who they are when they start? This drives which credential storage options are valid below &mdash; the SI credential has to be readable by <i>something</i> that&apos;s already authenticated, otherwise it&apos;s a chicken-and-egg.</p>
+
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_hostType">Engine host</label>
+            <select id="f_hostType" data-key="hostType" data-default="azureVMMI">
+              <option value="azureVMMI">Azure VM or Azure Arc-enabled server (managed identity)</option>
+              <option value="azureContainerMI">Azure Container Apps jobs (managed identity)</option>
+              <option value="win">Windows server outside Azure (no managed identity possible)</option>
+            </select>
+          </div>
+        </div>
+
+        <p class="note" data-host-type-block="win" style="margin-top: 14px; background:#fff8e1; border-left:3px solid #f57c00;">
+          <b>No managed identity on this server.</b> A server outside Azure cannot have one, so SecurityInsight signs in as a service principal: by <b>certificate</b> (recommended, the default here) or by <b>client secret</b>. An Azure Arc-enabled server does have a managed identity &mdash; pick <i>Azure VM or Azure Arc-enabled server</i> above instead.<br>
+          The credential must be readable <i>without</i> first authenticating to Azure. Two valid storage options below:<br>
+          &bull; <b>Self-signed cert + Local cert store</b> &mdash; the cert <i>is</i> the auth (the SPN&apos;s certificate thumbprint identifies it to Entra). Zero KV dependency. <i>Recommended.</i><br>
+          &bull; <b>Client secret + Inline in custom.ps1</b> &mdash; the secret lives in your <code>config\SecurityInsight.custom.ps1</code> directly. Simpler, but plaintext-on-disk (gitignored, never leaves the host).<br>
+          Key Vault storage is hidden &mdash; on a Win11 / Server host with no MI, KV would itself need a separate bootstrap cert, defeating the purpose.
+        </p>
+        <p class="note" data-host-type-block="azureVMMI" hidden style="margin-top: 14px; background:#e8f5e9; border-left:3px solid #2e7d32;">
+          <b>Azure VM or Arc server:</b> by default the wizard creates a <b>user-assigned managed identity</b>, grants it the read-only permissions and attaches it to the VM you name below. An Azure Arc server uses its own system-assigned identity instead (grant it with <code>setup\Grant-SIIdentity.ps1 -ArcMachineName</code>). A service principal stays available below.
+        </p>
+        <p class="note" data-host-type-block="azureContainerMI" hidden style="margin-top: 14px; background:#e8f5e9; border-left:3px solid #2e7d32;">
+          <b>Azure Container Apps jobs:</b> by default the jobs sign in as their <b>user-assigned managed identity</b>, which the container setup creates and grants. <b>Local cert store</b> doesn&apos;t apply to a service principal here (ephemeral container); use Key Vault.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Sign-in</h3>
+        <p class="card-sub"><b>Managed identity</b> is the default: the wizard creates a user-assigned identity and grants it the read-only Microsoft Graph, Defender and Azure permissions &mdash; nothing to store or rotate. Prefer a service principal? <b>Create new</b> makes an Entra app registration with a certificate (recommended) or a client secret; <b>Use existing</b> takes one you have.</p>
+
+        <div class="toggle-group" data-toggle-key="spnMode" style="margin-bottom: 4px;">
+          <label data-val="managedIdentity" data-host-type-block="azureVMMI,azureContainerMI"><input type="radio" name="spnMode" value="managedIdentity" /> <b style="color:#1b5e20;">Managed identity</b> (default)</label>
+          <label data-val="createNew"><input type="radio" name="spnMode" value="createNew" /> Create new Service Principal</label>
+          <label data-val="useExisting"><input type="radio" name="spnMode" value="useExisting" /> Use existing Service Principal</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Tenant + identity</h3>
+
+        <!-- ===== Managed identity + Create-new modes: the tenant ===== -->
+        <div data-spn-mode-block="managedIdentity,createNew">
+          <p class="card-sub" data-spn-mode-block="createNew">Type a friendly display name for the new SPN; the wizard creates the app registration on Apply.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_tenant">Tenant ID (GUID)</label>
+              <input type="text" id="f_tenant" data-key="tenantId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="tenantId">Must be a GUID, e.g. 12345678-aaaa-bbbb-cccc-1234567890ab</span>
+            </div>
+            <div class="field" data-spn-mode-block="managedIdentity" data-host-type-block="azureVMMI">
+              <label for="f_miName">Managed identity name <span style="color:#888;font-weight:400;">(optional; default id-si-&lt;label&gt;)</span></label>
+              <input type="text" id="f_miName" data-key="managedIdentityName" autocomplete="off" placeholder="id-si-prod-community-vm" />
+            </div>
+            <div class="field" data-spn-mode-block="managedIdentity" data-host-type-block="azureVMMI">
+              <label for="f_vmName">VM that runs SecurityInsight <span style="color:#888;font-weight:400;">(optional; the identity is attached to it)</span></label>
+              <input type="text" id="f_vmName" data-key="vmName" autocomplete="off" placeholder="vm-securityinsight" />
+            </div>
+            <div class="field" data-spn-mode-block="managedIdentity" data-host-type-block="azureVMMI">
+              <label for="f_vmRg">VM resource group <span style="color:#888;font-weight:400;">(optional; default the install's resource group)</span></label>
+              <input type="text" id="f_vmRg" data-key="vmResourceGroup" autocomplete="off" placeholder="rg-servers" />
+            </div>
+            <div class="field required" data-spn-mode-block="createNew">
+              <label for="f_spnname">SPN display name</label>
+              <input type="text" id="f_spnname" data-key="spnDisplayName" autocomplete="off"
+                     placeholder="SecurityInsight (prod-community-vm)"
+                     data-default="SecurityInsight (prod-community-vm)" />
+              <span class="err" data-err="spnDisplayName">Required. 3+ chars; alphanumerics + hyphens.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Use-existing mode ===== -->
+        <div data-spn-mode-block="useExisting" hidden>
+          <p class="card-sub">All three are required. Tenant + App ID are GUIDs; the wizard validates the format inline.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_tenant_e">Tenant ID (GUID)</label>
+              <input type="text" id="f_tenant_e" data-key="tenantId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="tenantId">Must be a GUID</span>
+            </div>
+            <div class="field required">
+              <label for="f_app">App registration (client) ID (GUID)</label>
+              <input type="text" id="f_app" data-key="appId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="appId">Must be a GUID</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-spn-mode-block="createNew,useExisting">
+        <h3>Credential</h3>
+        <p class="card-sub" data-spn-mode-block="createNew">Pick what kind of credential the wizard should generate, and where it should be stored. <b>Self-signed certificate</b> is recommended; a <b>client secret</b> is supported too.</p>
+        <p class="card-sub" data-spn-mode-block="useExisting" hidden>Pick how your existing SPN proves who it is. Key Vault secret is the easiest path; certificate thumbprint requires the cert to be in the launcher's local cert store.</p>
+
+        <div class="toggle-group" data-toggle-key="credType" style="margin-bottom: 16px;">
+          <label data-val="certThumb"><input type="radio" name="credType" value="certThumb" /> Self-signed certificate <b style="color:#5a6a7a;">(recommended)</b></label>
+          <label data-val="kvSecret"><input type="radio" name="credType" value="kvSecret" /> Client secret</label>
+        </div>
+
+        <!-- Cred storage choice (Create-new mode only) -->
+        <div data-spn-mode-block="createNew" style="margin-bottom: 16px;">
+          <p class="card-sub" style="margin-top:0;">Where the credential lives once generated:</p>
+          <div class="toggle-group" data-toggle-key="credStorage">
+            <label data-val="KeyVault" data-host-type-block="azureVMMI,azureContainerMI"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
+            <label data-val="LocalCertStore" data-cred-block="certThumb" data-host-type-block="win,azureVMMI"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
+            <label data-val="Inline" data-cred-block="kvSecret"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span> <b style="color:#c62828;">(testing only)</b></label>
+          </div>
+          <label style="display:block; margin-top:12px;"><input type="checkbox" id="f_includeTagContributor" data-key="includeTagContributor" /> Also allow asset tagging (grant <b>Tag Contributor</b>) <span class="help" data-tip="SecurityInsight only READS -- except the optional asset-tagging engine, which writes a criticality tag onto Azure resources. It needs the Tag Contributor role. Leave this off unless you will run asset-tagging; you can grant it later by re-running setup with it on.">?</span></label>
+        </div>
+
+        <!-- Key Vault secret block (Use-existing mode -- type the existing secret name) -->
+        <div class="form-grid" data-cred-block="kvSecret" data-spn-mode-block="useExisting" hidden>
+          <div class="field required">
+            <label for="f_kv">Key Vault name</label>
+            <input type="text" id="f_kv" data-key="kvName" autocomplete="off"
+                   placeholder="kvsiprodcommunityvm01" />
+            <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
+          </div>
+          <div class="field required">
+            <label for="f_secret">Secret name in the vault</label>
+            <input type="text" id="f_secret" data-key="secretName" autocomplete="off"
+                   placeholder="SecurityInsight-Secret"
+                   data-default="SecurityInsight-Secret" />
+            <span class="err" data-err="secretName">Required.</span>
+          </div>
+        </div>
+
+        <!-- Optional KV name input for Create-new + KeyVault storage -->
+        <div class="form-grid" data-spn-mode-block="createNew" data-cred-storage-block="KeyVault">
+          <div class="field required span-2">
+            <label for="f_kvnew">Key Vault name <span style="color:#888;font-weight:400;">(must already exist; wizard stores the cred here)</span></label>
+            <input type="text" id="f_kvnew" data-key="kvName" autocomplete="off"
+                   placeholder="kvsiprodcommunityvm01"
+                   data-default="kvsiprodcommunityvm01" />
+            <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
+          </div>
+        </div>
+
+        <!-- Certificate thumbprint block (Use-existing mode only) -->
+        <div class="form-grid" data-cred-block="certThumb" data-spn-mode-block="useExisting" hidden>
+          <div class="field required span-2">
+            <label for="f_thumb">Certificate thumbprint (40 hex chars, no spaces)</label>
+            <input type="text" id="f_thumb" data-key="certThumbprint" autocomplete="off"
+                   placeholder="A1B2C3D4E5F60718293A4B5C6D7E8F9001020304" />
+            <span class="err" data-err="certThumbprint">Must be exactly 40 hexadecimal characters.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-tenant"># Fill in the fields above to generate the PowerShell snippet.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-tenant">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 3: WORKSPACE + INGESTION --------------- -->
+    <section class="page" data-page="workspace" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 2 of 8 &middot; Workspace + ingestion</div>
+        <h2 class="page-title">Where do collected signals land?</h2>
+        <p class="page-lead">Every engine writes its profile rows to a Log Analytics custom table (<code>SI_*_CL</code>) via a Data Collection Endpoint + Rule. The wizard will append the workspace + DCE settings to the same snippet.</p>
+      </div>
+
+      <div class="card">
+        <h3>Subscription + region</h3>
+        <p class="card-sub">Azure subscription that hosts the Log Analytics workspace + DCE + storage account, and the region they all land in. The wizard creates every resource in this single (subscription, region) pair -- cross-sub / multi-region support comes in a later tag.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_sub">Subscription ID (GUID) <span class="help" data-tip="Find under Azure Portal &gt; Subscriptions &gt; the row you want &gt; Subscription ID column. Prefilled from the subscription the wizard's sign-in selected.">?</span></label>
+            <input type="text" id="f_sub" data-key="subscriptionId" autocomplete="off"
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <span class="err" data-err="subscriptionId">Must be a GUID.</span>
+          </div>
+          <div class="field required">
+            <label for="f_region">Azure region <span class="help" data-tip="Region for the workspace + DCE + storage. Pick the closest to your operator host (lowest egress + latency). Most customers pick West Europe / North Europe / East US / West US 2 / Australia East. The wizard does NOT validate per-subscription quota -- if a region returns a 'not enabled' / 'quota exhausted' error on Apply, switch here and re-apply.">?</span></label>
+            <select id="f_region" data-key="location" data-default="westeurope">
+              <optgroup label="Europe">
+                <option value="westeurope">West Europe (Netherlands)</option>
+                <option value="northeurope">North Europe (Ireland)</option>
+                <option value="uksouth">UK South (London)</option>
+                <option value="ukwest">UK West (Cardiff)</option>
+                <option value="francecentral">France Central (Paris)</option>
+                <option value="francesouth">France South (Marseille)</option>
+                <option value="germanywestcentral">Germany West Central (Frankfurt)</option>
+                <option value="germanynorth">Germany North (Berlin)</option>
+                <option value="switzerlandnorth">Switzerland North (Zurich)</option>
+                <option value="switzerlandwest">Switzerland West (Geneva)</option>
+                <option value="norwayeast">Norway East (Oslo)</option>
+                <option value="norwaywest">Norway West (Stavanger)</option>
+                <option value="swedencentral">Sweden Central (Gavle)</option>
+                <option value="swedensouth">Sweden South (Malmo)</option>
+                <option value="polandcentral">Poland Central (Warsaw)</option>
+                <option value="italynorth">Italy North (Milan)</option>
+                <option value="spaincentral">Spain Central (Madrid)</option>
+              </optgroup>
+              <optgroup label="North America">
+                <option value="eastus">East US (Virginia)</option>
+                <option value="eastus2">East US 2 (Virginia)</option>
+                <option value="westus">West US (California)</option>
+                <option value="westus2">West US 2 (Washington)</option>
+                <option value="westus3">West US 3 (Arizona)</option>
+                <option value="centralus">Central US (Iowa)</option>
+                <option value="northcentralus">North Central US (Illinois)</option>
+                <option value="southcentralus">South Central US (Texas)</option>
+                <option value="westcentralus">West Central US (Wyoming)</option>
+                <option value="canadacentral">Canada Central (Toronto)</option>
+                <option value="canadaeast">Canada East (Quebec)</option>
+                <option value="mexicocentral">Mexico Central (Queretaro)</option>
+              </optgroup>
+              <optgroup label="South America">
+                <option value="brazilsouth">Brazil South (Sao Paulo)</option>
+                <option value="brazilsoutheast">Brazil Southeast (Rio de Janeiro)</option>
+              </optgroup>
+              <optgroup label="Asia Pacific">
+                <option value="southeastasia">Southeast Asia (Singapore)</option>
+                <option value="eastasia">East Asia (Hong Kong)</option>
+                <option value="japaneast">Japan East (Tokyo)</option>
+                <option value="japanwest">Japan West (Osaka)</option>
+                <option value="koreacentral">Korea Central (Seoul)</option>
+                <option value="koreasouth">Korea South (Busan)</option>
+                <option value="centralindia">Central India (Pune)</option>
+                <option value="southindia">South India (Chennai)</option>
+                <option value="westindia">West India (Mumbai)</option>
+                <option value="jioindiacentral">Jio India Central (Nagpur)</option>
+                <option value="jioindiawest">Jio India West (Jamnagar)</option>
+              </optgroup>
+              <optgroup label="Australia + New Zealand">
+                <option value="australiaeast">Australia East (Sydney)</option>
+                <option value="australiasoutheast">Australia Southeast (Melbourne)</option>
+                <option value="australiacentral">Australia Central (Canberra)</option>
+                <option value="australiacentral2">Australia Central 2 (Canberra)</option>
+                <option value="newzealandnorth">New Zealand North (Auckland)</option>
+              </optgroup>
+              <optgroup label="Middle East">
+                <option value="uaenorth">UAE North (Dubai)</option>
+                <option value="uaecentral">UAE Central (Abu Dhabi)</option>
+                <option value="qatarcentral">Qatar Central (Doha)</option>
+                <option value="israelcentral">Israel Central (Tel Aviv)</option>
+              </optgroup>
+              <optgroup label="Africa">
+                <option value="southafricanorth">South Africa North (Johannesburg)</option>
+                <option value="southafricawest">South Africa West (Cape Town)</option>
+              </optgroup>
+            </select>
+            <span class="err" data-err="location">Required.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Log Analytics workspace</h3>
+        <p class="card-sub">If the workspace doesn't exist yet, the bootstrap will create it. Defaults match the standard layout -- override only if your org uses different names.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_ws">Workspace name</label>
+            <input type="text" id="f_ws" data-key="workspaceName" autocomplete="off"
+                   placeholder="log-si-prod-community-vm"
+                   data-default="log-si-prod-community-vm" />
+            <span class="err" data-err="workspaceName">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_wsrg">Workspace resource group</label>
+            <input type="text" id="f_wsrg" data-key="workspaceRg" autocomplete="off"
+                   placeholder="rg-si-prod-community-vm"
+                   data-default="rg-si-prod-community-vm" />
+            <span class="err" data-err="workspaceRg">Required.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Data Collection Endpoint</h3>
+        <p class="card-sub">DCE for the SI_* tables. The bootstrap creates the matching DCRs alongside it.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_dce">DCE name <span class="help" data-tip="Azure Monitor Data Collection Endpoint. The bootstrap creates one DCR per engine and points all of them at this DCE. Default name: dce-si-prod-community-vm (dce-si-&lt;ring&gt;-&lt;edition&gt;-&lt;hosting&gt;; ca instead of vm when the engines run as Container Apps jobs).">?</span></label>
+            <input type="text" id="f_dce" data-key="dceName" autocomplete="off"
+                   placeholder="dce-si-prod-community-vm"
+                   data-default="dce-si-prod-community-vm" />
+            <span class="err" data-err="dceName">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_dcerg">DCE resource group <span class="help" data-tip="RG that hosts the DCE. Often same as workspace RG to simplify RBAC. Engine grants the SPN Monitoring Metrics Publisher on this RG so DCRs auto-created at first ingest land here.">?</span></label>
+            <input type="text" id="f_dcerg" data-key="dceRg" autocomplete="off"
+                   placeholder="rg-si-prod-community-vm"
+                   data-default="rg-si-prod-community-vm" />
+            <span class="err" data-err="dceRg">Required.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Storage account <span style="color:#888;font-weight:400;font-size:14px;">(fingerprint cache + worker queues + Excel staging)</span></h3>
+        <p class="card-sub">SecurityInsight uses a single storage account for: per-engine fingerprint blobs (skip-when-unchanged), the worker queue when running on Container Apps Job, and a staging container for the Excel reports before mail. The bootstrap creates the account if missing and grants the SPN <b>Storage Blob/Table/Queue Data Contributor</b> on the account scope: SecurityInsight reaches storage only with its identity.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_storacct">Storage account name <span class="help" data-tip="3-24 chars, all lowercase letters and digits, globally unique across Azure. Suggested: stsi&lt;ring&gt;&lt;edition&gt;&lt;hosting&gt;01, e.g. stsiprodcommunityvm01.">?</span></label>
+            <input type="text" id="f_storacct" data-key="storageAccountName" autocomplete="off"
+                   placeholder="stsiprodcommunityvm01" />
+            <span class="err" data-err="storageAccountName">3-24 chars, lowercase letters / digits only.</span>
+          </div>
+          <div class="field required">
+            <label for="f_storrg">Storage resource group <span class="help" data-tip="RG for the storage account. Defaults to the workspace RG if left blank, which keeps the SI footprint in one RG (recommended).">?</span></label>
+            <input type="text" id="f_storrg" data-key="storageResourceGroup" autocomplete="off"
+                   placeholder="rg-si-prod-community-vm"
+                   data-default="rg-si-prod-community-vm" />
+            <span class="err" data-err="storageResourceGroup">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_storcontainer">Container name <span class="help" data-tip="Blob container holding the staged Excel reports + fingerprint cache. Engine creates it on first ingest. Default: securityinsight. Lowercase, 3-63 chars, no underscores.">?</span></label>
+            <input type="text" id="f_storcontainer" data-key="storageContainer" autocomplete="off"
+                   placeholder="securityinsight"
+                   data-default="securityinsight" />
+            <span class="err" data-err="storageContainer">Required.</span>
+          </div>
+          <div class="field">
+            <label for="f_naming">Resource naming suffix <span style="color:#888;font-weight:400;">(optional)</span> <span class="help" data-tip="Optional suffix appended to every default name on this page (workspace + RG + DCE + DCE RG + storage account + storage RG + container) so you can run preview / prod side-by-side. Example: 'test' produces log-si-prod-community-vm-test, rg-si-prod-community-vm-test, etc. Leave blank for plain defaults.">?</span></label>
+            <input type="text" id="f_naming" data-key="namingSuffix" autocomplete="off"
+                   placeholder="(blank)" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet (cumulative)</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-workspace"># Fill in the fields above to generate the PowerShell snippet.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-workspace">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 4: MAIL / SMTP -------------------------- -->
+    <section class="page" data-page="output" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 3 of 8 &middot; Mail / SMTP <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Send risk-analysis summaries by email?</h2>
+        <p class="page-lead">SecurityInsight can mail you a per-run summary (HTML) and attach the Excel report. Off by default &mdash; turn on only if you want the engine to send mail. <b>Anonymous SMTP relay</b> is fine for internal corporate mail relays; <b>authenticated</b> is needed for a hosted relay that requires sign-in. Recommended instead: an Office 365 shared mailbox (setup\Set-SIMail.ps1).</p>
+      </div>
+
+      <div class="card">
+        <h3>Mail mode</h3>
+        <p class="card-sub">Off &rarr; engine never tries to send mail. Anonymous &rarr; corporate relay (no login). Authenticated &rarr; user/password to a hosted relay.</p>
+        <div class="toggle-group" data-toggle-key="smtpMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="smtpMode" value="off" /> Off <span style="color:#888;">(no mail sent)</span></label>
+          <label data-val="anon"><input type="radio" name="smtpMode" value="anon" /> Anonymous relay <span style="color:#888;">(internal SMTP)</span></label>
+          <label data-val="auth"><input type="radio" name="smtpMode" value="auth" /> Authenticated <span style="color:#888;">(a relay that needs sign-in)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-smtp-mode-block="anon,auth" hidden>
+        <h3>SMTP relay</h3>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_smtpServer">Server hostname <span class="help" data-tip="The SMTP relay's DNS name. Internal corporate relay: ask your messaging team. SendGrid: smtp.sendgrid.net. M365: smtp.office365.com.">?</span></label>
+            <input type="text" id="f_smtpServer" data-key="smtpServer" autocomplete="off"
+                   placeholder="smtp.contoso.local" />
+            <span class="err" data-err="smtpServer">Required when mail is enabled.</span>
+          </div>
+          <div class="field required">
+            <label for="f_smtpPort">Port <span class="help" data-tip="587 = STARTTLS submission (default; works for most relays). 25 = legacy; only on-prem internal relays. 465 = implicit TLS (legacy SMTPS, rarely needed).">?</span></label>
+            <input type="text" id="f_smtpPort" data-key="smtpPort" autocomplete="off"
+                   placeholder="587" data-default="587" />
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="f_smtpUseSsl" data-key="smtpUseSsl" checked /> Use SSL / TLS <span class="help" data-tip="Encrypt the connection. Recommended ON for any external relay (a relay that needs sign-in). Internal relays sometimes use plaintext on port 25; turn off only if your relay refuses TLS.">?</span></label>
+          </div>
+          <div class="field required">
+            <label for="f_smtpFrom">From address <span class="help" data-tip="The 'From:' header on outbound mail. Must be a verified sender on hosted relays (a relay that needs sign-in reject mail whose From isn't verified). Often DIFFERENT from the SMTP login user.">?</span></label>
+            <input type="text" id="f_smtpFrom" data-key="smtpFrom" autocomplete="off"
+                   placeholder="securityinsight@contoso.com" />
+          </div>
+          <div class="field required span-2">
+            <label for="f_mailTo">Mail recipients <span class="help" data-tip="Comma- or semicolon-separated list of inboxes that receive the per-run summary. Distribution lists OK. Per-template recipient overrides go in LauncherConfig.custom.ps1 later.">?</span></label>
+            <input type="text" id="f_mailTo" data-key="mailTo" autocomplete="off"
+                   placeholder="it-alerts@contoso.com, soc@contoso.com" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-smtp-mode-block="auth" hidden>
+        <h3>SMTP authentication</h3>
+        <p class="card-sub">Login the engine uses to authenticate to the relay. The KV-based storage path is preferred for production -- here you just type the credentials and they end up wherever your <code>config\SecurityInsight.custom.ps1</code> writes them.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_smtpUser">SMTP username <span class="help" data-tip="The login the relay expects. SendGrid: literally the string 'apikey'. M365: a licensed mailbox UPN with SMTP AUTH enabled.">?</span></label>
+            <input type="text" id="f_smtpUser" data-key="smtpUser" autocomplete="off" />
+          </div>
+          <div class="field required">
+            <label for="f_smtpPassword">SMTP password / API key <span class="help" data-tip="Stored as $global:SMTPPassword in the custom config (or pulled from KV at engine start, depending on your auth setup). Treat as a secret.">?</span></label>
+            <input type="password" id="f_smtpPassword" data-key="smtpPassword" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-output"># Mail mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-output">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 5: CMDB --------------------------------- -->
+    <section class="page" data-page="cmdb" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 4 of 8 &middot; CMDB integration <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Enrich asset rows from your CMDB?</h2>
+        <p class="page-lead">If your CMDB exports a CSV with asset Owner / Department / CostCenter / BusinessApp columns, the engine joins it onto every <code>SI_*_Profile_CL</code> row. Useful for tier overrides, reporting, and the &quot;who owns this&quot; column in Risk Analysis. Off by default.</p>
+      </div>
+
+      <div class="card">
+        <h3>CMDB mode</h3>
+        <div class="toggle-group" data-toggle-key="cmdbMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="cmdbMode" value="off" /> Off <span style="color:#888;">(no CMDB enrichment)</span></label>
+          <label data-val="csv"><input type="radio" name="cmdbMode" value="csv" /> CSV file <span style="color:#888;">(local path or UNC)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-cmdb-mode-block="csv" hidden>
+        <h3>CSV source</h3>
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_cmdbCsvPath">CSV path <span class="help" data-tip="Absolute path on the engine host. Local: C:\SecurityInsight\cmdb\export.csv. UNC: \\fileserver\share\cmdb-export.csv. Required columns: AssetName, Tier (or BusinessCriticality), Owner. Optional: Department, CostCenter, BusinessApp -- engine joins on AssetName case-insensitive.">?</span></label>
+            <input type="text" id="f_cmdbCsvPath" data-key="cmdbCsvPath" autocomplete="off"
+                   placeholder="C:\SecurityInsight\cmdb\export.csv" />
+          </div>
+          <div class="field required">
+            <label for="f_cmdbRefreshHours">Refresh interval (hours) <span class="help" data-tip="How often to re-read the CSV. 24 = once per day (matches typical CMDB export schedules). 1 = hourly (only if your CMDB pushes updates that often). 168 = weekly. Cached file is reused between refreshes, so engine startup stays fast.">?</span></label>
+            <input type="text" id="f_cmdbRefreshHours" data-key="cmdbRefreshHours" autocomplete="off"
+                   placeholder="24" data-default="24" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-cmdb"># CMDB mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-cmdb">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 6: AZURE OPENAI ------------------------- -->
+    <section class="page" data-page="apptag" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 5 of 8 &middot; Azure OpenAI <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Add an AI summary to risk-analysis runs?</h2>
+        <p class="page-lead">When enabled, RiskAnalysis sends the top findings to Azure OpenAI (your tenant, your key) and adds a Summary sheet to the Excel + a paragraph at the top of the email. Costs a few cents per run on gpt-4.1-mini. Off by default; safe to enable later.</p>
+      </div>
+
+      <div class="card">
+        <h3>OpenAI mode</h3>
+        <div class="toggle-group" data-toggle-key="openAiMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="openAiMode" value="off" /> Off</label>
+          <label data-val="enabled"><input type="radio" name="openAiMode" value="enabled" /> Enabled <span style="color:#888;">(uses your Azure OpenAI deployment)</span></label>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> you need an existing Azure OpenAI resource + a deployed model (gpt-4.1-mini is recommended). If you don't have one, run <code>setup\Validate-SIOpenAI.ps1</code> after the wizard finishes &mdash; it provisions a PAYG instance + deployment for you.
+        </div>
+      </div>
+
+      <div class="card sub-block" data-open-ai-mode-block="enabled" hidden>
+        <h3>OpenAI resource</h3>
+        <p class="card-sub">Re-use an existing Azure OpenAI deployment (paste the endpoint + deployment name + key) <i>or</i> have the wizard create a new resource for you on Apply (PAYG SKU + gpt-4.1-mini deployment in the workspace's region).</p>
+        <div class="toggle-group" data-toggle-key="openAiResMode" style="margin-bottom: 14px;">
+          <label data-val="useExisting"><input type="radio" name="openAiResMode" value="useExisting" /> Use existing OpenAI resource <span style="color:#888;">(paste endpoint + deployment + key)</span></label>
+          <label data-val="createNew"><input type="radio" name="openAiResMode" value="createNew" /> Create new OpenAI resource</label>
+        </div>
+
+        <div class="form-grid" data-open-ai-res-mode-block="useExisting">
+          <div class="field required span-2">
+            <label for="f_openAiEndpoint">Endpoint URL <span class="help" data-tip="The Azure OpenAI resource endpoint, NOT the openai.com URL. Format: https://<your-resource-name>.openai.azure.com/. Find under your Azure OpenAI resource > Keys and Endpoint.">?</span></label>
+            <input type="text" id="f_openAiEndpoint" data-key="openAiEndpoint" autocomplete="off"
+                   placeholder="https://my-aoai-westeurope.openai.azure.com/" />
+          </div>
+          <div class="field required">
+            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio. This is NOT the model SKU (gpt-4.1-mini etc.) -- it's the arbitrary deployment alias YOU created on top of a model. The recommended convention is to name it after the OpenAI RESOURCE INSTANCE (e.g. oai-si-prod-community-vm) so resource + deployment line up 1:1; some teams instead name it after the model SKU (gpt-4.1-mini) -- both work as long as it matches what's in your Azure OpenAI Studio > Deployments tab.">?</span></label>
+            <input type="text" id="f_openAiDeployment" data-key="openAiDeployment" autocomplete="off"
+                   placeholder="oai-si-prod-community-vm" />
+          </div>
+          <div class="field required">
+            <label for="f_openAiApiVersion">API version <span class="help" data-tip="The Azure OpenAI API version string. 2024-08-01-preview is current as of this wizard release; future versions are usually backward-compatible for chat/completions.">?</span></label>
+            <input type="text" id="f_openAiApiVersion" data-key="openAiApiVersion" autocomplete="off"
+                   placeholder="2024-08-01-preview" data-default="2024-08-01-preview" />
+          </div>
+          <div class="field required span-2">
+            <label for="f_openAiApiKey">API key <span class="help" data-tip="Found under your Azure OpenAI resource > Keys and Endpoint > KEY 1. Treat as a secret -- ends up in $global:OpenAI_apiKey in the custom config (or KV-pulled at engine start).">?</span></label>
+            <input type="password" id="f_openAiApiKey" data-key="openAiApiKey" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4.1-mini pricing. When the next call would push spend over this cap, the asset gets SI_Classify_Status='budget-capped' with a placeholder verdict and the run continues (engine does not throw). Default 3 USD covers ~200-500 assets comfortably; raise to 10 for very large tenants, lower to 0.50 for cost-paranoid lab use.">?</span></label>
+            <input type="text" id="f_openAiMaxSpend" data-key="openAiMaxSpend" autocomplete="off"
+                   placeholder="3"
+                   data-default="3" />
+          </div>
+        </div>
+
+        <div data-open-ai-res-mode-block="createNew" hidden>
+          <p class="card-sub" style="margin-top:14px;">Where the new Azure OpenAI resource + deployment land. The wizard provisions a PAYG instance with these names on Apply.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_openAiResName">OpenAI resource name <span class="help" data-tip="DNS-globally-unique. Default: oai-si-prod-community-vm (oai-si-&lt;ring&gt;-&lt;edition&gt;-&lt;hosting&gt;). 2-64 chars, lowercase letters / digits / hyphens. The resource endpoint URL is auto-derived: https://&lt;name&gt;.openai.azure.com/.">?</span></label>
+              <input type="text" id="f_openAiResName" data-key="openAiResName" autocomplete="off"
+                     placeholder="oai-si-prod-community-vm"
+                     data-default="oai-si-prod-community-vm" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiResRg">Resource group <span class="help" data-tip="RG that hosts the Azure OpenAI resource. Defaults to the SecurityInsight resource group (rg-si-prod-community-vm); a separate one also works when cost allocation or policies must differ.">?</span></label>
+              <input type="text" id="f_openAiResRg" data-key="openAiResRg" autocomplete="off"
+                     placeholder="rg-si-prod-community-vm"
+                     data-default="rg-si-prod-community-vm" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiSub">Subscription ID <span class="help" data-tip="Subscription to host the OpenAI resource. Often DIFFERENT from the SI workspace sub if the org keeps AI workloads in a dedicated cost-centre sub. Defaults to the same sub you set on Step 2.">?</span></label>
+              <input type="text" id="f_openAiSub" data-key="openAiSubscriptionId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="openAiSubscriptionId">Must be a GUID (or leave blank to use Step 2's sub).</span>
+            </div>
+            <div class="field required">
+              <label for="f_openAiResRegion">Azure region <span class="help" data-tip="Region for the new OpenAI resource. NOT every Azure region offers Azure OpenAI -- Sweden Central, East US, East US 2, France Central, North Central US, Switzerland North, UK South, West Europe are the most-stocked-with-models. gpt-4.1-mini is widely available; gpt-4o has tighter region availability. Pick close to your workspace region for lowest latency.">?</span></label>
+              <select id="f_openAiResRegion" data-key="openAiLocation" data-default="swedencentral">
+                <optgroup label="Best gpt-4.1-mini availability">
+                  <option value="swedencentral">Sweden Central (Gavle)</option>
+                  <option value="eastus">East US (Virginia)</option>
+                  <option value="eastus2">East US 2 (Virginia)</option>
+                  <option value="francecentral">France Central (Paris)</option>
+                  <option value="northcentralus">North Central US (Illinois)</option>
+                  <option value="switzerlandnorth">Switzerland North (Zurich)</option>
+                  <option value="uksouth">UK South (London)</option>
+                  <option value="westeurope">West Europe (Netherlands)</option>
+                </optgroup>
+                <optgroup label="Other AOAI-enabled regions">
+                  <option value="australiaeast">Australia East (Sydney)</option>
+                  <option value="brazilsouth">Brazil South (Sao Paulo)</option>
+                  <option value="canadaeast">Canada East (Quebec)</option>
+                  <option value="japaneast">Japan East (Tokyo)</option>
+                  <option value="koreacentral">Korea Central (Seoul)</option>
+                  <option value="norwayeast">Norway East (Oslo)</option>
+                  <option value="southafricanorth">South Africa North (Johannesburg)</option>
+                  <option value="southindia">South India (Chennai)</option>
+                  <option value="southcentralus">South Central US (Texas)</option>
+                  <option value="westus">West US (California)</option>
+                  <option value="westus3">West US 3 (Arizona)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="field required">
+              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Arbitrary alias YOU assign to the model deployment -- used to address it in API calls. Convention (matches the rest of SI's naming): same as the OpenAI RESOURCE INSTANCE NAME above so resource + deployment line up 1:1, e.g. oai-si-prod-community-vm. Some teams instead name it after the model SKU (gpt-4.1-mini) -- both work; the wizard provisions whatever you type here as a deployment on top of the model SKU below.">?</span></label>
+              <input type="text" id="f_openAiNewDeployment" data-key="openAiNewDeployment" autocomplete="off"
+                     placeholder="oai-si-prod-community-vm"
+                     data-default="oai-si-prod-community-vm" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiModel">Model SKU <span class="help" data-tip="The actual Azure OpenAI model. gpt-4.1-mini is the SI default -- replaces gpt-4o-mini (deprecated 2025). For higher fidelity pick gpt-4.1; for fastest-cheapest pick gpt-4.1-nano. Reasoning models (o3-mini / o4-mini) work but are overkill for summarisation. Check region availability before picking.">?</span></label>
+              <select id="f_openAiModel" data-key="openAiModel" data-default="gpt-4.1-mini">
+                <optgroup label="GPT-4.1 family (current generation)">
+                  <option value="gpt-4.1-mini">gpt-4.1-mini (recommended -- cheap + fast, replaces gpt-4o-mini)</option>
+                  <option value="gpt-4.1">gpt-4.1 (highest summary quality)</option>
+                  <option value="gpt-4.1-nano">gpt-4.1-nano (fastest + cheapest)</option>
+                </optgroup>
+                <optgroup label="Reasoning models (overkill for summarisation)">
+                  <option value="o4-mini">o4-mini (reasoning, cheap)</option>
+                  <option value="o3-mini">o3-mini (reasoning, mid)</option>
+                </optgroup>
+                <optgroup label="Legacy (gpt-4o family scheduled for deprecation)">
+                  <option value="gpt-4o">gpt-4o (legacy)</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini (deprecated 2025 -- migrate to gpt-4.1-mini)</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
+          <p style="font-size:13px;color:#5a6a7a;background:#f0f7ff;border-left:3px solid #2a8b9b;padding:10px 12px;border-radius:4px;margin-top:14px;">
+            On Apply the wizard provisions the OpenAI resource + deployment + key, then writes the endpoint + key into your custom config automatically. The snippet preview below shows exactly what the engine will read.
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-apptag"># OpenAI mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-apptag">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 7: SHODAN ------------------------------- -->
+    <section class="page" data-page="shodan" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 6 of 8 &middot; Shodan attack surface <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Scan your public IPs via Shodan?</h2>
+        <p class="page-lead">When enabled, the PublicIP engine collects every Tier 0/1 asset's public IP, queries Shodan for open ports + CVE history, and lands the data in <code>SI_PublicIP_Profile_CL</code> for two new RA reports (open-port exposure, vulnerable-service exposure). Off by default; needs a Shodan account.</p>
+      </div>
+
+      <div class="card">
+        <h3>Shodan mode</h3>
+        <div class="toggle-group" data-toggle-key="shodanMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="shodanMode" value="off" /> Off</label>
+          <label data-val="enabled"><input type="radio" name="shodanMode" value="enabled" /> Enabled</label>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> a Shodan API key. <b>Free tier</b> caps at ~100 lookups/month with no port-history; <b>Membership</b> ($49 one-time) lifts the cap to ~10,000/month and unlocks CVE history. SI's PublicIP engine batches lookups, so a 200-asset tenant costs ~50-100 lookups per run.
+        </div>
+      </div>
+
+      <div class="card sub-block" data-shodan-mode-block="enabled" hidden>
+        <h3>Shodan credentials</h3>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_shodanApiKey">API key <span class="help" data-tip="Found at account.shodan.io after sign-in. Treat as a secret -- ends up in $global:SI_Shodan_ApiKey in the custom config (or KV-pulled at engine start). Free-tier keys work; the engine surfaces 'rate-limit reached' clearly if you blow the quota.">?</span></label>
+            <input type="password" id="f_shodanApiKey" data-key="shodanApiKey" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-shodan"># Shodan mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-shodan">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 8: OUTPUT SINKS + DEFENDER -------------- -->
+    <section class="page" data-page="advanced" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 7 of 8 &middot; Output sinks + Defender XDR <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Where else should output go?</h2>
+        <p class="page-lead">By default every engine writes to Log Analytics + an Excel file. Optionally also write JSON for downstream pipelines, and link your Defender XDR workspace so RA can correlate with Defender Advanced Hunting tables.</p>
+      </div>
+
+      <div class="card">
+        <h3>JSON output sink</h3>
+        <p class="card-sub">When enabled, every engine appends <code>'JSON'</code> to its <code>SI_Sinks_&lt;Engine&gt;</code> array, writing newline-delimited JSON next to the Excel report. Useful for external SIEM ingest or custom analytics. Adds ~10% to runtime.</p>
+        <div class="toggle-group" style="margin-bottom: 4px;">
+          <label><input type="checkbox" id="f_enableJsonSink" data-key="enableJsonSink" /> Enable JSON output for every engine <span class="help" data-tip="Adds 'JSON' to SI_Sinks_RiskAnalysis, SI_Sinks_Endpoint, SI_Sinks_Identity, SI_Sinks_Azure, etc. Files land in DATA/OUTPUT/&lt;EngineName&gt;/&lt;timestamp&gt;.json.">?</span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Defender XDR workspace linkage</h3>
+        <p class="card-sub">Optionally tell SI which Log Analytics workspace your Defender XDR data is streaming to &mdash; in most tenants this is your <b>Microsoft Sentinel workspace</b> (if you have Sentinel deployed). Several RA reports cross-correlate (e.g. join MDE recommendations with sign-in risk events from Sentinel-ingested AAD logs). Off by default; only pick "Linked" if you have a Sentinel / Defender-XDR-streaming workspace.</p>
+        <div class="toggle-group" data-toggle-key="defenderMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="defenderMode" value="off" /> Off <span style="color:#888;">(no Defender XDR correlation)</span></label>
+          <label data-val="linked"><input type="radio" name="defenderMode" value="linked" /> Linked <span style="color:#888;">(paste your XDR workspace ResourceId below)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-defender-mode-block="linked" hidden>
+        <h3>Defender workspace</h3>
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_defenderWorkspaceResourceId">Workspace ResourceId <span class="help" data-tip="Full Azure ResourceId of the Defender XDR-ingesting Log Analytics workspace -- in most tenants this IS your Microsoft Sentinel workspace. Format: /subscriptions/&lt;sub-guid&gt;/resourceGroups/&lt;rg&gt;/providers/Microsoft.OperationalInsights/workspaces/&lt;ws-name&gt;. Find it in Defender XDR portal > Settings > Microsoft Sentinel, OR in Azure portal > your Sentinel workspace > Properties > ResourceId. Leave blank if you don't have Sentinel deployed.">?</span></label>
+            <input type="text" id="f_defenderWorkspaceResourceId" data-key="defenderWorkspaceResourceId" autocomplete="off"
+                   placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.OperationalInsights/workspaces/..." />
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-defender-mode-block="off">
+        <h3>Entra sign-in logs &mdash; auto-stream to SI workspace</h3>
+        <p class="card-sub">Several RA reports correlate sign-in risk events + audit events with assets (e.g. <i>"identities flagged risky AND owning a Tier-0 endpoint"</i>, <i>"role-assignment activity on a critical SP"</i>). Without a Sentinel workspace there's nothing for RA to correlate against &mdash; the sign-in / audit data has to land somewhere reachable. <b>If you don't have Sentinel</b>, turn this on and the wizard creates an Entra ID Diagnostic Setting on Apply that ships the <b>8 log categories SI's queries actually reference</b> straight into your <b>SI Log Analytics workspace</b>.</p>
+        <div class="toggle-group" data-toggle-key="entraDiagToSI" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="entraDiagToSI" value="off" /> Off <span style="color:#888;">(no Entra Diagnostic Setting created)</span></label>
+          <label data-val="enabled"><input type="radio" name="entraDiagToSI" value="enabled" checked /> Enabled <span style="color:#888;">(default; recommended when you have no Sentinel)</span></label>
+        </div>
+        <div class="note" style="background:#f0f7ff;border-left:3px solid #2a8b9b;font-size:13px;margin-top:14px;">
+          <b>Log categories enabled</b> (derived from SI engine query references):
+          <ul style="margin:6px 0 0 18px;padding:0;">
+            <li><code>SignInLogs</code> &mdash; interactive user sign-ins (43 query references; primary)</li>
+            <li><code>AuditLogs</code> &mdash; directory writes (role assignments, app reg changes, etc.)</li>
+            <li><code>NonInteractiveUserSignInLogs</code> &mdash; refresh-token / device-code sign-ins</li>
+            <li><code>ServicePrincipalSignInLogs</code> &mdash; SPN logins (client-credentials grants)</li>
+            <li><code>ManagedIdentitySignInLogs</code> &mdash; MSI logins (Azure-hosted workloads)</li>
+            <li><code>UserRiskEvents</code> &mdash; Identity Protection risk detections per user</li>
+            <li><code>ProvisioningLogs</code> &mdash; SCIM / cross-tenant provisioning audit trail</li>
+            <li><code>MicrosoftGraphActivityLogs</code> &mdash; Graph API call audit (newer category)</li>
+          </ul>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> the operator running Apply needs the <b>Security Administrator</b> or <b>Global Administrator</b> Entra role to create tenant-level Diagnostic Settings. The wizard surfaces a clear error in the Apply panel if the role is missing &mdash; ask a Security Admin to either grant the role or run Apply themselves.
+          <br><br>
+          <b>Cost:</b> categories billed as Log Analytics ingestion + retention. Typical ~50-200 MB/day for &lt;500 users (mostly SignInLogs); MicrosoftGraphActivityLogs can be heavy in tenants with many service-principal callers &mdash; check your workspace SKU. The Diagnostic Setting targets the SI workspace only; existing Sentinel sinks stay untouched.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 4)</span>
+        </div>
+        <pre class="preview" id="preview-advanced"># Output sinks: LA + Excel only. Defender XDR linkage: OFF.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-advanced">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" data-page="review" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 8 of 8 &middot; Review &amp; Setup</div>
+        <h2 class="page-title">Review your answers, then Setup Infrastructure</h2>
+        <p class="page-lead">Click <b>Setup Infrastructure</b> to provision everything: the wizard creates the SPN (or re-uses your existing one), grants the permissions, creates Log Analytics + Storage with RBAC-only access, and writes <code>config\SecurityInsight.custom.ps1</code>.</p>
+      </div>
+
+      <div class="card">
+        <h3>Setup Infrastructure</h3>
+        <p class="card-sub">The wizard signs you in itself when it starts: in Azure Cloud Shell automatically, on a workstation in your browser. Sign in with a Global Admin (or Privileged Role Administrator) account in the target tenant before clicking the button.</p>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          <button class="btn primary" id="btn-apply" style="font-size:14px;padding:10px 22px;">&#9658; Setup Infrastructure</button>
+          <span class="pill" id="apply-state-pill" style="font-size:11px;">Idle</span>
+          <span style="color:#888;font-size:12px;">Setup takes ~3-8 min depending on Azure response time.</span>
+        </div>
+
+        <div id="apply-progress" style="margin-top:18px;display:none;">
+          <div class="apply-phase" data-phase="spn">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">SPN &mdash; create app registration + cred + Graph perms + RBAC</span>
+            <span class="apply-status">pending</span>
+          </div>
+          <div class="apply-phase" data-phase="infra">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">Infrastructure &mdash; LA workspace + DCE + Storage + RBAC</span>
+            <span class="apply-status">pending</span>
+          </div>
+          <div class="apply-phase" data-phase="config">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">Config file &mdash; render <code>SecurityInsight.custom.ps1</code></span>
+            <span class="apply-status">pending</span>
+          </div>
+          <div class="apply-phase" data-phase="entraDiag">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">Entra Diagnostic Setting &mdash; PUT <code>SI-EntraDiag</code> targeting SI workspace (8 categories)</span>
+            <span class="apply-status">pending</span>
+          </div>
+          <div class="apply-phase" data-phase="container">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">Container Apps Job &mdash; ACR + image build + CAE + KEDA-scaled Jobs (only when host=<i>azureContainerMI</i>)</span>
+            <span class="apply-status">pending</span>
+          </div>
+        </div>
+
+        <div id="apply-result" style="margin-top:14px;"></div>
+      </div>
+
+      <div class="card">
+        <h3>What will happen</h3>
+        <div class="form-grid" style="font-size:13px;color:#333;">
+          <div class="field span-2"><label>Phase 1 &mdash; Service principal</label>
+            <div id="apply-summary-spn" class="apply-summary">(fill in earlier pages first)</div>
+          </div>
+          <div class="field span-2"><label>Phase 2 &mdash; Log Analytics + DCE + Storage (reached with the identity)</label>
+            <div id="apply-summary-infra" class="apply-summary">(fill in earlier pages first)</div>
+          </div>
+          <div class="field span-2"><label>Phase 3 &mdash; Write <code>config\SecurityInsight.custom.ps1</code></label>
+            <div id="apply-summary-config" class="apply-summary">(includes SMTP / OpenAI / Shodan / CMDB only when toggled on the relevant pages)</div>
+          </div>
+          <div class="field span-2"><label>Phase 4 &mdash; Entra ID Diagnostic Setting (sign-in + audit log streaming)</label>
+            <div id="apply-summary-entradiag" class="apply-summary">(creates tenant-level Diagnostic Setting <code>SI-EntraDiag</code> targeting the SI workspace; skipped when Defender / Sentinel workspace is linked or toggle is off)</div>
+          </div>
+          <div class="field span-2"><label>Phase 5 &mdash; Container Apps Job runtime (ACR + CAE + KEDA-scaled Jobs)</label>
+            <div id="apply-summary-container" class="apply-summary">(creates Azure Container Registry, builds the orchestrator image, provisions Container Apps Environment + per-engine Jobs with KEDA queue scalers; only runs when engine host = <i>Azure Container Apps Job</i> on Step 1; skipped for VM hosts)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>State JSON that will be POSTed to <code>/api/apply</code></h4>
+          <span class="target">For debugging / reproduction via Invoke-RestMethod</span>
+        </div>
+        <pre class="preview" id="preview-apply" style="max-height:280px;overflow:auto;">(fill in the wizard pages first)</pre>
+        <div style="margin-top:10px;">
+          <button class="btn" data-copy="preview-apply">Copy state JSON</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =================================================================== -->
+  <!-- STICKY BOTTOM BAR: progress + navigation                            -->
+  <!-- =================================================================== -->
+  <div class="bar">
+    <div>
+      <div class="progress-text" id="progress-text">Page 1 of 9</div>
+      <div class="progress-bar"><div class="fill" id="progress-fill" style="width: 10%;"></div></div>
+    </div>
+    <div class="bar-actions">
+      <button class="btn" id="btn-back">&larr; Back</button>
+      <button class="btn primary" id="btn-next">Next &rarr;</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast">Copied to clipboard.</div>
+
+<script src="app.js"></script>
+</body>
+</html>

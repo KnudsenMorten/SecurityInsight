@@ -1,0 +1,53 @@
+id:        AssetProfileByLogonUser
+appliesTo: endpoint
+mode:      locked
+purpose:   'Endpoint tier inherited from most-frequent logon user (cross-engine)'
+category:  'Logon Graph'
+description: |
+  Promote endpoint tier from the most-frequent logon user's tier (resolved
+  in Enrich via ExposureGraph logon edges + SI_Identity_Profile_CL lookup,
+  stamped on each device as Metadata.MostFrequentUserTier).
+
+  Mapping: T0 -> T0, T1 user -> T1, T2 user -> T2. T3 user -> T3
+
+detections:
+
+  - id: LogonByT0User
+    detect:
+      any:
+        - kind: mostFrequentUserTier
+          tierValues: [0]
+    set:
+      Tier:     0
+      Purpose:  'Tier inherited from most-frequent logon user (T0)'
+      Category: 'Logon Graph'
+
+  - id: LogonByT1User
+    detect:
+      any:
+        - kind: mostFrequentUserTier
+          tierValues: [1]
+    set:
+      Tier:     1
+      Purpose:  'Tier inherited from most-frequent logon user (T1)'
+      Category: 'Logon Graph'
+
+  - id: LogonByT2User
+    detect:
+      any:
+        - kind: mostFrequentUserTier
+          tierValues: [2]
+    set:
+      Tier:     2
+      Purpose:  'Tier inherited from most-frequent logon user (T2)'
+      Category: 'Logon Graph'
+
+  - id: LogonByT3User
+    detect:
+      any:
+        - kind: mostFrequentUserTier
+          tierValues: [3]
+    set:
+      Tier:     3
+      Purpose:  'Tier inherited from most-frequent logon user (T3)'
+      Category: 'Logon Graph'

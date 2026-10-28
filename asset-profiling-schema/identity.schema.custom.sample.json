@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+
+  "_purpose": "REFERENCE FILE -- not loaded by the engine. Copy parts you need into: asset-profiling-schema/identity.schema.custom.json. Loaded automatically by Get-SISchemaWithCustomMerge.ps1 and merged on top of asset-profiling-schema/identity.schema.locked.json.",
+
+  "_loadingNotes": [
+    "Locked schema:   asset-profiling-schema/identity.schema.locked.json   (shipped, do NOT edit)",
+    "Custom overlay:  asset-profiling-schema/identity.schema.custom.json   (you create -- this file is a sample of that)",
+    "Merge semantics: see asset-profiling-schema/endpoint.schema.custom.sample.json for the full table -- identical merge model."
+  ],
+
+
+  "fields": [
+    {
+      "_comment": "EXAMPLE 1: brand-new bool field. purpose=risk auto-includes it in every Identity RA report's RiskFactor_Probability + RiskFactor_Probability_Detailed.",
+      "name": "IsContractorAccount",
+      "type": "bool",
+      "purpose": "risk",
+      "stage": { "writtenBy": "profile" },
+      "default": false,
+      "description": "True when the user account is identified as a contractor (e.g. UPN ends with @contractor.acme.com OR Department is 'Contractors')."
+    },
+
+    {
+      "_comment": "EXAMPLE 2: brand-new string field surfaced from Entra extensionAttribute.",
+      "name": "BusinessUnitFromExtAttr3",
+      "type": "string",
+      "purpose": "context",
+      "stage": { "writtenBy": "enrich" },
+      "default": "",
+      "description": "Copy of Entra extensionAttribute3 -- our HR feed writes BU codes there."
+    },
+
+    {
+      "_comment": "EXAMPLE 3: brand-new int field for risk weighting based on entitlement count.",
+      "name": "EntitlementCount",
+      "type": "int",
+      "purpose": "context",
+      "stage": { "writtenBy": "enrich" },
+      "default": 0,
+      "description": "Total count of distinct entitlement / role assignments. Used in custom RA reports to flag identities with > N entitlements."
+    },
+
+    {
+      "_comment": "EXAMPLE 4: REPLACE an existing locked field. Use cautiously -- you take full ownership.",
+      "name": "AccountEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "stage": { "writtenBy": "collect" },
+      "default": true,
+      "description": "Customer override -- changed default from false to true (more accurate for our environment where most accounts are active)."
+    }
+  ],
+
+  "aggregator": {
+    "_comment": "Per-source contributor mapping. Each id matches a field name above; source identifies which collector shape to read from.",
+    "contributors": [
+      {
+        "id": "IsContractorAccount",
+        "source": "entra",
+        "fromExpression": "tolower(Upn) endswith '@contractor.acme.com' or tolower(Department) == 'contractors'"
+      },
+      {
+        "id": "BusinessUnitFromExtAttr3",
+        "source": "entra",
+        "fromColumn": "OnPremisesExtensionAttributes.extensionAttribute3"
+      },
+      {
+        "id": "EntitlementCount",
+        "source": "entra",
+        "fromExpression": "array_length(coalesce(EntraRoles_Active, dynamic([])))"
+      }
+    ]
+  },
+
+  "rawPayload": {
+    "sources": {
+      "entra": {
+        "_comment": "Surface extra raw payload fields. These become Properties.collect.entra.<path> in the Profile_CL table.",
+        "includePaths": [
+          "OnPremisesExtensionAttributes.extensionAttribute3",
+          "EmployeeType",
+          "EmployeeOrgData.division"
+        ]
+      }
+    }
+  }
+}

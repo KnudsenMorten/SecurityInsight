@@ -1,0 +1,114 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "excel-findings-detailed",
+  "version": "1.0.0",
+  "description": "Default columns of a Detailed sheet: one row per CI x finding. A report may keep its own column order; these are the columns every Detailed sheet carries.",
+  "grain": "ci_finding",
+  "columns": [
+    {
+      "target": "CI",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "AssetName",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "AssetType",
+      "from": "si_asset_type"
+    },
+    {
+      "target": "CriticalityTier",
+      "from": "si_tier"
+    },
+    {
+      "target": "SecurityDomain",
+      "from": "si_security_domain"
+    },
+    {
+      "target": "ReportName",
+      "from": "si_report_name"
+    },
+    {
+      "target": "ConfigurationId",
+      "from": "si_finding_key"
+    },
+    {
+      "target": "ConfigurationName",
+      "from": "si_title"
+    },
+    {
+      "target": "Component",
+      "from": "si_component"
+    },
+    {
+      "target": "ServiceNowSubCi",
+      "from": "si_servicenow_subci"
+    },
+    {
+      "target": "OsFamily",
+      "from": "si_os_family"
+    },
+    {
+      "target": "PatchCycle",
+      "from": "si_patch_cycle"
+    },
+    {
+      "target": "SecuritySeverity",
+      "from": "si_severity"
+    },
+    {
+      "target": "Cvss",
+      "from": "si_cvss"
+    },
+    {
+      "target": "RiskScoreTotal",
+      "from": "si_risk_score"
+    },
+    {
+      "target": "RiskScoreTotal_Weighted",
+      "from": "si_weighted_risk_score"
+    },
+    {
+      "target": "RiskRating",
+      "from": "si_risk_rating"
+    },
+    {
+      "target": "RiskFactors",
+      "from": "si_finding_risk_factors",
+      "op": "join_ids:;"
+    },
+    {
+      "target": "DetectedBy",
+      "from": "si_detected_by",
+      "op": "join:;"
+    },
+    {
+      "target": "FirstDetected",
+      "from": "si_first_detected",
+      "op": "format_date"
+    },
+    {
+      "target": "cmdbId",
+      "from": "si_cmdb_id"
+    },
+    {
+      "target": "cmdbName",
+      "from": "si_cmdb_name"
+    },
+    {
+      "target": "cmdbCriticality",
+      "from": "si_cmdb_criticality"
+    },
+    {
+      "target": "cmdbDataSensitivity",
+      "from": "si_cmdb_data_sensitivity"
+    },
+    {
+      "target": "State",
+      "from": "si_finding_state"
+    }
+  ],
+  "gridDefault": true
+}

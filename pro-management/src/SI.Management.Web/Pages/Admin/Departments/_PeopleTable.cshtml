@@ -1,0 +1,81 @@
+@model SI.Management.Web.Pages.Admin.Departments.PeopleTableModel
+@using SI.Management.Web.Departments
+@using Microsoft.AspNetCore.Html
+@*
+    #335: ONE people table, the same on the New department form and on a department's page. A row = a person and a role;
+    someone with two roles has two rows. A new row's person is picked from the list (type a name or an e-mail address:
+    the directory's users and groups, and people already on a department) or typed as an e-mail address -- someone not
+    found is an outside person, with a name and company. Works without script (one blank row; Remove is a tick box);
+    people-table.js adds "+ Add person", the suggestions and the outside-person fields.
+*@
+@{
+    IHtmlContent RoleSelect(object i, string? selected)
+    {
+        var html = new System.Text.StringBuilder();
+        html.Append($"<select name=\"rows[{i}].Role\" aria-label=\"Role\" data-person-role><option value=\"\">Pick a role</option>");
+        foreach (var r in DepartmentRoles.All)
+            html.Append($"<option value=\"{r}\"{(r == selected ? " selected" : "")}>{System.Net.WebUtility.HtmlEncode(DepartmentRoles.Label(r))}</option>");
+        html.Append("</select>");
+        return new HtmlString(html.ToString());
+    }
+}
+<div class="people-table" data-people-table data-search-url="@Model.SearchUrl">
+    <details class="hint" data-role-legend>
+        <summary>(i) What the roles mean</summary>
+        <dl>
+            @foreach (var r in DepartmentRoles.All)
+            {
+                <dt>@DepartmentRoles.Label(r)</dt><dd>@DepartmentRoles.Purpose(r)</dd>
+            }
+        </dl>
+        <p>@(Model.DirectoryOn ? "People are looked up in your organisation's directory as you type." : "Type an e-mail address, or pick someone already on a department. (Looking people up in the directory is off: Access:GraphLookup.)") A business owner needs an e-mail address -- the monthly report goes there.</p>
+    </details>
+    <table data-people-rows data-static="a form: one row per person and role, in the order they were added">
+        <thead><tr><th>Person</th><th>Role</th><th><span class="sr-only">Remove</span></th></tr></thead>
+        <tbody>
+            @for (var i = 0; i < Model.Rows.Count; i++)
+            {
+                var row = Model.Rows[i];
+                var kept = row.MemberId is { } mid ? Model.Existing.FirstOrDefault(m => m.MemberId == mid) : null;
+                <tr data-person-row>
+                    <td>
+                        @if (kept is not null)
+                        {
+                            <input type="hidden" name="rows[@i].MemberId" value="@kept.MemberId" />
+                            <input type="hidden" name="rows[@i].Person" value="@(kept.Mail ?? kept.ObjectId)" />
+                            <span data-person>@kept.DisplayName</span>
+                            <span class="hint">@(kept.Mail ?? (kept.PrincipalType + " " + kept.ObjectId))</span>
+                            @if (kept.IsExternal) { <span class="badge">outside</span> }
+                            @if (!string.IsNullOrEmpty(kept.Company)) { <span class="hint">@kept.Company</span> }
+                        }
+                        else
+                        {
+                            <input name="rows[@i].Person" value="@row.Person" list="people-suggest" autocomplete="off" maxlength="256" aria-label="Person" placeholder="type a name or e-mail address" data-person-input />
+                            <span class="people-outside" data-person-outside hidden="@(string.IsNullOrEmpty(row.Name) && string.IsNullOrEmpty(row.Company))">
+                                <input name="rows[@i].Name" value="@row.Name" maxlength="256" aria-label="Name of the outside person" placeholder="name (outside person)" />
+                                <input name="rows[@i].Company" value="@row.Company" maxlength="256" aria-label="Company" placeholder="company" />
+                            </span>
+                        }
+                    </td>
+                    <td>@RoleSelect(i, row.Role is null ? null : DepartmentRoles.Normalize(row.Role))</td>
+                    <td><label class="remove-row"><input type="checkbox" name="rows[@i].Remove" value="true" checked="@row.Remove" data-person-remove /> Remove</label></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    <datalist id="people-suggest"></datalist>
+    <template data-person-template>
+        <tr data-person-row>
+            <td>
+                <input name="rows[__i__].Person" list="people-suggest" autocomplete="off" maxlength="256" aria-label="Person" placeholder="type a name or e-mail address" data-person-input />
+                <span class="people-outside" data-person-outside hidden>
+                    <input name="rows[__i__].Name" maxlength="256" aria-label="Name of the outside person" placeholder="name (outside person)" />
+                    <input name="rows[__i__].Company" maxlength="256" aria-label="Company" placeholder="company" />
+                </span>
+            </td>
+            <td>@RoleSelect("__i__", null)</td>
+            <td><label class="remove-row"><input type="checkbox" name="rows[__i__].Remove" value="true" data-person-remove /> Remove</label></td>
+        </tr>
+    </template>
+    <button type="button" class="secondary small" data-add-person hidden>+ Add person</button>
+</div>

@@ -1,0 +1,27 @@
+{
+  "_doc": "SecurityInsight Pro -- how every shipped template travels to an install (operator decision 2026-10-06, REQUIREMENTS #405). fix = a fix to our own queries / logic the engines or other reports rely on: arrives inside the product release, always installed, never held. default = customer business logic (tier rules, risk index weights, the service model, asset tagging seeds): SecurityInsight ships the default, a customer's edit (cfg.ItemOverride) is never changed by an update. microsoft = content that exists because Microsoft added a data surface (a table, a recommendation type, an attack-path type): arrives as a Microsoft content pack between releases, ring by ring, installed automatically unless the install holds Microsoft content. Resolution, first match wins: Items (exact '<kind>/<key>'), then Rules (in order, an ordinal .NET regex on the ItemKey of that kind), then ByKind, else 'fix' (the safe side: ships with the code, never held). Engine: Get-SIProTemplateClass (engine\\pro-settings\\SI-TemplatePacks.ps1); web app: TemplateClasses (pro-management, the same rule; a test runs both). The decision behind every entry: docs\\template-classification-3.0.0.md.",
+  "Schema": 1,
+  "Classes": [ "fix", "default", "microsoft" ],
+  "ByKind": {
+    "rareport": "fix",
+    "riskindex": "default",
+    "rule": "default",
+    "assettagging": "default",
+    "servicemodel": "default",
+    "datamodel": "fix"
+  },
+  "Rules": [
+    {
+      "Kind": "rareport",
+      "Pattern": "^report/Attack_Paths_",
+      "Class": "microsoft",
+      "Reason": "one report pair per Microsoft attack-path type (Exposure Management attack paths): the report exists because Microsoft added that attack-path type; new attack-path types arrive the same way"
+    }
+  ],
+  "Items": {
+    "rule/shared/AssetProfileByDefaultTier": {
+      "Class": "fix",
+      "Reason": "the default-tier fallback (#390): the profilers and Risk Analysis rely on it being there (a rule set without it falls back to the shipped file); its Tier values are tunable, and a customer's edit is an override that is never changed"
+    }
+  }
+}

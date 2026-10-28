@@ -1,0 +1,21 @@
+id:        VmwareNsxManager
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'VMware NSX Manager'
+category:  'Network/SDN'
+description: ''
+displayNames:
+  - 'VMware NSX Manager'
+
+detections:
+  - id: VmwareNsxManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nsx_manager*'
+    set:
+      Tier:     0
+      Purpose:  'Network/SDN'
+      Category: 'Network/SDN'

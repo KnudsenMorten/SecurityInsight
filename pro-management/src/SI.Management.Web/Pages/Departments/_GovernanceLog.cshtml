@@ -1,0 +1,23 @@
+@model IReadOnlyList<SI.Management.Web.Departments.GovernanceEntryRow>
+@using SI.Management.Core.ProData
+@if (Model.Count == 0)
+{
+    <p class="hint" data-governance-empty>Nothing is logged yet.</p>
+}
+else
+{
+    <table class="findings" data-sortable data-governance-log>
+        <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Status</th><th scope="col">Comment</th></tr></thead>
+        <tbody>
+            @foreach (var e in Model)
+            {
+                <tr data-entry="@e.EntryId">
+                    <td>@Fmt.Time(e.CreatedAt)</td>
+                    <td>@e.CreatedBy@if (e.Source != "web") { <span class="badge">@(e.Source == "flow" ? "remediation flow" : e.Source)</span> }</td>
+                    <td>@(e.Status is null ? "comment" : GovernanceStatuses.Label(e.Status))@if (e.ScheduledFor is { } s) { <span class="muted"> -- window @Fmt.Time(s)</span> }@if (e.ExemptionRequestId is { } rq) { <span class="muted"> -- <a href="/Exemptions/Decide?id=@rq">request #@rq</a></span> }</td>
+                    <td class="wrap">@e.Comment</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}

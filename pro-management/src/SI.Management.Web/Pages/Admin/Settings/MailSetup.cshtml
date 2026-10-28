@@ -1,0 +1,78 @@
+@page
+@model SI.Management.Web.Pages.Admin.Settings.MailSetupModel
+@using SI.Management.Web.Settings
+@{
+    ViewData["Title"] = "Set up mail";
+}
+<h1>Set up mail</h1>
+<p class="lede">Choose how SecurityInsight sends its mail. An <strong>Office 365 shared mailbox</strong> is recommended: no relay, no password, and Mail.Send reaches only that one mailbox. SMTP is fully supported for your own relay. <a href="/Admin/Settings/Email#mail">Back to E-mail + links</a></p>
+@if (Model.Error is not null) { <div class="notice error" role="alert" data-mail-setup-error>@Model.Error</div> }
+
+@if (Model.Result is { } res)
+{
+    <section class="card" aria-labelledby="h-progress" data-mail-setup-result="@(res.Succeeded ? "ok" : "failed")">
+        <h2 id="h-progress">Progress</h2>
+        <ol class="mail-setup-steps">
+            @foreach (var s in res.Steps)
+            {
+                <li data-step="@s.Number" data-state="@s.State"><strong>@s.Title</strong> -- @s.State: @s.Message</li>
+            }
+        </ol>
+        @if (res.Succeeded) { <div class="notice ok" role="status">Mail is set up. The test mail goes out with the mail job's next pass; its result shows on <a href="/Admin/Settings/Email#mail">E-mail + links</a>.</div> }
+        @if (res.NeedsRole) { <div class="notice warn" role="status" data-mail-setup-needs-role>@MailSetupFlow.NeedsRoleMessage</div> }
+        @if (res.Commands.Count > 0)
+        {
+            <p>The remaining steps, for your Exchange administrator: these commands download setup\Set-SIMail.ps1 from Invardia and run it with this mailbox and identity filled in (steps already done are kept). It needs no PowerShell module.</p>
+            <pre class="mono" data-mail-setup-commands>@(string.Join("\n", res.Commands))</pre>
+            <button type="button" class="copy secondary small" data-copy="@(string.Join("\n", res.Commands))" aria-label="Copy the commands">Copy</button>
+        }
+    </section>
+}
+
+<section class="card" aria-labelledby="h-shared" data-mail-setup-shared>
+    <h2 id="h-shared">Office 365 shared mailbox (recommended)</h2>
+    @if (!Model.ExchangeAvailable)
+    {
+        <div class="notice warn" role="status" data-mail-setup-unavailable>@MailSetupModel.NotAvailable: <a href="@MailSetupFlow.ScriptUrl">@MailSetupFlow.ScriptUrl</a></div>
+    }
+    <p class="muted">One button runs every step in order: create the mailbox (if you ask for it), register SecurityInsight's identity in Exchange, create a management scope holding only that mailbox, assign 'Application Mail.Send' in that scope, verify that Mail.Send reaches the shared mailbox and NOT your own mailbox (@Model.AdminUpn), save the mail settings, and queue a test mail to you. It needs the Exchange Administrator role (Entra) or Organization Management in Exchange; steps already done are kept.</p>
+    <form method="post" asp-page-handler="SharedMailbox" class="form-grid">
+        <fieldset>
+            <legend>Mailbox</legend>
+            <label><input type="radio" name="Mailbox" value="new" checked="@(Model.Mailbox != "existing")" /> Create a new shared mailbox</label>
+            <label><input type="radio" name="Mailbox" value="existing" checked="@(Model.Mailbox == "existing")" /> Use an existing shared mailbox</label>
+        </fieldset>
+        @* #503: the address named in step 1 on Settings > E-mail -- not typed again here *@
+        <div data-mail-setup-address>
+            @if (Model.Address is { } named)
+            {
+                <span>The shared mailbox: <strong>@named</strong> -- named in <a href="/Admin/Settings/Email#mailbox-step1">step 1</a></span>
+            }
+            else
+            {
+                <span class="notice warn" role="status" data-mail-setup-no-address>@MailSetupModel.NoAddressText <a href="/Admin/Settings/Email#mailbox-step1">Name it now</a></span>
+            }
+        </div>
+        <div><label for="ms-display">Display name (new mailbox)</label><input id="ms-display" type="text" name="DisplayName" value="@Model.DisplayName" maxlength="64" /></div>
+        <div>
+            <label for="ms-client">Engine identity -- client id</label><input id="ms-client" type="text" name="ClientId" value="@Model.ClientId" maxlength="36" />
+            @if (Model.ClientIdFromSettings) { <span class="hint">from SI_UAMI_ClientId / SI_ManagedIdentityClientId</span> }
+        </div>
+        <div><label for="ms-object">Engine identity -- service principal object id</label><input id="ms-object" type="text" name="ObjectId" value="@Model.ObjectId" maxlength="36" /><span class="hint">Entra admin center &gt; Enterprise applications &gt; the identity &gt; Object ID</span></div>
+        <div class="actions"><button type="submit" disabled="@(!Model.ExchangeAvailable || Model.Address is null)" data-mail-setup-run>Set up the shared mailbox</button></div>
+    </form>
+</section>
+
+<section class="card" aria-labelledby="h-smtp" data-mail-setup-smtp>
+    <h2 id="h-smtp">SMTP relay</h2>
+    <p class="muted">For your own relay. The password is never stored by this web app: give the NAME of the Key Vault secret that holds it, and store the password with <code>setup\Set-SIMail.ps1 -Mode smtp</code>, or in the install's Key Vault.</p>
+    <form method="post" asp-page-handler="Smtp" class="form-grid">
+        <div><label for="sm-server">SMTP server</label><input id="sm-server" type="text" name="SmtpServer" value="@Model.SmtpServer" maxlength="253" required /></div>
+        <div><label for="sm-port">Port</label><input id="sm-port" type="number" name="SmtpPort" value="@Model.SmtpPort" min="1" max="65535" required /></div>
+        <div><label><input type="checkbox" name="SmtpUseSsl" value="true" checked="@Model.SmtpUseSsl" /> Use TLS (STARTTLS / SSL)</label><input type="hidden" name="SmtpUseSsl" value="false" /></div>
+        <div><label for="sm-user">User (empty = no authentication)</label><input id="sm-user" type="text" name="SmtpUser" value="@Model.SmtpUser" maxlength="256" /></div>
+        <div><label for="sm-from">From address</label><input id="sm-from" type="email" name="From" value="@Model.From" maxlength="254" required /></div>
+        <div><label for="sm-secret">Password -- Key Vault secret name</label><input id="sm-secret" type="text" name="SmtpPasswordSecretName" value="@Model.SmtpPasswordSecretName" maxlength="127" /></div>
+        <div class="actions"><button type="submit" data-mail-setup-smtp-save>Save and send test mail</button></div>
+    </form>
+</section>

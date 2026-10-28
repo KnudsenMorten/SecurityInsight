@@ -1,0 +1,15 @@
+@page
+@model SI.Management.Web.Pages.Cis.IndexModel
+@{
+    ViewData["Title"] = "CIs";
+}
+<h1>CIs</h1>
+<p class="lede">One row per configuration item (CI): its tier, who decided it and why (the tier explanation), its risk score and weighted risk score, its risk factors and the CMDB values. Each CI's own page shows how its tier was decided and where each value came from.</p>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.NotLoaded)
+{
+    <div class="notice" role="status" data-not-loaded>@SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText</div>
+}
+@* THE CI grid: the search and filters, the view bar and the column chooser, the toolbar, the table, the exports *@
+<partial name="~/Pages/Cis/_CiGrid.cshtml" model="Model" />
+@foreach (var q in Model.Queries) { <partial name="_Query" model="q" /> }

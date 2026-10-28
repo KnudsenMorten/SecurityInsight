@@ -1,0 +1,21 @@
+id:        MicrosoftDynamicsAx
+appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
+mode:      locked
+purpose:   'Microsoft Dynamics AX'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Microsoft Dynamics AX'
+
+detections:
+  - id: MicrosoftDynamicsAx
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dynamics_ax*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

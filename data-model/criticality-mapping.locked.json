@@ -1,0 +1,82 @@
+{
+  "$comment": "Business criticality -> criticality factor for the weighted risk score (si_weighted_risk_score = si_risk_score x si_criticality_factor). One vocabulary per CMDB provider; the tenant's ONE CMDB owner decides which applies. Values match case-insensitively. level = the normalised si_cmdb_criticality_level (used by risk factors). Customer overrides: criticality-mapping.custom.json, per provider and value.",
+  "kind": "criticality-mapping",
+  "version": "1.0.0",
+  "defaultFactor": 1.0,
+  "combine": "max",
+  "cap": 5.0,
+  "$note": "Factors equal today's shipped sample (basis-100: Critical 150, High 125, Medium 110, Low 100), so the weighted score does not move for a customer who used the sample.",
+  "criticality": {
+    "cmdb": [
+      {
+        "value": "Business Critical",
+        "level": "critical",
+        "factor": 1.5
+      },
+      {
+        "value": "Critical",
+        "level": "critical",
+        "factor": 1.5
+      },
+      {
+        "value": "High",
+        "level": "high",
+        "factor": 1.25
+      },
+      {
+        "value": "Medium",
+        "level": "medium",
+        "factor": 1.1
+      },
+      {
+        "value": "Low",
+        "level": "low",
+        "factor": 1.0
+      }
+    ],
+    "servicenow": [
+      {
+        "value": "1 - most critical",
+        "level": "critical",
+        "factor": 1.5
+      },
+      {
+        "value": "2 - somewhat critical",
+        "level": "high",
+        "factor": 1.25
+      },
+      {
+        "value": "3 - less critical",
+        "level": "medium",
+        "factor": 1.1
+      },
+      {
+        "value": "4 - not critical",
+        "level": "low",
+        "factor": 1.0
+      }
+    ]
+  },
+  "dataSensitivity": {
+    "$comment": "Optional second input, combined with the criticality factor by \"combine\" (max | product) and capped by \"cap\". Empty = criticality only.",
+    "cmdb": [
+      {
+        "value": "Restricted",
+        "factor": 1.3
+      },
+      {
+        "value": "Confidential",
+        "factor": 1.2
+      },
+      {
+        "value": "Internal",
+        "factor": 1.1
+      },
+      {
+        "value": "Public",
+        "factor": 1.0
+      }
+    ],
+    "servicenow": []
+  }
+}

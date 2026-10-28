@@ -1,0 +1,22 @@
+@* The ONE "The query behind this" disclosure of a page (rendered by the layout after the page body): every query the
+   page ran, each labelled with the section it feeds. Nothing when the page ran none. *@
+@{
+    var items = PageQueries.For(Context).Items;
+}
+@if (items.Count > 0)
+{
+    @* deliberately NOT a card: a card that holds only a disclosure is what the operator called noise *@
+    <section class="page-queries" aria-label="The queries behind this page" data-page-queries>
+        <details class="query">
+            <summary>The query behind this@(items.Count > 1 ? " page (" + Fmt.Int(items.Count) + " queries)" : "")</summary>
+            @foreach (var (q, labels) in items)
+            {
+                <div class="query-item" data-query-item>
+                    @if (labels.Count > 0) { <h3 class="query-label">@string.Join(" · ", labels)</h3> }
+                    <p class="meta" data-utc>Source: @q.Source@(q.AsOf is { } a ? " · as of " + Fmt.When(a) : "")</p>
+                    <pre><code>@q.Query</code></pre>
+                </div>
+            }
+        </details>
+    </section>
+}

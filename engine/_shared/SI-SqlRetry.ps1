@@ -34,6 +34,51 @@ function Test-SISqlTransientError {
     return ($msg -match 'is not currently available|Please retry the connection later|too busy|try again')
 }
 
+function Test-SISqlStatementTransient {
+    <#
+        PURE and SELF-CONTAINED (it travels as a value into connection closures: it calls nothing by name). Is a failed SQL
+        STATEMENT one of Azure SQL's platform answers, so the statement may be run again on a new connection? Live 2026-10-28:
+        one statement of the data sync got 9001 (the log is not available) + 3314 (a rollback during recovery) + "A severe
+        error occurred on the current command" after minutes of a saturated log, and a 52-hour run failed on it.
+          transient: 9001, 3314, 40613, 40501, 40197, 49918 / 49919 / 49920 (not available, busy, moving), 4060 (cannot open
+                     the database during a failover), 10928 / 10929 (resource limits), 1205 (chosen as a deadlock victim),
+                     -2 / 258 (a client timeout), 10053 / 10054 / 233 / 64 (a reset or closed connection), "a severe error
+                     occurred on the current command", a transport-level error, a broken pooled connection ("Internal .NET
+                     Framework Data Provider error 6").
+          never:     the database is full (1105 / 40544 / 1101), a query defect (syntax, a type mismatch), a permission -- they
+                     fail on the first attempt.
+        -ErrorRecord: an ErrorRecord, an exception (SqlException numbers and inner exceptions are read) or a text.
+    #>
+    param([AllowNull()]$ErrorRecord)
+    if ($null -eq $ErrorRecord) { return $false }
+    $codes = @(9001, 3314, 40613, 40501, 40197, 49918, 49919, 49920, 4060, 10928, 10929, 1205, -2, 258, 10053, 10054, 233, 64)
+    $full = @(1105, 40544, 1101)
+    $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $null }
+    $nums = New-Object System.Collections.Generic.List[int]
+    $texts = New-Object System.Collections.Generic.List[string]
+    while ($ex) {
+        if ($ex -is [System.Data.SqlClient.SqlException]) {
+            foreach ($er in @($ex.Errors)) { $nums.Add([int]$er.Number) }
+            $nums.Add([int]$ex.Number)
+        }
+        try { if ($ex.Data -and $ex.Data.Contains('SISqlNumbers')) { foreach ($n in @($ex.Data['SISqlNumbers'])) { $nums.Add([int]$n) } } } catch { }
+        $texts.Add([string]$ex.Message); $ex = $ex.InnerException
+    }
+    if (-not $texts.Count) { $texts.Add([string]$ErrorRecord) }
+    $t = $texts -join ' | '
+    foreach ($n in $nums) { if ($full -contains $n) { return $false } }
+    if ($t -match '(?i)has reached its size quota|could not allocate (a new page|space)') { return $false }
+    foreach ($n in $nums) { if ($codes -contains $n) { return $true } }
+    [bool]($t -match '(?i)a severe error occurred on the current command|transport-level error|connection was forcibly closed|forcibly closed by the remote host|connection reset|Connection reset by peer|broken pipe|Internal \.NET Framework Data Provider error 6|is not currently available|log for database .* is not available|\b(9001|3314|40613|40501|40197|49918|49919|49920)\b')
+}
+
+function Get-SISqlStatementRetryWaits {
+    <# The pauses before each new attempt of a statement that met an Azure SQL platform answer: 6 more attempts over about
+       9 minutes (owner 2026-10-29). A failover or a resume passes in under a minute; a log that recovers after a rollback
+       under load (the live case) takes minutes. A bound on Microsoft's errors, never on SI's own work. #>
+    @(5, 15, 30, 60, 120, 300)
+}
+
 function Test-SISqlNotYetAnswer {
     <# PURE. Is this the refusal a database gives for a moment after its server's administrator or firewall rule changed:
        "Login failed" (18456) or "client with IP address ... is not allowed" (40615)? #>

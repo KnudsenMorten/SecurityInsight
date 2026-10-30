@@ -26,7 +26,9 @@
 
 if (-not (Get-Command -Name ConvertTo-SIReportedRing -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-ReportedRing.ps1')) }
 
-$script:SISetupUplink = @{
+function Get-SISetupUplinkState {
+    <# The value of $script:SISetupUplink, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SISetupUplink) { $script:SISetupUplink = @{
     SIRoot      = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     CatalogFile = 'setup-catalog.locked.json'
     Product     = 'securityinsight'
@@ -37,14 +39,17 @@ $script:SISetupUplink = @{
     States      = @('ok', 'missing', 'wrong', 'unknown')
     Scopes      = @('minimum', 'all', 'off')
     IdPattern   = '^[a-z0-9][a-z0-9.-]{0,59}$'
+} }
+    , $script:SISetupUplink
 }
+$script:SISetupUplink = $null; $null = Get-SISetupUplinkState
 
-function Get-SISetupMinimumControlIds { @($script:SISetupUplink.Minimum) }
+function Get-SISetupMinimumControlIds { @((Get-SISetupUplinkState).Minimum) }
 
 function Get-SISetupCatalog {
     <# The closed list (config\setup-catalog.locked.json) as an object. Throws when it cannot be read -- a release must not hand over a broken list. #>
-    param([string]$SIRoot = $script:SISetupUplink.SIRoot)
-    $f = [System.IO.Path]::Combine($SIRoot, 'config', $script:SISetupUplink.CatalogFile)
+    param([string]$SIRoot = (Get-SISetupUplinkState).SIRoot)
+    $f = [System.IO.Path]::Combine($SIRoot, 'config', (Get-SISetupUplinkState).CatalogFile)
     [IO.File]::ReadAllText($f).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop
 }
 
@@ -66,7 +71,7 @@ function Resolve-SISetupControlScope {
     param([AllowNull()]$Value)
     $v = "$Value".Trim().Trim('$').ToLowerInvariant()
     if ($v -in @('false', 'none', 'disabled')) { $v = 'off' }
-    if ($script:SISetupUplink.Scopes -contains $v) { return $v }
+    if ((Get-SISetupUplinkState).Scopes -contains $v) { return $v }
     'all'
 }
 
@@ -76,7 +81,7 @@ function Get-SISetupControlIds {
     if ($Scope -eq 'off') { return @() }
     $live = @(@($Catalog.controls) | Where-Object { $_ -and -not ($_.PSObject.Properties['retired'] -and $_.retired) } | ForEach-Object { [string]$_.id })
     if ($Scope -eq 'all') { return $live }
-    @($script:SISetupUplink.Minimum | Where-Object { $live -contains $_ })
+    @((Get-SISetupUplinkState).Minimum | Where-Object { $live -contains $_ })
 }
 
 function Get-SISetupControlStates {
@@ -160,15 +165,15 @@ function New-SISetupReport {
     $defs = @{}; foreach ($c in @($Catalog.controls)) { if ($c) { $defs[[string]$c.id] = $c } }
     $controls = New-Object System.Collections.Generic.List[object]
     foreach ($id in @(Get-SISetupControlIds -Catalog $Catalog -Scope $Scope)) {
-        if ($id -notmatch $script:SISetupUplink.IdPattern) { continue }
+        if ($id -notmatch (Get-SISetupUplinkState).IdPattern) { continue }
         $st = $States[$id]
-        $state = if ($st -and $script:SISetupUplink.States -contains "$($st.State)") { "$($st.State)" } else { 'unknown' }
+        $state = if ($st -and (Get-SISetupUplinkState).States -contains "$($st.State)") { "$($st.State)" } else { 'unknown' }
         $item = [ordered]@{ id = $id; state = $state }
         $def = $defs[$id]
         if ($st -and $null -ne $st.Value -and "$($st.Value)" -ne '' -and $def -and $def.PSObject.Properties['enum'] -and (@($def.enum) -contains "$($st.Value)")) { $item['value'] = "$($st.Value)" }
         $controls.Add([pscustomobject]$item)
     }
-    $o = [ordered]@{ Schema = 2; Kind = 'setup'; Product = $script:SISetupUplink.Product }
+    $o = [ordered]@{ Schema = 2; Kind = 'setup'; Product = (Get-SISetupUplinkState).Product }
     $ver = "$($Context.Version)".Trim(); if ($ver -match '^[0-9A-Za-z.+-]{1,50}$') { $o['Version'] = $ver }
     $ring = $null; if ($Context.PSObject.Properties['Ring']) { $ring = ConvertTo-SIReportedRing $Context.Ring }
     if ($null -ne $ring) { $o['Ring'] = [int]$ring }

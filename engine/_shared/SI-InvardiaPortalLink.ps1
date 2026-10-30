@@ -24,7 +24,9 @@
 
 # NO Set-StrictMode here -- it leaks into the caller's scope.
 
-$script:SIPortalLink = @{
+function Get-SIPortalLinkState {
+    <# The value of $script:SIPortalLink, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIPortalLink) { $script:SIPortalLink = @{
     StateName = 'InvardiaEnvironment'                                  # cfg.InstallState row
     UrlFormat = 'https://portal.invardia.com/#/environments/{0}'       # framework 8.16, Invardia 1.0.488
     Text      = 'See details and history:'                             # the owner's wording, 2026-10-16
@@ -32,13 +34,16 @@ $script:SIPortalLink = @{
     Anchor    = '<!-- SI portal link -->'                              # the top of a mail without a summary (flow content)
     RowAnchor = '<!-- SI portal link row -->'                          # the same (kept for an older body; filled like Anchor)
     Guid      = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+} }
+    , $script:SIPortalLink
 }
+$script:SIPortalLink = $null; $null = Get-SIPortalLinkState
 
 function ConvertTo-SIInvardiaEnvironmentIdOrEmpty {
     <# PURE. An Invardia environment id as the lower-case GUID it is, or '' when it is not GUID-shaped. #>
     param([AllowNull()][AllowEmptyString()][string]$EnvironmentId)
     $v = "$EnvironmentId".Trim()
-    if ($v -match $script:SIPortalLink.Guid) { return $v.ToLowerInvariant() }
+    if ($v -match (Get-SIPortalLinkState).Guid) { return $v.ToLowerInvariant() }
     ''
 }
 
@@ -69,7 +74,7 @@ function Get-SIInvardiaEnvironmentIdFromValue {
     param([AllowNull()][AllowEmptyString()][string]$Value)
     $v = "$Value".Trim()
     if (-not $v) { return '' }
-    if ($v -match $script:SIPortalLink.Guid) { return $v.ToLowerInvariant() }
+    if ($v -match (Get-SIPortalLinkState).Guid) { return $v.ToLowerInvariant() }
     Get-SIInvardiaEnvironmentIdFromAnswer $v
 }
 
@@ -78,7 +83,7 @@ function Get-SIInvardiaPortalUrl {
     param([AllowNull()][AllowEmptyString()][string]$EnvironmentId)
     $id = ConvertTo-SIInvardiaEnvironmentIdOrEmpty $EnvironmentId
     if (-not $id) { return '' }
-    $script:SIPortalLink.UrlFormat -f $id
+    (Get-SIPortalLinkState).UrlFormat -f $id
 }
 
 function Get-SIInvardiaPortalLinkHtml {
@@ -88,7 +93,7 @@ function Get-SIInvardiaPortalLinkHtml {
     if (-not $url) { return '' }
     $u = [System.Net.WebUtility]::HtmlEncode($url)
     ('<p {0}="1" style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#0B1633;margin:0 0 14px 0;">{1} <a href="{2}" style="color:#1B4FE4;text-decoration:underline;">{2}</a></p>' -f `
-        $script:SIPortalLink.Marker, [System.Net.WebUtility]::HtmlEncode($script:SIPortalLink.Text), $u)
+        (Get-SIPortalLinkState).Marker, [System.Net.WebUtility]::HtmlEncode((Get-SIPortalLinkState).Text), $u)
 }
 
 function Test-SIInvardiaPortalLinkSummary {
@@ -109,17 +114,17 @@ function Add-SIInvardiaPortalLinkAnchor {
     #>
     param([Parameter(Mandatory)][AllowEmptyString()][string]$BodyHtml)
     if (-not $BodyHtml) { return $BodyHtml }
-    if ((Test-SIInvardiaPortalLinkSummary $BodyHtml) -or $BodyHtml -match $script:SIPortalLink.Marker -or $BodyHtml.Contains($script:SIPortalLink.Anchor) -or $BodyHtml.Contains($script:SIPortalLink.RowAnchor)) { return $BodyHtml }
+    if ((Test-SIInvardiaPortalLinkSummary $BodyHtml) -or $BodyHtml -match (Get-SIPortalLinkState).Marker -or $BodyHtml.Contains((Get-SIPortalLinkState).Anchor) -or $BodyHtml.Contains((Get-SIPortalLinkState).RowAnchor)) { return $BodyHtml }
     $b = [regex]::Match($BodyHtml, '(?i)<body\b[^>]*>')
-    if ($b.Success) { $at = $b.Index + $b.Length; return $BodyHtml.Substring(0, $at) + $script:SIPortalLink.Anchor + $BodyHtml.Substring($at) }
-    $script:SIPortalLink.Anchor + $BodyHtml
+    if ($b.Success) { $at = $b.Index + $b.Length; return $BodyHtml.Substring(0, $at) + (Get-SIPortalLinkState).Anchor + $BodyHtml.Substring($at) }
+    (Get-SIPortalLinkState).Anchor + $BodyHtml
 }
 
 function Remove-SIInvardiaPortalLinkAnchor {
     <# PURE. -BodyHtml without the place-holders (an unused one is never sent). #>
     param([AllowNull()][AllowEmptyString()][string]$BodyHtml)
     if (-not $BodyHtml) { return $BodyHtml }
-    $BodyHtml.Replace($script:SIPortalLink.RowAnchor, '').Replace($script:SIPortalLink.Anchor, '')
+    $BodyHtml.Replace((Get-SIPortalLinkState).RowAnchor, '').Replace((Get-SIPortalLinkState).Anchor, '')
 }
 
 function Add-SIInvardiaPortalLink {
@@ -135,15 +140,15 @@ function Add-SIInvardiaPortalLink {
         No summary and no place-holder, no / not-a-GUID id, or the line already there = the body unchanged. Returns the body.
     #>
     param([Parameter(Mandatory)][AllowEmptyString()][string]$BodyHtml, [AllowNull()][AllowEmptyString()][string]$EnvironmentId)
-    if (-not $BodyHtml -or $BodyHtml -match $script:SIPortalLink.Marker) { return $BodyHtml }
+    if (-not $BodyHtml -or $BodyHtml -match (Get-SIPortalLinkState).Marker) { return $BodyHtml }
     $line = Get-SIInvardiaPortalLinkHtml $EnvironmentId
     if (-not $line) { return $BodyHtml }
     if (-not (Test-SIInvardiaPortalLinkSummary $BodyHtml)) {
         # 3. / 4. the place-holder at the top (the first one only: the line is never there twice)
-        $r = $BodyHtml.IndexOf($script:SIPortalLink.RowAnchor, [StringComparison]::Ordinal)
-        if ($r -ge 0) { return $BodyHtml.Substring(0, $r) + $line + $BodyHtml.Substring($r + $script:SIPortalLink.RowAnchor.Length) }
-        $a = $BodyHtml.IndexOf($script:SIPortalLink.Anchor, [StringComparison]::Ordinal)
-        if ($a -ge 0) { return $BodyHtml.Substring(0, $a) + $line + $BodyHtml.Substring($a + $script:SIPortalLink.Anchor.Length) }
+        $r = $BodyHtml.IndexOf((Get-SIPortalLinkState).RowAnchor, [StringComparison]::Ordinal)
+        if ($r -ge 0) { return $BodyHtml.Substring(0, $r) + $line + $BodyHtml.Substring($r + (Get-SIPortalLinkState).RowAnchor.Length) }
+        $a = $BodyHtml.IndexOf((Get-SIPortalLinkState).Anchor, [StringComparison]::Ordinal)
+        if ($a -ge 0) { return $BodyHtml.Substring(0, $a) + $line + $BodyHtml.Substring($a + (Get-SIPortalLinkState).Anchor.Length) }
         return $BodyHtml
     }
     # 1. the summary block: <div ... data-mail-summary ...> ... </div> (no div inside it); the line follows it
@@ -163,8 +168,8 @@ function Get-SIInvardiaEnvironmentIdKnown {
     param($Facts = $global:SI_InstallRingFacts)
     try {
         if ($null -eq $Facts) { return '' }
-        $v = if ($Facts -is [System.Collections.IDictionary]) { if ($Facts.Contains($script:SIPortalLink.StateName)) { [string]$Facts[$script:SIPortalLink.StateName] } else { '' } }
-             elseif ($Facts.PSObject.Properties[$script:SIPortalLink.StateName]) { [string]$Facts.($script:SIPortalLink.StateName) } else { '' }
+        $v = if ($Facts -is [System.Collections.IDictionary]) { if ($Facts.Contains((Get-SIPortalLinkState).StateName)) { [string]$Facts[(Get-SIPortalLinkState).StateName] } else { '' } }
+             elseif ($Facts.PSObject.Properties[(Get-SIPortalLinkState).StateName]) { [string]$Facts.((Get-SIPortalLinkState).StateName) } else { '' }
         return (Get-SIInvardiaEnvironmentIdFromValue $v)
     } catch { return '' }
 }
@@ -185,7 +190,7 @@ BEGIN
     COMMIT;
 END
 '@
-    $null = & $Store.Invoke $sql ([ordered]@{ Name = $script:SIPortalLink.StateName; Value = $v; By = 'si-engine (Invardia uplink)' }) 'nonquery'
+    $null = & $Store.Invoke $sql ([ordered]@{ Name = (Get-SIPortalLinkState).StateName; Value = $v; By = 'si-engine (Invardia uplink)' }) 'nonquery'
 }
 
 function Invoke-SIInvardiaEnvironmentNotice {
@@ -206,8 +211,8 @@ function Invoke-SIInvardiaEnvironmentNotice {
     try {
         $val = ConvertTo-SIInvardiaEnvironmentValue -EnvironmentId $id -NowUtc $NowUtc
         $f = $global:SI_InstallRingFacts
-        if ($f -is [System.Collections.IDictionary]) { $f[$script:SIPortalLink.StateName] = $val }
-        elseif ($null -ne $f) { $f | Add-Member -NotePropertyName $script:SIPortalLink.StateName -NotePropertyValue $val -Force }
+        if ($f -is [System.Collections.IDictionary]) { $f[(Get-SIPortalLinkState).StateName] = $val }
+        elseif ($null -ne $f) { $f | Add-Member -NotePropertyName (Get-SIPortalLinkState).StateName -NotePropertyValue $val -Force }
     } catch { }
     $done
 }

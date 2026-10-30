@@ -26,7 +26,29 @@
     later, with the command to add them.
 
 .PARAMETER ConfigPath
-    config.json -- the wizard's answers, keyed as in setup\install-parameters.json, plus installId.
+    config.json -- the wizard's answers, keyed as in setup\install-parameters.json, plus installId. Not needed when the
+    answers are given as parameters (-TenantId, -SubscriptionId ...).
+.PARAMETER TenantId
+    The tenant SecurityInsight assesses. With -SubscriptionId, all an install needs: every other answer has a default.
+.PARAMETER SubscriptionId
+    The subscription for SecurityInsight's own resources.
+.PARAMETER Location
+    The Azure region (default westeurope).
+.PARAMETER ResourceGroup
+    The resource group, created when it does not exist (default rg-si-prod-community-ca).
+.PARAMETER MailTo
+    Who receives the reports (default: you).
+.PARAMETER CollectionScope
+    What SecurityInsight reads in Azure: subscription (default), managementGroup (with -ManagementGroupId) or tenantRoot.
+.PARAMETER ManagementGroupId
+    The management group, with -CollectionScope managementGroup.
+.PARAMETER PrivateNetwork
+    SecurityInsight in a virtual network only, with private endpoints (give -VnetAddressPrefix for its own network).
+.PARAMETER VnetAddressPrefix
+    With -PrivateNetwork: a free address range for SecurityInsight's own network, e.g. 10.212.24.0/24.
+.PARAMETER InstallId
+    The install's name (default securityinsight): its state folder ~/clouddrive/invardia/<installId> keeps the answers,
+    so the install continues with -Resume alone.
 .PARAMETER LicencePath
     The SecurityInsight Pro licence file (.silicense). Without one the free version is installed -- with its database and
     web app; the paid features stay off until a licence is added.
@@ -45,6 +67,12 @@
     Exit code: 0 installed (warnings included), 1 a step failed, 2 a check failed, 3 config.json is not valid.
 
 .EXAMPLE
+    ./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>
+    # the quickest install: every other answer has its default
+.EXAMPLE
+    ./setup/Install-SecurityInsight.ps1 -Resume
+    # continue an install that stopped, with the answers of its first run
+.EXAMPLE
     ./setup/Install-SecurityInsight.ps1 -ConfigPath ./config.json -LicencePath ./contoso.silicense -Reporter { param($e) $e | ConvertTo-Json -Compress -Depth 6 }
 .EXAMPLE
     ./setup/Install-SecurityInsight.ps1 -ConfigPath ./config.json -PreflightOnly
@@ -58,7 +86,19 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)][string]$ConfigPath,
+    [string]$ConfigPath,
+    # The common answers as parameters (no config.json to write by hand): the script writes config.json itself, in the
+    # install's state folder, so -Resume alone finds it again. -ConfigPath is for every other setting.
+    [string]$TenantId,
+    [string]$SubscriptionId,
+    [string]$Location,
+    [string]$ResourceGroup,
+    [string[]]$MailTo,
+    [ValidateSet('subscription', 'managementGroup', 'tenantRoot')][string]$CollectionScope,
+    [string]$ManagementGroupId,
+    [switch]$PrivateNetwork,
+    [string]$VnetAddressPrefix,
+    [string]$InstallId = 'securityinsight',
     [string]$LicencePath,
     [scriptblock]$Reporter,
     [switch]$PreflightOnly,
@@ -90,6 +130,13 @@ $siRoot = Split-Path -Parent $PSScriptRoot
 # The paid steps (the licence, the v2.2 CMDB migration) ship only in the Pro package.
 $proSteps = [IO.Path]::Combine($siRoot, 'setup', '_shared', 'SI-GuidedInstallPro.ps1')
 if (Test-Path -LiteralPath $proSteps) { . $proSteps }
+
+if (-not "$ConfigPath".Trim()) {
+    $direct = Resolve-SIInstallDirectConfig -Bound $PSBoundParameters -InstallId $InstallId -StatePath $StatePath -PreflightOnly:$PreflightOnly -Resume:$Resume
+    if (-not $direct.Ok) { Write-Host $direct.Message -ForegroundColor Red; exit 3 }
+    $ConfigPath = $direct.ConfigPath
+    if ($direct.Message) { Write-Host $direct.Message }
+}
 
 $code = Invoke-SIGuidedInstall -SIRoot $siRoot -ConfigPath $ConfigPath -LicencePath $LicencePath -Reporter $Reporter `
     -PreflightOnly:$PreflightOnly -Resume:$Resume -StatePath $StatePath -Seams $Seams -SIConfigPath $SIConfigPath

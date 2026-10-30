@@ -698,10 +698,24 @@ function New-SIGuardSqlStateStore {
 # owner 2026-10-11 ("dont stop my business with unnecessary guards"; a warn-only check mailed "action needed"): a check that
 # only WARNS (it held, stopped or refused nothing) sends no mail -- it is recorded, shown on the Guards page and in the run
 # report. A mail means something was stopped or held. The one exception: the licence grace period, which needs a renewal.
+# #937 (owner 2026-10-28, "Stop the mail"): a check whose catalog entry says "mail": "never" sends no mail whatever its
+# outcome -- collection.source.asset-drop accepts a real drop by itself on the next complete collection, so its mail asked
+# nothing of anyone. Its event, the Guards page, the run report and the report to Invardia are unchanged.
 $script:SIGuardWarningMails = @('licence.state.grace')
+function Test-SIGuardNeverMails {
+    <# PURE over the catalog. Does the guard's catalog entry say "mail": "never"? Unknown id / unreadable catalog: $false. #>
+    param([AllowNull()][AllowEmptyString()][string]$GuardId)
+    if (-not "$GuardId".Trim()) { return $false }
+    try {
+        $g = @((Get-SIGuardCatalog).guards | Where-Object { [string]$_.id -eq $GuardId }) | Select-Object -First 1
+        return [bool]($g -and $g.PSObject.Properties['mail'] -and ([string]$g.mail -ieq 'never'))
+    } catch { return $false }
+}
 function Test-SIGuardOutcomeMails {
-    <# PURE. Whether this event's outcome sends a mail at all: every outcome but 'warning' (and the listed exceptions). #>
+    <# PURE. Whether this event's outcome sends a mail at all: every outcome but 'warning' (and the listed exceptions);
+       never for a guard the catalog marks "mail": "never". #>
     param([Parameter(Mandatory)]$Event)
+    if (Test-SIGuardNeverMails -GuardId ([string]$Event.GuardId)) { return $false }
     ([string]$Event.Outcome -ine 'warning') -or ($script:SIGuardWarningMails -contains [string]$Event.GuardId)
 }
 
@@ -1558,14 +1572,45 @@ function Get-SIGuardCallsForServiceNowCmdb {
     }
     if ($Result) {
         if ($Result.Halted) { $calls.Add(@{ GuardId = 'cmdb.servicenow.unreachable'; Outcome = 'halted'; Detail = [string]$Result.HaltReason }) }
-        $review = @($Result.Review)
-        if ($review.Count -gt 0) {
-            $calls.Add(@{ GuardId = 'cmdb.servicenow.create-gate'; Outcome = 'held'; HeldCount = $review.Count
-                          Detail = ('{0} asset(s) were not written to ServiceNow: {1}' -f $review.Count, ((@($review | ForEach-Object { [string]$_.Reason } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { '{0} x {1}' -f $_.Count, $_.Name })) -join '; '))
-                          Values = @(@{ Name = 'assetsHeld'; Label = 'Assets not written'; Measured = $review.Count }, @{ Name = 'assetsSubmitted'; Label = 'Assets submitted'; Measured = [long]$Result.Submitted }) })
+        $review = @($Result.Review | Where-Object { $_ })
+        # #928: the data-out push hands in the reasons (a sample) and the COUNT of rows ServiceNow did not accept
+        $n = if ($Result.PSObject.Properties['ReviewCount'] -and $null -ne $Result.ReviewCount) { [long]$Result.ReviewCount } else { [long]$review.Count }
+        if ($n -gt 0) {
+            $why = (@($review | ForEach-Object { [string]$_.Reason } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { '{0} x {1}' -f $_.Count, $_.Name })) -join '; '
+            $calls.Add(@{ GuardId = 'cmdb.servicenow.create-gate'; Outcome = 'held'; HeldCount = $n
+                          Detail = ('{0} asset(s) were not written to ServiceNow{1}' -f $n, $(if ($why) { ': ' + $why } else { '' }))
+                          Values = @(@{ Name = 'assetsHeld'; Label = 'Assets not written'; Measured = $n }, @{ Name = 'assetsSubmitted'; Label = 'Assets submitted'; Measured = [long]$Result.Submitted }) })
         }
     }
     $calls.ToArray()
+}
+
+function ConvertTo-SIGuardServiceNowPushResult {
+    <#
+        PURE. #928 (the ServiceNow push moved to ONE route, the data-out connector): the push result of one ServiceNow
+        data-out session (Open-SIDataOutSnowSession ... Close-SIDataOutSnowSession) in the shape the ServiceNow CMDB guard
+        reads (Get-SIGuardCallsForServiceNowCmdb -Result): @{ Halted; HaltReason; Review; ReviewCount; Submitted; Reached }.
+          Halted     the check before the push could not reach the instance, or the instance refused the account (a
+                     connection problem of KIND 'setup' -- no connector switched on, no credential -- is the install's
+                     setup, said by the run and Data health, never "not reachable");
+          Review     the reasons ServiceNow gave for the rows its import did not accept (at most 50), ReviewCount their number;
+          Reached    the push reached ServiceNow (the guards' checks ran and may clear).
+    #>
+    param([Parameter(Mandatory)]$Session)
+    $get = { param($o, $n) if ($null -eq $o) { $null } elseif ($o -is [System.Collections.IDictionary]) { $o[$n] } elseif ($o.PSObject.Properties[$n]) { $o.$n } else { $null } }
+    $chk = & $get $Session 'Check'
+    $conn = & $get $chk 'Connection'
+    $halted = [bool]($conn -and ($conn.Ok -eq $false) -and ([string]$conn.Kind -ne 'setup'))
+    $errs = @(@(& $get $Session 'Errors') | Where-Object { $_ } | Select-Object -First 50 | ForEach-Object { [pscustomobject]@{ Reason = [string]$_ } })
+    $notAccepted = [long](& $get $Session 'NotAccepted')
+    [pscustomobject]@{
+        Halted      = $halted
+        HaltReason  = $(if ($halted) { [string]$conn.Text } else { '' })
+        Review      = $errs
+        ReviewCount = $notAccepted
+        Submitted   = [long](& $get $Session 'Sent')
+        Reached     = [bool]($conn -and $conn.Ok -eq $true)
+    }
 }
 
 function Get-SIGuardCallsForDataSync {

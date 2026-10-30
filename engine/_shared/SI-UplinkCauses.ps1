@@ -31,7 +31,9 @@
     test session never calls.
 #>
 
-$script:SIUplinkCauses = @{
+function Get-SIUplinkCausesState {
+    <# The value of $script:SIUplinkCauses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIUplinkCauses) { $script:SIUplinkCauses = @{
     CauseClasses   = @('no-data-source', 'missing-column', 'query-defect', 'platform-timeout', 'too-large', 'count-more', 'count-less',
                        'settings-unreachable', 'permission', 'missing-licence', 'out-of-memory', 'held-last-good', 'held-too-long')
     Actions        = @('none', 'fixed-in', 'support', 'customer')
@@ -87,12 +89,15 @@ $script:SIUplinkCauses = @{
     # Invardia has checked internal's first held item on its environment page
     HoldFieldsRings       = @(0)
     HoldOffEscalatedClass = 'count-less'
+} }
+    , $script:SIUplinkCauses
 }
+$script:SIUplinkCauses = $null; $null = Get-SIUplinkCausesState
 
 # #902: the one list of hold kinds (the code of each hold)
 if (-not (Get-Command -Name Get-SIHoldKindCode -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-HoldKinds.ps1')) }
 
-function Get-SIUplinkCausesContract { $script:SIUplinkCauses }
+function Get-SIUplinkCausesContract { (Get-SIUplinkCausesState) }
 
 function Resolve-SIUplinkHoldFieldsSwitch {
     <#
@@ -101,8 +106,8 @@ function Resolve-SIUplinkHoldFieldsSwitch {
         none yet). on / true / yes = on; off / false / no = off; a ring list ("0", "0,1") = on for those rings. -Ring not
         known = off unless 'on'. @{ On; Setting; Reason } (the same rule as Resolve-SIUplinkFieldSwitch).
     #>
-    param([AllowNull()]$Ring, $Value = '__read__', $EnvValue = '__read__', [int[]]$ConfirmedRings = @($script:SIUplinkCauses.HoldFieldsRings))
-    $name = [string]$script:SIUplinkCauses.HoldFieldsSwitch
+    param([AllowNull()]$Ring, $Value = '__read__', $EnvValue = '__read__', [int[]]$ConfirmedRings = @((Get-SIUplinkCausesState).HoldFieldsRings))
+    $name = [string](Get-SIUplinkCausesState).HoldFieldsSwitch
     if ("$Value" -eq '__read__') { $Value = Get-Variable -Name $name -Scope Global -ValueOnly -ErrorAction SilentlyContinue }
     if ("$EnvValue" -eq '__read__') { $EnvValue = [Environment]::GetEnvironmentVariable($name.ToUpperInvariant()) }
     $rn = -1
@@ -205,8 +210,8 @@ function Get-SIErrorCodeUrl {
     <# PURE. The public page of an error code: https://invardia.com/docs/si/errors/<code>/ -- '' for a value that is not a code. #>
     param([AllowNull()][AllowEmptyString()][string]$Code)
     $c = "$Code".Trim().ToLowerInvariant()
-    if ($c -notmatch $script:SIUplinkCauses.CodePattern) { return '' }
-    $script:SIUplinkCauses.DocsBase + $c + '/'
+    if ($c -notmatch (Get-SIUplinkCausesState).CodePattern) { return '' }
+    (Get-SIUplinkCausesState).DocsBase + $c + '/'
 }
 
 function Get-SIReportCause {
@@ -270,20 +275,20 @@ function Resolve-SIReportCauseCode {
     param([Parameter(Mandatory)]$Cause)
     try {
         $cc = [string]$Cause.CauseClass; $mn = [string]$Cause.MissingName
-        if ($Cause.PSObject.Properties['Known'] -and -not $Cause.Known) { return $script:SIUplinkCauses.UnknownCode }
+        if ($Cause.PSObject.Properties['Known'] -and -not $Cause.Known) { return (Get-SIUplinkCausesState).UnknownCode }
         switch ($cc) {
             'missing-licence'      { if ($mn -like 'devicetvm*') { return 'si-ra-0101' } }
             'no-data-source'       { if ($mn -like 'devicetvm*') { return 'si-ra-0101' } }
-            'missing-column'       { if ($mn -match ('^' + ($script:SIUplinkCauses.OptionalCiColumnPattern.Trim('^', '$') -replace '_', '-') + '$')) { return 'si-ra-0102' } }
+            'missing-column'       { if ($mn -match ('^' + ((Get-SIUplinkCausesState).OptionalCiColumnPattern.Trim('^', '$') -replace '_', '-') + '$')) { return 'si-ra-0102' } }
             'query-defect'         { if ($mn -eq 'syn0002') { return 'si-ra-0103' } }
             'count-more'           { return 'si-ra-0201' }
             'too-large'            { if ($mn -eq 'query-body') { return 'si-ra-0302' } }
             'settings-unreachable' { return 'si-set-0401' }
         }
-        $g = $script:SIUplinkCauses.GenericCodes[$cc]
+        $g = (Get-SIUplinkCausesState).GenericCodes[$cc]
         if ($g) { return $g }
     } catch { }
-    $script:SIUplinkCauses.UnknownCode
+    (Get-SIUplinkCausesState).UnknownCode
 }
 
 function ConvertTo-SIUplinkDetail {
@@ -304,7 +309,7 @@ function ConvertTo-SIUplinkDetail {
         $line = [regex]::Replace($line, '(?i)\b(token|key|credential|secret)\s*[=:]\s*\S+', '$1=[redacted]')
         # a long run of token characters with letters AND digits (a key, a token, a hash) is cut whatever it is
         $line = [regex]::Replace($line, '[A-Za-z0-9+/_=\-]{32,}', { param($m) if ($m.Value -match '[A-Za-z]' -and $m.Value -match '\d') { '[redacted]' } else { $m.Value } })
-        if ($line.Length -gt $script:SIUplinkCauses.DetailMax) { $line = $line.Substring(0, $script:SIUplinkCauses.DetailMax) }
+        if ($line.Length -gt (Get-SIUplinkCausesState).DetailMax) { $line = $line.Substring(0, (Get-SIUplinkCausesState).DetailMax) }
         if (Test-SIUplinkLooksSecret $line) { return $null }
         return $line
     } catch { return $null }
@@ -345,7 +350,7 @@ function Get-SIUplinkCatalogueAction {
     param([AllowNull()]$Entry, [AllowEmptyString()][string]$Version)
     $act = 'support'; $fix = $null
     if ($Entry) {
-        $a = "$($Entry.action)".Trim().ToLowerInvariant(); if ($script:SIUplinkCauses.Actions -contains $a) { $act = $a }
+        $a = "$($Entry.action)".Trim().ToLowerInvariant(); if ((Get-SIUplinkCausesState).Actions -contains $a) { $act = $a }
         if ("$($Entry.fixedIn)".Trim()) { $fix = "$($Entry.fixedIn)".Trim() }
     }
     if ($act -eq 'fixed-in') {
@@ -399,19 +404,19 @@ function ConvertTo-SIUplinkReports {
                     # #902: a report held ON PURPOSE -- its code from the hold list, never from its text (never si-ra-0900)
                     if ($hold -eq 'info' -and -not $HoldFields) { continue }   # information only: left out until Invardia takes the class
                     $hn = @(& $get 'HoldNames' | Where-Object { "$_".Trim() })
-                    $hc = $(if ($hold -eq 'escalated') { $(if ($HoldFields) { [string]$script:SIUplinkCauses.HoldClassEscalated } else { [string]$script:SIUplinkCauses.HoldOffEscalatedClass }) } else { [string]$script:SIUplinkCauses.HoldClassInfo })
+                    $hc = $(if ($hold -eq 'escalated') { $(if ($HoldFields) { [string](Get-SIUplinkCausesState).HoldClassEscalated } else { [string](Get-SIUplinkCausesState).HoldOffEscalatedClass }) } else { [string](Get-SIUplinkCausesState).HoldClassInfo })
                     $cause = [pscustomobject]@{ CauseClass = $hc; MissingName = $(if ($hn.Count) { ConvertTo-SIUplinkId ([string]$hn[0]) } else { '' }); Known = $true }
                     $code = Get-SIHoldKindCode -Kind ([string](& $get 'HoldKind')) -Escalated:($hold -eq 'escalated')
                 } else {
                 try { $cause = Get-SIReportCause -State $state -Text $why } catch { $cause = $null }
-                if ($null -eq $cause -or $script:SIUplinkCauses.CauseClasses -notcontains [string]$cause.CauseClass) { $cause = [pscustomobject]@{ CauseClass = 'query-defect'; MissingName = ''; Known = $false } }
+                if ($null -eq $cause -or (Get-SIUplinkCausesState).CauseClasses -notcontains [string]$cause.CauseClass) { $cause = [pscustomobject]@{ CauseClass = 'query-defect'; MissingName = ''; Known = $false } }
                 # a COMPLETE report with more rows than the source counted (nothing is missing) is not a report problem at
                 # all: it is never put in Reports -- Invardia made even an Action = none item a fix request (telemetry
                 # si-ra-0201). It stays visible as a note (Get-SIUplinkReportNotes: the run's own log and run record).
                 if ($state -eq 'Complete' -and [string]$cause.CauseClass -eq 'count-more') { continue }
                 $code = Resolve-SIReportCauseCode -Cause $cause
                 }
-                if ($code -notmatch $script:SIUplinkCauses.CodePattern) { $code = $script:SIUplinkCauses.UnknownCode }
+                if ($code -notmatch (Get-SIUplinkCausesState).CodePattern) { $code = (Get-SIUplinkCausesState).UnknownCode }
                 $act = Get-SIUplinkCatalogueAction -Entry $byCode[$code] -Version $Version
                 $qh =ConvertTo-SIUplinkId ([string](& $get 'QueryHash')) -Max 16
                 $lgq = ConvertTo-SIUplinkId ([string](& $get 'LastGoodQueryHash')) -Max 16
@@ -444,10 +449,10 @@ function ConvertTo-SIUplinkReports {
                 }
                 if ($hold -and $HoldFields) {
                     # #902: the hold contract's three fields (names in $script:SIUplinkCauses, one place)
-                    $it[[string]$script:SIUplinkCauses.HoldFieldHeld] = $true
-                    $it[[string]$script:SIUplinkCauses.HoldFieldAge] = (ConvertTo-SIUplinkNumber (& $get 'KeptAgeHours'))
+                    $it[[string](Get-SIUplinkCausesState).HoldFieldHeld] = $true
+                    $it[[string](Get-SIUplinkCausesState).HoldFieldAge] = (ConvertTo-SIUplinkNumber (& $get 'KeptAgeHours'))
                     $hr = ConvertTo-SIUplinkNumber (& $get 'HeldRuns'); if ($null -eq $hr -or $hr -lt 1) { $hr = 1L }
-                    $it[[string]$script:SIUplinkCauses.HoldFieldRuns] = $hr
+                    $it[[string](Get-SIUplinkCausesState).HoldFieldRuns] = $hr
                 }
                 # #709: the cause in plain words FIRST ("<report>, <step>: <why>."), then the engine's own first error line
                 if ($Identified) {
@@ -456,12 +461,12 @@ function ConvertTo-SIUplinkReports {
                 $seen[$rid] = $true
                 # #902: an information hold sorts after every real failure (it never pushes a real item out of the 20)
                 $failed = [int]($state -in @('Failed', 'NotComplete')); if ($hold -eq 'info') { $failed = 0 }
-                $items.Add([pscustomobject]@{ Sev = [int]$script:SIUplinkCauses.Severity[[string]$cause.CauseClass]; Failed = $failed; Item = [pscustomobject]$it })
+                $items.Add([pscustomobject]@{ Sev = [int](Get-SIUplinkCausesState).Severity[[string]$cause.CauseClass]; Failed = $failed; Item = [pscustomobject]$it })
             } catch { continue }
         }
         # most severe first (a failure before a not-applicable report), then the report id -- the same order every run
         $sorted = @($items | Sort-Object -Property @{ Expression = { $_.Failed }; Descending = $true }, @{ Expression = { $_.Sev } }, @{ Expression = { $_.Item.Report } })
-        $out = @($sorted | Select-Object -First $script:SIUplinkCauses.MaxReports | ForEach-Object { $_.Item })
+        $out = @($sorted | Select-Object -First (Get-SIUplinkCausesState).MaxReports | ForEach-Object { $_.Item })
         return $out
     } catch { return @() }
 }
@@ -480,10 +485,10 @@ function ConvertTo-SIUplinkFailureItem {
           [AllowNull()][object[]]$Catalogue)
     try {
         $c = "$Code".Trim().ToLowerInvariant()
-        if ($c -notmatch $script:SIUplinkCauses.CodePattern) { return @() }
+        if ($c -notmatch (Get-SIUplinkCausesState).CodePattern) { return @() }
         $cat = if ($PSBoundParameters.ContainsKey('Catalogue')) { @($Catalogue) } else { @(Get-SIErrorCatalogue) }
         $e = @($cat | Where-Object { $_ -and "$($_.code)".Trim().ToLowerInvariant() -eq $c })[0]
-        if (-not $e -or $script:SIUplinkCauses.CauseClasses -notcontains [string]$e.causeClass) { return @() }
+        if (-not $e -or (Get-SIUplinkCausesState).CauseClasses -notcontains [string]$e.causeClass) { return @() }
         $act = Get-SIUplinkCatalogueAction -Entry $e -Version $Version
         $rid = ConvertTo-SIUplinkId ((@("$Job".Trim(), "$Step".Trim()) | Where-Object { $_ }) -join '-')
         if (-not $rid) { $rid = 'updater' }
@@ -697,7 +702,7 @@ function Join-SIUplinkCauseDetail {
     $s = "$Sentence".Trim(); $r = "$Raw".Trim()
     $d = if ($s -and $r) { '{0} | {1}' -f $s, $r } elseif ($s) { $s } elseif ($r) { $r } else { '' }
     if (-not $d) { return $null }
-    if ($d.Length -gt $script:SIUplinkCauses.DetailMax) { $d = $d.Substring(0, $script:SIUplinkCauses.DetailMax) }
+    if ($d.Length -gt (Get-SIUplinkCausesState).DetailMax) { $d = $d.Substring(0, (Get-SIUplinkCausesState).DetailMax) }
     $d
 }
 
@@ -748,13 +753,13 @@ function Get-SIReportCauseHeadline {
             $hold = Test-SIUplinkFactHeld -Fact $f
             if ($hold -eq 'info') { continue }
             if ($hold -eq 'escalated') {
-                $sevH = [int]$script:SIUplinkCauses.Severity[[string]$script:SIUplinkCauses.HoldClassEscalated]
+                $sevH = [int](Get-SIUplinkCausesState).Severity[[string](Get-SIUplinkCausesState).HoldClassEscalated]
                 if ($sevH -lt $bestSev) { $best = @{ F = $f; C = $null; H = $true }; $bestSev = $sevH }
                 continue
             }
             $wt = [string]$(if ($f -is [System.Collections.IDictionary]) { $f['Why'] } else { $f.Why })
             $c = $null; try { $c = Get-SIReportCause -State $st -Text $wt } catch { $c = $null }
-            $sev = if ($c -and $script:SIUplinkCauses.Severity.ContainsKey([string]$c.CauseClass)) { [int]$script:SIUplinkCauses.Severity[[string]$c.CauseClass] } else { 99 }
+            $sev = if ($c -and (Get-SIUplinkCausesState).Severity.ContainsKey([string]$c.CauseClass)) { [int](Get-SIUplinkCausesState).Severity[[string]$c.CauseClass] } else { 99 }
             if ($sev -lt $bestSev) { $best = @{ F = $f; C = $c }; $bestSev = $sev }
         }
         if ($null -eq $best) { return '' }
@@ -895,8 +900,8 @@ function ConvertFrom-SICapabilityProbe {
         if ($okRow) {
             $cols = @($LaRows | Where-Object { $_ -and [string]$_.Kind -eq 'col' } | ForEach-Object { ([string]$_.Name).ToLowerInvariant() })
             if ($cols.Count) {
-                $opt = @($cols | Where-Object { $_ -match $script:SIUplinkCauses.OptionalCiColumnPattern } | Sort-Object -Unique)
-                foreach ($c in ($opt | Select-Object -First $script:SIUplinkCauses.MaxCiColumns)) { $id = ConvertTo-SIUplinkId $c; if ($id) { $ci.Add($id) } }
+                $opt = @($cols | Where-Object { $_ -match (Get-SIUplinkCausesState).OptionalCiColumnPattern } | Sort-Object -Unique)
+                foreach ($c in ($opt | Select-Object -First (Get-SIUplinkCausesState).MaxCiColumns)) { $id = ConvertTo-SIUplinkId $c; if ($id) { $ci.Add($id) } }
                 $cap['cmdb'] = [bool](@($opt | Where-Object { $_ -like 'si_cmdb_*' }).Count -gt 0)
             }
             $cap['sentinel'] = [bool](@($LaRows | Where-Object { $_ -and [string]$_.Kind -eq 'sentinel' }).Count -gt 0)
@@ -915,17 +920,17 @@ function ConvertFrom-SICapabilityProbe {
             $status = [string]$s.capabilityStatus
             if ($status -and $status -notin @('Enabled', 'Warning')) { continue }
             $id = ConvertTo-SIUplinkId ([string]$s.skuPartNumber)
-            if ($id -and -not $lic.Contains($id) -and $lic.Count -lt $script:SIUplinkCauses.MaxLicences) { $lic.Add($id) }
+            if ($id -and -not $lic.Contains($id) -and $lic.Count -lt (Get-SIUplinkCausesState).MaxLicences) { $lic.Add($id) }
             foreach ($p in @($s.servicePlans)) { if ($p -and [string]$p.servicePlanName) { $plans[[string]$p.servicePlanName] = $true } }
         }
-        foreach ($pn in @($script:SIUplinkCauses.PlanCapabilities.Keys)) {
-            $k = $script:SIUplinkCauses.PlanCapabilities[$pn]
+        foreach ($pn in @((Get-SIUplinkCausesState).PlanCapabilities.Keys)) {
+            $k = (Get-SIUplinkCausesState).PlanCapabilities[$pn]
             if ($k -eq 'defenderVulnMgmt') { continue }   # measured from the data itself (DeviceTvm*), the licence only adds to it
             $cap[$k] = [bool]($plans.ContainsKey($pn) -or ($cap.Contains($k) -and $cap[$k]))
         }
     }
     # the closed keys only, in the agreed order
-    $closed = [ordered]@{}; foreach ($k in $script:SIUplinkCauses.CapabilityKeys) { if ($cap.Contains($k)) { $closed[$k] = [bool]$cap[$k] } }
+    $closed = [ordered]@{}; foreach ($k in (Get-SIUplinkCausesState).CapabilityKeys) { if ($cap.Contains($k)) { $closed[$k] = [bool]$cap[$k] } }
     [pscustomobject]@{ Capabilities = $closed; CiColumns = @($ci.ToArray()); Licences = @($lic.ToArray()) }
 }
 

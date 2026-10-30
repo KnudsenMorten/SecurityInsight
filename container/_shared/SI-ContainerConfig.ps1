@@ -1942,6 +1942,20 @@ function Get-SIJobExecutionOverlap {
     $null
 }
 
+function Test-SIFlowGuardRequest {
+    <#
+        PURE (#946). Does this flow execution CARRY something the execution guard lets through beside a running flow
+        execution? @{ Request; Cancel }: Request = a Run now (SI_FLOW_FORCE / SI_FLOW_STAGE / SI_FLOW_STEP / SI_FLOW_FROM_STEP)
+        or a cancel (SI_FLOW_CANCEL); Cancel = SI_FLOW_CANCEL. A value of 0 / false / no is no request. -Get { param($Name) }:
+        the environment (default: the process environment).
+    #>
+    param([scriptblock]$Get = { param($n) [Environment]::GetEnvironmentVariable($n) })
+    $on = { param($n) $v = ([string](& $Get $n)).Trim(); [bool]($v -and $v.ToLowerInvariant() -notin @('0', 'false', 'no')) }
+    $cancel = & $on 'SI_FLOW_CANCEL'
+    $req = $cancel -or [bool](@('SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP') | Where-Object { & $on $_ })
+    [pscustomobject]@{ Request = [bool]$req; Cancel = [bool]$cancel }
+}
+
 function Get-SIExecutionGuardDecision {
     <#
         PURE (#277 live finding, ring 1 2026-10-05). What the execution guard does with an overlap Get-SIJobExecutionOverlap
@@ -1958,10 +1972,17 @@ function Get-SIExecutionGuardDecision {
         rehearsal: the install's "Run the pipeline now" started 2 minutes after a 5-minute wake-up, which was still
         checking -- "this wake-up does nothing", and the first run never happened).
     #>
-    param([string]$Engine, [string]$Job, $Other, [string]$Self, [switch]$FlowRequest)
+    param([string]$Engine, [string]$Job, $Other, [string]$Self, [switch]$FlowRequest, [switch]$FlowCancel)
     if (-not $Other) { return [pscustomobject]@{ Action = 'Run'; Message = '' } }
     $started = if ($Other.properties -and $Other.properties.startTime) { [string]$Other.properties.startTime } else { 'unknown' }
     if ($Engine -eq 'flow' -or $Job -eq 'caj-si-flow') {
+        # #946 (live 2026-10-29, three installs): a CANCEL of the running run (SI_FLOW_CANCEL) is never dropped either -- it is
+        # meant for the run the other execution holds; the runner's cancel stops that runner, marks the run Cancelled and
+        # frees the lock (Invoke-SIPipelineCancelRun)
+        if ($FlowCancel) {
+            return [pscustomobject]@{ Action = 'Run'
+                Message = ('[flow] another flow execution is running ({0}, started {1}); this one carries a cancel of the running run, so it goes on.' -f $Other.name, $started) }
+        }
         if ($FlowRequest) {
             return [pscustomobject]@{ Action = 'Run'
                 Message = ('[flow] another flow execution is running ({0}, started {1}); this one carries a request, so it goes on -- the pipeline lock queues it while that run holds the install.' -f $Other.name, $started) }

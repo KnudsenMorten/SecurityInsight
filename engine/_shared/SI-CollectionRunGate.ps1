@@ -46,6 +46,39 @@ $script:SICollectionRunGate = @{
     RunFinished      = @('Succeeded', 'Failed', 'Stopped', 'Cancelled')
     StateName        = 'CollectionHeld'
     ArmApi           = '2025-07-01'
+    # #947 (owner 2026-10-29): A WAITING UPDATE GOES FIRST -- while an update of SecurityInsight waits for this install (the
+    # updater's wait mark, tag si-update-waits, kind 'run') or is being installed (the updater holds the install's lock), a
+    # scheduled collection collects nothing (SKIP; the next slot collects, on the new build). A mark older than this is not
+    # obeyed: the updater cancels an old run after 6 hours, so a mark this old means the update is not coming -- the
+    # collections are never held back by it for ever.
+    UpdateHoldMaxHours = 12
+    UpdaterHolder      = 'caj-si-updater:'
+}
+
+function ConvertFrom-SICollectionUpdateWaitsTag {
+    <# PURE (#947). The updater's wait mark '<sinceUtc>|<setUtc>|<run|store>|<reason>' -> @{ SinceUtc; SetUtc; Kind; Reason },
+       or $null. (The same shape SI-Pipeline.ps1 ConvertFrom-SIPipelineUpdateWaitsTag reads; this file stands alone.) #>
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    if (-not "$Value".Trim()) { return $null }
+    $p = "$Value".Split('|', 4)
+    if ($p.Count -lt 3 -or $p[2] -notin @('run', 'store')) { return $null }
+    $t = { param($s) $d = [datetime]::MinValue; if ([datetime]::TryParse($s, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d)) { $d } else { $null } }
+    $since = & $t $p[0]; $set = & $t $p[1]
+    if (-not $since -or -not $set) { return $null }
+    [pscustomobject]@{ SinceUtc = $since; SetUtc = $set; Kind = $p[2]; Reason = $(if ($p.Count -ge 4) { $p[3] } else { '' }) }
+}
+
+function Get-SICollectionUpdateHold {
+    <#
+        PURE (#947). Does a waiting update hold this scheduled collection? -Waits: the updater's wait mark (parsed; $null =
+        none). Holds for a mark of kind 'run' set within -MaxHours. A 'store' mark (the updater could not read the state) holds
+        nothing. Returns the plain reason, or '' (no hold).
+    #>
+    param($Waits, [Parameter(Mandatory)][datetime]$NowUtc, [int]$MaxHours = $script:SICollectionRunGate.UpdateHoldMaxHours)
+    if (-not $Waits -or [string]$Waits.Kind -ne 'run' -or -not $Waits.SinceUtc) { return '' }
+    $since = ([datetime]$Waits.SinceUtc).ToUniversalTime()
+    if (($NowUtc.ToUniversalTime() - $since).TotalHours -ge $MaxHours) { return '' }
+    'an update of SecurityInsight waits for this install (since {0:yyyy-MM-dd HH:mm}Z) and goes first -- this scheduled collection collected nothing; the next slot collects, on the new version' -f $since
 }
 
 function Get-SICollectionRunGateJobKey {
@@ -123,20 +156,26 @@ function Get-SICollectionRunGateDecision {
         if ($null -eq $Row) { return $null }
         $x = if ($Row -is [System.Collections.IDictionary]) { if ($Row.Contains($n)) { $Row[$n] } else { $null } } elseif ($Row.PSObject.Properties[$n]) { $Row.$n } else { $null }
         if ($x -is [System.DBNull]) { $null } else { $x } }
-    $out = { param($a, $why, $run) [pscustomobject]@{ Action = $a; Reason = $why; RunId = [string]$run } }
+    # Own: this execution IS the pipeline's own collection step (never held, not even by a waiting update -- #947)
+    $out = { param($a, $why, $run, [bool]$own = $false) [pscustomobject]@{ Action = $a; Reason = $why; RunId = [string]$run; Own = $own } }
     if ($null -eq $Row) { return (& $out 'Run' 'the pipeline''s state was not read -- the collection runs as before' '') }
     $has = & $v 'HasStore'
     if (-not (($has -eq $true) -or ([string]$has -in @('1', 'True', 'true')))) { return (& $out 'Run' 'this install keeps no pipeline state yet -- the collection runs as before' '') }
     $run = [string](& $v 'FlowRunId'); $holder = [string](& $v 'Holder')
-    if (-not $holder -or -not $run) { return (& $out 'Run' 'no pipeline run holds the install' '') }
     $age = & $v 'LockAgeSeconds'
+    # #947: the UPDATER holds the install's lock (it is installing an update): a scheduled collection started now would run on
+    # the version being replaced -- it collects nothing; the next slot collects, on the new version
+    if ($holder -and $holder.StartsWith([string]$script:SICollectionRunGate.UpdaterHolder) -and $null -ne $age -and [int]$age -le ($StaleMinutes * 60)) {
+        return (& $out 'Skip' 'an update of SecurityInsight is being installed -- this scheduled collection collected nothing; the next slot collects, on the new version' '')
+    }
+    if (-not $holder -or -not $run) { return (& $out 'Run' 'no pipeline run holds the install' '') }
     if ($null -eq $age -or [int]$age -gt ($StaleMinutes * 60)) { return (& $out 'Run' ('the pipeline lock of run {0} has not been renewed for more than {1} minutes (its runner stopped) -- the collection runs' -f $run, $StaleMinutes) $run) }
     $rs = [string](& $v 'RunState')
     if (-not $rs -or $rs -in $script:SICollectionRunGate.RunFinished) { return (& $out 'Run' ('pipeline run {0} has ended' -f $run) $run) }
     $ss = [string](& $v 'StepState'); $se = [string](& $v 'StepExecution')
     $rows = 0; $rv = & $v 'StepRows'; if ($null -ne $rv) { $rows = [int]$rv }
-    if ($ss -eq 'Starting') { return (& $out 'Run' ('pipeline run {0} is starting its {1} step -- this is that collection' -f $run, $Job) $run) }
-    if ($ss -eq 'Running' -and $se -and $Self -and $se -eq $Self) { return (& $out 'Run' ('this is the {0} step of pipeline run {1}' -f $Job, $run) $run) }
+    if ($ss -eq 'Starting') { return (& $out 'Run' ('pipeline run {0} is starting its {1} step -- this is that collection' -f $run, $Job) $run $true) }
+    if ($ss -eq 'Running' -and $se -and $Self -and $se -eq $Self) { return (& $out 'Run' ('this is the {0} step of pipeline run {1}' -f $Job, $run) $run $true) }
     if ($rows -gt 0 -and $ss -and $ss -notin $script:SICollectionRunGate.NotCovered) {
         $what = switch ($ss) {
             'Waiting' { 'its {0} step is still to come' -f $Job }
@@ -190,8 +229,17 @@ function Invoke-SICollectionRunGate {
     param([scriptblock]$Invoke, [Parameter(Mandatory)][string]$Job, [string]$Self = '', $DeadlineUtc,
           [scriptblock]$Now = { [datetime]::UtcNow }, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
           [scriptblock]$Log = { param($l, $m) Write-Host $m }, [scriptblock]$Record,
-          [int]$PollSeconds = $script:SICollectionRunGate.PollSeconds, [int]$SayEverySeconds = $script:SICollectionRunGate.SayEverySeconds)
+          [int]$PollSeconds = $script:SICollectionRunGate.PollSeconds, [int]$SayEverySeconds = $script:SICollectionRunGate.SayEverySeconds,
+          # #947: { } -> the updater's wait mark (parsed, ConvertFrom-SICollectionUpdateWaitsTag) or $null. Read once; a mark
+          # that cannot be read holds nothing.
+          [scriptblock]$UpdateWaits)
     $res = { param($a, $why, $run, $w) [pscustomobject]@{ Action = $a; Reason = $why; RunId = [string]$run; WaitedSeconds = [int]$w } }
+    $updateHold = ''
+    if ($UpdateWaits) {
+        $uw = $null
+        try { $uw = & $UpdateWaits } catch { & $Log 'WARN' ('[no-overlap] whether an update waits could not be read ({0}) -- nothing is held for it' -f $_.Exception.Message); $uw = $null }
+        $updateHold = Get-SICollectionUpdateHold -Waits $uw -NowUtc ([datetime](& $Now))
+    }
     if (-not $Record) {
         # (no closure: called only inside this function, it sees $Invoke / $Job / $Self / $Now here)
         $Record = { param($action, $run) $null = Save-SICollectionRunGateState -Invoke $Invoke -By ('caj-si-' + $Job) -Value (ConvertTo-SICollectionRunGateState -Job $Job -Execution $Self -RunId $run -Action $action -AtUtc ([datetime](& $Now))) }
@@ -211,6 +259,12 @@ function Invoke-SICollectionRunGate {
             return (& $res 'Run' $why '' $waited)
         }
         $d = Get-SICollectionRunGateDecision -Row $row -Self $Self -Job $Job
+        # #947: a waiting update goes first -- every scheduled collection that is not the pipeline's own step holds (SKIP)
+        if ($updateHold -and $d.Action -ne 'Skip' -and -not ($d.PSObject.Properties['Own'] -and $d.Own)) {
+            & $Log 'INFO' ('[no-overlap] ' + $updateHold)
+            try { & $Record 'skipped' $d.RunId } catch { }
+            return (& $res 'Skip' $updateHold $d.RunId $waited)
+        }
         if ($d.Action -eq 'Run') {
             if ($waiting) {
                 $why = '{0} -- the scheduled collection waited {1} min and runs now' -f $d.Reason, [int][Math]::Ceiling($waited / 60)

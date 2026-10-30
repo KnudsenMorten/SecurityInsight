@@ -65,4 +65,37 @@ WHERE {CollectionViewSql.ThisCollection}
         new("Department", "Department", Filter: GridFilter.Values, Hidden: true),
     }, "RiskScore", true, "FindingId", ["CollectionId"], Immutable: true,
         Keyset: CollectionViewSql.Rows.Keyset, KeySortSql: CollectionViewSql.RowKeySort));
+
+    /// <summary>
+    /// The same grid over the parts as STORED COLUMNS (sidata.Finding.Risk<Side>*, filled by the data sync -- a collection
+    /// stamped sidata.Collection.RiskPartsAt): no JSON read at all; the bases and sides sort and filter as numbers (the sides
+    /// page off their own index, <see cref="CollectionViewSql.Rows"/>' keyset), the factors filter as text.
+    /// </summary>
+    public static readonly GridSpec GridStored = GridSql.Check(new GridSpec(Name, "", $"""
+SELECT CONVERT(nvarchar(64), f.FindingId) AS FindingId, f.AssetKey, f.AssetName, {ProDataSql.TierExpr("f.Tier")} AS Tier,
+       f.Title, f.Cve, f.Severity, f.RiskScore, f.RiskScoreWeighted, f.RiskRating, f.SecurityDomain, f.ReportName, f.DepartmentName AS Department,
+       {CollectionViewSql.RiskPartsSelect},
+       f.RiskWeightPct AS Weight, f.RiskWeightBy AS WeightBy, N'' AS Formula
+FROM sidata.Finding AS f
+WHERE {CollectionViewSql.ThisCollection}
+""", [
+        new("FindingId", "Id", Hidden: true),
+        new("AssetKey", "Asset key", Search: true, Hidden: true),
+        new("Tier", "Tier", GridType.Tier, GridFilter.Values, SortSql: "CASE WHEN g.[Tier] = N'Unclassified' THEN 9 ELSE TRY_CONVERT(int, g.[Tier]) END"),
+        new("AssetName", "Asset", Filter: GridFilter.Contains, Search: true),
+        new("Title", "Finding", Filter: GridFilter.Contains, Search: true),
+        new("Cve", "CVE", Filter: GridFilter.Contains, Search: true),
+        new("Severity", "Severity", Filter: GridFilter.Values, SortSql: CollectionViewSql.SeverityRank("g.[Severity]"), Hidden: true),
+        .. CollectionViewSql.RiskPartColumns,
+        new("RiskScore", "Risk Score", GridType.Number, GridFilter.Range),
+        new("Weight", "Weight", Sortable: false),
+        new("RiskScoreWeighted", "Weighted", GridType.Number, GridFilter.Range),
+        new("RiskRating", "Rating", Filter: GridFilter.Values, SortSql: CollectionViewSql.RatingRank("g.[RiskRating]")),
+        new("Formula", "Formula", Sortable: false),
+        new("WeightBy", "Weight set by", Sortable: false, Hidden: true),
+        new("SecurityDomain", "Domain", Filter: GridFilter.Values, Hidden: true),
+        new("ReportName", "Report", Filter: GridFilter.Values, Hidden: true),
+        new("Department", "Department", Filter: GridFilter.Values, Hidden: true),
+    ], "RiskScore", true, "FindingId", ["CollectionId"], Immutable: true,
+        Keyset: CollectionViewSql.Rows.Keyset, KeySortSql: CollectionViewSql.RowKeySort));
 }

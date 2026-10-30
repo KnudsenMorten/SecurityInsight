@@ -42,6 +42,19 @@ public sealed class GuardSwitches
     public static string EnabledName(string guardId) => $"SI_Guard_{Token(guardId)}_Enabled";
     public static string MailName(string guardId) => $"SI_Guard_{Token(guardId)}_Mail";
 
+    /// #937 (owner 2026-10-28: "Stop the mail"): the checks that never send a mail, whatever their outcome -- the same list as
+    /// "mail": "never" in config\guard-catalog.locked.json (GuardSwitchesTests keeps them equal). Their event and the Guards
+    /// page are unchanged.
+    public static readonly IReadOnlySet<string> NeverMails = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "collection.source.asset-drop",
+    };
+
+    /// The settings the Settings page does not show: the mail switch of a check that never mails (it would change nothing).
+    /// A value stored for one stays harmless.
+    public static bool HiddenOnSettingsPage(string settingName) =>
+        NeverMails.Any(id => string.Equals(MailName(id), settingName, StringComparison.OrdinalIgnoreCase));
+
     private readonly ISettingsStoreReader _reader;
     private readonly IMemoryCache _cache;
     private readonly ILogger<GuardSwitches> _log;

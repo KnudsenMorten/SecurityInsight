@@ -1,4 +1,4 @@
-@* THE grid of every collection view: sort on any column (the header), a per-column filter row, free-text search, row
+@* THE grid of every collection view: sort on any column (the header), the Filters panel (one labelled filter per column shown, Sort by / Order), free-text search, row
    selection (multi-select) with "show only selected" and "export selected", server-side paging, export of the whole
    view to Excel / CSV. Every bit of state is in the URL. Two forms, linked by the form attribute: the filter form
    (search + column filters) and the selection form (the row checkboxes), so ticking rows never filters by accident. *@
@@ -90,7 +90,7 @@
         <form id="@gid-f" method="get" action="@Model.PagePath" class="gridbar dt-search" role="search" aria-label="Search and filter">
             @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
             @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
-            <input type="hidden" name="sort" value="@st.Sort" /><input type="hidden" name="dir" value="@(st.Desc ? "desc" : "asc")" />
+            @* the sort and its order are the Filters panel's "Sort by" / "Order" (form attribute) *@
             @foreach (var s in st.Selected) { <input type="hidden" name="sel" value="@s" /> }
             <label for="@gid-q" class="sr-only">Search</label>
             <input id="@gid-q" type="search" name="q" value="@st.Search" placeholder="Search every text column" maxlength="200" data-search data-grid-search />
@@ -99,7 +99,69 @@
             <button type="submit">Apply</button>
             <a class="button secondary" href="@(Model.ViewLink(Model.PagePath, Model.ExtraState().Select(e => (e.Key, (string?)e.Value)).ToArray()))">Clear</a>
         </form>
-        <button type="button" class="tool-button" data-filters-toggle aria-controls="@gid-colfilters" aria-expanded="true" title="Show or hide the filter of each column, under the column headers">Filters@(activeFilters > 0 ? " · " + Fmt.Int(activeFilters) + " active" : "")</button>
+        @{
+            // THE filter panel of every grid (owner 2026-10-21: one filter experience -- the CI list's): a labelled filter for
+            // every column shown that filters (a list = the multi-select with counts, text = contains), Sort by / Order, Apply
+            // and Clear. The chosen filters are the chips of the "What you're looking at" line; the address parameters are
+            // those the column filters always sent (f.<column>, sort, dir, q, size), so links, layouts and exports keep working.
+            var panelCols = cols.Where(c => !SI.Management.Web.Columns.GridLayout.IsExtra(c) && c.Filter is GridFilter.Values or GridFilter.Tokens or GridFilter.Contains).ToList();
+            var sortCols = cols.Where(c => c.Sortable && !SI.Management.Web.Columns.GridLayout.IsExtra(c)).ToList();
+            if (st.Sort is { } curSort && !sortCols.Any(c => c.Key == curSort) && plan.Spec.Column(curSort) is { } sc) { sortCols.Insert(0, sc); }
+        }
+        <details class="tool-menu filters-menu" data-filters-menu>
+            <summary class="tool-button">Filters@(activeFilters > 0 ? " · " + Fmt.Int(activeFilters) + " active" : "")</summary>
+            <div class="tool-panel filters-panel" data-filters-panel>
+                @foreach (var c in panelCols)
+                {
+                    filterOf.TryGetValue(c.Key, out var fv);
+                    <div data-panel-filter="@c.Key">
+                        @switch (c.Filter)
+                        {
+                            case GridFilter.Contains:
+                                <label for="@gid-pf-@c.Key">@c.Label (contains)</label>
+                                <input form="@gid-f" id="@gid-pf-@c.Key" type="search" name="f.@c.Key" value="@fv?.Text" maxlength="200" />
+                                break;
+                            default:
+                                var opts = Opts(c);
+                                var chosen = fv?.Values ?? (IReadOnlyList<string>)Array.Empty<string>();
+                                if (opts.Count == 0 && c.Filter == GridFilter.Tokens)
+                                {
+                                    <label for="@gid-pf-@c.Key">@c.Label</label>
+                                    <input form="@gid-f" id="@gid-pf-@c.Key" type="text" name="f.@c.Key" value="@string.Join("|", chosen)" placeholder="a|b" maxlength="400" />
+                                }
+                                else
+                                {
+                                    // THE shared filter (MultiFilter): ticks OR-ed, counts read when it is first opened (a list
+                                    // not known when the page is drawn is the view's own values, with their counts)
+                                    var mf = new SI.Management.Web.Pages.MultiFilter
+                                    {
+                                        Id = gid + "-pf-" + c.Key, Name = "f." + c.Key, Label = c.Label, Form = gid + "-f", Note = c.FilterNote, Fill = opts.Count == 0,
+                                        Choices = SI.Management.Web.Pages.MultiFilter.Plain(opts, o => Model.ValueLabel(c, o)), Chosen = chosen,
+                                        CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key,
+                                    };
+                                    <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" />
+                                }
+                                break;
+                        }
+                    </div>
+                }
+                @* #321: a number column sorts only -- a number filter from an address (a drilldown, a saved link) still applies,
+                   shows as a chip in words, and is kept when the panel is applied *@
+                @foreach (var c in cols.Where(c => c.Filter == GridFilter.Range && !SI.Management.Web.Columns.GridLayout.IsExtra(c)))
+                {
+                    if (filterOf.TryGetValue(c.Key, out var rv)) { <input form="@gid-f" type="hidden" name="f.@c.Key" value="@CollectionPageModel.FilterText(rv)" /> }
+                }
+                <div>
+                    <label for="@gid-sort">Sort by</label>
+                    <select form="@gid-f" id="@gid-sort" name="sort" data-sort-by>@foreach (var c in sortCols) { <option value="@c.Key" selected="@(st.Sort == c.Key)">@c.Label</option> }</select>
+                </div>
+                <div>
+                    <label for="@gid-dir">Order</label>
+                    <select form="@gid-f" id="@gid-dir" name="dir" data-sort-order><option value="desc" selected="@st.Desc">Highest / newest first</option><option value="asc" selected="@(!st.Desc)">Lowest / oldest first</option></select>
+                </div>
+                <div class="actions"><button form="@gid-f" type="submit">Apply</button> <a class="button secondary" href="@(Model.ViewLink(Model.PagePath, Model.ExtraState().Select(e => (e.Key, (string?)e.Value)).ToArray()))">Clear</a></div>
+            </div>
+        </details>
         @{
             // owner 2026-10-19 ("i need more filters of most common fields"): "+ Add filter" -- every column of this grid's
             // statement that filters in SQL (a typed column of the view) and is not shown now, with the control of its type:
@@ -188,51 +250,6 @@
                         <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key">
                             @if (c.Sortable) { <a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @c.Label }
                         </th>
-                    }
-                </tr>
-                <tr class="colfilters" id="@gid-colfilters">
-                    <td class="sel"></td>
-                    @foreach (var c in cols)
-                    {
-                        filterOf.TryGetValue(c.Key, out var fv);
-                        <td data-filter="@c.Key" class="@(c.Type == GridType.Number ? "num" : null)">
-                            @switch (c.Filter)
-                            {
-                                case GridFilter.Contains:
-                                    <input form="@gid-f" type="search" name="f.@c.Key" value="@fv?.Text" aria-label="Filter @c.Label (contains)" placeholder="contains" maxlength="200" />
-                                    break;
-                                case GridFilter.Range:
-                                    @* #321: a number column sorts only -- no min..max box. A number filter from a URL (a
-                                       drilldown, a saved link) still applies, shows as a chip in words, and is kept when
-                                       the search / other filters are applied. *@
-                                    if (fv is not null) { <input form="@gid-f" type="hidden" name="f.@c.Key" value="@CollectionPageModel.FilterText(fv)" /> }
-                                    break;
-                                case GridFilter.Dates:
-                                    @* a date column filters from "+ Add filter" (last 7 / 30 / 90 days, or from..to); here its filter is kept *@
-                                    if (fv is not null) { <input form="@gid-f" type="hidden" name="f.@c.Key" value="@CollectionPageModel.FilterText(fv)" /> }
-                                    break;
-                                case GridFilter.Values:
-                                case GridFilter.Tokens:
-                                    var opts = Opts(c);
-                                    var chosen = fv?.Values ?? (IReadOnlyList<string>)Array.Empty<string>();
-                                    if (opts.Count == 0)
-                                    {
-                                        <input form="@gid-f" type="text" name="f.@c.Key" value="@string.Join("|", chosen)" aria-label="Filter @c.Label (values separated by |)" placeholder="a|b" maxlength="400" />
-                                    }
-                                    else
-                                    {
-                                        // THE shared filter (MultiFilter): ticks OR-ed, counts read when it is first opened
-                                        var mf = new SI.Management.Web.Pages.MultiFilter
-                                        {
-                                            Id = gid + "-f-" + c.Key, Name = "f." + c.Key, Label = c.Label, Form = gid + "-f", Compact = true,
-                                            Choices = SI.Management.Web.Pages.MultiFilter.Plain(opts, o => Model.ValueLabel(c, o)), Chosen = chosen,
-                                            CountsUrl = Model.HandlerLink("ValueCounts") + "&col=" + c.Key, Note = c.FilterNote,
-                                        };
-                                        <partial name="~/Pages/Shared/_MultiFilter.cshtml" model="mf" />
-                                    }
-                                    break;
-                            }
-                        </td>
                     }
                 </tr>
             </thead>

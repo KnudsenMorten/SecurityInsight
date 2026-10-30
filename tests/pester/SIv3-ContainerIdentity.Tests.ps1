@@ -486,16 +486,43 @@ Describe 'the X509Store fallback where there is no Cert: drive' {
             Should -Invoke Get-SICertStoreLocation -Times 0
         } else { Set-ItResult -Skipped -Because 'this host has no Cert: drive' }
     }
-    It 'a PFX from Key Vault becomes a PFX file + its thumbprint (store write skipped here)' {
+    It 'a PFX from Key Vault becomes a PFX file + its thumbprint (store write skipped here) -- never skipped' {
         $pfx = [Convert]::ToBase64String($script:cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'pw-209'))
         # A Windows session signed in by SSH KEY (the gate on Invardia's test VM) has no DPAPI master key: persisting a
-        # private key (PersistKeySet, what the container does) is "Access denied" there. Measured 2026-10-07; the
-        # container (Linux) and an interactive Windows session persist it. Said as a skip, never a silent pass.
+        # private key (PersistKeySet) is "Access denied" there (measured 2026-10-07). The container (Linux) and an
+        # interactive Windows session persist it. #934: where this session cannot persist, the SAME function runs with the key
+        # held in memory only (EphemeralKeySet) -- the flags the container uses are pinned by the next test, so the import,
+        # the private-key check, the thumbprint and the PFX file are proven on every host; the test is never skipped.
+        $canPersist = $true
         try { $probe = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($pfx), 'pw-209', [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet); $probe.Dispose() }
-        catch { if ("$($_.Exception.Message)" -match 'Access denied|Access is denied') { Set-ItResult -Skipped -Because 'this Windows session cannot persist a private key (SSH key logon: no DPAPI master key)'; return }; throw }
-        $r = Import-SIContainerCertificate -PfxBase64 $pfx -Password 'pw-209' -Directory $TestDrive -SkipStore
+        catch { if ("$($_.Exception.Message)" -match 'Access denied|Access is denied') { $canPersist = $false } else { throw } }
+        $ia = @{ PfxBase64 = $pfx; Password = 'pw-209'; Directory = $TestDrive; SkipStore = $true }
+        if (-not $canPersist) {
+            $ia.KeyStorageFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+            Write-Host '    (this session cannot persist a private key -- the import runs with the key in memory only)'
+        }
+        $r = Import-SIContainerCertificate @ia
         $r.Thumbprint | Should -Be $script:cert.Thumbprint
         Test-Path -LiteralPath $r.PfxPath | Should -BeTrue
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($r.PfxPath)) | Should -Be $pfx -Because 'the file is the PFX from Key Vault, byte for byte'
+        # NEGATIVE: a PFX without its private key is refused, on both paths
+        $pub = [Convert]::ToBase64String($script:cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+        $ia.PfxBase64 = $pub
+        { Import-SIContainerCertificate @ia } | Should -Throw
+    }
+    It 'the container imports with Exportable + PersistKeySet, and no product caller passes other key flags' {
+        $f = Get-SIContainerCertificateKeyFlags
+        $f | Should -Be ([System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet)
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'auth\Find-SICertificate.ps1'))
+        $src | Should -Match '\$flags = if \(\$null -ne \$KeyStorageFlags\) \{[^}]*\} else \{ Get-SIContainerCertificateKeyFlags \}' -Because 'no flags given = the container flags'
+        foreach ($rel in 'container\Start-SIInContainer.ps1', 'container\Start-RiskAnalysisInContainer.ps1', 'container\Invoke-ShardProducer.ps1') {
+            $c = [IO.File]::ReadAllText((Join-Path $script:SIRoot $rel))
+            $c | Should -Match 'Import-SIContainerCertificate' -Because "$rel imports the certificate"
+            $c | Should -Not -Match 'KeyStorageFlags' -Because "$rel uses the container flags"
+        }
+        $all = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Include *.ps1 | Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -ne 'Find-SICertificate.ps1' } |
+                 Where-Object { [IO.File]::ReadAllText($_.FullName) -match 'Import-SIContainerCertificate[^\r\n]*-KeyStorageFlags' })
+        $all.Count | Should -Be 0 -Because 'only a test session uses another key storage'
     }
     It 'the certificate client token is a signed assertion -- never a secret' {
         $c = $script:cert

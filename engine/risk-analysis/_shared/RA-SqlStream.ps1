@@ -1140,6 +1140,19 @@ function Write-RAStepPhaseRow {
     } catch { }
 }
 
+function Write-RAStepProgressRow {
+    <# #576: the running report's progress -- '<report>', query slice <Done> of <Total> -- through the run's own database seam
+       (Write-SIStepProgress, SI-StepPhase.ps1; at a new report and at most every 15 s). Nothing when there is no stream or
+       the helper is not loaded. NEVER throws, never changes a row of the result. #>
+    param($Stream, [Parameter(Mandatory)][string]$Phase, [long]$Done = -1, [long]$Total = -1)
+    try {
+        if ($null -eq $Stream -or $null -eq $Stream.Invoke) { return }
+        if (-not (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue)) { return }
+        $log = $null; if ($Stream.Log -is [scriptblock]) { $log = $Stream.Log }
+        $null = Write-SIStepProgress -Invoke $Stream.Invoke -Job (Get-RAStepPhaseJob -Stream $Stream) -Phase $Phase -Done $Done -Total $Total -Log $log
+    } catch { }
+}
+
 function Write-RAPhaseTimesToSql {
     <# #873 A: a report's (or a part's) time per phase as rows of cfg.StepPhaseTime -- '<What>: <phase>', one row per phase
        measured, in slice order; the insert row carries the rows written. NEVER throws. #>

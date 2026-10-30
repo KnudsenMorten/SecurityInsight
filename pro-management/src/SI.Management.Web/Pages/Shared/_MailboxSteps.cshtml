@@ -25,6 +25,10 @@
             <input id="mb-domain-other" type="text" name="MailDomainOther" maxlength="253" autocomplete="off" spellcheck="false" placeholder="contoso.com" aria-label="Another domain" hidden="@(st.Domains.Count > 0)" data-mb-domain-other />
         </div>
         <div><label for="mb-display">Display name</label><input id="mb-display" type="text" name="MailDisplayName" value="@st.DisplayName" maxlength="64" data-mb-display /></div>
+        @* #633 (owner 2026-10-13: "it shuld also show email adress as peope try with display name only"): the address the
+           name and the domain make, shown as it is typed (mailbox-steps.js builds the same as SharedMailboxSteps.AddressOf) *@
+        @{ var mbAddress = SharedMailboxSteps.AddressOf(st.MailboxName, st.Domain); }
+        <p class="wide" data-mb-address-line hidden="@(mbAddress is null)">The mailbox's address will be <strong data-mb-address>@mbAddress</strong> -- this is the address, not the display name.</p>
         <fieldset>
             <legend>The mailbox</legend>
             <label><input type="radio" name="MailboxExists" value="false" checked="@(!st.Exists)" data-mb-exists /> Create it</label>

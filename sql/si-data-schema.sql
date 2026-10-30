@@ -4822,3 +4822,47 @@ CREATE TABLE sidata.VulnSbExclude (
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_VulnSbExclude' AND object_id = OBJECT_ID('sidata.VulnSbExclude'))
 CREATE CLUSTERED INDEX IX_VulnSbExclude ON sidata.VulnSbExclude (SbRun, Kind, Value);
+
+-- ---------------------------------------------------------------------------------------------
+-- THE RISK SCORE'S PARTS AS COLUMNS (ADDED 2026-10-29; owner: "it should be possible to see the Risk Score calculations as
+-- columns" -- in the Detailed and the Summary rows, by default). Risk Analysis writes every part of a finding's score on its
+-- row (RiskConsequenceBase / RiskProbabilityBase, RiskFactor_*_Impacts "Name=n;...", the sides, the factor points, the
+-- weight); the data sync copies them into typed columns, so the views show, sort and filter them without reading the row's
+-- JSON. Per side (Asset = the consequence side, Vuln = the probability side):
+--   Risk<Side>Base      the base (the risk index); a row written before the bases were recorded: the side minus its points
+--   Risk<Side>Side      the side's score (base + the points of its factors)
+--   Risk<Side>Points    the points of its factors, as Risk Analysis summed them
+--   Risk<Side>Factors   the factors with their points as Risk Analysis wrote them ("Name=n;..."), or -- an older row -- their names
+--   Risk<Side>Derived   1 = the base was worked out (an older row), 0 = recorded
+--   RiskWeightPct / RiskWeightBy   the weight (in %) and what set it
+-- sidata.Collection.RiskPartsAt is set when every finding of the collection carries them (RiskPartsUpto: how far a fill that
+-- stopped at its time budget came); the data sync fills a new collection when it derives it and earlier collections newest
+-- first, within a time budget per run (Invoke-SIDataRiskPartsBackfill). The two sides are indexed (the views sort on them).
+-- sidata.SummaryRow gets the parts it did not carry (its side scores and factor points already are columns).
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.Finding', 'RiskAssetBase') IS NULL ALTER TABLE sidata.Finding ADD RiskAssetBase FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskAssetSide') IS NULL ALTER TABLE sidata.Finding ADD RiskAssetSide FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskAssetPoints') IS NULL ALTER TABLE sidata.Finding ADD RiskAssetPoints FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskAssetFactors') IS NULL ALTER TABLE sidata.Finding ADD RiskAssetFactors NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskAssetDerived') IS NULL ALTER TABLE sidata.Finding ADD RiskAssetDerived BIT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskVulnBase') IS NULL ALTER TABLE sidata.Finding ADD RiskVulnBase FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskVulnSide') IS NULL ALTER TABLE sidata.Finding ADD RiskVulnSide FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskVulnPoints') IS NULL ALTER TABLE sidata.Finding ADD RiskVulnPoints FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskVulnFactors') IS NULL ALTER TABLE sidata.Finding ADD RiskVulnFactors NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskVulnDerived') IS NULL ALTER TABLE sidata.Finding ADD RiskVulnDerived BIT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskWeightPct') IS NULL ALTER TABLE sidata.Finding ADD RiskWeightPct FLOAT NULL;
+IF COL_LENGTH('sidata.Finding', 'RiskWeightBy') IS NULL ALTER TABLE sidata.Finding ADD RiskWeightBy NVARCHAR(1000) NULL;
+IF COL_LENGTH('sidata.Collection', 'RiskPartsAt') IS NULL ALTER TABLE sidata.Collection ADD RiskPartsAt DATETIME2(0) NULL;
+IF COL_LENGTH('sidata.Collection', 'RiskPartsUpto') IS NULL ALTER TABLE sidata.Collection ADD RiskPartsUpto BIGINT NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_AssetSidePage' AND object_id = OBJECT_ID('sidata.Finding'))
+    EXEC (N'CREATE INDEX IX_Finding_AssetSidePage ON sidata.Finding (CollectionId, RiskAssetSide DESC) INCLUDE (ExemptionId)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_VulnSidePage' AND object_id = OBJECT_ID('sidata.Finding'))
+    EXEC (N'CREATE INDEX IX_Finding_VulnSidePage ON sidata.Finding (CollectionId, RiskVulnSide DESC) INCLUDE (ExemptionId)');
+
+IF COL_LENGTH('sidata.SummaryRow', 'RiskAssetBase') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskAssetBase FLOAT NULL;
+IF COL_LENGTH('sidata.SummaryRow', 'RiskAssetFactors') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskAssetFactors NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.SummaryRow', 'RiskAssetDerived') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskAssetDerived BIT NULL;
+IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnBase') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnBase FLOAT NULL;
+IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnFactors') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnFactors NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnDerived') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnDerived BIT NULL;

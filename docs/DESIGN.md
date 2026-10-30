@@ -10454,7 +10454,7 @@ when 3 or more installs trip the same guard on the same version within 24 h.
 | `vuln.connector.refused` | refused | a connector that is not set up completely |
 | `cmdb.sql.snapshot-incomplete` / `collapse` (below 50 %) / `empty-snapshot` / `no-correlation-map` | refused | `Invoke-SICmdbSql.ps1` |
 | `cmdb.sql.stale` | skipped | another run changed the CI table meanwhile |
-| `cmdb.servicenow.unreachable` / `create-gate` / `service-model` | halted / held / refused | `Invoke-SICmdb.ps1` |
+| `cmdb.servicenow.unreachable` / `create-gate` / `service-model` | halted / held / refused | the CI push of the ServiceNow data-out connector (`SI-DataOut.ps1`, `Invoke-SIDataOutSnowGuards`: not reachable / rows not accepted) / `Invoke-SICmdb.ps1` (the service model) |
 | `datasync.collection.held` / `short-read` | held / refused | `Invoke-SIDataSync.ps1` |
 | `audit.retention.refused` | refused | the data sync's retention step (below 13 months / not a number) |
 | `ra.output.row-drop` (LARGE-DROP, WENT-TO-ZERO, MISSING) / `ra.output.column-emptied` (COLUMN-EMPTIED, COLUMN-VANISHED) | warning | `Invoke-RiskAnalysis.ps1` — ONE event per run each, listing every report |

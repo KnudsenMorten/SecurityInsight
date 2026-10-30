@@ -6700,7 +6700,7 @@
                      },
                      {
                          "name":  "SI_Guard_CmdbServicenowCreateGate_Enabled",
-                         "label":  "ServiceNow: create and match rules",
+                         "label":  "ServiceNow: CIs not accepted",
                          "group":  "Guards (safety checks)",
                          "type":  "bool",
                          "engines":  [
@@ -6711,28 +6711,28 @@
                          "advanced":  false,
                          "default":  null,
                          "defaultText":  "Off",
-                         "description":  "ServiceNow: create and match rules (cmdb.servicenow.create-gate). Off: no event and no mail. The step itself still stops, because those assets do not meet the connector\u0027s create and match rules (set in the connector).",
-                         "purpose":  "The safety check that protects the configuration items (CIs) in ServiceNow: Some assets were not created or updated in ServiceNow because SecurityInsight could not match them safely (no stable asset id yet, or more than one matching CI).",
-                         "effect":  "Off: no event and no mail. The step itself still stops, because those assets do not meet the connector\u0027s create and match rules (set in the connector). On: the check works as described on the Guards page.",
+                         "description":  "ServiceNow: CIs not accepted (cmdb.servicenow.create-gate). Off: no event and no mail. The rows ServiceNow did not accept are still sent again with the next run.",
+                         "purpose":  "The safety check that protects the configuration items (CIs) in ServiceNow: ServiceNow\u0027s import did not accept some of the CIs SecurityInsight sent, so this batch was not completed.",
+                         "effect":  "Off: no event and no mail. The rows ServiceNow did not accept are still sent again with the next run. On: the check works as described on the Guards page.",
                          "whenToChange":  "Off by default: only the two brakes stay on (CIs retired by mistake, duplicate vulnerability records) -- this check is a warning you can switch on. Turn it on when you want it to hold or stop the step, and mail, again.",
                          "card":  "CMDB, ServiceNow and asset metadata checks",
                          "needs":  "SI_Guards_Enabled",
                          "info":  {
-                                      "what":  "The safety check that protects the configuration items (CIs) in ServiceNow: Some assets were not created or updated in ServiceNow because SecurityInsight could not match them safely (no stable asset id yet, or more than one matching CI).",
+                                      "what":  "The safety check that protects the configuration items (CIs) in ServiceNow: ServiceNow\u0027s import did not accept some of the CIs SecurityInsight sent, so this batch was not completed.",
                                       "whenOn":  "the check works as described on the Guards page.",
-                                      "whenOff":  "no event and no mail. The step itself still stops, because those assets do not meet the connector\u0027s create and match rules (set in the connector).",
+                                      "whenOff":  "no event and no mail. The rows ServiceNow did not accept are still sent again with the next run.",
                                       "risk":  "Turning this check off removes a protection: when its condition happens, nothing holds or stops the step and no event is raised. Reversible at once: switch it back on; it applies from the next run.",
                                       "requires":  "Works only while \"All guards (safety checks)\" is on.",
                                       "default":  "Off",
                                       "recommended":  "Keep the default (off) unless you want this check to hold or stop the step. Change it when: Off by default: only the two brakes stay on (CIs retired by mistake, duplicate vulnerability records) -- this check is a warning you can switch on. Turn it on when you want it to hold or stop the step, and mail, again.",
                                       "docUrl":  "https://invardia.com/docs/si/settings/SI_Guard_CmdbServicenowCreateGate_Enabled/",
                                       "confirmWhen":  "off",
-                                      "confirm":  "no event and no mail. The step itself still stops, because those assets do not meet the connector\u0027s create and match rules (set in the connector). Turning this check off removes a protection: when its condition happens, nothing holds or stops the step and no event is raised. Reversible at once: switch it back on; it applies from the next run."
+                                      "confirm":  "no event and no mail. The rows ServiceNow did not accept are still sent again with the next run. Turning this check off removes a protection: when its condition happens, nothing holds or stops the step and no event is raised. Reversible at once: switch it back on; it applies from the next run."
                                   }
                      },
                      {
                          "name":  "SI_Guard_CmdbServicenowCreateGate_Mail",
-                         "label":  "ServiceNow: create and match rules: mail",
+                         "label":  "ServiceNow: CIs not accepted: mail",
                          "group":  "Guards (safety checks)",
                          "type":  "bool",
                          "engines":  [
@@ -6754,7 +6754,7 @@
                                       "whenOn":  "(follows the check: nothing is mailed while the check is off)",
                                       "whenOff":  "the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
                                       "risk":  "Low: no data is changed and the check still works; only its mail stops, so a trip is seen only on the Guards page, in run health and in the audit trail. Reversible at once.",
-                                      "requires":  "Works only while \"ServiceNow: create and match rules\" is on.",
+                                      "requires":  "Works only while \"ServiceNow: CIs not accepted\" is on.",
                                       "default":  "On (follows the check: nothing is mailed while the check is off)",
                                       "recommended":  "Keep the default. Change it when: Turn it off for a check whose mails you do not need, instead of turning the check off.",
                                       "docUrl":  "https://invardia.com/docs/si/settings/SI_Guard_CmdbServicenowCreateGate_Mail/",
@@ -7255,20 +7255,20 @@
                          "advanced":  false,
                          "default":  null,
                          "defaultText":  "On (follows the check: nothing is mailed while the check is off)",
-                         "description":  "Its mail: off = the event is still shown on the Guards page, but not mailed.",
-                         "purpose":  "Whether this safety check sends a mail when it trips.",
+                         "description":  "Its mail: this check never sends a mail -- its event is shown on the Guards page only; a value here changes nothing.",
+                         "purpose":  "This safety check never sends a mail: it accepts a real drop by itself on the next complete collection, so its event is shown on the Guards page only. This switch changes nothing and is not shown on the Settings page.",
                          "effect":  "Off: the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
-                         "whenToChange":  "Turn it off for a check whose mails you do not need, instead of turning the check off.",
+                         "whenToChange":  "Never: this check sends no mail either way.",
                          "card":  "CMDB, ServiceNow and asset metadata checks",
                          "needs":  "SI_Guard_CollectionSourceAssetDrop_Enabled",
                          "info":  {
-                                      "what":  "Whether this safety check sends a mail when it trips.",
+                                      "what":  "This safety check never sends a mail: it accepts a real drop by itself on the next complete collection, so its event is shown on the Guards page only. This switch changes nothing and is not shown on the Settings page.",
                                       "whenOn":  "(follows the check: nothing is mailed while the check is off)",
                                       "whenOff":  "the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
                                       "risk":  "Low: no data is changed and the check still works; only its mail stops, so a trip is seen only on the Guards page, in run health and in the audit trail. Reversible at once.",
                                       "requires":  "Works only while \"Collection: far fewer assets from one source\" is on.",
                                       "default":  "On (follows the check: nothing is mailed while the check is off)",
-                                      "recommended":  "Keep the default. Change it when: Turn it off for a check whose mails you do not need, instead of turning the check off.",
+                                      "recommended":  "Keep the default. Change it when: Never: this check sends no mail either way.",
                                       "docUrl":  "https://invardia.com/docs/si/settings/SI_Guard_CollectionSourceAssetDrop_Mail/",
                                       "confirmWhen":  "off",
                                       "confirm":  "the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check. Low: no data is changed and the check still works; only its mail stops, so a trip is seen only on the Guards page, in run health and in the audit trail. Reversible at once."
@@ -9995,6 +9995,7 @@
                          "effect":  "Without it (and without a confirmation) SecurityInsight does not send through the shared mailbox.",
                          "whenToChange":  "Set once, to an administrator\u0027s own mailbox; setup fills it in.",
                          "card":  "Mail",
+                         "hint":  "An e-mail address (name@domain) of a different, ordinary mailbox -- never the shared mailbox itself, and not a display name.",
                          "info":  {
                                       "what":  "An ordinary mailbox OUTSIDE the shared mailbox\u0027s scope. Before it sends, SecurityInsight checks that it may NOT send as this mailbox -- which proves Mail.Send is restricted. Nothing is delivered by the check.",
                                       "whenChanged":  "Without it (and without a confirmation) SecurityInsight does not send through the shared mailbox.",
@@ -15722,7 +15723,7 @@
                          "secret":  false,
                          "advanced":  false,
                          "default":  null,
-                         "defaultText":  "Falls back to MailFrom, then SMTPUser; with signed-in mail the run stops at start",
+                         "defaultText":  "Left empty: the mail server user name",
                          "description":  "verified-sender address (From header).",
                          "purpose":  "The From address on every mail.",
                          "effect":  "Sets who the mail appears to come from. A sender the relay has not verified gets the mail rejected. With no sender at all and anonymous mail, mail is skipped with a warning.",
@@ -15734,7 +15735,7 @@
                                       "whenChanged":  "Sets who the mail appears to come from. A sender the relay has not verified gets the mail rejected. With no sender at all and anonymous mail, mail is skipped with a warning.",
                                       "risk":  "A wrong value can mean that alerts and reports go to the wrong people or to nobody, or that mail stops; no collected data is changed. Reversible at once: change it back.",
                                       "requires":  "Read by: risk-analysis.",
-                                      "default":  "Falls back to MailFrom, then SMTPUser; with signed-in mail the run stops at start",
+                                      "default":  "Left empty: the mail server user name",
                                       "recommended":  "Keep the default. Change it when: Set it whenever mail is on; use an address your mail relay accepts as sender.",
                                       "docUrl":  "https://invardia.com/docs/si/settings/SMTPFrom/"
                                   }
@@ -15780,7 +15781,7 @@
                          "secret":  false,
                          "advanced":  false,
                          "default":  null,
-                         "defaultText":  "No fallback for Risk Analysis mail; the daily close-loop mail uses 587 with encryption, else 25",
+                         "defaultText":  "Needed for report mails, e.g. 587",
                          "description":  "25=plain/STARTTLS, 465=SMTPS, 587=submission",
                          "purpose":  "The network port of the mail server used for report e-mails, for example 25, 465 or 587.",
                          "effect":  "Must match the mail server and the encryption setting; a wrong port makes sending fail (the run itself continues).",
@@ -15792,7 +15793,7 @@
                                       "whenChanged":  "Must match the mail server and the encryption setting; a wrong port makes sending fail (the run itself continues).",
                                       "risk":  "A wrong value can mean that alerts and reports go to the wrong people or to nobody, or that mail stops; no collected data is changed. Reversible at once: change it back.",
                                       "requires":  "Read by: risk-analysis.",
-                                      "default":  "No fallback for Risk Analysis mail; the daily close-loop mail uses 587 with encryption, else 25",
+                                      "default":  "Needed for report mails, e.g. 587",
                                       "recommended":  "Keep the default. Change it when: Set it to match your mail server; setup asks for it.",
                                       "docUrl":  "https://invardia.com/docs/si/settings/SMTPPort/"
                                   }

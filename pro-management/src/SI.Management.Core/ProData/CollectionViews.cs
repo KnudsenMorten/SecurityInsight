@@ -5,8 +5,13 @@ namespace SI.Management.Core.ProData;
 /// "what happened with this collection" is the window [CollectionTime, NextTime).
 public sealed record ViewCollection(string CollectionId, DateTime CollectionTime, string Kind, long? Rows, DateTime? DerivedAt, DateTime? NextTime)
 {
-    /// Part of every cache key: a collection whose aggregates are recomputed gets new keys.
-    public string Version => CollectionId + "@" + (DerivedAt?.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0");
+    /// When every finding of the collection got the risk score's parts as columns (sidata.Collection.RiskPartsAt; null =
+    /// not yet: the parts' columns are empty and the explained score reads them from each finding's row).
+    public DateTime? RiskPartsAt { get; init; }
+
+    /// Part of every cache key: a collection whose aggregates are recomputed -- or whose risk score's parts arrive -- gets new keys.
+    public string Version => CollectionId + "@" + (DerivedAt?.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0")
+        + (RiskPartsAt is { } rp ? "+" + rp.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) : "");
 }
 
 /// One pre-computed aggregate row (sidata.FindingFacet).
@@ -25,6 +30,10 @@ public static class Facets
     public const string Tier = "tier";
     public const string Domain = "domain";
     public const string Report = "report";
+    // the findings grid's Category / Subcategory / Department dropdowns (owner 2026-10-28)
+    public const string Category = "category";
+    public const string Subcategory = "subcategory";
+    public const string Department = "department";
 }
 
 /// A grid of one view, with the values its source needs (collection id, time window, CI key, ...).
@@ -258,7 +267,7 @@ public sealed class CollectionViews : ICollectionViews
     {
         var (rows, text) = await Run(CollectionViewSql.CollectionsTop(120, await HasReadyMarkAsync(ct).ConfigureAwait(false)), ct).ConfigureAwait(false);
         return R<IReadOnlyList<ViewCollection>>(rows.Select(r => new ViewCollection(S(r, "CollectionId"), T(r, "CollectionTime") ?? default, S(r, "Kind"),
-            ProDataQueries.LN(r, "RowTotal"), T(r, "DerivedAt"), T(r, "NextTime"))).ToList(), text);
+            ProDataQueries.LN(r, "RowTotal"), T(r, "DerivedAt"), T(r, "NextTime")) { RiskPartsAt = T(r, "RiskPartsAt") }).ToList(), text);
     }
 
     public Task<QueryResult<GridPage>> GridAsync(GridQuery query, CancellationToken ct) => Grid(query, export: false, ct);

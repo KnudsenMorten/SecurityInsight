@@ -128,3 +128,32 @@ function Invoke-SIJobStartRequestRelease {
     if (-not $Invoke -or $null -eq $RequestId -or -not $Execution) { return $false }
     try { $null = & $Invoke (Get-SIJobStartRequestReleaseSql) @{ Id = $RequestId; Exec = $Execution } 'nonquery'; $true } catch { $false }
 }
+
+function Invoke-SIJobStartRequestIsolated {
+    <#
+        What a container entrypoint calls, BEFORE its engine: the claim (-RequestId absent) or the hand-back (-RequestId) with
+        the Pro database seam of SI-Guard.ps1 (-GuardPath), loaded INSIDE this call only. Live 3.0.5 (internal, 2026-10-28): the
+        guard file, dot-sourced in the entrypoint's own scope, brought the telemetry code with it; the engine started after it
+        then found those functions defined and did not load them, and they read their lists from the engine's scope, where they
+        were never set -- the half-hourly status report stopped ("'pro' is not a valid Edition ()", no endpoint). Here
+        nothing the guard file defines outlives the call, and the process-wide database seam it remembers is put back as it
+        was, so the engine starts exactly as before. -Invoke: the database seam itself (tests); no guard file is loaded then.
+        Claim: @{ Claimed; RequestId; Names; Line }. Hand-back: $true / $false. Never throws.
+    #>
+    param([string]$GuardPath, [string]$Job, [string]$Execution, $RequestId, [scriptblock]$Invoke, [scriptblock]$Sleep)
+    $keep = @{}; foreach ($n in 'SI_GuardProInvoke', 'SI_GuardInvoke') { $keep[$n] = Get-Variable -Name $n -Scope Global -ValueOnly -ErrorAction SilentlyContinue }
+    try {
+        if (-not $Invoke) {
+            if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . $GuardPath }
+            $Invoke = Get-SIGuardProInvoke
+        }
+        if ($PSBoundParameters.ContainsKey('RequestId')) { return (Invoke-SIJobStartRequestRelease -Invoke $Invoke -RequestId $RequestId -Execution $Execution) }
+        $a = @{ Invoke = $Invoke; Job = $Job; Execution = $Execution }; if ($Sleep) { $a.Sleep = $Sleep }
+        return (Invoke-SIJobStartRequestClaim @a)
+    } catch {
+        if ($PSBoundParameters.ContainsKey('RequestId')) { return $false }
+        return @{ Claimed = $false; RequestId = $null; Names = @(); Line = ('[start-request] the start request could not be read ({0}) -- the run goes on as configured' -f (([string]$_.Exception.Message) -split "`n")[0]) }
+    } finally {
+        foreach ($n in $keep.Keys) { Set-Variable -Name $n -Scope Global -Value $keep[$n] }
+    }
+}

@@ -896,12 +896,25 @@ input::placeholder, textarea::placeholder { color: var(--field-placeholder); opa
 .multifilter .mf-panel .colfilter-list { border: 0; padding: 0; margin: 0; }
 .multifilter .mf-all { display: flex; gap: .3rem; align-items: center; font-weight: 600; font-size: .8rem; }
 .multifilter .mf-panel .hint { margin: 0; font-size: .75rem; }
+/* inside a grid's filter row the row's "input { width: 100% }" stretched each tick box across the panel, pushing the values
+   right (owner 2026-10-28: "menus still dont look good"): a tick box keeps its own size, the value sits left next to it */
+table.grid tr.colfilters .multifilter .mf-panel input[type=checkbox] { width: auto; min-width: 0; margin: 0; flex: none; }
+.multifilter .mf-panel label { justify-content: flex-start; text-align: left; font-weight: 400; }
+.multifilter .mf-panel .mf-all { font-weight: 600; }
 .multifilter:not(.compact) { position: relative; }
 .multifilter:not(.compact) > summary { padding: .35rem .6rem; border: 1px solid var(--seg-line); border-radius: var(--radius); background: var(--surface-0); width: 100%; justify-content: space-between; }
 .multifilter:not(.compact)[open] > .mf-panel { position: absolute; z-index: 15; left: 0; top: 100%; width: max(100%, 14rem); max-width: calc(100vw - 32px); box-shadow: 0 8px 24px rgb(0 0 0 / 18%); }
 .value-empty { opacity: .6; }
 /* the filters of a view whose filters sit above its grid: inside the Filters panel each filter opens in place */
-.filters-panel { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; }
+/* every control of the row starts at its top: a filter that opens grows downwards and the others stay where they are (they
+   were aligned to the row's bottom, so an opened filter pushed them down and left an empty band above the row) */
+.filters-panel { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; }
+/* a value's tick box sits next to its words, the words wrap inside the panel (never a horizontal scroll) and a count is never cut */
+.filters-panel .colfilter-list { overflow-x: hidden; }
+.filters-panel .colfilter-list label { display: flex; align-items: baseline; gap: .35rem; justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.filters-panel .colfilter-list input[type=checkbox] { width: auto; min-width: 0; margin: 0; flex: none; }
+.filters-panel .value-count { white-space: nowrap; }
+.filters-panel .mf-panel { overflow-x: hidden; max-width: 100%; }
 .filters-panel > div { flex: 1 1 12rem; min-width: 0; }
 .tool-panel .multifilter:not(.compact)[open] > .mf-panel { position: static; box-shadow: none; width: auto; }
 /* the pager: "Showing 1–50 of 1.117.524 findings · page [1] of 22.351 · ← Previous · Next → · Last" */

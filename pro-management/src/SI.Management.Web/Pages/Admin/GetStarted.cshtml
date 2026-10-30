@@ -74,7 +74,7 @@
                             @foreach (var f in Model.Fields)
                             {
                                 var (rule, hidden) = Model.ShowWhen(f);
-                                await Html.RenderPartialAsync("_SettingField", new SettingFieldView(f, Model.CanSuperAdmin, Model.Errors.TryGetValue(f.Setting.Name, out var err) ? err : null, rule, hidden));
+                                await Html.RenderPartialAsync("_SettingField", new SettingFieldView(f, Model.CanSuperAdmin, Model.Errors.TryGetValue(f.Setting.Name, out var err) ? err : null, rule, hidden, Label: Model.FieldLabel(f)));
                             }
                         </div>
                         if (cur.Id == "ai")

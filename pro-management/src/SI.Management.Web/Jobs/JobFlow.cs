@@ -36,6 +36,11 @@ public sealed record FlowDefinition(string Mode, string StartTime, string Cadenc
 /// record written before they were kept. Stage (#306): the stage the step ran in.
 public sealed record FlowStepRun(int Order, int Group, string Job, string State, string? Execution, DateTimeOffset? StartedUtc, DateTimeOffset? EndedUtc, string? ErrorClass, string? Error,
     int? Attempts = null, string? RetryReason = null, string? Stage = null);
+/// #576: a running execution's progress as the engine writes it (cfg.StepProgress): what it does now, done / total when known.
+public sealed record StepProgress(string Execution, string Job, string Phase, long? Done, long? Total, DateTimeOffset? AtUtc);
+/// #576: what the pipeline page shows for a running step: the phase, done (of total), a percentage when the total is known,
+/// when it was written, and whether that is older than <see cref="JobFlow.ProgressStaleMinutes"/> (shown greyed).
+public sealed record StepProgressView(string Phase, long? Done, long? Total, int? Percent, DateTimeOffset? AtUtc, bool Stale);
 /// Scope / Target / RequestedBy (#306): what was run -- pipeline | stage | step | from-step -- and who asked for it.
 public sealed record FlowRun(string FlowRunId, string Trigger, string? FromStep, string State, DateTimeOffset StartedUtc, DateTimeOffset? EndedUtc,
     DateTimeOffset? HeartbeatUtc, string? StopReason, DateTimeOffset? SlotUtc, string? Note, IReadOnlyList<FlowStepRun> Steps,
@@ -260,6 +265,55 @@ public static class JobFlow
     public static bool ManualInFlowMode(string key) => JobSchedule.Key(key) == "asset-trend";
 
     public static string JobName(string key) => "caj-si-" + key;
+
+    /// #576: a progress record older than this is shown greyed ("no update for n min") -- the engine writes at most every 15 s.
+    public const int ProgressStaleMinutes = 15;
+
+    /// PURE (#576). The progress of a RUNNING step (Running / Starting, with an execution): the record of its execution, or
+    /// null (no record = the page shows "Running" as before). Percent only when the total is known (0..100).
+    public static StepProgressView? ProgressOf(FlowStepRun? step, IReadOnlyList<StepProgress>? records, DateTimeOffset now)
+    {
+        if (step is null || step.State is not ("Running" or "Starting") || string.IsNullOrEmpty(step.Execution) || records is null) return null;
+        var r = records.Where(x => string.Equals(x.Execution, step.Execution, StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.AtUtc).FirstOrDefault();
+        if (r is null || string.IsNullOrWhiteSpace(r.Phase)) return null;
+        int? pct = r.Done is { } d && r.Total is { } t && t > 0 ? (int)Math.Clamp(d * 100 / t, 0, 100) : null;
+        var stale = r.AtUtc is { } at && (now - at).TotalMinutes > ProgressStaleMinutes;
+        return new StepProgressView(r.Phase, r.Done, r.Total, pct, r.AtUtc, stale);
+    }
+
+    /// The job whose executions are a step's runs: caj-si-&lt;key&gt;, or the producer of a collection in parts when only that is
+    /// installed (the step's recorded execution is the producer's). Null when neither is installed.
+    public static string? StepRunJob(string key, IReadOnlyCollection<string> installed)
+    {
+        var plain = JobName(key);
+        if (installed.Contains(plain)) return plain;
+        return installed.Contains(plain + "-producer") ? plain + "-producer" : null;
+    }
+
+    /// The pipeline page's line for a run of a step's job that the pipeline did not record (it was started outside the
+    /// pipeline -- in Azure, by support), when it is newer than the step's own record. Running = it is running now.
+    public sealed record OutsideRun(JobExecution Execution, bool Running)
+    {
+        public string Text => Running ? "running -- started outside the pipeline" : "ran outside the pipeline";
+        public string Outcome => Execution.Status.ToLowerInvariant();
+    }
+
+    /// PURE. The newest execution of a step's job when the pipeline did not record it and it is newer than the step's record
+    /// (-Known: every execution the pipeline's records name). Null when there is nothing to show -- the newest run is the
+    /// pipeline's own, older than its record, or no execution was read.
+    public static OutsideRun? OutsideRunOf(FlowStepRun? record, IReadOnlyList<JobExecution>? executions, IReadOnlySet<string>? known = null)
+    {
+        if (executions is null || executions.Count == 0) return null;
+        var newest = executions.Where(e => !string.IsNullOrEmpty(e.Name) && e.StartTime is not null).OrderByDescending(e => e.StartTime).FirstOrDefault();
+        if (newest is null) return null;
+        if (!string.IsNullOrEmpty(record?.Execution) && string.Equals(record.Execution, newest.Name, StringComparison.OrdinalIgnoreCase)) return null;
+        if (known is not null && known.Contains(newest.Name)) return null;
+        var running = newest.Status is "Running" or "Processing";
+        if (record?.StartedUtc is { } recorded) { if (newest.StartTime <= recorded) return null; }
+        // no started record to compare with: only a run going NOW is shown (an old ended one says nothing about this step)
+        else if (!running) return null;
+        return new OutsideRun(newest, running);
+    }
 
     /// The flow view's line for a step that was started more than once ("started 2 times"); null for one start.
     public static string? AttemptText(FlowStepRun? step) => step?.Attempts is > 1 and var n

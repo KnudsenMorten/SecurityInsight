@@ -54,6 +54,18 @@ if (-not (Get-Command -Name ConvertTo-SIUplinkReports -ErrorAction SilentlyConti
 # #710 / framework 8.16: Invardia's answer names the install's environment (environmentId) -- kept for the customer mail's portal link
 if (-not (Get-Command -Name Get-SIInvardiaEnvironmentIdFromAnswer -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaPortalLink.ps1')) }
 
+function Initialize-SIAitUplinkScope {
+    <# The framework client (AitUplink.ps1, kept as it is) holds its closed lists and the community endpoint at script scope.
+       When its functions were loaded by an outer script (a container entrypoint) and are called from an engine's own script,
+       those lists are empty there: the record lost its Edition and Outcome, and an anonymous report its endpoint. Read once
+       into the reading scope from the same file, before the client is used. Never throws. #>
+    if ($null -ne $script:AitUplinkEditions -and $null -ne $script:AitUplinkInvardiaEndpoint) { return }
+    try {
+        $f = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'engine', '_shared', 'AitUplink.ps1')
+        if ([System.IO.File]::Exists($f)) { . $f }
+    } catch { }
+}
+
 function New-SITelemetrySendState {
     <# The sender's settings. Made when this file loads -- and again by the functions below when `$script:` is the scope
        of a script started from the one that loaded this file (its own scope: the functions are visible there, this
@@ -94,7 +106,12 @@ function New-SITelemetrySendState {
     }
     }
 }
-$script:SITelemetrySend = New-SITelemetrySendState
+function Get-SITelemetrySendState {
+    <# The value of $script:SITelemetrySend, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }
+    , $script:SITelemetrySend
+}
+$script:SITelemetrySend = $null; $null = Get-SITelemetrySendState
 
 # =====================================================================================================================
 #  Pure decisions
@@ -130,7 +147,7 @@ function Resolve-SITelemetryJob {
         if ("$ReportTemplate" -match '(?i)summary') { return 'si-ra-summary' }
         return 'si-ra-detailed'
     }
-    if ($script:SITelemetrySend.Jobs.ContainsKey($e)) { return $script:SITelemetrySend.Jobs[$e] }
+    if ((Get-SITelemetrySendState).Jobs.ContainsKey($e)) { return (Get-SITelemetrySendState).Jobs[$e] }
     return $null
 }
 
@@ -210,6 +227,35 @@ function Get-SITelemetryFailedStep {
     }
     if ($ExitReason -eq 'success-partial' -and $Job -like 'si-ra-*') { return 'ra-query' }
     return $null
+}
+
+function Get-SITelemetryStepsOk {
+    <#
+        PURE. The steps a run report lists as finished well (StepsOk): Invardia resolves a step's ticket when a later report of
+        the same job is ok and lists that step. -RunContext.StepsOk: the steps the engine finished (its stages, the pipeline's
+        steps that succeeded, the data sync's parts that did not fail ...), in their order. -FailedStep: the report's own.
+          ok        every listed step, and 'run' (the run as a whole -- the step a failure without a recorded step is reported under);
+          warning   the listed steps BEFORE the failed one when it is in the list, else every listed step; never 'run';
+          failed    none.
+        Ids in the FailedStep shape (lower-case letters, digits, dashes, at most 32), each once, at most 50.
+    #>
+    param([AllowNull()]$RunContext, [AllowEmptyString()][string]$ExitReason, [AllowEmptyString()][string]$FailedStep = '')
+    $out = New-Object System.Collections.Generic.List[string]
+    $outcome = try { Get-SITelemetryOutcome -ExitReason $ExitReason } catch { 'failed' }
+    if ($outcome -eq 'failed') { return }
+    $norm = { param($v) $s = ("$v".Trim().ToLowerInvariant() -replace '[^a-z0-9\-]', '-') -replace '^[^a-z]+', ''; if ($s.Length -gt 32) { $s = $s.Substring(0, 32) }; if ($s -cmatch '^[a-z][a-z0-9\-]{0,31}$') { $s } else { '' } }
+    $list = New-Object System.Collections.Generic.List[string]
+    if ($RunContext -and $RunContext.PSObject.Properties['StepsOk']) { foreach ($x in @($RunContext.StepsOk)) { $n = & $norm $x; if ($n -and -not $list.Contains($n)) { $list.Add($n) } } }
+    $failed = & $norm $FailedStep
+    if ($outcome -eq 'warning') {
+        $cut = if ($failed) { $list.IndexOf($failed) } else { -1 }
+        $take = if ($cut -ge 0) { $cut } else { $list.Count }
+        for ($i = 0; $i -lt $take; $i++) { if ($list[$i] -ne $failed -and $list[$i] -ne 'run') { $out.Add($list[$i]) } }
+    } else {
+        foreach ($x in $list) { $out.Add($x) }
+        if (-not $out.Contains('run')) { $out.Add('run') }
+    }
+    [string[]]@($out | Select-Object -First 50)
 }
 
 function Get-SITelemetryIncompleteReports {
@@ -296,6 +342,7 @@ function ConvertTo-SITelemetryWire {
         $a.HostName = [string]$Record.Host
         if ($Record.PSObject.Properties['ErrorText']) { $a.ErrorText = [string]$Record.ErrorText }
     }
+    Initialize-SIAitUplinkScope
     $w = New-AitUplinkReport @a
     # #719: the framework client keeps the first 40 Counts keys by name (10 before main's 2026-10-13 copy); Invardia takes up
     # to 40 per record -- SI still shapes the identified
@@ -311,6 +358,11 @@ function ConvertTo-SITelemetryWire {
     if ($w -and $Record.Kind -eq 'run' -and "$($w.ErrorClass)".Trim() -and "$($w.Outcome)" -ne 'ok' -and (Get-Command -Name Get-SIErrorFixKind -ErrorAction SilentlyContinue)) {
         $fk = Get-SIErrorFixKind -ErrorClass ([string]$w.ErrorClass)
         if ($fk) { $w | Add-Member -NotePropertyName 'FixKind' -NotePropertyValue $fk -Force }
+    }
+    # the steps the run finished well (StepsOk, the FailedStep shape, at most 50): on identified and anonymous reports alike
+    # (ids identify nobody) -- Invardia resolves a step's ticket on a later ok report that lists it
+    if ($w -and $Record.Kind -eq 'run' -and $Record.PSObject.Properties['StepsOk'] -and @($Record.StepsOk | Where-Object { $_ }).Count) {
+        $w | Add-Member -NotePropertyName 'StepsOk' -NotePropertyValue ([string[]]@($Record.StepsOk | Where-Object { $_ } | Select-Object -First 50)) -Force
     }
     if ($w -and $Mode -eq 'identified' -and $Record.Kind -in @('heartbeat', 'run') -and (Get-Command -Name ConvertTo-SILicenceIdOrEmpty -ErrorAction SilentlyContinue)) {
         $lid = ConvertTo-SILicenceIdOrEmpty $LicenceId
@@ -646,22 +698,22 @@ function Get-SITelemetryInstallKey {
        -WithReason: @{ Key; Reason } -- Reason says in plain words why there is no key ('' when there is one); it names
        the secret and the vault, never a value. #>
     param([switch]$WithReason)
-    if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }
-    $name = $script:SITelemetrySend.InstallKeyName
+    if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
+    $name = (Get-SITelemetrySendState).InstallKeyName
     $why = ''
     $key = ''
     try {
         # an internal install: the platform Key Vault (signed in by SecurityInsight itself -- auth/SI-PlatformConnect.ps1)
         if ($global:Context -and $global:KV_HighPriv_KeyVaultName) {
             try {
-                if (-not (Get-Command -Name Get-SIPlatformSecret -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'auth', 'SI-PlatformConnect.ps1')) }
+                if (-not (Get-Command -Name Get-SIPlatformSecret -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'auth', 'SI-PlatformConnect.ps1')) }
                 $v = [string](Get-SIPlatformSecret -Context $global:Context -Name $name -AsPlainText -ErrorAction Stop 3>$null); if ($v.Trim()) { $key = $v.Trim() }
                 else { $why = ('{0} is empty or missing in the platform Key Vault {1}' -f $name, [string]$global:KV_HighPriv_KeyVaultName) }
             } catch { $why = ('{0} could not be read from the platform Key Vault {1}: {2}' -f $name, [string]$global:KV_HighPriv_KeyVaultName, $_.Exception.Message) }
         }
         if (-not $key) {
             if (-not (Get-Command -Name Get-SIVaultName -ErrorAction SilentlyContinue)) {
-                $h = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'auth', 'Get-SIVaultName.ps1'); if (Test-Path -LiteralPath $h) { . $h }
+                $h = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'auth', 'Get-SIVaultName.ps1'); if (Test-Path -LiteralPath $h) { . $h }
             }
             $vault = $null
             if (Get-Command -Name Get-SIVaultName -ErrorAction SilentlyContinue) { try { $vault = Get-SIVaultName -AllowMissing } catch { } }
@@ -670,7 +722,7 @@ function Get-SITelemetryInstallKey {
                 if (-not $why) { $why = 'the install''s Key Vault is not known to this job (SI_KeyVaultName is not set)' }
             } else {
                 if (-not (Get-Command -Name Get-SIKvSecret -ErrorAction SilentlyContinue)) {
-                    $h = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'auth', 'Get-SIKvSecret.ps1'); if (Test-Path -LiteralPath $h) { . $h }
+                    $h = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'auth', 'Get-SIKvSecret.ps1'); if (Test-Path -LiteralPath $h) { . $h }
                 }
                 if (Get-Command -Name Get-SIKvSecret -ErrorAction SilentlyContinue) {
                     $kvWarn = $null
@@ -698,9 +750,9 @@ function Get-SITelemetryVersion {
         (Get-SITelemetryReleaseVersion; Invardia matches installs to releases by it: the health hold, "who runs V"); the
         label rides as its own field `build` (heartbeat and run report; an optional field, resent without when refused).
     #>
-    if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }
+    if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
     try {
-        $bj = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'BUILD.json')
+        $bj = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'BUILD.json')
         if ([System.IO.File]::Exists($bj)) {
             $j = [System.IO.File]::ReadAllText($bj) | ConvertFrom-Json
             $d = ([string]$j.display).Trim(); $sc = ([string]$j.shortCommit).Trim()
@@ -708,7 +760,7 @@ function Get-SITelemetryVersion {
         }
     } catch { }
     try {
-        $f = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'VERSION')
+        $f = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'VERSION')
         if ([System.IO.File]::Exists($f)) { return ([System.IO.File]::ReadAllText($f)).Trim() }
     } catch { }
     return ''
@@ -718,9 +770,9 @@ function Get-SITelemetryReleaseVersion {
     <# The RELEASE this install runs (BUILD.json 'release', stamped by Publish-SIRelease: 3.0.0.<build number>) -- what the
        error catalogue's fixedIn is compared with (#709). Not stamped (an older or a local package): the reported version,
        which never reads as newer than a fix. #>
-    if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }
+    if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
     try {
-        $bj = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'BUILD.json')
+        $bj = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'BUILD.json')
         if ([System.IO.File]::Exists($bj)) {
             $j = [System.IO.File]::ReadAllText($bj) | ConvertFrom-Json
             if ($j.PSObject.Properties['release'] -and "$($j.release)".Trim()) { return ([string]$j.release).Trim() }
@@ -745,7 +797,7 @@ function Test-SITelemetryReleasedBuild {
        the root of this file's tree) -- a dev tree has none, whatever its VERSION file says. @{ Released; Reason }. Never throws. #>
     param([string]$Root)
     try {
-        if (-not "$Root".Trim()) { if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }; $Root = $script:SITelemetrySend.SIRoot }
+        if (-not "$Root".Trim()) { if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }; $Root = (Get-SITelemetrySendState).SIRoot }
         $bj = [System.IO.Path]::Combine($Root, 'BUILD.json')
         if (-not [System.IO.File]::Exists($bj)) { return [pscustomobject]@{ Released = $false; Reason = 'no BUILD.json (a dev tree, a test VM or a gate''s work folder)' } }
         $j = [System.IO.File]::ReadAllText($bj).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop
@@ -787,12 +839,12 @@ function Get-SITelemetryContext {
           [AllowNull()][AllowEmptyString()][string]$EnvironmentName)
     $injected = @($PSBoundParameters.Keys | Where-Object { $_ -ne 'Refresh' }).Count -gt 0
     if (-not $injected -and -not $Refresh -and $global:SI_TelemetryContext) { return $global:SI_TelemetryContext }
-    if ($null -eq $script:SITelemetrySend) { $script:SITelemetrySend = New-SITelemetrySendState }
+    if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
 
     if (-not $PSBoundParameters.ContainsKey('License')) {
         $License = $null
         if (-not (Get-Command -Name Get-SILicense -ErrorAction SilentlyContinue)) {
-            $cat = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'engine', 'SI-FeatureCatalog.ps1')
+            $cat = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'engine', 'SI-FeatureCatalog.ps1')
             # Loaded here for this call only (functions dot-sourced in a function vanish when it returns) -- enough: the
             # result is cached.
             if (Test-Path -LiteralPath $cat) { try { . $cat } catch { } }
@@ -825,6 +877,7 @@ function Get-SITelemetryContext {
         $anonWhy = $(if ($null -eq $License) { 'no SecurityInsight Pro licence could be read in this run, and this install has no Pro database set' }
                      else { ('no SecurityInsight Pro licence is in force (licence: {0}{1})' -f $(if ("$($License.Status)".Trim()) { [string]$License.Status } else { 'unknown' }), $(if ("$($License.Reason)".Trim()) { ' -- ' + [string]$License.Reason } else { '' })) })
     }
+    Initialize-SIAitUplinkScope
     $sender = Resolve-AitUplinkSender -Enabled $true -InstallKey $key -Endpoint (Get-SITelemetryEndpoint)
     if ($sender.Mode -ne 'anonymous') { $anonWhy = '' }
     $dir = if ("$StateDirectory".Trim()) { $StateDirectory } else { Get-SITelemetryStateDirectory -GetEnv $GetEnv }
@@ -877,7 +930,7 @@ function Get-SITelemetryRing {
         if (-not (& $has 'CommunityRing')) {
             $CommunityRing = $null
             if ($Edition -eq 'community') {
-                $file = [System.IO.Path]::Combine($script:SITelemetrySend.SIRoot, 'config', 'update.custom.json')
+                $file = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'config', 'update.custom.json')
                 if (Test-Path -LiteralPath $file) { try { $CommunityRing = ([IO.File]::ReadAllText($file).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop).ring } catch { $CommunityRing = $null } }
             }
         }
@@ -903,6 +956,7 @@ function Send-SITelemetryUplink {
     #>
     param([Parameter(Mandatory)][object]$Record, [AllowNull()][string]$Endpoint, [AllowNull()][string]$AccessCode, [int]$TimeoutSec = 5)
     # #918: a build that is not a RELEASE never sends to the PUBLIC community uplink (identified installs are unchanged)
+    Initialize-SIAitUplinkScope
     $gate = Test-SITelemetryCommunitySendAllowed -AccessCode $AccessCode
     if (-not $gate.Allowed) { return [pscustomobject]@{ Status = 'skipped'; Reason = $gate.Reason; Sent = $false; SupersededBy = ''; EnvironmentId = '' } }
     if ("$Endpoint" -notmatch '^https://' -or -not "$AccessCode".Trim()) { return (Send-AitUplink -Record $Record -Endpoint $Endpoint -AccessCode $AccessCode -TimeoutSec $TimeoutSec) }
@@ -1034,6 +1088,10 @@ function Send-SITelemetryRunEnd {
         if (-not $exit) { return (& $out 'skipped' @() ("run-health ExitReason '{0}' is not reported" -f $ExitReason)) }
         $shard = 0; if ($RunContext.PSObject.Properties['ShardIndex']) { $shard = [int]$RunContext.ShardIndex }
         if ($shard -gt 0 -and $exit -eq 'success') { return (& $out 'skipped' @() 'a successful shard other than the first is not reported separately') }
+        # a part of a run in parts (a collection's producer before its hand-over, a part's worker) does not report the job's
+        # ok: only the execution that knows the whole result does (the one that publishes the collection's records). Its
+        # failures and warnings are still reported.
+        if ($exit -eq 'success' -and $RunContext.PSObject.Properties['SuppressJobOk'] -and [bool]$RunContext.SuppressJobOk) { return (& $out 'skipped' @() 'a part of a run in parts does not report the job''s ok -- the execution that publishes the whole result does') }
 
         $nowUtc = if ($Now) { ([datetime]$Now).ToUniversalTime() } else { [datetime]::UtcNow }
         if (-not $Context) { $Context = Get-SITelemetryContext }
@@ -1096,8 +1154,8 @@ function Send-SITelemetryRunEnd {
             $c2 = @{}; foreach ($k in @($counts.Keys)) { $c2[$k] = $counts[$k] }
             $c2['reportsExpected'] = $incN.Expected; $c2['reportsStored'] = $incN.Stored; $c2['reportsIncomplete'] = $incN.Incomplete
             $counts = $c2; $runArgs.Counts = $counts
-            $runArgs.FailedStep = $script:SITelemetry.ReportIncompleteStep
-            $runArgs.ErrorClass = $script:SITelemetry.ReportIncompleteClass
+            $runArgs.FailedStep = (Get-SITelemetryState).ReportIncompleteStep
+            $runArgs.ErrorClass = (Get-SITelemetryState).ReportIncompleteClass
             if ($incN.Link) { $runLink = $incN.Link }
             # the text says how many, the names are on the page and in the run's log; #709 (identified only): the most severe
             # one's cause in plain words follows -- the report's id already travels in Reports[] (framework 8.16)
@@ -1108,6 +1166,9 @@ function Send-SITelemetryRunEnd {
                 if ($head) { $runArgs.ErrorMessage += ('. First cause: {0}' -f $head) }
             }
         }
+        # the steps this run finished well (StepsOk): a later ok report closes the tickets of the steps it lists
+        $sok = @(Get-SITelemetryStepsOk -RunContext $RunContext -ExitReason $exit -FailedStep $(if ($runArgs.ContainsKey('FailedStep')) { [string]$runArgs.FailedStep } else { '' }))
+        if ($sok.Count) { $runArgs.StepsOk = [string[]]$sok }
         $runRec = New-SITelemetryRunRecord @runArgs
         # #709 / framework 8.16: every report that failed, did not apply or deviated, with its code and cause (Risk Analysis
         # puts the facts on its run context as ReportCauses). Built here, never fatal: nothing = no Reports.
@@ -1195,13 +1256,13 @@ function Send-SITelemetryRunEnd {
         foreach ($w in $queue) {
             if ($null -eq $w) { throw 'the report could not be built (an anonymous report needs its install id)' }
             # CR3: a heartbeat refused WITH the release fields goes again once without them (Send-SITelemetryRecordWithFallback)
-            $r = (Send-SITelemetryRecordWithFallback -Record $w -Transport $Transport -Context $Context -TimeoutSec $script:SITelemetrySend.TimeoutSec `
+            $r = (Send-SITelemetryRecordWithFallback -Record $w -Transport $Transport -Context $Context -TimeoutSec (Get-SITelemetrySendState).TimeoutSec `
                     -Invoke $(if ($relF) { $relF.Invoke } else { $null }) -NowUtc $nowUtc).Result
             # the setup report with every control (SI_Telemetry_SetupControls = all, the default) that Invardia does not take
             # goes again ONCE with only the framework's minimum list -- said once per process; the minimum one decides
             if ("$($r.Status)" -ne 'ok' -and [string]$w.Kind -eq 'setup' -and $setupMinimum) {
                 $firstWhy = ConvertTo-AitUplinkRedacted -Text ("$($r.Reason)")
-                $r = & $Transport $setupMinimum $Context.Endpoint $Context.AccessCode $script:SITelemetrySend.TimeoutSec
+                $r = & $Transport $setupMinimum $Context.Endpoint $Context.AccessCode (Get-SITelemetrySendState).TimeoutSec
                 if ("$($r.Status)" -eq 'ok' -and -not $global:SI_SetupControlsFallbackSaid) {
                     $global:SI_SetupControlsFallbackSaid = $true
                     Write-Host ("  Invardia did not take the setup report with every SecurityInsight control ({0}) -- it was sent with the minimum control list instead." -f $firstWhy)
@@ -1370,7 +1431,7 @@ function Send-SIReleaseModeReport {
         $w = ConvertTo-SITelemetryWire -Record (New-SITelemetryHeartbeat @base) -Mode $Context.Mode -Counts $hbCounts -Now $nowUtc -Endpoints $eps -LicenceId $lid -EnvironmentName $envName `
                 -GuardMode $gmWire -Wave $rel.Wave -ReleaseMode $rel.ReleaseMode -Components $rel.Components -Evidence $rel.Evidence -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })
         if ($null -eq $w) { return (& $out 'error' 'the report could not be built') }
-        $s = Send-SITelemetryRecordWithFallback -Record $w -Transport $Transport -Context $Context -TimeoutSec $script:SITelemetrySend.TimeoutSec -Invoke $claimInvoke -NowUtc $nowUtc
+        $s = Send-SITelemetryRecordWithFallback -Record $w -Transport $Transport -Context $Context -TimeoutSec (Get-SITelemetrySendState).TimeoutSec -Invoke $claimInvoke -NowUtc $nowUtc
         if ("$($s.Result.Status)" -ne 'ok') {
             $global:SI_TelemetryHalted = $true
             $why = ConvertTo-AitUplinkRedacted -Text ("$($s.Result.Reason)")

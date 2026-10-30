@@ -23,7 +23,18 @@ function Install-SecurityInsight {
     #>
     [CmdletBinding(SupportsShouldProcess)]   # -WhatIf goes to the script with the other parameters (the checks only)
     param(
-        [Parameter(Mandatory)][string]$ConfigPath,
+        [string]$ConfigPath,
+        # the common answers as parameters (setup/Install-SecurityInsight.ps1 writes config.json from them)
+        [string]$TenantId,
+        [string]$SubscriptionId,
+        [string]$Location,
+        [string]$ResourceGroup,
+        [string[]]$MailTo,
+        [ValidateSet('subscription', 'managementGroup', 'tenantRoot')][string]$CollectionScope,
+        [string]$ManagementGroupId,
+        [switch]$PrivateNetwork,
+        [string]$VnetAddressPrefix,
+        [string]$InstallId,
         [string]$LicencePath,
         [scriptblock]$Reporter,
         [switch]$PreflightOnly,

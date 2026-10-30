@@ -107,6 +107,15 @@ function New-SIProSettingsStore {
         }
         $untilOf = ${function:Get-SIProTokenCacheUntil}
         $loginText = ${function:Get-SIProSqlLoginFailureText}
+        # 2026-10-28 (a small install, a pipeline wake-up): the open failed on a broken pooled connection ("Internal .NET
+        # Framework Data Provider error 6") while the token was fine and the next wake-ups read the database. A temporary
+        # Azure SQL answer at the OPEN (Test-SISqlStatementTransient, SI-SqlRetry.ps1 -- nothing was sent yet) is tried again
+        # on a new connection after 2, 5, 10, 20 and 30 s, the pool of the broken one cleared first.
+        if (-not (Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-SqlRetry.ps1')) }
+        $openTransient = ${function:Test-SISqlStatementTransient}
+        $openWaits = @(2, 5, 10, 20, 30)
+        # the ONE place this store builds a connection (the first open, the retry after a broken open, the fresh-token open)
+        $newCn = { param([string]$cs, [string]$tok) $c = New-Object System.Data.SqlClient.SqlConnection($cs); $c.AccessToken = $tok; $c }
         $Invoke = {
             param([string]$sql, $p, [string]$mode)
             if (-not $tokenCache.Token -or [datetime]::UtcNow -ge $tokenCache.Until) {
@@ -114,21 +123,33 @@ function New-SIProSettingsStore {
                 $tokenCache.Until = & $untilOf -Token $tokenCache.Token -Now ([datetime]::UtcNow)
             }
             $cs = 'Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $srv, $db
-            $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
-            $cn.AccessToken = $tokenCache.Token
+            $cn = & $newCn $cs $tokenCache.Token
             try {
                 # customer G 2026-10-09: a token held for a fixed 45 minutes expired mid-run and every call answered "Login
                 # failed" (18456). A failed sign-in takes a FRESH token and opens once more; a second failure is the answer.
-                try { $cn.Open() }
-                catch {
-                    $sx = $_.Exception; while ($sx -and -not ($sx -is [System.Data.SqlClient.SqlException]) -and $sx.InnerException) { $sx = $sx.InnerException }
-                    if (-not ($sx -is [System.Data.SqlClient.SqlException]) -or [int]$sx.Number -ne 18456) { throw }
+                $openTry = 0; $openErr = $null
+                while ($true) {
+                    try { $cn.Open(); $openErr = $null; break }
+                    catch {
+                        if ($openTry -lt $openWaits.Count -and (& $openTransient $_)) {
+                            $ow = [int]$openWaits[$openTry]; $openTry++
+                            Write-Host ('       the database {0} could not be opened for a moment ({1}) -- trying again on a new connection in {2} s ({3}/{4})' -f $db, (([string]$_.Exception.Message) -split "`n")[0].Trim(), $ow, $openTry, $openWaits.Count) -ForegroundColor DarkYellow
+                            try { [System.Data.SqlClient.SqlConnection]::ClearPool($cn) } catch { }
+                            $cn.Dispose(); Start-Sleep -Seconds $ow
+                            $cn = & $newCn $cs $tokenCache.Token
+                            continue
+                        }
+                        $openErr = $_; break
+                    }
+                }
+                if ($openErr) {
+                    $sx = $openErr.Exception; while ($sx -and -not ($sx -is [System.Data.SqlClient.SqlException]) -and $sx.InnerException) { $sx = $sx.InnerException }
+                    if (-not ($sx -is [System.Data.SqlClient.SqlException]) -or [int]$sx.Number -ne 18456) { throw $openErr }
                     $cn.Dispose()
                     Start-Sleep -Seconds 3
                     $tokenCache.Token = & $getToken -Fresh
                     $tokenCache.Until = & $untilOf -Token $tokenCache.Token -Now ([datetime]::UtcNow)
-                    $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
-                    $cn.AccessToken = $tokenCache.Token
+                    $cn = & $newCn $cs $tokenCache.Token
                     # refused again with a fresh token: say WHICH identity needs the grant, in plain words (rc.465, MarkDone)
                     try { $cn.Open() }
                     catch {

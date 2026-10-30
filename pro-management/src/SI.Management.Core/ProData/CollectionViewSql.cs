@@ -30,9 +30,9 @@ public static class CollectionViewSql
     /// next collection's time (the end of "what happened with this collection").
     public const string Collections = """
 SELECT TOP (@Top) CONVERT(nvarchar(64), col.CollectionId) AS CollectionId, col.CollectionTime, col.Kind, col.[Rows] AS RowTotal,
-       col.DerivedAt, col.NextTime
+       col.DerivedAt, col.NextTime, col.RiskPartsAt
 FROM (
-    SELECT x.CollectionId, x.CollectionTime, x.Kind, x.[Rows], x.DerivedAt,
+    SELECT x.CollectionId, x.CollectionTime, x.Kind, x.[Rows], x.DerivedAt, x.RiskPartsAt,
            LEAD(x.CollectionTime) OVER (ORDER BY x.CollectionTime) AS NextTime
     FROM sidata.Collection AS x
     WHERE x.Status = N'Complete' AND x.Kind = N'Detailed'
@@ -52,9 +52,9 @@ ORDER BY col.CollectionTime DESC;
     /// ONE TRUSTED RUN (owner 2026-10-19): never past the published run -- its collection is the newest a view opens.
     public const string CollectionsReady = $"""
 SELECT TOP (@Top) CONVERT(nvarchar(64), col.CollectionId) AS CollectionId, col.CollectionTime, col.Kind, col.[Rows] AS RowTotal,
-       col.DerivedAt, col.NextTime
+       col.DerivedAt, col.NextTime, col.RiskPartsAt
 FROM (
-    SELECT x.CollectionId, x.CollectionTime, x.Kind, x.[Rows], x.DerivedAt,
+    SELECT x.CollectionId, x.CollectionTime, x.Kind, x.[Rows], x.DerivedAt, x.RiskPartsAt,
            LEAD(x.CollectionTime) OVER (ORDER BY x.CollectionTime) AS NextTime
     FROM sidata.Collection AS x
     WHERE x.Status = N'Complete' AND x.Kind = N'Detailed'
@@ -118,17 +118,43 @@ ORDER BY ff.Facet, ff.Findings DESC;
 
     // ---- (1) raw rows, also the findings of one CI (3) and the facet views (7..10) ---------------------------------
 
+    // ---- the risk score's parts as STORED COLUMNS (owner 2026-10-28: "it should be possible to see the Risk Score
+    // calculations as columns" -- the findings rows show them by default, before the risk score). The data sync copies them
+    // from the finding's row (sidata.Finding.Risk<Side>*; the engine's SI-DataSql.ps1, Get-SIDataRiskPartsSql); the page
+    // words them with the explained score's own texts (RiskExplanation.OfStored). The sides page off their own index. -----
+
+    /// The parts as the grids name them (the aliases <see cref="RiskPartColumns"/> and RiskExplanation.OfStored read).
+    public const string RiskPartsSelect =
+        "f.RiskAssetBase AS AssetBase, f.RiskAssetFactors AS AssetFactors, f.RiskAssetSide AS AssetSide, f.RiskAssetPoints AS AssetPoints, f.RiskAssetDerived AS AssetDerived, " +
+        "f.RiskVulnBase AS VulnBase, f.RiskVulnFactors AS VulnFactors, f.RiskVulnSide AS VulnSide, f.RiskVulnPoints AS VulnPoints, f.RiskVulnDerived AS VulnDerived";
+
+    /// The parts' columns: the bases and sides are numbers (sorted, filtered from..to), the factors text (filtered by what
+    /// they contain); the points and whether a base was worked out are there for the words (hidden).
+    public static readonly IReadOnlyList<GridColumn> RiskPartColumns =
+    [
+        new("AssetBase", "Asset base", GridType.Number, GridFilter.Range),
+        new("AssetFactors", "Asset factors", Filter: GridFilter.Contains, Sortable: false),
+        new("AssetSide", "Asset side (consequence)", GridType.Number, GridFilter.Range),
+        new("VulnBase", "Vulnerability base", GridType.Number, GridFilter.Range),
+        new("VulnFactors", "Vulnerability factors", Filter: GridFilter.Contains, Sortable: false),
+        new("VulnSide", "Vulnerability side (probability)", GridType.Number, GridFilter.Range),
+        new("AssetPoints", "Asset factor points", GridType.Number, GridFilter.Range, Hidden: true),
+        new("VulnPoints", "Vulnerability factor points", GridType.Number, GridFilter.Range, Hidden: true),
+        new("AssetDerived", "Asset base worked out", Sortable: false, Hidden: true),
+        new("VulnDerived", "Vulnerability base worked out", Sortable: false, Hidden: true),
+    ];
+
     public static readonly GridSpec Rows = GridSql.Check(new GridSpec("rows", "", $"""
 SELECT CONVERT(nvarchar(64), f.FindingId) AS FindingId, f.AssetKey, f.AssetName, a.AssetKind, {ProDataSql.AssetKindsExpr("a")} AS AssetKinds, {ProDataSql.TierExpr("f.Tier")} AS Tier,
        f.Severity, f.RiskRating, f.RiskScore, f.RiskScoreWeighted, f.Cvss, f.HasExploit, f.SecurityDomain, f.ReportName,
        f.Cve, f.ConfigurationId, f.Title, f.MitreTactics, f.MitreTechniques, f.ComplianceTags,
-       f.Category, f.Subcategory, f.DepartmentName AS Department
+       f.Category, f.Subcategory, f.DepartmentName AS Department,
+       {RiskPartsSelect}
 FROM sidata.Finding AS f
 LEFT JOIN sidata.Asset AS a ON a.AssetKey = f.AssetKey
 WHERE {ThisCollection}
   AND (@AssetKey IS NULL OR f.AssetKey = @AssetKey)
-""", new GridColumn[]
-    {
+""", [
         new("FindingId", "Id", Hidden: true),
         new("AssetKey", "Asset key", Search: true, Hidden: true),
         new("Tier", "Tier", GridType.Tier, GridFilter.Values, SortSql: TierSort),
@@ -139,6 +165,7 @@ WHERE {ThisCollection}
         new("ConfigurationId", "Configuration", Filter: GridFilter.Contains, Search: true, Hidden: true),
         new("Severity", "Severity", Filter: GridFilter.Values, SortSql: SeverityRank("g.[Severity]")),
         new("RiskRating", "Rating", Filter: GridFilter.Values, SortSql: RatingRank("g.[RiskRating]")),
+        .. RiskPartColumns,
         new("RiskScore", "Risk Score", GridType.Number, GridFilter.Range),
         new("RiskScoreWeighted", "Weighted", GridType.Number, GridFilter.Range),
         new("Cvss", "CVSS", GridType.Number, GridFilter.Range),
@@ -153,7 +180,7 @@ WHERE {ThisCollection}
         new("MitreTactics", "MITRE tactics", Filter: GridFilter.Tokens, Search: true),
         new("MitreTechniques", "MITRE techniques", Filter: GridFilter.Tokens, Search: true, Hidden: true),
         new("ComplianceTags", "Compliance", Filter: GridFilter.Tokens, Search: true),
-    }, "RiskScore", true, "FindingId", ["CollectionId", "AssetKey"], Immutable: true, Keyset: RowsKeyset(), KeySortSql: RowKeySort));
+    ], "RiskScore", true, "FindingId", ["CollectionId", "AssetKey"], Immutable: true, Keyset: RowsKeyset(), KeySortSql: RowKeySort));
 
     // ---- #812: the raw rows' opening view off an index, its total and its filter counts stored ------------------------
     // A large customer, 2026-10-19 (1,117,524 findings): the raw rows' first page counted every finding of the collection
@@ -182,7 +209,8 @@ WHERE {ThisCollection}
         var facet = column switch
         {
             "Severity" => "severity", "RiskRating" => "rating", "SecurityDomain" => "domain", "ReportName" => "report",
-            "MitreTactics" => "tactic", "MitreTechniques" => "technique", "ComplianceTags" => "tag", "Tier" => "tier", _ => null,
+            "MitreTactics" => "tactic", "MitreTechniques" => "technique", "ComplianceTags" => "tag", "Tier" => "tier",
+            "Category" => "category", "Subcategory" => "subcategory", "Department" => "department", _ => null,
         };
         if (facet is null) return null;
         var value = facet == "tier" ? "CASE WHEN ff.Value IN (N'0', N'1', N'2', N'3') THEN ff.Value ELSE N'Unclassified' END" : "ff.Value";
@@ -204,6 +232,9 @@ ORDER BY SUM(CONVERT(bigint, ff.Findings)) DESC, v.V;
             ["RiskScore"] = "f.RiskScore DESC, f.FindingId",
             ["Cvss"] = "f.Cvss DESC, f.FindingId",
             ["RiskScoreWeighted"] = "f.RiskScoreWeighted DESC, f.FindingId",
+            // the risk score's two sides (IX_Finding_AssetSidePage / IX_Finding_VulnSidePage)
+            ["AssetSide"] = "f.RiskAssetSide DESC, f.FindingId",
+            ["VulnSide"] = "f.RiskVulnSide DESC, f.FindingId",
         },
         source => source.Replace(ThisCollection, ThisCollection + " AND f.FindingId IN (SELECT pk.K FROM pk)", StringComparison.Ordinal),
         StoredFindingTotal,

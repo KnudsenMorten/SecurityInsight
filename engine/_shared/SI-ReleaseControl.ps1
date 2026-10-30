@@ -46,7 +46,9 @@
 
 if (-not (Get-Command -Name ConvertFrom-SIGuardStrictJson -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-GuardStrict.ps1')) }
 
-$script:SIReleaseControl = @{
+function Get-SIReleaseControlState {
+    <# The value of $script:SIReleaseControl, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIReleaseControl) { $script:SIReleaseControl = @{
     ReleaseModeHours = 12
     EveryMinutes     = 30
     # framework 12.22 3(a): the new heartbeat fields went to ring 0 first; Invardia's wave / releaseMode intake is live and
@@ -63,7 +65,10 @@ $script:SIReleaseControl = @{
     SIRoot           = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     WaveName         = '^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,59}$'
     VersionText      = '^[0-9A-Za-z.+-]{1,50}$'
+} }
+    , $script:SIReleaseControl
 }
+$script:SIReleaseControl = $null; $null = Get-SIReleaseControlState
 
 # =====================================================================================================================
 #  The switch -- PURE
@@ -76,7 +81,7 @@ function Resolve-SIReleaseControlSwitch {
         Returns @{ On; Setting (on | off | auto); Reason }.
     #>
     param([AllowNull()]$Value = $global:SI_Telemetry_ReleaseControl, [AllowNull()][AllowEmptyString()][string]$EnvValue = $env:SI_TELEMETRY_RELEASECONTROL,
-          [AllowNull()]$Ring, [int[]]$ConfirmedRings = @($script:SIReleaseControl.ConfirmedRings))
+          [AllowNull()]$Ring, [int[]]$ConfirmedRings = @((Get-SIReleaseControlState).ConfirmedRings))
     $set = ''
     foreach ($v in @($Value, $EnvValue)) {
         if ($null -eq $v) { continue }
@@ -118,7 +123,7 @@ function ConvertTo-SIReleaseWaveName {
         $Value = $n
     }
     $v = ("$Value" -replace '[\r\n\t]+', ' ').Trim()
-    if ($v -notmatch $script:SIReleaseControl.WaveName) { return '' }
+    if ($v -notmatch (Get-SIReleaseControlState).WaveName) { return '' }
     $v
 }
 
@@ -151,7 +156,7 @@ function Get-SIReleaseWaveFromUpdateState {
         }
     }
     if (-not $name) { return [pscustomobject]@{ Known = $true; Wave = $null } }
-    $ver = "$ver".Trim(); if ($ver -notmatch $script:SIReleaseControl.VersionText) { $ver = '' }
+    $ver = "$ver".Trim(); if ($ver -notmatch (Get-SIReleaseControlState).VersionText) { $ver = '' }
     $rn = ConvertTo-SIReleaseControlRing $ring
     [pscustomobject]@{ Known = $true; Wave = [ordered]@{ name = $name; version = $(if ($ver) { $ver } else { $null }); ring = $(if ($rn -ge 0) { $rn } else { $null }) } }
 }
@@ -178,8 +183,8 @@ function Get-SIReleaseModeFromFingerprint {
           Known   a fingerprint is recorded (else: an older install -- the field is left out)
           Wire    [ordered]@{ version; sinceUtc; untilUtc; everyMinutes } while Active, else $null
     #>
-    param([AllowNull()]$Fingerprint, [Parameter(Mandatory)][datetime]$NowUtc, [int]$Hours = $script:SIReleaseControl.ReleaseModeHours,
-          [int]$EveryMinutes = $script:SIReleaseControl.EveryMinutes)
+    param([AllowNull()]$Fingerprint, [Parameter(Mandatory)][datetime]$NowUtc, [int]$Hours = (Get-SIReleaseControlState).ReleaseModeHours,
+          [int]$EveryMinutes = (Get-SIReleaseControlState).EveryMinutes)
     $out = [ordered]@{ Known = $false; Active = $false; Since = $null; Until = $null; Version = ''; Wire = $null }
     $fp = if ($Fingerprint -is [string]) { ConvertFrom-SIGuardStrictJson $Fingerprint } else { $Fingerprint }
     $hash = ([string](Get-SIGuardStrictField $fp 'hash')).Trim().ToLowerInvariant()
@@ -191,7 +196,7 @@ function Get-SIReleaseModeFromFingerprint {
     $until = $from.AddHours($Hours)
     if ($now -ge $until -or $now -lt $from.AddMinutes(-5)) { return [pscustomobject]$out }
     $v = ([string](Get-SIGuardStrictField $fp 'strictVersion')).Trim()
-    if ($v -notmatch $script:SIReleaseControl.VersionText) { $v = '' }
+    if ($v -notmatch (Get-SIReleaseControlState).VersionText) { $v = '' }
     $out.Active = $true; $out.Since = $from; $out.Until = $until; $out.Version = $v
     $out.Wire = [ordered]@{ version = $(if ($v) { $v } else { $null }); sinceUtc = (ConvertTo-SIGuardStrictIso $from); untilUtc = (ConvertTo-SIGuardStrictIso $until); everyMinutes = $EveryMinutes }
     [pscustomobject]$out
@@ -199,7 +204,7 @@ function Get-SIReleaseModeFromFingerprint {
 
 function Get-SIReleaseModeSlot {
     <# PURE. Which half hour of release mode -NowUtc is in (0 = the first); -1 when not in release mode. #>
-    param([AllowNull()]$Mode, [Parameter(Mandatory)][datetime]$NowUtc, [int]$EveryMinutes = $script:SIReleaseControl.EveryMinutes)
+    param([AllowNull()]$Mode, [Parameter(Mandatory)][datetime]$NowUtc, [int]$EveryMinutes = (Get-SIReleaseControlState).EveryMinutes)
     if ($null -eq $Mode -or -not $Mode.Active -or $null -eq $Mode.Since) { return -1 }
     $m = ($NowUtc.ToUniversalTime() - ([datetime]$Mode.Since)).TotalMinutes
     if ($m -lt 0) { return 0 }
@@ -299,7 +304,7 @@ function Save-SIReleaseControlHold {
     if (-not $Invoke) { return $false }
     try {
         $w = ("$Why" -replace '[\r\n\t]+', ' ').Trim(); if ($w.Length -gt 200) { $w = $w.Substring(0, 197) + '...' }
-        $v = ([ordered]@{ untilUtc = (ConvertTo-SIGuardStrictIso $NowUtc.AddHours($script:SIReleaseControl.HoldHours)); why = $w } | ConvertTo-Json -Compress)
+        $v = ([ordered]@{ untilUtc = (ConvertTo-SIGuardStrictIso $NowUtc.AddHours((Get-SIReleaseControlState).HoldHours)); why = $w } | ConvertTo-Json -Compress)
         $null = & $Invoke (Get-SIReleaseControlHoldSql) ([ordered]@{ Value = $v; By = 'telemetry' }) 'nonquery'
         $true
     } catch { $false }
@@ -320,8 +325,8 @@ function Get-SIReleaseControlInvoke {
 # =====================================================================================================================
 function Get-SIReleaseScopeMap {
     <# The component map (config\release-scopes.locked.json under -SIRoot, or -Json). Throws when it cannot be read. #>
-    param([string]$SIRoot = $script:SIReleaseControl.SIRoot, [AllowEmptyString()][string]$Json)
-    if (-not "$Json".Trim()) { $Json = [System.IO.File]::ReadAllText([System.IO.Path]::Combine($SIRoot, $script:SIReleaseControl.ScopeMapFile)) }
+    param([string]$SIRoot = (Get-SIReleaseControlState).SIRoot, [AllowEmptyString()][string]$Json)
+    if (-not "$Json".Trim()) { $Json = [System.IO.File]::ReadAllText([System.IO.Path]::Combine($SIRoot, (Get-SIReleaseControlState).ScopeMapFile)) }
     $m = $Json.TrimStart([char]0xFEFF) | ConvertFrom-Json
     if (-not $m.scopes -or -not $m.raReports) { throw 'the component map has no scopes' }
     $m
@@ -516,7 +521,7 @@ function Format-SIReleaseChangedScopes {
         PURE. The changedScopes value of a publish call: '*' when every component changed (a core file) or more than
         -Max did, else the ids joined with ','. '' when none changed. As a list for a JSON body: -AsList.
     #>
-    param([Parameter(Mandatory)]$Comparison, [int]$Max = $script:SIReleaseControl.MaxScopesListed, [switch]$AsList)
+    param([Parameter(Mandatory)]$Comparison, [int]$Max = (Get-SIReleaseControlState).MaxScopesListed, [switch]$AsList)
     $c = @($Comparison.Changed)
     if (-not $c.Count) { if ($AsList) { return , @() } else { return '' } }
     $all = [bool]$Comparison.All -or $c.Count -gt $Max
@@ -534,7 +539,7 @@ function Get-SIReleaseChangedScopesFromGit {
     param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string]$SinceRef, [Parameter(Mandatory)][string]$Ref, $Map, [string]$SolutionPath = 'SOLUTIONS/SecurityInsight')
     if (-not $Map) {
         $global:LASTEXITCODE = 0
-        $mj = @(Invoke-SIReleaseGitText -RepoRoot $RepoRoot -Arguments @('show', ('{0}:{1}/{2}' -f $Ref, $SolutionPath, $script:SIReleaseControl.ScopeMapFile)))
+        $mj = @(Invoke-SIReleaseGitText -RepoRoot $RepoRoot -Arguments @('show', ('{0}:{1}/{2}' -f $Ref, $SolutionPath, (Get-SIReleaseControlState).ScopeMapFile)))
         $Map = if ($LASTEXITCODE -eq 0 -and $mj.Count) { Get-SIReleaseScopeMap -Json ($mj -join "`n") } else { Get-SIReleaseScopeMap }
         $global:LASTEXITCODE = 0
     }
@@ -569,7 +574,7 @@ function Get-SIReleaseScopeReadSql {
 
 function Get-SIReleaseScopeState {
     <# PURE. One component row's state: Testing (its code changed and it has fewer than -GoodDays good daily runs since), else Stable. #>
-    param([Parameter(Mandatory)]$Row, [int]$GoodDays = $script:SIReleaseControl.StableGoodDays)
+    param([Parameter(Mandatory)]$Row, [int]$GoodDays = (Get-SIReleaseControlState).StableGoodDays)
     $ch = ConvertTo-SIGuardStrictUtc (Get-SIGuardStrictField $Row 'ChangedUtc')
     if ($null -eq $ch) { return 'Stable' }
     $n = 0; [void][int]::TryParse("$(Get-SIGuardStrictField $Row 'GoodDays')", [ref]$n)
@@ -691,7 +696,7 @@ function Update-SIReleaseScopeRun {
     if (-not $ids.Count -and -not $sc.Prefix) { return $false }
     $now = if ($NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [datetime]::UtcNow }
     $start = if ($StartedAt) { try { ([datetime]$StartedAt).ToUniversalTime() } catch { $now } } else { $now }
-    $p = [ordered]@{ Need = [int]$script:SIReleaseControl.StableGoodDays }
+    $p = [ordered]@{ Need = [int](Get-SIReleaseControlState).StableGoodDays }
     for ($i = 0; $i -lt $ids.Count; $i++) { $p[('s' + $i)] = [string]$ids[$i] }
     if ($sc.Prefix) { $p['Prefix'] = [string]$sc.Prefix }
     if ($kind -eq 'good') { $p['Today'] = $now.Date; $p['StartedAt'] = $start }
@@ -763,9 +768,9 @@ function ConvertTo-SIReleaseComponentsWire {
         $c = ConvertTo-SIGuardStrictUtc (Get-SIGuardStrictField $r 'ChangedUtc')
         if ($null -ne $c -and ($null -eq $newest -or $c -gt $newest)) { $newest = $c; $ver = ([string](Get-SIGuardStrictField $r 'ChangedVersion')).Trim() }
     }
-    if ($ver -notmatch $script:SIReleaseControl.VersionText) { $ver = '' }
+    if ($ver -notmatch (Get-SIReleaseControlState).VersionText) { $ver = '' }
     [ordered]@{ total = [int]$s.Total; testing = [int]$s.Testing; stable = [int]$s.Stable
-        testingIds = @($ids | Select-Object -First $script:SIReleaseControl.MaxScopesListed)
+        testingIds = @($ids | Select-Object -First (Get-SIReleaseControlState).MaxScopesListed)
         since = $(if ($newest) { ConvertTo-SIGuardStrictIso $newest } else { $null }); version = $(if ($ver) { $ver } else { $null }) }
 }
 
@@ -794,7 +799,7 @@ function Get-SIReleaseEvidenceWindow {
     $ver = ([string](Get-SIGuardStrictField $fp 'strictVersion')).Trim()
     if ($null -eq $since -and $Components -and $Components['since']) { $since = ConvertTo-SIGuardStrictUtc $Components['since']; $ver = [string]$Components['version'] }
     if ($null -eq $since) { return [pscustomobject]@{ Known = $false; Since = $null; Version = ''; Before = $null; Hours = 0 } }
-    if ("$ver" -notmatch $script:SIReleaseControl.VersionText) { $ver = '' }
+    if ("$ver" -notmatch (Get-SIReleaseControlState).VersionText) { $ver = '' }
     $now = $NowUtc.ToUniversalTime()
     $h = [Math]::Min(720.0, [Math]::Max(1.0, ($now - $since).TotalHours))
     [pscustomobject]@{ Known = $true; Since = $since; Version = $ver; Before = $since.AddHours(-$h); Hours = [int][Math]::Ceiling($h) }

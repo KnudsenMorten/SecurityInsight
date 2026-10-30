@@ -24,6 +24,8 @@ export function initRowDrawer(doc) {
     var link = t.closest("a[data-drawer-link]");
     if (link && (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) { return; }
     if (!link && t.closest("a, button, input, select, textarea, label, summary")) { return; }
+    // Shift / Ctrl / Cmd + click on a row selects rows (ui.js, range selection) -- it never opens the drawer
+    if (!link && (e.shiftKey || e.ctrlKey || e.metaKey)) { return; }
     var row = t.closest("tr[data-row-drawer]");
     if (!row) { return; }
     var url = row.getAttribute("data-row-drawer");

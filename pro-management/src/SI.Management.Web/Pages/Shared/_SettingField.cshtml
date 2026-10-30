@@ -15,7 +15,7 @@ var info = s.MoreInfo;
    data-confirm and compares data-current with the value about to be saved (wwwroot/js/app/settings.js) *@
 <div class="set-field@(f.Editor == EditorKind.Chips ? " wide" : "")" id="s-@n" data-show-when="@Model.ShowWhen" hidden="@Model.Hidden" data-setting="@n" data-search="@search" data-changed="@(f.Changed ? "true" : "false")"
      data-confirm-when="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.ConfirmWhen)" data-confirm="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.Confirm)" data-current="@(f.Text ?? "")" data-title="@s.Title">
-    <label class="set-label" for="@id">@s.Title@if (f.Changed) {<span class="set-dot" title="Changed from the default"><span class="sr-only"> (changed from the default)</span></span>}</label>
+    <label class="set-label" for="@id">@(Model.Label ?? s.Title)@if (f.Changed) {<span class="set-dot" title="Changed from the default"><span class="sr-only"> (changed from the default)</span></span>}</label>
     @switch (f.Editor)
     {
         case EditorKind.Toggle:
@@ -69,7 +69,7 @@ var info = s.MoreInfo;
             </div>
             break;
         case EditorKind.Secret:
-            <input type="text" id="@id" name="v:@n" value="@f.Text" autocomplete="off" spellcheck="false" placeholder="Key Vault secret name" disabled="@(!editable)" />
+            <input type="text" id="@id" name="v:@n" value="@f.Text" autocomplete="off" spellcheck="false" placeholder="The secret's name (not the secret itself)" disabled="@(!editable)" />
             <p class="set-hint">@(f.Row is null ? "Not set." : "Set.") The name of the secret in your Key Vault -- never the secret itself.</p>
             @* #822: the secrets a person may set here get "Set value" (the value goes to Key Vault through the updater) *@
             if (SI.Management.Web.Settings.SecretAllowList.Settings.TryGetValue(n, out var kvName))

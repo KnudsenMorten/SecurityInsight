@@ -13,14 +13,24 @@
     The marker only says "ask now"; nothing is trusted from it -- the licence itself is verified as always. PS 5.1 + 7.
 #>
 
-$script:SILicenceSupersededName = 'LicenceSupersededBy'
-$script:SILicenceSupersededGuid = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+function Get-SILicenceSupersededNameState {
+    <# The value of $script:SILicenceSupersededName, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SILicenceSupersededName) { $script:SILicenceSupersededName = 'LicenceSupersededBy' }
+    , $script:SILicenceSupersededName
+}
+$script:SILicenceSupersededName = $null; $null = Get-SILicenceSupersededNameState
+function Get-SILicenceSupersededGuidState {
+    <# The value of $script:SILicenceSupersededGuid, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SILicenceSupersededGuid) { $script:SILicenceSupersededGuid = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }
+    , $script:SILicenceSupersededGuid
+}
+$script:SILicenceSupersededGuid = $null; $null = Get-SILicenceSupersededGuidState
 
 function ConvertTo-SILicenceIdOrEmpty {
     <# PURE. A licence id as the lower-case GUID Invardia takes, or '' when it is not GUID-shaped. #>
     param([AllowNull()][AllowEmptyString()][string]$LicenceId)
     $v = "$LicenceId".Trim()
-    if ($v -match $script:SILicenceSupersededGuid) { return $v.ToLowerInvariant() }
+    if ($v -match (Get-SILicenceSupersededGuidState)) { return $v.ToLowerInvariant() }
     ''
 }
 
@@ -55,7 +65,7 @@ BEGIN
     COMMIT;
 END
 '@
-    $null = & $Store.Invoke $sql ([ordered]@{ Name = $script:SILicenceSupersededName; Value = $v; By = 'si-engine (Invardia uplink)' }) 'nonquery'
+    $null = & $Store.Invoke $sql ([ordered]@{ Name = (Get-SILicenceSupersededNameState); Value = $v; By = 'si-engine (Invardia uplink)' }) 'nonquery'
 }
 
 function Read-SILicenceSupersededMark {

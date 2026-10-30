@@ -252,13 +252,8 @@ Describe 'the pipeline never starts while an update runs (and the updater never 
             Get-SIUpdaterNeedsQuiet -SIRoot $d | Should -Be 'the release asks for it'
         } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    It 'this release carries UPDATE-NEEDS-QUIET.txt only with its REMOVE-ME (#897/#898: the release that brings the run gate)' -Tag 'PrivateRepo' {
-        # REMOVE-ME (#898): in the release after the run gate, the file goes and this test is "carries no UPDATE-NEEDS-QUIET.txt" again
+    It 'this release carries no UPDATE-NEEDS-QUIET.txt: every updater carries the run gate itself (#898)' -Tag 'PrivateRepo' {
         $f = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'UPDATE-NEEDS-QUIET.txt'
-        if (Test-Path -LiteralPath $f) {
-            $t = [IO.File]::ReadAllText($f)
-            $t | Should -Match 'REMOVE-ME' -Because 'the file is for ONE release: the one whose older updater has no run gate'
-            $t | Should -Match 'run gate'
-        }
+        Test-Path -LiteralPath $f | Should -BeFalse -Because 'the run gate waits for the pipeline itself; the file would make every update also wait for no SI job at all'
     }
 }

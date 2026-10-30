@@ -108,6 +108,7 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'cfg.ReportMail';              Verbs = 'SELECT, UPDATE' }
     @{ Object = 'cfg.SignInMail';              Verbs = 'SELECT, UPDATE' }
     @{ Object = 'cfg.StepPhaseTime';           Verbs = 'SELECT, INSERT' }           # a long step's time per phase (Write-SIStepPhase); append-only for the engine
+    @{ Object = 'cfg.StepProgress';            Verbs = 'SELECT, INSERT, UPDATE' }   # a step's progress, one row per execution: its newest sign of progress and what it does now (Write-SIStepProgress)
     @{ Object = 'cfg.TechnicalReview';         Verbs = 'SELECT, INSERT' }
     @{ Object = 'cfg.VerificationCheckRun';    Verbs = 'SELECT, INSERT' }
     @{ Object = 'cfg.VerificationFinding';     Verbs = 'SELECT, INSERT, UPDATE' }

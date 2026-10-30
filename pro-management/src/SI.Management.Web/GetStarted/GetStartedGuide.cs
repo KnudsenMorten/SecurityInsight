@@ -156,8 +156,22 @@ public static class GetStartedGuide
 
     /// The mail step's fields: the choice (shared mailbox / SMTP relay / no mail), the shared mailbox, and the SMTP relay's
     /// own fields -- shown only while SMTP is chosen (data-show-when).
+    /// #633: SI_Mail_From sits right under "Mail sender address" (SMTPFrom): with SMTP it is used instead of it.
     public static readonly IReadOnlyList<string> MailFields =
-        ["SI_Mail_Mode", "SI_Mail_From", "SI_Mail_ProbeMailbox", "SmtpServer", "SMTPPort", "SMTP_UseSSL", "SMTPFrom", "Mail_SendAnonymous", "SMTPUser", "SMTPPassword"];
+        ["SI_Mail_Mode", "SI_Mail_ProbeMailbox", "SmtpServer", "SMTPPort", "SMTP_UseSSL", "SMTPFrom", "SI_Mail_From", "Mail_SendAnonymous", "SMTPUser", "SMTPPassword"];
+
+    /// #633 (owner 2026-10-13: "this is also confusing ... it mentions shared mailbox"): with an SMTP relay the step says
+    /// nothing about a shared mailbox -- SI_Mail_From (the shared mailbox's address, which with SMTP is the From address and
+    /// wins over "Mail sender address") is shown only while it holds a value, and labelled for what it does there.
+    public static bool MailFieldOnlyWhenSet(string name) => name == "SI_Mail_From";
+
+    /// #633: the mail step's own label of a field (null = the catalog's).
+    public static string? MailFieldLabel(string name) => name switch
+    {
+        "SI_Mail_From" => "Sender address (used instead of the one above)",
+        "SI_Mail_ProbeMailbox" => "Mailbox to prove the restriction (its e-mail address)",
+        _ => null,
+    };
 
     /// Which mail mode a mail field belongs to (null = every mode): the SMTP relay's fields only with smtp.
     public static string? MailFieldMode(string name) => name is "SmtpServer" or "SMTPPort" or "SMTP_UseSSL" or "SMTPFrom" or "Mail_SendAnonymous" or "SMTPUser" or "SMTPPassword" ? "smtp"

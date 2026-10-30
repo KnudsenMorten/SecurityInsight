@@ -262,17 +262,31 @@ function Invoke-SIUpdaterFromCommunity {
     $writeTag = { param($value)
         if ($s['WriteWaits']) { $null = & $s.WriteWaits $value }
         elseif ($real -and $gate.JobId) { $null = Write-SIUpdaterWaitsTag -JobId $gate.JobId -Value $value } }
+    $askGate = {
+        if ($s['RunGate']) { & $s.RunGate $holder }
+        elseif ($real -and (Get-Command -Name Invoke-SIUpdaterRunGate -ErrorAction SilentlyContinue)) {
+            Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -SubscriptionId $SubscriptionId `
+                -BusyJobs { $en = Get-SIUpdaterEnvironment -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob $updaterJob
+                            @(Get-SIUpdaterBusyJobs -JobNames @($en.JobNames) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } `
+                -DatabaseMissing { if ($Store -and "$($Store.Server)" -and "$($Store.Database)") { Test-SIUpdaterDatabaseMissing -Server ([string]$Store.Server) -Database ([string]$Store.Database) -SubscriptionId $SubscriptionId } else { $false } }
+        } else { [pscustomobject]@{ Go = $true; Verdict = 'Go'; Kind = ''; Reason = 'no run gate in this image'; RunId = ''; LockTaken = $false; Holder = '' } }
+    }
     $passGate = {
         if ($gate.Result) { return $gate.Result }
-        $r = if ($s['RunGate']) { & $s.RunGate $holder }
-             elseif ($real -and (Get-Command -Name Invoke-SIUpdaterRunGate -ErrorAction SilentlyContinue)) {
-                 Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -SubscriptionId $SubscriptionId `
-                     -BusyJobs { $en = Get-SIUpdaterEnvironment -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob $updaterJob
-                                 @(Get-SIUpdaterBusyJobs -JobNames @($en.JobNames) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } `
-                     -DatabaseMissing { if ($Store -and "$($Store.Server)" -and "$($Store.Database)") { Test-SIUpdaterDatabaseMissing -Server ([string]$Store.Server) -Database ([string]$Store.Database) -SubscriptionId $SubscriptionId } else { $false } }
-             } else { [pscustomobject]@{ Go = $true; Verdict = 'Go'; Kind = ''; Reason = 'no run gate in this image'; RunId = ''; LockTaken = $false; Holder = '' } }
-        $gate.Result = $r
+        $r = & $askGate
         Write-UpdLog ("run gate: {0}" -f $r.Reason)
+        # #947 (b): a bound on the wait, as Pro (SI-UpdaterInvardia.ps1): after 6 hours a run that started on an OLDER version
+        # is cancelled and the update is installed. Seam (tests): CancelRun { param($RunId, $TargetVersion, $Reason) }.
+        if (-not $r.Go -and ($s['CancelRun'] -or ($real -and (Get-Command -Name Invoke-SIUpdaterCancelOldRun -ErrorAction SilentlyContinue))) -and (Get-Command -Name Invoke-SIUpdaterOverdueCancel -ErrorAction SilentlyContinue)) {
+            & $readTag
+            $odSince = if ($gate.Tag) { $gate.Tag.SinceUtc } else { $null }
+            $odTarget = if ($chk -and $chk.Version) { "$($chk.Version)".Trim() } else { '' }
+            $r = Invoke-SIUpdaterOverdueCancel -Gate $r -SinceUtc $odSince -NowUtc $now -TargetVersion $odTarget -GateAgain $askGate -Log { param($m) Write-UpdLog $m } `
+                     -Sleep $(if ($s['Sleep']) { $s['Sleep'] } else { { param($sec) Start-Sleep -Seconds $sec } }) `
+                     -Cancel { param($id, $ver, $why) if ($s['CancelRun']) { & $s.CancelRun $id $ver $why } else { Invoke-SIUpdaterCancelOldRun -Store $Store -RunId $id -TargetVersion $ver -Reason $why -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Holder $holder } }
+            if ($r.Go) { Write-UpdLog ("run gate: {0}" -f $r.Reason) }
+        }
+        $gate.Result = $r
         if ($r.Go) { & $readTag; if ($gate.Tag) { & $writeTag ''; $gate.Cleared = $true } }
         $r
     }

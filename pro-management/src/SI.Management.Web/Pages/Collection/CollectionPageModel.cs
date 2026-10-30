@@ -324,11 +324,58 @@ public abstract class CollectionPageModel : PageModel
 
     /// A cell as this view shows it (on screen; with <paramref name="csv"/> in the CSV export). Default: <see cref="Text"/>.
     public virtual string CellText(GridColumn c, IReadOnlyDictionary<string, object?> row, bool csv = false) =>
-        GridLayout.IsExtra(c) ? GridLayout.Text(row, c.Key) : Text(c, row, csv);
+        GridLayout.IsExtra(c) ? GridLayout.Text(row, c.Key) : RiskPartText(c.Key, row, csv) ?? Text(c, row, csv);
 
     /// A cell as this view's Excel export holds it. Default: <see cref="ExcelValue"/>.
     public virtual object? CellExcel(GridColumn c, IReadOnlyDictionary<string, object?> row) =>
-        GridLayout.IsExtra(c) ? GridLayout.Excel(row, c.Key) : ExcelValue(c, row);
+        GridLayout.IsExtra(c) ? GridLayout.Excel(row, c.Key) : RiskPartExcel(c.Key, row) ?? ExcelValue(c, row);
+
+    /// <summary>
+    /// The risk score's parts of a findings row that carries them as stored columns (CollectionViewSql.RiskPartColumns): in
+    /// the explained score's own words -- the base ("4", "4 (derived)" for an older row), the factors with their points
+    /// ("HighMachineRisk +3, InternetExposed +4"), the side's score -- on screen in the viewer's number format, in a CSV
+    /// invariant. Null = not a part's column (or a row without them): the cell is shown as any other.
+    /// </summary>
+    public static string? RiskPartText(string key, IReadOnlyDictionary<string, object?> row, bool csv)
+    {
+        if (!RiskExplanation.HasStored(row)) return null;
+        Func<double, string> num = csv ? ScoreFormat.Invariant : ScoreFormat.Number;
+        static string Flag(IReadOnlyDictionary<string, object?> r, string k) =>
+            r.TryGetValue(k, out var v) && v is not null and not DBNull ? (Convert.ToBoolean(v, System.Globalization.CultureInfo.InvariantCulture) ? "yes" : "no") : "";
+        return key switch
+        {
+            "AssetBase" => RiskExplanation.BaseText(RiskExplanation.OfStored(row).Asset, num),
+            "AssetFactors" => RiskExplanation.FactorsText(RiskExplanation.OfStored(row).Asset, num),
+            "AssetSide" => RiskExplanation.OfStored(row).Asset.Score is { } a ? num(a) : "",
+            "VulnBase" => RiskExplanation.BaseText(RiskExplanation.OfStored(row).Vulnerability, num),
+            "VulnFactors" => RiskExplanation.FactorsText(RiskExplanation.OfStored(row).Vulnerability, num),
+            "VulnSide" => RiskExplanation.OfStored(row).Vulnerability.Score is { } v ? num(v) : "",
+            "AssetDerived" or "VulnDerived" => Flag(row, key),
+            _ => null,
+        };
+    }
+
+    /// The parts in an Excel export: the factors and a worked-out base as their words, a recorded base and the sides as
+    /// numbers (null = not a part's column: the cell as any other).
+    public static object? RiskPartExcel(string key, IReadOnlyDictionary<string, object?> row)
+    {
+        if (!RiskExplanation.HasStored(row)) return null;
+        var e = RiskExplanation.OfStored(row);
+        var side = key.StartsWith("Asset", StringComparison.Ordinal) ? e.Asset : e.Vulnerability;
+        switch (key)
+        {
+            case "AssetFactors" or "VulnFactors" or "AssetDerived" or "VulnDerived":
+                return RiskPartText(key, row, csv: true);
+            case "AssetBase" or "VulnBase":
+                if (!side.Derived) return side.Base;
+                var words = RiskExplanation.BaseText(side, ScoreFormat.Invariant);
+                return words.Length > 0 ? words : null;
+            case "AssetSide" or "VulnSide":
+                return side.Score;
+            default:
+                return null;
+        }
+    }
 
     /// The hover text of a cell (null = none).
     public virtual string? CellTitle(GridColumn c, IReadOnlyDictionary<string, object?> row) => null;

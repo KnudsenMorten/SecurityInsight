@@ -22,7 +22,7 @@
     THE PERIOD -- 24 hours from the time the updater recorded the changed fingerprint. A SuperAdmin may end it early with
     a reason (the web app, Operations > Guards (safety checks); audited guard.strict.end-early) -- cfg.InstallState 'GuardStrictEnd'.
 
-    A STRICT TRIP is a normal trip: it holds and mails as always; its numbers say the limit is halved, worded calmly
+    A STRICT TRIP is a normal trip: it holds as always and mails when its check mails (a check the catalog marks "mail": "never" does not); its numbers say the limit is halved, worded calmly
     ("stricter period after release X until <time>"), and its report to Invardia carries Strict, ConfiguredLimit and
     EffectiveLimit. The identified heartbeat carries guardMode { mode, until, startedBy, version, endedEarlyAt, endedBy }.
 
@@ -30,20 +30,25 @@
     PS 5.1 and 7.
 #>
 
-$script:SIGuardStrict = @{
+function Get-SIGuardStrictState {
+    <# The value of $script:SIGuardStrict, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIGuardStrict) { $script:SIGuardStrict = @{
     Hours          = 24
     Folders        = @('engine', 'launcher', 'risk-analysis-detection')
     FingerprintRow = 'EngineFingerprint'
     EndRow         = 'GuardStrictEnd'
     CacheMinutes   = 5
+} }
+    , $script:SIGuardStrict
 }
+$script:SIGuardStrict = $null; $null = Get-SIGuardStrictState
 
 # =====================================================================================================================
 #  The engine fingerprint -- deterministic
 # =====================================================================================================================
 function Get-SIEngineFingerprintFolders {
     <# PURE. The engine folders (relative to the solution root), the same as the publish call's Get-SIEngineFolders. #>
-    @($script:SIGuardStrict.Folders)
+    @((Get-SIGuardStrictState).Folders)
 }
 
 function Get-SIEngineFingerprint {
@@ -156,7 +161,7 @@ function Get-SIGuardModeFromState {
         Strict = a period started (strictFrom), -NowUtc before its end (strictFrom + -Hours), and no early end OF THIS
         PERIOD (the end names the same fingerprint and start). An early end of an older period ends nothing.
     #>
-    param([AllowNull()]$Fingerprint, [AllowNull()]$StrictEnd, [Parameter(Mandatory)][datetime]$NowUtc, [int]$Hours = $script:SIGuardStrict.Hours)
+    param([AllowNull()]$Fingerprint, [AllowNull()]$StrictEnd, [Parameter(Mandatory)][datetime]$NowUtc, [int]$Hours = (Get-SIGuardStrictState).Hours)
     $fp = if ($Fingerprint -is [string]) { ConvertFrom-SIGuardStrictJson $Fingerprint } else { $Fingerprint }
     $en = if ($StrictEnd -is [string]) { ConvertFrom-SIGuardStrictJson $StrictEnd } else { $StrictEnd }
     $now = $NowUtc.ToUniversalTime()
@@ -246,7 +251,7 @@ function Read-SIGuardModeState {
     $fp = $null; $en = $null
     foreach ($r in @(& $Invoke (Get-SIGuardModeSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $_ })) {
         $n = [string](Get-SIGuardStrictField $r 'Name'); $v = [string](Get-SIGuardStrictField $r 'Value')
-        if ($n -eq $script:SIGuardStrict.FingerprintRow) { $fp = $v } elseif ($n -eq $script:SIGuardStrict.EndRow) { $en = $v }
+        if ($n -eq (Get-SIGuardStrictState).FingerprintRow) { $fp = $v } elseif ($n -eq (Get-SIGuardStrictState).EndRow) { $en = $v }
     }
     Get-SIGuardModeFromState -Fingerprint $fp -StrictEnd $en -NowUtc $NowUtc
 }
@@ -264,7 +269,7 @@ function Get-SIGuardModeNow {
         if ($null -ne $global:SI_GuardModeOverride) { return $global:SI_GuardModeOverride }
         if (-not $Invoke -and (Get-Module -Name Pester)) { return $normal }
         $c = $script:SIGuardModeCache
-        if (-not $Refresh -and -not $Invoke -and $c -and ($now - $c.At).TotalMinutes -lt $script:SIGuardStrict.CacheMinutes -and $now -ge $c.At) { return $c.Mode }
+        if (-not $Refresh -and -not $Invoke -and $c -and ($now - $c.At).TotalMinutes -lt (Get-SIGuardStrictState).CacheMinutes -and $now -ge $c.At) { return $c.Mode }
         $inv = $Invoke
         if (-not $inv -and $global:SI_GuardInvoke -is [scriptblock]) { $inv = $global:SI_GuardInvoke }
         if (-not $inv -and (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { $inv = Get-SIGuardProInvoke }

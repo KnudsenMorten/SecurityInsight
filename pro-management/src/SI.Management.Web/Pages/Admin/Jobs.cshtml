@@ -33,6 +33,9 @@
     var ordered = JobFlow.Ordered(Model.Flow);
     // each step's newest record: from the last run when it was part of it, else from its newest run (any scope)
     FlowStepRun? Rec(string job) => stepRun.TryGetValue(job, out var a) ? a : Model.LastSteps.TryGetValue(job, out var b) ? b : null;
+    // #662: every execution the pipeline's records name -- a newer execution that is none of them was started outside it
+    var knownExec = stepRun.Values.Select(r => r.Execution).Concat(Model.LastSteps.Values.Select(r => r.Execution))
+        .Where(x => !string.IsNullOrEmpty(x)).Select(x => x!).ToHashSet(StringComparer.OrdinalIgnoreCase);
     string Chip(string state) => state switch { "succeeded" => "ok", "failed" => "bad", "running" => "run", "skipped" => "warn", "throttled" => "warn", _ => "" };
     var runDur = lastRun?.EndedUtc is { } lre ? JobFlow.DurationText(lre - lastRun.StartedUtc) : null;
     @* ---- #306: the pipeline's header card -- what it is, when it runs, how the last run went, Run now ---- *@
@@ -148,19 +151,23 @@
                                 var jobName = JobFlow.JobName(s.Job);
                                 var sr = Rec(s.Job);
                                 var st = !s.Enabled ? "Disabled" : JobFlow.IsThrottled(sr) ? "Throttled" : sr?.State switch { "Success" => "Success", "Failed" or "TimedOut" or "Interrupted" => "Failed", "Running" or "Starting" => "Running", "Skipped" => "Skipped", "Disabled" => "Disabled", _ => "Waiting" };
+                                var outsideJob = Model.StepExecutions.TryGetValue(s.Job, out var sxv) ? sxv.Job : null;
+                                var outside = s.Enabled && outsideJob is not null ? JobFlow.OutsideRunOf(sr, sxv.Executions, knownExec) : null;
+                                if (outside is { Running: true }) { st = "Running"; }
                                 var firstOfStage = order == mine[0].Order;
                                 var lastOfStage = order == mine[^1].Order;
                                 var job = Model.List.FirstOrDefault(x => x.Name == jobName);
                                 <tr data-step="@s.Job" data-job="@jobName">
                                     <td class="num">@(si + "." + (order - mine[0].Order + 1))@if (s.WithPrevious && !firstOfStage) { <br /><span class="muted small" title="starts together with the step above">with the step above</span> }</td>
                                     <td class="wrap"><a href="?job=@jobName">@JobSchedule.Label(s.Job)</a>@if (!installed.Contains(s.Job)) { <br /><span class="badge warn">not installed</span> }<br /><span class="muted small">@(JobSchedule.Role(s.Job)?.Does ?? "")</span><br /><span class="muted small">In the pipeline, step @order -- no timer of its own</span></td>
-                                    <td><span class="state @(st switch { "Success" => "ok", "Failed" => "bad", "Running" => "run", "Throttled" => "warn", _ => "" })" title="@(sr?.Error ?? "")" data-step-state="@st">@st</span>@if (sr?.State is "TimedOut" or "Interrupted") { <br /><span class="muted small">@sr.State.ToLowerInvariant()</span> }</td>
+                                    <td><span class="state @(st switch { "Success" => "ok", "Failed" => "bad", "Running" => "run", "Throttled" => "warn", _ => "" })" title="@(sr?.Error ?? "")" data-step-state="@st">@st</span>@if (sr?.State is "TimedOut" or "Interrupted") { <br /><span class="muted small">@sr.State.ToLowerInvariant()</span> }@if (outside is not null) { <br /><span class="muted small" data-step-outside="@(outside.Running ? "running" : "ended")" title="execution @outside.Execution.Name">@outside.Text @Fmt.Time(outside.Execution.StartTime)@if (!outside.Running) { <text>: @outside.Outcome</text> }</span> }@if (JobFlow.ProgressOf(sr, Model.Progress, fnow) is { } pg) { <br /><span class="small@(pg.Stale ? " muted" : "")" data-step-progress="@(pg.Percent?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")">@pg.Phase@if (pg.Done is { } pd) { <text> · @Fmt.Int(pd)@if (pg.Total is { } pt) { <text> of @Fmt.Int(pt)</text> } else { <text> so far</text> }</text> }</span>@if (pg.Percent is { } pc) { <br /><progress max="100" value="@pc" aria-label="@(pc) percent done">@(pc) %</progress> }<br /><span class="muted small">updated @Fmt.Time(pg.AtUtc)@if (pg.Stale && pg.AtUtc is { } pat) { <text> -- no update for @((int)(fnow - pat).TotalMinutes) min</text> }</span> }</td>
                                     <td>@if (sr?.StartedUtc is { } ss) { @Fmt.Time(ss) }</td>
                                     <td class="num">@(sr?.StartedUtc is { } a1 && sr.EndedUtc is { } b1 ? JobFlow.DurationText(b1 - a1) : "")</td>
                                     <td class="wrap small">@if (JobFlow.SilentStep(sr) is { } quiet) { <span data-step-silent><span class="badge warn">@quiet.Headline</span> <span class="muted small">-- @(JobFlow.SilentWarning.Rest)@if (quiet.NoticedUtc is { } qn) { <text> · noticed @Fmt.Time(qn)</text> }</span></span><br /> }@if (!string.IsNullOrEmpty(sr?.Error)) { <span>@sr!.Error</span> }@if (JobFlow.AttemptText(sr) is { } attempts) { <br /><span class="muted small" data-step-attempts="@sr!.Attempts" title="@(sr.RetryReason ?? "")">@attempts</span>@if (!string.IsNullOrEmpty(sr.RetryReason)) { <br /><span class="muted small">@sr.RetryReason</span> } }<br /><span class="muted">on failure: @(s.OnFailure switch { "stop" => "stop the pipeline", "continue" => "carry on", _ => "skip what needs it" }) · timeout @s.TimeoutMinutes min</span></td>
                                     <td>
                                         <div class="row-actions">
                                             @if (sr?.Execution is { Length: > 0 } ex && !ex.Contains('@')) { <a class="button small secondary" href="?job=@jobName&execution=@ex">log</a> }
+                                            @if (outside is not null) { <a class="button small secondary" href="?job=@outsideJob&execution=@outside.Execution.Name" data-step-outside-log>log of that run</a> }
                                             @if (canEdit)
                                             {
                                                 @if (isFlow && Model.FlowJobPresent)

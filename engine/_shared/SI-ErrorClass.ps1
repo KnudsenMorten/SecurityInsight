@@ -29,7 +29,9 @@ if (-not (Get-Command -Name Get-SIKqlErrorText -ErrorAction SilentlyContinue)) {
 }
 
 # The closed list, exactly as agreed (#226). Get-SIErrorClass returns one of these and nothing else.
-$script:SIErrorClasses = @(
+function Get-SIErrorClassesState {
+    <# The value of $script:SIErrorClasses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIErrorClasses) { $script:SIErrorClasses = @(
     'graph-401', 'graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'sql-login', 'mi-unavailable',
     'throttled', 'platform-timeout', 'platform-5xx', 'kql-query-defect', 'table-missing', 'ingest-4xx',
     'ingest-short-count', 'settings-error', 'config-missing', 'licence-invalid', 'ai-error',
@@ -51,22 +53,35 @@ $script:SIErrorClasses = @(
     # Set by the caller that retried it (the pipeline runner's lock), never derived from a text: not a product defect.
     'transient-sql',
     'unknown'
-)
+) }
+    , $script:SIErrorClasses
+}
+$script:SIErrorClasses = $null; $null = Get-SIErrorClassesState
 
 # #904: the numbers of Azure SQL's "the database is full" refusal (1105: no space in the filegroup; 40544: the database
 # reached its size quota; 1101: no new page could be allocated)
-$script:SIDatabaseFullNumbers = @(1105, 40544, 1101)
+function Get-SIDatabaseFullNumbersState {
+    <# The value of $script:SIDatabaseFullNumbers, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIDatabaseFullNumbers) { $script:SIDatabaseFullNumbers = @(1105, 40544, 1101) }
+    , $script:SIDatabaseFullNumbers
+}
+$script:SIDatabaseFullNumbers = $null; $null = Get-SIDatabaseFullNumbersState
 
 # Risk Analysis' recognised platform-failure prefixes (RA-GraphHunting.ps1, $script:RAPlatformFailurePrefixes). Read
 # from there when Risk Analysis is loaded, so the two can never disagree; this copy serves every other engine. A test
 # compares the two lists.
-$script:SIErrorPlatformPrefixes = @(
+function Get-SIErrorPlatformPrefixesState {
+    <# The value of $script:SIErrorPlatformPrefixes, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIErrorPlatformPrefixes) { $script:SIErrorPlatformPrefixes = @(
     @{ Pattern = 'Query cancelled on creation'; Class = 'platform-timeout' }
     @{ Pattern = 'ScalarEvaluator\.Evaluate failed'; Class = 'platform-timeout' }
     @{ Pattern = 'Errors occurred while resolving remote entities'; Class = 'platform-5xx' }
-)
+) }
+    , $script:SIErrorPlatformPrefixes
+}
+$script:SIErrorPlatformPrefixes = $null; $null = Get-SIErrorPlatformPrefixesState
 
-function Get-SIErrorClasses { $script:SIErrorClasses }
+function Get-SIErrorClasses { (Get-SIErrorClassesState) }
 
 function Test-SIDatabaseFullError {
     <#
@@ -79,7 +94,7 @@ function Test-SIDatabaseFullError {
     $ex = if ($Value -is [System.Exception]) { $Value } elseif ($Value -is [System.Management.Automation.ErrorRecord]) { $Value.Exception } else { $null }
     $texts = New-Object System.Collections.Generic.List[string]
     while ($ex) {
-        if ($ex -is [System.Data.SqlClient.SqlException]) { foreach ($er in @($ex.Errors)) { if ($script:SIDatabaseFullNumbers -contains [int]$er.Number) { return $true } } }
+        if ($ex -is [System.Data.SqlClient.SqlException]) { foreach ($er in @($ex.Errors)) { if ((Get-SIDatabaseFullNumbersState) -contains [int]$er.Number) { return $true } } }
         $texts.Add([string]$ex.Message); $ex = $ex.InnerException
     }
     if (-not $texts.Count) { $texts.Add([string]$Value) }
@@ -132,12 +147,22 @@ function Test-SIOutOfMemoryText {
 # lacks (licence-invalid), a setting the customer must set (config-missing, settings-error). Everything else -- sign-in
 # and token trouble, a missing table, ingestion, throttling, timeouts, service errors, guard refusals, unknown -- stays a
 # product defect: a class is put here only when its own definition above says the customer's configuration is the cause.
-$script:SICustomerConfigClasses = @('graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'licence-invalid', 'config-missing', 'settings-error')
+function Get-SICustomerConfigClassesState {
+    <# The value of $script:SICustomerConfigClasses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SICustomerConfigClasses) { $script:SICustomerConfigClasses = @('graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'licence-invalid', 'config-missing', 'settings-error') }
+    , $script:SICustomerConfigClasses
+}
+$script:SICustomerConfigClasses = $null; $null = Get-SICustomerConfigClassesState
 # #913: the classes that are nobody's fix -- an Azure SQL transient that did not pass within its bounded retry. No FixKind:
 # never a fix request, never a red alert (the next wake-up runs as usual).
-$script:SINoFixClasses = @('transient-sql')
+function Get-SINoFixClassesState {
+    <# The value of $script:SINoFixClasses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SINoFixClasses) { $script:SINoFixClasses = @('transient-sql') }
+    , $script:SINoFixClasses
+}
+$script:SINoFixClasses = $null; $null = Get-SINoFixClassesState
 
-function Get-SICustomerConfigClasses { $script:SICustomerConfigClasses }
+function Get-SICustomerConfigClasses { (Get-SICustomerConfigClassesState) }
 
 function Get-SIErrorFixKind {
     <#
@@ -147,8 +172,8 @@ function Get-SIErrorFixKind {
     param([AllowEmptyString()][AllowNull()][string]$ErrorClass)
     $c = "$ErrorClass".Trim().ToLowerInvariant()
     if (-not $c) { return '' }
-    if ($script:SINoFixClasses -contains $c) { return '' }
-    if ($script:SICustomerConfigClasses -contains $c) { return 'customer-config' }
+    if ((Get-SINoFixClassesState) -contains $c) { return '' }
+    if ((Get-SICustomerConfigClassesState) -contains $c) { return 'customer-config' }
     'product-defect'
 }
 
@@ -251,6 +276,10 @@ function Get-SIErrorClass {
     if ([string]::IsNullOrWhiteSpace($t)) { return 'unknown' }
     # #904: the database is full -- before every service / platform word (its text names SQL and often a timeout)
     if ((Test-SIDatabaseFullError $t) -or ($null -ne $ErrorRecord -and (Test-SIDatabaseFullError $ErrorRecord))) { return 'database-full' }
+    # 2026-10-29: a temporary Azure SQL error that outlasted SecurityInsight's own retry is TAGGED by the code that retried
+    # it -- its message ends "-- transient-sql" (SI-DataSql.ps1, the pipeline lock); the step's log carries that line, so the
+    # pipeline's report of the step names the platform's class, never a product defect
+    if ($t -match '(?i)--\s*transient-sql\b') { return 'transient-sql' }
     $svc =Get-SIErrorService -Text $t
     if (-not $svc -and $Service) { $svc = $Service.ToLowerInvariant() }
 
@@ -273,7 +302,7 @@ function Get-SIErrorClass {
         if ($name -match '(?i)_CL$' -or $t -match '(?i)\btable\b.*(could not be found|does not exist)') { return 'table-missing' }
     }
     if ($t -match "(?i)\btable\b[^|]{0,120}\b(could not be found|does not exist)|unknown table|PathNotFoundError|not present in this tenant's advanced hunting schema") { return 'table-missing' }
-    foreach ($p in $script:SIErrorPlatformPrefixes) { if ($t -match $p.Pattern) { return $p.Class } }
+    foreach ($p in (Get-SIErrorPlatformPrefixesState)) { if ($t -match $p.Pattern) { return $p.Class } }
     if ($t -match '(?i)Fix syntax errors in your query|Fix semantic errors in your query|SyntaxError|SemanticError|return types are not compatible|\bSEM\d{4}\b|\bSYN\d{4}\b|Expected: .* in query|Failed to resolve (scalar|table or column|table) expression') { return 'kql-query-defect' }
 
     # ---- throttling -------------------------------------------------------------------------------------------------

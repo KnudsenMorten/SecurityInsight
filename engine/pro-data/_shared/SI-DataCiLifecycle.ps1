@@ -84,7 +84,13 @@ function Get-SIDataFindingStateSql {
     # string in one parameter. Everything else in the statement is the same.
     # -WithFrozenReports (per report): the statement also takes @frozenReports, a JSON array of report names this run could
     # not complete (Resolve-SIReportScopedComplete) -- an absent finding one of them found is FROZEN (counted in Frozen).
-    param([switch]$WithDisabledOwners, [switch]$WithEquivalence, [switch]$FromStage, [switch]$WithFrozenReports)
+    # -Ranged (2026-10-29, with -FromStage): the same statement for ONE OwnerKey range (@RangeLo / @RangeHi, its /*R:..*/
+    # markers; Invoke-SIDataFindingStateRanged) -- every lifecycle row and staged finding of an owner is in its owner's range,
+    # so each row ends exactly as in the one statement. Each range is its own transaction and writes its mark (the snapshot
+    # and the last owner key done, sidata.CiBuildState) in it; only the LAST range moves FindingStateSnapshot. A range run
+    # again for the same snapshot (a statement retried after its commit) writes nothing; an absence is counted only on a
+    # row this snapshot has not touched yet (LastSnapshot < @t) -- a finding closes one run later at worst, never earlier.
+    param([switch]$WithDisabledOwners, [switch]$WithEquivalence, [switch]$FromStage, [switch]$WithFrozenReports, [switch]$Ranged)
     $sql = @'
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -105,7 +111,7 @@ BEGIN
         INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId)
         SELECT LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256), NULLIF(MAX(x.CiId), N''), N'open', @t, @t, @t, 0, MAX(x.Severity), LEFT(MAX(x.DetectedBy), 2000), NULLIF(MAX(x.ExemptionId), N'')
         FROM OPENJSON(@j) WITH (OwnerKey NVARCHAR(MAX), FindingKey NVARCHAR(MAX), CiId NVARCHAR(64), Severity NVARCHAR(16), DetectedBy NVARCHAR(MAX), ExemptionId NVARCHAR(64)) x
-        WHERE x.OwnerKey IS NOT NULL AND x.FindingKey IS NOT NULL
+        WHERE x.OwnerKey IS NOT NULL AND x.FindingKey IS NOT NULL/*R:x.OwnerKey*/
           AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = LEFT(x.OwnerKey, 450) AND s.FindingKey = LEFT(x.FindingKey, 256))
         GROUP BY LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256);
         SET @missing = @@ROWCOUNT;
@@ -113,7 +119,7 @@ BEGIN
     SELECT 0 AS Opened, 0 AS Seen, 0 AS Reopened, 0 AS Closed, 0 AS Absent, 0 AS Frozen, 1 AS Skipped, N'collection already processed' AS Note, 0 AS Carried, @missing AS Repaired;
     RETURN;
 END
-DECLARE @after INT = TRY_CONVERT(INT, @closeAfter); IF @after IS NULL OR @after < 1 SET @after = 2;
+DECLARE @after INT = TRY_CONVERT(INT, @closeAfter); IF @after IS NULL OR @after < 1 SET @after = 2;/*RSKIP*/
 -- the collection's findings: a #temp table (it has statistics -- the table variable this was planned every join below as
 -- one row, at a large install 1.47 million), keyed as before; in the database's collation, as the table variable was
 IF OBJECT_ID('tempdb..#lcf') IS NOT NULL DROP TABLE #lcf;
@@ -124,7 +130,7 @@ CREATE TABLE #lcf (OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL, Fin
 -- monitored' (no CI row has the id '') instead of with its real reason
 INSERT #lcf SELECT LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256), NULLIF(MAX(x.CiId), N''), MAX(x.Severity), LEFT(MAX(x.DetectedBy), 2000), MAX(x.ExemptionId)
 FROM OPENJSON(@j) WITH (OwnerKey NVARCHAR(MAX), FindingKey NVARCHAR(MAX), CiId NVARCHAR(64), Severity NVARCHAR(16), DetectedBy NVARCHAR(MAX), ExemptionId NVARCHAR(64)) x
-WHERE x.OwnerKey IS NOT NULL AND x.FindingKey IS NOT NULL
+WHERE x.OwnerKey IS NOT NULL AND x.FindingKey IS NOT NULL/*R:x.OwnerKey*/
 GROUP BY LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256);
 DECLARE @opened INT = 0, @seen INT = 0, @reopened INT = 0, @closed INT = 0, @absent INT = 0, @frozen INT = 0;
 DECLARE @fz TABLE (OwnerKey NVARCHAR(450) NOT NULL PRIMARY KEY);
@@ -145,7 +151,7 @@ DECLARE @carried INT = 0;
 DECLARE @rc TABLE (Seen DATETIME2(3) NOT NULL, Name NVARCHAR(256) NOT NULL, PRIMARY KEY (Seen, Name));
 DECLARE @rcCarry NVARCHAR(200) = CASE WHEN COL_LENGTH('sidata.RaReportStatus', 'QueryHashCarry') IS NOT NULL THEN N'MAX(r.QueryHashCarry)' ELSE N'CAST(NULL AS NVARCHAR(400))' END;
 DECLARE @rcSql NVARCHAR(MAX) = N'
-;WITH seen AS (SELECT DISTINCT s.LastSeen AS Seen FROM sidata.CiFindingState s WHERE s.State <> N''closed'' AND s.LastSeen < @t),
+;WITH seen AS (SELECT DISTINCT s.LastSeen AS Seen FROM sidata.CiFindingState s WHERE s.State <> N''closed'' AND s.LastSeen < @t/*R:s.OwnerKey*/),
 cur AS (SELECT r.ReportName, MAX(r.QueryHash) AS H, ' + @rcCarry + N' AS C FROM sidata.RaReportStatus r
         WHERE r.Grain = N''Detailed'' AND r.CollectionTime BETWEEN DATEADD(second, -5, @t) AND DATEADD(second, 5, @t) GROUP BY r.ReportName),
 prev AS (SELECT x.Seen, p.ReportName, p.QueryHash FROM seen x
@@ -159,7 +165,7 @@ WHERE (c.ReportName IS NOT NULL AND c.H IS NOT NULL AND c.H <> p.QueryHash
        AND NOT (c.C IS NOT NULL AND CHARINDEX(N'';'' + p.QueryHash + N'';'', N'';'' + REPLACE(c.C, N'' '', N'''') + N'';'') > 0))
    OR (c.ReportName IS NULL AND EXISTS (SELECT 1 FROM cur WHERE cur.H IS NOT NULL));';
 IF @complete = N'1' AND OBJECT_ID('sidata.RaReportStatus') IS NOT NULL AND COL_LENGTH('sidata.RaReportStatus', 'QueryHash') IS NOT NULL
-    INSERT @rc EXEC sp_executesql @rcSql, N'@t DATETIME2(3)', @t = @t;
+    INSERT @rc EXEC sp_executesql @rcSql, N'@t DATETIME2(3)/*RPL*/', @t = @t/*RPV*/;
 /*SI_EQUIVALENCE_DECL*/
 -- #406 OWNER DECISION 2026-10-19 ("Close as asset retired"): the CIs SecurityInsight has RETIRED (sidata.Ci Lifecycle). A
 -- finding on such a CI is closed as 'asset_retired' -- also one this collection still reports -- and is neither seen nor
@@ -182,7 +188,7 @@ IF @complete = N'1' AND OBJECT_ID('sidata.CiFinding') IS NOT NULL
     JOIN sidata.CiFinding cf ON cf.FindingKey = s.FindingKey AND NULLIF(cf.CiId, N'') IS NOT NULL AND NULLIF(cf.AssetId, N'') IS NOT NULL
                             AND N'asset:' + LOWER(cf.AssetId) = s.OwnerKey
     JOIN #lcf f ON f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey
-    WHERE s.State <> N'closed' AND s.OwnerKey LIKE N'asset:%' AND NULLIF(s.CiId, N'') IS NULL
+    WHERE s.State <> N'closed' AND s.OwnerKey LIKE N'asset:%' AND NULLIF(s.CiId, N'') IS NULL/*R:s.OwnerKey*/
       AND NOT EXISTS (SELECT 1 FROM #lcf x WHERE x.OwnerKey = s.OwnerKey AND x.FindingKey = s.FindingKey);
 BEGIN TRANSACTION;
 /*SI_EQUIVALENCE*/
@@ -223,7 +229,7 @@ SET @retiredClosed = @@ROWCOUNT;
 UPDATE s SET State = N'closed', ClosedAt = @t, CloseReason = N'asset_retired', LastSnapshot = @t, AbsentRuns = 0,
        LastSeen = CASE WHEN EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey) THEN @t ELSE s.LastSeen END
 FROM sidata.CiFindingState s JOIN @ret r ON r.CiId = s.CiId
-WHERE s.State <> N'closed';
+WHERE s.State <> N'closed'/*R:s.OwnerKey*/;
 SET @retiredClosed = @retiredClosed + @@ROWCOUNT;
 IF @complete = N'1'
 BEGIN
@@ -240,26 +246,26 @@ BEGIN
                                              AND CHARINDEX(N';' + REPLACE(g.Name, N' ', N'') + N';', N';' + REPLACE(ISNULL(s.DetectedBy, N''), N' ', N'') + N';') > 0) THEN N'report changed'
                               ELSE N'remediated' END
     FROM sidata.CiFindingState s LEFT JOIN sidata.Ci c ON c.CiId = s.CiId
-    WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
+    WHERE s.State <> N'closed'/*R:s.OwnerKey*//*ABS*/ AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
       AND NOT EXISTS (SELECT 1 FROM @fr r WHERE s.DetectedBy IS NULL OR s.DetectedBy = N'' OR CHARINDEX(N';' + REPLACE(r.Name, N' ', N'') + N';', N';' + REPLACE(s.DetectedBy, N' ', N'') + N';') > 0)
       AND NOT EXISTS (SELECT 1 FROM @fz z WHERE z.OwnerKey = s.OwnerKey);
     SET @absent = @@ROWCOUNT;
     -- #533: absent findings of a disabled, left-out asset are FROZEN -- untouched above (no count, no close)
     SELECT @frozen = COUNT(*) FROM sidata.CiFindingState s
-    WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
+    WHERE s.State <> N'closed'/*R:s.OwnerKey*/ AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
       AND EXISTS (SELECT 1 FROM @fz z WHERE z.OwnerKey = s.OwnerKey);
     -- per report: so are the absent findings of a report this run could not complete (counted once)
     SET @frozen = @frozen + (SELECT COUNT(*) FROM sidata.CiFindingState s
-        WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
+        WHERE s.State <> N'closed'/*R:s.OwnerKey*/ AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)
           AND NOT EXISTS (SELECT 1 FROM @fz z WHERE z.OwnerKey = s.OwnerKey)
           AND EXISTS (SELECT 1 FROM @fr r WHERE s.DetectedBy IS NULL OR s.DetectedBy = N'' OR CHARINDEX(N';' + REPLACE(r.Name, N' ', N'') + N';', N';' + REPLACE(s.DetectedBy, N' ', N'') + N';') > 0));
-    SELECT @closed = COUNT(*) FROM sidata.CiFindingState WHERE State = N'closed' AND ClosedAt = @t;
-    SELECT @rekeyed = COUNT(*) FROM sidata.CiFindingState WHERE State = N'closed' AND ClosedAt = @t AND CloseReason = N'rekeyed';
+    SELECT @closed = COUNT(*) FROM sidata.CiFindingState WHERE State = N'closed' AND ClosedAt = @t/*R:OwnerKey*/;
+    SELECT @rekeyed = COUNT(*) FROM sidata.CiFindingState WHERE State = N'closed' AND ClosedAt = @t AND CloseReason = N'rekeyed'/*R:OwnerKey*/;
 END
 ELSE
 BEGIN
     SELECT @frozen = COUNT(*) FROM sidata.CiFindingState s
-    WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey);
+    WHERE s.State <> N'closed'/*R:s.OwnerKey*/ AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey);
     SET @closed = @retiredClosed;
 END
 -- #495 HISTORY PER CI: every finding opened, reopened or closed on a CI in this collection is a change of the CI
@@ -273,11 +279,11 @@ IF OBJECT_ID('sidata.CiChange') IS NOT NULL
                                           WHEN EXISTS (SELECT 1 FROM @reo o WHERE o.OwnerKey = s.OwnerKey AND o.FindingKey = s.FindingKey AND o.WasReason = N'asset_retired') THEN N' -- asset reactivated'
                                           ELSE N'' END), 512), NULL
     FROM sidata.CiFindingState s
-    WHERE NULLIF(s.CiId, N'') IS NOT NULL
+    WHERE NULLIF(s.CiId, N'') IS NOT NULL/*R:s.OwnerKey*/
       AND ((s.FirstDetected = @t AND s.State = N'open' AND s.ReopenCount = 0) OR s.ReopenedAt = @t OR (s.State = N'closed' AND s.ClosedAt = @t));
-MERGE sidata.CiBuildState AS b USING (SELECT N'FindingStateSnapshot' AS Name, CONVERT(NVARCHAR(400), @t, 127) AS Value) AS v ON b.Name = v.Name
+/*SNAP{*/MERGE sidata.CiBuildState AS b USING (SELECT N'FindingStateSnapshot' AS Name, CONVERT(NVARCHAR(400), @t, 127) AS Value) AS v ON b.Name = v.Name
 WHEN MATCHED THEN UPDATE SET Value = v.Value, UpdatedAt = SYSUTCDATETIME()
-WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (v.Name, v.Value);
+WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (v.Name, v.Value);/*}SNAP*/
 COMMIT TRANSACTION;
 DROP TABLE #lcf;
 DROP TABLE #rk;
@@ -298,7 +304,7 @@ SELECT @opened AS Opened, @seen AS Seen, @reopened AS Reopened, @closed AS Close
 DECLARE @eq TABLE (OwnerKey NVARCHAR(450) NOT NULL, Alias NVARCHAR(256) NOT NULL, Canonical NVARCHAR(256) NOT NULL, PRIMARY KEY (OwnerKey, Alias));
 INSERT @eq SELECT LEFT(x.o, 450), LEFT(x.a, 256), MAX(LEFT(x.c, 256))
 FROM OPENJSON(ISNULL(@equivalence, N'[]')) WITH (o NVARCHAR(MAX), a NVARCHAR(MAX), c NVARCHAR(MAX)) x
-WHERE x.o IS NOT NULL AND x.a IS NOT NULL AND x.c IS NOT NULL AND x.a <> x.c
+WHERE x.o IS NOT NULL AND x.a IS NOT NULL AND x.c IS NOT NULL AND x.a <> x.c/*R:x.o*/
 GROUP BY LEFT(x.o, 450), LEFT(x.a, 256);
 DECLARE @mv TABLE (OwnerKey NVARCHAR(450) NOT NULL, Alias NVARCHAR(256) NOT NULL, Canonical NVARCHAR(256) NOT NULL, PRIMARY KEY (OwnerKey, Alias));
 '@
@@ -339,6 +345,7 @@ END
     $frFill = ''
     if ($WithFrozenReports) { $frFill = 'INSERT @fr SELECT DISTINCT LEFT(z.k, 256) FROM OPENJSON(ISNULL(@frozenReports, N''[]'')) WITH (k NVARCHAR(MAX) ''$'') z WHERE z.k IS NOT NULL AND z.k <> N'''';' }
     $out = $sql.Replace('/*SI_DISABLED_OWNERS*/', $fill).Replace('/*SI_FROZEN_REPORTS*/', $frFill).Replace('/*SI_EQUIVALENCE_DECL*/', $eqDecl).Replace('/*SI_EQUIVALENCE*/', $eqStep)
+    $out = Convert-SIDataFindingStateRangeText -Sql $out -Ranged:$Ranged
     if ($FromStage) {
         $out = $out.Replace('OPENJSON(@j) WITH (OwnerKey NVARCHAR(MAX), FindingKey NVARCHAR(MAX), CiId NVARCHAR(64), Severity NVARCHAR(16), DetectedBy NVARCHAR(MAX), ExemptionId NVARCHAR(64)) x',
                             "(SELECT OwnerKey, FindingKey, CiId, Severity, DetectedBy, ExemptionId FROM sidata.CiFindingLifecycleStage WHERE Kind = N'f') x")
@@ -346,6 +353,48 @@ END
                             "(SELECT OwnerKey AS o, FindingKey AS a, Canonical AS c FROM sidata.CiFindingLifecycleStage WHERE Kind = N'a') x")
     }
     $out
+}
+
+function Convert-SIDataFindingStateRangeText {
+    <#
+        PURE. The lifecycle statement's range markers: without -Ranged every marker goes and the statement is the one of
+        before; with -Ranged the range's own parts are written in (the /*R:..*/ predicates stay for Expand-SIDataRangeMarker):
+        the skip of a range already done for this snapshot, the absence only on a row this snapshot has not touched yet, the
+        rekey's proof read from the staged input (an owner of another range), and the marks instead of the one snapshot move.
+    #>
+    param([Parameter(Mandatory)][string]$Sql, [switch]$Ranged)
+    if (-not $Ranged) {
+        return [regex]::Replace($Sql, '/\*(R:[A-Za-z0-9_\.\[\]]+|RPL|RPV|RP|ABS|RSKIP|SNAP\{|\}SNAP)\*/', '')
+    }
+    $skip = @"
+
+DECLARE @rangeSnap NVARCHAR(400) = (SELECT TOP (1) Value FROM sidata.CiBuildState WHERE Name = N'FindingStateRangeSnap');
+DECLARE @rangeKey NVARCHAR(400) = (SELECT TOP (1) Value FROM sidata.CiBuildState WHERE Name = N'FindingStateRangeKey');
+IF @rangeSnap = CONVERT(NVARCHAR(400), @snap) AND @RangeHi IS NOT NULL AND @rangeKey >= @RangeHi
+BEGIN
+    SELECT 0 AS Opened, 0 AS Seen, 0 AS Reopened, 0 AS Closed, 0 AS Absent, 0 AS Frozen, 0 AS Skipped, N'range done' AS Note, 0 AS Carried, 0 AS Repaired,
+           0 AS RetiredClosed, 0 AS Reactivated, 0 AS Rekeyed;
+    RETURN;
+END
+"@
+    $m = [regex]::Match($Sql, '/\*SNAP\{\*/(?<merge>.*?)/\*\}SNAP\*/', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $m.Success) { throw 'the lifecycle statement is not in the shape its ranges are cut from' }
+    $marks = @"
+IF @RangeLast = N'1'
+BEGIN
+$($m.Groups['merge'].Value)
+    DELETE FROM sidata.CiBuildState WHERE Name IN (N'FindingStateRangeSnap', N'FindingStateRangeKey');
+END
+ELSE
+    MERGE sidata.CiBuildState AS b USING (SELECT N'FindingStateRangeSnap' AS Name, CONVERT(NVARCHAR(400), @snap) AS Value UNION ALL SELECT N'FindingStateRangeKey', CONVERT(NVARCHAR(400), @RangeHi)) AS v ON b.Name = v.Name
+    WHEN MATCHED THEN UPDATE SET Value = v.Value, UpdatedAt = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (v.Name, v.Value);
+"@
+    $out = $Sql.Substring(0, $m.Index) + $marks + $Sql.Substring($m.Index + $m.Length)
+    $join = 'JOIN #lcf f ON f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey'
+    if ($out.IndexOf($join) -lt 0) { throw 'the lifecycle statement is not in the shape its ranges are cut from' }
+    $out = $out.Replace($join, "JOIN sidata.CiFindingLifecycleStage f ON f.Kind = N'f' AND f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey")
+    $out.Replace('/*RSKIP*/', $skip).Replace('/*ABS*/', ' AND s.LastSnapshot < @t')
 }
 
 function Get-SIDataCiStagedFrozenOwnersSql {
@@ -557,7 +606,8 @@ function Get-SIDataCiDailyDetailSql {
         #855 W7: only OPEN findings count, as the CI's own totals (Get-SIDataCiTotalsSql): a finding whose lifecycle row is
         closed is not, and a RETIRED CI has none.
     #>
-    @'
+    param([switch]$Ranged)
+    $sql = @'
 SET NOCOUNT ON;
 IF COL_LENGTH('sidata.CiDaily', 'FactorCount') IS NULL OR COL_LENGTH('sidata.CiDaily', 'OpenCritical') IS NULL BEGIN SELECT 0; RETURN; END
 EXEC sp_executesql N'
@@ -566,12 +616,14 @@ UPDATE d SET OpenCritical = ISNULL(s.Crit, 0), OpenHigh = ISNULL(s.High, 0), Ope
 FROM sidata.CiDaily d JOIN sidata.Ci c ON c.CiId = d.CiId
 LEFT JOIN (SELECT CiId, SUM(CASE WHEN Severity = N''critical'' THEN 1 ELSE 0 END) AS Crit, SUM(CASE WHEN Severity = N''high'' THEN 1 ELSE 0 END) AS High,
                   SUM(CASE WHEN Severity = N''medium'' THEN 1 ELSE 0 END) AS Med, SUM(CASE WHEN Severity = N''low'' THEN 1 ELSE 0 END) AS Low
-           FROM sidata.CiFinding AS f WHERE f.CiId IS NOT NULL AND ISNULL(f.ExemptionId, N'''') = N''''
+           FROM sidata.CiFinding AS f WHERE f.CiId IS NOT NULL AND ISNULL(f.ExemptionId, N'''') = N''''/*R:f.CiId*/
              AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState AS x WHERE x.OwnerKey = f.CiId AND x.FindingKey = f.FindingKey AND x.State = N''closed'')
            GROUP BY f.CiId) s ON s.CiId = d.CiId AND ISNULL(c.Lifecycle, N'''') <> N''retired''
-WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME());
-SELECT @@ROWCOUNT;';
+WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME())/*R:d.CiId*/;
+SELECT @@ROWCOUNT;'/*RP*/;
 '@
+    if ($Ranged) { return $sql }
+    Convert-SIDataFindingStateRangeText -Sql $sql
 }
 
 function Get-SIDataFindingSlaDays {
@@ -607,7 +659,10 @@ function Get-SIDataFindingModelSql {
                                  are kept as they were, never resolved or closed
         Every part a database does not carry is skipped (dynamic SQL); a database without the new columns answers Skipped = 1.
     #>
-    (@'
+    # -Ranged (2026-10-29): ONE OwnerKey range of the states (/*R:s.OwnerKey*/; Invoke-SIDataFindingModel) -- each state is
+    # written from its own CI, finding and exemption, so the ranges write exactly what the one statement wrote
+    param([switch]$Ranged)
+    $sql = (@'
 SET NOCOUNT ON;
 IF OBJECT_ID('sidata.CiFindingState') IS NULL OR COL_LENGTH('sidata.CiFindingState', 'DueAt') IS NULL OR COL_LENGTH('sidata.CiFindingState', 'Excluded') IS NULL
 BEGIN
@@ -631,7 +686,7 @@ SELECT c.CiId,
             WHEN NULLIF(JSON_VALUE(c.DocJson, '$.si_owner'), N'') IS NOT NULL THEN N'ci' END,
        LEFT(JSON_VALUE(c.DocJson, '$.si_service_criticality'), 64)
 FROM sidata.Ci c
-WHERE ISJSON(c.DocJson) = 1 AND c.CiId IN (SELECT s.CiId FROM sidata.CiFindingState s WHERE s.CiId IS NOT NULL AND (s.State <> N'closed' OR s.ClosedAt >= @last));
+WHERE ISJSON(c.DocJson) = 1 AND c.CiId IN (SELECT s.CiId FROM sidata.CiFindingState s WHERE s.CiId IS NOT NULL AND (s.State <> N'closed' OR s.ClosedAt >= @last)/*R:s.OwnerKey*/);
 IF OBJECT_ID('sidata.CiService') IS NOT NULL
     UPDATE o SET ServiceKeys = LEFT((SELECT STRING_AGG(CAST(cs.ServiceKey AS NVARCHAR(MAX)), N';') WITHIN GROUP (ORDER BY cs.ServiceKey) FROM sidata.CiService cs WHERE cs.CiId = o.CiId), 1000)
     FROM #o o;
@@ -659,7 +714,7 @@ OUTER APPLY (SELECT TOP (1) u.FindingType, u.Title FROM (
 CROSS APPLY (SELECT CASE LOWER(REPLACE(REPLACE(ISNULL(s.Severity, N''''), N'' '', N''''), N''-'', N''''))
                         WHEN N''critical'' THEN @crit WHEN N''veryhigh'' THEN @crit WHEN N''high'' THEN @high
                         WHEN N''mediumhigh'' THEN @med WHEN N''medium'' THEN @med WHEN N''moderate'' THEN @med WHEN N''low'' THEN @low ELSE NULL END AS Sla) x
-WHERE (s.State <> N''closed'' OR s.ClosedAt >= @last)
+WHERE (s.State <> N''closed'' OR s.ClosedAt >= @last)/*R:s.OwnerKey*/
   AND (ISNULL(s.Owner, N'''') <> ISNULL(o.Owner, N'''') OR ISNULL(s.OwnerSource, N'''') <> ISNULL(o.OwnerSource, N'''')
        OR ISNULL(s.ServiceKeys, N'''') <> ISNULL(o.ServiceKeys, N'''') OR ISNULL(s.ServiceCriticality, N'''') <> ISNULL(o.ServiceCriticality, N'''')
        OR ISNULL(s.SlaDays, -1) <> ISNULL(x.Sla, -1)
@@ -667,8 +722,8 @@ WHERE (s.State <> N''closed'' OR s.ClosedAt >= @last)
        OR s.Excluded <> CASE WHEN s.State <> N''closed'' AND EXISTS (SELECT 1 FROM #fz z WHERE z.OwnerKey = s.OwnerKey) THEN 1 ELSE 0 END
        OR (f.Title IS NOT NULL AND ISNULL(s.Title, N'''') <> LEFT(f.Title, 400)) OR (f.FindingType IS NOT NULL AND ISNULL(s.FindingType, N'''') <> LEFT(f.FindingType, 32)));
 SET @n = @@ROWCOUNT;',
-    N'@crit INT, @high INT, @med INT, @low INT, @last DATETIME2(3), @n INT OUTPUT',
-    @crit = @cr, @high = @hi, @med = @me, @low = @lo, @last = @last, @n = @n OUTPUT;
+    N'@crit INT, @high INT, @med INT, @low INT, @last DATETIME2(3), @n INT OUTPUT/*RPL*/',
+    @crit = @cr, @high = @hi, @med = @me, @low = @lo, @last = @last, @n = @n OUTPUT/*RPV*/;
 -- the exemption in force (Pro: cfg.Exemption)
 IF OBJECT_ID('cfg.Exemption') IS NOT NULL
     EXEC sp_executesql N'
@@ -676,10 +731,10 @@ UPDATE s SET ExemptionReason = CASE WHEN s.ExemptionId IS NULL THEN NULL ELSE LE
              ExemptedUntil = CASE WHEN s.ExemptionId IS NULL THEN NULL ELSE e.ExpiresAt END
 FROM sidata.CiFindingState s
 LEFT JOIN cfg.Exemption e ON CONVERT(NVARCHAR(64), e.ExemptionId) = s.ExemptionId AND e.RevokedAt IS NULL
-WHERE s.State <> N''closed''
+WHERE s.State <> N''closed''/*R:s.OwnerKey*/
   AND (ISNULL(s.ExemptionReason, N'''') <> ISNULL(CASE WHEN s.ExemptionId IS NULL THEN NULL ELSE LEFT(e.Reason, 400) END, N'''')
        OR ISNULL(s.ExemptedUntil, ''19000101'') <> ISNULL(CASE WHEN s.ExemptionId IS NULL THEN NULL ELSE e.ExpiresAt END, ''19000101''));
-SET @ne = @@ROWCOUNT;', N'@ne INT OUTPUT', @ne = @ne OUTPUT;
+SET @ne = @@ROWCOUNT;', N'@ne INT OUTPUT/*RPL*/', @ne = @ne OUTPUT/*RPV*/;
 -- the vulnerability close-loop's record of the same finding (Pro: vuln.VulnerabilityItem -- the CI key and the finding key)
 IF OBJECT_ID('vuln.VulnerabilityItem') IS NOT NULL
     EXEC sp_executesql N'
@@ -687,12 +742,14 @@ UPDATE s SET TicketState = v.State, TicketClosedAt = v.ClosedAt, TicketCloseReas
 FROM sidata.CiFindingState s
 CROSS APPLY (SELECT TOP (1) vi.State, vi.ClosedAt, vi.CloseReason FROM vuln.VulnerabilityItem vi
              WHERE vi.CorrelationId = s.CiId AND vi.Cve = LEFT(s.FindingKey, 100) ORDER BY vi.UpdatedAt DESC) v
-WHERE s.CiId IS NOT NULL
+WHERE s.CiId IS NOT NULL/*R:s.OwnerKey*/
   AND (ISNULL(s.TicketState, N'''') <> ISNULL(v.State, N'''') OR ISNULL(s.TicketClosedAt, ''19000101'') <> ISNULL(v.ClosedAt, ''19000101'')
        OR ISNULL(s.TicketCloseReason, N'''') <> ISNULL(LEFT(v.CloseReason, 400), N''''));
-SET @nt = @@ROWCOUNT;', N'@nt INT OUTPUT', @nt = @nt OUTPUT;
+SET @nt = @@ROWCOUNT;', N'@nt INT OUTPUT/*RPL*/', @nt = @nt OUTPUT/*RPV*/;
 SELECT @n AS Updated, @ne AS Exempted, @nt AS Tickets, 0 AS Skipped;
 '@).Replace('/*ownstage:#fz:@dis*/', (Get-SIDataCiOwnerStageFillSql -Table '#fz' -Column 'OwnerKey' -Param '@dis'))
+    if ($Ranged) { return $sql }
+    Convert-SIDataFindingStateRangeText -Sql $sql
 }
 
 function Get-SIDataCiDailyGraphSql {
@@ -701,7 +758,8 @@ function Get-SIDataCiDailyGraphSql {
         it inherits, its active relations and its overdue / exempted findings -- dynamic SQL so a database without the
         columns (or the graph tables) skips. Answers the rows updated.
     #>
-    @'
+    param([switch]$Ranged)
+    $sql = @'
 SET NOCOUNT ON;
 IF COL_LENGTH('sidata.CiDaily', 'RelationCount') IS NULL OR OBJECT_ID('sidata.CiService') IS NULL OR OBJECT_ID('sidata.CiRelation') IS NULL
    OR COL_LENGTH('sidata.CiFindingState', 'DueAt') IS NULL BEGIN SELECT 0; RETURN; END
@@ -715,9 +773,11 @@ UPDATE d SET Lifecycle = c.Lifecycle, InternetExposed = c.InternetExposed,
        ExemptedFindings = (SELECT COUNT(*) FROM sidata.CiFindingState s WHERE s.CiId = d.CiId AND s.State <> N''closed''
                             AND s.ExemptionId IS NOT NULL AND (s.ExemptedUntil IS NULL OR s.ExemptedUntil > SYSUTCDATETIME()))
 FROM sidata.CiDaily d JOIN sidata.Ci c ON c.CiId = d.CiId
-WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME()) AND ISJSON(c.DocJson) = 1;
-SELECT @@ROWCOUNT;';
+WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME()) AND ISJSON(c.DocJson) = 1/*R:d.CiId*/;
+SELECT @@ROWCOUNT;'/*RP*/;
 '@
+    if ($Ranged) { return $sql }
+    Convert-SIDataFindingStateRangeText -Sql $sql
 }
 
 function Get-SIDataCiRetentionSql {
@@ -940,6 +1000,92 @@ function Invoke-SIDataLifecycleStaleOpenRepair {
     }
 }
 
+function Test-SIDataLifecycleRanged {
+    <# A real database's seam with the range helpers loaded (SI-DataCi.ps1): the lifecycle steps run in key ranges. #>
+    param($Invoke)
+    [bool]((Get-Command -Name Test-SIDataRangedSeam -ErrorAction SilentlyContinue) -and (Test-SIDataRangedSeam $Invoke))
+}
+
+function Invoke-SIDataFindingStateRanged {
+    <#
+        2026-10-29 THE FINDING LIFECYCLE IN OWNERKEY RANGES (Get-SIDataFindingStateSql -FromStage -Ranged): one range of the
+        lifecycle rows' owners at a time (the first open below, the last open above, so a staged owner new to the lifecycle is
+        in a range too), each ONE command and its own transaction with its mark; the range's size from the measured time of the
+        one before; one log line per range. A run that stopped part-way goes on after the last owner key its mark holds, when
+        the mark is of the same snapshot. The bounds are cut to the 400 characters the mark can hold (any value cuts the keys
+        into ranges, so every owner is still in exactly one). -Params: the statement's own; -Snap: the snapshot (ISO text, as
+        the statement's @snap). Answers ONE row: the counts summed over the ranges (Skipped = 1 when the collection was
+        processed before: only missing records were added). Throws when a range gives no answer.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Sql, [Parameter(Mandatory)][hashtable]$Params,
+          [Parameter(Mandatory)][string]$Snap, [scriptblock]$Log, [long]$FirstTake = 50000, [long]$TargetMs = 5000,
+          # tests only: stop after this many ranges, as a run that ends part-way
+          [int]$StopAfterRanges = 0)
+    $sum = [ordered]@{ Opened = 0L; Seen = 0L; Reopened = 0L; Closed = 0L; Absent = 0L; Frozen = 0L; Carried = 0L; Repaired = 0L; RetiredClosed = 0L; Reactivated = 0L; Rekeyed = 0L }
+    $skipped = 0; $note = ''
+    $one = { param($q) $v = & $Invoke $q @{} 'scalar'; if ($null -eq $v -or $v -is [System.DBNull]) { '' } else { [string]$v } }
+    $hasLo = $false; $lo = $null
+    $ms = & $one "IF OBJECT_ID('sidata.CiBuildState') IS NULL SELECT N'' ELSE SELECT ISNULL((SELECT TOP (1) Value FROM sidata.CiBuildState WHERE Name = N'FindingStateRangeSnap'), N'');"
+    $mk = & $one "IF OBJECT_ID('sidata.CiBuildState') IS NULL SELECT N'' ELSE SELECT ISNULL((SELECT TOP (1) Value FROM sidata.CiBuildState WHERE Name = N'FindingStateRangeKey'), N'');"
+    if ($ms -and $ms -eq $Snap -and $mk) {
+        $hasLo = $true; $lo = $mk
+        if ($Log) { & $Log 'INFO' 'v3 model    : finding lifecycle -- goes on where the last run left this collection (the owners before its mark are done)' }
+    }
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstTake = [long]$Invoke.SIRangeFirstTake }
+    $take = [Math]::Max(1L, $FirstTake); $i = 0; $lastMs = 0L
+    $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)
+    $val = { param($row, $n) if ($null -eq $row) { $null } elseif ($row -is [System.Collections.IDictionary]) { $v = $row[$n]; if ($v -is [System.DBNull]) { $null } else { $v } } else { $p = $row.PSObject.Properties[$n]; if ($p) { $v = $p.Value; if ($v -is [System.DBNull]) { $null } else { $v } } else { $null } } }
+    while ($true) {
+        if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log; if ($pace.Shrink) { $take = [Math]::Max(1L, [long][Math]::Floor($take / 2)) } }
+        $lop = ''; if ($hasLo) { $lop = ' AND OwnerKey > @RangeLo' }
+        $b = @(Get-SIDataSeamRows -Invoke $Invoke -Sql ("SELECT LEFT(MAX(x.k), 400) AS Hi, COUNT_BIG(*) AS N, CASE WHEN @RangeLo IS NULL OR LEFT(MAX(x.k), 400) > @RangeLo THEN 1 ELSE 0 END AS Adv FROM (SELECT TOP (CONVERT(bigint, @Take)) OwnerKey AS k FROM sidata.CiFindingState WHERE 1 = 1{0} ORDER BY OwnerKey) AS x;" -f $lop) -Params @{ Take = [string]$take; RangeLo = $lo }) | Select-Object -First 1
+        $hi = & $val $b 'Hi'; $n = & $val $b 'N'; if ($null -eq $n) { $n = 0 }; $adv = [int](& $val $b 'Adv')
+        $last = ([long]$n -lt $take) -or ($null -eq $hi)
+        # a cut bound that does not go past the last one (owner keys over 400 characters sharing their first 400): a larger range
+        if (-not $last -and $adv -ne 1) { $take = $take * 2; continue }
+        $i++
+        $range = [pscustomobject]@{ Index = $i; HasLo = $hasLo; Lo = $lo; HasHi = (-not $last); Hi = $(if ($last) { $null } else { [string]$hi }) }
+        $p = @{}; foreach ($k in $Params.Keys) { $p[$k] = $Params[$k] }
+        $null = Add-SIDataRangeParams -Params $p -Range $range
+        $p['RangeLast'] = $(if ($last) { '1' } else { '0' })
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $rows = @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Expand-SIDataRangeMarker -Sql $Sql -Range $range) -Params $p)
+        $lastMs = $sw.ElapsedMilliseconds
+        $r = @($rows | Where-Object { $null -ne (& $val $_ 'Skipped') }) | Select-Object -First 1
+        if (-not $r) { throw ('the database gave no answer for the finding lifecycle''s range {0}' -f $i) }
+        foreach ($k in @($sum.Keys)) { $v = & $val $r $k; if ($null -ne $v) { $sum[$k] += [long]$v } }
+        if ([int](& $val $r 'Skipped') -eq 1) { $skipped = 1; $note = [string](& $val $r 'Note') }
+        if ($Log) { & $Log 'INFO' ('v3 model    : finding lifecycle -- range {0}: {1:N0} new, {2:N0} seen again, {3:N0} reopened, {4:N0} closed, {5:N0} absent -- {6:N1} s' -f $i, [long](& $val $r 'Opened'), [long](& $val $r 'Seen'), [long](& $val $r 'Reopened'), [long](& $val $r 'Closed'), [long](& $val $r 'Absent'), ($lastMs / 1000.0)) }
+        if ($last) { break }
+        if ($StopAfterRanges -gt 0 -and $i -ge $StopAfterRanges) { throw ('stopped after {0} range(s) (a test of a run that ends part-way)' -f $i) }
+        $hasLo = $true; $lo = [string]$hi
+        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 }
+    }
+    $o = [ordered]@{}; foreach ($k in $sum.Keys) { $o[$k] = [int]$sum[$k] }
+    $o['Skipped'] = $skipped; $o['Note'] = $note
+    , @([pscustomobject]$o)
+}
+
+function Invoke-SIDataFindingModel {
+    <# 2026-10-29 The one finding model (Get-SIDataFindingModelSql): per OwnerKey range of the states on a real database (each
+       range one command, written only where a value differs), the one statement otherwise. Answers ONE row: Updated,
+       Exempted, Tickets summed; Skipped = 1 on a database without the model's columns. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][hashtable]$Params, [scriptblock]$Log)
+    if (-not (Test-SIDataLifecycleRanged $Invoke)) { return @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Get-SIDataFindingModelSql) -Params $Params) | Select-Object -First 1 }
+    $sql = Get-SIDataFindingModelSql -Ranged; $inv = $Invoke; $prm = $Params
+    $ans = Invoke-SIDataKeyRanges -Invoke $Invoke -Table 'sidata.CiFindingState' -Column 'OwnerKey' -What 'v3 model    : the finding model' -Log $Log -FirstTake 50000 -Step {
+        param($r)
+        $p = @{}; foreach ($k in $prm.Keys) { $p[$k] = $prm[$k] }
+        $null = Add-SIDataRangeParams -Params $p -Range $r
+        $row = @(Get-SIDataSeamRows -Invoke $inv -Sql (Expand-SIDataRangeMarker -Sql $sql -Range $r) -Params $p) | Select-Object -First 1
+        $u = [int](Get-SIItemValueOrNull $row 'Updated'); $e = [int](Get-SIItemValueOrNull $row 'Exempted'); $t = [int](Get-SIItemValueOrNull $row 'Tickets')
+        [pscustomobject]@{ Updated = $u; Exempted = $e; Tickets = $t; Skipped = [int](Get-SIItemValueOrNull $row 'Skipped'); Text = ('{0:N0} written, {1:N0} exemption(s), {2:N0} ticket state(s)' -f $u, $e, $t) }
+    }
+    $o = [ordered]@{ Updated = 0; Exempted = 0; Tickets = 0; Skipped = 0 }
+    foreach ($a in @($ans)) { $o.Updated += $a.Updated; $o.Exempted += $a.Exempted; $o.Tickets += $a.Tickets; if ($a.Skipped -eq 1) { $o.Skipped = 1 } }
+    [pscustomobject]$o
+}
+
 function Invoke-SIDataCiLifecycle {
     <#
         After the findings were stored: the lifecycle, today's trend detail, the retention. Never throws; returns a summary.
@@ -1016,8 +1162,14 @@ function Invoke-SIDataCiLifecycle {
             }
             $frz = @($FrozenReports | Where-Object { "$_".Trim() })
             if ($frz.Count) { $lp['frozenReports'] = ConvertTo-Json -InputObject @($frz) -Compress }
-            $rows = @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Get-SIDataFindingStateSql -WithDisabledOwners -WithEquivalence -FromStage:$useStage -WithFrozenReports:($frz.Count -gt 0)) -Params $lp)
-            if ($useStage) { try { [void](& $Invoke (Get-SIDataCiLifecycleStageClearSql) @{} 'scalar') } catch { } }
+            if ($useStage -and (Test-SIDataLifecycleRanged $Invoke)) {
+                # 2026-10-29 a real database: one OwnerKey range at a time, each its own transaction (one transaction over every
+                # lifecycle row ran past the platform's limit at the largest installs)
+                $rows = @(Invoke-SIDataFindingStateRanged -Invoke $Invoke -Sql (Get-SIDataFindingStateSql -WithDisabledOwners -WithEquivalence -FromStage -WithFrozenReports:($frz.Count -gt 0) -Ranged) -Params $lp -Snap $snapIso -Log $Log)
+            } else {
+                $rows = @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Get-SIDataFindingStateSql -WithDisabledOwners -WithEquivalence -FromStage:$useStage -WithFrozenReports:($frz.Count -gt 0)) -Params $lp)
+            }
+            if ($useStage) { try { Clear-SIDataCiStage -Invoke $Invoke -Table 'sidata.CiFindingLifecycleStage' } catch { } }
             # the answer is the row that carries the counts -- anything else (no row, a row without them) is NOT "0 new": it
             # is said as such, never reported as a lifecycle that found nothing
             $r = @($rows | Where-Object { $null -ne (Get-SIItemValueOrNull $_ 'Skipped') }) | Select-Object -First 1
@@ -1034,12 +1186,16 @@ function Invoke-SIDataCiLifecycle {
         if ($out.Answered) { $out.StaleRepair = Invoke-SIDataLifecycleStaleOpenRepair -Invoke $Invoke -Complete $Complete -Log $Log }
         # #494 the one finding model: owner, services, SLA and due date, exemption, ticket, excluded
         $sla = Get-SIDataFindingSlaDays
-        $fm = @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Get-SIDataFindingModelSql) -Params @{ dis = (ConvertTo-SIDataCiOwnerParam -Stage $ownStage -Kind 'o' -Keys ([string[]]@($frozenOwners))); crit = [string]$sla.critical; high = [string]$sla.high
+        $fm = @(Invoke-SIDataFindingModel -Invoke $Invoke -Log $Log -Params @{ dis = (ConvertTo-SIDataCiOwnerParam -Stage $ownStage -Kind 'o' -Keys ([string[]]@($frozenOwners))); crit = [string]$sla.critical; high = [string]$sla.high
                                                           med = [string]$sla.medium; low = [string]$sla.low }) | Select-Object -First 1
         if ($fm -and [int](Get-SIItemValueOrNull $fm 'Skipped') -ne 1) { $out.ModelUpdated = [int](Get-SIItemValueOrNull $fm 'Updated'); $out.ModelExempted = [int](Get-SIItemValueOrNull $fm 'Exempted'); $out.ModelTickets = [int](Get-SIItemValueOrNull $fm 'Tickets') }
-        $out.Daily = [int](& $Invoke (Get-SIDataCiDailyDetailSql) @{} 'scalar')
+        if (Test-SIDataLifecycleRanged $Invoke) {
+            $out.Daily = [int](Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiDailyDetailSql -Ranged) -What 'v3 model    : today''s trend row of the CIs' -Log $Log)
+        } else { $out.Daily = [int](& $Invoke (Get-SIDataCiDailyDetailSql) @{} 'scalar') }
         # #495 the daily row's graph detail (lifecycle, exposure, services, relations, overdue / exempted findings)
-        $out.DailyGraph = [int](& $Invoke (Get-SIDataCiDailyGraphSql) @{} 'scalar')
+        if (Test-SIDataLifecycleRanged $Invoke) {
+            $out.DailyGraph = [int](Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiDailyGraphSql -Ranged) -What 'v3 model    : today''s trend row''s graph detail' -Log $Log)
+        } else { $out.DailyGraph = [int](& $Invoke (Get-SIDataCiDailyGraphSql) @{} 'scalar') }
         $out.Purged = [long](Invoke-SIDataCiRetention -Invoke $Invoke -Log $Log -Params @{ change = [string](Get-SIDataRetentionDays $global:SI_Pro_CiChangeRetentionDays 730); daily = [string](Get-SIDataRetentionDays $global:SI_Pro_CiDailyRetentionDays 400)
                                                                     state = [string](Get-SIDataRetentionDays $global:SI_Pro_FindingStateRetentionDays 365) })
         if ($out.ModelUpdated -gt 0 -or $out.ModelExempted -gt 0 -or $out.ModelTickets -gt 0) {

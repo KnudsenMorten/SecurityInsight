@@ -287,6 +287,14 @@ function Send-RARunHealthEnd {
     param([string]$ExitReason = 'success', [string]$ErrorMessage = '', [int]$AssetCount = -1)
     if ($script:_RunHealthEndSent) { return }
     $script:_RunHealthEndSent = $true
+    # the run report's StepsOk (2026-10-29): sent by this producer only, after its completeness check -- ok: the queries and
+    # the reports; a warning with a report that is not complete (FailedStep ra-report): the queries only; a queue worker
+    # never gets here (its part ends before the run's end)
+    # (a query that failed or a bucket that could not be read: the queries are not listed)
+    try {
+        $__qFailed = ($null -ne $script:_RABucketLossRun -and $script:_RABucketLossRun.Count -gt 0) -or ($null -ne $script:_RAReportFailures -and $script:_RAReportFailures.Count -gt 0)
+        if ($script:_RunHealthCtx) { $script:_RunHealthCtx | Add-Member -NotePropertyName StepsOk -NotePropertyValue ([string[]]$(if ($__qFailed) { @('ra-report') } else { @('ra-query', 'ra-report') })) -Force }
+    } catch { }
     # #709 / framework 8.16: every report that failed, did not apply or deviated rides on the run record as Reports[] (the
     # sender maps each to its code and cause). Built from what the run already knows; never fails the END record.
     try {
@@ -4931,6 +4939,9 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       if ($script:RAScaleSplit.Done) { $__soTo = $__soFrom }
   }
   for ($b = $__soFrom; $b -lt $__soTo; $b++) {
+
+      # #576: the running step's progress on Operations > Jobs -- this report, query slice b of n (best effort, never fails it)
+      if (Get-Command -Name Write-RAStepProgressRow -ErrorAction SilentlyContinue) { Write-RAStepProgressRow -Stream $script:RAStream -Phase ('report {0}' -f $ReportName) -Done ($b - $__soFrom) -Total ($__soTo - $__soFrom) }
 
       # #882: a queue worker whose run is over sends no further query (and writes nothing more)
       if ($script:RAScaleRole -eq 'worker') { Assert-RAScaleOutWorkerLive -Where ('before query slice {0} of {1}' -f ($b + 1), $ReportName) }

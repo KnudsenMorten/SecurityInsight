@@ -235,6 +235,18 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
             new("No", "#", o => numbers.TryGetValue(R(o).RowNo, out var n) ? (object?)n : null, Number: true),
             new("Factors", "Risk factors", o => SummaryReport.FactorsText(R(o))),
         };
+        // the risk score's parts (owner 2026-10-28: "it should be possible to see the Risk Score calculations as columns"), in
+        // the explained score's words: each side's base, factors with their points and score -- shown by default
+        static string Words(SI.Management.Web.Pages.Collection.ExplainSide? s, int part)
+        {
+            if (s is null || SI.Management.Web.Pages.Collection.RiskExplanation.SideTexts(s, SI.Management.Core.ProData.ScoreFormat.Number) is not { } t) return "";
+            return part == 0 ? t.Base : part == 1 ? t.Factors : t.Side;
+        }
+        static string Csv(SI.Management.Web.Pages.Collection.ExplainSide? s, int part)
+        {
+            if (s is null || SI.Management.Web.Pages.Collection.RiskExplanation.SideTexts(s, SI.Management.Core.ProData.ScoreFormat.Invariant) is not { } t) return "";
+            return part == 0 ? t.Base : part == 1 ? t.Factors : t.Side;
+        }
         for (var i = 0; i < SummaryReport.ExportColumns.Count; i++)
         {
             var at = i;
@@ -244,6 +256,15 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
             Func<object, string?>? text = null;
             if (name is "RiskScoreTotal" or "RiskScoreTotal_Weighted") text = o => Fmt.Score(SummaryReport.ExportCells(R(o))[at] as double?);
             cols.Add(new(KeyOf(name), name, o => SummaryReport.ExportCells(R(o))[at], Number: number, Shown: shown.Contains(name), Text: text));
+        }
+        foreach (var (key, label, side, part) in new (string, string, Func<SummaryRowView, SI.Management.Web.Pages.Collection.ExplainSide?>, int)[]
+        {
+            ("AssetBase", "Asset base", SummaryReport.AssetSide, 0), ("AssetFactors", "Asset factors", SummaryReport.AssetSide, 1),
+            ("AssetSide", "Asset side (consequence)", SummaryReport.AssetSide, 2), ("VulnBase", "Vulnerability base", SummaryReport.VulnSide, 0),
+            ("VulnFactors", "Vulnerability factors", SummaryReport.VulnSide, 1), ("VulnSide", "Vulnerability side (probability)", SummaryReport.VulnSide, 2),
+        })
+        {
+            cols.Add(new(key, label, o => Csv(side(R(o)), part) is { Length: > 0 } v ? v : null, Text: o => Words(side(R(o)), part)));
         }
         return cols;
     }
@@ -260,7 +281,7 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
             RowAttributes = o => new Dictionary<string, string?> { ["data-row"] = R(o).RowNo.ToString(CultureInfo.InvariantCulture), ["data-rating"] = R(o).RiskRating },
             Shipped = new[] { "No", "ConfigurationName", "ConfigurationId", "Category", "Subcategory" }
                 .Concat(SI.Management.Web.Columns.DataViewDefaults.IssueContext.Where(k => k != SI.Management.Core.ProData.DataColumnKeys.Assets))
-                .Concat(new[] { "SecuritySeverity", "RiskRating", "RiskScoreTotal", "RiskScoreTotalWeighted", "Factors", "cmdbId", "cmdbName", "ImpactedAssetCount", "ImpactedAssetsList", "MoreDetails" })
+                .Concat(new[] { "SecuritySeverity", "RiskRating", "AssetBase", "AssetFactors", "AssetSide", "VulnBase", "VulnFactors", "VulnSide", "RiskScoreTotal", "RiskScoreTotalWeighted", "Factors", "cmdbId", "cmdbName", "ImpactedAssetCount", "ImpactedAssetsList", "MoreDetails" })
                 .ToList(),
         };
         // on the page the recommendation reads as before (its path under it) and the impacted assets are links (+ N more)

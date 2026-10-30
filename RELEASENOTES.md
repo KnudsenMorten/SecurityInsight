@@ -1,3 +1,72 @@
+## v3.0.9 — stability for large installs, the Risk Score in columns, a one-line install
+
+### Updates reach every install
+
+- A waiting update now goes first: while an update waits, the pipeline starts no new run and the scheduled collections
+  hold, so the update installs when the current run ends. After six hours of waiting, the update ends a run that started
+  on an older version itself, installs, and the next run starts on the new version. A run of the new version is never
+  ended.
+- A pipeline step whose job ended on its own (for example after a broken database connection) is now closed by the
+  pipeline, so the run goes on by its normal rules instead of holding the install.
+- Cancelling a run now works while the run is still active.
+
+### The data sync on large installs
+
+- Storing the findings per CI, the finding lifecycle, the CI totals and columns, and the day's totals per department and
+  service now work in bounded key ranges, each with its own commit. No single database command grows with the size of
+  the collection any more; each range is measured and written to the log. A data sync that stops part-way is finished by
+  the next one, with the same result.
+- A brief Azure SQL failure (a failover, a busy log, a broken connection) is retried on a new connection for up to about
+  nine minutes before the step reports it. Query errors still fail at once.
+- While the findings per CI are being replaced, the published pages keep showing the previous complete set.
+
+### Status and reports
+
+- The run reports of the collection jobs (identities, Azure, devices, public IPs, privilege tiers) reach Invardia again,
+  and every run report lists the steps that succeeded, so a resolved problem closes by itself.
+- The status report names a step that runs far past its usual time with no sign of progress.
+- The asset pages' copy no longer raises "data behind" while it is being refreshed after a publish.
+
+### Findings and the web app
+
+- The parts of the Risk Score are columns in the Detailed and Summary findings, shown by default: the base and the points
+  of each side, the factors with their points, and the weight. They can be sorted and filtered. Earlier collections are
+  filled by the data sync, newest first.
+- The findings grids use the same filter panel as the CI list: labelled filters, what you are looking at, sort and order.
+- Shift+click selects every row between two rows; Ctrl+click selects one more.
+- Operations > Jobs shows a job run started outside the pipeline, and what a running step is doing now, with its progress
+  where the step counts it.
+- Get Started, the mail step: the steps are in the right order and say what is needed.
+
+### Install
+
+- The install takes the common answers as parameters. The quickest install is one line:
+  `./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>`. The install page and the
+  README show five samples.
+
+### Checks and mails
+
+- The check "far fewer assets from one source" no longer sends a mail; it shows on Operations only.
+- A ServiceNow import that does not accept some CIs is raised on the Guards page again, and clears when a complete batch
+  is accepted.
+
+## v3.0.8 — the status report after 3.0.5
+
+### Status report
+
+- Since 3.0.5, an install stopped sending its half-hourly status report to Invardia: the step that reads a job
+  start's own values left part of its setup behind for the job that ran next. That step now cleans up after itself,
+  and the status report and run reports go out as before. Nothing else changes.
+
+## v3.0.6 — findings filters as dropdowns
+
+### Findings
+
+- **Category, Subcategory and Department are dropdown filters** on the findings of both the Summary and the Detailed
+  results, like Domain and Report: tick one or more values, with the number of findings for each. A collection loaded
+  before this update shows them as dropdowns after its next data sync.
+- The value menus of every filter are easier to read: each value sits next to its tick box.
+
 ## v3.0.5 — job starts without a template
 
 ### Azure Container Apps

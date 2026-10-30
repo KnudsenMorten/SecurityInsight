@@ -68,6 +68,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterFastRoll.ps1')
 # 2026-10-23: the run gate -- nothing changes the install while a pipeline run is going; the wait is handed to caj-si-flow
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRunGate.ps1')
+# #947 (owner 2026-10-29): a bound on the wait -- after 6 hours a run that started on an older version is cancelled and the update installed
+. (Join-Path $PSScriptRoot '_shared/SI-UpdaterWaitBound.ps1')
 # #750 (b): the roll steps both editions share (pre-roll, post-roll, self-retry, the state row, the running release)
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRollSteps.ps1')
 # Pro: the web app + MCP server roll (absent from the Community edition)

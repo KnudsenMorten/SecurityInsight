@@ -917,11 +917,11 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         function script:Invoke-GuardBlock {
             param([string]$Engine, [string]$Job, [string]$Self, $Executions, [hashtable]$Env = @{})
             $script:GuardEvents = New-Object System.Collections.Generic.List[object]; $script:Rows = New-Object System.Collections.Generic.List[object]
-            $saved = @{}; foreach ($n in 'CONTAINER_APP_JOB_NAME', 'CONTAINER_APP_JOB_EXECUTION_NAME', 'SI_JOBS_SUBSCRIPTIONID', 'SI_JOBS_RESOURCEGROUP', 'SI_TRIGGER_FROM_QUEUE', 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP') { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+            $saved = @{}; foreach ($n in 'CONTAINER_APP_JOB_NAME', 'CONTAINER_APP_JOB_EXECUTION_NAME', 'SI_JOBS_SUBSCRIPTIONID', 'SI_JOBS_RESOURCEGROUP', 'SI_TRIGGER_FROM_QUEUE', 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP', 'SI_FLOW_CANCEL') { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
             try {
                 [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_NAME', $Job); [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME', $Self)
                 [Environment]::SetEnvironmentVariable('SI_JOBS_SUBSCRIPTIONID', 'sub'); [Environment]::SetEnvironmentVariable('SI_JOBS_RESOURCEGROUP', 'rg'); [Environment]::SetEnvironmentVariable('SI_TRIGGER_FROM_QUEUE', $null)
-                foreach ($n in 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP') { [Environment]::SetEnvironmentVariable($n, $null) }; foreach ($k in $Env.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$Env[$k]) }
+                foreach ($n in 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP', 'SI_FLOW_CANCEL') { [Environment]::SetEnvironmentVariable($n, $null) }; foreach ($k in $Env.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$Env[$k]) }
                 $engine = $Engine; $exs = $Executions
                 function Get-OptionalEnv { param([string]$Name, $Default = $null) $v = [Environment]::GetEnvironmentVariable($Name); if ([string]::IsNullOrWhiteSpace($v)) { $Default } else { $v } }
                 function Invoke-SIArm { param($Path, $ApiVersion, [switch]$List) $exs }
@@ -969,6 +969,37 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
             $r.Lines[0] | Should -Match 'carries a request'
         }
         (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env @{ SI_FLOW_FORCE = '0' }).Exited | Should -BeTrue -Because 'SI_FLOW_FORCE=0 is no request'
+    }
+    It '#946 (live 2026-10-29, three installs): a CANCEL execution beside a live runner is not FlowBusy -- it goes on to the cancel' {
+        $getEnv = { param($n) if ($script:EnvOf.ContainsKey($n)) { [string]$script:EnvOf[$n] } else { '' } }
+        $script:EnvOf = @{ SI_FLOW_CANCEL = '1' }
+        $ask = Test-SIFlowGuardRequest -Get $getEnv
+        $ask.Request | Should -BeTrue; $ask.Cancel | Should -BeTrue
+        foreach ($off in '0', 'false', 'no', '') {
+            $script:EnvOf = @{ SI_FLOW_CANCEL = $off }
+            (Test-SIFlowGuardRequest -Get $getEnv).Request | Should -BeFalse -Because ("SI_FLOW_CANCEL='{0}' is no cancel" -f $off)
+        }
+        foreach ($k in 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP') {
+            $script:EnvOf = @{ $k = '1' }
+            $a = Test-SIFlowGuardRequest -Get $getEnv
+            $a.Request | Should -BeTrue; $a.Cancel | Should -BeFalse
+        }
+        $d = Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $script:Running[0] -Self 'caj-si-flow-29853040' -FlowRequest -FlowCancel
+        $d.Action | Should -Be 'Run'
+        $d.Message | Should -Match 'carries a cancel of the running run, so it goes on'
+        (Get-SIExecutionGuardDecision -Engine 'endpoint' -Job 'caj-si-endpoint' -Other $script:Running[0] -Self 'x' -FlowCancel).Action | Should -Be 'Skip' -Because 'only the flow runner takes a cancel'
+        # the entry's guard as it runs: the cancel execution is not ended as FlowBusy, no guard event, no row
+        $r = Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env @{ SI_FLOW_CANCEL = '1'; SI_FLOW_CANCEL_REASON = 'support: the run is stuck' }
+        $r.Exited | Should -BeFalse
+        $script:GuardEvents.Count | Should -Be 0; $script:Rows.Count | Should -Be 0
+        $r.Lines[0] | Should -Match 'carries a cancel'
+        [Environment]::SetEnvironmentVariable('SI_FLOW_CANCEL_REASON', $null)
+        # a plain wake-up is still FlowBusy
+        (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running).Exited | Should -BeTrue
+        # wiring: the entry asks the one function, and passes the cancel on
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\Start-SIInContainer.ps1'))
+        $src | Should -Match '\$guardFlowAsk = Test-SIFlowGuardRequest'
+        $src | Should -Match '-FlowCancel:\(\[bool\]\$guardFlowAsk\.Cancel\)'
     }
     It 'the first execution (nothing earlier running) goes on' {
         $r = Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29852960' -Executions $script:Running

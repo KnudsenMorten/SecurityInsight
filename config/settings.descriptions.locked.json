@@ -3776,10 +3776,10 @@
     },
     "SI_Guard_CollectionSourceAssetDrop_Mail": {
       "label": "Collection: far fewer assets from one source: mail",
-      "purpose": "Whether this safety check sends a mail when it trips.",
+      "purpose": "This safety check never sends a mail: it accepts a real drop by itself on the next complete collection, so its event is shown on the Guards page only. This switch changes nothing and is not shown on the Settings page.",
       "defaultText": "On (follows the check: nothing is mailed while the check is off)",
       "effect": "Off: the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
-      "whenToChange": "Turn it off for a check whose mails you do not need, instead of turning the check off.",
+      "whenToChange": "Never: this check sends no mail either way.",
       "advanced": false,
       "group": "Guards (safety checks)",
       "needs": "SI_Guard_CollectionSourceAssetDrop_Enabled"
@@ -4282,17 +4282,17 @@
       "needs": "SI_Guard_CmdbServicenowUnreachable_Enabled"
     },
     "SI_Guard_CmdbServicenowCreateGate_Enabled": {
-      "label": "ServiceNow: create and match rules",
-      "purpose": "The safety check that protects the configuration items (CIs) in ServiceNow: Some assets were not created or updated in ServiceNow because SecurityInsight could not match them safely (no stable asset id yet, or more than one matching CI).",
+      "label": "ServiceNow: CIs not accepted",
+      "purpose": "The safety check that protects the configuration items (CIs) in ServiceNow: ServiceNow's import did not accept some of the CIs SecurityInsight sent, so this batch was not completed.",
       "defaultText": "Off",
-      "effect": "Off: no event and no mail. The step itself still stops, because those assets do not meet the connector's create and match rules (set in the connector). On: the check works as described on the Guards page.",
+      "effect": "Off: no event and no mail. The rows ServiceNow did not accept are still sent again with the next run. On: the check works as described on the Guards page.",
       "whenToChange": "Off by default: only the two brakes stay on (CIs retired by mistake, duplicate vulnerability records) -- this check is a warning you can switch on. Turn it on when you want it to hold or stop the step, and mail, again.",
       "advanced": false,
       "group": "Guards (safety checks)",
       "needs": "SI_Guards_Enabled"
     },
     "SI_Guard_CmdbServicenowCreateGate_Mail": {
-      "label": "ServiceNow: create and match rules: mail",
+      "label": "ServiceNow: CIs not accepted: mail",
       "purpose": "Whether this safety check sends a mail when it trips.",
       "defaultText": "On (follows the check: nothing is mailed while the check is off)",
       "effect": "Off: the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
@@ -4927,7 +4927,7 @@
     "SMTPFrom": {
       "label": "Mail sender address",
       "purpose": "The From address on every mail.",
-      "defaultText": "Falls back to MailFrom, then SMTPUser; with signed-in mail the run stops at start",
+      "defaultText": "Left empty: the mail server user name",
       "effect": "Sets who the mail appears to come from. A sender the relay has not verified gets the mail rejected. With no sender at all and anonymous mail, mail is skipped with a warning.",
       "whenToChange": "Set it whenever mail is on; use an address your mail relay accepts as sender.",
       "advanced": false,
@@ -4947,7 +4947,7 @@
     "SMTPPort": {
       "label": "Mail server port",
       "purpose": "The network port of the mail server used for report e-mails, for example 25, 465 or 587.",
-      "defaultText": "No fallback for Risk Analysis mail; the daily close-loop mail uses 587 with encryption, else 25",
+      "defaultText": "Needed for report mails, e.g. 587",
       "effect": "Must match the mail server and the encryption setting; a wrong port makes sending fail (the run itself continues).",
       "whenToChange": "Set it to match your mail server; setup asks for it.",
       "advanced": false,
@@ -4980,7 +4980,8 @@
       "effect": "Without it (and without a confirmation) SecurityInsight does not send through the shared mailbox.",
       "whenToChange": "Set once, to an administrator's own mailbox; setup fills it in.",
       "advanced": true,
-      "group": "Mail & notifications"
+      "group": "Mail & notifications",
+      "hint": "An e-mail address (name@domain) of a different, ordinary mailbox -- never the shared mailbox itself, and not a display name."
     },
     "SI_Mail_RestrictionAttestation": {
       "label": "Restriction confirmed by",

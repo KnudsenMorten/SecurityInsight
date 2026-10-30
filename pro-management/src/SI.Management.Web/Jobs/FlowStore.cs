@@ -28,6 +28,9 @@ public interface IFlowStore
     /// #700: the RUNNING run cancelled -- marked Cancelled with who and why (never resumed), its queue request ended and the
     /// install's lock released at once, in one transaction. Its job executions are stopped by the runner (started next).
     Task<RunCancel> CancelRunAsync(string flowRunId, string by, string reason, CancellationToken ct);
+    /// #576: the running steps' progress records (cfg.StepProgress, written by the engines as they run). None by default:
+    /// a store without them shows each running step as "Running", as before.
+    Task<IReadOnlyList<StepProgress>> ProgressAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<StepProgress>>(Array.Empty<StepProgress>());
 }
 
 public sealed class SqlFlowStore : IFlowStore
@@ -168,6 +171,17 @@ EXEC cfg.FlowRunCancelSet @FlowRunId = @FlowRunId, @By = @By, @Why = @Why;
 
     public async Task<IReadOnlyList<FlowStepRun>> LastStepRunsAsync(CancellationToken ct) =>
         (await _sql.QueryAsync(LastStepsSql, None, ct)).Select(Step).ToList();
+
+    /// #576: the progress records of the last two days (one row per execution; a database without the table has none).
+    public const string ProgressSql = """
+IF OBJECT_ID(N'cfg.StepProgress') IS NOT NULL
+    -- one row per execution; only a row that says what the step does now (Phase) is shown -- a row with only a sign of progress is the stuck-step check's
+    SELECT Execution, Job, Phase, Done, Total, LastUtc AS AtUtc FROM cfg.StepProgress WHERE Phase IS NOT NULL AND LastUtc >= DATEADD(day, -2, SYSUTCDATETIME());
+""";
+
+    public async Task<IReadOnlyList<StepProgress>> ProgressAsync(CancellationToken ct) =>
+        (await _sql.QueryAsync(ProgressSql, None, ct)).Where(r => r.Str("Execution") is { Length: > 0 })
+            .Select(r => new StepProgress(r.Str("Execution")!, r.Str("Job") ?? "", r.Str("Phase") ?? "", r.Long("Done"), r.Long("Total"), Utc(r, "AtUtc"))).ToList();
 
     public async Task<(long Id, string Outcome)> EnqueueAsync(string scope, string target, string by, CancellationToken ct)
     {

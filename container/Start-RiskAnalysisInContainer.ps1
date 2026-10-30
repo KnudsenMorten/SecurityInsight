@@ -123,8 +123,8 @@ if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase -and $raJob -and $raE
     (Get-OptionalEnv 'SI_RA_SCALEOUT_ROLE' '').Trim().ToLowerInvariant() -ne 'worker') {
     try {
         . (Join-Path $PSScriptRoot '../engine/_shared/SI-JobStartRequest.ps1')
-        if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') }
-        $raStartRequest = Invoke-SIJobStartRequestClaim -Invoke (Get-SIGuardProInvoke) -Job ([string]$raJob) -Execution ([string]$raExec)
+        # the database seam is loaded inside the call only: nothing it brings may reach the risk analysis
+        $raStartRequest = Invoke-SIJobStartRequestIsolated -GuardPath (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') -Job ([string]$raJob) -Execution ([string]$raExec)
         if ($raStartRequest.Line) { Write-Host $raStartRequest.Line }
     } catch { Write-Warning ('[start-request] the start request could not be read ({0}) -- the run goes on as configured' -f $_.Exception.Message) }
 }

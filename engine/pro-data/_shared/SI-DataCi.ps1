@@ -268,7 +268,7 @@ function Write-SIDataCiLifecycleStage {
     $st = @(ConvertTo-SIDataFindingStateItems -Items @($Items))
     $al = @(ConvertTo-SIDataFindingAliasItems -Items @($Items))
     $nF = 0; $nA = 0
-    if ($First) { [void](& $Invoke (Get-SIDataCiLifecycleStageClearSql) @{} 'scalar') }
+    if ($First) { Clear-SIDataCiStage -Invoke $Invoke -Table 'sidata.CiFindingLifecycleStage' }
     if ($st.Count) { $nF = Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataCiLifecycleStageSql -Kind f } -Items $st }
     if ($al.Count) { $nA = Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataCiLifecycleStageSql -Kind a } -Items $al }
     [pscustomobject]@{ Findings = $nF; Aliases = $nA }
@@ -568,36 +568,50 @@ function Invoke-SIDataCiColumnBackfill {
 
 function Invoke-SIDataCiFindingSwap {
     <#
-        #881 THE SAME SWAP (Get-SIDataCiFindingSwapSql: the staged set replaces the stored one, only what changed is written,
-        ONE transaction -- a failure leaves the stored findings as they were), with its heavy part OUT of the transaction: at the
-        largest tenants the hash of every row of both sets (DocJson included) and the matching ran inside the transaction, in
-        table variables over the whole tables, holding the staging table locked for the whole of it. Now, on ONE connection
-        (the seam's mode 'session'), the hashes are worked out a key range at a time into #temp tables (each range its own
-        statement, sized from the measured time of the one before), the rows to remove, to keep and to add are matched there,
-        and the transaction only writes what changed -- after checking that neither table changed meanwhile (the staged count,
-        its first and last StageId, the stored count and its last CiFindingId) and, as before, that the stored count comes out
-        as the staged one. The end state is exactly the one statement's (the same multiset, the same rule of which rows stay).
-        -ContentHash / -Full: as Get-SIDataCiFindingSwapSql (a stored row's ContentHash is read, not worked out again, when
-        it has one). A seam without sessions (a test's fake) runs the one statement. Answers the rows now stored.
+        #881 THE SAME SWAP (Get-SIDataCiFindingSwapSql: the staged set replaces the stored one, only what changed is written),
+        with its heavy part out of one transaction. On ONE connection (the seam's mode 'session') the hashes are worked out a
+        key range at a time into #temp tables, each range its own statement, sized from the measured time of the one before.
+        2026-10-29 THE WRITES IN HASH RANGES TOO (live at the largest install: 4,064 s for 1,300,749 rows in the one write
+        transaction -- every kept row's time and document are rewritten on a new collection): the rows are matched and written
+        one range of hashes at a time -- every row of one hash is in one range, so the pairing of stored and staged rows is
+        exactly the one statement's -- each range ONE command and its own transaction (remove, keep, add; its own counts
+        checked or it rolls back), the range's size from the measured time of the one before, one log line per range. The end
+        state is exactly the one statement's: the same multiset in every column (only which CiFindingId a row has may differ).
+          * ONE REPLACE AT A TIME: the session lock si-cifinding-swap for the whole replace.
+          * BEFORE THE FIRST WRITE neither table changed since the hashes (the staged count, its first and last StageId, the
+            stored count and its last CiFindingId), and the staged count is the count this run wrote -- else nothing is written.
+          * WHILE IT RUNS the mark sidata.ViewState 'cifinding-swap' is OPEN: the web app reads the published copies, and the
+            copy refresh and the publish hold while the mark is open (SI-DataPublishedRun.ps1) -- a half-replaced set is never
+            copied to what the pages show.
+          * AT THE END the stored count must come out as the staged one; only then is the mark taken away. A run that stops
+            part-way leaves the mark open; the next run stages its collection again and the same ranges finish the replace
+            (a range already done matches and writes nothing).
+        -ContentHash: matched by the content hash (a stored row's ContentHash is read where it has one). -Full (with
+        -ContentHash: the weekly check): every stored row's content hash worked out again from its data -- the rows a run
+        moved are matched by their content and their time and document written, the end state the old full swap's (every
+        column of every row equal to its staged row), without removing and adding every row. Without -ContentHash (a database
+        before the column): matched by every column. A seam without sessions (a test's fake) runs the one statement.
+        Answers the rows now stored.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][long]$Expected, [switch]$SubCi, [switch]$Category,
           [switch]$ContentHash, [switch]$Full,
-          [long]$FirstSize = 50000, [long]$TargetMs = 5000, [scriptblock]$Log = { param($l, $m) })
+          [long]$FirstSize = 50000, [long]$TargetMs = 5000, [scriptblock]$Log = { param($l, $m) },
+          # what the mark names (the collection's time, for a person reading it)
+          [string]$CollectionText = '',
+          # tests only: stop after this many write ranges, as a run that ends part-way
+          [int]$StopAfterRanges = 0)
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstSize = [long]$Invoke.SIRangeFirstTake }
     $session = $Invoke.PSObject.Properties['SIConnectionInfo'] -and $Invoke.SIConnectionInfo
     if (-not $session) { return [long](& $Invoke (Get-SIDataCiFindingSwapSql -SubCi:$SubCi -Category:$Category -ContentHash:$ContentHash -Full:$Full) @{ Expected = [string]$Expected } 'scalar') }
     $cols = $script:SIDataCiFindingColumns; if ($SubCi) { $cols += ', SubCi, PatchCycle, CvePublished' }; if ($Category) { $cols += ', Category, Subcategory' }
     $names = @($cols -split ',\s*' | Where-Object { $_ })
     $sCols = (@($names | ForEach-Object { 's.[{0}]' -f $_ })) -join ', '
-    $byAll = (-not $ContentHash) -or $Full
+    # every column (no content hash column yet), or the content hash -- on the weekly check worked out again from the data
+    $byAll = -not $ContentHash
     $mS = Get-SIDataCiFindingHashSql -Alias 's' -Names $names -All:$byAll
     $mT = Get-SIDataCiFindingHashSql -Alias 't' -Names $names -All:$byAll
-    $cS = Get-SIDataCiFindingHashSql -Alias 's' -Names $names
-    $tH = if ($byAll) { $mT.Expr } else { 'ISNULL(t.ContentHash, ' + $mT.Expr + ')' }
-    $sC = if ($ContentHash) { ', ' + $cS.Expr } else { ', CAST(NULL AS binary(32))' }
-    $sApply = $mS.Apply; if ($ContentHash -and $byAll) { $sApply = $cS.Apply }
-    # the staged side: its match hash (H) and its content hash (C) -- one and the same, worked out once, unless -Full
-    $sSel = $mS.Expr + ' AS H' + $sC
-    if (-not $byAll) { $sApply = $mS.Apply + ' CROSS APPLY (SELECT ' + $mS.Expr + ' AS H) AS hx'; $sSel = 'hx.H AS H, hx.H' }
+    if ($byAll) { $sApply = $mS.Apply; $sSel = $mS.Expr + ' AS H, CAST(NULL AS binary(32))' }
+    else { $sApply = $mS.Apply + ' CROSS APPLY (SELECT ' + $mS.Expr + ' AS H) AS hx'; $sSel = 'hx.H AS H, hx.H' }
     $exp = [long]$Expected
     $nextSize = { param([long]$cur, [long]$ms) if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { Get-SIDataNextSize -Current $cur -ElapsedMs $ms -TargetMs $TargetMs -Minimum 1 } else { [Math]::Max(1L, $cur) } }
     $logFn = $Log
@@ -606,84 +620,119 @@ function Invoke-SIDataCiFindingSwap {
         $insCols += ', ContentHash'; $insVals += ', i.C'
         # a kept row: the run's time and document from its staged row, and its hash -- each only where it differs
         $keep = @'
-UPDATE f SET CollectionTime = s.CollectionTime, DocJson = s.DocJson, ContentHash = k.C /* one-statement-ok: only the kept rows, inside the swap's one transaction (the stored set is replaced atomically) */
-FROM sidata.CiFinding AS f JOIN #keep AS k ON k.CiFindingId = f.CiFindingId JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
+UPDATE f SET CollectionTime = s.CollectionTime, DocJson = s.DocJson, ContentHash = k.C /* one-statement-ok: one hash range (#rkeep holds this range's rows only) */
+FROM sidata.CiFinding AS f JOIN #rkeep AS k ON k.CiFindingId = f.CiFindingId JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
 WHERE f.CollectionTime <> s.CollectionTime OR ISNULL(DATALENGTH(f.DocJson), -1) <> ISNULL(DATALENGTH(s.DocJson), -1) OR CAST(f.DocJson AS varbinary(max)) <> CAST(s.DocJson AS varbinary(max))
    OR f.ContentHash IS NULL OR f.ContentHash <> k.C;
-DECLARE @kept BIGINT = @@ROWCOUNT;
+SET @w = @@ROWCOUNT;
 '@
     }
+    $hex = { param($b) if ($null -eq $b -or $b -is [System.DBNull]) { $null } else { '0x' + ([BitConverter]::ToString([byte[]]$b)).Replace('-', '') } }
+    # (ViewState.Value holds 64 characters: 'open' and the collection's time; UpdatedAt says since when)
+    $markText = ('open {0}' -f $(if ($CollectionText) { $CollectionText } else { 'the newest collection' }))
+    if ($markText.Length -gt 64) { $markText = $markText.Substring(0, 64) }
+    $markSql = "MERGE sidata.ViewState AS v USING (SELECT N'cifinding-swap' AS Name, N'{0}' AS Value) AS x ON v.Name = x.Name WHEN MATCHED THEN UPDATE SET Value = x.Value, UpdatedAt = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (x.Name, x.Value);" -f $markText.Replace("'", "''")
+    $stopAt = $StopAfterRanges
     $onSession = {
         param($Run)
-        & $Run 'CREATE TABLE #skh (StageId BIGINT NOT NULL PRIMARY KEY, H BINARY(32) NOT NULL, C BINARY(32) NULL); CREATE TABLE #tkh (CiFindingId BIGINT NOT NULL PRIMARY KEY, H BINARY(32) NOT NULL);' 'none'
+        $lock = [int](& $Run "DECLARE @l int; EXEC @l = sp_getapplock @Resource = N'si-cifinding-swap', @LockMode = N'Exclusive', @LockOwner = N'Session', @LockTimeout = 0; SELECT @l;" 'scalar')
+        if ($lock -lt 0) { throw 'another data sync is replacing the findings per CI right now -- the stored findings are kept as they are' }
+        & $Run 'CREATE TABLE #skh (StageId BIGINT NOT NULL, H BINARY(32) NOT NULL, C BINARY(32) NULL, PRIMARY KEY CLUSTERED (H, StageId)); CREATE TABLE #tkh (CiFindingId BIGINT NOT NULL, H BINARY(32) NOT NULL, PRIMARY KEY CLUSTERED (H, CiFindingId));' 'none'
         # the hashes, a key range at a time (reads; the #temp tables live in tempdb, outside the user database's log)
         foreach ($side in @(@{ Tbl = 'sidata.CiFindingStage'; Key = 'StageId'; Into = '#skh'; Sel = $sSel; Cols = 'H, C'; Apply = $sApply; A = 's' },
-                            @{ Tbl = 'sidata.CiFinding'; Key = 'CiFindingId'; Into = '#tkh'; Sel = ($tH + ' AS H'); Cols = 'H'; Apply = $mT.Apply; A = 't' })) {
+                            @{ Tbl = 'sidata.CiFinding'; Key = 'CiFindingId'; Into = '#tkh'; Sel = $(if ($byAll) { $mT.Expr } else { $mT.Expr }) + ' AS H'; Cols = 'H'; Apply = $mT.Apply; A = 't' })) {
             $b = @(& $Run ("SELECT ISNULL(MIN({0}), 0) AS Lo, ISNULL(MAX({0}), -1) AS Hi FROM {1};" -f $side.Key, $side.Tbl) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
             $after = [long]$b['Lo'] - 1; $hi = [long]$b['Hi']; $size = [Math]::Max(1L, $FirstSize)
             while ($after -lt $hi) {
                 $upto = [long][Math]::Min([double]$hi, [double]$after + [double]$size)
                 $sw = [Diagnostics.Stopwatch]::StartNew()
-                if ($side.A -eq 't' -and -not $byAll) {
+                if ($side.A -eq 't' -and -not $byAll -and -not $Full) {
                     # a stored row's content hash is read where it has one; only a row without one has it worked out
                     & $Run ("INSERT #tkh (CiFindingId, H) SELECT t.CiFindingId, t.ContentHash FROM sidata.CiFinding AS t WHERE t.ContentHash IS NOT NULL AND t.CiFindingId > {0} AND t.CiFindingId <= {1};" -f $after, $upto) 'none'
                     & $Run ("INSERT #tkh (CiFindingId, H) SELECT t.CiFindingId, {0} FROM sidata.CiFinding AS t{1} WHERE t.ContentHash IS NULL AND t.CiFindingId > {2} AND t.CiFindingId <= {3};" -f $mT.Expr, $mT.Apply, $after, $upto) 'none'
                 } else {
+                    # the staged side; the stored side by every column, or (the weekly check) by its content worked out from its data
                     & $Run ("INSERT {0} ({1}, {2}) SELECT {3}.{1}, {4} FROM {5} AS {3}{6} WHERE {3}.{1} > {7} AND {3}.{1} <= {8};" -f $side.Into, $side.Key, $side.Cols, $side.A, $side.Sel, $side.Tbl, $side.Apply, $after, $upto) 'none'
                 }
                 $after = $upto
                 $size = & $nextSize $size $sw.ElapsedMilliseconds
             }
         }
-        # which stored rows stay (a staged row with the same hash, by its place among rows with that hash), which staged rows come in
-        & $Run @'
-SELECT StageId, H, C, ROW_NUMBER() OVER (PARTITION BY H ORDER BY StageId) AS Rn INTO #sk FROM #skh;
-SELECT CiFindingId, H, ROW_NUMBER() OVER (PARTITION BY H ORDER BY CiFindingId) AS Rn INTO #tk FROM #tkh;
-CREATE INDEX IX_sk ON #sk (H, Rn); CREATE INDEX IX_tk ON #tk (H, Rn);
-SELECT t.CiFindingId INTO #del FROM #tk AS t WHERE NOT EXISTS (SELECT 1 FROM #sk AS k WHERE k.H = t.H AND k.Rn = t.Rn);
-SELECT k.StageId, k.C INTO #ins FROM #sk AS k WHERE NOT EXISTS (SELECT 1 FROM #tk AS t WHERE t.H = k.H AND t.Rn = k.Rn);
-SELECT t.CiFindingId, k.StageId, k.C INTO #keep FROM #tk AS t JOIN #sk AS k ON k.H = t.H AND k.Rn = t.Rn;
-CREATE UNIQUE CLUSTERED INDEX CX_del ON #del (CiFindingId); CREATE UNIQUE CLUSTERED INDEX CX_ins ON #ins (StageId); CREATE UNIQUE CLUSTERED INDEX CX_keep ON #keep (CiFindingId);
-'@ 'none'
-        $cnt = @(& $Run 'SELECT (SELECT COUNT_BIG(*) FROM #del) AS D, (SELECT COUNT_BIG(*) FROM #ins) AS I, (SELECT COUNT_BIG(*) FROM #keep) AS K;' 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
-        $n = & $Run @"
+        # nothing written yet: the staged set is the one this run wrote, and neither table changed while it was compared
+        $chk = @(& $Run @"
+SELECT (SELECT COUNT_BIG(*) FROM sidata.CiFindingStage) AS Staged, (SELECT ISNULL(MIN(StageId), 0) FROM sidata.CiFindingStage) AS SLo, (SELECT ISNULL(MAX(StageId), 0) FROM sidata.CiFindingStage) AS SHi,
+       (SELECT COUNT_BIG(*) FROM #skh) AS SkCount, (SELECT ISNULL(MIN(StageId), 0) FROM #skh) AS SkLo, (SELECT ISNULL(MAX(StageId), 0) FROM #skh) AS SkHi,
+       (SELECT COUNT_BIG(*) FROM sidata.CiFinding) AS Stored, (SELECT ISNULL(MAX(CiFindingId), 0) FROM sidata.CiFinding) AS THi,
+       (SELECT COUNT_BIG(*) FROM #tkh) AS TkCount, (SELECT ISNULL(MAX(CiFindingId), 0) FROM #tkh) AS TkHi;
+"@ 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+        if ([long]$chk['Staged'] -ne $exp) { throw ('the staged findings per CI are not the set this run wrote ({0} staged, {1} written) -- the stored findings are kept as they are' -f [long]$chk['Staged'], $exp) }
+        if ([long]$chk['Staged'] -ne [long]$chk['SkCount'] -or [long]$chk['SLo'] -ne [long]$chk['SkLo'] -or [long]$chk['SHi'] -ne [long]$chk['SkHi'] -or
+            [long]$chk['Stored'] -ne [long]$chk['TkCount'] -or [long]$chk['THi'] -ne [long]$chk['TkHi']) {
+            throw 'the findings per CI or their staging changed while they were compared -- the stored findings are kept as they are'
+        }
+        # the mark is OPEN from the first write until the stored count is checked at the end
+        & $Run $markSql 'none'
+        $tot = @{ D = 0L; I = 0L; K = 0L; W = 0L }
+        $take = [Math]::Max(1L, $FirstSize); $hasLo = $false; $lo = $null; $i = 0
+        while ($true) {
+            $lop = ''; if ($hasLo) { $lop = ' WHERE u.H > ' + $lo }
+            $bd = @(& $Run ("SELECT MAX(x.k) AS Hi, COUNT_BIG(*) AS N FROM (SELECT TOP ({0}) u.H AS k FROM (SELECT H FROM #skh UNION ALL SELECT H FROM #tkh) AS u{1} ORDER BY u.H) AS x;" -f $take, $lop) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+            $hiHex = & $hex $bd['Hi']; $last = ($null -eq $hiHex) -or ([long]$bd['N'] -lt $take)
+            $p = ''; if ($hasLo) { $p += ' AND H > ' + $lo }; if (-not $last) { $p += ' AND H <= ' + $hiHex }
+            $i++
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $r = @(& $Run @"
 SET XACT_ABORT ON;
+IF OBJECT_ID('tempdb..#rs') IS NOT NULL DROP TABLE #rs; IF OBJECT_ID('tempdb..#rt') IS NOT NULL DROP TABLE #rt;
+IF OBJECT_ID('tempdb..#rdel') IS NOT NULL DROP TABLE #rdel; IF OBJECT_ID('tempdb..#rins') IS NOT NULL DROP TABLE #rins; IF OBJECT_ID('tempdb..#rkeep') IS NOT NULL DROP TABLE #rkeep;
+SELECT StageId, H, C, ROW_NUMBER() OVER (PARTITION BY H ORDER BY StageId) AS Rn INTO #rs FROM #skh WHERE 1 = 1$p;
+SELECT CiFindingId, H, ROW_NUMBER() OVER (PARTITION BY H ORDER BY CiFindingId) AS Rn INTO #rt FROM #tkh WHERE 1 = 1$p;
+SELECT t.CiFindingId INTO #rdel FROM #rt AS t WHERE NOT EXISTS (SELECT 1 FROM #rs AS k WHERE k.H = t.H AND k.Rn = t.Rn);
+SELECT k.StageId, k.C INTO #rins FROM #rs AS k WHERE NOT EXISTS (SELECT 1 FROM #rt AS t WHERE t.H = k.H AND t.Rn = k.Rn);
+SELECT t.CiFindingId, k.StageId, k.C INTO #rkeep FROM #rt AS t JOIN #rs AS k ON k.H = t.H AND k.Rn = t.Rn;
+DECLARE @d BIGINT = (SELECT COUNT_BIG(*) FROM #rdel), @i BIGINT = (SELECT COUNT_BIG(*) FROM #rins), @k BIGINT = (SELECT COUNT_BIG(*) FROM #rkeep), @w BIGINT = 0, @x BIGINT;
 BEGIN TRAN;
-DECLARE @staged BIGINT, @sLo BIGINT, @sHi BIGINT, @stored BIGINT, @tHi BIGINT;
-SELECT @staged = COUNT_BIG(*), @sLo = MIN(StageId), @sHi = MAX(StageId) FROM sidata.CiFindingStage WITH (TABLOCKX);
-SELECT @stored = COUNT_BIG(*), @tHi = MAX(CiFindingId) FROM sidata.CiFinding WITH (TABLOCKX);
-IF @staged <> $exp
-BEGIN
-    ROLLBACK;
-    DECLARE @msg NVARCHAR(200) = CONCAT(N'the staged findings per CI are not the set this run wrote (', @staged, N' staged, ', $exp, N' written) -- the stored findings are kept as they are');
-    THROW 51000, @msg, 1;
-END
-IF @staged <> (SELECT COUNT_BIG(*) FROM #skh) OR ISNULL(@sLo, 0) <> ISNULL((SELECT MIN(StageId) FROM #skh), 0) OR ISNULL(@sHi, 0) <> ISNULL((SELECT MAX(StageId) FROM #skh), 0)
-   OR @stored <> (SELECT COUNT_BIG(*) FROM #tkh) OR ISNULL(@tHi, 0) <> ISNULL((SELECT MAX(CiFindingId) FROM #tkh), 0)
-BEGIN
-    ROLLBACK;
-    THROW 51000, N'the findings per CI or their staging changed while they were compared -- the stored findings are kept as they are', 1;
-END
-DELETE f FROM sidata.CiFinding AS f JOIN #del AS d ON d.CiFindingId = f.CiFindingId /* one-statement-ok: only the rows that changed, inside the swap's one transaction (the stored set is replaced atomically) */;
+DELETE f FROM sidata.CiFinding AS f JOIN #rdel AS d ON d.CiFindingId = f.CiFindingId /* one-statement-ok: one hash range (#rdel holds this range's rows only) */;
+SET @x = @@ROWCOUNT;
+IF @x <> @d BEGIN ROLLBACK; THROW 51000, N'the findings per CI changed while they were replaced -- this part is kept as it was and the next run finishes the replace', 1; END
 $keep
 INSERT sidata.CiFinding ($insCols)
-SELECT $insVals FROM sidata.CiFindingStage AS s JOIN #ins AS i ON i.StageId = s.StageId
+SELECT $insVals FROM sidata.CiFindingStage AS s JOIN #rins AS i ON i.StageId = s.StageId
 ORDER BY s.StageId;
-DECLARE @n BIGINT = (SELECT COUNT_BIG(*) FROM sidata.CiFinding);
-IF @n <> @staged
-BEGIN
-    ROLLBACK;
-    DECLARE @msg2 NVARCHAR(200) = CONCAT(N'the findings per CI did not come out as the staged set (', @n, N' stored, ', @staged, N' staged) -- the stored findings are kept as they are');
-    THROW 51000, @msg2, 1;
-END
+SET @x = @@ROWCOUNT;
+IF @x <> @i BEGIN ROLLBACK; THROW 51000, N'the staged findings per CI changed while they were replaced -- this part is kept as it was and the next run finishes the replace', 1; END
 COMMIT;
-SELECT @n;
-"@ 'scalar'
-        $how = if (-not $ContentHash) { 'every column (the database has no content hash yet)' } elseif ($Full) { 'every column (the weekly full swap)' } else { 'their content hash' }
-        & $logFn 'INFO' ('v3 model    : the findings per CI replaced -- {0:N0} stored: {1:N0} kept, {2:N0} removed, {3:N0} added (matched by {4})' -f [long]$n, [long]$cnt['K'], [long]$cnt['D'], [long]$cnt['I'], $how)
+DROP TABLE #rs; DROP TABLE #rt; DROP TABLE #rdel; DROP TABLE #rins; DROP TABLE #rkeep;
+SELECT @d AS D, @i AS I, @k AS K, @w AS W;
+"@ 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+            $ms = $sw.ElapsedMilliseconds
+            foreach ($q in 'D', 'I', 'K', 'W') { $tot[$q] += [long]$r[$q] }
+            & $logFn 'INFO' ('v3 model    : findings per CI: swap -- range {0}: {1:N0} removed, {2:N0} kept ({3:N0} rewritten), {4:N0} added -- {5:N1} s' -f $i, [long]$r['D'], [long]$r['K'], [long]$r['W'], [long]$r['I'], ($ms / 1000.0))
+            if ($last) { break }
+            if ($stopAt -gt 0 -and $i -ge $stopAt) { throw ('stopped after {0} range(s) (a test of a run that ends part-way)' -f $i) }
+            $hasLo = $true; $lo = $hiHex
+            $take = & $nextSize $take $ms
+        }
+        # the stored set must come out as the staged one -- only then is the mark taken away
+        $n = [long](& $Run 'SELECT COUNT_BIG(*) FROM sidata.CiFinding;' 'scalar')
+        if ($n -ne [long]$chk['Staged']) { throw ('the findings per CI did not come out as the staged set ({0} stored, {1} staged) -- the next run finishes the replace; until then the pages keep showing the published run' -f $n, [long]$chk['Staged']) }
+        & $Run "DELETE FROM sidata.ViewState WHERE Name = N'cifinding-swap';" 'none'
+        $null = & $Run "EXEC sp_releaseapplock @Resource = N'si-cifinding-swap', @LockOwner = N'Session';" 'none'
+        $how = if (-not $ContentHash) { 'every column (the database has no content hash yet)' } elseif ($Full) { 'their content worked out again from every row (the weekly full check)' } else { 'their content hash' }
+        & $logFn 'INFO' ('v3 model    : the findings per CI replaced -- {0:N0} stored: {1:N0} kept, {2:N0} removed, {3:N0} added (matched by {4}; {5:N0} range(s))' -f $n, $tot.K, $tot.D, $tot.I, $how, $i)
         $n
     }
+    # a database without the mark table (not updated yet) cannot hold the copies while the replace runs: the one statement
+    $hasMark = $false
+    try { $hasMark = ([string](& $Invoke "SELECT CASE WHEN OBJECT_ID('sidata.ViewState') IS NOT NULL THEN 1 ELSE 0 END;" @{} 'scalar') -eq '1') } catch { $hasMark = $false }
+    if (-not $hasMark) { return [long](& $Invoke (Get-SIDataCiFindingSwapSql -SubCi:$SubCi -Category:$Category -ContentHash:$ContentHash -Full:$Full) @{ Expected = [string]$Expected } 'scalar') }
     [long](& $Invoke $null $null 'session' $onSession)
+}
+
+function Get-SIDataCiFindingSwapOpenSql {
+    <# READS ONLY. The open mark of a replace of the findings per CI (Invoke-SIDataCiFindingSwap), as the one column
+       CiFindingSwapOpen ('' when there is none). The same read is in SI-DataPublishedRun.ps1 (a test keeps the two equal). #>
+    "SELECT CASE WHEN OBJECT_ID('sidata.ViewState') IS NULL THEN N'' ELSE ISNULL((SELECT TOP (1) Value FROM sidata.ViewState WHERE Name = N'cifinding-swap'), N'') END AS CiFindingSwapOpen;"
 }
 
 function Invoke-SIDataCiLifecycleFromStage {
@@ -736,6 +785,15 @@ function Get-SIDataCiFindingStageClearSql {
     'DELETE FROM sidata.CiFindingStage; SELECT 1;'
 }
 
+function Clear-SIDataCiStage {
+    <# 2026-10-29 A staging table emptied: on a real database in batches (Clear-SIDataCiDbTable -- one DELETE over 1.3 M staged
+       findings with their documents was one command and one transaction); any other seam the one statement of before. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('sidata.CiFindingStage', 'sidata.CiFindingLifecycleStage')][string]$Table)
+    if (Test-SIDataRangedSeam $Invoke) { Clear-SIDataCiDbTable -Invoke $Invoke -Table $Table; return }
+    if ($Table -eq 'sidata.CiFindingStage') { [void](& $Invoke (Get-SIDataCiFindingStageClearSql) @{} 'scalar') }
+    else { [void](& $Invoke (Get-SIDataCiLifecycleStageClearSql) @{} 'scalar') }
+}
+
 function Get-SIDataCiTotalsSql {
     <#
         The CIs' finding totals, SET-BASED from the stored findings (the CI build writes the CIs and never touches these):
@@ -745,28 +803,60 @@ function Get-SIDataCiTotalsSql {
         lifecycle row is closed (sidata.CiFindingState: fixed, asset retired, no longer monitored) is not, and a RETIRED CI
         has none (its findings close as asset retired; the lifecycle step may close them after this step in the same run).
         So a retired CI never keeps its open findings and risk score -- here, on the CI list, and in what goes to ServiceNow.
+        -Ranged (2026-10-29): the same statement for ONE CiId range (@RangeLo / @RangeHi, Invoke-SIDataCiTotals) -- every
+        finding of a CI is in its CI's range, so each CI's totals are exactly the whole statement's.
     #>
-    @'
+    param([switch]$Ranged)
+    $sql = @'
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 DECLARE @t TABLE (CiId NVARCHAR(64) PRIMARY KEY, Score FLOAT, Weighted FLOAT, Cnt INT);
 INSERT @t SELECT f.CiId, SUM(ISNULL(f.RiskScore, 0)), SUM(ISNULL(f.WeightedRiskScore, 0)), COUNT(*) FROM sidata.CiFinding AS f
 JOIN sidata.Ci AS ci ON ci.CiId = f.CiId AND ISNULL(ci.Lifecycle, N'') <> N'retired'
-WHERE f.CiId IS NOT NULL AND ISNULL(f.ExemptionId, N'') = N''
+WHERE f.CiId IS NOT NULL AND ISNULL(f.ExemptionId, N'') = N''/*R:f.CiId*/
   AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState AS s WHERE s.OwnerKey = f.CiId AND s.FindingKey = f.FindingKey AND s.State = N'closed')
 GROUP BY f.CiId;
 BEGIN TRAN;
 UPDATE c SET RiskScore = t.Score, WeightedRiskScore = t.Weighted, OpenFindings = ISNULL(t.Cnt, 0)
 FROM sidata.Ci c LEFT JOIN @t t ON t.CiId = c.CiId
-WHERE ISNULL(c.RiskScore, -1) <> ISNULL(t.Score, -1) OR ISNULL(c.WeightedRiskScore, -1) <> ISNULL(t.Weighted, -1) OR ISNULL(c.OpenFindings, 0) <> ISNULL(t.Cnt, 0);
+WHERE (ISNULL(c.RiskScore, -1) <> ISNULL(t.Score, -1) OR ISNULL(c.WeightedRiskScore, -1) <> ISNULL(t.Weighted, -1) OR ISNULL(c.OpenFindings, 0) <> ISNULL(t.Cnt, 0))/*R:c.CiId*/;
 DECLARE @n INT = @@ROWCOUNT;
 UPDATE d SET RiskScore = c.RiskScore, WeightedRiskScore = c.WeightedRiskScore, OpenFindings = c.OpenFindings
 FROM sidata.CiDaily d JOIN sidata.Ci c ON c.CiId = d.CiId
-WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME())
+WHERE d.[Day] = CONVERT(date, SYSUTCDATETIME())/*R:d.CiId*/
   AND (ISNULL(d.RiskScore, -1) <> ISNULL(c.RiskScore, -1) OR ISNULL(d.WeightedRiskScore, -1) <> ISNULL(c.WeightedRiskScore, -1) OR ISNULL(d.OpenFindings, 0) <> ISNULL(c.OpenFindings, 0));
 COMMIT;
 SELECT @n;
 '@
+    if ($Ranged) { return $sql }
+    Expand-SIDataRangeMarker -Sql $sql
+}
+
+function Invoke-SIDataCiRangedStatement {
+    <#
+        2026-10-29 ONE statement with range markers (/*R:..*/), run per CiId range of sidata.Ci (Invoke-SIDataKeyRanges) on a
+        real database's seam -- or once, without the markers, on any other seam (a test's fake). -Params: the statement's own
+        parameters. Answers the sum of what the ranges answered (a scalar each).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params = @{}, [string]$What = 'ranges',
+          [string]$Table = 'sidata.Ci', [string]$Column = 'CiId', [scriptblock]$Log, [long]$FirstTake = 2000, [long]$TargetMs = 5000)
+    if (-not (Test-SIDataRangedSeam $Invoke)) { return [long](& $Invoke (Expand-SIDataRangeMarker -Sql $Sql) $Params 'scalar') }
+    $inv = $Invoke; $text = $Sql; $prm = $Params
+    $answers = Invoke-SIDataKeyRanges -Invoke $Invoke -Table $Table -Column $Column -What $What -Log $Log -FirstTake $FirstTake -TargetMs $TargetMs -Step {
+        param($r)
+        $p = @{}; foreach ($k in $prm.Keys) { $p[$k] = $prm[$k] }
+        $null = Add-SIDataRangeParams -Params $p -Range $r
+        $v = & $inv (Expand-SIDataRangeMarker -Sql $text -Range $r) $p 'scalar'
+        if ($null -eq $v -or $v -is [System.DBNull]) { 0L } else { [long]$v }
+    }
+    $sum = 0L; foreach ($a in @($answers)) { $sum += [long]$a }
+    $sum
+}
+
+function Invoke-SIDataCiTotals {
+    <# The CIs' finding totals (Get-SIDataCiTotalsSql): per CiId range on a real database, the one statement otherwise. Answers the CIs written. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log)
+    Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiTotalsSql -Ranged) -What "v3 model    : the CIs' finding totals" -Log $Log
 }
 
 # THE CI GRID'S FIELDS AS COLUMNS (2026-10-11, owner: "why is the performance so bad"): sidata.Ci column -> CI document field.
@@ -791,7 +881,10 @@ function Get-SIDataCiDocFieldsSql {
         transaction holds the table long. A database without the columns (the schema not updated yet) is skipped -- the
         statement is run from text, so it compiles there too. Answers the number of CIs filled.
     #>
-    param([int]$BatchSize = 2000)
+    param([int]$BatchSize = 2000,
+          # 2026-10-29 ONE CiId range (/*R:c.CiId*/, Invoke-SIDataCiDocFields): the same UPDATE without the loop -- the loop of
+          # batches ran inside ONE command, so the client waited for every batch of the whole table at once
+          [switch]$Ranged)
     $set = New-Object System.Collections.Generic.List[string]
     $with = New-Object System.Collections.Generic.List[string]
     foreach ($k in $script:SIDataCiDocFields.Keys) {
@@ -813,6 +906,21 @@ function Get-SIDataCiDocFieldsSql {
             $len = if ($script:SIDataCiDocLongFields -contains $k) { 4000 } else { 400 }
             $with.Add(("[{0}] NVARCHAR({2}) ''$.{1}''" -f $k, $path, $len))
         }
+    }
+    if ($Ranged) {
+        return @"
+SET NOCOUNT ON;
+IF COL_LENGTH('sidata.Ci', 'DocFieldsHash') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @n INT;
+EXEC sp_executesql N'
+SET NOCOUNT ON;
+UPDATE c SET $($set -join ', '), DocFieldsHash = ISNULL(c.ContentHash, 0x00)
+FROM sidata.Ci AS c
+OUTER APPLY OPENJSON(CASE WHEN ISJSON(c.DocJson) = 1 THEN c.DocJson END) WITH ($($with -join ', ')) AS j
+WHERE (c.DocFieldsHash IS NULL OR c.DocFieldsHash <> ISNULL(c.ContentHash, 0x00))/*R:c.CiId*/;
+SET @n = @@ROWCOUNT;', N'@n INT OUTPUT/*RPL*/', @n = @n OUTPUT/*RPV*/;
+SELECT @n;
+"@
     }
     @"
 SET NOCOUNT ON;
@@ -871,6 +979,41 @@ END
 "@
 }
 
+function Get-SIDataCiIpCatchUpRangeSql {
+    <# 2026-10-29 Get-SIDataCiIpCatchUpSql for ONE CiId range (/*R:c.CiId*/), without its loop and its mark (the caller sets the
+       mark once every range is done). Answers the CIs written; 0 when the mark is there or the mark table is not. #>
+    @"
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.ViewState') IS NULL OR EXISTS (SELECT 1 FROM sidata.ViewState WHERE Name = N'ci-ip-fill') BEGIN SELECT 0; RETURN; END
+DECLARE @n INT;
+EXEC sp_executesql N'
+UPDATE c SET IpAddress = x.Ip
+FROM sidata.Ci AS c
+CROSS APPLY (SELECT $(Get-SIDataCiBestIpSql -ListJson "CASE WHEN ISJSON(c.DocJson) = 1 THEN JSON_QUERY(c.DocJson, N''$.si_ip_addresses'') END") AS Ip) AS x
+WHERE c.IpAddress IS NULL AND c.Class = N''device'' AND x.Ip IS NOT NULL/*R:c.CiId*/;
+SET @n = @@ROWCOUNT;', N'@n INT OUTPUT/*RPL*/', @n = @n OUTPUT/*RPV*/;
+SELECT @n;
+"@
+}
+
+function Invoke-SIDataCiDocFields {
+    <#
+        2026-10-29 The CI list's columns (Get-SIDataCiDocFieldsSql) and the one-time IP catch-up: on a real database a CiId range
+        at a time, each range one command (the same UPDATE, the same expressions, the same CIs picked by their hash); the
+        catch-up's mark only after its last range. Any other seam: the one statement of before. Answers the CIs filled.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log)
+    if (-not (Test-SIDataRangedSeam $Invoke)) { return [int](& $Invoke (Get-SIDataCiDocFieldsSql) @{} 'scalar') }
+    $n = Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiDocFieldsSql -Ranged) -What "v3 model    : the CI list's columns" -Log $Log
+    $due = $false
+    try { $due = ([string](& $Invoke "SELECT CASE WHEN OBJECT_ID('sidata.ViewState') IS NOT NULL AND COL_LENGTH('sidata.Ci', 'IpAddress') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.ViewState WHERE Name = N'ci-ip-fill') THEN 1 ELSE 0 END;" @{} 'scalar') -eq '1') } catch { $due = $false }
+    if ($due) {
+        $n += Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiIpCatchUpRangeSql) -What "v3 model    : the devices' IP address from their own addresses (once)" -Log $Log
+        $null = & $Invoke "IF NOT EXISTS (SELECT 1 FROM sidata.ViewState WHERE Name = N'ci-ip-fill') INSERT sidata.ViewState (Name, Value) VALUES (N'ci-ip-fill', N'1'); SELECT 1;" @{} 'scalar'
+    }
+    [int]$n
+}
+
 function Get-SIDataCiStoredColumnsProbeSql {
     <# 1 when sidata.Ci carries the columns the CI views read (the schema of this release), else 0. #>
     "SELECT CASE WHEN COL_LENGTH('sidata.Ci', 'DocFieldsHash') IS NOT NULL THEN 1 ELSE 0 END"
@@ -894,7 +1037,7 @@ function Invoke-SIDataCiStoredColumns {
     try { $has = ([string](& $Invoke (Get-SIDataCiStoredColumnsProbeSql) @{} 'scalar') -eq '1') } catch { $has = $false }
     if (-not $has) { return [pscustomobject]@{ Status = 'no-schema'; DocFields = 0; ViewColumns = $null } }
     $nD = 0; $failed = $false
-    try { $nD = [int](& $Invoke (Get-SIDataCiDocFieldsSql) @{} 'scalar') }
+    try { $nD = [int](Invoke-SIDataCiDocFields -Invoke $Invoke) }
     # NEVER A WARNING of the build: a line of level WARN in the CI build's log is an alert, and nothing is wrong with the
     # build or its CIs when this convenience step cannot run -- the data sync fills the columns as it always did (and warns
     # itself if it cannot). What happened is said at INFO, with the reason.
@@ -922,6 +1065,120 @@ function Invoke-SIDataCiStoredColumns {
     $nC = 0; if ($ctx -and [string]$ctx.Status -eq 'ok') { $nC = [int]$ctx.Fields }
     if (-not $failed) { & $Log 'INFO' ("CIs: the columns the CI views read are current -- filled on {0} CI(s) this build changed ({1} with their view context)" -f $nD, $nC) }
     return [pscustomobject]@{ Status = $(if ($failed) { 'partial' } else { 'ok' }); DocFields = $nD; ViewColumns = $ctx }
+}
+
+# =====================================================================================================================
+#  KEY RANGES (2026-10-29): NO COMMAND OF THE DATA SYNC DOES WORK THAT GROWS WITH THE COLLECTION. Live at the largest
+#  installs: the findings-per-CI replace ran 4,064 s as one transaction over 1.3 M rows, the CI view columns 8,139 s as one
+#  command, the exempted twins past the SQL limit -- one statement is one wait of the client and one transaction of the
+#  database, however large the collection grows. Every such step now walks its key in ranges: each range is ONE command and
+#  its own transaction, sized from the measured time of the one before (Get-SIDataNextSize: -TargetMs per command, no fixed
+#  ceiling), paced by the database's own load, and logged with its rows and seconds. A seam of a real database runs them
+#  (marked SISqlRanged: New-SIDataSqlInvoke, New-SIRecordSqlInvoke); a test's fake runs the one statement of before.
+# =====================================================================================================================
+
+function Test-SIDataRangedSeam {
+    <# PURE. Does this seam run the heavy steps in key ranges (a real database's seam, marked SISqlRanged)? #>
+    param($Invoke)
+    [bool]($null -ne $Invoke -and $Invoke.PSObject.Properties['SISqlRanged'] -and $Invoke.SISqlRanged)
+}
+
+function Get-SIDataKeyRangePredicate {
+    <# PURE. ' AND <column> > @RangeLo AND <column> <= @RangeHi' for one range -- each side only when the range has it (the
+       first range has no lower bound, the last none above); '' without a range. #>
+    param([Parameter(Mandatory)][string]$Column, $Range)
+    if ($null -eq $Range) { return '' }
+    $p = ''
+    if ($Range.HasLo) { $p += (' AND {0} > @RangeLo' -f $Column) }
+    if ($Range.HasHi) { $p += (' AND {0} <= @RangeHi' -f $Column) }
+    $p
+}
+
+function Expand-SIDataRangeMarker {
+    <# PURE. Every /*R:<column>*/ of -Sql becomes the range's predicate on that column (Get-SIDataKeyRangePredicate); without
+       -Range every marker goes (the one statement of before). /*RP*/, /*RPL*/, /*RPV*/ pass the range on into a dynamic
+       statement (sp_executesql): its whole parameter part, the declarations added to a list, the values added to a list. #>
+    param([Parameter(Mandatory)][string]$Sql, $Range)
+    $r = $Range
+    # (a plain loop: a closure handed to the regex could not see the functions the caller loaded)
+    $sb = New-Object System.Text.StringBuilder
+    $at = 0
+    foreach ($m in [regex]::Matches($Sql, '/\*R:([A-Za-z0-9_\.\[\]]+)\*/')) {
+        [void]$sb.Append($Sql.Substring($at, $m.Index - $at))
+        [void]$sb.Append((Get-SIDataKeyRangePredicate -Column $m.Groups[1].Value -Range $r))
+        $at = $m.Index + $m.Length
+    }
+    [void]$sb.Append($Sql.Substring($at))
+    $out = $sb.ToString()
+    if ($null -eq $r) { return $out.Replace('/*RP*/', '').Replace('/*RPL*/', '').Replace('/*RPV*/', '') }
+    $out.Replace('/*RP*/', ", N'@RangeLo NVARCHAR(450), @RangeHi NVARCHAR(450)', @RangeLo = @RangeLo, @RangeHi = @RangeHi").Replace('/*RPL*/', ', @RangeLo NVARCHAR(450), @RangeHi NVARCHAR(450)').Replace('/*RPV*/', ', @RangeLo = @RangeLo, @RangeHi = @RangeHi')
+}
+
+function Add-SIDataRangeParams {
+    <# The range's bounds as the statement's parameters @RangeLo / @RangeHi (both always there; NULL where the range is open). #>
+    param([Parameter(Mandatory)][hashtable]$Params, $Range)
+    $Params['RangeLo'] = $(if ($Range -and $Range.HasLo) { [string]$Range.Lo } else { $null })
+    $Params['RangeHi'] = $(if ($Range -and $Range.HasHi) { [string]$Range.Hi } else { $null })
+    $Params
+}
+
+function Get-SIDataKeyRangeBoundSql {
+    <# READS ONLY. The upper bound of the next range of -Column in -Table: the value of the @Take-th row after @RangeLo (every
+       row of that value goes with it), and how many rows were looked at (fewer than @Take = the last range). #>
+    param([Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Column, [string]$Where = '', [switch]$HasLo)
+    $lo = ''; if ($HasLo) { $lo = (' AND {0} > @RangeLo' -f $Column) }
+    'SELECT MAX(x.k) AS Hi, COUNT_BIG(*) AS N FROM (SELECT TOP (CONVERT(bigint, @Take)) {1} AS k FROM {0} WHERE {1} IS NOT NULL{2}{3} ORDER BY {1}) AS x;' -f $Table, $Column, $lo, $Where
+}
+
+function Get-SIDataRangeAnswerText {
+    <# PURE. One range's answer as words for its log line: a number = rows, an object = its Text (else its N). #>
+    param($Answer)
+    if ($null -eq $Answer) { return 'nothing written' }
+    if ($Answer -is [System.ValueType] -or $Answer -is [string]) { return ('{0:N0} row(s)' -f [double]$Answer) }
+    if ($Answer.PSObject.Properties['Text'] -and $Answer.Text) { return [string]$Answer.Text }
+    if ($Answer.PSObject.Properties['N']) { return ('{0:N0} row(s)' -f [double]$Answer.N) }
+    [string]$Answer
+}
+
+function Invoke-SIDataKeyRanges {
+    <#
+        Walks -Column of -Table in ranges of about -FirstTake rows to start with (every row of one key value in one range; the
+        first range open below, the last open above, so a row whose key is not in -Table yet -- a staged row -- is in a range
+        too) and runs -Step { param($Range) } for each: ONE command, its own transaction. The next range's size follows the
+        measured time of this one (Get-SIDataNextSize, -TargetMs); the database's load paces it (Invoke-SISqlPacing). One
+        log line per range: -What, its number, what it wrote, its seconds. -After: go on after that key (a stopped run's
+        mark). -OnDone { param($Range, $Answer) }: after each range (a mark). Returns every range's answer, in order.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Column,
+          [string]$Where = '', [Parameter(Mandatory)][scriptblock]$Step, [string]$What = 'ranges', [AllowNull()]$After = $null,
+          [long]$FirstTake = 2000, [long]$TargetMs = 5000, [scriptblock]$Log, [scriptblock]$OnDone)
+    # (a test's seam may start with smaller ranges: SIRangeFirstTake)
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstTake = [long]$Invoke.SIRangeFirstTake }
+    $take = [Math]::Max(1L, $FirstTake)
+    $hasLo = ($null -ne $After -and "$After" -ne ''); $lo = $(if ($hasLo) { [string]$After } else { $null })
+    $i = 0; $lastMs = 0L
+    $out = New-Object System.Collections.Generic.List[object]
+    $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)
+    $val = { param($row, $n) if ($null -eq $row) { $null } elseif ($row -is [System.Collections.IDictionary]) { $v = $row[$n]; if ($v -is [System.DBNull]) { $null } else { $v } } else { $v = $row.$n; if ($v -is [System.DBNull]) { $null } else { $v } } }
+    while ($true) {
+        if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log; if ($pace.Shrink) { $take = [Math]::Max(1L, [long][Math]::Floor($take / 2)) } }
+        $p = @{ Take = [string]$take }; if ($hasLo) { $p['RangeLo'] = $lo }
+        $b = @(@(& $Invoke (Get-SIDataKeyRangeBoundSql -Table $Table -Column $Column -Where $Where -HasLo:$hasLo) $p 'rows') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+        $hi = & $val $b 'Hi'; $n = & $val $b 'N'; if ($null -eq $n) { $n = 0 }
+        $last = ([long]$n -lt $take) -or ($null -eq $hi)
+        $i++
+        $range = [pscustomobject]@{ Index = $i; HasLo = $hasLo; Lo = $lo; HasHi = (-not $last); Hi = $(if ($last) { $null } else { [string]$hi }) }
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $ans = & $Step $range
+        $lastMs = $sw.ElapsedMilliseconds
+        $out.Add($ans)
+        if ($Log) { & $Log 'INFO' ('{0} -- range {1}: {2} -- {3:N1} s' -f $What, $i, (Get-SIDataRangeAnswerText $ans), ($lastMs / 1000.0)) }
+        if ($OnDone) { & $OnDone $range $ans }
+        if ($last) { break }
+        $hasLo = $true; $lo = [string]$hi
+        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 }
+    }
+    , $out.ToArray()
 }
 
 function Invoke-SIDataCiChunks {
@@ -1728,7 +1985,7 @@ function Invoke-SIDataCiSync {
         }
 
         # ---- 2. the pages, each staged before the next is read -------------------------------------------------------
-        $state = @{ Read = 0L; Staged = 0L; LcStaged = 0L; First = $true; Snap = $null; LcStage = $false; Pages = 0L; Cuts = 0L; SubCi = $false; Category = $false }
+        $state = @{ Read = 0L; Staged = 0L; LcStaged = 0L; First = $true; PreCleared = $false; Snap = $null; LcStage = $false; Pages = 0L; Cuts = 0L; SubCi = $false; Category = $false }
         if (($expected -gt 0 -or $useDb) -and -not $DryRun) {
             $hasStage = $false
             try { $hasStage = ([string](& $Invoke (Get-SIDataCiFindingStageCheckSql) @{} 'scalar') -eq '1') } catch { $hasStage = $false }
@@ -1795,13 +2052,15 @@ function Invoke-SIDataCiSync {
                 if (-not $state.Snap -and $pageItems.Count) { $state.Snap = [string]$pageItems[0]['CollectionTime'] }
                 if (-not $DryRun -and $pageItems.Count) {
                     $arr = $pageItems.ToArray(); $pageItems.Clear()
-                    $state.Staged += Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataWriteCiFindingSql -First:$first -Stage -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) } -Items $arr -ClearFirst $state.First
+                    $state.Staged += Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataWriteCiFindingSql -First:$first -Stage -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) } -Items $arr -ClearFirst ($state.First -and -not $state.PreCleared)
                     if ($state.LcStage) { $lw = Write-SIDataCiLifecycleStage -Invoke $Invoke -Items $arr -First $state.First; $state.LcStaged += [long]$lw.Findings }
                     $state.First = $false
                     $arr = $null
                 }
                 $chars
             }
+            # 2026-10-29 a real database: the staging table is emptied in batches before the first page (not by the first chunk's one DELETE)
+            if (Test-SIDataRangedSeam $Invoke) { Clear-SIDataCiStage -Invoke $Invoke -Table 'sidata.CiFindingStage'; $state.PreCleared = $true }
             $read = Read-SIDataPages -Query $pageRead -KqlOf $kqlOf -Pages $planned -OnRows $onRows -TargetChars $TargetChars -What 'the newest finding collection' -Log $Log
             $state.Pages = [long]$read.Pages; $state.Cuts = [long]$read.Cuts
         }
@@ -1812,7 +2071,7 @@ function Invoke-SIDataCiSync {
             $why = ("the findings per CI were NOT stored: Log Analytics holds {0} finding row(s) for the collection of {1}, {2} were read -- the stored findings are kept as they are and no finding is closed this run" -f $expected, $collText, $state.Read)
             & $Log 'WARN' ("v3 model    : " + $why)
             & $say 'FAILED' $why
-            if (-not $DryRun -and $state.Staged -gt 0) { try { [void](& $Invoke (Get-SIDataCiFindingStageClearSql) @{} 'scalar') } catch { } }
+            if (-not $DryRun -and $state.Staged -gt 0) { try { Clear-SIDataCiStage -Invoke $Invoke -Table 'sidata.CiFindingStage' } catch { } }
             return [pscustomobject]@{ Status = 'failed'; Short = $true; Findings = 0; Rows = $state.Read; Expected = $expected; Error = $why; Issues = $issues.ToArray() }
         }
         if ($DryRun) {
@@ -1831,13 +2090,13 @@ function Invoke-SIDataCiSync {
             $hashOn = $false; $fullDue = $false
             try { $hashOn = ([string](& $Invoke (Get-SIDataCiFindingContentHashCheckSql) @{} 'scalar') -eq '1') } catch { $hashOn = $false }
             if ($hashOn) { try { $fullDue = ([string](& $Invoke (Get-SIDataCiFindingFullDueSql) @{ Days = [string]$script:SIDataCiFindingFullDays } 'scalar') -ne '0') } catch { $fullDue = $true } }
-            [void](Invoke-SIDataCiFindingSwap -Invoke $Invoke -Expected ([long]$nF) -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) -ContentHash:$hashOn -Full:$fullDue -Log $Log)
+            [void](Invoke-SIDataCiFindingSwap -Invoke $Invoke -Expected ([long]$nF) -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) -ContentHash:$hashOn -Full:$fullDue -Log $Log -CollectionText ([string]$timeText))
             if ($hashOn -and $fullDue) { try { [void](& $Invoke (Get-SIDataCiFindingFullMarkSql) @{} 'scalar') } catch { & $Log 'WARN' ("v3 model    : the weekly full swap of the findings per CI ran, its mark was not set ({0}) -- the next run does it again" -f $_.Exception.Message) } }
             & $ph 'findings per CI: swap' ([long]$nF)
-            try { [void](& $Invoke (Get-SIDataCiFindingStageClearSql) @{} 'scalar') } catch { }
+            try { Clear-SIDataCiStage -Invoke $Invoke -Table 'sidata.CiFindingStage' } catch { }
             if ($state.Pages -gt 1 -or $state.Cuts -gt 0) { & $Log 'INFO' ("v3 model    : the collection of {0} was read in {1} page(s) ({2} row(s), every one counted)" -f $collText, $state.Pages, $state.Read) }
         }
-        $nT = [int](& $Invoke (Get-SIDataCiTotalsSql) @{} 'scalar')
+        $nT = [int](Invoke-SIDataCiTotals -Invoke $Invoke -Log $Log)
         & $Log 'OK' ("v3 model    : {0} finding(s) of the newest collection stored; finding totals updated on {1} CI(s)" -f $nF, $nT)
         # #774: never a plain success when the CIs got no finding while the Risk Analysis result in the database holds findings
         if ($nF -eq 0 -and $null -ne $dbSrc -and [long]$dbSrc.Rows -gt 0) {
@@ -1849,7 +2108,7 @@ function Invoke-SIDataCiSync {
         # until it ran, the web app reads those CIs' fields from the document (a WARNING: the data is whole in the document)
         $nD = 0
         try {
-            $nD = [int](& $Invoke (Get-SIDataCiDocFieldsSql) @{} 'scalar')
+            $nD = [int](Invoke-SIDataCiDocFields -Invoke $Invoke -Log $Log)
             & $Log 'OK' ("v3 model    : the CI list's columns filled from the document on {0} CI(s)" -f $nD)
         } catch {
             & $Log 'WARN' ("v3 model    : the CI list's columns were not filled this run ({0}) -- the CIs page reads those fields from the document until the next run" -f $_.Exception.Message)

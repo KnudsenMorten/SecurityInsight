@@ -130,6 +130,13 @@ function Get-SICertificateClientToken {
     return [string]$resp.access_token
 }
 
+function Get-SIContainerCertificateKeyFlags {
+    <# PURE. The key flags the container imports the SPN's PFX with: Exportable + PersistKeySet (the store keeps the key for
+       the life of the run). One place, so a test can pin them. #>
+    [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
+        [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+}
+
 function Import-SIContainerCertificate {
     <#
         CONTAINER ONLY. The SPN's PFX arrives as a Key Vault-referenced secret (base64), exactly as the SI
@@ -144,11 +151,13 @@ function Import-SIContainerCertificate {
         [Parameter(Mandatory)][string]$PfxBase64,
         [string]$Password,
         [string]$Directory = [IO.Path]::GetTempPath(),
-        [switch]$SkipStore
+        [switch]$SkipStore,
+        # TESTS ONLY: a Windows test session that cannot persist a private key (no DPAPI master key) imports with
+        # EphemeralKeySet instead. No caller in the product passes it: the container always uses Get-SIContainerCertificateKeyFlags.
+        [Parameter(DontShow)][AllowNull()][Nullable[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]]$KeyStorageFlags = $null
     )
     $bytes = [Convert]::FromBase64String(($PfxBase64 -replace '\s', ''))
-    $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
-             [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+    $flags = if ($null -ne $KeyStorageFlags) { [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]$KeyStorageFlags } else { Get-SIContainerCertificateKeyFlags }
     # A Key Vault certificate's secret is a password-less PFX; '' opens those on both .NET hosts.
     $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes, [string]$Password, $flags)
     if (-not $cert.HasPrivateKey) { throw 'the SPN certificate (SI_SPN_CERT_PFX_B64) carries no private key.' }

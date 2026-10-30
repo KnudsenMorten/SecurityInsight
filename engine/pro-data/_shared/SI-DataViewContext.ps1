@@ -621,7 +621,9 @@ function Get-SIDataCiIdentifierColumnsSql {
         every native id it links (sidata.CiLink) -- what the web app read per page before. A value once, sorted, '; '-joined.
         Only a CI whose values moved is written. Answers the number of CIs written; '' when the list has no such entry.
     #>
-    param([Parameter(Mandatory)]$List)
+    # -Ranged (2026-10-29): the same statement for ONE CiId range (/*R:..*/ markers, Invoke-SIDataCiViewColumns) -- every
+    # identifier, record and link of a CI is read with its CI, so each CI's values are exactly the whole statement's
+    param([Parameter(Mandatory)]$List, [switch]$Ranged)
     $lists = @(@($List.ci) | Where-Object { [string]$_.type -eq 'LIST' })
     if ($lists.Count -eq 0) { return '' }
     $sel = New-Object System.Collections.Generic.List[string]
@@ -637,16 +639,16 @@ function Get-SIDataCiIdentifierColumnsSql {
         $set.Add(("[{0}] = p.[{0}]" -f $col))
         $diff.Add(("ISNULL(c.[{0}], N'') <> ISNULL(p.[{0}], N'')" -f $col))
     }
-    @"
+    $sql = @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 CREATE TABLE #i (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, T NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, V NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL);
 INSERT #i (CiId, T, V)
-SELECT c.CiId, ai.IdentifierType, ai.IdentifierValue FROM sidata.Ci AS c JOIN sidata.AssetIdentifier AS ai ON ai.AssetKey = c.CiId
+SELECT c.CiId, ai.IdentifierType, ai.IdentifierValue FROM sidata.Ci AS c JOIN sidata.AssetIdentifier AS ai ON ai.AssetKey = c.CiId WHERE 1 = 1/*R:c.CiId*/
 UNION
-SELECT r.CiId, ri.IdType, ri.IdValue FROM sidata.CiRecord AS r JOIN sidata.RecordIdentifier AS ri ON ri.RecordKey = r.RecordKey WHERE r.CiId IS NOT NULL
+SELECT r.CiId, ri.IdType, ri.IdValue FROM sidata.CiRecord AS r JOIN sidata.RecordIdentifier AS ri ON ri.RecordKey = r.RecordKey WHERE r.CiId IS NOT NULL/*R:r.CiId*/
 UNION
-SELECT l.CiId, N'#link', l.NativeId FROM sidata.CiLink AS l;
+SELECT l.CiId, N'#link', l.NativeId FROM sidata.CiLink AS l WHERE 1 = 1/*R:l.CiId*/;
 CREATE TABLE #g (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, T NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, Vs NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL);
 INSERT #g (CiId, T, Vs)
 SELECT d.CiId, d.T, STRING_AGG(CONVERT(nvarchar(max), d.V), N'; ') WITHIN GROUP (ORDER BY d.V)
@@ -661,9 +663,17 @@ INTO #p
 FROM #g AS g GROUP BY g.CiId;
 UPDATE c SET $($set -join ', ')
 FROM sidata.Ci AS c LEFT JOIN #p AS p ON p.CiId = c.CiId
-WHERE $($diff -join ' OR ');
+WHERE ($($diff -join ' OR '))/*R:c.CiId*/;
 SELECT @@ROWCOUNT;
 "@
+    if ($Ranged) { return $sql }
+    Expand-SIDataViewRangeMarker -Sql $sql
+}
+
+function Expand-SIDataViewRangeMarker {
+    <# PURE. The statement without its range markers (/*R:..*/): the whole-table statement of before. #>
+    param([Parameter(Mandatory)][string]$Sql)
+    [regex]::Replace($Sql, '/\*R:[A-Za-z0-9_\.\[\]]+\*/', '')
 }
 
 function Get-SIDataCiContextFieldsSql {
@@ -675,7 +685,9 @@ function Get-SIDataCiContextFieldsSql {
         FLOAT), a yes / no (BIT) and a date (DATETIME2(3), UTC) are stored typed; a list / object field (JSON) is kept as its
         JSON text, a scalar in such a field as its text. Answers the number of CIs filled.
     #>
-    param([Parameter(Mandatory)]$List, [int]$BatchSize = 2000)
+    # -Ranged (2026-10-29): the same UPDATE for ONE CiId range (/*R:c.CiId*/), without the loop -- the loop of batches ran
+    # inside ONE command, so the client waited for every batch of the whole table at once
+    param([Parameter(Mandatory)]$List, [int]$BatchSize = 2000, [switch]$Ranged)
     $set = New-Object System.Collections.Generic.List[string]
     $with = New-Object System.Collections.Generic.List[string]
     foreach ($e in @($List.ci)) {
@@ -702,6 +714,16 @@ function Get-SIDataCiContextFieldsSql {
     if ($set.Count -gt 0) { $fill = ($set -join ', ') + ', ' }
     $apply = ''
     if ($with.Count -gt 0) { $apply = "OUTER APPLY OPENJSON(CASE WHEN ISJSON(c.DocJson) = 1 AND LEFT(LTRIM(c.DocJson), 1) = N'{' THEN c.DocJson END) WITH ($($with -join ', ')) AS j" }
+    if ($Ranged) {
+        return @"
+SET NOCOUNT ON;
+UPDATE c SET ${fill}CtxHash = ISNULL(c.ContentHash, 0x00), CtxSet = @Set
+FROM sidata.Ci AS c
+$apply
+WHERE (c.CtxHash IS NULL OR c.CtxHash <> ISNULL(c.ContentHash, 0x00) OR c.CtxSet IS NULL OR c.CtxSet <> @Set)/*R:c.CiId*/;
+SELECT @@ROWCOUNT;
+"@
+    }
     @"
 SET NOCOUNT ON;
 DECLARE @b INT = 1, @t INT = 0;
@@ -736,10 +758,26 @@ function Invoke-SIDataCiViewColumns {
             & $Log 'WARN' 'v3 model    : the database does not have the CI context columns yet -- run setup\Initialize-SIDataSql.ps1 again (the updater does it); the views read the CI context from the CI document until then.'
             return [pscustomobject]@{ Status = 'no-schema' }
         }
-        $nI = 0
-        $idSql = Get-SIDataCiIdentifierColumnsSql -List $List
-        if ($idSql) { $nI = [int](& $Invoke $idSql @{} 'scalar') }
-        $nF = [int](& $Invoke (Get-SIDataCiContextFieldsSql -List $List) @{ Set = (Get-SIViewCiSetId -List $List) } 'scalar')
+        $nI = 0; $nF = 0
+        $setId = Get-SIViewCiSetId -List $List
+        if ((Get-Command -Name Test-SIDataRangedSeam -ErrorAction SilentlyContinue) -and (Test-SIDataRangedSeam $Invoke)) {
+            # 2026-10-29 a CiId range at a time (live: 8,139 s as two commands over every CI): per range the identifiers, then the
+            # fields of the same CIs -- a CI is still marked filled only by the second, each range one command per statement
+            $idR = Get-SIDataCiIdentifierColumnsSql -List $List -Ranged; $fR = Get-SIDataCiContextFieldsSql -List $List -Ranged; $inv = $Invoke
+            $ans = Invoke-SIDataKeyRanges -Invoke $Invoke -Table 'sidata.Ci' -Column 'CiId' -What 'v3 model    : the CI context columns' -Log $Log -Step {
+                param($r)
+                $a = 0L; $b = 0L; $sw = [Diagnostics.Stopwatch]::StartNew()
+                if ($idR) { $p = Add-SIDataRangeParams -Params @{} -Range $r; $a = [long](& $inv (Expand-SIDataRangeMarker -Sql $idR -Range $r) $p 'scalar') }
+                $msI = $sw.ElapsedMilliseconds
+                $p = Add-SIDataRangeParams -Params @{ Set = $setId } -Range $r; $b = [long](& $inv (Expand-SIDataRangeMarker -Sql $fR -Range $r) $p 'scalar')
+                [pscustomobject]@{ I = $a; F = $b; Text = ('identifiers on {0:N0} CI(s) ({1:N1} s), fields on {2:N0} CI(s) ({3:N1} s)' -f $a, ($msI / 1000.0), $b, (($sw.ElapsedMilliseconds - $msI) / 1000.0)) }
+            }
+            foreach ($x in @($ans)) { $nI += [int]$x.I; $nF += [int]$x.F }
+        } else {
+            $idSql = Get-SIDataCiIdentifierColumnsSql -List $List
+            if ($idSql) { $nI = [int](& $Invoke $idSql @{} 'scalar') }
+            $nF = [int](& $Invoke (Get-SIDataCiContextFieldsSql -List $List) @{ Set = $setId } 'scalar')
+        }
         & $Log 'OK' ("v3 model    : the CI context columns filled on {0} CI(s); identifier values and linked objects written on {1} CI(s)" -f $nF, $nI)
         return [pscustomobject]@{ Status = 'ok'; Fields = $nF; Identifiers = $nI }
     } catch {

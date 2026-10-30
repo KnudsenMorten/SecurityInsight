@@ -103,6 +103,10 @@ param(
     [int]$Workers = 0,
     [switch]$NoDotnet,
     [switch]$NoSafety,
+    # 2026-10-29 THE SCALE MEASUREMENTS, ON DEMAND ONLY (owner 2026-10-11: "dont run that 100000 test"): the tests tagged Scale of
+    # the suites named with -Suites (nothing else is selected for it), each bounded by -TimeoutMinutes instead of the quick
+    # gate's 20 minutes -- a deliberate measurement the owner asks for by name, never a release gate
+    [switch]$Scale,
     [switch]$ListOnly,
     # the selection as JSON (Full, Base, Changed, Suites, Dotnet, Unmapped, OverBudget, AllSuites, MeasuredSeconds,
     # LongestSeconds) -- setup\Release-SI.ps1 reads it (-ListOnly)
@@ -113,8 +117,8 @@ param(
     [int]$TimeoutMinutes = 40,
     # THE HARD 20-MINUTE STOP of the quick gate (owner 2026-10-13: 10 min; owner 2026-10-28: "extend to 20 min"): per suite and
     # for the whole gate; 0 = fast-gate.map.json quick (1200). Never above 1200 -- a shorter one is for the gate's own tests.
-    [ValidateRange(0, 1200)][int]$SuiteLimitSeconds = 0,
-    [ValidateRange(0, 1200)][int]$GateLimitSeconds = 0,
+    [ValidateRange(0, 2400)][int]$SuiteLimitSeconds = 0,
+    [ValidateRange(0, 2400)][int]$GateLimitSeconds = 0,
     [ValidateRange(1, 600)][int]$ProgressSeconds = 60,
     # the older COVERING selection (every suite that covers each changed path), as a diagnostic: -ListOnly only
     [switch]$Precise,
@@ -1342,15 +1346,26 @@ if (-not $Full) {
     $qRuntimes = @(switch ($Runtime) { 'both' { 'pwsh', 'ps51' } 'pwsh' { 'pwsh' } 'ps51' { 'ps51' } })
     $qExe = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
     foreach ($rt in $qRuntimes) { if (-not (Get-Command $qExe[$rt] -ErrorAction SilentlyContinue)) { Write-Host "  FATAL: $($qExe[$rt]) not found" -ForegroundColor Red; exit 2 } }
-    $qSuiteLimit = if ($SuiteLimitSeconds -gt 0) { $SuiteLimitSeconds } else { $map.Quick.SuiteLimitSeconds }
+    # owner 2026-10-29 ("just rerun with 40 min" / "approved"): above the hard 20 minutes ONLY on the owner's own words for this
+    # run (-OwnerWords), and never above 40 minutes; without his words the gate stops at 20 minutes as always
+    if (($SuiteLimitSeconds -gt 1200 -or $GateLimitSeconds -gt 1200) -and -not "$OwnerWords".Trim()) {
+        Write-Host '  REFUSED: a gate longer than 20 minutes runs only on the owner''s own words for this run (-OwnerWords). Nothing was run.' -ForegroundColor Red; exit 2
+    }
+    if ($SuiteLimitSeconds -gt 1200 -or $GateLimitSeconds -gt 1200) { Write-Host ("  the owner's words for this run raise the limit to {0:N0} min: '{1}'" -f ([Math]::Max($SuiteLimitSeconds, $GateLimitSeconds) / 60), "$OwnerWords".Trim()) -ForegroundColor Yellow }    $qSuiteLimit = if ($SuiteLimitSeconds -gt 0) { $SuiteLimitSeconds } else { $map.Quick.SuiteLimitSeconds }
     $qGateLimit = if ($GateLimitSeconds -gt 0) { $GateLimitSeconds } else { $map.Quick.GateLimitSeconds }
+    if ($Scale) {
+        # a scale measurement runs only the suites named by -Suites, each as long as -TimeoutMinutes allows (on demand only)
+        if (-not "$Suites".Trim()) { Write-Host '  FATAL: -Scale runs only the suites named with -Suites (a measurement asked for by name)' -ForegroundColor Red; exit 2 }
+        $qSuiteLimit = [Math]::Max(60, 60 * $TimeoutMinutes); $qGateLimit = $qSuiteLimit
+        Write-Host ("  SCALE: the tests tagged Scale of {0} run, up to {1} minute(s) -- on demand only" -f $Suites, $TimeoutMinutes) -ForegroundColor Yellow
+    }
     $qThrottle = if ($Workers -gt 0) { $Workers } else { [Math]::Max(1, [Math]::Min($map.Quick.Throttle, [Environment]::ProcessorCount)) }
     $work = Join-Path ([IO.Path]::GetTempPath()) ('si-gate-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $shardScript = Join-Path $pesterDir '_Invoke-GateShard.ps1'
     # a public copy leaves the private-repository checks out; EVERY gate leaves out the scale benchmarks (tag Scale); a
     # suite the quick gate selects runs whole otherwise (its Nightly-tagged tests too: there is no nightly run)
-    $exclude = Get-SIFastGateExcludeTags -Scope $scope -Hotfix
+    $exclude = Get-SIFastGateExcludeTags -Scope $scope -Hotfix -Scale:$Scale
     $exclude = Add-SIFastGatePs51Tag -Exclude $exclude -Runtime $Runtime
     # THE GATE WAITS FOR SQL (owner 2026-10-25): a selected suite with real-SQL tests skips them without a local SQL
     # Server, and a skip is not a pass -- so SQL Express is started and probed first, and SI_TEST_LOCALSQL is set for

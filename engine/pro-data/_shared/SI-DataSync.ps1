@@ -112,12 +112,16 @@ function Invoke-SIDataSyncCore {
     $phaseClock = [Diagnostics.Stopwatch]::StartNew()
     # the SQL pacing's own waits (SI-SqlPacing.ps1: the job sleeps before a range while the database is saturated -- time that
     # is in no SQL statement): per phase, the seconds the pacer waited, as a row of its own ('<phase>: paused')
-    $phasePaced = @{ S = 0.0 }
+    $phasePaced = @{ S = 0.0; N = 0 }
     $phase = {
         param([string]$Name, [long]$Rows = -1)
         $sec = $phaseClock.Elapsed.TotalSeconds; $phaseClock.Restart()
         & $Log 'INFO' ("timing      : {0} -- {1:N1} s{2}" -f $Name, $sec, $(if ($Rows -ge 0) { (', {0:N0} row(s)' -f $Rows) } else { '' }))
         if (-not $DryRun -and (Get-Command -Name Write-SIStepPhase -ErrorAction SilentlyContinue)) { $null = Write-SIStepPhase -Invoke $phaseInvoke -Job 'asset-datasync' -Phase $Name -Seconds $sec -Rows $Rows }
+        # #576: the running step's progress on Operations > Jobs -- the phase just finished and how many phases are done
+        # (the data sync does not know its number of phases in advance: no total). Best effort, never fails the sync.
+        $phasePaced.N = [int]$phasePaced.N + 1
+        if (-not $DryRun -and (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue)) { $null = Write-SIStepProgress -Invoke $phaseInvoke -Job 'asset-datasync' -Phase ('finished: ' + $Name) -Done $phasePaced.N -Force }
         $pz = 0.0; if (Get-Command -Name Get-SISqlPacingSummary -ErrorAction SilentlyContinue) { try { $pz = [double](Get-SISqlPacingSummary -Invoke $Invoke).PausedSeconds } catch { $pz = $phasePaced.S } }
         $pd = $pz - $phasePaced.S; $phasePaced.S = $pz
         if ($pd -gt 0) {
@@ -342,7 +346,7 @@ function Invoke-SIDataSyncCore {
         $result.Merges = Invoke-SIDataDuplicateAssetMerge -Invoke $Invoke -DryRun:$DryRun -Log $Log
         if (-not $DryRun) { foreach ($d in @($result.Merges.Days)) { if ($d -and -not $repairDays.Contains([string]$d)) { $repairDays.Add([string]$d) } } }
     }
-    foreach ($d in $repairDays) { [void](& $Invoke (Get-SIDataFindingDailySql) @{ Day = $d } 'scalar') }
+    foreach ($d in $repairDays) { [void](Invoke-SIDataFindingDaily -Invoke $Invoke -Day ([string]$d) -Log $Log) }
 
     & $phase 'repairs (report names, duplicate assets)'
     # ---- 4 (y). #855 W10: the newest and the published collection, stored before the lifecycle was stamped, are stamped ONCE
@@ -362,8 +366,8 @@ function Invoke-SIDataSyncCore {
         else {
             foreach ($p in $pendAd) {
                 $counted = [bool]$p['Counted']
-                if ($counted) { [void](& $Invoke (Get-SIDataFindingDailySql -Counted) @{ Day = [string]$p['Day'] } 'scalar') }
-                else { [void](& $Invoke (Get-SIDataFindingDailySql) @{ Day = [string]$p['Day'] } 'scalar') }
+                if ($counted) { [void](Invoke-SIDataFindingDaily -Invoke $Invoke -Counted -Day ([string]$p['Day']) -Log $Log) }
+                else { [void](Invoke-SIDataFindingDaily -Invoke $Invoke -Day ([string]$p['Day']) -Log $Log) }
             }
             & $ok ("assets      : {0} day(s) got their distinct asset counts (an asset counts once per group, never once per finding group added up)" -f $pendAd.Count)
         }
@@ -413,6 +417,17 @@ function Invoke-SIDataSyncCore {
     }
 
     & $phase 'views (derive)' ([long](@($result.Derived | ForEach-Object { if ($_) { [long]$_.Findings } else { 0L } }) | Measure-Object -Sum).Sum)
+    # ---- 4b (2). the risk score's parts as columns (2026-10-29): the collections stored before the parts were columns get
+    # them, newest first, within 20 minutes per run (the rest on the next runs; a stopped collection goes on where it stopped).
+    # A new collection got them with its derive above. Never fails the run.
+    if (Get-Command -Name Invoke-SIDataRiskPartsBackfill -ErrorAction SilentlyContinue) {
+        $result['RiskParts'] = Invoke-SIDataRiskPartsBackfill -Invoke $Invoke -DryRun:$DryRun -BudgetSeconds 1200 -Log $Log
+        & $phase 'risk score parts' ([long]$result['RiskParts'].Rows)
+    }
+    # the same parts on the Risk Analysis Summary rows (written by Risk Analysis before this step, or loaded earlier)
+    if (Get-Command -Name Invoke-SIDataSummaryRiskParts -ErrorAction SilentlyContinue) {
+        $result['SummaryRiskParts'] = Invoke-SIDataSummaryRiskParts -Invoke $Invoke -DryRun:$DryRun -Log $Log
+    }
     # ---- 4c. asset responsibility (#254): each finding's department, pre-resolved ---------------------------------
     if ($Responsibility -and (Get-Command -Name Invoke-SIDataResponsibility -ErrorAction SilentlyContinue)) {
         if (@($Responsibility.Problems).Count) {
@@ -1432,7 +1447,7 @@ function Invoke-SIDataAdoptRaCollection {
         [void](& $Invoke (Get-SIDataMarkPartialSql) @{ CollectionId = $cid; Reason = $why; By = 'the current rules (a partial run is loaded, marked partial)'; ReleasedUtc = '' } 'scalar')
         & $Log 'WARN' ("  the collection of {0} UTC is MARKED PARTIAL -- its Risk Analysis run did not finish every report; what it missed is unknown, not resolved" -f $tText)
     }
-    $daily = [int](& $Invoke (Get-SIDataFindingDailySql) @{ Day = $Item.CollectionTime.ToUniversalTime().ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } 'scalar')
+    $daily = [int](Invoke-SIDataFindingDaily -Invoke $Invoke -Day $Item.CollectionTime.ToUniversalTime().ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture))
     $clock.Stop()
     $seconds = [long][Math]::Round($clock.Elapsed.TotalSeconds)
     & $Log 'OK' ("  completed {0} (written by Risk Analysis): {1} row(s), {2} second(s) -- {3} asset(s), {4} recommendation(s); {5} daily aggregate row(s)" -f $tText, $rows, $seconds, $nAssets, $nRec, $daily)
@@ -1585,7 +1600,7 @@ function Invoke-SIDataLoadCollection {
     # ---- complete -----------------------------------------------------------------------------------------------
     $done = [int](& $Invoke (Get-SIDataCompleteCollectionSql) @{ CollectionId = $cid; Rows = [int]$written } 'scalar')
     if ($done -ne 1) { throw ("{0}: the collection could not be marked complete -- the database does not hold all {1} row(s)." -f $tText, $written) }
-    $daily = [int](& $Invoke (Get-SIDataFindingDailySql) @{ Day = $Item.CollectionTime.ToUniversalTime().ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } 'scalar')
+    $daily = [int](Invoke-SIDataFindingDaily -Invoke $Invoke -Day $Item.CollectionTime.ToUniversalTime().ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture))
     $clock.Stop()
     $seconds = [long][Math]::Round($clock.Elapsed.TotalSeconds)
     # one plain line per collection: what was loaded, in how many pages, and how long it took

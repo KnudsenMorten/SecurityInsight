@@ -370,3 +370,37 @@ function Close-SICollectRunsOf {
     } catch { $err = [string]$_.Exception.Message }
     [pscustomobject]@{ Closed = $closed.ToArray(); Why = $err }
 }
+
+# =====================================================================================================================
+#  THE RUN REPORT OF A RUN IN PARTS (2026-10-29): the producer reports its END before its hand-over, and each part its own,
+#  so an ok from any of them is no proof that the collection is whole (a failed hand-over's ticket was once closed by a
+#  later ok). Those executions no longer report the job's ok (SuppressJobOk); the execution that publishes the records does.
+# =====================================================================================================================
+function Get-SICollectRunStepsOk {
+    <# PURE. Every step of a whole collection run in parts, in order -- the stages of the engine (Invoke-SIEngineRun.ps1's
+       list: the azure engine adds 'recommendations'), then the hand-over and the records. #>
+    param([Parameter(Mandatory)][string]$Engine)
+    $st = @('schedule', 'discover', 'collect', 'enrich', 'classify', 'profile', 'reconcile', 'output', 'tagging')
+    if ($Engine -eq 'azure') { $st += 'recommendations' }
+    [string[]]@($st + @('handover', 'records'))
+}
+
+function Get-SICollectRunReport {
+    <#
+        PURE. What the execution that published a run's records reports for the job: -RecordsState 'published' | 'failed'
+        (Invoke-SICollectRecordsIfLast), -FailedParts (parts marked failed). Returns @{ RunContext; ExitReason; Message } or
+        $null (nothing more to report: a failed part has reported itself, and its collection is not whole).
+          every part done, the records published   success, StepsOk = every step (Get-SICollectRunStepsOk)
+          the records not all published            error, FailedStep 'records'
+    #>
+    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RecordsState, [int]$FailedParts = 0, [string]$RunId = '', $StartedAt)
+    $start = if ($StartedAt) { ([datetime]$StartedAt).ToUniversalTime() } else { [datetime]::UtcNow }
+    $ctx = [pscustomobject]@{ RunId = $RunId; Engine = $Engine; ShardIndex = 0; ShardCount = 1; CollectionTime = $start; StartedAt = $start }
+    if ($RecordsState -eq 'failed') {
+        $ctx | Add-Member -NotePropertyName FailedStep -NotePropertyValue 'records'
+        return [pscustomobject]@{ RunContext = $ctx; ExitReason = 'error'; Message = ('the records of this {0} collection were not all published -- it is not complete and stays on its last good collection' -f $Engine) }
+    }
+    if ($RecordsState -ne 'published' -or $FailedParts -gt 0) { return $null }
+    $ctx | Add-Member -NotePropertyName StepsOk -NotePropertyValue (Get-SICollectRunStepsOk -Engine $Engine)
+    [pscustomobject]@{ RunContext = $ctx; ExitReason = 'success'; Message = '' }
+}

@@ -1049,6 +1049,31 @@
     "since": null
   },
   {
+    "code": "si-flow-1204",
+    "title": "A pipeline step runs far past its usual time and shows no progress",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A step of the pipeline run going on now has run far longer than its last run took on this installation, and it has shown no sign of progress for an hour. Nothing is stopped: the run goes on. Support looks at the step to see whether it is stuck.",
+    "internalNote": "The newest cfg.FlowRun is Running and a Running / Starting cfg.FlowStepRun of it has run longer than max(2 x its last run's time, its last run's time + 60 min) -- its last run's time = that job's newest successful step among the newest 10 run records; none known: 6 h -- AND shows no progress for 60 minutes: its newest mark in cfg.StepProgress (its own execution's or its job's workers', moved by every batch a step writes, at most every 5 minutes) or phase row in cfg.StepPhaseTime is older than that, or, for a step that writes neither, the runner's log check found no sign of progress (its RetryReason). Get-SIPipelineStalledSteps, engine/_shared/SI-JobFlow.ps1. Found 2026-10-29: a correlation ran 55 h and two data syncs 35 h+ before anyone acted. Warning only: nothing is stopped or held. since = when it became stuck; the steps are named in Pipeline.stalledSteps (step, sinceUtc, lastProgressUtc); the runner's log and the step's RetryReason say it once. A person may cancel the run on Operations > Jobs -- SecurityInsight never does.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Open the run on Operations > Jobs and the step named on the heartbeat: read its log and its database load. A step that stands still: decide with the customer whether to cancel the run there."
+      }
+    ],
+    "lesson": "Time alone does not tell a long step from a stuck one: a step that writes nothing for an hour, far past its usual time, is the one to look at.",
+    "since": null
+  },
+  {
     "code": "si-snow-1301",
     "title": "A ServiceNow output's check failed",
     "causeClass": "settings-unreachable",
@@ -1081,8 +1106,8 @@
       "capabilities": [],
       "licences": []
     },
-    "customerText": "The pages of the merged assets (CIs and assets) show a copy that is older than the run the rest of the web app shows, so their numbers can differ from the other pages. Your data is unchanged. SecurityInsight refreshes the copy by itself within minutes; support is told if it stays.",
-    "internalNote": "sidata.PublishedRun 'current' in the data database has CopiedAt NULL or older than PublishedAt: the pointer moved without the copies (sidata.CiPub, AssetPub, ...) being refreshed. Before the publisher refreshed the copies itself, a publish that did not go through the runner's batch (a hand publish through sidata.PublishedRunSet) did exactly that; found live 2026-10-21 (the copy predated the CI lifecycle build). Now sidata.PublishedRunSet refreshes them in its own transaction (sidata.PublishedCopyRefreshAll) and sidata.PublishedCopyCatchUp repairs a stale copy on every wake-up of the pipeline runner, after every publish attempt that did not publish, and in the update (step 9g). Raised by the heartbeat's Warnings (Get-SIHeartbeatPublishedCopySql); since = PublishedAt. If it stays: read the runner's log for the catch-up line, or EXEC sidata.PublishedCopyCatchUp through the Support app.",
+    "customerText": "The pages of the merged assets (CIs and assets) show a copy that is older than the run the rest of the web app shows, so their numbers can differ from the other pages. Your data is unchanged. SecurityInsight refreshes the copy by itself right after each run; support is told if it stays.",
+    "internalNote": "sidata.PublishedRun 'current' in the data database has CopiedAt NULL or older than PublishedAt, no refresher is writing the copies (the session lock si-published-copy-refresh is free), and the publish is older than twice the last refresh's own time (the sum of sidata.PublishedCopy.Milliseconds) plus 10 minutes (Test-SIHeartbeatCopyStaleTooLong). Every publish moves the pointer first and the copies (sidata.CiPub, AssetPub, ...) follow range by range right after it (Invoke-SIPublishedCopyRefresh; CopiedAt moves when every range is done -- 14 minutes on internal 2026-10-28), so a copy being written is the normal course and is not said. sidata.PublishedCopyCatchUp repairs a stale copy on every wake-up of the pipeline runner, after every publish attempt that did not publish, and in the update (step 9g); found live 2026-10-21 after a hand publish. Raised by the heartbeat's Warnings (Get-SIHeartbeatPublishedCopySql); since = PublishedAt. If it stays: read the runner's log for the catch-up line, or EXEC sidata.PublishedCopyCatchUp through the Support app.",
     "whoActs": "support",
     "priority": "P2",
     "opensTicket": true,

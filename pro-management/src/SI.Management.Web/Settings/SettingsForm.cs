@@ -22,6 +22,8 @@ public static class SettingsForm
 {
     /// The reason the change log records for a change saved on the Settings page (the reason is optional there).
     public const string Reason = "changed in Settings";
+    /// #633: the plain sentence when the mailbox that proves the restriction is given without an @ (a display name).
+    public const string ProbeNeedsAddress = "Give the mailbox's e-mail address, not its display name";
 
     /// Loose on purpose: one @, something on both sides, a dot in the domain, no spaces or list separators.
     private static readonly Regex Mail = new(@"^[^@\s<>,;""]+@[^@\s<>,;""]+\.[^@\s<>,;""]+$", RegexOptions.CultureInvariant);
@@ -75,6 +77,10 @@ public static class SettingsForm
 
         var text = p.Value ?? "";
         if (text.Trim().Length == 0 && s.Type != "bool") return ResetOrNothing();
+        // #633 (owner 2026-10-13: "peope try with display name only"): the mailbox that proves the restriction is an e-mail
+        // ADDRESS -- a display name is refused here, in plain words, instead of failing later at Exchange
+        if (string.Equals(s.Name, MailMode.ProbeSetting, StringComparison.OrdinalIgnoreCase) && !text.Contains('@'))
+            return (null, ProbeNeedsAddress);
         if (s.Type == "bool" && text.Trim().Length == 0) return ResetOrNothing();   // Not set on a three-way switch
         var value = SettingJson.FromForm(s, s.Type is "int" or "number" or "enum" or "bool" ? text.Trim() : text);
         var stored = SettingJson.ToStoredText(value);

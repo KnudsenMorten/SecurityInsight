@@ -1165,6 +1165,55 @@ function Get-SIInstallStateDirectory {
     [IO.Path]::Combine($home_, 'clouddrive', 'invardia', $InstallId)
 }
 
+function Resolve-SIInstallDirectConfig {
+    <#
+        The install started with its answers as PARAMETERS instead of -ConfigPath (owner 2026-10-29: "make 4-5 samples,
+        most common is interactive login"): -TenantId and -SubscriptionId, plus the optional -Location, -ResourceGroup,
+        -MailTo, -CollectionScope, -ManagementGroupId, -PrivateNetwork and -VnetAddressPrefix; everything else keeps its
+        default from install-parameters.json, as in a config.json that leaves it out.
+        The answers are written as config.json in the install's state folder, so the same install continues with -Resume
+        alone; a check-only run (-PreflightOnly) writes it to a temporary file, never to the state folder. No answers and
+        -Resume: the state folder's config.json from the first run. -Bound: the script's $PSBoundParameters.
+        @{ Ok; ConfigPath; Message }.
+    #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Bound, [Parameter(Mandatory)][string]$InstallId, [string]$StatePath,
+          [switch]$PreflightOnly, [switch]$Resume)
+    $map = [ordered]@{ TenantId = 'tenantId'; SubscriptionId = 'subscriptionId'; Location = 'location'; ResourceGroup = 'resourceGroup'
+                       MailTo = 'mailTo'; CollectionScope = 'collectionScope'; ManagementGroupId = 'managementGroupId'
+                       PrivateNetwork = 'privateNetwork'; VnetAddressPrefix = 'vnetAddressPrefix' }
+    $boundKeys = @($Bound.Keys)   # $PSBoundParameters has no public Contains(); its Keys work for it and a hashtable alike
+    $given = @($map.Keys | Where-Object { $boundKeys -contains $_ })
+    $dir = Get-SIInstallStateDirectory -StatePath $StatePath -InstallId $InstallId
+    $stored = [IO.Path]::Combine($dir, 'config.json')
+    if (-not $given.Count) {
+        if ($Resume -and (Test-Path -LiteralPath $stored)) { return @{ Ok = $true; ConfigPath = $stored; Message = ('Continuing the install with its answers from {0}' -f $stored) } }
+        return @{ Ok = $false; ConfigPath = $null
+                  Message = 'Tell the install where to go: -TenantId <tenant id> -SubscriptionId <subscription id> (or -ConfigPath <config.json> for every setting).' }
+    }
+    $missing = @('TenantId', 'SubscriptionId' | Where-Object { -not "$($Bound[$_])".Trim() })
+    if ($missing.Count) { return @{ Ok = $false; ConfigPath = $null; Message = ('Also needed: {0}' -f ((@($missing) | ForEach-Object { '-' + $_ }) -join ' ')) } }
+    if ("$($Bound['CollectionScope'])" -eq 'managementGroup' -and -not "$($Bound['ManagementGroupId'])".Trim()) {
+        return @{ Ok = $false; ConfigPath = $null; Message = 'Also needed with -CollectionScope managementGroup: -ManagementGroupId <management group id>' }
+    }
+    $cfg = [ordered]@{ installId = $InstallId }
+    foreach ($k in $given) {
+        $v = $Bound[$k]
+        if ($v -is [System.Management.Automation.SwitchParameter]) { $v = [bool]$v }
+        elseif ($k -eq 'MailTo') { $v = @($v | ForEach-Object { "$_" -split '[,;\s]+' } | Where-Object { $_ }) }   # "a,b" from a command line too
+        else { $v = "$v".Trim() }
+        $cfg[$map[$k]] = $v
+    }
+    $json = ConvertTo-Json -InputObject $cfg -Depth 4
+    if ($PreflightOnly) {
+        $path = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('si-install-{0}-{1}.json' -f $InstallId, [guid]::NewGuid().ToString('N')))
+    } else {
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $path = $stored
+    }
+    [IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding $false))
+    @{ Ok = $true; ConfigPath = $path; Message = $(if ($PreflightOnly) { '' } else { ('Your answers are kept in {0} (run the same install again with -Resume)' -f $path) }) }
+}
+
 function Read-SIInstallState {
     param([Parameter(Mandatory)][string]$Directory)
     $f = [IO.Path]::Combine($Directory, 'state.json')

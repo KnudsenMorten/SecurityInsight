@@ -105,7 +105,8 @@ public sealed class IndexModel : PageModel
         InDatabase = rows.Count;
         LicenceAutoOn = ProAutoSwitches.IsOn(rows, ProAutoSwitches.LicenceRequest);
         InvardiaUpdatesOn = ProAutoSwitches.IsOn(rows, ProAutoSwitches.InvardiaUpdates);
-        IEnumerable<CatalogSetting> list = _catalog.All;
+        // the mail switch of a check that never mails is not shown (GuardSwitches.HiddenOnSettingsPage)
+        IEnumerable<CatalogSetting> list = _catalog.All.Where(s => !SI.Management.Web.Guards.GuardSwitches.HiddenOnSettingsPage(s.Name));
         if (!string.IsNullOrWhiteSpace(Q))
         {
             var q = Q.Trim();

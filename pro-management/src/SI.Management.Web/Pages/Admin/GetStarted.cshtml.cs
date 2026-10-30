@@ -119,6 +119,9 @@ public sealed class GetStartedModel : PageModel
                 }
                 // #503: the mail step names the shared mailbox in two steps (the address is typed only there)
                 if (Current.Id == "mail") MailboxSteps = SI.Management.Web.Pages.Admin.Settings.EmailModel.StepsOf(rows, User, _config, _jobOptions.Value);
+                // #633 (owner 2026-10-13): with an SMTP relay the sender is ONE field ("Mail sender address"); the older sender
+                // setting is shown only while it holds a value (it is then used instead of the field above it)
+                if (Current.Id == "mail") Fields = Fields.Where(f => !GetStartedGuide.MailFieldOnlyWhenSet(f.Setting.Name) || !string.IsNullOrWhiteSpace(f.Text)).ToList();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -146,6 +149,10 @@ public sealed class GetStartedModel : PageModel
             ConnectorForms ??= GetStartedConnector.PrefillAll(ConnectorRows);
         }
     }
+
+    /// #633: the label a field carries in this step (null = the catalog's) -- the mail step names each field for what it is
+    /// with the way of sending it belongs to.
+    public string? FieldLabel(SettingField f) => Current.Id == "mail" ? GetStartedGuide.MailFieldLabel(f.Setting.Name) : null;
 
     /// The show-when rule of a field in this step ("SI_Mail_Mode=smtp"), and whether it starts hidden.
     public (string? Rule, bool Hidden) ShowWhen(SettingField f)

@@ -59,6 +59,8 @@ public abstract class FindingRowsPageModel : CollectionPageModel
             ["Tier"] = TierValues, ["AssetKind"] = Kinds, ["Severity"] = Options(Facets.Severity), ["RiskRating"] = Options(Facets.Rating),
             ["SecurityDomain"] = Options(Facets.Domain), ["ReportName"] = Options(Facets.Report), ["MitreTactics"] = Options(Facets.Tactic),
             ["ComplianceTags"] = Options(Facets.Tag), ["HasExploit"] = Flags,
+            // dropdowns once the data sync stored their counts; a collection without them keeps the text filter
+            ["Category"] = Options(Facets.Category), ["Subcategory"] = Options(Facets.Subcategory), ["Department"] = Options(Facets.Department),
         },
         defaultSort);
 
@@ -115,6 +117,12 @@ public sealed class RowsModel(ICollectionViews views, ILogger<RowsModel> log) : 
     public override bool CompactFrame => true;
 
     public NamedView? CurrentView => NamedViews.Find(PagePath, View);
+
+    /// The sentence above the grid while the data sync has not yet given this collection's findings the risk score's parts.
+    public const string RiskPartsPendingText = "The risk score's parts of this collection (each side's base, factors and score) are being prepared by the data sync -- their columns fill after one of its next runs.";
+
+    /// True: the collection's findings do not carry the risk score's parts yet (their columns show empty).
+    public bool RiskPartsPending => Current is not null && Current.RiskPartsAt is null;
 
     public override IEnumerable<(string Key, string Value)> ExtraState()
     {
@@ -567,7 +575,7 @@ public sealed class RiskScoreModel(ICollectionViews views, ILogger<RiskScoreMode
     public const string DerivedText = "Some rows come from a collection made before each factor's points were recorded: their base is worked out as the side's score minus its factors' points and marked \"(derived)\", and their factors are listed without points. The next collection records every part.";
 
     /// A row of the page shown is worked out from an older collection (<see cref="DerivedText"/> is shown).
-    public bool ExplainHasDerived => Explain && Grid is { } g && g.Rows.Any(r => RiskExplanation.Of(r).Derived);
+    public bool ExplainHasDerived => Explain && Grid is { } g && g.Rows.Any(r => RiskExplanation.Read(r).Derived);
 
     protected override async Task<GridPlan?> PrepareAsync(bool forExport, CancellationToken ct)
     {
@@ -575,7 +583,8 @@ public sealed class RiskScoreModel(ICollectionViews views, ILogger<RiskScoreMode
         // the filters' choices from the collection's pre-computed counts (as the finding rows have them); the page has no
         // distribution table of its own -- the per-asset view shows it
         if (!forExport) await LoadFacetsAsync(ct);
-        return new GridPlan(RiskExplainSql.Grid, new Dictionary<string, object?> { ["CollectionId"] = Current!.CollectionId }, Current.Version,
+        // the parts as stored columns once the data sync filled this collection (no JSON read); until then each row's own parts
+        return new GridPlan(Current!.RiskPartsAt is null ? RiskExplainSql.Grid : RiskExplainSql.GridStored, new Dictionary<string, object?> { ["CollectionId"] = Current!.CollectionId }, Current.Version,
             new Dictionary<string, IReadOnlyList<string>>
             {
                 ["Tier"] = TierValues, ["Severity"] = Options(Facets.Severity), ["RiskRating"] = Options(Facets.Rating),
@@ -604,14 +613,14 @@ public sealed class RiskScoreModel(ICollectionViews views, ILogger<RiskScoreMode
         Func<double, string> num = csv ? ScoreFormat.Invariant : ScoreFormat.Number;
         return column switch
         {
-            "AssetBase" => RiskExplanation.BaseText(RiskExplanation.Of(row).Asset, num),
-            "AssetFactors" => RiskExplanation.FactorsText(RiskExplanation.Of(row).Asset, num),
-            "AssetSide" => RiskExplanation.Of(row).Asset.Score is { } a ? num(a) : "",
-            "VulnBase" => RiskExplanation.BaseText(RiskExplanation.Of(row).Vulnerability, num),
-            "VulnFactors" => RiskExplanation.FactorsText(RiskExplanation.Of(row).Vulnerability, num),
-            "VulnSide" => RiskExplanation.Of(row).Vulnerability.Score is { } v ? num(v) : "",
-            "Weight" => RiskExplanation.Of(row).WeightText(num),
-            "Formula" => RiskExplanation.Of(row).Formula(num),
+            "AssetBase" => RiskExplanation.BaseText(RiskExplanation.Read(row).Asset, num),
+            "AssetFactors" => RiskExplanation.FactorsText(RiskExplanation.Read(row).Asset, num),
+            "AssetSide" => RiskExplanation.Read(row).Asset.Score is { } a ? num(a) : "",
+            "VulnBase" => RiskExplanation.BaseText(RiskExplanation.Read(row).Vulnerability, num),
+            "VulnFactors" => RiskExplanation.FactorsText(RiskExplanation.Read(row).Vulnerability, num),
+            "VulnSide" => RiskExplanation.Read(row).Vulnerability.Score is { } v ? num(v) : "",
+            "Weight" => RiskExplanation.Read(row).WeightText(num),
+            "Formula" => RiskExplanation.Read(row).Formula(num),
             _ => null,
         };
     }

@@ -252,11 +252,23 @@ function Remove-SIProSchemaDeferredIndexes {
 }
 
 function Get-SIProSchemaIndexBuildSql {
-    <# PURE. The statement for one deferred index: RESUME a paused build, else CREATE it ONLINE + RESUMABLE, both with MAX_DURATION. #>
+    <# PURE. The statement for one deferred index: RESUME a paused build, else CREATE it ONLINE + RESUMABLE, both with MAX_DURATION.
+       A FILTERED index (CREATE ... WHERE ...) is built ONLINE only: SQL Server refuses RESUMABLE for it ("The RESUMABLE option
+       is not supported for creating a filtered index", seen 2026-10-29 on a Developer edition, the same engine as Azure SQL),
+       and MAX_DURATION needs RESUMABLE -- with both, such an index was never built and stayed pending on every update. It
+       still runs outside the schema's transaction and keeps the table readable and writable while it builds. #>
     param([Parameter(Mandatory)]$Index, [string]$BuildState = '', [Parameter(Mandatory)][int]$Minutes)
     $m = [Math]::Max(1, $Minutes)
     if ($BuildState -eq 'PAUSED') { return ('ALTER INDEX {0} ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f $Index.Name, $Index.Table, $m) }
-    '{0} WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = {1} MINUTES)' -f $Index.Statement.TrimEnd(';').TrimEnd(), $m
+    $stmt = $Index.Statement.TrimEnd(';').TrimEnd()
+    if (Test-SIProSchemaIndexFiltered -Index $Index) { return ('{0} WITH (ONLINE = ON)' -f $stmt) }
+    '{0} WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = {1} MINUTES)' -f $stmt, $m
+}
+
+function Test-SIProSchemaIndexFiltered {
+    <# PURE. Is -Index (Get-SIProSchemaIndexStatements) a filtered index -- a WHERE after its column list? #>
+    param([Parameter(Mandatory)]$Index)
+    [bool]([string]$Index.Statement -match '(?is)^\s*CREATE\b.*?\bON\b.*?\)\s*(INCLUDE\s*\([^)]*\)\s*)?WHERE\b')
 }
 
 function Invoke-SIProSchemaIndexStep {
@@ -281,7 +293,8 @@ function Invoke-SIProSchemaIndexStep {
         if ($rem -lt 1) { $pending.Add($d.Name); continue }
         $left = [int][Math]::Floor($rem + 0.05)                  # whole minutes (a few seconds of reading do not cost one)
         $sql = Get-SIProSchemaIndexBuildSql -Index $d -BuildState $(if ($b) { $b.State } else { '' }) -Minutes $left
-        & $Log ('  index {0} on {1}: {2} (up to {3} min)' -f $d.Name, $d.Table, $(if ($b) { "resumed at $($b.Percent)%" } else { 'built online, resumable' }), $left)
+        $how = if ($b) { "resumed at $($b.Percent)%" } elseif (Test-SIProSchemaIndexFiltered -Index $d) { 'built online (a filtered index cannot be resumable: it runs to the end)' } else { 'built online, resumable' }
+        & $Log ('  index {0} on {1}: {2} (up to {3} min)' -f $d.Name, $d.Table, $how, $left)
         $err = $null
         try { & $Run $sql } catch { $err = $_.Exception.Message }
         $after = $null; try { $after = Get-SIProSchemaIndexState -Invoke $Invoke -LargeTableRows ([long]::MaxValue) } catch { }

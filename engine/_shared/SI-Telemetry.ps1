@@ -27,7 +27,9 @@ if (-not (Get-Command -Name Get-SIErrorClass -ErrorAction SilentlyContinue)) {
     . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-ErrorClass.ps1'))
 }
 
-$script:SITelemetry = @{
+function Get-SITelemetryState {
+    <# The value of $script:SITelemetry, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetry) { $script:SITelemetry = @{
     Product          = 'securityinsight'
     Solution         = 'SecurityInsight'
     Schema           = 2
@@ -49,9 +51,12 @@ $script:SITelemetry = @{
     ReportIncompleteStep  = 'ra-report'
     ReportIncompleteClass = 'report-incomplete'
     ErrorTextMax     = 4000   # Invardia UPLINK-FIX 2026-10-07: run ErrorText max 4000
+} }
+    , $script:SITelemetry
 }
+$script:SITelemetry = $null; $null = Get-SITelemetryState
 
-function Get-SITelemetryContract { $script:SITelemetry }
+function Get-SITelemetryContract { (Get-SITelemetryState) }
 
 function Get-SITelemetryOutcome {
     <# PURE. ExitReason -> Outcome: success = ok, success-partial = warning, throttled = warning (#532, framework §12.18
@@ -95,7 +100,7 @@ function ConvertTo-SITelemetryErrorText {
     $t = [regex]::Replace($t, '(?i)\bBearer\s+[A-Za-z0-9_\-\.=~+/]+', 'Bearer [redacted]')
     $t = [regex]::Replace($t, '(?i)\b(client_secret|password|pwd|accountkey|sharedaccesskey|apikey|api-key|x-api-key|access_token|refresh_token)\s*[=:]\s*("[^"]*"|''[^'']*''|[^;&\s,]+)', '$1=[redacted]')
     $t = [regex]::Replace($t, '(?i)\bsig=[A-Za-z0-9%+/=]+', 'sig=[redacted]')
-    if ($t.Length -gt $script:SITelemetry.ErrorTextMax) { $t = $t.Substring(0, $script:SITelemetry.ErrorTextMax) }
+    if ($t.Length -gt (Get-SITelemetryState).ErrorTextMax) { $t = $t.Substring(0, (Get-SITelemetryState).ErrorTextMax) }
     $t
 }
 
@@ -108,17 +113,17 @@ function Test-SITelemetryValue {
 function New-SITelemetryBase {
     param([string]$Kind, [string]$Edition, [string]$Version, $Ring, [string]$Hosting, [string]$RuntimeIdentity, [string]$LicenceState,
           [bool]$Anonymous, [string]$InstallId, [string]$TenantId, [string]$HostName, $Now)
-    Test-SITelemetryValue -Name 'Edition' -Value $Edition -Allowed $script:SITelemetry.Editions
-    Test-SITelemetryValue -Name 'Hosting' -Value $Hosting -Allowed $script:SITelemetry.Hostings
-    Test-SITelemetryValue -Name 'RuntimeIdentity' -Value $RuntimeIdentity -Allowed $script:SITelemetry.RuntimeIdentities
-    Test-SITelemetryValue -Name 'LicenceState' -Value $LicenceState -Allowed $script:SITelemetry.LicenceStates
+    Test-SITelemetryValue -Name 'Edition' -Value $Edition -Allowed (Get-SITelemetryState).Editions
+    Test-SITelemetryValue -Name 'Hosting' -Value $Hosting -Allowed (Get-SITelemetryState).Hostings
+    Test-SITelemetryValue -Name 'RuntimeIdentity' -Value $RuntimeIdentity -Allowed (Get-SITelemetryState).RuntimeIdentities
+    Test-SITelemetryValue -Name 'LicenceState' -Value $LicenceState -Allowed (Get-SITelemetryState).LicenceStates
     if ($Anonymous -and $InstallId -notmatch '^[A-Za-z0-9\-]{16,64}$') { throw 'telemetry: an anonymous record needs its random InstallId (16-64 letters, digits or dashes)' }
     $ts = if ($Now) { ([datetime]$Now).ToUniversalTime() } else { [datetime]::UtcNow }
     $r = [ordered]@{
-        Schema          = $script:SITelemetry.Schema
+        Schema          = (Get-SITelemetryState).Schema
         Kind            = $Kind
-        Product         = $script:SITelemetry.Product
-        Solution        = $script:SITelemetry.Solution
+        Product         = (Get-SITelemetryState).Product
+        Solution        = (Get-SITelemetryState).Solution
         Edition         = $Edition
         Version         = [string]$Version
         Ring            = $(if ($null -ne $Ring -and [string]$Ring -ne '') { [int]$Ring } else { $null })
@@ -164,8 +169,11 @@ function New-SITelemetryRunRecord {
           [Parameter(Mandatory)][string]$Edition, [Parameter(Mandatory)][string]$Version, $Ring,
           [Parameter(Mandatory)][string]$Hosting, [Parameter(Mandatory)][string]$RuntimeIdentity, [Parameter(Mandatory)][string]$LicenceState,
           [long]$DurationMs = 0, [string]$FailedStep, [string]$ErrorClass, $ErrorRecord, [AllowEmptyString()][string]$ErrorMessage,
-          [System.Collections.IDictionary]$Counts, [switch]$Anonymous, [string]$InstallId, [string]$TenantId, [string]$HostName, $Now)
-    Test-SITelemetryValue -Name 'Job' -Value $Job -Allowed $script:SITelemetry.Jobs
+          [System.Collections.IDictionary]$Counts, [switch]$Anonymous, [string]$InstallId, [string]$TenantId, [string]$HostName, $Now,
+          # the steps this run finished well (Get-SITelemetryStepsOk) -- ids in the FailedStep shape, at most 50; ok and
+          # warning runs only: a later ok report that lists a step closes the ticket that step's failure opened
+          [string[]]$StepsOk)
+    Test-SITelemetryValue -Name 'Job' -Value $Job -Allowed (Get-SITelemetryState).Jobs
     $outcome = Get-SITelemetryOutcome -ExitReason $ExitReason
     if ($DurationMs -lt 0) { throw 'telemetry: DurationMs cannot be negative' }
     if ($FailedStep -and $FailedStep -notmatch '^[a-z][a-z0-9\-]{0,31}$') { throw ("telemetry: '{0}' is not a step name (lower-case letters, digits and dashes)" -f $FailedStep) }
@@ -175,16 +183,16 @@ function New-SITelemetryRunRecord {
         # #532 (framework §12.18): a throttled run reports ErrorClass 'throttled' -- platform-5xx / platform-timeout as the
         # only cause map the same way
         if ($ExitReason -eq 'throttled') { $cls = 'throttled' }
-        Test-SITelemetryValue -Name 'ErrorClass' -Value $cls -Allowed $script:SITelemetry_ErrorClasses
+        Test-SITelemetryValue -Name 'ErrorClass' -Value $cls -Allowed (Get-SITelemetryErrorClassList)
     }
     $c = [ordered]@{}
     if ($Counts) {
         foreach ($k in @($Counts.Keys)) {
-            if ($script:SITelemetry.CountNames -notcontains [string]$k) { throw ("telemetry: '{0}' is not a count ({1})" -f $k, ($script:SITelemetry.CountNames -join ', ')) }
-            if ([string]$k -cnotmatch $script:SITelemetry.CountKeyPattern) { throw ("telemetry: '{0}' is not a count name the receiver accepts" -f $k) }
+            if ((Get-SITelemetryState).CountNames -notcontains [string]$k) { throw ("telemetry: '{0}' is not a count ({1})" -f $k, ((Get-SITelemetryState).CountNames -join ', ')) }
+            if ([string]$k -cnotmatch (Get-SITelemetryState).CountKeyPattern) { throw ("telemetry: '{0}' is not a count name the receiver accepts" -f $k) }
         }
-        if (@($Counts.Keys).Count -gt $script:SITelemetry.MaxCounts) { throw ("telemetry: {0} counts -- the receiver drops a record with more than {1}" -f @($Counts.Keys).Count, $script:SITelemetry.MaxCounts) }
-        foreach ($k in $script:SITelemetry.CountNames) {
+        if (@($Counts.Keys).Count -gt (Get-SITelemetryState).MaxCounts) { throw ("telemetry: {0} counts -- the receiver drops a record with more than {1}" -f @($Counts.Keys).Count, (Get-SITelemetryState).MaxCounts) }
+        foreach ($k in (Get-SITelemetryState).CountNames) {
             if (-not $Counts.Contains($k)) { continue }
             if ($Anonymous) { $c[$k] = Get-SITelemetryCountBucket $Counts[$k] }
             else { $n = 0L; $c[$k] = $(if ([long]::TryParse([string]$Counts[$k], [ref]$n) -and $n -ge 0) { $n } else { $null }) }
@@ -197,6 +205,14 @@ function New-SITelemetryRunRecord {
     $r.Outcome = $outcome
     $r.DurationMs = $DurationMs
     $r.FailedStep = $(if ($outcome -ne 'ok' -and $FailedStep) { $FailedStep } else { $null })
+    if ($outcome -ne 'failed') {
+        $so = New-Object System.Collections.Generic.List[string]
+        foreach ($s in @($StepsOk)) {
+            $id = ([string]$s).Trim().ToLowerInvariant()
+            if ($id -cmatch '^[a-z][a-z0-9\-]{0,31}$' -and -not $so.Contains($id) -and $so.Count -lt 50) { $so.Add($id) }
+        }
+        if ($so.Count) { $r.StepsOk = [string[]]$so.ToArray() }
+    }
     $r.ErrorClass = $cls
     $r.Counts = [pscustomobject]$c
     if (-not $Anonymous) {
@@ -213,4 +229,9 @@ function New-SITelemetryRunRecord {
 }
 
 # the closed ErrorClass list, from the classifier (one definition)
-$script:SITelemetry_ErrorClasses = @(Get-SIErrorClasses)
+function Get-SITelemetryErrorClassList {
+    <# The value of $script:SITelemetry_ErrorClasses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetry_ErrorClasses) { $script:SITelemetry_ErrorClasses = @(Get-SIErrorClasses) }
+    , $script:SITelemetry_ErrorClasses
+}
+$script:SITelemetry_ErrorClasses = $null; $null = Get-SITelemetryErrorClassList

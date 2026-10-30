@@ -144,6 +144,7 @@
     { "table": "cfg.RaBucketHistory", "why": "the bucket count and measured result size of each Risk Analysis report per run; run logs" },
     { "table": "cfg.RaBucketReset", "why": "one-time requests to size a Risk Analysis report's buckets again; consumed by the next run, never restored" },
      { "table": "cfg.StepPhaseTime", "why": "how long each phase of a long step took and how many rows it handled; measurements of the runs, never configuration" },
+    { "table": "cfg.StepProgress", "why": "the newest sign of progress of each job execution; measurements of the runs, never configuration" },
     { "table": "cfg.RaBucketImport", "why": "which templates had their earlier bucket counts imported once; install state" },
     { "table": "cfg.RaSourceAccept", "why": "an Admin's acceptance that a report's source is empty for good; an audited decision record (cfg.ChangeLog) the runs clear when the source has rows again, never restored" },
     { "table": "cfg.DataHealthCycle", "why": "the data health check's daily cycles; run logs" },

@@ -44,6 +44,8 @@ SELECT N'Saved' AS Outcome;
     public IReadOnlyList<PipelineRequest> Queue { get; private set; } = Array.Empty<PipelineRequest>();
     public PipelineLock? Lock { get; private set; }
     public IReadOnlyDictionary<string, FlowStepRun> LastSteps { get; private set; } = new Dictionary<string, FlowStepRun>();
+    /// #576: the progress records of the running executions (cfg.StepProgress).
+    public IReadOnlyList<StepProgress> Progress { get; private set; } = Array.Empty<StepProgress>();
     [BindProperty] public string? Stage { get; set; }
     [BindProperty] public string? ToStage { get; set; }
     [BindProperty] public bool StageRunIfPreviousFailed { get; set; }
@@ -96,6 +98,9 @@ SELECT N'Saved' AS Outcome;
                 (Queue, Lock) = await _flow.QueueAsync(ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the pipeline queue failed (apply the Pro database schema again)"); }
+            // #576: the running steps' progress -- best effort: none read = each running step shows "Running" as before
+            try { Progress = await _flow.ProgressAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the steps' progress failed"); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -117,6 +122,37 @@ SELECT N'Saved' AS Outcome;
     public QueryResult<IReadOnlyList<ConsoleLine>>? Log { get; private set; }
     public string? Error { get; private set; }
 
+    /// #662 (owner 2026-10-14: "funny gui doesnt show it as running"): each step's job's newest executions, read from Azure
+    /// (step key -> the job read + its executions). The page shows a run the pipeline did not record (started outside it)
+    /// beside the step's record. Read-only; a job that cannot be read in time shows the record alone, as before.
+    public IReadOnlyDictionary<string, (string Job, IReadOnlyList<JobExecution> Executions)> StepExecutions { get; private set; } =
+        new Dictionary<string, (string, IReadOnlyList<JobExecution>)>();
+    public const int StepExecutionReads = 6;
+    public static readonly TimeSpan StepExecutionBudget = TimeSpan.FromSeconds(6);
+
+    private async Task LoadStepExecutionsAsync(CancellationToken ct)
+    {
+        var installed = List.Select(j => j.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var reads = Flow.Steps.Where(s => s.Enabled).Select(s => s.Job).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(k => (Key: k, Job: JobFlow.StepRunJob(k, installed))).Where(p => p.Job is not null).ToList();
+        if (reads.Count == 0) return;
+        var found = new System.Collections.Concurrent.ConcurrentDictionary<string, (string, IReadOnlyList<JobExecution>)>(StringComparer.OrdinalIgnoreCase);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(StepExecutionBudget);
+        using var gate = new SemaphoreSlim(StepExecutionReads);
+        await Task.WhenAll(reads.Select(async p =>
+        {
+            try
+            {
+                await gate.WaitAsync(budget.Token);
+                try { found[p.Key] = (p.Job!, await _jobs.ExecutionsAsync(p.Job!, 5, budget.Token)); }
+                finally { gate.Release(); }
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested) { _log.LogDebug(ex, "the executions of {Job} were not read for the page", p.Job); }
+        }));
+        StepExecutions = found;
+    }
+
     public async Task OnGetAsync(CancellationToken ct)
     {
         if (!Configured) return;
@@ -124,6 +160,7 @@ SELECT N'Saved' AS Outcome;
         {
             List = await _jobs.ListAsync(ct);
             await LoadFlowAsync(ct);
+            await LoadStepExecutionsAsync(ct);
             if (Job is not null && List.Any(j => j.Name == Job))
             {
                 Executions = await _jobs.ExecutionsAsync(Job, 15, ct);

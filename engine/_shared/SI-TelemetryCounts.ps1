@@ -45,7 +45,9 @@
     PS 5.1 and 7. Never throws to its caller.
 #>
 
-$script:SITelemetryCountNames = @('users', 'guests', 'devices', 'sqlUsedMb', 'sqlMaxMb', 'servicePrincipals', 'azureResources', 'servers', 'clientDevices',
+function Get-SITelemetryCountNamesState {
+    <# The value of $script:SITelemetryCountNames, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetryCountNames) { $script:SITelemetryCountNames = @('users', 'guests', 'devices', 'sqlUsedMb', 'sqlMaxMb', 'servicePrincipals', 'azureResources', 'servers', 'clientDevices',
     # #719 (owner 2026-10-16 via Invardia: "add relevant. i want data") -- the Risk Analysis result and the CI estate, from the
     # Pro database (Get-SIRaTelemetryCounts; each key's definition in data-model/telemetry-counts.locked.json)
     'raReportsTotal', 'raReportsComplete', 'raRowsDetailed', 'cveDevicePairs', 'cveDevices', 'cves', 'cvesCritical', 'cvesHigh',
@@ -57,13 +59,21 @@ $script:SITelemetryCountNames = @('users', 'guests', 'devices', 'sqlUsedMb', 'sq
     'secureScore', 'secureScoreMax', 'exposureScore',
     # owner 2026-10-13 ("si must send objects for each of the security domains"; Invardia's adoption dashboard): the current
     # CIs per security domain and the close-loop's real remediations -- same read (Get-SIRaTelemetryCountSql)
-    'domainEndpoint', 'domainIdentity', 'domainAzure', 'domainPublicIp', 'fixedLast30Days')
+    'domainEndpoint', 'domainIdentity', 'domainAzure', 'domainPublicIp', 'fixedLast30Days') }
+    , $script:SITelemetryCountNames
+}
+$script:SITelemetryCountNames = $null; $null = Get-SITelemetryCountNamesState
 
 # #719: Invardia refuses the WHOLE record above 40 Counts keys; SI stays at or under 38 (two spare), every value a whole number
 # >= 0. The framework client (AitUplink.ps1, byte-identical to sync/) keeps the first 40 keys by name (it kept 10 before
 # main's 2026-10-13 copy) -- SI still shapes the heartbeat's Counts itself, by priority, at most 38
 # (ConvertTo-SITelemetryCountsWire, called by ConvertTo-SITelemetryWire) -- the safe path.
-$script:SITelemetryCountMaxKeys = 38
+function Get-SITelemetryCountMaxKeysState {
+    <# The value of $script:SITelemetryCountMaxKeys, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetryCountMaxKeys) { $script:SITelemetryCountMaxKeys = 38 }
+    , $script:SITelemetryCountMaxKeys
+}
+$script:SITelemetryCountMaxKeys = $null; $null = Get-SITelemetryCountMaxKeysState
 
 <#
     THE ASSET INVENTORY (owner 2026-10-10, via Invardia: "updated numbers both total and per customer and per tenant of
@@ -87,7 +97,7 @@ function Get-SIInventoryCountQuery {
     # A collection IN PARTS publishes part by part under one collection time, its parts' rows minutes or hours apart: a
     # quiet half hour between two parts is not its end. So where the install's database says when each source last
     # collected COMPLETELY (sidata.SourceState, Get-SICountCompleteBy), a newer collection is never counted.
-    param([System.Collections.IDictionary]$CompleteBy = $script:SICountCompleteBy)
+    param([System.Collections.IDictionary]$CompleteBy = (Get-SICountCompleteByState))
     $q = @'
 let idt = SI_Identity_Profile_CL | where TimeGenerated > ago(8d);
 let idl = toscalar(idt{{IDB}} | summarize _in = max(ingestion_time()) by CollectionTime | where _in < ago(30m) | summarize max(CollectionTime));
@@ -112,7 +122,12 @@ union isfuzzy=true
 }
 
 # source -> when it last collected completely, for the counts of ONE heartbeat (Get-SITelemetryHeartbeatCounts sets it)
-$script:SICountCompleteBy = @{}
+function Get-SICountCompleteByState {
+    <# The value of $script:SICountCompleteBy, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SICountCompleteBy) { $script:SICountCompleteBy = @{} }
+    , $script:SICountCompleteBy
+}
+$script:SICountCompleteBy = $null; $null = Get-SICountCompleteByState
 
 function Get-SICountCompleteFilter {
     <# PURE. The KQL filter that keeps a source's counts off a collection newer than its last COMPLETE one:
@@ -179,9 +194,9 @@ function Get-SIInventoryCounts {
     $out
 }
 
-function Get-SITelemetryHeartbeatCountNames { $script:SITelemetryCountNames }
+function Get-SITelemetryHeartbeatCountNames { (Get-SITelemetryCountNamesState) }
 
-function Get-SITelemetryCountMaxKeys { $script:SITelemetryCountMaxKeys }
+function Get-SITelemetryCountMaxKeys { (Get-SITelemetryCountMaxKeysState) }
 
 function ConvertTo-SITelemetryCountsWire {
     <#
@@ -191,8 +206,8 @@ function ConvertTo-SITelemetryCountsWire {
     param([AllowNull()][System.Collections.IDictionary]$Counts)
     if ($null -eq $Counts -or $Counts.Count -eq 0) { return $null }
     $o = [ordered]@{}
-    foreach ($k in $script:SITelemetryCountNames) {
-        if ($o.Count -ge $script:SITelemetryCountMaxKeys) { break }
+    foreach ($k in (Get-SITelemetryCountNamesState)) {
+        if ($o.Count -ge (Get-SITelemetryCountMaxKeysState)) { break }
         if ($k -cnotmatch '^[a-z][A-Za-z0-9]{0,30}$' -or -not $Counts.Contains($k)) { continue }
         $v = ConvertTo-SITelemetryCount $Counts[$k]
         if ($null -ne $v) { $o[$k] = [long]$v }
@@ -235,7 +250,9 @@ function ConvertTo-SITelemetryCountsWire {
     domain grouping -- sidata.Finding is never read); vulnerabilitiesOpen = cves + recommendations + azureRecommendations;
     dataSources = Sources.
 #>
-$script:SIRaCountAssetReports = [ordered]@{
+function Get-SIRaCountAssetReportsState {
+    <# The value of $script:SIRaCountAssetReports, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIRaCountAssetReports) { $script:SIRaCountAssetReports = [ordered]@{
     cveDevices              = 'Device_Missing_CVEs_Detailed'
     eosSoftwareDevices      = 'Device_EndOfSupport_Software_Detailed'
     usersWithoutMfa         = 'Identity_NoMFA_Detailed'
@@ -243,23 +260,41 @@ $script:SIRaCountAssetReports = [ordered]@{
     privilegedPermanent     = 'Identity_PermanentPrivilegedRole_Detailed'
     guestsPrivileged        = 'Identity_GuestWithPrivilegedRole_Detailed'
     spnsExpiringCredentials = 'Identity_SPN_ExpiringCredentials_Detailed'
+} }
+    , $script:SIRaCountAssetReports
 }
+$script:SIRaCountAssetReports = $null; $null = Get-SIRaCountAssetReportsState
 # the distinct recommendations / CVEs of a report (the 'report' grouping's Recommendations and its Very High / High / exploited twins)
-$script:SIRaCountRecommendationReports = [ordered]@{
+function Get-SIRaCountRecommendationReportsState {
+    <# The value of $script:SIRaCountRecommendationReports, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIRaCountRecommendationReports) { $script:SIRaCountRecommendationReports = [ordered]@{
     cves                 = @('Device_Missing_CVEs_Detailed', 'recs')
     cvesCritical         = @('Device_Missing_CVEs_Detailed', 'recsCritical')
     cvesHigh             = @('Device_Missing_CVEs_Detailed', 'recsHigh')
     cvesExploited        = @('Device_Missing_CVEs_Detailed', 'recsExploited')
     recommendations      = @('Device_Recommendations_Detailed', 'recs')
     azureRecommendations = @('Azure_DefenderRecommendations_Detailed', 'recs')
+} }
+    , $script:SIRaCountRecommendationReports
 }
+$script:SIRaCountRecommendationReports = $null; $null = Get-SIRaCountRecommendationReportsState
 # sidata.Ci Class -> the Counts key of its security domain (the web app: device = Endpoint, identity = Identity,
 # cloud_resource = Azure, public_ip = PublicIP)
-$script:SITelemetryDomainKeys = [ordered]@{ device = 'domainEndpoint'; identity = 'domainIdentity'; cloud_resource = 'domainAzure'; public_ip = 'domainPublicIp' }
-$script:SIRaCountDetailedPairs = [ordered]@{
+function Get-SITelemetryDomainKeysState {
+    <# The value of $script:SITelemetryDomainKeys, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetryDomainKeys) { $script:SITelemetryDomainKeys = [ordered]@{ device = 'domainEndpoint'; identity = 'domainIdentity'; cloud_resource = 'domainAzure'; public_ip = 'domainPublicIp' } }
+    , $script:SITelemetryDomainKeys
+}
+$script:SITelemetryDomainKeys = $null; $null = Get-SITelemetryDomainKeysState
+function Get-SIRaCountDetailedPairsState {
+    <# The value of $script:SIRaCountDetailedPairs, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SIRaCountDetailedPairs) { $script:SIRaCountDetailedPairs = [ordered]@{
     cveDevicePairs            = 'Device_Missing_CVEs_Detailed'
     recommendationDevicePairs = 'Device_Recommendations_Detailed'
+} }
+    , $script:SIRaCountDetailedPairs
 }
+$script:SIRaCountDetailedPairs = $null; $null = Get-SIRaCountDetailedPairsState
 
 function Get-SIRaTelemetryCountSql {
     <#
@@ -361,21 +396,21 @@ function ConvertFrom-SIRaTelemetryCountRows {
         $det = @($status.Keys | Where-Object { $_ -like 'Detailed|*' } | ForEach-Object { $status[$_].N } | Where-Object { $null -ne $_ })
         if ($det.Count) { $s = [long]0; foreach ($v in $det) { $s += [long]$v }; $out['raRowsDetailed'] = $s }
     }
-    foreach ($key in $script:SIRaCountDetailedPairs.Keys) {
-        $rn = $script:SIRaCountDetailedPairs[$key]
+    foreach ($key in (Get-SIRaCountDetailedPairsState).Keys) {
+        $rn = (Get-SIRaCountDetailedPairsState)[$key]
         if ((& $done 'Detailed' $rn) -and $null -ne $status["Detailed|$rn"].N) { $out[$key] = [long]$status["Detailed|$rn"].N }
     }
     # #636: the distinct assets / CVEs / recommendations of a Complete report, from the Detailed findings' 'report' grouping; a
     # report without a group row (no finding) is a real 0 once the collection's groupings were read
     $grouped = [bool](@($agg.Keys | Where-Object { $_ -like 'recs|*' -or $_ -like 'assets|*' -or $_ -eq 'grouped|' }).Count)
-    foreach ($key in $script:SIRaCountAssetReports.Keys) {
-        $rn = $script:SIRaCountAssetReports[$key]
+    foreach ($key in (Get-SIRaCountAssetReportsState).Keys) {
+        $rn = (Get-SIRaCountAssetReportsState)[$key]
         if (-not (& $gdone 'Detailed' $rn)) { continue }
         if ($agg.ContainsKey("assets|$rn") -and $null -ne $agg["assets|$rn"]) { $out[$key] = [long]$agg["assets|$rn"] }
         elseif ($grouped) { $out[$key] = [long]0 }
     }
-    foreach ($key in $script:SIRaCountRecommendationReports.Keys) {
-        $rn = $script:SIRaCountRecommendationReports[$key][0]; $k = $script:SIRaCountRecommendationReports[$key][1]
+    foreach ($key in (Get-SIRaCountRecommendationReportsState).Keys) {
+        $rn = (Get-SIRaCountRecommendationReportsState)[$key][0]; $k = (Get-SIRaCountRecommendationReportsState)[$key][1]
         if (-not (& $gdone 'Detailed' $rn)) { continue }
         if ($agg.ContainsKey("$k|$rn") -and $null -ne $agg["$k|$rn"]) { $out[$key] = [long]$agg["$k|$rn"] }
         elseif ($grouped) { $out[$key] = [long]0 }
@@ -391,9 +426,9 @@ function ConvertFrom-SIRaTelemetryCountRows {
         if ($null -ne $agg['cisTier0|']) { $out['cisTier0'] = [long]$agg['cisTier0|'] }
         # the security domains: once the class was read at all (a domain row came back), a domain without a CI is a real 0
         if (@($agg.Keys | Where-Object { $_ -like 'domain|*' }).Count) {
-            foreach ($d in $script:SITelemetryDomainKeys.Keys) {
+            foreach ($d in (Get-SITelemetryDomainKeysState).Keys) {
                 $v = $agg["domain|$d"]
-                $out[$script:SITelemetryDomainKeys[$d]] = $(if ($null -ne $v) { [long]$v } else { [long]0 })
+                $out[(Get-SITelemetryDomainKeysState)[$d]] = $(if ($null -ne $v) { [long]$v } else { [long]0 })
             }
         }
     }
@@ -504,7 +539,7 @@ function Get-SISqlSpaceCounts {
 function Get-SIIdentityCountQuery {
     <# The KQL for users / guests: the latest identity collection, one row per user object. Typed = how many users carry
        a UserType at all -- 0 means the column is not filled, and then nothing is reported. #>
-    param([System.Collections.IDictionary]$CompleteBy = $script:SICountCompleteBy)
+    param([System.Collections.IDictionary]$CompleteBy = (Get-SICountCompleteByState))
     $q = @'
 let t = SI_Identity_Profile_CL | where TimeGenerated > ago(8d);
 let lastColl = toscalar(t{{IDB}} | summarize _in = max(ingestion_time()) by CollectionTime | where _in < ago(30m) | summarize max(CollectionTime));
@@ -537,7 +572,7 @@ function Get-SIEntraOnPremSidQuery {
     <# The KQL for the SIDs of every Entra user in the latest identity collection that came from on-prem AD (OnPremSid),
        enabled or not -- a synced AD account belongs to the Entra part either way (counted there, or deliberately not
        when disabled in Entra), so it is never added again from AD. #>
-    param([System.Collections.IDictionary]$CompleteBy = $script:SICountCompleteBy)
+    param([System.Collections.IDictionary]$CompleteBy = (Get-SICountCompleteByState))
     $q = @'
 let t = SI_Identity_Profile_CL | where TimeGenerated > ago(8d);
 let lastColl = toscalar(t{{IDB}} | summarize _in = max(ingestion_time()) by CollectionTime | where _in < ago(30m) | summarize max(CollectionTime));
@@ -772,16 +807,21 @@ function Get-SIDeviceCount {
     CHEAP: one call each, at most once an hour per process (the answer is kept for -CacheMinutes), and only in the hourly
     status report job (SI_ENGINE heartbeat) unless -WithScores says otherwise. Never throws.
 #>
-$script:SISecurityScore = @{
+function Get-SISecurityScoreTable {
+    <# The value of $script:SISecurityScore, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SISecurityScore) { $script:SISecurityScore = @{
     GraphUri     = 'https://graph.microsoft.com/v1.0/security/secureScores?$top=1'
     DefenderUri  = 'https://api.securitycenter.microsoft.com/api/exposureScore'
     GraphRole    = 'SecurityEvents.Read.All'
     DefenderRole = 'Score.Read.All'
     TimeoutSec   = 30
     CacheMinutes = 55
+} }
+    , $script:SISecurityScore
 }
+$script:SISecurityScore = $null; $null = Get-SISecurityScoreTable
 
-function Get-SISecurityScoreContract { $script:SISecurityScore }
+function Get-SISecurityScoreContract { (Get-SISecurityScoreTable) }
 
 function Invoke-SISecurityScoreGet {
     <#
@@ -796,7 +836,7 @@ function Invoke-SISecurityScoreGet {
         }
         $token = Get-SIGraphToken -Resource $Resource
         if ([string]::IsNullOrWhiteSpace([string]$token)) { return @{ Status = 0; Body = $null; Error = ('no {0} token' -f $Resource) } }
-        $body = Invoke-RestMethod -Method Get -Uri $Uri -Headers @{ Authorization = ('Bearer ' + $token) } -TimeoutSec $script:SISecurityScore.TimeoutSec -ErrorAction Stop
+        $body = Invoke-RestMethod -Method Get -Uri $Uri -Headers @{ Authorization = ('Bearer ' + $token) } -TimeoutSec (Get-SISecurityScoreTable).TimeoutSec -ErrorAction Stop
         return @{ Status = 200; Body = $body; Error = '' }
     } catch {
         $code = 0
@@ -812,7 +852,7 @@ function ConvertFrom-SISecurityScoreAnswers {
         401 / 403 names); Problems (plain reasons, not a permission) }. A value that is not a number >= 0 is left out.
     #>
     param([AllowNull()]$Graph, [AllowNull()]$Defender)
-    $c = $script:SISecurityScore
+    $c = (Get-SISecurityScoreTable)
     $counts = [ordered]@{}; $refused = New-Object System.Collections.Generic.List[string]; $problems = New-Object System.Collections.Generic.List[string]
     $num = { param($v) if ($null -eq $v) { return $null }; $d = 0.0
         if (-not [double]::TryParse([string]$v, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $null }
@@ -861,7 +901,7 @@ function Get-SISecurityScoreCounts {
         -CacheMinutes (55): a second call within the hour reads nothing. Sets the permission state (Get-SISecurityScoreState)
         and says ONE plain line per process when a score could not be read (-Log, default Write-Host). Never throws.
     #>
-    param([scriptblock]$GraphGet, [scriptblock]$DefenderGet, [datetime]$NowUtc = [datetime]::UtcNow, [int]$CacheMinutes = $script:SISecurityScore.CacheMinutes,
+    param([scriptblock]$GraphGet, [scriptblock]$DefenderGet, [datetime]$NowUtc = [datetime]::UtcNow, [int]$CacheMinutes = (Get-SISecurityScoreTable).CacheMinutes,
           [scriptblock]$Log)
     try {
         $now = $NowUtc.ToUniversalTime()
@@ -872,8 +912,8 @@ function Get-SISecurityScoreCounts {
         if (-not $GraphGet) { $GraphGet = { param($Uri) Invoke-SISecurityScoreGet -Resource Graph -Uri $Uri } }
         if (-not $DefenderGet) { $DefenderGet = { param($Uri) Invoke-SISecurityScoreGet -Resource Defender -Uri $Uri } }
         $g = $null; $d = $null
-        try { $g = & $GraphGet $script:SISecurityScore.GraphUri } catch { $g = @{ Status = 0; Body = $null; Error = "$($_.Exception.Message)" } }
-        try { $d = & $DefenderGet $script:SISecurityScore.DefenderUri } catch { $d = @{ Status = 0; Body = $null; Error = "$($_.Exception.Message)" } }
+        try { $g = & $GraphGet (Get-SISecurityScoreTable).GraphUri } catch { $g = @{ Status = 0; Body = $null; Error = "$($_.Exception.Message)" } }
+        try { $d = & $DefenderGet (Get-SISecurityScoreTable).DefenderUri } catch { $d = @{ Status = 0; Body = $null; Error = "$($_.Exception.Message)" } }
         $r = ConvertFrom-SISecurityScoreAnswers -Graph $g -Defender $d
         $prev = $global:SI_SecurityScoreState
         $since = if ($prev -and @($prev.Refused).Count -and $prev.SinceUtc) { $prev.SinceUtc } else { $now }
@@ -936,6 +976,6 @@ function Get-SITelemetryHeartbeatCounts {
     if ($scores) {
         try { $sc = Get-SISecurityScoreCounts -GraphGet $GraphGet -DefenderGet $DefenderGet -NowUtc $NowUtc -Log $Log; foreach ($k in @($sc.Keys)) { $c[$k] = $sc[$k] } } catch { }
     }
-    foreach ($k in @($c.Keys)) { if ($script:SITelemetryCountNames -notcontains $k) { $c.Remove($k) } }
+    foreach ($k in @($c.Keys)) { if ((Get-SITelemetryCountNamesState) -notcontains $k) { $c.Remove($k) } }
     $c
 }

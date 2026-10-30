@@ -2041,7 +2041,36 @@ function Invoke-SIDataOutSnowContract {
     # a run in which every row landed)
     $whole = ($sn.BatchState -eq 'complete') -or (-not $sn.StatusTable -and -not $sn.Failed -and -not $sn.Held -and $sn.Errors.Count -eq 0 -and $sn.NotAccepted -eq 0)
     if ($whole -and $W.Store -and -not $W.WhatIf) { foreach ($g2 in $W.ContractGone) { $W.GoneBuf.Add($g2) } }
+    # #928: the CI push is THE route into the ServiceNow CMDB -- its result feeds the ServiceNow CMDB guard (instance not
+    # reachable = halted, rows not accepted = held); a complete batch clears them
+    if ($out -eq 'servicenow-ci' -and -not $W.WhatIf) { $null = Invoke-SIDataOutSnowGuards -Session $sn -Complete ([bool]$whole) -Log $W.Log }
     $dw
+}
+
+function Invoke-SIDataOutSnowGuards {
+    <#
+        #928: the ServiceNow CMDB guard on the one ServiceNow route. The CI output's push result
+        (ConvertTo-SIGuardServiceNowPushResult) -> Get-SIGuardCallsForServiceNowCmdb -Result -> Invoke-SIGuardCalls. When
+        the push reached ServiceNow, both checks count as checked: a complete batch (-Complete) clears an open episode.
+        -Common: the guard calls' shared arguments (tests); default the data-out engine and the Pro settings database.
+        Nothing when the guards are not loaded (a Community run). Never throws. Returns the trips' results.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Session, [bool]$Complete = $false, [scriptblock]$Log, [hashtable]$Common)
+    if (-not (Get-Command -Name Invoke-SIGuardCalls -ErrorAction SilentlyContinue) -or -not (Get-Command -Name ConvertTo-SIGuardServiceNowPushResult -ErrorAction SilentlyContinue)) { return @() }
+    try {
+        $res = ConvertTo-SIGuardServiceNowPushResult -Session $Session
+        $calls = @(Get-SIGuardCallsForServiceNowCmdb -Result $res)
+        if (-not $Common) { $Common = @{ Engine = 'data-out'; Invoke = (Get-SIGuardProInvoke) } }
+        if ($res.Reached) {
+            $checked = @(@{ GuardId = 'cmdb.servicenow.unreachable'; Detail = 'ServiceNow was reached and the batch was sent.' },
+                         @{ GuardId = 'cmdb.servicenow.create-gate'; Detail = 'ServiceNow accepted every row of the batch.' })
+            return @(Invoke-SIGuardCalls -Calls $calls -Common $Common -Checked $checked -Complete $Complete)
+        }
+        @(Invoke-SIGuardCalls -Calls $calls -Common $Common)
+    } catch {
+        if ($Log) { & $Log 'WARN' ('the ServiceNow CMDB guard could not be told the push result ({0}) -- the push itself is not affected' -f $_.Exception.Message) }
+        @()
+    }
 }
 
 function Invoke-SIDataOutWriter {

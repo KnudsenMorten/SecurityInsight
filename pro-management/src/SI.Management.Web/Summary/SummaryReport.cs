@@ -34,7 +34,18 @@ public sealed record SummaryRowView(
     double? RiskConsequenceScore, double? RiskProbabilityScore, double? RiskScoreTotal, double? RiskScoreWeightFactor, string? RiskScoreWeightDetailed,
     double? RiskScoreTotalWeighted, string? RiskRating, int RatingRank, string? CmdbId, string? CmdbName, string? CmdbCriticality, string? CmdbDataSensitivity,
     long ImpactedAssetCount, string? ImpactedAssetsList, string? ImpactedAssetIds, string? MoreDetails, string? ReportName,
-    string? MitreTactics, string? MitreTechniques, string? ComplianceTags);
+    string? MitreTactics, string? MitreTechniques, string? ComplianceTags)
+{
+    // the risk score's parts the data sync adds to a Summary row (sidata.SummaryRow.Risk<Side>*; null = not filled yet): each
+    // side's base, its factors as Risk Analysis wrote them ("Name=n;..." -- or, worked out, their names) and whether the base
+    // was worked out; the sides' scores and points are the row's own RiskConsequenceScore / RiskFactorConsequence ...
+    public double? RiskAssetBase { get; init; }
+    public string? RiskAssetFactors { get; init; }
+    public bool? RiskAssetDerived { get; init; }
+    public double? RiskVulnBase { get; init; }
+    public string? RiskVulnFactors { get; init; }
+    public bool? RiskVulnDerived { get; init; }
+}
 
 /// One impacted asset of a Summary row, in the row's order; CiId = the CI it is (null = not resolved to a CI).
 public sealed record SummaryAssetRef(int RowNo, int Ordinal, string? Name, string? AssetId, string? CiId)
@@ -153,7 +164,8 @@ WHERE s.CollectionTime = CONVERT(datetime2(3), @At, 126)
 f.RowNo, f.TierGroup, f.SecurityDomain, f.Category, f.Subcategory, f.ConfigurationName, f.ConfigurationId, f.Impact, f.SecuritySeverity, f.CriticalityTier,
 f.CriticalityTierLevel, f.RiskFactorConsequenceDetailed, f.RiskFactorConsequence, f.RiskFactorProbabilityDetailed, f.RiskFactorIds, f.RiskFactorProbability,
 f.RiskConsequenceScore, f.RiskProbabilityScore, f.RiskScoreTotal, f.RiskScoreWeightFactor, f.RiskScoreWeightDetailed, f.RiskScoreTotalWeighted, f.RiskRating,
-f.RatingRank, f.CmdbId, f.CmdbName, f.CmdbCriticality, f.CmdbDataSensitivity, f.ImpactedAssetCount, f.ReportName, f.MitreTactics, f.MitreTechniques, f.ComplianceTags
+f.RatingRank, f.CmdbId, f.CmdbName, f.CmdbCriticality, f.CmdbDataSensitivity, f.ImpactedAssetCount, f.ReportName, f.MitreTactics, f.MitreTechniques, f.ComplianceTags,
+f.RiskAssetBase, f.RiskAssetFactors, f.RiskAssetDerived, f.RiskVulnBase, f.RiskVulnFactors, f.RiskVulnDerived
 """;
     private const string LongColumns = ", f.ImpactedAssetsList, f.ImpactedAssetIds, f.MoreDetails";
 
@@ -298,7 +310,23 @@ UNION ALL SELECT N'report', s.ReportName, COUNT_BIG(*) FROM sidata.SummaryRow AS
         D(r, "RiskConsequenceScore"), D(r, "RiskProbabilityScore"), D(r, "RiskScoreTotal"), D(r, "RiskScoreWeightFactor"), r.Str("RiskScoreWeightDetailed"),
         D(r, "RiskScoreTotalWeighted"), r.Str("RiskRating"), I(r, "RatingRank") ?? RatingRank(r.Str("RiskRating")), r.Str("CmdbId"), r.Str("CmdbName"),
         r.Str("CmdbCriticality"), r.Str("CmdbDataSensitivity"), r.Long("ImpactedAssetCount") ?? 0, r.Str("ImpactedAssetsList"), r.Str("ImpactedAssetIds"),
-        r.Str("MoreDetails"), r.Str("ReportName"), r.Str("MitreTactics"), r.Str("MitreTechniques"), r.Str("ComplianceTags"));
+        r.Str("MoreDetails"), r.Str("ReportName"), r.Str("MitreTactics"), r.Str("MitreTechniques"), r.Str("ComplianceTags"))
+    {
+        RiskAssetBase = D(r, "RiskAssetBase"), RiskAssetFactors = r.Str("RiskAssetFactors"), RiskAssetDerived = Bit(r, "RiskAssetDerived"),
+        RiskVulnBase = D(r, "RiskVulnBase"), RiskVulnFactors = r.Str("RiskVulnFactors"), RiskVulnDerived = Bit(r, "RiskVulnDerived"),
+    };
+
+    private static bool? Bit(SqlRow r, string c) => r.TryGetValue(c, out var v) && v is not null && v is not DBNull ? Convert.ToBoolean(v, CultureInfo.InvariantCulture) : null;
+
+    /// <summary>
+    /// The risk score's parts of a Summary row as the explained score words them (the same texts as the Detailed rows): the
+    /// asset side (consequence) and the vulnerability side (probability), each its base, factors and score. Null = the row
+    /// does not carry them yet (an empty cell).
+    /// </summary>
+    public static SI.Management.Web.Pages.Collection.ExplainSide? AssetSide(SummaryRowView r) => r.RiskAssetDerived is null ? null
+        : SI.Management.Web.Pages.Collection.RiskExplanation.StoredSide(r.RiskAssetBase, r.RiskAssetDerived, r.RiskAssetFactors, r.RiskFactorConsequence, r.RiskConsequenceScore);
+    public static SI.Management.Web.Pages.Collection.ExplainSide? VulnSide(SummaryRowView r) => r.RiskVulnDerived is null ? null
+        : SI.Management.Web.Pages.Collection.RiskExplanation.StoredSide(r.RiskVulnBase, r.RiskVulnDerived, r.RiskVulnFactors, r.RiskFactorProbability, r.RiskProbabilityScore);
 }
 
 /// <summary>The SQL implementation over <see cref="ISqlExecutor"/>.</summary>

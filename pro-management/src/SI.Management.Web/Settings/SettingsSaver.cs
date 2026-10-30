@@ -104,5 +104,6 @@ public sealed class SettingsSaver
 /// change SuperAdmin-only settings, and the refusal to show under it (a Get Started step re-shown after a refused save).
 /// Unavailable: the field cannot be changed here now, said in one line under it (the detailed Excel switch above the size a
 /// workbook holds -- DetailedWorkbookLimit); a switch stored on is shown as on but not applied.
-public sealed record SettingFieldView(SettingField F, bool CanSuperAdmin, string? Error = null, string? ShowWhen = null, bool Hidden = false, string? Unavailable = null);
+public sealed record SettingFieldView(SettingField F, bool CanSuperAdmin, string? Error = null, string? ShowWhen = null, bool Hidden = false, string? Unavailable = null, string? Label = null);
 // ShowWhen = "Name=value": the field shows only while that setting's choice is that value (wwwroot/js/app/show-when.js)
+// Label (#633): the label this page gives the field (null = the catalog's title)

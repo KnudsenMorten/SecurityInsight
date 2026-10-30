@@ -454,6 +454,69 @@ SELECT @n;
 #  THE WRITES / ORCHESTRATION
 # ------------------------------------------------------------------------------------------------------------------
 
+function Invoke-SIDataDepartmentFacet {
+    <#
+        2026-10-29 The collection's per-department aggregate (Get-SIDataDepartmentFacetSql; -Counted: its counted twin) -- on a
+        real database's seam in ranges (SI-DataSql.ps1 "THE COLLECTION'S AGGREGATES IN RANGES"): the findings a FindingId range
+        at a time into partial counts per department, severity, tier and asset, folded a range of assets at a time, and the
+        aggregate (and, not counted, the policy fingerprint) replaced in one short transaction. Any other seam: the one
+        statement. Answers the aggregate's rows written.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [string]$Fingerprint = '', [switch]$Counted,
+          [scriptblock]$Log, [long]$FirstSize = 50000, [long]$TargetMs = 5000)
+    $p0 = @{ CollectionId = $CollectionId }; if (-not $Counted) { $p0['Fingerprint'] = $Fingerprint }
+    if (-not ((Get-Command -Name Test-SIDataSessionRangedSeam -ErrorAction SilentlyContinue) -and (Test-SIDataSessionRangedSeam $Invoke))) {
+        return [int](& $Invoke (Get-SIDataDepartmentFacetSql -Counted:$Counted) $p0 'scalar')
+    }
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstSize = [long]$Invoke.SIRangeFirstTake }
+    $table = 'DepartmentFacet'; $mark = ''
+    $stamp = "UPDATE sidata.Collection SET ResolvedAt = SYSUTCDATETIME(), ResolvedVersion = $(ConvertTo-SIDataSqlText $Fingerprint) WHERE CollectionId = $CollectionId;"
+    if ($Counted) { $table = 'DepartmentFacetCounted'; $mark = ' AND x.ExemptionId IS NULL'; $stamp = '' }
+    $what = $(if ($Counted) { 'v3 model    : the departments without exempted findings' } else { 'v3 model    : the departments' })
+    $cid = $CollectionId
+    $onSession = {
+        param($Run)
+        & $Run @'
+SELECT TOP (0) ISNULL(x.DepartmentId, 0) AS Dept, COALESCE(NULLIF(x.Severity, N''), N'(none)') AS Sev,
+       CASE WHEN x.Tier BETWEEN 0 AND 3 THEN CONVERT(nvarchar(12), x.Tier) ELSE N'Unclassified' END AS TierV, x.AssetKey,
+       COUNT_BIG(*) AS Findings, SUM(x.RiskScore) AS ScoreSum, SUM(x.RiskScoreWeighted) AS WSum
+INTO #fp FROM sidata.Finding AS x
+GROUP BY ISNULL(x.DepartmentId, 0), COALESCE(NULLIF(x.Severity, N''), N'(none)'), CASE WHEN x.Tier BETWEEN 0 AND 3 THEN CONVERT(nvarchar(12), x.Tier) ELSE N'Unclassified' END, x.AssetKey;
+CREATE CLUSTERED INDEX CX_fp ON #fp (AssetKey);
+CREATE TABLE #fr (DepartmentId int NOT NULL, Severity nvarchar(30) COLLATE DATABASE_DEFAULT NOT NULL, Tier nvarchar(12) COLLATE DATABASE_DEFAULT NOT NULL, Findings bigint NOT NULL, Assets bigint NOT NULL, ScoreSum float NULL, WSum float NULL);
+'@ 'none'
+        $null = Invoke-SIDataSessionIdRanges -Run $Run -CollectionId $cid -What $what -Log $Log -FirstSize $FirstSize -TargetMs $TargetMs -Text @"
+INSERT #fp (Dept, Sev, TierV, AssetKey, Findings, ScoreSum, WSum)
+SELECT ISNULL(x.DepartmentId, 0), COALESCE(NULLIF(x.Severity, N''), N'(none)'), CASE WHEN x.Tier BETWEEN 0 AND 3 THEN CONVERT(nvarchar(12), x.Tier) ELSE N'Unclassified' END, x.AssetKey,
+       COUNT_BIG(*), SUM(x.RiskScore), SUM(x.RiskScoreWeighted)
+FROM sidata.Finding AS x
+WHERE x.CollectionId = $cid AND x.FindingId > {AFTER} AND x.FindingId <= {UPTO}$mark AND (x.CiLifecycle IS NULL OR x.CiLifecycle = N'active')
+GROUP BY ISNULL(x.DepartmentId, 0), COALESCE(NULLIF(x.Severity, N''), N'(none)'), CASE WHEN x.Tier BETWEEN 0 AND 3 THEN CONVERT(nvarchar(12), x.Tier) ELSE N'Unclassified' END, x.AssetKey;
+"@
+        $null = Invoke-SIDataSessionKeyRanges -Run $Run -Table '#fp' -Column 'AssetKey' -What $what -Log $Log -TargetMs $TargetMs -Text @'
+INSERT #fr (DepartmentId, Severity, Tier, Findings, Assets, ScoreSum, WSum)
+SELECT Dept, CASE WHEN GROUPING(Sev) = 1 THEN N'*' ELSE Sev END, CASE WHEN GROUPING(TierV) = 1 THEN N'*' ELSE TierV END,
+       SUM(Findings), COUNT(DISTINCT AssetKey), SUM(ScoreSum), SUM(WSum)
+FROM #fp WHERE 1 = 1{PRED}
+GROUP BY GROUPING SETS ((Dept, Sev), (Dept, TierV), (Dept));
+'@
+        [int](& $Run @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRAN;
+DELETE FROM sidata.$table WHERE CollectionId = $cid;
+INSERT sidata.$table (CollectionId, DepartmentId, Severity, Tier, Findings, Assets, ScoreTotal, WeightedTotal)
+SELECT $cid, DepartmentId, Severity, Tier, SUM(Findings), SUM(Assets), ISNULL(SUM(ScoreSum), 0), SUM(WSum) FROM #fr GROUP BY DepartmentId, Severity, Tier;
+DECLARE @n int = @@ROWCOUNT;
+$stamp
+COMMIT;
+DROP TABLE #fp; DROP TABLE #fr;
+SELECT @n;
+"@ 'scalar')
+    }
+    [int](& $Invoke $null $null 'session' $onSession)
+}
+
 function Read-SIDataAssetTagRows {
     <#
         Reads the responsibility columns of every profile table (one query each). A table that does not exist yet is
@@ -497,7 +560,7 @@ function Invoke-SIDataResolveCollection {
         }
         if ($BatchSize) { $BatchSize.Value = $size }
     }
-    $facets = [int](& $Invoke (Get-SIDataDepartmentFacetSql) @{ CollectionId = $CollectionId; Fingerprint = $Fingerprint } 'scalar')
+    $facets = [int](Invoke-SIDataDepartmentFacet -Invoke $Invoke -CollectionId $CollectionId -Fingerprint $Fingerprint)
     [pscustomobject]@{ CollectionId = $CollectionId; Findings = $done; Facets = $facets }
 }
 

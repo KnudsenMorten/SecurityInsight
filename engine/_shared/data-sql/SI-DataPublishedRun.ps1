@@ -132,6 +132,17 @@ BEGIN
            CONVERT(bit, 0) AS CopiesCaughtUp, CAST(NULL AS nvarchar(400)) AS CopiesNote;
     RETURN;
 END
+-- 2026-10-29 NEVER WHILE THE FINDINGS PER CI ARE BEING REPLACED (engine\pro-data\_shared\SI-DataCi.ps1: the replace runs a range
+-- at a time and keeps sidata.ViewState 'cifinding-swap' open until the stored set is the staged one) -- the views keep what they show
+DECLARE @swap nvarchar(64) = CASE WHEN OBJECT_ID(N'sidata.ViewState') IS NULL THEN NULL ELSE (SELECT TOP (1) Value FROM sidata.ViewState WHERE Name = N'cifinding-swap' AND Value LIKE N'open%') END;
+IF @swap IS NOT NULL AND ISNULL(@RefuseWhy, N'') = N''
+BEGIN
+    SELECT CONVERT(bit, 0) AS Published,
+           CONVERT(nvarchar(400), CONCAT(N'the findings per CI of ', LTRIM(STUFF(@swap, 1, 4, N'')), N' are being replaced by the data sync (or it stopped part-way) -- the pages keep showing the published run; a run publishes once the replace is whole')) AS Reason,
+           CAST(NULL AS int) AS CollectionId, CAST(NULL AS datetime2(3)) AS CollectionTime, CONVERT(bit, 0) AS [Partial],
+           CONVERT(bit, 0) AS CopiesCaughtUp, CAST(NULL AS nvarchar(400)) AS CopiesNote;
+    RETURN;
+END
 -- every value arrives as text ('' = none): typed here, once
 DECLARE @rs datetime2(3) = TRY_CONVERT(datetime2(3), NULLIF(@RunStartedUtc, N''), 126),
         @re datetime2(3) = TRY_CONVERT(datetime2(3), NULLIF(@RunEndedUtc, N''), 126),
@@ -423,6 +434,42 @@ function Invoke-SIPublishedCopyRefresh {
     }
 }
 
+function Get-SIDataCiSwapOpenSql {
+    <# READS ONLY. 2026-10-29 The open mark of a replace of the findings per CI (engine\pro-data\_shared\SI-DataCi.ps1,
+       Invoke-SIDataCiFindingSwap), as the one column CiFindingSwapOpen ('' when there is none). The same read as
+       Get-SIDataCiFindingSwapOpenSql there (a test keeps the two equal). #>
+    "SELECT CASE WHEN OBJECT_ID('sidata.ViewState') IS NULL THEN N'' ELSE ISNULL((SELECT TOP (1) Value FROM sidata.ViewState WHERE Name = N'cifinding-swap'), N'') END AS CiFindingSwapOpen;"
+}
+
+function Get-SIDataCiSwapOpen {
+    <#
+        2026-10-29 Is a replace of the findings per CI under way (or stopped part-way)? The data sync replaces them a range at a
+        time and keeps the mark open until the stored set is the staged one; meanwhile the source table is part old, part new.
+        The copy refresh and the publish HOLD while it is open, so a half-replaced set never becomes what the pages show.
+        Answers the mark's text ('open <collection>'), '' when there is none or it cannot be read (a read that fails is
+        not a reason to hold: the copies were taken as before).
+    #>
+    param([scriptblock]$Invoke)
+    if (-not $Invoke) { return '' }
+    try {
+        foreach ($r in @(& $Invoke (Get-SIDataCiSwapOpenSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })) {
+            $v = $null
+            if ($r -is [System.Collections.IDictionary]) { if ($r.Contains('CiFindingSwapOpen')) { $v = $r['CiFindingSwapOpen'] } }
+            elseif ($r.PSObject.Properties['CiFindingSwapOpen']) { $v = $r.CiFindingSwapOpen }
+            if ($v -is [string] -and $v -match '^open\b') { return $v }
+        }
+    } catch { }
+    ''
+}
+
+function Get-SIDataCiSwapOpenText {
+    <# PURE. The one plain line while the findings per CI are being replaced (-Mark: Get-SIDataCiSwapOpen's answer). #>
+    param([Parameter(Mandatory)][string]$Mark, [Parameter(Mandatory)][ValidateSet('copies', 'publish')][string]$What)
+    $c = ($Mark -replace '^open\s*', '').Trim(); if (-not $c) { $c = 'the newest collection' }
+    if ($What -eq 'copies') { return ('the copies the pages show wait: the findings per CI of {0} are being replaced by the data sync (or it stopped part-way) -- the pages keep showing the published run, and the copies are refreshed once the replace is whole' -f $c) }
+    ('not published now: the findings per CI of {0} are being replaced by the data sync (or it stopped part-way) -- the pages keep showing the published run; a run publishes once the replace is whole' -f $c)
+}
+
 function Get-SIPublishedCopyCatchUpSql {
     <# The catch-up of the shown run's copies (sidata.PublishedCopyCatchUp), one row: Ready (the procedure is there), Stale,
        Refreshed, PublishedAt, CopiedAt, Ranged (#881: the copies can be refreshed range by range by the engine's driver --
@@ -446,7 +493,9 @@ IF @m IS NOT NULL AND @ranged = 1
     EXEC sidata.PublishedCopyCatchUp @Stale = @s OUTPUT, @Refreshed = @r OUTPUT, @PublishedAt = @p OUTPUT, @CopiedAt = @c OUTPUT, @MarkFor = @m;
 ELSE
     EXEC sidata.PublishedCopyCatchUp @WhatIf = @w, @Stale = @s OUTPUT, @Refreshed = @r OUTPUT, @PublishedAt = @p OUTPUT, @CopiedAt = @c OUTPUT;
-SELECT CONVERT(bit, 1) AS Ready, ISNULL(@s, 0) AS Stale, ISNULL(@r, 0) AS Refreshed, @p AS PublishedAt, @c AS CopiedAt, @ranged AS Ranged, @now AS Now;
+-- 2026-10-29 the open replace of the findings per CI (the caller holds the copies while it is open)
+SELECT CONVERT(bit, 1) AS Ready, ISNULL(@s, 0) AS Stale, ISNULL(@r, 0) AS Refreshed, @p AS PublishedAt, @c AS CopiedAt, @ranged AS Ranged, @now AS Now,
+       CASE WHEN OBJECT_ID(N'sidata.ViewState') IS NULL THEN NULL ELSE (SELECT TOP (1) Value FROM sidata.ViewState WHERE Name = N'cifinding-swap' AND Value LIKE N'open%') END AS CiFindingSwapOpen;
 '@
 }
 
@@ -500,13 +549,15 @@ function Invoke-SIPublishedCopyCatchUp {
         $r = $rows[0]
         $val = { param($n) $v = $null; if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } } elseif ($r.PSObject.Properties[$n]) { $v = $r.$n }; if ($v -is [System.DBNull]) { $null } else { $v } }
         [pscustomobject]@{ Ready = (& $bit (& $val 'Ready')); Stale = (& $bit (& $val 'Stale')); Refreshed = (& $bit (& $val 'Refreshed'))
-                           PublishedAt = (& $val 'PublishedAt'); CopiedAt = (& $val 'CopiedAt'); Ranged = (& $bit (& $val 'Ranged')); Now = [string](& $val 'Now') }
+                           PublishedAt = (& $val 'PublishedAt'); CopiedAt = (& $val 'CopiedAt'); Ranged = (& $bit (& $val 'Ranged')); Now = [string](& $val 'Now'); SwapOpen = [string](& $val 'CiFindingSwapOpen') }
     }
     try {
         if (-not $Invoke) { return $res }
         # first only ask (a database that refreshes range by range is refreshed by the engine itself, below)
         $a = & $ask '1' ''
         if (-not $a.Ready) { return $res }
+        # 2026-10-29 never while the findings per CI are being replaced (their source table is part old, part new): one plain line
+        if ($a.SwapOpen -match '^open\b') { $res.PublishedAt = $a.PublishedAt; $res.CopiedAt = $a.CopiedAt; $res.Stale = [bool]$a.Stale; $res.Action = 'held'; $res.Reason = (Get-SIDataCiSwapOpenText -Mark $a.SwapOpen -What copies); & $Log 'INFO' $res.Reason; return $res }
         $res.PublishedAt = $a.PublishedAt; $res.CopiedAt = $a.CopiedAt
         if (-not $a.Stale) { $res.Action = 'current' }
         elseif ($WhatIf) { $res.Stale = $true; $res.Action = 'would-refresh' }

@@ -332,18 +332,18 @@ $guardSub = Get-OptionalEnv 'SI_JOBS_SUBSCRIPTIONID' (Get-OptionalEnv 'SI_FLOW_S
 # #931: the values a person's start carries (Run now, a template release, a mail-only run, who started it) arrive as a
 # start request in the Pro database, never as a start override (Azure Container Apps: an override needs jobs/write). Claimed
 # BEFORE the guard below, which reads them; handed back when this execution does nothing, so the next one takes it.
-$startRequest = @{ Claimed = $false }; $startRequestInvoke = $null
+# The database seam is loaded inside the call only (Invoke-SIJobStartRequestIsolated): nothing it brings may reach the engine.
+$startRequest = @{ Claimed = $false }; $startRequestGuard = $null
 if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase -and $guardJob -and $guardExec -and (Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -ne '1' -and -not (Get-OptionalEnv 'SI_COLLECT_PHASE' $null)) {
     try {
+        $startRequestGuard = Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1'
         . (Join-Path $PSScriptRoot '../engine/_shared/SI-JobStartRequest.ps1')
-        if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') }
-        $startRequestInvoke = Get-SIGuardProInvoke
-        $startRequest = Invoke-SIJobStartRequestClaim -Invoke $startRequestInvoke -Job ([string]$guardJob) -Execution ([string]$guardExec)
+        $startRequest = Invoke-SIJobStartRequestIsolated -GuardPath $startRequestGuard -Job ([string]$guardJob) -Execution ([string]$guardExec)
         if ($startRequest.Line) { Write-Host $startRequest.Line }
     } catch { Write-Warning ('[start-request] the start request could not be read ({0}) -- the run goes on as configured' -f $_.Exception.Message) }
 }
 function Undo-SIStartRequestClaim {
-    if ($script:startRequest.Claimed) { $null = Invoke-SIJobStartRequestRelease -Invoke $script:startRequestInvoke -RequestId $script:startRequest.RequestId -Execution ([string]$script:guardExec) }
+    if ($script:startRequest.Claimed) { $null = Invoke-SIJobStartRequestIsolated -GuardPath $script:startRequestGuard -RequestId $script:startRequest.RequestId -Execution ([string]$script:guardExec) }
 }
 if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -ne '1' -and -not (Get-OptionalEnv 'SI_COLLECT_PHASE' $null)) {
     $guardOther = $null
@@ -352,9 +352,10 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
         $guardOther = Get-SIJobExecutionOverlap -Executions $guardList -Self $guardExec
     } catch { Write-Warning ('[guard] could not check for a running execution of {0} ({1}) -- the run goes on' -f $guardJob, $_.Exception.Message) }
     # A flow execution that carries a request (Run now) is never dropped by the guard: the runner's lock queues it.
-    $guardFlowRequest = [bool](@('SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP') | Where-Object {
-        $v = [string][Environment]::GetEnvironmentVariable($_); $v -and $v -notin @('0', 'false', 'no') })
-    $guardDecision = Get-SIExecutionGuardDecision -Engine $engine -Job $guardJob -Other $guardOther -Self $guardExec -FlowRequest:$guardFlowRequest
+    # #946: a cancel of the running run (SI_FLOW_CANCEL) is a request too -- it is meant for the run the other execution holds.
+    $guardFlowAsk = Test-SIFlowGuardRequest
+    $guardFlowRequest = [bool]$guardFlowAsk.Request
+    $guardDecision = Get-SIExecutionGuardDecision -Engine $engine -Job $guardJob -Other $guardOther -Self $guardExec -FlowRequest:$guardFlowRequest -FlowCancel:([bool]$guardFlowAsk.Cancel)
     if ($guardDecision.Action -eq 'Run' -and $guardDecision.Message) { Write-Host $guardDecision.Message }
     # #277 (live, ring 1 2026-10-05): the flow runner wakes every 5 minutes -- a wake-up during a flow run is normal
     # operation, not a guard: one INFO line, no row, no guard event, no telemetry, no warning.
@@ -432,8 +433,20 @@ if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) {
                     $gateDeadline = Get-SICollectionRunGateDeadline -StartedUtc $gateStart -LimitSeconds $gateLimit
                 } catch { $gateDeadline = $null }
             }
+            # #947: A WAITING UPDATE GOES FIRST -- the updater's wait mark (tag si-update-waits on the updater job, the same mark
+            # the pipeline runner obeys); the updater job's name from the install record, else today's name. Unreadable = no hold.
+            $gateUpdateWaits = $null
+            if ($guardSub -and $guardRg) {
+                $gateUpdateWaits = {
+                    if (-not (Get-Command -Name Get-SIInstallName -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-InstallNames.ps1') }
+                    $updName = Get-SIInstallName -Role updater -Record (Read-SIInstallNamesRecord -Store ([pscustomobject]@{ Invoke = $gateInvoke }))
+                    $updJob = Invoke-SIArm -Path ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $guardSub, $guardRg, $updName) -ApiVersion '2025-07-01' -AllowNotFound
+                    if (-not $updJob -or -not $updJob.tags -or -not $updJob.tags.PSObject.Properties['si-update-waits']) { return $null }
+                    ConvertFrom-SICollectionUpdateWaitsTag -Value ([string]$updJob.tags.'si-update-waits')
+                }
+            }
             $gate = Invoke-SICollectionRunGate -Invoke $gateInvoke -Job (Get-SICollectionRunGateJobKey $guardJob) -Self ([string]$guardExec) -DeadlineUtc $gateDeadline `
-                        -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host $m } }
+                        -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host $m } } -UpdateWaits $gateUpdateWaits
             if ($gate.Action -in @('Skip', 'Limit')) {
                 try {
                     if (-not (Get-Command -Name Send-SIRunHealthRow -ErrorAction SilentlyContinue)) { . '/app/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1' }
@@ -588,6 +601,18 @@ $finishKedaRecords = {
             'published' { Write-Host ('[parts] {0}: the last part -- the run''s records published' -f $recEngineName) }
             'failed' { Write-Warning ('[parts] {0}: the last part -- the run''s records were NOT all published (see the run''s records marker)' -f $recEngineName) }
             default { }
+        }
+        # the ONE report of the job to Invardia for a run in parts: the execution that published the records knows the whole
+        # result (the producer and the parts do not report an ok of their own). Whole = every part done and every record
+        # published: ok, with every step of the run (StepsOk). Records that could not be published: failed, step 'records'.
+        # A run with a failed part says nothing more here -- that part's own report stands. Never fails the worker.
+        if ($recState -in @('published', 'failed')) {
+            try {
+                if (-not (Get-Command -Name Send-SITelemetryRunEnd -ErrorAction SilentlyContinue)) { . '/app/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1' }
+                $recFailedParts = @(@(Read-SICollectPartMarkers -Store $recStore -Engine $recEngineName -RunId $RecCollectKey) | Where-Object { $_ -and [string]$_.State -eq 'failed' }).Count
+                $recReport = Get-SICollectRunReport -Engine $recEngineName -RecordsState $recState -FailedParts $recFailedParts -RunId $RecEngineRun -StartedAt $recCt
+                if ($recReport) { $null = Send-SITelemetryRunEnd -RunContext $recReport.RunContext -ExitReason $recReport.ExitReason -ErrorMessage $recReport.Message }
+            } catch { Write-Warning ('[parts] the run''s report to Invardia could not be sent: {0}' -f $_.Exception.Message) }
         }
     } catch {
         Write-Warning ('[parts] the run''s records could not be checked or published: {0}' -f $_.Exception.Message)

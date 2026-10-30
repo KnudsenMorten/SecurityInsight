@@ -799,7 +799,7 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $q | Should -BeGreaterThan $g.IndexOf('if ($ListOnly) { exit 0 }')
         $q | Should -BeLessThan $g.IndexOf('$dotnetJob = Start-Job')
         $g.IndexOf('Test-SIFastGateFullRun -OwnerWords $OwnerWords -Selected $reasons.Count') | Should -BeLessThan $g.IndexOf('$runRes = @(Invoke-SIQuickGateRun')
-        $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Hotfix\r?\n'
+        $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Hotfix -Scale:\$Scale\r?\n'
         $g | Should -Match 'Stop-SIGateProcessTree -Process \$r\.Process'
         $g | Should -Match "Kill', \[type\[\]\]@\(\[bool\]\)"
         $g | Should -Match 'taskkill\.exe /T /F /PID \$Process\.Id'
@@ -811,8 +811,8 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $g | Should -Match 'QUICK GATE TIMED OUT: \{0\} after'
         $g | Should -Match 'QUICK GATE NOT RUN: \{0\}'
         # the limits can never be raised above 20 minutes
-        $g | Should -Match '\[ValidateRange\(0, 1200\)\]\[int\]\$SuiteLimitSeconds'
-        $g | Should -Match '\[ValidateRange\(0, 1200\)\]\[int\]\$GateLimitSeconds'
+        $g | Should -Match '\[ValidateRange\(0, 2400\)\]\[int\]\$SuiteLimitSeconds'
+        $g | Should -Match '\[ValidateRange\(0, 2400\)\]\[int\]\$GateLimitSeconds'
         $g | Should -Match 'SuiteLimitSeconds = \[Math\]::Min\(1200'
         # the web app: built and tested in its own stoppable process, the PROJECT (never the solution), only on a web change
         $d = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')

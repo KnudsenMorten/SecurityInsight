@@ -379,6 +379,21 @@ CREATE TABLE cfg.StepPhaseTime (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_StepPhaseTime_Execution' AND object_id = OBJECT_ID('cfg.StepPhaseTime'))
 CREATE INDEX IX_StepPhaseTime_Execution ON cfg.StepPhaseTime (Execution, AtUtc);
 
+-- A step's progress (2026-10-29, engine/_shared/SI-StepPhase.ps1 Write-SIStepProgress): ONE row per job execution -- its newest
+-- sign of progress (every batch a long step writes moves LastUtc, at most every 5 minutes; the heartbeat and the pipeline runner
+-- tell a step that moves from one that stands still, a warning only) and, where the engine knows it, what it does now and done /
+-- total (Operations > Jobs shows it on the running step). Measurement only; Execution joins cfg.FlowStepRun.
+IF OBJECT_ID('cfg.StepProgress') IS NULL
+CREATE TABLE cfg.StepProgress (
+    Execution       NVARCHAR(128)   NOT NULL CONSTRAINT PK_StepProgress PRIMARY KEY,
+    Job             NVARCHAR(64)    NOT NULL,
+    Phase           NVARCHAR(200)   NULL,
+    Done            BIGINT          NULL,
+    Total           BIGINT          NULL,
+    LastUtc         DATETIME2(3)    NOT NULL CONSTRAINT DF_StepProgress_Last DEFAULT SYSUTCDATETIME(),
+    Beats           BIGINT          NOT NULL CONSTRAINT DF_StepProgress_Beats DEFAULT 0
+);
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ConnectorRun_Name' AND object_id = OBJECT_ID('cfg.ConnectorRun'))
 CREATE INDEX IX_ConnectorRun_Name ON cfg.ConnectorRun (ConnectorName, StartedAt);
 

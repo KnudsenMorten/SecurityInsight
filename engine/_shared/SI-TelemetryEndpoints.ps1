@@ -32,7 +32,9 @@
     dropped, never sent.
 #>
 
-$script:SITelemetryEndpointRules = @{
+function Get-SITelemetryEndpointRulesState {
+    <# The value of $script:SITelemetryEndpointRules, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
+    if ($null -eq $script:SITelemetryEndpointRules) { $script:SITelemetryEndpointRules = @{
     Max           = 12
     KindPattern   = '^[a-z][a-z0-9-]{1,30}$'
     UrlMax        = 400
@@ -44,9 +46,12 @@ $script:SITelemetryEndpointRules = @{
     StateName     = 'Endpoints'      # cfg.InstallState row
     StateMax      = 400              # cfg.InstallState.Value is NVARCHAR(400)
     RunHealthPath = '/Admin/RunHealth'
+} }
+    , $script:SITelemetryEndpointRules
 }
+$script:SITelemetryEndpointRules = $null; $null = Get-SITelemetryEndpointRulesState
 
-function Get-SITelemetryEndpointRules { $script:SITelemetryEndpointRules }
+function Get-SITelemetryEndpointRules { (Get-SITelemetryEndpointRulesState) }
 
 function Test-SITelemetrySendEndpoints {
     <# The send gate: $global:SI_Telemetry_SendEndpoints, else the environment variable SI_TELEMETRY_SENDENDPOINTS; ON
@@ -75,7 +80,7 @@ function ConvertTo-SITelemetryEndpointUrl {
     if ($u.UserInfo -or $v -match '^https://[^/]*@') { return '' }
     if (-not $u.Host -or $u.Host -notmatch '\.') { return '' }
     $out = 'https://' + $u.Authority.ToLowerInvariant() + $u.AbsolutePath.TrimEnd('/')
-    if ($out.Length -gt $script:SITelemetryEndpointRules.UrlMax) { return '' }
+    if ($out.Length -gt (Get-SITelemetryEndpointRulesState).UrlMax) { return '' }
     $out
 }
 
@@ -85,7 +90,7 @@ function ConvertTo-SITelemetryEndpointLabel {
     param([AllowNull()][AllowEmptyString()][string]$Value)
     $t = [regex]::Replace("$Value", '[\x00-\x1F\x7F<>]', ' ')
     $t = [regex]::Replace($t, '\s+', ' ').Trim()
-    if ($t.Length -gt $script:SITelemetryEndpointRules.LabelMax) { $t = $t.Substring(0, $script:SITelemetryEndpointRules.LabelMax).TrimEnd() }
+    if ($t.Length -gt (Get-SITelemetryEndpointRulesState).LabelMax) { $t = $t.Substring(0, (Get-SITelemetryEndpointRulesState).LabelMax).TrimEnd() }
     $t
 }
 
@@ -95,7 +100,7 @@ function ConvertTo-SITelemetryEndpointList {
        `kind` (a row written before §8.9) is read as kind, web -> webapp. Writes the entries one by one (none = nothing to send),
        so every caller collects them with @(...) and the list is never wrapped in a second array. #>
     param([AllowNull()][object[]]$Items)
-    $r = $script:SITelemetryEndpointRules
+    $r = (Get-SITelemetryEndpointRulesState)
     $out = New-Object System.Collections.Generic.List[object]
     $seen = @{}
     foreach ($it in @($Items)) {
@@ -128,7 +133,7 @@ function ConvertTo-SIInstallEndpointsValue {
     foreach ($e in $list) {
         $keep.Add($e)
         $json = ConvertTo-Json -InputObject @($keep.ToArray()) -Compress -Depth 3
-        if ($json.Length -gt $script:SITelemetryEndpointRules.StateMax) { $keep.RemoveAt($keep.Count - 1) }
+        if ($json.Length -gt (Get-SITelemetryEndpointRulesState).StateMax) { $keep.RemoveAt($keep.Count - 1) }
     }
     if (-not $keep.Count) { return '' }
     ConvertTo-Json -InputObject @($keep.ToArray()) -Compress -Depth 3
@@ -151,7 +156,7 @@ function Resolve-SITelemetryEndpoints {
     $items = New-Object System.Collections.Generic.List[object]
     foreach ($h in @(ConvertTo-SITelemetryEndpointList -Items $Hosting)) { $items.Add($h) }
     if ("$PublicBaseUrl".Trim()) { $items.Add([pscustomobject]@{ kind = 'webapp'; url = "$PublicBaseUrl".Trim() }) }
-    $labels = $script:SITelemetryEndpointRules.Labels
+    $labels = (Get-SITelemetryEndpointRulesState).Labels
     $withLabels = @(ConvertTo-SITelemetryEndpointList -Items $items.ToArray() | ForEach-Object {
         $e = [ordered]@{ kind = $_.kind; url = $_.url }
         if ($_.PSObject.Properties['label'] -and "$($_.label)") { $e['label'] = $_.label } elseif ($labels.ContainsKey($_.kind)) { $e['label'] = $labels[$_.kind] }
@@ -165,7 +170,7 @@ function Get-SITelemetryRunLink {
     param([AllowNull()][object[]]$Endpoints)
     $web = @(ConvertTo-SITelemetryEndpointList -Items $Endpoints | Where-Object { "$($_.kind)" -eq 'webapp' } | Select-Object -First 1)
     if (-not $web.Count) { return '' }
-    $web[0].url + $script:SITelemetryEndpointRules.RunHealthPath
+    $web[0].url + (Get-SITelemetryEndpointRulesState).RunHealthPath
 }
 
 function Get-SITelemetryInstallEndpoints {

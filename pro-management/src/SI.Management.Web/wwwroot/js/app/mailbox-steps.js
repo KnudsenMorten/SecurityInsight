@@ -22,6 +22,13 @@ export function buildCommand(name, domain, display, exists, sub, rg) {
   return DOWNLOAD + "\n" + parts.join(" ");
 }
 
+// #633: the address the name and the domain make -- the SAME rule as SharedMailboxSteps.AddressOf; null until both are valid
+export function buildAddress(name, domain) {
+  name = (name || "").trim();
+  var d = (domain || "").trim().replace(/^@/, "");
+  return NAME.test(name) && DOMAIN.test(d) ? name + "@" + d : null;
+}
+
 export function initMailboxSteps(root) {
   root.querySelectorAll("[data-mailbox-step1]").forEach(function (form) {
     var block = form.querySelector("[data-mb-command-block]");
@@ -44,6 +51,11 @@ export function initMailboxSteps(root) {
         form.getAttribute("data-sub"), form.getAttribute("data-rg"));
       if (block) { block.hidden = cmd === null; }
       if (pre && cmd !== null) { pre.textContent = cmd; }
+      var addr = buildAddress((form.querySelector("[data-mb-name]") || {}).value, domain());
+      var line = form.querySelector("[data-mb-address-line]");
+      var out = form.querySelector("[data-mb-address]");
+      if (line) { line.hidden = addr === null; }
+      if (out && addr !== null) { out.textContent = addr; }
     }
     form.addEventListener("input", update);
     form.addEventListener("change", update);

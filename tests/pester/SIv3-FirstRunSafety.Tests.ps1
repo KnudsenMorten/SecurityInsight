@@ -49,8 +49,12 @@ BeforeAll {
         $out = Join-Path $Root ('out-' + [guid]::NewGuid().ToString('N') + '.txt')
         $lib = Join-Path $script:SIRoot 'launcher\_lib\Initialize-LauncherConfig.ps1'
         $dir = Join-Path $script:SIRoot ('launcher\' + $LauncherFolder)
+        # The gate turns the status reports off for every process it starts (SI_TELEMETRY_ENABLED=false + SI_TEST_GATE=1);
+        # this child plays a REAL install, where they are on by default -- so it clears the gate's switch for itself. Loading
+        # the configuration sends nothing; the notice only says that reports are on.
         $cmd = @"
 `$ErrorActionPreference = 'Stop'
+`$env:SI_TELEMETRY_ENABLED = `$null; `$env:SI_TEST_GATE = `$null
 . '$lib'
 `$o = Initialize-LauncherConfig -Solution 'SecurityInsight' -Engine '$Engine' -LauncherDir '$dir' -RepoRoot '$Root' -Mode 'community' -CustomConfigPath '$(Join-Path $Root 'engine.custom.ps1')' *>&1 | ForEach-Object { [string]`$_ }
 $Extra

@@ -128,6 +128,13 @@ if ($HostKind -eq 'Container') {
     if ($producers.Count -and [string]$global:SI_StorageAccount) {
         if (-not (Get-Command -Name New-SICollectBlobStore -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-CollectParts.ps1') }
         $seams = Add-SIJobFlowCollectParts -Seams $seams -Store (New-SICollectBlobStore -Account ([string]$global:SI_StorageAccount)) -ProducerJobs $producers
+        # #576: a running collection in parts shows its parts done of all on Operations > Jobs (best effort, never fails a poll)
+        if ($proStore) {
+            try {
+                if (-not (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-StepPhase.ps1') }
+                $seams.Progress = { param($PKey, $PExec, $PDone, $PTotal) Write-SIStepProgress -Invoke $proStore.Invoke -Job ([string]$PKey) -Execution ([string]$PExec) -Phase 'collecting in parts' -Done $PDone -Total $PTotal }
+            } catch { & $say 'WARN' ('the collection''s progress is not shown in this run ({0})' -f $_.Exception.Message) }
+        }
         foreach ($p in $producers) { $base = $p -replace '-producer$', ''; if ($installed -notcontains $base) { $installed += $base } }
         & $say 'INFO' ('collect in parts (producer + workers): {0}' -f ((@($producers | ForEach-Object { ($_ -replace '^caj-si-', '') -replace '-producer$', '' })) -join ', '))
     }
@@ -413,13 +420,21 @@ $stepLogs = if ($HostKind -eq 'Container') { New-SIJobFlowStepLogReader -Storage
 $releaseTick = { if ($proStore -and (Get-Command -Name Invoke-SIReleaseModeReportTick -ErrorAction SilentlyContinue)) { try { $null = Invoke-SIReleaseModeReportTick -Invoke $proStore.Invoke } catch { } } }
 & $releaseTick
 
+# 2026-10-28: whether this wake-up started a run -- a wake-up that started none and failed on a temporary Azure SQL answer is a
+# warning, never a failed run (the catch of the drain, below)
+$wake = @{ RunStarted = $false }
+# si-flow-1204: the reader of a step's newest sign of progress (engine\_shared\SI-StepPhase.ps1)
+if (-not (Get-Command -Name Get-SIStepProgressLast -ErrorAction SilentlyContinue)) { $spf = Join-Path $siRoot 'engine/_shared/SI-StepPhase.ps1'; if (Test-Path -LiteralPath $spf) { try { . $spf } catch { } } }
 $pipeRunOne = {
     param($PipeReq, $PipePrev, $PipeRunId)
+    $wake.RunStarted = $true
     # #700: the version this runner runs (kept on a new run), and "was this run cancelled meanwhile?" at every poll
     $pArgs = @{ Definition = $pipeDefinition; Seams = $seams; Store = $runStore; OnStep = $onStep; Log = $say; PollSeconds = $PollSeconds; Previous = $PipePrev; Version = $siVersion
                 Cancelled = $(if ($runStore.PSObject.Methods['Cancelled']) { { param($id) $runStore.Cancelled($id) } } else { $null })
                 # si-flow-1203: the newest runs read once the run goes on -- a run / step much longer than usual is said, never stopped
                 History = $(if ($runStore.PSObject.Methods['Recent']) { { $runStore.Recent() } } else { $null })
+                # si-flow-1204: a step far past its last time is asked for its newest sign of progress (cfg.StepProgress / cfg.StepPhaseTime)
+                StepProgress = $(if ($proStore -and (Get-Command -Name Get-SIStepProgressLast -ErrorAction SilentlyContinue)) { { param($j, $e, $s) Get-SIStepProgressLast -Invoke $proStore.Invoke -Job $j -Execution $e -SinceUtc $s } } else { $null })
                 Heartbeat = { param($s) $null = $control.HeartbeatLock($lockHolder, [string]$s.FlowRunId, (Get-SIPipelineStatusText -State $s -Definition $pipeDefinition)); & $releaseTick } }
     foreach ($k in $retry.Keys) { $pArgs[$k] = $retry[$k] }
     if ($PipeReq) {
@@ -454,6 +469,9 @@ $pipeRunOne = {
     $pipeWentAfter = @(Get-SIPipelineWentOnAfter -State $pipeResult -Definition $pipeDefinition | Select-Object -First 1)
     if ($pipeWentAfter.Count) { $pipeBad = $pipeWentAfter }
     $pipeCtx.RunId = $pipeResult.FlowRunId; $pipeCtx.StartedAt = $pipeResult.StartedUtc; $pipeCtx.CollectionTime = $pipeResult.StartedUtc
+    # the run report's StepsOk (2026-10-29): every step that succeeded in this run, by its key -- a later ok report closes
+    # the tickets of the steps it lists
+    $pipeCtx | Add-Member -NotePropertyName StepsOk -NotePropertyValue ([string[]]@($pipeResult.Steps | Where-Object { $_ -and [string]$_.State -eq 'Success' } | ForEach-Object { Get-SIJobFlowKey ([string]$_.Job) } | Where-Object { $_ })) -Force
     $pipeStepLine = ''
     if ($pipeBad.Count) {
         $pipeCtx.FailedStep = Get-SIJobFlowKey ([string]$pipeBad[0].Job)
@@ -631,6 +649,57 @@ if ($runStore -and $runStore.PSObject.Methods['CloseEndedRunSteps']) {
     } catch { & $say 'WARN' ('the open step rows of ended runs could not be closed this time: {0}' -f $_.Exception.Message) }
 }
 
+# ---- #945 (owner 2026-10-29; live, a customer install: the correlation step's execution ended Failed on 28 Oct 03:09Z and the run still
+# showed it running on 29 Oct, holding the install) -- EVERY wake-up, also one that finds the install busy, reads the
+# executions of the running run's open steps. An execution that has ENDED (Failed / Stopped / Succeeded) at least 20 minutes
+# ago while its step still says Running closes the step with that result (Get-SIJobFlowEndedExecutionCloses), only while the
+# row still says Running with that execution. The run then goes on by the normal rules: the runner that holds it takes the
+# close over at its next poll, or the next runner resumes it (a failed step's dependants are skipped, the run ends).
+# Only reads executions and writes the one row: nothing is ever stopped here. A list that cannot be read closes nothing.
+if ($HostKind -eq 'Container' -and $armSeams -and $armSeams.PSObject.Methods['Executions'] -and $runStore -and $runStore.PSObject.Methods['CloseOpenStep']) {
+    try {
+        $eoRun = $runStore.Load()
+        if ($eoRun -and [string]$eoRun.State -notin $script:SIJobFlow.RunFinished) {
+            $eoParts = @{}; foreach ($eoP in @($producers)) { $eoParts[((([string]$eoP) -replace '^caj-si-', '') -replace '-producer$', '')] = $true }
+            $eoLists = @{}
+            foreach ($eoSt in @($eoRun.Steps | Where-Object { $_ -and [string]$_.State -eq 'Running' -and [string]$_.Execution -and -not ([string]$_.Execution).Contains('@') })) {
+                $eoKey = Get-SIJobFlowKey ([string]$eoSt.Job)
+                if ($eoLists.ContainsKey($eoKey)) { continue }
+                $eoJob = if ($eoParts.ContainsKey($eoKey)) { $eoKey + '-producer' } else { $eoKey }
+                try { $eoLists[$eoKey] = @($armSeams.Executions($eoJob)) }
+                catch { $eoLists[$eoKey] = $null; & $say 'WARN' ('{0}: whether its execution {1} has ended could not be read this time ({2}) -- nothing is closed; the next wake-up reads again' -f $eoKey, $eoSt.Execution, $_.Exception.Message) }
+            }
+            foreach ($eoClose in @(Get-SIJobFlowEndedExecutionCloses -State $eoRun -ExecutionsByJob $eoLists -NowUtc ([datetime]::UtcNow) -PartsJobs $eoParts)) {
+                try {
+                    if ([int]$runStore.CloseOpenStep([string]$eoRun.FlowRunId, $eoClose) -gt 0) {
+                        & $say 'WARN' ('step {0} {1}: its execution {2} ended {3} at {4:yyyy-MM-dd HH:mm}Z while the run still showed it running -- the step is closed {5}; the run goes on by the normal rules' -f $eoClose.Order, $eoClose.Job, $eoClose.Execution, $eoClose.Status.ToLowerInvariant(), $eoClose.EndedUtc, $eoClose.State.ToLowerInvariant())
+                    }
+                } catch { & $say 'WARN' ('step {0} {1}: its ended execution could not be recorded this time ({2}) -- the next wake-up tries again' -f $eoClose.Order, $eoClose.Job, $_.Exception.Message) }
+            }
+        }
+    } catch { & $say 'WARN' ('whether the running steps'' executions have ended could not be checked this time: {0}' -f $_.Exception.Message) }
+}
+
+# ---- #947 (b) (owner 2026-10-29: busy installs never got their update) -- A BOUND ON THE WAIT: an update that has waited 6
+# hours or more for the pipeline is started from EVERY wake-up, also a busy one (at most once an hour); the updater then
+# cancels the run that started on an older version and installs (container/updater/_shared/SI-UpdaterWaitBound.ps1). A run that
+# started on the version being installed is never cancelled. A mark that cannot be read, or a start that fails, is said and
+# changes nothing.
+if ($HostKind -eq 'Container' -and $updateWaits -and $updaterJobName -and -not $Cancel) {
+    try {
+        $owWaits = & $updateWaits
+        if ($owWaits) {
+            $owEx = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $updaterJobName) $null
+            $owGo = Get-SIPipelineUpdateOverdueStart -Waits $owWaits -Executions @($owEx.value) -NowUtc ([datetime]::UtcNow)
+            if ($owGo.Start) {
+                $owJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $updaterJobName) $null
+                $owR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $updaterJobName) (New-SIUpdateNowStartTemplate -Job $owJob -Mode 'pending-update')
+                & $say 'WARN' ('{0} ({1} execution {2})' -f $owGo.Text, $updaterJobName, $(if ($owR -and $owR.PSObject.Properties['name']) { [string]$owR.name } else { '(started)' }))
+            }
+        }
+    } catch { & $say 'WARN' ('whether a long-waiting update must be started could not be checked this time: {0}' -f $_.Exception.Message) }
+}
+
 $drain = $null
 try {
     $drain = Invoke-SIPipelineDrain -Definition $pipeDefinition -Control $control -LoadLast { $runStore.Load() } -RunOne $pipeRunOne -Request $pipeRequest -Holder $lockHolder -Log $say -UpdateRunning $updateRunning -CodeCurrent $codeCurrent -CloseCancelled $closeCancelled -UpdateWaits $updateWaits -StartUpdate $startUpdate
@@ -649,7 +718,22 @@ try {
         }
         exit 0
     }
-    & $say 'ERROR' ('the pipeline could not run: {0}' -f $_.Exception.Message)
+    # 2026-10-28 (a small install): a wake-up failed opening the settings database on a broken pooled connection and raised the
+    # red "run failing" alert though no run started. A wake-up that STARTED NO RUN and failed on a temporary Azure SQL answer
+    # (Test-SISqlStatementTransient, after the open's own retry) is said as a warning of class transient-sql, exit 0; the next
+    # wake-up runs as usual. Any other failure, or one after a run was started, is an error as before.
+    if (-not $wake.RunStarted) {
+        if (-not (Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue)) { $sr = Join-Path $siRoot 'engine/_shared/SI-SqlRetry.ps1'; if (Test-Path -LiteralPath $sr) { . $sr } }
+        if ((Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue) -and (Test-SISqlStatementTransient -ErrorRecord $_)) {
+            & $say 'WARN' ('this wake-up started nothing: the database answered a temporary Azure SQL error ({0}); the next wake-up tries again' -f (([string]$_.Exception.Message) -split "`n")[0].Trim())
+            if (Get-Command -Name Send-SIRunHealthRow -ErrorAction SilentlyContinue) {
+                $wsCtx = [pscustomobject]@{ RunId = [guid]::NewGuid().ToString(); Engine = 'flow'; ShardIndex = 0; ShardCount = 1; CollectionTime = [datetime]::UtcNow; StartedAt = [datetime]::UtcNow
+                                             FailedStep = 'wake-up'; FailedStepError = [string]$_.Exception.Message; FailedStepErrorClass = 'transient-sql' }
+                try { Send-SIRunHealthRow -RunContext $wsCtx -Phase End -ExitReason 'success-partial' -ErrorMessage $_.Exception.Message } catch { }
+            }
+            exit 0
+        }
+    }    & $say 'ERROR' ('the pipeline could not run: {0}' -f $_.Exception.Message)
     if (Get-Command -Name Send-SIRunHealthRow -ErrorAction SilentlyContinue) {
         $failCtx = [pscustomobject]@{ RunId = [guid]::NewGuid().ToString(); Engine = 'flow'; ShardIndex = 0; ShardCount = 1; CollectionTime = [datetime]::UtcNow; StartedAt = [datetime]::UtcNow; FailedStep = '' }
         Send-SIRunHealthRow -RunContext $failCtx -Phase End -ExitReason 'error' -ErrorMessage $_.Exception.Message

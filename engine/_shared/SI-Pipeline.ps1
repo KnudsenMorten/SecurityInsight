@@ -1408,6 +1408,34 @@ function Get-SIPipelineUpdateStart {
     [pscustomobject]@{ Start = $true; Running = $false; Text = '' }
 }
 
+function Get-SIPipelineUpdateOverdueStart {
+    <#
+        PURE (#947 (b), owner 2026-10-29). An update has waited -MaxHours (6) or more for the pipeline (its wait mark -Waits,
+        kind 'run', SinceUtc = when it first began to wait): the runner starts the updater ON A BUSY WAKE-UP TOO -- the update
+        then cancels the run that started on an older version and installs (SI-UpdaterWaitBound.ps1 Invoke-SIUpdaterOverdueCancel).
+        Without this an update that waits would only be asked again at its next daily start. At most once every -EveryMinutes
+        (60): an updater execution that is running, or that started within that time, is not started again.
+        -Executions: the updater job's executions (ARM shape). Returns @{ Start; Text }.
+    #>
+    param($Waits, [AllowEmptyCollection()][object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$NowUtc, [int]$MaxHours = 6, [int]$EveryMinutes = 60)
+    $no = { param($t) [pscustomobject]@{ Start = $false; Text = $t } }
+    if (-not $Waits -or [string]$Waits.Kind -ne 'run' -or -not $Waits.SinceUtc) { return (& $no '') }
+    $now = $NowUtc.ToUniversalTime()
+    $hours = ($now - ([datetime]$Waits.SinceUtc).ToUniversalTime()).TotalHours
+    if ($hours -lt $MaxHours) { return (& $no '') }
+    foreach ($e in @($Executions | Where-Object { $_ })) {
+        $p = if ($e.PSObject.Properties['properties']) { $e.properties } else { $e }
+        $st = [string]$p.status
+        $t = $null
+        if ($p.PSObject.Properties['startTime'] -and "$($p.startTime)".Trim()) { try { $t = ([datetime]$p.startTime).ToUniversalTime() } catch { $t = $null } }
+        if ($st -in @('Running', 'Processing') -and -not ($p.PSObject.Properties['endTime'] -and "$($p.endTime)".Trim()) -and (-not $t -or ($now - $t).TotalHours -lt 6)) {
+            return (& $no ('the updater is running ({0})' -f [string]$e.name))
+        }
+        if ($t -and ($now - $t).TotalMinutes -lt $EveryMinutes) { return (& $no ('the updater started {0} minutes ago ({1})' -f [int]($now - $t).TotalMinutes, [string]$e.name)) }
+    }
+    [pscustomobject]@{ Start = $true; Text = ('an update has waited {0} hours for the pipeline -- the updater is started; it cancels a run that started on an older version and installs' -f [int][Math]::Floor($hours)) }
+}
+
 # =====================================================================================================================
 #  #700: cancel the RUNNING pipeline run (owner 2026-10-15: "why not kill it" / "dont let it finish if it runs wrong release")
 # =====================================================================================================================

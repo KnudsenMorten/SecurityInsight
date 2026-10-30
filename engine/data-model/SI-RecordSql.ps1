@@ -718,7 +718,10 @@ function New-SIRecordSqlInvoke {
     # Not a GetNewClosure(): a closure runs in its own module scope and does not see the connection helpers the caller
     # loaded. The server and database go in as literals; the functions are found where the seam is called.
     $q = { param($s) "'" + ([string]$s).Replace("'", "''") + "'" }
-    [scriptblock]::Create(('param($Sql, $Params, $Mode) Invoke-SIRecordSqlDb -Server {0} -Database {1} -Sql $Sql -Params $Params -Mode $Mode' -f (& $q $Server), (& $q $Database)))
+    $seam = [scriptblock]::Create(('param($Sql, $Params, $Mode) Invoke-SIRecordSqlDb -Server {0} -Database {1} -Sql $Sql -Params $Params -Mode $Mode' -f (& $q $Server), (& $q $Database)))
+    # 2026-10-29 a real database: the CI list's and the CI views' columns are filled a CiId range at a time (SI-DataCi.ps1 "KEY RANGES")
+    $seam | Add-Member -NotePropertyName SISqlRanged -NotePropertyValue $true
+    $seam
 }
 
 function Read-SISqlRows {

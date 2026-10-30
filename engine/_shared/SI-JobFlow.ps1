@@ -1510,6 +1510,92 @@ function Get-SIPipelineLongRunText {
     '{0} has run for {1}, much longer than usual ({2}). Warning only: nothing is stopped, the run goes on. Look at it on Operations > Jobs (si-flow-1203).' -f $what, (& $h $Finding.AgeMinutes), $usual
 }
 
+# =====================================================================================================================
+#  A STEP THAT RUNS FAR PAST ITS LAST TIME WITH NO PROGRESS -- PURE (si-flow-1204, owner 2026-10-29: "a stuck step is seen
+#  after days, not hours" -- a correlation ran 55 h and two data syncs 35 h+ before anyone acted). WARNING ONLY: nothing is
+#  stopped, nothing is held. One rule for the runner's log / step record and for the heartbeat (Warnings + Pipeline.stalledSteps).
+# =====================================================================================================================
+function Get-SIPipelineStallRule {
+    <#
+        PURE. A running step is "stuck" when BOTH hold:
+          * it has run longer than max(Factor x its last run's time, its last run's time + ExtraMinutes) -- its last run's time =
+            the job's newest successful step among the OTHER runs read; none known: NoTimeMinutes;
+          * it shows no progress for QuietMinutes: its newest sign of progress (cfg.StepProgress / cfg.StepPhaseTime since it
+            started) is older than that -- or, for a step that leaves no such sign, the runner's log check already found no
+            sign of progress (its record says "no sign of progress").
+    #>
+    @{ Factor = 2.0; ExtraMinutes = 60; NoTimeMinutes = 360; QuietMinutes = 60 }
+}
+
+function Get-SIPipelineLastStepMinutes {
+    <# PURE. Job key -> the minutes its newest SUCCESSFUL step took among -Steps { FlowRunId, Job, State, StartedUtc, EndedUtc }
+       of the runs other than -ExcludeRunId (the run going on). A job that never succeeded in them has no entry. #>
+    param([object[]]$Steps = @(), [AllowEmptyString()][string]$ExcludeRunId = '')
+    $out = @{}; $at = @{}
+    foreach ($s in @(@($Steps) | Where-Object { $_ -and [string]$_.State -eq 'Success' -and [string]$_.FlowRunId -ne $ExcludeRunId })) {
+        $k = Get-SIJobFlowKey ([string]$s.Job); if (-not $k) { continue }
+        $a = ConvertTo-SIPipelineLongRunTime $s.StartedUtc; $b = ConvertTo-SIPipelineLongRunTime $s.EndedUtc
+        if ($null -eq $a -or $null -eq $b -or $b -lt $a) { continue }
+        if ($at.ContainsKey($k) -and $at[$k] -ge $a) { continue }
+        $at[$k] = $a; $out[$k] = ($b - $a).TotalMinutes
+    }
+    $out
+}
+
+function Get-SIPipelineStallThreshold {
+    <# PURE. The minutes after which a running step may be called stuck: from -LastMinutes (its last run's time), else the rule. #>
+    param([AllowNull()]$LastMinutes)
+    $r = Get-SIPipelineStallRule
+    if ($null -eq $LastMinutes) { return @{ Minutes = [double]$r.NoTimeMinutes; Basis = 'rule'; LastMinutes = $null } }
+    $l = [double]$LastMinutes
+    @{ Minutes = [Math]::Max($l * [double]$r.Factor, $l + [double]$r.ExtraMinutes); Basis = 'last'; LastMinutes = $l }
+}
+
+function Get-SIPipelineStalledSteps {
+    <#
+        PURE. The running steps that are stuck (Get-SIPipelineStallRule). -Steps: the run's steps { Job, Order, State,
+        StartedUtc, LastProgressUtc ($null = no sign of progress recorded since it started), Silent (the runner's log check
+        found no sign of progress) }; -LastMinutes: Get-SIPipelineLastStepMinutes; -NowUtc. One entry per stuck step, by
+        order: { Step (job key); Order; StartedUtc; AgeMinutes; LastMinutes ($null = not known); ThresholdMinutes; Basis
+        last | rule; LastProgressUtc; SinceUtc (when it became stuck) }. A step with recent progress, or still inside its
+        time, is never said.
+    #>
+    param([object[]]$Steps = @(), [hashtable]$LastMinutes = @{}, [Parameter(Mandatory)][datetime]$NowUtc)
+    $r = Get-SIPipelineStallRule
+    $now = $NowUtc.ToUniversalTime()
+    foreach ($s in @(@($Steps) | Where-Object { $_ -and [string]$_.State -in @('Running', 'Starting') } | Sort-Object { [int]$_.Order })) {
+        $start = ConvertTo-SIPipelineLongRunTime $s.StartedUtc; if ($null -eq $start) { continue }
+        $k = Get-SIJobFlowKey ([string]$s.Job); if (-not $k) { continue }
+        $th = Get-SIPipelineStallThreshold -LastMinutes $(if ($LastMinutes.ContainsKey($k)) { $LastMinutes[$k] } else { $null })
+        $age = ($now - $start).TotalMinutes
+        if ($age -le [double]$th.Minutes) { continue }
+        $prog = if ($s.PSObject.Properties['LastProgressUtc']) { ConvertTo-SIPipelineLongRunTime $s.LastProgressUtc } else { $null }
+        $silent = [bool]($s.PSObject.Properties['Silent'] -and $s.Silent)
+        $crossed = $start.AddMinutes([double]$th.Minutes)
+        if ($null -ne $prog) {
+            if (($now - $prog).TotalMinutes -lt [double]$r.QuietMinutes) { continue }
+            $quietFrom = $prog.AddMinutes([double]$r.QuietMinutes)
+        } elseif ($silent) {
+            $quietFrom = $crossed
+        } else { continue }
+        [pscustomobject]@{ Step = $k; Order = [int]$s.Order; StartedUtc = $start; AgeMinutes = [long][Math]::Floor($age)
+                           LastMinutes = $(if ($null -ne $th.LastMinutes) { [long][Math]::Round([double]$th.LastMinutes) } else { $null })
+                           ThresholdMinutes = [long][Math]::Ceiling([double]$th.Minutes); Basis = $th.Basis; LastProgressUtc = $prog
+                           SinceUtc = $(if ($quietFrom -gt $crossed) { $quietFrom } else { $crossed }) }
+    }
+}
+
+function Get-SIPipelineStalledText {
+    <# PURE. The plain words for one entry of Get-SIPipelineStalledSteps (the runner's log and the step record). "shows no
+       progress" is the mark that says it was reported already. #>
+    param([Parameter(Mandatory)]$Finding)
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $h = { param($m) ('{0} h' -f ([double]$m / 60).ToString('0.#', $inv)) }
+    $basis = if ($Finding.Basis -eq 'last') { 'its last run here took {0}' -f (& $h $Finding.LastMinutes) } else { 'its last run''s time is not known here, so the rule of {0} applies' -f (& $h $Finding.ThresholdMinutes) }
+    $quiet = if ($Finding.LastProgressUtc) { 'its last sign of progress was at {0} UTC' -f ([datetime]$Finding.LastProgressUtc).ToString('yyyy-MM-dd HH:mm', $inv) } else { 'it has written no sign of progress' }
+    'step {0} has run for {1}, far past its usual time ({2}), and shows no progress: {3}. Warning only: nothing is stopped, the run goes on. Look at it on Operations > Jobs (si-flow-1204).' -f $Finding.Step, (& $h $Finding.AgeMinutes), $basis, $quiet
+}
+
 function Test-SIJobFlowExecutionAtLimit {
     <#
         PURE. Did this execution (ARM: name, properties.status / startTime / endTime) END AT ITS JOB'S OWN RUN LIMIT? It
@@ -1544,6 +1630,120 @@ function Select-SIJobFlowRunningExecution {
     $started = $null
     if ($live[0].properties.startTime) { try { $started = ([datetime]$live[0].properties.startTime).ToUniversalTime() } catch { $started = $null } }
     [pscustomobject]@{ Execution = [string]$live[0].name; StartedUtc = $started }
+}
+
+function Get-SIJobFlowExecutionStatusOf {
+    <#
+        PURE (#945). The status Azure's execution LIST gives one execution (-Execution, by name), or '' when it is not in the
+        list. The fallback when the single-execution read fails (live 2026-10-28/29, a customer install: the step's execution had ended
+        Failed, the runner's read of it never answered, and the step stayed "running" for days).
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Executions = @(), [AllowEmptyString()][string]$Execution)
+    if (-not "$Execution".Trim()) { return '' }
+    $hit = @(@($Executions) | Where-Object { $_ -and [string]$_.name -eq $Execution -and $_.PSObject.Properties['properties'] -and $_.properties })[0]
+    if (-not $hit) { return '' }
+    [string]$hit.properties.status
+}
+
+function Get-SIJobFlowEndedExecutionCloses {
+    <#
+        PURE (#945, owner 2026-10-29). THE WAKE-UP CHECK: which open steps of the run -State have an execution that Azure says
+        has ENDED, while the step's record still says Running? Asked on EVERY wake-up of the pipeline runner -- also the ones
+        that find the install busy -- so a run whose runner never noticed the end (a customer install, 28 Oct: Failed at 03:09Z, still
+        "running" on 29 Oct) is closed and goes on by the normal rules (a failed step's dependants are skipped, the run ends).
+        -ExecutionsByJob: step key -> that job's execution list (ARM shape); a key that is missing or $null = the list could
+        not be read -> nothing is closed for it. -PartsJobs: the step keys collected in parts (their list is the PRODUCER's;
+        a producer that SUCCEEDED does not end the step -- its parts do -- so only Failed / Stopped close it).
+        CLOSES ONLY: a step that is Running, with a recorded execution (never a VM process 'pid@...'), found BY NAME in the
+        list, with an ended status (Succeeded / Failed / Degraded / Cancelled / Stopped) AND an end time at least
+        -GraceMinutes ago (20: longer than a working runner needs -- it polls every 30 s, and its pause before judging a
+        failure is at most 15 minutes). Running / Processing / not in the list / no end time = nothing. A run that has ended:
+        nothing. Never stops anything. Returns @(@{ Order; Job; Execution; Status; State; ErrorClass; Error; EndedUtc }).
+    #>
+    param($State, [hashtable]$ExecutionsByJob = @{}, [Parameter(Mandatory)][datetime]$NowUtc, [int]$GraceMinutes = 20, [hashtable]$PartsJobs = @{})
+    $out = New-Object System.Collections.Generic.List[object]
+    if (-not $State -or [string]$State.State -in $script:SIJobFlow.RunFinished) { return @() }
+    $now = $NowUtc.ToUniversalTime()
+    foreach ($st in @($State.Steps)) {
+        if (-not $st -or [string]$st.State -ne 'Running') { continue }
+        $ex = [string]$st.Execution
+        if (-not $ex.Trim() -or $ex.Contains('@')) { continue }
+        $k = Get-SIJobFlowKey ([string]$st.Job)
+        if (-not $ExecutionsByJob.ContainsKey($k) -or $null -eq $ExecutionsByJob[$k]) { continue }
+        $hit = @(@($ExecutionsByJob[$k]) | Where-Object { $_ -and [string]$_.name -eq $ex -and $_.PSObject.Properties['properties'] -and $_.properties })[0]
+        if (-not $hit) { continue }
+        $p = $hit.properties
+        $status = [string]$p.status
+        if ($status -notmatch '^(?i)(succeeded|failed|degraded|cancelled|canceled|stopped)$') { continue }
+        $end = $null
+        try { if ($p.PSObject.Properties['endTime'] -and "$($p.endTime)".Trim()) { $end = [datetime]::Parse([string]$p.endTime, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) } } catch { $end = $null }
+        if (-not $end -or ($now - $end).TotalMinutes -lt $GraceMinutes) { continue }
+        $parts = $PartsJobs.ContainsKey($k) -and [bool]$PartsJobs[$k]
+        $noticed = 'noticed by the pipeline''s wake-up at {0:yyyy-MM-dd HH:mm}Z (its runner had not closed the step)' -f $now
+        $endText = '{0:yyyy-MM-dd HH:mm}Z' -f $end
+        $s = $null; $cls = ''; $err = ''
+        switch -Regex ($status) {
+            '^(?i)succeeded$' {
+                if ($parts) { break }
+                $s = 'Success'; $cls = ''; $err = ''
+            }
+            '^(?i)stopped$' {
+                $s = 'Interrupted'; $cls = 'stopped'
+                $err = '{0} -- the execution ended stopped at {1}; {2}' -f (Get-SIJobFlowStoppedText -Job ([string]$st.Job)), $endText, $noticed
+            }
+            default {
+                $s = 'Failed'; $cls = 'job-failed'
+                $err = 'the execution ended {0} at {1}; {2}' -f $status.ToLowerInvariant(), $endText, $noticed
+            }
+        }
+        if (-not $s) { continue }
+        $out.Add([pscustomobject]@{ Order = [int]$st.Order; Job = [string]$st.Job; Execution = $ex; Status = $status; State = $s; ErrorClass = $cls; Error = $err; EndedUtc = $end })
+    }
+    $out.ToArray()
+}
+
+function Set-SIJobFlowStepClosed {
+    <# PURE (#945). The file / blob stores' close of one step in the run record -State: only when it is run -FlowRunId, the
+       run has not ended, and the step (-Close.Order) is Running with -Close.Execution. Changes -State in place; $true when
+       the step was closed. #>
+    param($State, [string]$FlowRunId, [Parameter(Mandatory)]$Close)
+    if (-not $State -or [string]$State.FlowRunId -ne $FlowRunId -or [string]$State.State -in $script:SIJobFlow.RunFinished) { return $false }
+    $st = @($State.Steps | Where-Object { $_ -and [int]$_.Order -eq [int]$Close.Order })[0]
+    if (-not $st -or [string]$st.State -ne 'Running' -or [string]$st.Execution -ne [string]$Close.Execution) { return $false }
+    $st.State = [string]$Close.State; $st.ErrorClass = [string]$Close.ErrorClass; $st.Error = [string]$Close.Error; $st.EndedUtc = ([datetime]$Close.EndedUtc).ToUniversalTime()
+    $true
+}
+
+function Get-SIJobFlowSaveJson {
+    <# PURE (#945). The JSON the file / blob store writes for -State: as it is, except a step the STORED record (-Stored, the
+       same run) already ended (Success / Failed / Interrupted / TimedOut) with the SAME execution, which -State still says is
+       Running -- that step is written as stored (a runner that never saw the wake-up check's close does not reopen it; it
+       takes the close over at its next poll). A step started again (a new execution, or Starting) is written as it is.
+       -State itself is never changed. #>
+    param([Parameter(Mandatory)]$State, $Stored)
+    $json = ConvertTo-SIJobFlowRunJson -State $State
+    if (-not $Stored -or [string]$Stored.FlowRunId -ne [string]$State.FlowRunId) { return $json }
+    $keep = @{}
+    foreach ($st in @($State.Steps)) {
+        if (-not $st -or [string]$st.State -ne 'Running' -or -not [string]$st.Execution) { continue }
+        $was = @($Stored.Steps | Where-Object { $_ -and [int]$_.Order -eq [int]$st.Order })[0]
+        if ($was -and [string]$was.Execution -eq [string]$st.Execution -and [string]$was.State -in @('Success', 'Failed', 'Interrupted', 'TimedOut')) { $keep[[int]$st.Order] = $was }
+    }
+    if (-not $keep.Count) { return $json }
+    $copy = ConvertFrom-SIJobFlowRunJson -Json $json
+    foreach ($st in @($copy.Steps)) {
+        if (-not $st -or -not $keep.ContainsKey([int]$st.Order)) { continue }
+        $w = $keep[[int]$st.Order]
+        $st.State = [string]$w.State; $st.ErrorClass = [string]$w.ErrorClass; $st.Error = [string]$w.Error; $st.EndedUtc = $w.EndedUtc
+    }
+    ConvertTo-SIJobFlowRunJson -State $copy
+}
+
+function Get-SIJobFlowStepRowOf {
+    <# PURE (#945). One step of the stored run record (or $null when the record is another run). #>
+    param($State, [string]$FlowRunId, [int]$Order)
+    if (-not $State -or [string]$State.FlowRunId -ne $FlowRunId) { return $null }
+    @($State.Steps | Where-Object { $_ -and [int]$_.Order -eq $Order })[0]
 }
 
 function Get-SIJobFlowHoursText {
@@ -1690,7 +1890,12 @@ function Invoke-SIJobFlow {
         # With it, a run that has run longer than its threshold (Get-SIPipelineLongRun: 2 x usual, at least usual + 2 h; the
         # floor without history) is said ONCE in the log and in the run's note, a step once in the log and its step record
         # (RetryReason). Without it (the default) nothing is checked. Never fails the run.
-        $History
+        $History,
+        # si-flow-1204 (owner 2026-10-29): A STEP FAR PAST ITS LAST TIME WITH NO PROGRESS IS SAID, NEVER STOPPED. -StepProgress
+        # { param($Job, $Execution, $SinceUtc) } -> the step's newest sign of progress since it started (Get-SIStepProgressLast), or
+        # $null. Asked only for a step already past its time (Get-SIPipelineStalledSteps), at most every 10 minutes per step;
+        # said ONCE in the log and the step record (RetryReason). Needs -History (the last run's times). Never fails the run.
+        [scriptblock]$StepProgress
     )
     if (-not $Map) { $Map = Get-SIJobFlowMap }
     if ($Scope -eq 'from-step') { if (-not $FromStep) { $FromStep = $Target }; $Scope = 'pipeline' }
@@ -1831,11 +2036,14 @@ function Invoke-SIJobFlow {
     # si-flow-1203: a run / step much longer than usual for this install -- said once (the run: its note says it; a step:
     # its RetryReason), never stopped. The usual lengths are worked out once, from the OTHER runs read (-History).
     $longUsual = $null; $longRunSaid = $false; $longStepSaid = @{}
+    # si-flow-1204: the last run's time of each job (the OTHER runs read), the steps said, when each step's progress was asked
+    $stallLast = $null; $stallSaid = @{}; $stallAsked = @{}
     if ($null -ne $History) {
         try {
             # a scriptblock is read only here, once the run goes on (never on a wake-up that only waits)
             $hist = if ($History -is [scriptblock]) { & $History } else { $History }
             $longUsual = Get-SIPipelineUsualMinutes -Runs @($hist.Runs | Where-Object { $_ }) -Steps @($hist.Steps | Where-Object { $_ }) -ExcludeRunId ([string]$state.FlowRunId)
+            if ($StepProgress) { $stallLast = Get-SIPipelineLastStepMinutes -Steps @($hist.Steps | Where-Object { $_ }) -ExcludeRunId ([string]$state.FlowRunId) }
         }
         catch { $longUsual = $null; & $Log 'WARN' ('how long a run usually takes here could not be worked out ({0}) -- a long run is not said in this run' -f $_.Exception.Message) }
     }
@@ -1862,6 +2070,33 @@ function Invoke-SIJobFlow {
                 $lst.RetryReason = (@([string]$lst.RetryReason, $lt) | Where-Object { $_ }) -join ' | '
             }
         } catch { & $Log 'WARN' ('whether this run is much longer than usual could not be told ({0})' -f $_.Exception.Message) }
+        # si-flow-1204: a step far past its last time that shows no progress -- said once, nothing is stopped
+        if ($null -ne $stallLast -and $StepProgress) {
+            try {
+                $sNow = ([datetime](& $Now)).ToUniversalTime()
+                $cand = @()
+                foreach ($st0 in @(@($state.Steps) | Where-Object { [string]$_.State -in @('Running', 'Starting') -and $_.StartedUtc })) {
+                    $sk0 = Get-SIJobFlowKey ([string]$st0.Job)
+                    if ($stallSaid.ContainsKey([int]$st0.Order) -or [string]$st0.RetryReason -match 'shows no progress') { $stallSaid[[int]$st0.Order] = $true; continue }
+                    $th0 = Get-SIPipelineStallThreshold -LastMinutes $(if ($stallLast.ContainsKey($sk0)) { $stallLast[$sk0] } else { $null })
+                    $since0 = ([datetime]$st0.StartedUtc).ToUniversalTime()
+                    if (($sNow - $since0).TotalMinutes -le [double]$th0.Minutes) { continue }
+                    if ($stallAsked.ContainsKey([int]$st0.Order) -and ($sNow - [datetime]$stallAsked[[int]$st0.Order]).TotalMinutes -lt 10) { continue }
+                    $stallAsked[[int]$st0.Order] = $sNow
+                    $lp = $null; try { $lp = & $StepProgress ([string]$st0.Job) ([string]$st0.Execution) $since0 } catch { $lp = $null }
+                    $cand += [pscustomobject]@{ Job = [string]$st0.Job; Order = [int]$st0.Order; State = [string]$st0.State; StartedUtc = $since0; LastProgressUtc = $lp
+                                                Silent = ([string]$st0.RetryReason -match 'has shown no sign of progress for') }
+                }
+                foreach ($sf in @(Get-SIPipelineStalledSteps -Steps $cand -LastMinutes $stallLast -NowUtc $sNow)) {
+                    $sst = @(@($state.Steps) | Where-Object { [int]$_.Order -eq [int]$sf.Order })[0]
+                    if (-not $sst) { continue }
+                    $stallSaid[[int]$sf.Order] = $true
+                    $stt = Get-SIPipelineStalledText -Finding $sf
+                    & $Log 'WARN' ('step {0} {1}: {2}' -f $sst.Order, $sst.Job, $stt)
+                    $sst.RetryReason = (@([string]$sst.RetryReason, $stt) | Where-Object { $_ }) -join ' | '
+                }
+            } catch { & $Log 'WARN' ('whether a step shows progress could not be told ({0})' -f $_.Exception.Message) }
+        }
     }
     $limitOf = {
         param($st)
@@ -2139,6 +2374,20 @@ function Invoke-SIJobFlow {
                 }
             }
         }
+        # #945: the status could not be read, and a wake-up of the pipeline may have closed this step meanwhile (it read
+        # that the execution had ENDED -- Get-SIJobFlowEndedExecutionCloses): the close is taken over, so the step ends here
+        # by the normal rules (its dependants are judged, the run goes on or ends). Only a row of THIS execution that is no
+        # longer Running; a store without the read, or a read that fails, changes nothing.
+        $adoptedEnd = $null
+        if (-not $ended -and -not $status -and $Store -and $Store.PSObject.Methods['StepRow']) {
+            $row = $null
+            try { $row = $Store.StepRow([string]$state.FlowRunId, [int]$st.Order) } catch { $row = $null }
+            if ($row -and [string]$row.Execution -eq [string]$st.Execution -and [string]$row.State -in @('Success', 'Failed', 'Interrupted')) {
+                $st.State = [string]$row.State; $st.ErrorClass = [string]$row.ErrorClass; $st.Error = [string]$row.Error; $ended = $true
+                if ($row.EndedUtc) { $adoptedEnd = ([datetime]$row.EndedUtc).ToUniversalTime() }
+                & $Log 'WARN' ('step {0} {1}: its execution {2} had ended ({3}) -- closed by the pipeline''s wake-up check; the run goes on by the normal rules' -f $st.Order, $st.Job, $st.Execution, ([string]$row.State).ToLowerInvariant())
+            }
+        }
         if (-not $ended) {
             $lim = & $limitOf $st
             $since = if ($st.StartedUtc) { ([datetime]$st.StartedUtc).ToUniversalTime() } else { $tNow }
@@ -2287,7 +2536,7 @@ function Invoke-SIJobFlow {
             }
         }
         if ($ended) {
-            $st.EndedUtc = $tNow
+            $st.EndedUtc = if ($adoptedEnd -and [string]$st.State -ne 'Starting' -and [string]$st.State -ne 'Running') { $adoptedEnd } else { $tNow }
             & $Log $(if ($st.State -eq 'Success') { 'INFO' } else { 'WARN' }) ('step {0} {1}: {2}{3}' -f $st.Order, $st.Job, $st.State.ToLowerInvariant(), $(if ($st.Error) { ' -- ' + $st.Error } else { '' }))
             # #882: a step that ended without success leaves no worker running for it (its producer died or was stopped;
             # its queue workers would go on writing for a run nobody finishes)
@@ -2502,7 +2751,29 @@ function New-SIJobFlowArmSeams {
         Start = { param($Job) $r = & $this.Arm 'POST' ('{0}/{1}/start' -f $this.Base, (Get-SIJobFlowJobName $Job)) @{}
                   $n = [string]$r.name; if (-not $n -and $r.id) { $n = ([string]$r.id -split '/')[-1] }
                   if (-not $n) { throw 'the start returned no execution name' }; $n }
-        Poll  = { param($Job, $Execution) $r = & $this.Arm 'GET' ('{0}/{1}/executions/{2}' -f $this.Base, (Get-SIJobFlowJobName $Job), $Execution) $null; [string]$r.properties.status }
+        # #945: when the read of the one execution fails or says nothing, its status is taken from the job's execution LIST
+        # (live 2026-10-28, a customer install: the step's execution ended Failed and the runner kept "trying again" for days). Neither
+        # answers = the first error is thrown (the runner tries again at its next poll, as before).
+        Poll  = { param($Job, $Execution)
+                  $first = $null; $st = ''
+                  try { $r = & $this.Arm 'GET' ('{0}/{1}/executions/{2}' -f $this.Base, (Get-SIJobFlowJobName $Job), $Execution) $null; if ($r -and $r.PSObject.Properties['properties'] -and $r.properties) { $st = [string]$r.properties.status } }
+                  catch { $first = $_ }
+                  if ($st) { return $st }
+                  $list = $null
+                  try { $list = $this.Executions($Job) } catch { if ($first) { throw $first }; throw }
+                  $st = Get-SIJobFlowExecutionStatusOf -Executions @($list) -Execution ([string]$Execution)
+                  if ($st) { return $st }
+                  if ($first) { throw $first }
+                  '' }
+        # #945: the job's executions, every page (at most 5; Azure lists the newest first)
+        Executions = { param($Job)
+                  $all = New-Object System.Collections.Generic.List[object]; $path = '{0}/{1}/executions' -f $this.Base, (Get-SIJobFlowJobName $Job); $pg = 0
+                  while ($path -and $pg -lt 5) {
+                      $r = & $this.Arm 'GET' $path $null; $pg++
+                      foreach ($v in @($r.value)) { if ($v) { $all.Add($v) } }
+                      $path = if ($r -and $r.PSObject.Properties['nextLink'] -and $r.nextLink) { [string]$r.nextLink } else { $null }
+                  }
+                  $all.ToArray() }
         # an execution that already ended answers 400 "job execution ... not found": it is already stopped, not a failure
         Stop  = { param($Job, $Execution) try { $null = & $this.Arm 'POST' ('{0}/{1}/stop/{2}' -f $this.Base, (Get-SIJobFlowJobName $Job), $Execution) @{} } catch { if (-not (Test-SIJobFlowStopAlreadyEnded -Message ([string]$_.Exception.Message))) { throw } } }
         # the job's own run limit (its replica timeout) in seconds / in whole minutes; 0 when the job does not say
@@ -2557,7 +2828,9 @@ function Add-SIJobFlowCollectParts {
     $names = if ($PSBoundParameters.ContainsKey('ProducerJobs')) { @($ProducerJobs) } else { @($Seams.List()) }
     $keda = @{}
     foreach ($n in $names) { if ([string]$n -match '^caj-si-(.+)-producer$') { $keda[$Matches[1]] = $true } }
-    New-SIJobFlowSeams -Fields @{ Inner = $Seams; Store = $Store; Keda = $keda; Timeout = $TimeoutMinutes; NowFn = $Now; Waits = @{} } -Methods @{
+    # Progress (#576): { param($Key, $Execution, $Done, $Total) } -- the parts done of all, at every poll of a running
+    # collection (the caller sets it: the runner writes the step's progress record); $null = nothing written
+    New-SIJobFlowSeams -Fields @{ Inner = $Seams; Store = $Store; Keda = $keda; Timeout = $TimeoutMinutes; NowFn = $Now; Waits = @{}; Progress = $null } -Methods @{
         IsParts = { param($Job) $this.Keda.ContainsKey((Get-SIJobFlowKey $Job)) }
         # NOT A WAIT ANY MORE (2026-10-13: the parts are waited for until they are done -- Poll). Only what the step's own
         # run limit is said to be: -TimeoutMinutes (the parts' start and queueing) plus the worker job's own run limit.
@@ -2617,7 +2890,10 @@ function Add-SIJobFlowCollectParts {
                     # the producer ended without a manifest: nothing will ever mark the parts
                     return [pscustomobject]@{ Status = 'Failed'; Error = 'the producer ended without writing the list of parts -- the collection did not start' }
                 }
-                default { return 'Running' }
+                default {
+                    if ($this.Progress) { try { $null = & $this.Progress $k ([string]$Execution) ([long]$p.Done) ([long]$p.Parts) } catch { } }
+                    return 'Running'
+                }
             }
         }
     }
@@ -2841,14 +3117,19 @@ function New-SIJobFlowFileStore {
     New-SIJobFlowSeams -Fields @{ Path = $Path } -Methods @{
         Load = { if (Test-Path -LiteralPath $this.Path) { ConvertFrom-SIJobFlowRunJson -Json ([IO.File]::ReadAllText($this.Path)) } else { $null } }
         Cancelled = { param($FlowRunId) $s = $null; try { $s = $this.Load() } catch { $s = $null }; Get-SIJobFlowCancelledOf -Stored $s -FlowRunId $FlowRunId }
+        # #945: the wake-up check's close of one step (only while it is Running with that execution, in a run not ended)
+        CloseOpenStep = { param($FlowRunId, $Close) $s = $this.Load(); if (Set-SIJobFlowStepClosed -State $s -FlowRunId $FlowRunId -Close $Close) { $this.Save($s); 1 } else { 0 } }
+        StepRow = { param($FlowRunId, $Order) Get-SIJobFlowStepRowOf -State $this.Load() -FlowRunId $FlowRunId -Order $Order }
         Save = {
             param($State)
             # #700: a run cancelled in the file stays cancelled (a live runner's later save does not undo it)
-            if ([string]$State.State -ne 'Cancelled') { $old = $null; try { $old = $this.Load() } catch { $old = $null }; $null = Copy-SIJobFlowCancelled -Stored $old -State $State }
+            $old = $null; try { $old = $this.Load() } catch { $old = $null }
+            if ([string]$State.State -ne 'Cancelled') { $null = Copy-SIJobFlowCancelled -Stored $old -State $State }
             $dir = Split-Path -Parent $this.Path
             if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
             $tmp = $this.Path + '.tmp'
-            [IO.File]::WriteAllText($tmp, (ConvertTo-SIJobFlowRunJson -State $State), (New-Object System.Text.UTF8Encoding($false)))
+            # #945: a step the wake-up check closed is never written back to Running with the same execution
+            [IO.File]::WriteAllText($tmp, (Get-SIJobFlowSaveJson -State $State -Stored $old), (New-Object System.Text.UTF8Encoding($false)))
             Move-Item -LiteralPath $tmp -Destination $this.Path -Force
         }
     }
@@ -2866,11 +3147,16 @@ function New-SIJobFlowBlobStore {
             } catch { if ("$($_.Exception.Message)" -match '404|BlobNotFound|ContainerNotFound|not found') { $null } else { throw } }
         }
         Cancelled = { param($FlowRunId) $s = $null; try { $s = $this.Load() } catch { $s = $null }; Get-SIJobFlowCancelledOf -Stored $s -FlowRunId $FlowRunId }
+        # #945: the wake-up check's close of one step (only while it is Running with that execution, in a run not ended)
+        CloseOpenStep = { param($FlowRunId, $Close) $s = $this.Load(); if (Set-SIJobFlowStepClosed -State $s -FlowRunId $FlowRunId -Close $Close) { $this.Save($s); 1 } else { 0 } }
+        StepRow = { param($FlowRunId, $Order) Get-SIJobFlowStepRowOf -State $this.Load() -FlowRunId $FlowRunId -Order $Order }
         Save = {
             param($State)
             # #700: a run cancelled in the blob stays cancelled (a live runner's later save does not undo it)
-            if ([string]$State.State -ne 'Cancelled') { $old = $null; try { $old = $this.Load() } catch { $old = $null }; $null = Copy-SIJobFlowCancelled -Stored $old -State $State }
-            $null = Set-SIBlobContent -Account $this.Account -Container $this.Container -Blob $this.Blob -Bytes ([Text.Encoding]::UTF8.GetBytes((ConvertTo-SIJobFlowRunJson -State $State))) -ContentType 'application/json'
+            $old = $null; try { $old = $this.Load() } catch { $old = $null }
+            if ([string]$State.State -ne 'Cancelled') { $null = Copy-SIJobFlowCancelled -Stored $old -State $State }
+            # #945: a step the wake-up check closed is never written back to Running with the same execution
+            $null = Set-SIBlobContent -Account $this.Account -Container $this.Container -Blob $this.Blob -Bytes ([Text.Encoding]::UTF8.GetBytes((Get-SIJobFlowSaveJson -State $State -Stored $old))) -ContentType 'application/json'
         }
     }
 }
@@ -2878,7 +3164,7 @@ function New-SIJobFlowBlobStore {
 # ---- Pro: cfg.JobFlow (the definition), cfg.FlowRun + cfg.FlowStepRun (the run records) ------------------------------
 function Get-SIJobFlowSqlText {
     <# The T-SQL of the Pro store (one place; the LocalSql test runs it against sql\si-pro-settings.sql). #>
-    param([Parameter(Mandatory)][ValidateSet('ReadDefinition', 'LastRun', 'LastRunSteps', 'SaveRun', 'SaveStep', 'RunCancelled', 'CloseEndedRunSteps', 'EndedRunOpenSteps', 'RecentRuns', 'RecentSteps')][string]$Name)
+    param([Parameter(Mandatory)][ValidateSet('ReadDefinition', 'LastRun', 'LastRunSteps', 'SaveRun', 'SaveStep', 'RunCancelled', 'CloseEndedRunSteps', 'EndedRunOpenSteps', 'RecentRuns', 'RecentSteps', 'CloseOpenStep', 'StepRow')][string]$Name)
     $recent = [int](Get-SIPipelineLongRunRule).RunsRead
     switch ($Name) {
         # si-flow-1203: the newest run records and their steps -- how long a run and each step usually take here (read once
@@ -2923,6 +3209,8 @@ BEGIN
         SELECT * FROM cfg.FlowRun WHERE FlowRunId = @FlowRunId AND State = N'Cancelled';
 END
 '@ }
+        # #945: a step that has ENDED is never written back to Running with the SAME execution (a runner that never saw the
+        # wake-up check's close keeps it closed; it takes the close over at its next poll) -- a new execution is written.
         # a step of a run that has ENDED is never moved (back) to Starting / Running: a runner that did not see the end
         # (older code, a container that outlived its stop) cannot record a step it started again -- the row is kept
         'SaveStep' { @'
@@ -2930,7 +3218,7 @@ MERGE cfg.FlowStepRun AS t
 USING (SELECT @FlowRunId AS FlowRunId, @StepOrder AS StepOrder,
               CASE WHEN @State IN (N'Starting', N'Running') AND EXISTS (SELECT 1 FROM cfg.FlowRun r WHERE r.FlowRunId = @FlowRunId AND r.State IN (N'Succeeded', N'Failed', N'Stopped', N'Cancelled')) THEN 1 ELSE 0 END AS RunEnded) AS s
     ON t.FlowRunId = s.FlowRunId AND t.StepOrder = s.StepOrder
-WHEN MATCHED AND s.RunEnded = 0 THEN UPDATE SET State = @State, Execution = @Execution, StartedUtc = @StartedUtc, EndedUtc = @EndedUtc, ErrorClass = @ErrorClass, Error = @Error
+WHEN MATCHED AND s.RunEnded = 0 AND NOT (@State = N'Running' AND t.Execution = @Execution AND t.State IN (N'Success', N'Failed', N'Interrupted', N'TimedOut')) THEN UPDATE SET State = @State, Execution = @Execution, StartedUtc = @StartedUtc, EndedUtc = @EndedUtc, ErrorClass = @ErrorClass, Error = @Error
 WHEN NOT MATCHED AND s.RunEnded = 0 THEN INSERT (FlowRunId, StepOrder, GroupNo, Job, State, Execution, StartedUtc, EndedUtc, ErrorClass, Error)
      VALUES (@FlowRunId, @StepOrder, @GroupNo, @Job, @State, @Execution, @StartedUtc, @EndedUtc, @ErrorClass, @Error);
 IF COL_LENGTH(N'cfg.FlowStepRun', N'Attempts') IS NOT NULL AND COL_LENGTH(N'cfg.FlowStepRun', N'RetryReason') IS NOT NULL
@@ -2963,6 +3251,19 @@ SELECT @@ROWCOUNT AS Closed;
 '@ }
         # #882: the step rows CloseEndedRunSteps is about to close that had STARTED (Starting / Running) -- read first, so the
         # runner stops what may still run for them (the execution recorded on the row, the step's workers). Read-only.
+        # #945: the wake-up check closes ONE step whose execution Azure says has ended -- only while the row still says Running
+        # with THAT execution (a runner that moved the step on -- closed it, started it again -- is never overwritten), and
+        # only in a run that has not ended. Answers Closed (0 or 1).
+        'CloseOpenStep' { @'
+SET NOCOUNT ON;
+UPDATE s SET State = @State, EndedUtc = @EndedUtc, ErrorClass = @ErrorClass, Error = LEFT(@Error, 1000)
+FROM cfg.FlowStepRun s JOIN cfg.FlowRun r ON r.FlowRunId = s.FlowRunId
+WHERE s.FlowRunId = @FlowRunId AND s.StepOrder = @StepOrder AND s.State = N'Running' AND s.Execution = @Execution
+  AND r.State NOT IN (N'Succeeded', N'Failed', N'Stopped', N'Cancelled');
+SELECT @@ROWCOUNT AS Closed;
+'@ }
+        # #945: one step row as it is stored now (the runner adopts a close the wake-up check made). Read-only.
+        'StepRow' { "SELECT State, Execution, EndedUtc, ErrorClass, Error FROM cfg.FlowStepRun WHERE FlowRunId = @FlowRunId AND StepOrder = @StepOrder;" }
         'EndedRunOpenSteps' { @'
 SET NOCOUNT ON;
 SELECT s.FlowRunId, s.StepOrder, s.Job, s.Execution, s.State, s.StartedUtc
@@ -3049,6 +3350,24 @@ function New-SIJobFlowSqlStore {
             $n = 0; if ($r.Count -and $r[0].PSObject.Properties['Closed'] -and -not ($r[0].Closed -is [DBNull])) { $n = [int]$r[0].Closed }
             if ($n -gt 0) { $this.Seen.Clear() }
             $n
+        }
+        # #945: the wake-up check's close of one step (Get-SIJobFlowSqlText 'CloseOpenStep'); answers 1 when it was closed
+        CloseOpenStep = {
+            param($FlowRunId, $Close)
+            $r = @(& $this.Invoke (Get-SIJobFlowSqlText 'CloseOpenStep') @{ FlowRunId = [string]$FlowRunId; StepOrder = [int]$Close.Order; Execution = [string]$Close.Execution
+                     State = [string]$Close.State; EndedUtc = ([datetime]$Close.EndedUtc).ToUniversalTime(); ErrorClass = [string]$Close.ErrorClass; Error = [string]$Close.Error } 'reader' | ConvertTo-SIJobFlowSqlRows)
+            $n = 0; if ($r.Count -and $r[0].PSObject.Properties['Closed'] -and -not ($r[0].Closed -is [DBNull])) { $n = [int]$r[0].Closed }
+            if ($n -gt 0) { $this.Seen.Remove(('{0}|{1}' -f $FlowRunId, [int]$Close.Order)) }
+            $n
+        }
+        # #945: one step row as stored now: @{ State; Execution; EndedUtc; ErrorClass; Error } or $null
+        StepRow = {
+            param($FlowRunId, $Order)
+            $r = @(& $this.Invoke (Get-SIJobFlowSqlText 'StepRow') @{ FlowRunId = [string]$FlowRunId; StepOrder = [int]$Order } 'reader' | ConvertTo-SIJobFlowSqlRows)
+            if (-not $r.Count) { return $null }
+            $x = $r[0]; $s = { param($v) if ($null -eq $v -or $v -is [DBNull]) { '' } else { [string]$v } }
+            [pscustomobject]@{ State = (& $s $x.State); Execution = (& $s $x.Execution); ErrorClass = (& $s $x.ErrorClass); Error = (& $s $x.Error)
+                               EndedUtc = $(if ($null -eq $x.EndedUtc -or $x.EndedUtc -is [DBNull]) { $null } else { ([datetime]$x.EndedUtc).ToUniversalTime() }) }
         }
         # #882: the started step rows of ended runs that are still open (Get-SIJobFlowSqlText 'EndedRunOpenSteps') -- read
         # before they are closed, so what may still run for them is stopped. @(@{ FlowRunId; Job; Execution; State; StartedUtc })

@@ -1027,7 +1027,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Guard_CmdbServicenowUnreachable_Enabled = $true
 # Its mail: off = the event is still shown on the Guards page, but not mailed.
 # $global:SI_Guard_CmdbServicenowUnreachable_Mail = $true
-# ServiceNow: create and match rules (cmdb.servicenow.create-gate). Off: no event and no mail. The step itself still stops, because those assets do not meet the connector's create and match rules (set in the connector).
+# ServiceNow: CIs not accepted (cmdb.servicenow.create-gate). Off: no event and no mail. The rows ServiceNow did not accept are still sent again with the next run.
 # $global:SI_Guard_CmdbServicenowCreateGate_Enabled = $true
 # Its mail: off = the event is still shown on the Guards page, but not mailed.
 # $global:SI_Guard_CmdbServicenowCreateGate_Mail = $true
@@ -1041,7 +1041,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Guard_AssetPropertiesCollectionChange_Mail = $true
 # Collection: far fewer assets from one source (collection.source.asset-drop). Off: a collection with far fewer assets is taken as it comes -- the assets the source no longer lists are marked not seen at once, and their CIs retire after the usual days.
 # $global:SI_Guard_CollectionSourceAssetDrop_Enabled = $true
-# Its mail: off = the event is still shown on the Guards page, but not mailed.
+# Its mail: this check never sends a mail -- its event is shown on the Guards page only; a value here changes nothing.
 # $global:SI_Guard_CollectionSourceAssetDrop_Mail = $true
 # CI build started while another was running (ci.build.concurrent). Off: no event. The second CI build still waits for the first one, because two builds never write the CIs at the same time.
 # $global:SI_Guard_CiBuildConcurrent_Enabled = $true
@@ -1498,7 +1498,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #
 # Mail sender address  [SMTPFrom]  (engine: risk-analysis)
 #   What it is for:   The From address on every mail.
-#   Default:          Falls back to MailFrom, then SMTPUser; with signed-in mail the run stops at start
+#   Default:          Left empty: the mail server user name
 #   If you change it: Sets who the mail appears to come from. A sender the relay has not verified gets the mail
 #                     rejected. With no sender at all and anonymous mail, mail is skipped with a warning.
 #   When to change:   Set it whenever mail is on; use an address your mail relay accepts as sender.
@@ -1533,7 +1533,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #
 # Mail server port  [SMTPPort]  (engine: risk-analysis)
 #   What it is for:   The network port of the mail server used for report e-mails, for example 25, 465 or 587.
-#   Default:          No fallback for Risk Analysis mail; the daily close-loop mail uses 587 with encryption, else 25
+#   Default:          Needed for report mails, e.g. 587
 #   If you change it: Must match the mail server and the encryption setting; a wrong port makes sending fail (the run
 #                     itself continues).
 #   When to change:   Set it to match your mail server; setup asks for it.
@@ -2037,16 +2037,17 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_CollectionSourceAssetDrop_Enabled/
 #
 # Collection: far fewer assets from one source: mail  [SI_Guard_CollectionSourceAssetDrop_Mail]
-#   What it is for:   Whether this safety check sends a mail when it trips.
+#   What it is for:   This safety check never sends a mail: it accepts a real drop by itself on the next complete
+#                     collection, so its event is shown on the Guards page only. This switch changes nothing and is
+#                     not shown on the Settings page.
 #   Default:          On (follows the check: nothing is mailed while the check is off)
 #   If you change it: Off: the event is still shown on the Guards page and kept in run health and the audit trail, but
 #                     no mail is sent for it. The install-wide switch "Mail when a safety check stops a step" still
 #                     applies to every check.
-#   When to change:   Turn it off for a check whose mails you do not need, instead of turning the check off.
+#   When to change:   Never: this check sends no mail either way.
 #   Risk:             Low: no data is changed and the check still works; only its mail stops, so a trip is seen only
 #                     on the Guards page, in run health and in the audit trail. Reversible at once.
-#   Recommended:      Keep the default. Change it when: Turn it off for a check whose mails you do not need, instead
-#                     of turning the check off.
+#   Recommended:      Keep the default. Change it when: Never: this check sends no mail either way.
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_CollectionSourceAssetDrop_Mail/
 #
 # Daily flow: job did not start  [SI_Guard_FlowStepStartFailed_Enabled]
@@ -2581,14 +2582,12 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     of turning the check off.
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_RaBucketCountJump_Mail/
 #
-# ServiceNow: create and match rules  [SI_Guard_CmdbServicenowCreateGate_Enabled]
-#   What it is for:   The safety check that protects the configuration items (CIs) in ServiceNow: Some assets were not
-#                     created or updated in ServiceNow because SecurityInsight could not match them safely (no stable
-#                     asset id yet, or more than one matching CI).
+# ServiceNow: CIs not accepted  [SI_Guard_CmdbServicenowCreateGate_Enabled]
+#   What it is for:   The safety check that protects the configuration items (CIs) in ServiceNow: ServiceNow's import
+#                     did not accept some of the CIs SecurityInsight sent, so this batch was not completed.
 #   Default:          Off
-#   If you change it: Off: no event and no mail. The step itself still stops, because those assets do not meet the
-#                     connector's create and match rules (set in the connector). On: the check works as described on
-#                     the Guards page.
+#   If you change it: Off: no event and no mail. The rows ServiceNow did not accept are still sent again with the next
+#                     run. On: the check works as described on the Guards page.
 #   When to change:   Off by default: only the two brakes stay on (CIs retired by mistake, duplicate vulnerability
 #                     records) -- this check is a warning you can switch on. Turn it on when you want it to hold or
 #                     stop the step, and mail, again.
@@ -2601,7 +2600,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     stop the step, and mail, again.
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_CmdbServicenowCreateGate_Enabled/
 #
-# ServiceNow: create and match rules: mail  [SI_Guard_CmdbServicenowCreateGate_Mail]
+# ServiceNow: CIs not accepted: mail  [SI_Guard_CmdbServicenowCreateGate_Mail]
 #   What it is for:   Whether this safety check sends a mail when it trips.
 #   Default:          On (follows the check: nothing is mailed while the check is off)
 #   If you change it: Off: the event is still shown on the Guards page and kept in run health and the audit trail, but

@@ -378,6 +378,9 @@ $runContext = [pscustomobject]@{
     StagingContainer = $containerName
     StageResults     = @{}
     Phase            = $Phase
+    # the job's ok goes to Invardia only from the execution that knows the whole result: in a run in parts that is the
+    # execution that publishes the records (the container entrypoint), never the producer before its hand-over nor a part
+    SuppressJobOk    = ($Phase -in @('discover', 'parts'))
 }
 
 $siVersion = 'unknown'
@@ -516,6 +519,8 @@ try {
     # #474: the licence's device limit reached -- said on the END record too (the run's outcome is unchanged)
     if ($Engine -eq 'endpoint' -and $global:SI_LicenceLimitNote) { $exitErrorMsg = (@(@($exitErrorMsg, [string]$global:SI_LicenceLimitNote) | Where-Object { $_ }) -join ' | ') }
     $runContext | Add-Member -NotePropertyName 'ExitReason' -NotePropertyValue $exitReason -Force
+    # the stages this run finished, in their order (the run report's StepsOk: a later ok closes their tickets)
+    $runContext | Add-Member -NotePropertyName 'StepsOk' -NotePropertyValue ([string[]]@($stages | Where-Object { $runContext.StageResults.ContainsKey($_) } | ForEach-Object { ([string]$_).ToLowerInvariant() })) -Force
     # The launcher's closing line reads this, so it never prints "completed successfully" over a partial run.
     $global:SI_LastRunExitReason = $exitReason
 

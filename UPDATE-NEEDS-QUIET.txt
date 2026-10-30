@@ -1,4 +1,0 @@
-the updater now waits for a running pipeline run; this release installs only while no SecurityInsight job runs
-REMOVE-ME (#897 / backlog #898 in docs/REQUIREMENTS.md): the updater image before this release has no run gate, so this file makes it wait
-until no SecurityInsight job runs (up to SI_UPDATER_WAIT_MINUTES, then its next run) for this one release. Remove the file in the release after it:
-from then on every updater carries the run gate, which waits for the pipeline itself and hands the install to the pipeline runner.

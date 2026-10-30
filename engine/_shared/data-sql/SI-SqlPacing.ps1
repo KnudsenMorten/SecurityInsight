@@ -43,6 +43,9 @@ $script:SISqlPacers = New-Object 'System.Runtime.CompilerServices.ConditionalWea
 $script:SISqlPacingDmvSql = 'SELECT TOP (2) end_time, avg_cpu_percent, avg_data_io_percent, avg_log_write_percent FROM sys.dm_db_resource_stats ORDER BY end_time DESC'
 $script:SISqlPacingArmApi = '2023-10-01'
 
+# the step's progress mark (Write-SIStepProgress) -- a written batch is progress (Invoke-SISqlPacing)
+if (-not (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue)) { $__spf = [System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'SI-StepPhase.ps1'); if ([System.IO.File]::Exists($__spf)) { . $__spf } }
+
 function Get-SISqlPacingSettings {
     <#
         PURE over the globals (or -Globals). @{ Enabled; High; Low }:
@@ -393,6 +396,13 @@ function Invoke-SISqlPacing {
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [long]$LastBatchMs = 0, [scriptblock]$Log, [switch]$Housekeeping, [datetime]$DeadlineUtc = [datetime]::MaxValue)
     $none = [pscustomobject]@{ WaitedMs = 0L; Shrink = $false; State = 'off'; Load = $null }
+    # owner 2026-10-29: a batch that was written is progress -- the step's progress mark (cfg.StepProgress, at most every
+    # 5 minutes, SI-StepPhase.ps1) lets the heartbeat tell a long step that moves from one that stands still. Never fails.
+    if ($LastBatchMs -gt 0) {
+        try {
+            if (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue) { $null = Write-SIStepProgress -Invoke $Invoke }
+        } catch { }
+    }
     try {
         $p = Get-SISqlPacer -Invoke $Invoke -Log $Log
         if (-not $p.Enabled -or -not $p.Read) { return $none }

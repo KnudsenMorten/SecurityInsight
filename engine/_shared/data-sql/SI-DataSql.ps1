@@ -33,12 +33,17 @@ function New-SIDataSqlInvoke {
         [string]$TenantId,
         [string]$CertThumbprint,
         # 0 = no limit (owner 2026-10-22: "i accept no limits"): deletes and aggregates touch many rows; long work is batched and says its progress
-        [int]$CommandTimeoutSec = 0
+        [int]$CommandTimeoutSec = 0,
+        # test seams: -TokenSeam { } -> a token (no sign-in); -Connect { param($Server, $Database, $Token) } -> an open
+        # connection; -Sleep { param($Seconds) }; -StatementWaits = the pauses of the statement retry (Get-SISqlStatementRetryWaits)
+        [scriptblock]$TokenSeam, [scriptblock]$Connect, [scriptblock]$Sleep, [int[]]$StatementWaits
     )
     $srv = $Server; $db = $Database; $app = $AppId; $ten = $TenantId; $timeout = $CommandTimeoutSec
     # A GetNewClosure() block cannot see functions the caller dot-sourced, so the token function travels INTO the
     # closure as a value (as in SI-VulnTarget.ps1).
-    if ($global:SI_UseManagedIdentity) {
+    if ($TokenSeam) {
+        $getToken = $TokenSeam
+    } elseif ($global:SI_UseManagedIdentity) {
         if (-not (Get-Command -Name 'Get-SIManagedIdentityToken' -ErrorAction SilentlyContinue)) {
             throw 'New-SIDataSqlInvoke: managed identity is on but the identity token helper is not loaded -- this sign-in works only inside a SecurityInsight container.'
         }
@@ -60,6 +65,11 @@ function New-SIDataSqlInvoke {
     # the shared open-with-retry, as a value (the closure below cannot see dot-sourced functions)
     if (-not (Get-Command -Name 'Open-SISqlConnectionRetry' -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'SI-SqlRetry.ps1') }
     $openSql = ${function:Open-SISqlConnectionRetry}
+    # the statement retry (SI-SqlRetry.ps1), as values: which failures are Azure SQL's platform answers, and the pauses
+    $isTransient = ${function:Test-SISqlStatementTransient}
+    $waits = if ($PSBoundParameters.ContainsKey('StatementWaits')) { @($StatementWaits) } else { @(Get-SISqlStatementRetryWaits) }
+    $sleepFn = if ($Sleep) { $Sleep } else { { param($s) Start-Sleep -Seconds $s } }
+    $connectFn = $Connect
     # #738: what a reader on ANOTHER thread needs to make the same connection (Risk Analysis reads its next page while it
     # posts the current one): the connection string and a current token -- values, never this script block
     $connInfo = {
@@ -74,8 +84,8 @@ function New-SIDataSqlInvoke {
         # the answer is the number of rows. 'reader' / 'rows' collect every row -- for a read that is bounded by its query.
         param([string]$sql, $p, [string]$mode, [scriptblock]$OnRow)
         # THE OPEN is retried (the shared Open-SISqlConnectionRetry, SI-SqlRetry.ps1): a failover, a serverless resume, a busy
-        # database or a client timeout -- with a fresh token each time. ONLY the open: a statement that may already have run
-        # is never sent again (the sweep of 2026-10-22: one 40613 here failed the whole step).
+        # database or a client timeout -- with a fresh token each time (the sweep of 2026-10-22: one 40613 here failed the
+        # whole step). The STATEMENT has its own retry, below.
         $tok = {
             param([bool]$Fresh)
             if ($Fresh -or -not $tokenCache.Token -or [datetime]::UtcNow -ge $tokenCache.Until) {
@@ -84,61 +94,98 @@ function New-SIDataSqlInvoke {
             }
             $tokenCache.Token
         }
-        $cn = & $openSql -Server $srv -Database $db -Token $tok
-        try {
-            # mode 'session' (no fixed limits, owner 2026-10-22): ONE connection for several plain batches, so #temp tables
-            # live from one step to the next and each step is its own command -- the caller says its progress between them.
-            # -OnRow { param($Run) } gets $Run = { param($Sql, $Mode) } ('scalar' | 'reader' | anything else = no answer);
-            # a batch is sent WITHOUT parameters (a parameterised command runs in sp_executesql, which drops its #temp tables)
-            if ($mode -eq 'session') {
-                if (-not $OnRow) { throw "SQL mode 'session' needs a step callback (OnRow)." }
-                $sessionCn = $cn; $sessionTimeout = $timeout
-                $run = {
-                    param([string]$StepSql, [string]$StepMode)
-                    $sc = $sessionCn.CreateCommand(); $sc.CommandText = $StepSql; $sc.CommandTimeout = $sessionTimeout
-                    switch ($StepMode) {
-                        'scalar' { $v = $sc.ExecuteScalar(); if ($v -is [System.DBNull]) { $null } else { $v } }
-                        'reader' {
-                            $rd = $sc.ExecuteReader(); $out = New-Object System.Collections.Generic.List[object]
-                            try { while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; $out.Add($h) } } finally { $rd.Close() }
-                            , $out.ToArray()
+        # A STATEMENT that meets one of Azure SQL's platform answers (Test-SISqlStatementTransient: the log not available, a
+        # rollback during recovery, a failover, busy, a reset connection, "a severe error occurred") is run again on a NEW
+        # connection after a pause (Get-SISqlStatementRetryWaits: 6 more attempts over about 9 minutes, owner 2026-10-29), and
+        # the log says so. Live 2026-10-28: one 9001 here ended a 52-hour data sync. Redoing is safe: those answers roll the
+        # statement back; a reset connection may hide a commit, and every writer of the data sync is checked by its own count
+        # (a collection is complete only when its rows equal the source's; the findings per CI and the key figures are
+        # replaced in one checked transaction). NEVER redone: a stream that has handed a row on (it would hand it on twice),
+        # an open that failed (Open-SISqlConnectionRetry retried it already), and every other error (a query defect fails on
+        # attempt 1). Past the last attempt the error is thrown tagged transient-sql (Exception.Data['SIErrorClass']).
+        $state = @{ Delivered = 0L; OpenFailed = $false }
+        $attemptOnce = {
+            $cn = $null
+            try { $cn = $(if ($connectFn) { & $openSql -Server $srv -Database $db -Token $tok -Connect $connectFn } else { & $openSql -Server $srv -Database $db -Token $tok }) }
+            catch { $state.OpenFailed = $true; throw }
+            try {
+                # mode 'session' (no fixed limits, owner 2026-10-22): ONE connection for several plain batches, so #temp tables
+                # live from one step to the next and each step is its own command -- the caller says its progress between them.
+                # -OnRow { param($Run) } gets $Run = { param($Sql, $Mode) } ('scalar' | 'reader' | anything else = no answer);
+                # a batch is sent WITHOUT parameters (a parameterised command runs in sp_executesql, which drops its #temp tables)
+                if ($mode -eq 'session') {
+                    if (-not $OnRow) { throw "SQL mode 'session' needs a step callback (OnRow)." }
+                    $sessionCn = $cn; $sessionTimeout = $timeout
+                    $run = {
+                        param([string]$StepSql, [string]$StepMode)
+                        $sc = $sessionCn.CreateCommand(); $sc.CommandText = $StepSql; $sc.CommandTimeout = $sessionTimeout
+                        switch ($StepMode) {
+                            'scalar' { $v = $sc.ExecuteScalar(); if ($v -is [System.DBNull]) { $null } else { $v } }
+                            'reader' {
+                                $rd = $sc.ExecuteReader(); $out = New-Object System.Collections.Generic.List[object]
+                                try { while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; $out.Add($h) } } finally { $rd.Close() }
+                                , $out.ToArray()
+                            }
+                            default { [void]$sc.ExecuteNonQuery() }
                         }
-                        default { [void]$sc.ExecuteNonQuery() }
+                    }.GetNewClosure()
+                    return (& $OnRow $run)
+                }
+                $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = $timeout
+                if ($p) { foreach ($k in $p.Keys) { [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [System.DBNull]::Value } else { $p[$k] })) } }
+                switch ($mode) {
+                    # 'rows' is the same read as 'reader': the callers of the v3 model (which CIs the collection scope leaves out, the
+                    # finding lifecycle's counts, the finding model's counts) ask for 'rows' -- unanswered, their statements ran
+                    # but nothing came back, so an out-of-scope CI's findings closed as fixed instead of freezing
+                    { $_ -in 'reader', 'rows' } {
+                        $rd = $cmd.ExecuteReader()
+                        $out = New-Object System.Collections.Generic.List[object]
+                        while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $rd.GetValue($i) }; $out.Add($h) }
+                        $rd.Close(); , $out.ToArray()
                     }
-                }.GetNewClosure()
-                return (& $OnRow $run)
-            }
-            $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = $timeout
-            if ($p) { foreach ($k in $p.Keys) { [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [System.DBNull]::Value } else { $p[$k] })) } }
-            switch ($mode) {
-                # 'rows' is the same read as 'reader': the callers of the v3 model (which CIs the collection scope leaves out, the
-                # finding lifecycle's counts, the finding model's counts) ask for 'rows' -- unanswered, their statements ran
-                # but nothing came back, so an out-of-scope CI's findings closed as fixed instead of freezing
-                { $_ -in 'reader', 'rows' } {
-                    $rd = $cmd.ExecuteReader()
-                    $out = New-Object System.Collections.Generic.List[object]
-                    while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $rd.GetValue($i) }; $out.Add($h) }
-                    $rd.Close(); , $out.ToArray()
+                    'stream' {
+                        if (-not $OnRow) { throw "SQL read mode 'stream' needs a row callback (OnRow)." }
+                        $rd = $cmd.ExecuteReader()
+                        $n = 0L
+                        try {
+                            $names = [string[]]::new($rd.FieldCount)
+                            for ($i = 0; $i -lt $rd.FieldCount; $i++) { $names[$i] = $rd.GetName($i) }
+                            while ($rd.Read()) {
+                                $h = @{}; for ($i = 0; $i -lt $names.Length; $i++) { $h[$names[$i]] = $rd.GetValue($i) }
+                                $state.Delivered++; $null = & $OnRow $h
+                                $n++
+                            }
+                        } finally { $rd.Close() }
+                        $n
+                    }
+                    'scalar' { $cmd.ExecuteScalar() }
+                    default  { [void]$cmd.ExecuteNonQuery() }
                 }
-                'stream' {
-                    if (-not $OnRow) { throw "SQL read mode 'stream' needs a row callback (OnRow)." }
-                    $rd = $cmd.ExecuteReader()
-                    $n = 0L
-                    try {
-                        $names = [string[]]::new($rd.FieldCount)
-                        for ($i = 0; $i -lt $rd.FieldCount; $i++) { $names[$i] = $rd.GetName($i) }
-                        while ($rd.Read()) {
-                            $h = @{}; for ($i = 0; $i -lt $names.Length; $i++) { $h[$names[$i]] = $rd.GetValue($i) }
-                            $null = & $OnRow $h
-                            $n++
-                        }
-                    } finally { $rd.Close() }
-                    $n
+            } catch {
+                # a broken connection is not handed out again by the pool
+                if ($cn -is [System.Data.SqlClient.SqlConnection]) { try { [System.Data.SqlClient.SqlConnection]::ClearPool($cn) } catch { } }
+                throw
+            } finally { if ($cn) { $cn.Dispose() } }
+        }
+        $try = 0
+        while ($true) {
+            try { & $attemptOnce; break }
+            catch {
+                $err = $_
+                $transient = [bool](& $isTransient $err)
+                if (-not $transient -or $state.OpenFailed) { throw }
+                $first = (([string]$err.Exception.Message) -split "`n")[0].Trim()
+                if ($state.Delivered -gt 0 -or $try -ge @($waits).Count) {
+                    $why = if ($state.Delivered -gt 0) { '{0:N0} row(s) were already read, so the read is not repeated' -f $state.Delivered } else { 'it was tried {0} time(s)' -f ($try + 1) }
+                    $ex = New-Object System.Exception(('the database {0} answered a temporary Azure SQL error ({1}); {2} -- transient-sql' -f $db, $first, $why), $err.Exception)
+                    $ex.Data['SIErrorClass'] = 'transient-sql'
+                    throw $ex
                 }
-                'scalar' { $cmd.ExecuteScalar() }
-                default  { [void]$cmd.ExecuteNonQuery() }
+                $w = [int]@($waits)[$try]; $try++
+                Write-Host ('       the database {0} answered a temporary Azure SQL error ({1}) -- connecting again and running the statement again in {2} s ({3}/{4})' -f $db, $first, $w, $try, @($waits).Count) -ForegroundColor DarkYellow
+                if ($w -gt 0) { & $sleepFn $w }
             }
-        } finally { $cn.Dispose() }
+        }
     }.GetNewClosure()
     $invoke | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $connInfo
     # the database this seam writes to: the write pacing (SI-SqlPacing.ps1) reads ITS load -- only a seam marked so is read
@@ -147,6 +194,8 @@ function New-SIDataSqlInvoke {
     $invoke | Add-Member -NotePropertyName SISqlStream -NotePropertyValue $true
     # this seam runs several batches on one connection (mode 'session': the key figures in steps, with progress)
     $invoke | Add-Member -NotePropertyName SISqlSession -NotePropertyValue $true
+    # 2026-10-29 this seam runs the data sync's heavy steps in key ranges, each range one command (SI-DataCi.ps1 "KEY RANGES")
+    $invoke | Add-Member -NotePropertyName SISqlRanged -NotePropertyValue $true
     $invoke
 }
 
@@ -641,7 +690,7 @@ function Invoke-SIDataCiLifecycleRestamp {
             $cid = [int]$p['CollectionId']
             $n += [long](Invoke-SIDataCiLifecycleStamp -Invoke $Invoke -CollectionId $cid -BatchSize ([ref]$bs))
             [void](& $Invoke (Get-SIDataCiLifecycleRederiveSql) @{ CollectionId = $cid } 'scalar')
-            [void](& $Invoke (Get-SIDataFindingDailySql) @{ Day = [string]$p['Day'] } 'scalar')
+            [void](Invoke-SIDataFindingDaily -Invoke $Invoke -Day ([string]$p['Day']))
         }
         & $Log 'OK' ("lifecycle   : {0} collection(s) stamped with their CIs' lifecycle ({1} finding row(s)) -- their views are worked out again in this run, active CIs by default" -f $pending.Count, $n)
         [pscustomobject]@{ Status = 'ok'; Collections = $pending.Count; Findings = $n }
@@ -915,7 +964,7 @@ function Get-SIDataFacetFactsSql {
     (@'
 WITH f AS (
     SELECT FindingId, AssetKey, RiskScore, RiskScoreWeighted, RiskRating, MitreTactics, MitreTechniques, ComplianceTags, Cvss,
-           Severity, Tier, SecurityDomain, ReportName,
+           Severity, Tier, SecurityDomain, ReportName, Category, Subcategory, DepartmentName,
            CASE WHEN ISJSON(DetailJson) = 1 THEN LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(DetailJson, '$.si_component'))), N''), 64) END AS Component,
            {FIX}
     -- #855: the facets count ACTIVE CIs only (a finding no CI carries, or of an unstamped collection, counts as active) -- their
@@ -931,6 +980,10 @@ WITH f AS (
     UNION ALL SELECT FindingId, N'tier', COALESCE(CONVERT(nvarchar(8), Tier), N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
     UNION ALL SELECT FindingId, N'domain', COALESCE(SecurityDomain, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
     UNION ALL SELECT FindingId, N'report', COALESCE(ReportName, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
+    -- the findings grid's Category / Subcategory / Department dropdowns (owner 2026-10-28: "i would like these to be dropdowns")
+    UNION ALL SELECT FindingId, N'category', COALESCE(Category, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
+    UNION ALL SELECT FindingId, N'subcategory', COALESCE(Subcategory, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
+    UNION ALL SELECT FindingId, N'department', COALESCE(DepartmentName, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
     UNION ALL SELECT FindingId, N'component', COALESCE(Component, N'(none)'), AssetKey, RiskScore, RiskScoreWeighted FROM f
     UNION ALL SELECT f.FindingId, N'tactic', LTRIM(RTRIM(s.value)), f.AssetKey, f.RiskScore, f.RiskScoreWeighted FROM f CROSS APPLY STRING_SPLIT(f.MitreTactics, N';') AS s WHERE f.MitreTactics IS NOT NULL
     UNION ALL SELECT f.FindingId, N'technique', LTRIM(RTRIM(s.value)), f.AssetKey, f.RiskScore, f.RiskScoreWeighted FROM f CROSS APPLY STRING_SPLIT(f.MitreTechniques, N';') AS s WHERE f.MitreTechniques IS NOT NULL
@@ -1382,6 +1435,217 @@ function Invoke-SIDataRowColumnsFill {
     } catch { & $out $false 0 ('the row values could not be filled: ' + $_.Exception.Message) }
 }
 
+# ------------------------------------------------------------------------------------------------------------------
+#  THE RISK SCORE'S PARTS AS COLUMNS (2026-10-29; owner: "it should be possible to see the Risk Score calculations as
+#  columns"). Risk Analysis writes every part of a finding's score on its row (Calculate-RiskScore, RA-RiskScore.ps1);
+#  this copies them into typed columns of sidata.Finding (sql/si-data-schema.sql, "THE RISK SCORE'S PARTS AS COLUMNS"), so
+#  the views show, sort and filter them without reading the row's JSON. The SAME rule as the web app's explained score
+#  (RiskExplanation.SideOf): a number is the value trimmed and read invariant (empty = none); a side whose base was recorded
+#  lists its factors with their points ("Name=n;..."), an older side's base is its score minus its factors' points (none =
+#  0) and lists the factors by name. Nothing else is worked out: the values are Risk Analysis's own.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataRiskPartsReadySql {
+    <# 1 = the database has the risk score's parts columns and the collection's stamp. #>
+    "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'RiskAssetDerived') IS NOT NULL AND COL_LENGTH('sidata.Finding', 'RiskWeightBy') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RiskPartsAt') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RiskPartsUpto') IS NOT NULL THEN 1 ELSE 0 END"
+}
+
+function Test-SIDataRiskPartsReady {
+    <# $true when the database has the columns; never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    try { return ([string](& $Invoke (Get-SIDataRiskPartsReadySql) @{} 'scalar') -eq '1') } catch { return $false }
+}
+
+function Get-SIDataRiskPartsNumberExpr {
+    <#
+        PURE. A number as the explained score reads it: the text trimmed of white space, read as a float; empty or not a
+        number = NULL. A text longer than 400 characters is no number (SQL Server refuses TRY_CONVERT of a very long text
+        with an error instead of NULL -- a fill must never fail on one odd row).
+    #>
+    param([Parameter(Mandatory)][string]$Text)
+    "CASE WHEN LEN($Text) <= 400 THEN TRY_CONVERT(float, NULLIF(TRIM(CHAR(9) + CHAR(10) + CHAR(13) + CHAR(32) FROM $Text), N'')) END"
+}
+
+function Get-SIDataRiskPartsSql {
+    <#
+        ONE FindingId range (@CollectionId, @After < FindingId <= @Upto) of sidata.Finding: the risk score's parts from the
+        row's JSON, parsed once per row. Every row of the range is written (a row without JSON gets no parts and its sides
+        marked worked out, as the explained score shows it). Idempotent. Answers the rows written.
+        -Progress: also records the range's end on the collection (sidata.Collection.RiskPartsUpto) in the same batch, so a
+        fill stopped by its time budget goes on from there.
+    #>
+    param([switch]$Progress)
+    $n = { param($t) Get-SIDataRiskPartsNumberExpr -Text $t }
+    $prog = if ($Progress) { "`r`nUPDATE sidata.Collection SET RiskPartsUpto = @Upto WHERE CollectionId = @CollectionId;" } else { '' }
+    @"
+SET NOCOUNT ON;
+UPDATE f SET
+    RiskAssetSide    = p.ASide,
+    RiskAssetPoints  = p.APoints,
+    RiskAssetBase    = CASE WHEN p.ABase IS NOT NULL THEN p.ABase WHEN p.ASide IS NOT NULL THEN p.ASide - ISNULL(p.APoints, 0) END,
+    RiskAssetDerived = CASE WHEN p.ABase IS NOT NULL THEN 0 ELSE 1 END,
+    RiskAssetFactors = (SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.ABase IS NOT NULL THEN j.ci ELSE j.cn END AS v) AS x),
+    RiskVulnSide     = p.VSide,
+    RiskVulnPoints   = p.VPoints,
+    RiskVulnBase     = CASE WHEN p.VBase IS NOT NULL THEN p.VBase WHEN p.VSide IS NOT NULL THEN p.VSide - ISNULL(p.VPoints, 0) END,
+    RiskVulnDerived  = CASE WHEN p.VBase IS NOT NULL THEN 0 ELSE 1 END,
+    RiskVulnFactors  = (SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.VBase IS NOT NULL THEN j.pi ELSE j.pn END AS v) AS x),
+    RiskWeightPct    = p.Weight,
+    RiskWeightBy     = CASE WHEN DATALENGTH(j.wb) > 0 THEN LEFT(j.wb, 1000) END
+FROM sidata.Finding AS f
+OUTER APPLY OPENJSON(CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END) WITH (
+    cb nvarchar(max) N'$.RiskConsequenceBase', cs nvarchar(max) N'$.RiskConsequenceScore', cp nvarchar(max) N'$.RiskFactor_Consequence',
+    ci nvarchar(max) N'$.RiskFactor_Consequence_Impacts', cn nvarchar(max) N'$.RiskFactor_Consequence_Detailed',
+    pb nvarchar(max) N'$.RiskProbabilityBase', ps nvarchar(max) N'$.RiskProbabilityScore', pp nvarchar(max) N'$.RiskFactor_Probability',
+    pi nvarchar(max) N'$.RiskFactor_Probability_Impacts', pn nvarchar(max) N'$.RiskFactor_Probability_Detailed',
+    w nvarchar(max) N'$.RiskScore_Weight_Factor', wb nvarchar(max) N'$.RiskScore_Weight_Detailed') AS j
+CROSS APPLY (SELECT $(& $n 'j.cb') AS ABase, $(& $n 'j.cs') AS ASide, $(& $n 'j.cp') AS APoints,
+                    $(& $n 'j.pb') AS VBase, $(& $n 'j.ps') AS VSide, $(& $n 'j.pp') AS VPoints,
+                    $(& $n 'j.w') AS Weight) AS p
+WHERE f.CollectionId = CONVERT(int, @CollectionId) AND f.FindingId > CONVERT(bigint, @After) AND f.FindingId <= CONVERT(bigint, @Upto);
+DECLARE @n bigint = @@ROWCOUNT;$prog
+SELECT @n;
+"@
+}
+
+function Get-SIDataRiskPartsStampSql {
+    <# The collection carries the parts on every row (@Upto: its last FindingId). #>
+    'UPDATE sidata.Collection SET RiskPartsAt = SYSUTCDATETIME(), RiskPartsUpto = CONVERT(bigint, @Upto) WHERE CollectionId = CONVERT(int, @CollectionId); SELECT 1;'
+}
+
+function Get-SIDataRiskPartsPendingSql {
+    <# The complete collections (rows not removed) whose rows do not all carry the parts yet, newest first, with how far a fill came. #>
+    @'
+SELECT c.CollectionId, c.RiskPartsUpto AS Upto,
+       (SELECT MIN(f.FindingId) FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId) AS Lo,
+       (SELECT MAX(f.FindingId) FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId) AS Hi
+FROM sidata.Collection AS c
+WHERE c.Status = N'Complete' AND c.RiskPartsAt IS NULL AND c.RetiredAt IS NULL
+ORDER BY c.CollectionTime DESC;
+'@
+}
+
+function Invoke-SIDataRiskPartsBackfill {
+    <#
+        The collections stored before the parts were columns get them: complete collections without RiskPartsAt, NEWEST
+        FIRST, in FindingId ranges sized from their measured time and paced by the database's load, within -BudgetSeconds
+        per run (the owner: 20 minutes); each range records how far it came (RiskPartsUpto), so the next run goes on from
+        there; a collection is stamped (RiskPartsAt) only after its last range. -DryRun: says what it would do. NEVER THROWS:
+        @{ Ready; Collections (stamped this run); Rows; Pending (left for the next run); Seconds; Error }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log, [int]$BudgetSeconds = 1200, [long]$TargetMs = 5000, [switch]$DryRun)
+    if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $res = [ordered]@{ Ready = $false; Collections = 0; Rows = 0L; Pending = 0; Seconds = 0; Error = '' }
+    try {
+        if (-not (Test-SIDataRiskPartsReady -Invoke $Invoke)) {
+            & $Log 'INFO' 'score parts : the database does not have the risk score''s part columns yet -- the next update adds them; until then the views show the parts empty.'
+            return [pscustomobject]$res
+        }
+        $res.Ready = $true
+        # ASSIGNED first, then enumerated: the seam answers a reader as ONE list (', rows') -- @(& ...) would hold the list as one item
+        $pendRaw = & $Invoke (Get-SIDataRiskPartsPendingSql) @{} 'reader'
+        $pending = @(@($pendRaw) | Where-Object { $_ })
+        $res.Pending = $pending.Count
+        if ($pending.Count -eq 0) { & $Log 'INFO' 'score parts : every collection carries the risk score''s parts.'; return [pscustomobject]$res }
+        if ($DryRun) { & $Log 'INFO' ("score parts : {0} collection(s) would get the risk score's parts; nothing is written." -f $pending.Count); return [pscustomobject]$res }
+        $sql = Get-SIDataRiskPartsSql -Progress
+        $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)
+        $size = [long]20000; $lastMs = 0L
+        foreach ($c in $pending) {
+            if ($clock.Elapsed.TotalSeconds -ge $BudgetSeconds) { break }
+            $cid = [int]$c['CollectionId']
+            $hasRows = $null -ne $c['Lo'] -and -not ($c['Lo'] -is [System.DBNull])
+            $hi = if ($hasRows) { [long]$c['Hi'] } else { 0L }
+            $after = if ($hasRows) { [long]$c['Lo'] - 1 } else { 0L }
+            if ($hasRows -and $null -ne $c['Upto'] -and -not ($c['Upto'] -is [System.DBNull]) -and [long]$c['Upto'] -gt $after) { $after = [long]$c['Upto'] }
+            while ($hasRows -and $after -lt $hi) {
+                if ($clock.Elapsed.TotalSeconds -ge $BudgetSeconds) { break }
+                if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs; if ($pace.Shrink) { $size = [Math]::Max(500L, [long][Math]::Floor($size / 2)) } }
+                $upto = [Math]::Min($hi, $after + $size)
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $res.Rows += [long](& $Invoke $sql @{ CollectionId = $cid; After = $after; Upto = $upto } 'scalar')
+                $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
+                $after = $upto
+                $size = Get-SIDataNextSize -Current $size -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 500
+            }
+            if ($hasRows -and $after -lt $hi) { break }
+            $null = & $Invoke (Get-SIDataRiskPartsStampSql) @{ CollectionId = $cid; Upto = $hi } 'scalar'
+            $res.Collections++
+        }
+        $res.Pending = $pending.Count - $res.Collections
+        $res.Seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
+        if ($res.Pending -gt 0) {
+            & $Log 'OK' ("score parts : {0} earlier collection(s) got the risk score's parts ({1} finding row(s), {2} s); {3} more follow on the next run(s) -- the time this run may spend on it is used." -f $res.Collections, $res.Rows, $res.Seconds, $res.Pending)
+        } else {
+            & $Log 'OK' ("score parts : {0} earlier collection(s) got the risk score's parts ({1} finding row(s), {2} s)." -f $res.Collections, $res.Rows, $res.Seconds)
+        }
+    } catch {
+        $res.Error = $_.Exception.Message
+        & $Log 'WARN' ("score parts : the risk score's parts of earlier collections were not all written this run -- {0}. The next run goes on from where this one stopped." -f $_.Exception.Message)
+    }
+    [pscustomobject]$res
+}
+
+function Get-SIDataSummaryRiskPartsReadySql {
+    <# 1 = sidata.SummaryRow has the risk score's parts columns and the whole row (RowJson). #>
+    "SELECT CASE WHEN COL_LENGTH('sidata.SummaryRow', 'RiskAssetDerived') IS NOT NULL AND COL_LENGTH('sidata.SummaryRow', 'RiskVulnFactors') IS NOT NULL AND COL_LENGTH('sidata.SummaryRow', 'RowJson') IS NOT NULL THEN 1 ELSE 0 END"
+}
+
+function Get-SIDataSummaryRiskPartsSql {
+    <#
+        ONE batch (@Batch rows) of Summary rows without the risk score's parts: the base and the factors with their points
+        from the whole row (RowJson, written by Risk Analysis) where it carries the base; else -- a row loaded without it --
+        the base worked out as the side's score minus its factors' points and the factors by name, from the row's own columns
+        (the same rule as the findings, Get-SIDataRiskPartsSql). The sides' scores and points stay the row's own columns.
+        Answers the rows written; the caller repeats until 0.
+    #>
+    $n = { param($t) Get-SIDataRiskPartsNumberExpr -Text $t }
+    @"
+SET NOCOUNT ON;
+UPDATE TOP (CONVERT(int, @Batch)) s SET
+    RiskAssetBase    = CASE WHEN p.ABase IS NOT NULL THEN p.ABase WHEN s.RiskConsequenceScore IS NOT NULL THEN s.RiskConsequenceScore - ISNULL(s.RiskFactorConsequence, 0) END,
+    RiskAssetDerived = CASE WHEN p.ABase IS NOT NULL THEN 0 ELSE 1 END,
+    RiskAssetFactors = (SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.ABase IS NOT NULL THEN j.ci ELSE s.RiskFactorConsequenceDetailed END AS v) AS x),
+    RiskVulnBase     = CASE WHEN p.VBase IS NOT NULL THEN p.VBase WHEN s.RiskProbabilityScore IS NOT NULL THEN s.RiskProbabilityScore - ISNULL(s.RiskFactorProbability, 0) END,
+    RiskVulnDerived  = CASE WHEN p.VBase IS NOT NULL THEN 0 ELSE 1 END,
+    RiskVulnFactors  = (SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.VBase IS NOT NULL THEN j.pi ELSE s.RiskFactorProbabilityDetailed END AS v) AS x)
+FROM sidata.SummaryRow AS s
+OUTER APPLY OPENJSON(CASE WHEN ISJSON(s.RowJson) = 1 THEN s.RowJson END) WITH (
+    cb nvarchar(max) N'$.RiskConsequenceBase', ci nvarchar(max) N'$.RiskFactor_Consequence_Impacts',
+    pb nvarchar(max) N'$.RiskProbabilityBase', pi nvarchar(max) N'$.RiskFactor_Probability_Impacts') AS j
+CROSS APPLY (SELECT $(& $n 'j.cb') AS ABase, $(& $n 'j.pb') AS VBase) AS p
+WHERE s.RiskAssetDerived IS NULL;
+SELECT @@ROWCOUNT;
+"@
+}
+
+function Invoke-SIDataSummaryRiskParts {
+    <#
+        The Summary rows (new and earlier) get the risk score's parts, in batches, within -BudgetSeconds (the rest on the next
+        run). NEVER THROWS: @{ Ready; Rows; Error }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log, [int]$BudgetSeconds = 300, [int]$Batch = 20000, [switch]$DryRun)
+    if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
+    $res = [ordered]@{ Ready = $false; Rows = 0L; Error = '' }
+    try {
+        if ([string](& $Invoke (Get-SIDataSummaryRiskPartsReadySql) @{} 'scalar') -ne '1') { return [pscustomobject]$res }
+        $res.Ready = $true
+        if ($DryRun) { return [pscustomobject]$res }
+        $clock = [Diagnostics.Stopwatch]::StartNew(); $sql = Get-SIDataSummaryRiskPartsSql
+        while ($clock.Elapsed.TotalSeconds -lt $BudgetSeconds) {
+            $n = [long](& $Invoke $sql @{ Batch = $Batch } 'scalar')
+            $res.Rows += $n
+            if ($n -lt $Batch) { break }
+        }
+        if ($res.Rows -gt 0) { & $Log 'OK' ("score parts : {0} Summary row(s) got the risk score's parts" -f $res.Rows) }
+    } catch {
+        $res.Error = $_.Exception.Message
+        & $Log 'WARN' ("score parts : the risk score's parts of the Summary rows were not all written this run -- {0}. Tried again on the next run." -f $_.Exception.Message)
+    }
+    [pscustomobject]$res
+}
+
 function Invoke-SIDataDeriveCollection {
     <#
         Fills the views' columns of ONE collection in FindingId ranges sized from their measured time, then its
@@ -1418,12 +1682,213 @@ function Invoke-SIDataDeriveCollection {
     }
     # #830 / #834 every range carried the row values: the readers read this collection from its typed columns from now on
     if ($rowCols -and -not $rowsDone) { $null = & $Invoke 'UPDATE sidata.Collection SET RaRowsAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar' }
+    # the risk score's parts as columns, when the database has them (the updater adds them): every row, then the stamp
+    if (Test-SIDataRiskPartsReady -Invoke $Invoke) {
+        $parts = @{ Invoke = $Invoke; CollectionId = $CollectionId; Sql = (Get-SIDataRiskPartsSql); TargetMs = $TargetMs }
+        $hiPart = 0L
+        if ($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull])) {
+            $parts.Lo = [long]$b['Lo']; $parts.Hi = [long]$b['Hi']; $hiPart = [long]$b['Hi']
+            $null = Invoke-SIDataFindingRanges @parts
+        }
+        $null = & $Invoke (Get-SIDataRiskPartsStampSql) @{ CollectionId = $CollectionId; Upto = $hiPart } 'scalar'
+    }
     # the facet aggregate in FindingId ranges (a large collection's one statement ran past the SQL limit)
     $fsz = [long]0
     $facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $CollectionId -FixColumn:$Fix -BatchSize ([ref]$fsz) -TargetMs $TargetMs -Log $Log
     $svc = $null
-    if ($Services) { $svc = [int](& $Invoke (Get-SIDataServicesSql) @{ CollectionId = $CollectionId } 'scalar') }
+    if ($Services) { $svc = [int](Invoke-SIDataServices -Invoke $Invoke -CollectionId $CollectionId -Log $Log) }
     [pscustomobject]@{ CollectionId = $CollectionId; Findings = $done; Facets = $facets; Services = $svc }
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  THE COLLECTION'S AGGREGATES IN RANGES (2026-10-29): the day's totals, the services and the departments of a collection
+#  -- and their counted twins (the exempted step) -- ran as ONE statement over every finding of the collection: at the
+#  large installs past the SQL limit ("Invoke-SIDataExemptedVariants ... Timeout expired"). On a real database's seam they
+#  now run on ONE connection (mode 'session'): the findings are read a FindingId range at a time (the clustered key) into
+#  a #temp table of partial counts per group and asset, those are folded a range of asset keys at a time (every row of an
+#  asset in one range, so a distinct count of assets adds up exactly), and only the collection's aggregate rows are
+#  replaced, in one short transaction. Nothing is written to the database before that transaction, so a run that stops
+#  part-way leaves the aggregate as it was and the next run makes it again. Counts and highest values are the one
+#  statement's exactly; a sum of scores (float) may differ in its last digits only (the order of the additions -- the one
+#  statement's own sum varies with its plan the same way). Every range is its own command, measured and logged.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Test-SIDataSessionRangedSeam {
+    <# PURE. A real database's seam that runs several batches on one connection and the heavy steps in ranges. #>
+    param($Invoke)
+    [bool]($null -ne $Invoke -and $Invoke.PSObject.Properties['SISqlSession'] -and $Invoke.SISqlSession -and $Invoke.PSObject.Properties['SISqlRanged'] -and $Invoke.SISqlRanged)
+}
+
+function ConvertTo-SIDataSqlText {
+    <# PURE. A value as a T-SQL text literal (N'...', quotes doubled); NULL for $null. A batch of a session takes no parameters. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return 'NULL' }
+    "N'" + ([string]$Value).Replace("'", "''") + "'"
+}
+
+function Invoke-SIDataSessionIdRanges {
+    <# In a session (-Run): -Text for every FindingId range of collection -CollectionId ({AFTER} / {UPTO} replaced), sized
+       from the measured time of the one before; one log line per range. Answers the ranges run. #>
+    param([Parameter(Mandatory)][scriptblock]$Run, [Parameter(Mandatory)][int]$CollectionId, [Parameter(Mandatory)][string]$Text, [string]$What = 'ranges',
+          [long]$FirstSize = 50000, [long]$TargetMs = 5000, [scriptblock]$Log)
+    $b = @(& $Run ('SELECT ISNULL(MIN(FindingId), 0) AS Lo, ISNULL(MAX(FindingId), -1) AS Hi FROM sidata.Finding WHERE CollectionId = {0};' -f $CollectionId) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+    $after = [long]$b['Lo'] - 1; $hi = [long]$b['Hi']; $size = [Math]::Max(1L, $FirstSize); $i = 0
+    while ($after -lt $hi) {
+        $upto = [long][Math]::Min([double]$hi, [double]$after + [double]$size)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        & $Run ($Text.Replace('{AFTER}', [string]$after).Replace('{UPTO}', [string]$upto)) 'none'
+        $i++
+        if ($Log) { & $Log 'INFO' ('{0} -- findings range {1} (ids {2:N0}-{3:N0}) -- {4:N1} s' -f $What, $i, ($after + 1), $upto, ($sw.ElapsedMilliseconds / 1000.0)) }
+        $after = $upto
+        $size = Get-SIDataNextSize -Current $size -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 1
+    }
+    $i
+}
+
+function Invoke-SIDataSessionKeyRanges {
+    <# In a session (-Run): -Text for every range of the text key -Column of the #temp table -Table ({PRED} replaced by the range's
+       predicate, its bounds as literals; every row of one key value in one range), then once for the rows without a key
+       ({PRED} = ' AND <column> IS NULL'). Sized from the measured time of the one before; one log line per range. #>
+    param([Parameter(Mandatory)][scriptblock]$Run, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Column, [Parameter(Mandatory)][string]$Text,
+          [string]$What = 'ranges', [long]$FirstTake = 20000, [long]$TargetMs = 5000, [scriptblock]$Log)
+    $take = [Math]::Max(1L, $FirstTake); $lo = $null; $i = 0
+    while ($true) {
+        $lop = ''; if ($null -ne $lo) { $lop = (' AND {0} > {1}' -f $Column, (ConvertTo-SIDataSqlText $lo)) }
+        $b = @(& $Run ('SELECT MAX(x.k) AS Hi, COUNT_BIG(*) AS N FROM (SELECT TOP ({0}) {1} AS k FROM {2} WHERE {1} IS NOT NULL{3} ORDER BY {1}) AS x;' -f $take, $Column, $Table, $lop) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+        $hi = $b['Hi']; $n = [long]$b['N']
+        if ($n -eq 0 -or $null -eq $hi) { break }
+        $last = $n -lt $take
+        $pred = (' AND {0} IS NOT NULL' -f $Column) + $lop
+        if (-not $last) { $pred += (' AND {0} <= {1}' -f $Column, (ConvertTo-SIDataSqlText $hi)) }
+        $i++
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        & $Run ($Text.Replace('{PRED}', $pred)) 'none'
+        if ($Log) { & $Log 'INFO' ('{0} -- assets range {1} -- {2:N1} s' -f $What, $i, ($sw.ElapsedMilliseconds / 1000.0)) }
+        if ($last) { break }
+        $lo = [string]$hi
+        $take = Get-SIDataNextSize -Current $take -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 1
+    }
+    & $Run ($Text.Replace('{PRED}', (' AND {0} IS NULL' -f $Column))) 'none'
+    $i
+}
+
+function Invoke-SIDataFindingDaily {
+    <#
+        The day's aggregate (Get-SIDataFindingDailySql; -Counted: its counted twin) -- on a real database's seam in ranges (see
+        above), any other seam the one statement. -Day: 'yyyy-MM-dd'. Answers the day's rows written (as the statement).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Day, [switch]$Counted, [scriptblock]$Log,
+          [long]$FirstSize = 50000, [long]$TargetMs = 5000)
+    if (-not (Test-SIDataSessionRangedSeam $Invoke)) { return [int](& $Invoke (Get-SIDataFindingDailySql -Counted:$Counted) @{ Day = $Day } 'scalar') }
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstSize = [long]$Invoke.SIRangeFirstTake }
+    if ($Day -notmatch '^\d{4}-\d{2}-\d{2}$') { throw ("the day of the day's totals is not a date ('{0}')" -f $Day) }
+    $table = 'FindingDaily'; $mark = ''; $assets = 'AssetDaily'
+    if ($Counted) { $table = 'FindingDailyCounted'; $mark = ' AND f.ExemptionId IS NULL'; $assets = 'AssetDailyCounted' }
+    $what = $(if ($Counted) { "v3 model    : the day's totals without exempted findings ($Day)" } else { "v3 model    : the day's totals ($Day)" })
+    $onSession = {
+        param($Run)
+        $c = @(& $Run @"
+SET NOCOUNT ON;
+DECLARE @d date = '$Day';
+DECLARE @c int = (SELECT TOP (1) CollectionId FROM sidata.Collection
+                  WHERE Kind = 'Detailed' AND Status = 'Complete' AND CollectionTime >= @d AND CollectionTime < DATEADD(day, 1, @d)
+                  ORDER BY CollectionTime DESC);
+DECLARE @gone int = 0;
+IF @c IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RetiredAt') IS NOT NULL
+    EXEC sp_executesql N'SELECT @g = COUNT(*) FROM sidata.Collection WHERE CollectionId = @c AND RetiredAt IS NOT NULL', N'@c int, @g int OUTPUT', @c = @c, @g = @gone OUTPUT;
+SELECT @c AS C, @gone AS Gone;
+"@ 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+        # #717: the day's collection had its finding rows removed by the retention -- its stored day totals are kept
+        if ([int]$c['Gone'] -gt 0) { return 0 }
+        $cid = $c['C']
+        & $Run @'
+SELECT TOP (0) f.CiLifecycle AS Lc, f.Tier, ISNULL(f.Severity, '') AS Sev, ISNULL(f.SecurityDomain, '') AS Dom, ISNULL(f.ReportName, '') AS Rep, f.AssetKey,
+       COUNT_BIG(*) AS Findings, SUM(f.RiskScore) AS ScoreSum, MAX(f.RiskScore) AS ScoreMax
+INTO #dp FROM sidata.Finding AS f GROUP BY f.CiLifecycle, f.Tier, ISNULL(f.Severity, ''), ISNULL(f.SecurityDomain, ''), ISNULL(f.ReportName, ''), f.AssetKey;
+CREATE CLUSTERED INDEX CX_dp ON #dp (AssetKey);
+SELECT TOP (0) Lc, Tier, Sev, Dom, Rep, Findings, CONVERT(bigint, 0) AS Assets, ScoreSum, ScoreMax INTO #dr FROM #dp;
+-- (the CUBE's rolled-up cells carry NULL in every column: all of them may be empty here)
+CREATE TABLE #da (G int NOT NULL, Tier tinyint NULL, Sev nvarchar(30) COLLATE DATABASE_DEFAULT NULL, Dom nvarchar(128) COLLATE DATABASE_DEFAULT NULL, Rep nvarchar(256) COLLATE DATABASE_DEFAULT NULL, Lc nvarchar(16) COLLATE DATABASE_DEFAULT NULL, Assets bigint NOT NULL);
+'@ 'none'
+        if ($null -ne $cid) {
+            $null = Invoke-SIDataSessionIdRanges -Run $Run -CollectionId ([int]$cid) -What $what -Log $Log -FirstSize $FirstSize -TargetMs $TargetMs -Text @"
+INSERT #dp (Lc, Tier, Sev, Dom, Rep, AssetKey, Findings, ScoreSum, ScoreMax)
+SELECT f.CiLifecycle, f.Tier, ISNULL(f.Severity, ''), ISNULL(f.SecurityDomain, ''), ISNULL(f.ReportName, ''), f.AssetKey, COUNT_BIG(*), SUM(f.RiskScore), MAX(f.RiskScore)
+FROM sidata.Finding AS f
+WHERE f.CollectionId = $([int]$cid) AND f.FindingId > {AFTER} AND f.FindingId <= {UPTO}$mark
+GROUP BY f.CiLifecycle, f.Tier, ISNULL(f.Severity, ''), ISNULL(f.SecurityDomain, ''), ISNULL(f.ReportName, ''), f.AssetKey;
+"@
+            # assets never span two asset ranges: their distinct counts add up -- per group, and per cell of the CUBE
+            $null = Invoke-SIDataSessionKeyRanges -Run $Run -Table '#dp' -Column 'AssetKey' -What $what -Log $Log -TargetMs $TargetMs -Text @'
+INSERT #dr (Lc, Tier, Sev, Dom, Rep, Findings, Assets, ScoreSum, ScoreMax)
+SELECT Lc, Tier, Sev, Dom, Rep, SUM(Findings), COUNT(DISTINCT AssetKey), SUM(ScoreSum), MAX(ScoreMax) FROM #dp WHERE 1 = 1{PRED} GROUP BY Lc, Tier, Sev, Dom, Rep;
+INSERT #da (G, Tier, Sev, Dom, Rep, Lc, Assets)
+SELECT GROUPING_ID(Tier, Sev, Dom, Rep), Tier, Sev, Dom, Rep, Lc, COUNT(DISTINCT AssetKey) FROM #dp WHERE 1 = 1{PRED} GROUP BY Lc, CUBE (Tier, Sev, Dom, Rep);
+'@
+        }
+        [int](& $Run @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @d date = '$Day';
+DECLARE @c int = $(if ($null -eq $cid) { 'NULL' } else { [int]$cid });
+BEGIN TRAN;
+DELETE FROM sidata.$table WHERE [Day] = @d;
+INSERT sidata.$table ([Day], CollectionId, Tier, Severity, SecurityDomain, ReportName, Findings, Assets, ScoreTotal, ScoreMax, CiLifecycle)
+SELECT @d, @c, Tier, Sev, Dom, Rep, SUM(Findings), SUM(Assets), ISNULL(SUM(ScoreSum), 0), MAX(ScoreMax), Lc
+FROM #dr GROUP BY Lc, Tier, Sev, Dom, Rep;
+DECLARE @n int = @@ROWCOUNT;
+IF OBJECT_ID('sidata.$assets') IS NOT NULL
+BEGIN
+    DELETE FROM sidata.$assets WHERE [Day] = @d;
+    INSERT sidata.$assets ([Day], CollectionId, GroupingId, Tier, Severity, SecurityDomain, ReportName, Assets, CiLifecycle)
+    SELECT @d, @c, G, Tier, Sev, Dom, Rep, SUM(Assets), Lc FROM #da GROUP BY G, Tier, Sev, Dom, Rep, Lc;
+END;
+COMMIT;
+DROP TABLE #dp; DROP TABLE #dr; DROP TABLE #da;
+SELECT @n;
+"@ 'scalar')
+    }
+    [int](& $Invoke $null $null 'session' $onSession)
+}
+
+function Invoke-SIDataServices {
+    <#
+        One collection's services (Get-SIDataServicesSql; -Counted: its counted twin) -- on a real database's seam in ranges:
+        the membership sources and everything after the per-asset counts run as the one statement's own text (they are per
+        asset and per service, not per finding); the per-asset counts (#a) are made a FindingId range at a time and folded a
+        range of assets at a time. Any other seam: the one statement. Answers the service rows written.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [switch]$Counted, [object[]]$Sources = (Get-SIDataServiceSources),
+          [scriptblock]$Log, [long]$FirstSize = 50000, [long]$TargetMs = 5000)
+    $sql = Get-SIDataServicesSql -Sources $Sources -Counted:$Counted
+    if (-not (Test-SIDataSessionRangedSeam $Invoke)) { return [int](& $Invoke $sql @{ CollectionId = $CollectionId } 'scalar') }
+    if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstSize = [long]$Invoke.SIRangeFirstTake }
+    # a batch of a session takes no parameter: the collection's id (a number) is written in
+    $text = $sql.Replace('@CollectionId', [string][int]$CollectionId)
+    $iA = $text.IndexOf('CREATE TABLE #a ('); $iIns = $text.IndexOf("INSERT #a`r`nSELECT"); if ($iIns -lt 0) { $iIns = $text.IndexOf("INSERT #a`nSELECT") }
+    $iMem = $text.IndexOf('CREATE TABLE #mem')
+    if ($iA -lt 0 -or $iIns -lt $iA -or $iMem -lt $iIns) { throw 'the services statement is not in the shape its ranges are cut from' }
+    $head = $text.Substring(0, $iA); $createA = $text.Substring($iA, $iIns - $iA); $insA = $text.Substring($iIns, $iMem - $iIns); $tail = $text.Substring($iMem)
+    $gb = $insA.LastIndexOf('GROUP BY f.AssetKey;')
+    if ($gb -lt 0) { throw 'the services statement is not in the shape its ranges are cut from' }
+    # the per-asset counts of one FindingId range, into #ap (the same expressions)
+    $insAp = ($insA.Substring(0, $gb).Replace('INSERT #a', 'INSERT #ap').TrimEnd() + ' AND f.FindingId > {AFTER} AND f.FindingId <= {UPTO}' + "`r`n" + 'GROUP BY f.AssetKey;')
+    $what = $(if ($Counted) { 'v3 model    : the services without exempted findings' } else { 'v3 model    : the services' })
+    $cid = $CollectionId
+    $onSession = {
+        param($Run)
+        & $Run $head 'none'
+        & $Run ($createA + "SELECT TOP (0) * INTO #ap FROM #a;`r`nCREATE CLUSTERED INDEX CX_ap ON #ap (AssetKey);") 'none'
+        $null = Invoke-SIDataSessionIdRanges -Run $Run -CollectionId $cid -What $what -Log $Log -FirstSize $FirstSize -TargetMs $TargetMs -Text $insAp
+        $null = Invoke-SIDataSessionKeyRanges -Run $Run -Table '#ap' -Column 'AssetKey' -What $what -Log $Log -TargetMs $TargetMs -Text @'
+INSERT #a
+SELECT AssetKey, MAX(AssetName), MIN(Tier), SUM(Findings), SUM(Critical), SUM(High), SUM(Medium), SUM(Low), SUM(T0), SUM(T1), SUM(T2), SUM(T3), SUM(TU),
+       SUM(WeightedTotal), SUM(RiskTotal), MAX(MaxWeighted)
+FROM #ap WHERE 1 = 1{PRED} GROUP BY AssetKey;
+'@
+        [int](& $Run ("SET XACT_ABORT ON;`r`n" + $tail) 'scalar')
+    }
+    [int](& $Invoke $null $null 'session' $onSession)
 }
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -1468,12 +1933,12 @@ function Invoke-SIDataExemptedVariants {
     $cid = [int]$Collection.CollectionId
     $t = ConvertTo-SIDataUtc $Collection.CollectionTime
     $out = [ordered]@{ CollectionId = $cid; Daily = $null; Facets = $null; Departments = $null; Services = $null; Stamped = $false }
-    $out.Daily = [int](& $Invoke (Get-SIDataFindingDailySql -Counted) @{ Day = $t.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } 'scalar')
+    $out.Daily = [int](Invoke-SIDataFindingDaily -Invoke $Invoke -Counted -Day $t.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) -Log $Log)
     if ([int]$Collection.Derived -ne 1) { return [pscustomobject]$out }
     $fsz = [long]0
     $out.Facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $cid -Counted -BatchSize ([ref]$fsz) -Log $Log
-    if ($Departments -and [int]$Collection.Resolved -eq 1) { $out.Departments = [int](& $Invoke (Get-SIDataDepartmentFacetSql -Counted) @{ CollectionId = $cid } 'scalar') }
-    if ($Services -and [int]$Collection.ServicesDerived -eq 1) { $out.Services = [int](& $Invoke (Get-SIDataServicesSql -Counted) @{ CollectionId = $cid } 'scalar') }
+    if ($Departments -and [int]$Collection.Resolved -eq 1) { $out.Departments = [int](Invoke-SIDataDepartmentFacet -Invoke $Invoke -CollectionId $cid -Counted -Log $Log) }
+    if ($Services -and [int]$Collection.ServicesDerived -eq 1) { $out.Services = [int](Invoke-SIDataServices -Invoke $Invoke -CollectionId $cid -Counted -Log $Log) }
     $out.Stamped = ([int](& $Invoke (Get-SIDataExemptedStampSql) @{ CollectionId = $cid } 'scalar')) -eq 1
     [pscustomobject]$out
 }

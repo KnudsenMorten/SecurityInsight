@@ -226,7 +226,65 @@ export function initSelection() {
     }
     if (all) { all.addEventListener("change", function () { rows().forEach(function (r) { r.checked = all.checked; }); sync(); }); }
     scope.addEventListener("change", function (e) { if (e.target && e.target.hasAttribute && e.target.hasAttribute("data-select-row")) { sync(); } });
+    initRangeSelection(scope, rows);
     sync();
+  });
+}
+
+// RANGE SELECTION, the Windows way (owner 2026-10-13: "select FROM and TO in a multi selection and it will select all in
+// between"): click a row (its tick box, or -- with Ctrl / Cmd -- anywhere on it), then Shift + click another: every row
+// between the two takes the clicked row's new state, in the order the list SHOWS (after its sort and filter; a row the
+// list hides is left alone). Ctrl / Cmd + click on a row ticks or unticks that one row. A plain click on a row keeps its
+// own meaning (a link, a drawer). With pages, the range is within the page shown.
+function shownRow(box) {
+  var tr = box.closest("tr");
+  return !!tr && !tr.closest("[hidden]") && tr.style.display !== "none";
+}
+
+function setBox(box, state) {
+  if (box.disabled || box.checked === state) { return; }
+  box.checked = state;
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+export function selectRange(list, from, to, state) {
+  var shown = list.filter(shownRow);
+  var i = shown.indexOf(from), j = shown.indexOf(to);
+  if (i < 0 || j < 0) { setBox(to, state); return 0; }
+  var lo = Math.min(i, j), hi = Math.max(i, j), n = 0;
+  for (var k = lo; k <= hi; k++) { if (!shown[k].disabled) { setBox(shown[k], state); n++; } }
+  return n;
+}
+
+function initRangeSelection(scope, rows) {
+  if (scope.getAttribute("data-range-ready") === "1") { return; }
+  scope.setAttribute("data-range-ready", "1");
+  var anchor = null;
+  // Shift + click never selects the text between the two rows
+  scope.addEventListener("mousedown", function (e) {
+    if (!e.shiftKey || !(e.target instanceof Element) || e.target.closest("input, select, textarea")) { return; }
+    if (e.target.closest("tr") && e.target.closest("tr").querySelector("[data-select-row]")) { e.preventDefault(); }
+  });
+  scope.addEventListener("click", function (e) {
+    var t = e.target;
+    if (!(t instanceof Element)) { return; }
+    var box = t.closest("[data-select-row]");
+    if (box) {
+      // the box itself: the browser has ticked or unticked it already -- Shift carries that state over the range
+      if (e.shiftKey && anchor && anchor !== box && rows().indexOf(anchor) >= 0) { selectRange(rows(), anchor, box, box.checked); }
+      anchor = box;
+      return;
+    }
+    if (!(e.shiftKey || e.ctrlKey || e.metaKey)) { return; }
+    if (t.closest("a, button, input, select, textarea, label, summary")) { return; }
+    var tr = t.closest("tr");
+    var rowBox = tr ? tr.querySelector("[data-select-row]") : null;
+    if (!rowBox || rowBox.disabled) { return; }
+    e.preventDefault();
+    var state = !rowBox.checked;
+    if (e.shiftKey && anchor && anchor !== rowBox && rows().indexOf(anchor) >= 0) { selectRange(rows(), anchor, rowBox, state); }
+    else { setBox(rowBox, state); }
+    anchor = rowBox;
   });
 }
 

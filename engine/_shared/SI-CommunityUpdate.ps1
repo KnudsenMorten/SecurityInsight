@@ -129,6 +129,26 @@ function Get-SICommunityRunningVersion {
     "$([IO.File]::ReadAllText($f))".Trim().TrimStart([char]0xFEFF)
 }
 
+function Test-SICommunityReleasePayload {
+    <#
+        PURE over a folder. Would the update clients take this extracted release (-PayloadRoot) as -Version? Its VERSION is
+        -Version and it carries every file in -RequiredFiles (relative, '/'; default: the update client's own files). The
+        same rules the clients apply after the download (Invoke-SICommunityUpdate, the container updater); the publisher
+        checks the public zip with them before Invardia registers it. Returns @{ Ok; Version; Missing; Reason }.
+    #>
+    param([Parameter(Mandatory)][string]$PayloadRoot, [Parameter(Mandatory)][string]$Version, [string[]]$RequiredFiles = $script:SICommunityUpdateClientFiles)
+    $have = Get-SICommunityRunningVersion -Root $PayloadRoot
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @($RequiredFiles | Where-Object { $_ })) {
+        $full = [string]$PayloadRoot; foreach ($seg in @("$c" -split '/')) { $full = [IO.Path]::Combine($full, $seg) }
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { $missing.Add([string]$c) }
+    }
+    $why = @()
+    if ($have -ne $Version.Trim()) { $why += ("its VERSION says '{0}', the release is {1} -- every install would refuse it" -f $have, $Version.Trim()) }
+    if ($missing.Count) { $why += ("it does not carry {0} -- installing it would end updates for the installs that take it" -f ($missing -join ', ')) }
+    [pscustomobject]@{ Ok = (-not $why.Count); Version = $have; Missing = @($missing.ToArray()); Reason = $(if ($why.Count) { $why -join '; ' } else { ('VERSION {0}, and every file the update clients need' -f $have) }) }
+}
+
 function Get-SICommunityUpdateSettings {
     <#
         This install's ring and channel. -Ring (this run only) > config\update.custom.json { "ring": 2 } > 3 (broad).

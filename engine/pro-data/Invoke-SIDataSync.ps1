@@ -263,6 +263,12 @@ $global:SI_DataSyncPartFailures = @()
 if (Get-Command -Name Get-SIDataSyncPartFailures -ErrorAction SilentlyContinue) {
     $partFails = @(Get-SIDataSyncPartFailures -Result $res)
     $global:SI_DataSyncPartFailures = $partFails
+    # the run report's StepsOk (2026-10-29): every part of the data sync that did not fail -- a later ok report closes the
+    # tickets of the parts it lists (a part's failure is reported under its own step)
+    if ($script:SIDataSyncParts) {
+        $failedSteps = @($partFails | ForEach-Object { [string]$_.Step })
+        $runContext | Add-Member -NotePropertyName StepsOk -NotePropertyValue ([string[]]@($script:SIDataSyncParts.Values | ForEach-Object { [string]$_.Step } | Where-Object { $_ -and $failedSteps -notcontains $_ })) -Force
+    }
     if ($partFails.Count) {
         foreach ($pl in @(Get-SIDataSyncPartFailureText -Failures $partFails)) { Write-DataWarn $pl }
         $runContext | Add-Member -NotePropertyName FailedStep -NotePropertyValue ([string]$partFails[0].Step) -Force
@@ -295,6 +301,8 @@ if ($__sumStep -eq 'off') {
 try {
     . (Join-Path $here '..\_shared\data-sql\SI-DataSummary.ps1')
     $global:SI_DataSummaryResult = Invoke-SIDataSummarySync -Query $query -Invoke $invoke -EditionMajor $edition -Settings $settings -DryRun:$DryRun -Log $log
+    # the Summary rows just loaded get the risk score's parts as columns (never fails the step)
+    if (Get-Command -Name Invoke-SIDataSummaryRiskParts -ErrorAction SilentlyContinue) { $null = Invoke-SIDataSummaryRiskParts -Invoke $invoke -DryRun:$DryRun -Log $log }
     # #881 a part that fails is a WARNING (it opens a fix request), never a failed step: the Summary collection stays out of the
     # database, so the run is not published (the publisher checks its summary) and the trusted run stays shown
     if ([string]$global:SI_DataSummaryResult.Problem) { Add-SIRunIssue -Issues $runIssues -Level WARNING -Text ('Risk Analysis Summary: ' + [string]$global:SI_DataSummaryResult.Problem + ' -- this part failed; the next run loads it') }
@@ -534,8 +542,22 @@ if ($issueOut.Failed) {
 }
 } catch {
     $rhEnd.Exit = 'error'; $rhEnd.Message = $_.Exception.Message
+    # a temporary Azure SQL error that outlasted the statement retry (SI-DataSql.ps1) is said as what it is: class
+    # transient-sql on the report -- the platform's, never a product defect
+    $tagEx = $_.Exception; $tagClass = ''
+    while ($tagEx) { try { if ($tagEx.Data -and $tagEx.Data.Contains('SIErrorClass')) { $tagClass = [string]$tagEx.Data['SIErrorClass']; break } } catch { }; $tagEx = $tagEx.InnerException }
+    if ($tagClass) {
+        $runContext | Add-Member -NotePropertyName FailedStepError -NotePropertyValue ([string]$_.Exception.Message) -Force
+        $runContext | Add-Member -NotePropertyName FailedStepErrorClass -NotePropertyValue $tagClass -Force
+    }
     throw
 } finally {
     # #317: the run's END record -- once, success or failure
     & $sendHealth 'End' $rhEnd.Exit $rhEnd.Message
+    # 2026-10-29: a WHOLE data sync (every part delivered) reports its ok to Invardia, with every part it delivered (StepsOk) --
+    # a part's failure is reported under that part's step (Send-SIDataSyncPartFailures), and only an ok that lists it closes
+    # its ticket. Failures and warnings keep their own reports (the parts' and the pipeline's): nothing is sent twice.
+    if (-not $DryRun -and [string]$rhEnd.Exit -eq 'success' -and (Get-Command -Name Send-SITelemetryRunEnd -ErrorAction SilentlyContinue)) {
+        try { $null = Send-SITelemetryRunEnd -RunContext $runContext -ExitReason 'success' -ErrorMessage '' } catch { }
+    }
 }

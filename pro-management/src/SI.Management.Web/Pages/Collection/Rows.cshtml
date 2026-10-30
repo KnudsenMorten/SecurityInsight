@@ -6,5 +6,6 @@
     @* #864: a fix's link opens exactly its findings and says so -- never narrowed silently by a remembered filter *@
     <p class="notice attn" role="status" data-fix-note>@fixNote <a href="@Model.FixAllHref">All of this fix's findings</a></p>
 }
+@if (Model.Grid is not null && Model.RiskPartsPending) { <p class="hint" role="status" data-risk-parts-pending>@SI.Management.Web.Pages.Collection.RowsModel.RiskPartsPendingText</p> }
 @if (Model.Grid is not null) { <partial name="_Grid" model="Model" /> }
 <partial name="_Queries" model="Model" />

@@ -135,10 +135,80 @@ Describe 'SIv3-JobStartRequest: the job takes its own start request' {
 Describe 'SIv3-JobStartRequest: wiring' {
     It 'the container entrypoint claims before the execution guard and hands back on every skip' {
         $src = Get-Content -Raw (Join-Path $script:SIRoot 'container\Start-SIInContainer.ps1')
-        $claim = $src.IndexOf('Invoke-SIJobStartRequestClaim'); $guard = $src.IndexOf('$guardFlowRequest = ')
+        $claim = $src.IndexOf('Invoke-SIJobStartRequestIsolated'); $guard = $src.IndexOf('$guardFlowRequest = ')
         $claim | Should -BeGreaterThan 0
         $claim | Should -BeLessThan $guard
         ([regex]::Matches($src, 'Undo-SIStartRequestClaim')).Count | Should -BeGreaterOrEqual 4   # the function + FlowBusy + Skip + no-overlap
+    }
+
+    It 'both entrypoints claim and hand back only through the isolated call, never with the guard file in their own scope' {
+        foreach ($f in 'Start-SIInContainer.ps1', 'Start-RiskAnalysisInContainer.ps1') {
+            $src = Get-Content -Raw (Join-Path $script:SIRoot "container\$f")
+            $src | Should -Match 'Invoke-SIJobStartRequestIsolated -GuardPath'
+            $src | Should -Not -Match 'Invoke-SIJobStartRequestClaim|Invoke-SIJobStartRequestRelease'
+        }
+        $ra = Get-Content -Raw (Join-Path $script:SIRoot 'container\Start-RiskAnalysisInContainer.ps1')
+        $ra | Should -Not -Match "\.\s*\(Join-Path \`$PSScriptRoot '\.\./engine/_shared/SI-Guard\.ps1'\)"
+    }
+}
+
+Describe 'SIv3-JobStartRequest: the claim leaves the engine''s start untouched (live 3.0.5: the status report stopped)' {
+    BeforeAll {
+        $script:Pwsh = (Get-Process -Id $PID).Path
+        $script:Work = Join-Path ([System.IO.Path]::GetTempPath()) ('si-startreq-' + [guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $script:Work
+        # the engine, started from the entrypoint as its own script: loads the telemetry code the way every engine does
+        $script:Engine = Join-Path $script:Work 'engine.ps1'
+        Set-Content -LiteralPath $script:Engine -Encoding UTF8 -Value @"
+. '$(Join-Path $script:SIRoot 'engine\_shared\SI-TelemetrySend.ps1')'
+'editions=' + (@(`$script:SITelemetry.Editions) -join ',')
+"@
+        function Invoke-Entrypoint([string]$Claim) {
+            $host1 = Join-Path $script:Work ('host-' + [guid]::NewGuid().ToString('N') + '.ps1')
+            Set-Content -LiteralPath $host1 -Encoding UTF8 -Value @"
+`$ErrorActionPreference = 'Continue'
+. '$(Join-Path $script:SIRoot 'engine\_shared\SI-JobStartRequest.ps1')'
+`$guardPath = '$(Join-Path $script:SIRoot 'engine\_shared\SI-Guard.ps1')'
+$Claim
+'seam=' + [string](`$global:SI_GuardProInvoke -is [scriptblock])
+'guardFn=' + [string][bool](Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)
+'telemetryFn=' + [string][bool](Get-Command -Name New-SITelemetryRunRecord -ErrorAction SilentlyContinue)
+& '$script:Engine'
+"@
+            @(& $script:Pwsh -NoProfile -NonInteractive -File $host1 2>&1 | ForEach-Object { [string]$_ })
+        }
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Work -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'the real guard file, loaded for the claim, leaves nothing behind: the engine loads its own telemetry and finds its lists' {
+        $out = Invoke-Entrypoint '$r = Invoke-SIJobStartRequestIsolated -GuardPath $guardPath -Job ''caj-si-heartbeat'' -Execution ''caj-si-heartbeat-1''; ''claimed='' + [string]$r.Claimed'
+        $out | Should -Contain 'claimed=False'
+        $out | Should -Contain 'guardFn=False'
+        $out | Should -Contain 'telemetryFn=False'
+        $out | Should -Contain 'editions=community,pro,trial'
+    }
+
+    It 'control: the guard file dot-sourced in the entrypoint''s scope (3.0.5) leaves the engine without its lists' {
+        $out = Invoke-Entrypoint '. $guardPath'
+        $out | Should -Contain 'telemetryFn=True'
+        $out | Should -Contain 'editions='
+    }
+
+    It 'the database seam the guard file remembers for the process is put back as it was; the claim itself still works' {
+        $fakeGuard = Join-Path $script:Work 'fake-guard.ps1'
+        Set-Content -LiteralPath $fakeGuard -Encoding UTF8 -Value @'
+function Get-SIGuardProInvoke { $inv = { param($sql, $p, $mode) if ($mode -eq 'reader') { ,@([pscustomobject]@{ RequestId = 3; EnvJson = '{"SI_AUDIT_CID":"c9"}'; RequestedBy = 'a@example.test' }) } else { 0 } }; $global:SI_GuardProInvoke = $inv; $global:SI_GuardInvoke = $inv; $inv }
+'@
+        $out = Invoke-Entrypoint ('$r = Invoke-SIJobStartRequestIsolated -GuardPath ''{0}'' -Job ''caj-si-flow'' -Execution ''e1''; ''claimed='' + [string]$r.Claimed + '' id='' + [string]$r.RequestId + '' cid='' + $env:SI_AUDIT_CID' -f $fakeGuard)
+        $out | Should -Contain 'claimed=True id=3 cid=c9'
+        $out | Should -Contain 'seam=False'
+        $out | Should -Contain 'guardFn=False'
+    }
+
+    It 'a hand-back goes through the same isolated call and never throws' {
+        (Invoke-SIJobStartRequestIsolated -Invoke { param($sql, $p, $mode) 1 } -RequestId 5 -Execution 'e1') | Should -BeTrue
+        (Invoke-SIJobStartRequestIsolated -Invoke { param($sql, $p, $mode) throw 'gone' } -RequestId 5 -Execution 'e1') | Should -BeFalse
+        (Invoke-SIJobStartRequestIsolated -GuardPath (Join-Path $script:Work 'no-such-file.ps1') -Job 'caj-si-flow' -Execution 'e1').Line | Should -Match 'goes on as configured'
     }
 
     It 'the schema allows start-env and carries the values and the execution' {

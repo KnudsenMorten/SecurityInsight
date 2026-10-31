@@ -67,7 +67,7 @@
     Exit code: 0 installed (warnings included), 1 a step failed, 2 a check failed, 3 config.json is not valid.
 
 .EXAMPLE
-    ./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>
+    ./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
     # the quickest install: every other answer has its default
 .EXAMPLE
     ./setup/Install-SecurityInsight.ps1 -Resume

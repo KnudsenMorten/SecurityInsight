@@ -149,6 +149,7 @@
     { "action": "report.summary.save", "source": "web", "what": "a management summary report added or changed: sections, data, recipients, schedule (Reports & outputs > Management summary)" },
     { "action": "report.summary.remove", "source": "web", "what": "a management summary report removed (nothing more is sent)" },
     { "action": "report.summary.send", "source": "web", "what": "a management summary queued for its recipients -- sent now by a person, or by its schedule (one per period)" },
+    { "action": "report.presentation.download", "source": "web", "what": "a management presentation (PowerPoint) downloaded -- the run, the run compared with, the sections and the audience" },
     { "action": "report.custom.test", "source": "web", "what": "a report query tested read-only against the workspace (capped, timed out; WhatIf, nothing stored)" },
     { "action": "report.environment.export", "source": "web", "what": "the environment report exported as JSON (framework ENV-REPORT-1): names, ids and states only" },
     { "action": "notify.recipient.save", "source": "web", "what": "a mail recipient's notifications saved or a recipient added (audience, reports and alerts on or off); a recipient who was not a user added as Reader" },

@@ -86,7 +86,8 @@ public static class NavModel
         Group("Overview", "Executive overview", "reader",
             new("/Management/Overview", "Topics"), new("/Management/Index", "Risk trend"), new("/Management/Domains", "Domains"), new("/Management/Tier0", "Tier-0 exposure")),
         Group("Overview", "Executive report", "reader",
-            new("/Management/Report", "Key figures"), new("/Management/RiskAnalysis", "Risk Analysis"), new("/Management/Summary", "Management summary")),
+            new("/Management/Report", "Key figures"), new("/Management/RiskAnalysis", "Risk Analysis"), new("/Management/Summary", "Management summary"),
+                new("/Management/Presentation", "Presentation")),
         // one source for "the riskiest assets": the last Risk Analysis run, as the mail ranks them (the live "Riskiest
         // assets now" page answered the same question from another source; it redirects to Top 50 risky assets). The Top 50
         // critical findings are Security recommendations > Summary now (#636; the old address opens it).

@@ -42,7 +42,12 @@ if (-not (Get-Command -Name Write-SIStepPhase -ErrorAction SilentlyContinue) -an
 if (-not (Get-Command -Name Test-SIDisabledIncluded -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-DisabledAssets.ps1')) }
 # #914 THE DATA-OUT CONTRACT (the action table, the envelope, the clear marker, the requests) and the output scope (#274)
 if (-not (Get-Command -Name Get-SIDataOutContractAction -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-DataOutContract.ps1')) }
-if (-not (Get-Command -Name Get-SIOutputScope -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-OutputScope.ps1')) }
+# #961 ALWAYS dot-sourced, never "only when Get-SIOutputScope is missing": the container's entry loads the Pro settings layer
+# (and with it SI-OutputScope.ps1) and then starts this engine with '&' -- the engine SEES Get-SIOutputScope but not the
+# tables it keeps in its file's scope ($script:SIOutputScopeDestinations ...), so the ServiceNow hand-off failed with "You
+# cannot call a method on a null-valued expression" and sent no rows (live 2026-10-30). The same trap as the verification
+# job's data health check (Invoke-SIVerification.ps1, 2026-10-15).
+. ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-OutputScope.ps1'))
 $script:SIDataOutKinds = @('excel', 'servicenow-importset', 'fixed')
 $script:SIDataOutGrains = @('ci', 'ci_finding', 'finding_summary', 'record')
 $script:SIDataOutVolatile = @('$row_hash', '$run_time', '$run_id', '$changed_at', '$action', '$batch_id', '$cleared', '$reason', '$replaces')

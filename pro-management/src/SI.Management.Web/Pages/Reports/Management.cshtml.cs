@@ -29,6 +29,8 @@ public sealed class ManagementModel(MgmtReportSender sender, SI.Management.Web.N
     [BindProperty] public int Day { get; set; } = 1;
     [BindProperty] public string? TimeUtc { get; set; }
     [BindProperty] public bool Enabled { get; set; } = true;
+    /// The Monthly management pack (PowerPoint) attached to the mail (on by default).
+    [BindProperty] public bool Presentation { get; set; } = true;
 
     public bool Ready { get; private set; }
     public IReadOnlyList<MgmtReport> Reports { get; private set; } = [];
@@ -67,7 +69,7 @@ public sealed class ManagementModel(MgmtReportSender sender, SI.Management.Web.N
     {
         Name = e.Name; Grain = e.Grain; Kpi = e.Kpi; Domains = e.Domains; Timeline = e.Timeline; Recipients = string.Join("\n", e.Recipients);
         KeyBlocks = (e.KeyBlocks ?? SI.Management.Web.RiskExec.ExecutiveFigures.Blocks.Select(b => b.Key)).ToList();
-        Cadence = e.Cadence; Day = e.Day; TimeUtc = e.TimeUtc; Enabled = e.Enabled;
+        Cadence = e.Cadence; Day = e.Day; TimeUtc = e.TimeUtc; Enabled = e.Enabled; Presentation = e.Presentation;
     }
 
     private MgmtReport FromForm(MgmtReport? old) => new(Id ?? 0, (Name ?? "").Trim(), RiskExecGrain.Parse(Grain) ?? Grain ?? "", Kpi, Domains, Timeline,
@@ -77,6 +79,7 @@ public sealed class ManagementModel(MgmtReportSender sender, SI.Management.Web.N
         // every block chosen = the default (null), so a block added later reaches the report too
         KeyBlocks = SI.Management.Web.RiskExec.ExecutiveFigures.Blocks.All(b => KeyBlocks.Contains(b.Key)) ? null
             : SI.Management.Web.RiskExec.ExecutiveFigures.Blocks.Select(b => b.Key).Where(KeyBlocks.Contains).ToList(),
+        Presentation = Presentation,
     };
 
     [Audited("report.summary.save")]

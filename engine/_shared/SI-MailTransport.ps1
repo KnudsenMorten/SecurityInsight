@@ -363,6 +363,7 @@ function Get-SIMailContentType {
     param([string]$Path)
     switch -Regex ([IO.Path]::GetExtension("$Path").ToLowerInvariant()) {
         '^\.xlsx$' { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        '^\.pptx$' { 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
         '^\.csv$'  { 'text/csv' }
         '^\.json$' { 'application/json' }
         '^\.html?$' { 'text/html' }

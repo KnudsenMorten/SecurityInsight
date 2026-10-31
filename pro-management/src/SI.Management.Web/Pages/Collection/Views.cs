@@ -119,10 +119,13 @@ public sealed class RowsModel(ICollectionViews views, ILogger<RowsModel> log) : 
     public NamedView? CurrentView => NamedViews.Find(PagePath, View);
 
     /// The sentence above the grid while the data sync has not yet given this collection's findings the risk score's parts.
-    public const string RiskPartsPendingText = "The risk score's parts of this collection (each side's base, factors and score) are being prepared by the data sync -- their columns fill after one of its next runs.";
+    /// Kept short: the Detailed view keeps a tight frame above its table (MenuRestructureTests).
+    public const string RiskPartsPendingText = "The risk score's parts are being prepared by the data sync; their columns fill after its next run.";
 
-    /// True: the collection's findings do not carry the risk score's parts yet (their columns show empty).
-    public bool RiskPartsPending => Current is not null && Current.RiskPartsAt is null;
+    /// True: the collection's findings do not carry the risk score's parts yet AND one of their columns is shown (empty) --
+    /// a layout without those columns has nothing to explain.
+    public bool RiskPartsPending => Current is not null && Current.RiskPartsAt is null
+        && (DisplayColumns.Count > 0 ? DisplayColumns : Plan is null ? Array.Empty<GridColumn>() : Visible(Plan.Spec)).Any(d =>CollectionViewSql.RiskPartColumns.Any(p => !p.Hidden && string.Equals(p.Key, d.Key, StringComparison.OrdinalIgnoreCase)));
 
     public override IEnumerable<(string Key, string Value)> ExtraState()
     {

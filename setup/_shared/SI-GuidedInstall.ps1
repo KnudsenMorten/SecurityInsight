@@ -1188,12 +1188,12 @@ function Resolve-SIInstallDirectConfig {
     if (-not $given.Count) {
         if ($Resume -and (Test-Path -LiteralPath $stored)) { return @{ Ok = $true; ConfigPath = $stored; Message = ('Continuing the install with its answers from {0}' -f $stored) } }
         return @{ Ok = $false; ConfigPath = $null
-                  Message = 'Tell the install where to go: -TenantId <tenant id> -SubscriptionId <subscription id> (or -ConfigPath <config.json> for every setting).' }
+                  Message = 'Tell the install where to go: -TenantId ''<tenant id>'' -SubscriptionId ''<subscription id>'' (or -ConfigPath <config.json> for every setting).' }
     }
     $missing = @('TenantId', 'SubscriptionId' | Where-Object { -not "$($Bound[$_])".Trim() })
     if ($missing.Count) { return @{ Ok = $false; ConfigPath = $null; Message = ('Also needed: {0}' -f ((@($missing) | ForEach-Object { '-' + $_ }) -join ' ')) } }
     if ("$($Bound['CollectionScope'])" -eq 'managementGroup' -and -not "$($Bound['ManagementGroupId'])".Trim()) {
-        return @{ Ok = $false; ConfigPath = $null; Message = 'Also needed with -CollectionScope managementGroup: -ManagementGroupId <management group id>' }
+        return @{ Ok = $false; ConfigPath = $null; Message = 'Also needed with -CollectionScope managementGroup: -ManagementGroupId ''<management group id>''' }
     }
     $cfg = [ordered]@{ installId = $InstallId }
     foreach ($k in $given) {

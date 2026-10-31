@@ -253,15 +253,28 @@ Describe 'the evidence probe (container) and the record' {
         $null = (New-SIJobFlowStartEvidence -Query { param($k) $script:Kql = $k; [pscustomobject]@{ Mine = 0; Stamped = 3 } }).Probe('ptc', 'caj-si-ptc-e1', $script:T0, $script:T0.AddSeconds(31))
         $script:Kql | Should -Match "Engine == 'privilege-tier-classifier'"
         $t0 = $script:T0; $t1 = $script:T0.AddSeconds(31)
-        $p = New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 0; Stamped = 12 } } -ListBlobs { param($pre) @('run-logs/ptc/ptc_container_20261004T010000Z.log') }
+        $p = New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 0; Stamped = 12 } } -ListBlobs { param($pre) @('run-logs/ptc/ptc_container_20261004T010000Z.log', 'run-logs/asset-trend/asset-trend_container_20261004T050000Z.log') }
         $e = $p.Probe('asset-trend', 'caj-si-asset-trend-e1', $t0, $t1)
         $e.HasStartRecord | Should -BeFalse; $e.HasTranscript | Should -BeFalse
         (New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 1; Stamped = 12 } }).Probe('x', 'caj-si-x-e1', $t0, $t1).HasStartRecord | Should -BeTrue
         (New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 0; Stamped = 0 } }).Probe('x', 'caj-si-x-e1', $t0, $t1).HasStartRecord | Should -BeNullOrEmpty
         (New-SIJobFlowStartEvidence -Query { param($k) throw 'forbidden' }).Probe('x', 'caj-si-x-e1', $t0, $t1).HasStartRecord | Should -BeNullOrEmpty
         (New-SIJobFlowStartEvidence).Probe('x', 'caj-si-x-e1', $t0, $t1).HasStartRecord | Should -BeNullOrEmpty -Because 'no workspace: cannot tell'
-        (New-SIJobFlowStartEvidence -ListBlobs { param($pre) @('run-logs/asset-trend/asset-trend_container_20261005T050012Z.log') }).Probe('x', 'e', $t0, $t1).HasTranscript | Should -BeTrue
+        (New-SIJobFlowStartEvidence -ListBlobs { param($pre) @('run-logs/asset-trend/asset-trend_container_20261005T050012Z.log') }).Probe('asset-trend', 'e', $t0, $t1).HasTranscript | Should -BeTrue
         (New-SIJobFlowStartEvidence -ListBlobs { param($pre) @() }).Probe('x', 'e', $t0, $t1).HasTranscript | Should -BeNullOrEmpty -Because 'no run logs at all: the install keeps none'
+        # #966 (live 2026-10-30): ANOTHER step's run log inside the window is not this step's -- the step before and the
+        # heartbeat publish theirs there. The verification step whose container died: the close-loop mail's log 4 s before
+        $t30 = [datetime]::new(2026, 10, 30, 18, 23, 9, [DateTimeKind]::Utc); $e30 = $t30.AddSeconds(96)
+        $logs = @('run-logs/close-loop-mail/close-loop-mail_container_20261030T182208Z.log', 'run-logs/heartbeat/heartbeat_container_20261030T182218Z.log',
+                  'run-logs/verification/verification_container_20261029T182416Z.log')
+        $v = (New-SIJobFlowStartEvidence -ListBlobs { param($pre) $logs }.GetNewClosure()).Probe('verification', 'caj-si-verification-efr9zu5', $t30, $e30)
+        $v.HasTranscript | Should -BeFalse -Because 'no run log of the verification engine in the window: its container never ran it'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $false -HasTranscript $v.HasTranscript -DurationSeconds 96 -Attempts 1 -Retries 1).Retry | Should -BeTrue -Because 'a platform start failure is started again (working rule 4)'
+        # its own run log in the window: it ran
+        $own = @($logs) + 'run-logs/verification/verification_container_20261030T182405Z.log'
+        (New-SIJobFlowStartEvidence -ListBlobs { param($pre) $own }.GetNewClosure()).Probe('caj-si-verification', 'x', $t30, $e30).HasTranscript | Should -BeTrue
+        # run logs, but never one of this engine (named otherwise): the signal does not exist -- never a retry on it
+        (New-SIJobFlowStartEvidence -ListBlobs { param($pre) @('run-logs/heartbeat/heartbeat_container_20261030T182218Z.log') }).Probe('verification', 'x', $t30, $e30).HasTranscript | Should -BeNullOrEmpty
     }
     It 'the transcript window is the execution +/- 60 s' {
         $a = $script:T0; $b = $script:T0.AddSeconds(31)

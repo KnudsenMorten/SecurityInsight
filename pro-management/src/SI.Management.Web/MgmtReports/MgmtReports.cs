@@ -32,7 +32,14 @@ public sealed record MgmtReport(long Id, string Name, string Grain, bool Kpi, bo
     public IReadOnlyList<string>? KeyBlocks { get; init; }
 
     public bool Includes(string block) => KeyBlocks is null || KeyBlocks.Contains(block, StringComparer.Ordinal);
+
+    /// The Monthly management pack (PowerPoint) attached to the mail (owner 2026-10-29: ON for every report, existing and new --
+    /// a report saved before the choice existed has no token and counts as on; only <see cref="SqlMgmtReportStore.PresentationOff"/> turns it off).
+    public bool Presentation { get; init; } = true;
 }
+
+/// A file a queued mail carries (the management presentation).
+public sealed record MailAttachment(string Name, byte[] Bytes);
 
 /// <summary>PURE: when a report is due, without ever sending one period twice, and catching up a missed period ONCE.</summary>
 public static class MgmtSchedule
@@ -354,6 +361,10 @@ public interface IMgmtReportStore
     /// Claims a period for a report: true only for the ONE caller that moved LastPeriodKey to it (no double send).
     Task<bool> ClaimAsync(long id, string periodKey, CancellationToken ct);
     Task QueueMailAsync(long reportId, string? periodKey, IReadOnlyList<string> to, string subject, string html, string by, CancellationToken ct);
+
+    /// The same with a file the mail carries (the management presentation); null = none.
+    Task QueueMailAsync(long reportId, string? periodKey, IReadOnlyList<string> to, string subject, string html, string by, MailAttachment? attachment, CancellationToken ct) =>
+        QueueMailAsync(reportId, periodKey, to, subject, html, by, ct);
 }
 
 public sealed class SqlMgmtReportStore(ISqlExecutor sql) : IMgmtReportStore
@@ -378,10 +389,26 @@ SELECT @Id AS ReportId;
 INSERT cfg.ReportMail (ReportId, PeriodKey, ToList, Subject, BodyHtml, QueuedBy) VALUES (@ReportId, @PeriodKey, @ToList, @Subject, @BodyHtml, @By);
 SELECT N'Saved' AS Outcome;
 """;
+    /// The same with the attachment (the management presentation). The columns come with the settings schema
+    /// (sql\si-pro-settings.sql); a database that does not carry them yet queues the mail without the file -- the mail says
+    /// where to download it either way.
+    public const string QueueWithAttachmentSql = """
+IF COL_LENGTH(N'cfg.ReportMail', N'AttachmentBytes') IS NOT NULL
+    EXEC sp_executesql N'INSERT cfg.ReportMail (ReportId, PeriodKey, ToList, Subject, BodyHtml, QueuedBy, AttachmentName, AttachmentBytes) VALUES (@ReportId, @PeriodKey, @ToList, @Subject, @BodyHtml, @By, @AttachmentName, @AttachmentBytes);',
+        N'@ReportId bigint, @PeriodKey nvarchar(16), @ToList nvarchar(2000), @Subject nvarchar(400), @BodyHtml nvarchar(max), @By nvarchar(256), @AttachmentName nvarchar(200), @AttachmentBytes varbinary(max)',
+        @ReportId, @PeriodKey, @ToList, @Subject, @BodyHtml, @By, @AttachmentName, @AttachmentBytes;
+ELSE
+    INSERT cfg.ReportMail (ReportId, PeriodKey, ToList, Subject, BodyHtml, QueuedBy) VALUES (@ReportId, @PeriodKey, @ToList, @Subject, @BodyHtml, @By);
+SELECT N'Saved' AS Outcome;
+""";
 
     private static string Cut(string s, int n) => s.Length > n ? s[..n] : s;
     public static string SectionsText(MgmtReport r) => string.Join(",", new[] { r.Kpi ? "kpi" : null, r.Domains ? "domains" : null, r.Timeline ? "timeline" : null }.Where(x => x is not null)
-        .Concat(r.KeyBlocks is null ? Array.Empty<string>() : r.KeyBlocks.Count == 0 ? new[] { "kf:none" } : r.KeyBlocks.Select(b => "kf:" + b).ToArray()));
+        .Concat(r.KeyBlocks is null ? Array.Empty<string>() : r.KeyBlocks.Count == 0 ? new[] { "kf:none" } : r.KeyBlocks.Select(b => "kf:" + b).ToArray())
+        .Concat(r.Presentation ? Array.Empty<string>() : new[] { PresentationOff }));
+
+    /// The Sections token of a report that does NOT attach the management presentation (no token = attached, the default).
+    public const string PresentationOff = "pptx:off";
 
     /// The key figures blocks of a stored Sections text (no kf: token = every block; kf:none = none).
     public static IReadOnlyList<string>? KeyBlocksOf(IReadOnlyList<string> sections)
@@ -399,7 +426,7 @@ SELECT N'Saved' AS Outcome;
             return new MgmtReport(r.Long("ReportId") ?? 0, r.Str("Name") ?? "", r.Str("Grain") ?? RiskExecGrain.Detailed, s.Contains("kpi"), s.Contains("domains"), s.Contains("timeline"),
                 (r.Str("Recipients") ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries), r.Str("Cadence") ?? MgmtReport.Monthly,
                 (int)(r.Long("Day") ?? 1), r.Str("TimeUtc") ?? "07:00", r.TryGetValue("Enabled", out var e) && e is true or 1 or 1L,
-                r.Str("LastPeriodKey"), r.Date("LastSentAt"), DateTime.SpecifyKind(r.Date("CreatedAt") ?? DateTime.UtcNow, DateTimeKind.Utc)) { KeyBlocks = KeyBlocksOf(s) };
+                r.Str("LastPeriodKey"), r.Date("LastSentAt"), DateTime.SpecifyKind(r.Date("CreatedAt") ?? DateTime.UtcNow, DateTimeKind.Utc)) { KeyBlocks = KeyBlocksOf(s), Presentation = !s.Contains(PresentationOff) };
         }).ToList();
 
     public async Task<long> SaveAsync(MgmtReport r, string by, CancellationToken ct)
@@ -419,10 +446,19 @@ SELECT N'Saved' AS Outcome;
         (await sql.QueryAsync(ClaimSql, new Dictionary<string, object?> { ["Id"] = id, ["Key"] = periodKey }, ct)).FirstOrDefault()?.Long("N") == 1;
 
     public Task QueueMailAsync(long reportId, string? periodKey, IReadOnlyList<string> to, string subject, string html, string by, CancellationToken ct) =>
-        sql.QueryAsync(QueueSql, new Dictionary<string, object?>
+        QueueMailAsync(reportId, periodKey, to, subject, html, by, null, ct);
+
+    public Task QueueMailAsync(long reportId, string? periodKey, IReadOnlyList<string> to, string subject, string html, string by, MailAttachment? attachment, CancellationToken ct)
+    {
+        var p = new Dictionary<string, object?>
         {
             ["ReportId"] = reportId, ["PeriodKey"] = periodKey, ["ToList"] = Cut(string.Join(";", to), 2000), ["Subject"] = Cut(subject, 400), ["BodyHtml"] = SI.Management.Core.Mail.MailLayout.Normalize(html), ["By"] = Cut(by, 256),
-        }, ct);
+        };
+        if (attachment is null) return sql.QueryAsync(QueueSql, p, ct);
+        p["AttachmentName"] = Cut(attachment.Name, 200);
+        p["AttachmentBytes"] = attachment.Bytes;
+        return sql.QueryAsync(QueueWithAttachmentSql, p, ct);
+    }
 }
 
 /// <summary>Composes a report from the live data and hands it to the outbox (then wakes the mail job, best effort).</summary>
@@ -482,9 +518,13 @@ public sealed class MgmtReportSender(IMgmtReportStore store, IRiskExecViews view
         // MAIL-2: each recipient's notifications (switched off = left out) and audience (one mail per audience, its button)
         var groups = (await notify.PrefsAsync(ct)).Route(r.Recipients, SI.Management.Web.Notify.NotifyCatalog.MgmtSummaryId(r.Id));
         var baseUrl = (await web.ReadAsync(ct)).PublicBaseUrl;
+        // owner 2026-10-29: the Monthly management pack (PowerPoint) goes with the mail -- built once, the same file for every
+        // recipient; the mail also says where to download it (a mail system that drops a large file still has the link)
+        var pack = r.Presentation ? await PresentationAsync(ct) : null;
+        var packLine = pack is null ? "" : PresentationLine(baseUrl);
         foreach (var g in groups)
             await store.QueueMailAsync(r.Id, periodKey, g.To, c.Subject,
-                MgmtSummaryComposer.WithButton(c.Html, SI.Management.Web.Notify.MailBrand.AudienceButton(baseUrl, g.Audience), SI.Management.Web.Notify.MailBrand.Link(baseUrl, "/")), by, ct);
+                MgmtSummaryComposer.WithButton(c.Html, SI.Management.Web.Notify.MailBrand.AudienceButton(baseUrl, g.Audience) + packLine, SI.Management.Web.Notify.MailBrand.Link(baseUrl, "/")), by, pack, ct);
         // a person's "send now" is written by the page's audit filter (one row per request); the scheduler writes its own
         if (actorSource == "job") await audit.WriteAsync(new SI.Management.Web.Audit.AuditRecord("report.summary.send", by, actorSource, "ok")
         {
@@ -497,6 +537,37 @@ public sealed class MgmtReportSender(IMgmtReportStore store, IRiskExecViews view
         }
         return true;
     }
+
+    /// <summary>
+    /// The Monthly management pack for the mail (Presentation\MgmtDeck.cs, the same generator as the download): the published
+    /// run, compared with the run before, for management, en-US numbers as the mail itself. Pro only -- without a Pro licence,
+    /// or when it cannot be built, the mail goes without it (never a failed mail; the reason is in the log).
+    /// </summary>
+    public async Task<MailAttachment?> PresentationAsync(CancellationToken ct)
+    {
+        if (services is null) return null;
+        try
+        {
+            if (services.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) is not SI.Management.Web.Licensing.IProLicence lic || !await lic.IsProAsync(ct)) return null;
+            var sections = SI.Management.Web.Presentation.MgmtDeck.PackSections;
+            var inputs = await SI.Management.Web.Presentation.MgmtDeck.LoadAsync(services, null, null, sections, true, ct);
+            if (!inputs.Figures.Ready) return null;
+            var o = new SI.Management.Web.Presentation.MgmtDeck.Options(SI.Management.Web.Presentation.MgmtDeck.PackTitle, SI.Management.Web.Presentation.MgmtDeck.Management, sections);
+            var deck = SI.Management.Web.Presentation.MgmtDeck.WithCulture("en-US", () => SI.Management.Web.Presentation.MgmtDeck.Build(o, inputs, SI.Management.Web.Presentation.MgmtDeck.Brand()));
+            return new MailAttachment(deck.FileName, deck.Bytes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "management summary: the management presentation could not be built -- the mail goes without it");
+            return null;
+        }
+    }
+
+    /// The line under the button: the presentation is attached, and where to download it (when the web app's address is set).
+    public static string PresentationLine(string? baseUrl) =>
+        SI.Management.Web.Notify.MailBrand.Link(baseUrl, "/Management/Presentation?handler=Pack") is { } href
+            ? SI.Management.Web.Notify.MailBrand.Para($"<span data-mail-pack>The monthly management pack is attached as a PowerPoint presentation. If it is missing, <a href=\"{WebUtility.HtmlEncode(href)}\">download it from SecurityInsight</a>.</span>")
+            : SI.Management.Web.Notify.MailBrand.Para($"<span data-mail-pack>The monthly management pack is attached as a PowerPoint presentation. If it is missing, download it from SecurityInsight: {WebUtility.HtmlEncode(SI.Management.Web.Navigation.NavModel.PathOf("/Management/Presentation"))}.</span>");
 
     /// One scheduler pass: every due report, once. Returns how many were queued.
     public async Task<int> RunDueAsync(CancellationToken ct)

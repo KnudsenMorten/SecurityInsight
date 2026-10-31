@@ -6,6 +6,12 @@
 }
 <h1>Executive report</h1>
 <partial name="_ExportPdf" model="@("Executive report")" />
+@{ var edition = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(HttpContext.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, HttpContext.RequestAborted); }
+@if (edition.Pro && f.Ready)
+{
+    @* the Monthly management pack as a PowerPoint (Pro): the same figures, one click; Presentation makes your own *@
+    <p class="noprint" data-pres-pack-report><a class="button secondary" href="/Management/Presentation?handler=Pack@(Model.RunQuery.Length > 0 ? "&" + Model.RunQuery.TrimEnd('&') : "")" download>Download as PowerPoint</a> <a href="/Management/Presentation">Make your own presentation</a></p>
+}
 <p class="scope-line muted" data-scope>@if (f.Current is { } cur) { <text>What you're looking at: the collection of </text><time data-utc datetime="@cur.CollectionTime.ToString("o")">@Fmt.When(cur.CollectionTime)</time><text>; open findings (exempted ones left out); active assets (not seen for more than 30 days are counted under Coverage); accepted lifecycle: </text>@f.Grace<text> (per your settings); change since </text>@(f.Since ?? "the last report (none yet)")<text>.</text> } else { @f.Missing }</p>
 @if (f.Error is not null) { <div class="notice error" role="alert">@f.Error</div> }
 <partial name="_RunPicker" model="Model.Picker()" />

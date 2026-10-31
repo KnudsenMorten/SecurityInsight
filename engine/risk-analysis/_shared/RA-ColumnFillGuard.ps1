@@ -322,7 +322,10 @@ function Invoke-RAColumnFillGuard {
         Write-Info ("[ColumnFillGuard] {0} report(s) compared against the previous run -- no column lost its content." -f $Snapshots.Count)
     }
     else {
-        Write-Warn2 ("[ColumnFillGuard] {0} column(s) carry LESS data than the previous run while their rows remained. Every row is present and the columns are blank, which a row count cannot see. Investigate before trusting this export." -f $findings.Count)
+        # #967: say only what was measured -- the SHARE of rows with a value. The guard keeps counts, not rows: rows that held
+        # the value and left the report read exactly like values lost (live 2026-10-29: 57 of 58 owner rows had left the
+        # source, the guard said "every row is present and the columns are blank").
+        Write-Warn2 ("[ColumnFillGuard] {0} column(s) have a value on a smaller share of the report's rows than in the previous run. The guard compares shares, not the same rows: rows that had the value and left the report count the same as values lost -- compare the findings by key before trusting this export." -f $findings.Count)
         foreach ($f in $findings) {
             if ($f.Kind -eq 'COLUMN-VANISHED') {
                 Write-Warn2 ("  COLUMN-VANISHED {0}.{1}: was {2}/{3} rows ({4}%), column is NO LONGER IN THE SCHEMA. The column was dropped between the query and the export." -f $f.Report, $f.Column, $f.PreviousFilled, $f.PreviousRows, $f.PreviousFillPct)

@@ -74,6 +74,13 @@
     <EmbeddedResource Include="Performance\size-prices.json" LogicalName="Performance/size-prices.json" />
   </ItemGroup>
 
+  <!-- The management presentation's logo (Presentation\MgmtDeck.cs): Invardia's Pro horizontal colour logo, the brand pack's
+       PNG and SVG unchanged, embedded so a deck never reads the disk. The files stay in wwwroot\brand as well. -->
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\brand\invardia-securityinsight-pro-horizontal-colour-2048w.png" LogicalName="Presentation/logo.png" />
+    <EmbeddedResource Include="wwwroot\brand\invardia-securityinsight-pro-horizontal-colour.svg" LogicalName="Presentation/logo.svg" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="SI.Management.Web.Tests" />
   </ItemGroup>

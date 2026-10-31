@@ -1063,7 +1063,10 @@ function Invoke-SIDataFindingStateRanged {
     }
     $o = [ordered]@{}; foreach ($k in $sum.Keys) { $o[$k] = [int]$sum[$k] }
     $o['Skipped'] = $skipped; $o['Note'] = $note
-    , @([pscustomobject]$o)
+    # #960 THE ROW ITSELF, never wrapped: the caller collects it with @(...) and reads 'Skipped' with Get-SIItemValueOrNull --
+    # ', @(row)' made its first item an array, every count was lost and the run said "nothing was closed" after the closes
+    # were written (live 2026-10-30, every 3.0.9 data sync)
+    [pscustomobject]$o
 }
 
 function Invoke-SIDataFindingModel {

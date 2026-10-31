@@ -89,7 +89,9 @@ public static class ServiceNowStagingStatus
             "Add every column of the table below with exactly its column name, type and maximum length (the label is free; the name is what SecurityInsight sends). Save.",
             $"Add a REST Insert Multiple record for {t} with Column mappings = Column name (SecurityInsight writes this table one row at a time, which maps by name; the record keeps it the same if that ever changes).",
             "Give both data staging tables the column u_si_batch_id (string, 100).",
-            "Give the integration user SecurityInsight signs in with the roles import_set_loader and import_transformer (it writes this table like the data staging tables).",
+            // #962: the whole role list, the same as "For your ServiceNow team" -- two roles here once left a customer at 403
+            "Give the integration user SecurityInsight signs in with every role it needs: import_set_loader and import_transformer (to write this table like the data staging tables), personalize_dictionary (to read the table and its columns -- without it nothing is sent), import_admin (to read the column mapping and the import result), and, for a table of a scoped application, the application's role that gives read and create on it.",
+            "On the table's Application Access tab: Accessible from = All application scopes; Can read and Can create on; Allow access to this table via web services on.",
             "No transform map is needed on this table. Your importer reads it: " + ImportRule,
             $"Tell your SecurityInsight admin the table name. If it is not {DefaultTable}, they set {Setting} to it.",
         ];

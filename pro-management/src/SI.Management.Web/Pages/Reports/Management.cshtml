@@ -28,7 +28,7 @@ else
                             <tr data-mgmt-report="@r.Id">
                                 <td>@r.Name @if (!r.Enabled) { <span class="badge warn">paused</span> }</td>
                                 <td>@r.Grain report</td>
-                                <td>@string.Join(", ", new[] { r.Kpi ? "Risk Analysis KPI" : null, r.Domains ? "risk by domain" : null, r.Timeline ? "timeline" : null }.Where(x => x is not null))</td>
+                                <td>@string.Join(", ", new[] { r.Kpi ? "Risk Analysis KPI" : null, r.Domains ? "risk by domain" : null, r.Timeline ? "timeline" : null, r.Presentation ? "PowerPoint attached" : null }.Where(x => x is not null))</td>
                                 <td>@MgmtSchedule.Describe(r)</td>
                                 <td data-utc>@(r.Enabled ? Fmt.When(MgmtSchedule.NextSlot(r, Model.Now)) : "–")</td>
                                 <td data-utc>@(r.LastSentAt is { } s ? Fmt.When(s) + " (" + r.LastPeriodKey + ")" : "never")</td>
@@ -88,6 +88,8 @@ else
                     <input id="m-time" name="TimeUtc" value="@Model.TimeUtc" maxlength="5" />
                     <p class="hint">Each period is sent once. If the app was not running at the time, the report is sent once when it is back -- never once per missed period.</p>
                 </div>
+                <label><input type="checkbox" name="Presentation" value="true" checked="@Model.Presentation" data-mgmt-presentation /> Attach the monthly management pack as a PowerPoint presentation</label>
+                <input type="hidden" name="Presentation" value="false" />
                 <label><input type="checkbox" name="Enabled" value="true" checked="@Model.Enabled" /> Send on the schedule</label>
                 <div class="actions"><button type="submit" data-mgmt-save>Save</button> <a href="/Reports/Management">Cancel</a></div>
             </form>

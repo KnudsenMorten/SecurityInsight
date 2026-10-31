@@ -1,3 +1,34 @@
+## v3.0.10 — the data sync's counts, the ServiceNow hand-off, management presentations
+
+### The data sync
+
+- The finding lifecycle's counts reach the run again: what was new, seen again, reopened and closed is in the log, the
+  run record and the mail, and the one-time clean-up of stale open findings runs. Before, a data sync on 3.0.9 said that
+  nothing was closed after its closes were written.
+
+### ServiceNow
+
+- The CI hand-off to ServiceNow sends its rows again: it failed with a script error when the engine was started by the
+  container and sent nothing.
+- The check before every sync no longer needs ServiceNow's own table list. When the instance's access rules refuse it,
+  SecurityInsight reads the staging table itself with the same user and sends; only the column check that needs the
+  dictionary is then left out, said as a warning.
+- A refusal says what ServiceNow said. A role ServiceNow names is said as its word; when it names none, the message says
+  which access SecurityInsight usually needs there, never as if ServiceNow had said it.
+- "For your ServiceNow team" lists the complete set: the user SecurityInsight signs in with, every role it needs, the
+  access settings of each staging table, and every call SecurityInsight makes to the instance.
+
+### Runs
+
+- A pipeline step whose container stops before SecurityInsight starts in it is started again once. Only the step's own
+  run log counts as proof that it ran, not another job's log in the same minute.
+- The column fill check says what it measured: a value on a smaller share of the report's rows. Rows that had the value
+  and left the report are no longer reported as blank columns.
+
+### Management presentations
+
+- A wizard builds a PowerPoint presentation from the Executive report, and the monthly management pack is attached to
+  the management summary mail.
 ## v3.0.9 — stability for large installs, the Risk Score in columns, a one-line install
 
 ### Updates reach every install
@@ -41,7 +72,7 @@
 ### Install
 
 - The install takes the common answers as parameters. The quickest install is one line:
-  `./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>`. The install page and the
+  `./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'`. The install page and the
   README show five samples.
 
 ### Checks and mails

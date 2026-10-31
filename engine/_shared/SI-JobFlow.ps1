@@ -1171,8 +1171,17 @@ function New-SIJobFlowStartEvidence {
             if (($this.ListBlobs -or $this.Account) -and $StartedUtc -and $EndedUtc) {
                 try {
                     $names = if ($this.ListBlobs) { @(& $this.ListBlobs 'run-logs/') } else { @(Get-SIBlobList -Account $this.Account -Container 'sistaging' -Prefix 'run-logs/' | ForEach-Object { [string]$_.Name }) }
-                    # no run log at all = this install keeps none (transcripts off): the signal does not exist
-                    $tr = if (@($names).Count) { Test-SIJobFlowTranscriptInWindow -Names $names -StartedUtc ([datetime]$StartedUtc) -EndedUtc ([datetime]$EndedUtc) } else { $null }
+                    # #966 THIS STEP'S OWN run log (its engine, or its key; a producer / worker of it counts), never any
+                    # engine's: in a pipeline the step before and the half-hourly heartbeat publish theirs inside the window,
+                    # so "any transcript" answered "it ran" and a container that died before the engine started was never
+                    # started again (live 2026-10-30: the verification step, pod created and BackoffLimitExceeded 65 s later,
+                    # no line of its own -- the close-loop mail's run log 4 s before it decided "it ran", the run failed).
+                    # No run log at all = this install keeps none; no run log of THIS engine ever = its logs are named
+                    # otherwise: either way the signal does not exist ($null -- never retried on it).
+                    $key = Get-SIJobFlowKey ([string]$Job)
+                    $teng = if ($this.Engines.ContainsKey($key)) { $this.Engines[$key] } elseif ($this.Engines.ContainsKey([string]$Job)) { $this.Engines[[string]$Job] } else { $key }
+                    $ever = if (@($names).Count) { Select-SIJobFlowStepLog -Names $names -Engine $teng -Key $key -StartedUtc ([datetime]::new(2000, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)) -EndedUtc ([datetime]::new(2100, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)) } else { '' }
+                    $tr = if ($ever) { [bool](Select-SIJobFlowStepLog -Names $names -Engine $teng -Key $key -StartedUtc ([datetime]$StartedUtc) -EndedUtc ([datetime]$EndedUtc)) } else { $null }
                 } catch { $tr = $null }
             }
             [pscustomobject]@{ HasStartRecord = $row; HasTranscript = $tr; EndReason = $endReason }

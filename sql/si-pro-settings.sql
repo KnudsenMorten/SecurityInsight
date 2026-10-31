@@ -2079,6 +2079,15 @@ CREATE TABLE cfg.ReportMail (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ReportMail_Pending' AND object_id = OBJECT_ID('cfg.ReportMail'))
 CREATE INDEX IX_ReportMail_Pending ON cfg.ReportMail (SentAt, QueuedAt);
 
+-- The management presentation (PowerPoint) a management summary mail carries (owner 2026-10-29: the Monthly management pack
+-- is attached to every management summary mail). The web app writes it with the mail (MgmtReports.cs QueueWithAttachmentSql);
+-- the mail job sends it as the mail's attachment (engine\asset-cmdb\_shared\SI-ExemptionMail.ps1). Additive: nullable, no default.
+IF COL_LENGTH('cfg.ReportMail', 'AttachmentName') IS NULL
+ALTER TABLE cfg.ReportMail ADD AttachmentName NVARCHAR(200) NULL;
+
+IF COL_LENGTH('cfg.ReportMail', 'AttachmentBytes') IS NULL
+ALTER TABLE cfg.ReportMail ADD AttachmentBytes VARBINARY(MAX) NULL;
+
 -- THE WEB APP'S SIGN-IN KEY RING (#345): the ASP.NET data-protection keys that encrypt the sign-in cookie and every form's
 -- antiforgery token, shared by every revision and replica of the web app (Auth\SqlKeyRing.cs). On the container's disk a
 -- new revision had new keys, so a deploy signed every open page out and refused its next save. One row per key, written

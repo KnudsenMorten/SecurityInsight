@@ -1,0 +1,99 @@
+@page
+@model SI.Management.Web.Pages.Management.PresentationModel
+@using SI.Management.Web.Presentation
+@{
+    ViewData["Title"] = "Presentation";
+    var f = Model.Figures;
+}
+<h1>Management presentation</h1>
+<p class="lede">Make a PowerPoint presentation of your key figures: choose the run, what to include, the title and who it is for, then download it. The charts are real PowerPoint charts you can edit, and each slide explains itself in its speaker notes.</p>
+
+<section class="card" aria-labelledby="h-pack" data-pres-pack>
+    <h2 id="h-pack">Monthly management pack</h2>
+    <p>The key figures of the Executive report as a ready presentation: the headline figures, the Protection Score, patching, exposure, coverage, identity, cloud, what to fix first and the trend.</p>
+    <p><a class="button" href="/Management/Presentation?handler=Pack@(Model.RunQuery)" data-pres-pack-download download>Download the monthly management pack</a></p>
+    <p class="hint">The same pack is attached to the management summary mail: <nav-ref page="/Reports/Index" then="Management summary" />.</p>
+</section>
+
+<form method="post" class="card pres-wizard" data-pres-form aria-labelledby="h-wizard">
+    <h2 id="h-wizard">Make your own</h2>
+    <input type="hidden" name="C" value="@Model.C" />
+    <input type="hidden" name="Vs" value="@Model.Vs" />
+
+    <fieldset data-pres-step="run">
+        <legend>1. The run</legend>
+        @if (f.Current is { } cur)
+        {
+            <p data-pres-run>The run of <time data-utc datetime="@cur.CollectionTime.ToString("o")">@Fmt.When(cur.CollectionTime)</time>@if (f.Previous is { } prev) { <text>, compared with the run of </text><time data-utc datetime="@prev.CollectionTime.ToString("o")">@Fmt.When(prev.CollectionTime)</time> }.</p>
+            <p class="hint">Choose another run, or another run to compare with, with the choice below the form.</p>
+        }
+        else
+        {
+            <p class="hint" data-pres-missing>@f.Missing</p>
+        }
+        @if (f.Error is not null) { <div class="notice error" role="alert">@f.Error</div> }
+    </fieldset>
+
+    <fieldset data-pres-step="sections">
+        <legend>2. What to include</legend>
+        <p class="hint">The headline figures and a slide about the figures are always included.</p>
+        <div class="seg-row noprint" data-pres-presets hidden>
+            <button type="button" class="small secondary" data-pres-preset="pack" data-keys="@string.Join(",", MgmtDeck.PackSections)">Monthly management pack</button>
+            <button type="button" class="small secondary" data-pres-preset="all" data-keys="@string.Join(",", MgmtDeck.Sections.Select(s => s.Key))">Everything</button>
+            <button type="button" class="small secondary" data-pres-preset="none" data-keys="">Clear</button>
+        </div>
+        @foreach (var (key, label) in MgmtDeck.Sections)
+        {
+            <label><input type="checkbox" name="Sections" value="@key" checked="@Model.Sections.Contains(key)" data-pres-section="@key" /> @label</label>
+        }
+        <div>
+            <label for="p-view">Protection Score tables</label>
+            <select id="p-view" name="View" data-pres-remember="view">
+                @foreach (var (code, label) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews)
+                {
+                    <option value="@code" selected="@(code == Model.View)">@label</option>
+                }
+            </select>
+        </div>
+    </fieldset>
+
+    <fieldset data-pres-step="look">
+        <legend>3. Title, audience and number format</legend>
+        <div><label for="p-title">Title</label><input id="p-title" name="Title" value="@Model.Title" maxlength="120" required /></div>
+        <div>
+            <label for="p-aud">Audience</label>
+            <select id="p-aud" name="Audience" data-pres-remember="audience">
+                @foreach (var (code, label) in MgmtDeck.Audiences)
+                {
+                    <option value="@code" selected="@(code == Model.Audience)">@label</option>
+                }
+            </select>
+            <p class="hint">Board: number cards and charts. Management: also the top-10 tables. IT management: also the patching groups.</p>
+        </div>
+        <div>
+            <label for="p-fmt">Number and date format</label>
+            <select id="p-fmt" name="Format" data-pres-remember="format">
+                @foreach (var c in DisplayCulture.Supported)
+                {
+                    var ci = System.Globalization.CultureInfo.GetCultureInfo(c);
+                    <option value="@c" selected="@(string.Equals(c, Model.Format, StringComparison.OrdinalIgnoreCase))">@ci.EnglishName (@(1234567.8.ToString("N1", ci)))</option>
+                }
+            </select>
+            <p class="hint">The slide text is in English.</p>
+        </div>
+        <label><input type="checkbox" name="AiNotes" value="true" checked="@Model.AiNotes" data-pres-remember="ai" /> Add the AI-written analysis of the last Risk Analysis run to the speaker notes (when it is turned on)</label>
+        <input type="hidden" name="AiNotes" value="false" />
+    </fieldset>
+
+    <fieldset data-pres-step="download">
+        <legend>4. Download</legend>
+        <button type="submit" data-pres-generate>Download the presentation</button>
+        <p class="hint">Made from the stored figures of the run, so it takes a few seconds even for a large estate.</p>
+    </fieldset>
+</form>
+
+<partial name="_RunPicker" model="Model.Picker()" />
+
+@section Scripts {
+    <script src="~/js/presentation.js" asp-append-version="true"></script>
+}

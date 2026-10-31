@@ -330,7 +330,7 @@ public static class ServiceNowChecklist
         bool? rolesOk = f is null || latest is null ? (bool?)null
             : f.ConnectionKind == "role" || f.Role.Length > 0 ? false
             : f.ConnectionOk == true && f.ColumnsRead && f.Mapping is "name" or "label" ? true : null;
-        items.Add(new("roles", rolesOk, "The key's user has the ServiceNow roles: " + roles + ".",
+        items.Add(new("roles", rolesOk, "The ServiceNow user SecurityInsight signs in with (or the API key's user) has the roles: " + roles + ".",
             rolesOk == false ? "The last check was refused: " + (f!.Role.Length > 0 ? "missing " + f.Role : f.ConnectionText) : rolesOk is null ? "Verify tells whether the reads are allowed; the send role shows on the first run." : null));
         return items;
     }

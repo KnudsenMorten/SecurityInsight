@@ -26,7 +26,8 @@ step's log, and (for a batch) in `u_si_reason` of the staging status table. Each
 | `The instance did not answer in time.` | Timeout | Tried again on the next sync |
 | `The instance could not be reached:` | Network | Allow https from Azure; check an IP allow list |
 | `ServiceNow refused the sign-in (401)` | Wrong or expired key or password, or not allowed for the REST API; a password stored as an API key | Set the credential again, the right way |
-| `ServiceNow refused the request (403): the key's user is missing a role` | A role is missing (named in the message) | Grant the role (see [Roles of the integration user](servicenow-setup#roles-of-the-integration-user)) |
+| `ServiceNow refused the request (403): it says the user needs the role ...` | ServiceNow named the missing role | Grant that role (see [Roles of the integration user](servicenow-setup#roles-of-the-integration-user)) |
+| `ServiceNow refused the request (403): this user may not do it` | ServiceNow named no role: an access rule (ACL) of the instance refuses the table named after "ServiceNow said" | Grant the role SecurityInsight usually needs (named in the message) or an ACL that gives the same access. When it is `sys_db_object` / `sys_dictionary`, SecurityInsight checks the staging table itself and sends anyway; only the column check is left out (a warning) |
 | `the integration user was refused` | 401 or 403 on a call | Check the credential and the table's access rules |
 | `The ServiceNow connector is part of SecurityInsight Pro` / `the ServiceNow hand-off is part of SecurityInsight Pro` | The license does not include it | Nothing is sent |
 

@@ -56,35 +56,35 @@ and nothing is created until they pass.
 resource group in West Europe, a new Log Analytics workspace, the web app, and the reports mailed to you).
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>
+./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
 ```
 
 **2. Your own region, resource group and report recipients**, when you have naming rules or the reports go to a team:
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> `
+./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -Location northeurope -ResourceGroup rg-securityinsight -MailTo secops@contoso.com
 ```
 
 **3. Read every subscription**, in a management group or in the whole tenant, not only the one SecurityInsight runs in:
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> `
-    -CollectionScope managementGroup -ManagementGroupId <management group id>      # or -CollectionScope tenantRoot
+./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
+    -CollectionScope managementGroup -ManagementGroupId '<management group id>'      # or -CollectionScope tenantRoot
 ```
 
 **4. Private network only**: no public endpoints, the web app reachable from your network only. You get the hand-off
 list for your network team at the end.
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> `
+./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -PrivateNetwork -VnetAddressPrefix 10.212.24.0/24
 ```
 
 **5. Check first, or continue an install that stopped:**
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> -PreflightOnly   # checks only, changes nothing
+./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -PreflightOnly   # checks only, changes nothing
 ./setup/Install-SecurityInsight.ps1 -Resume                                                                  # continues with the same answers
 ```
 
@@ -98,7 +98,7 @@ the one-line command for the Pro edition, with the same choices as the samples a
 
 | File | Purpose | How to run it | Produces |
 |---|---|---|---|
-| `setup\Install-SecurityInsight.ps1` | Guided install as Container Apps jobs. Checks your sign-in, rights, resource providers and names first and changes nothing until they pass; then creates every resource step by step and reports each step. A grant it cannot make ends as a warning with the exact command. Without a licence file it installs Community. | In Azure Cloud Shell: `./setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id>` (the samples above), or `-ConfigPath ./config.json` for every setting. `-PreflightOnly` runs only the checks; `-Resume` continues after a stop. | Resource group, workspace, data collection endpoint and rules, storage, Key Vault, managed identity and its grants, the container registry and image, the Container Apps jobs, a first run and a health check |
+| `setup\Install-SecurityInsight.ps1` | Guided install as Container Apps jobs. Checks your sign-in, rights, resource providers and names first and changes nothing until they pass; then creates every resource step by step and reports each step. A grant it cannot make ends as a warning with the exact command. Without a licence file it installs Community. | In Azure Cloud Shell: `./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'` (the samples above), or `-ConfigPath ./config.json` for every setting. `-PreflightOnly` runs only the checks; `-Resume` continues after a stop. | Resource group, workspace, data collection endpoint and rules, storage, Key Vault, managed identity and its grants, the container registry and image, the Container Apps jobs, a first run and a health check |
 | `Setup-SecurityInsight-Unattended.ps1` | A Windows server install without prompts, driven by a JSON file. | `.\Setup-SecurityInsight-Unattended.ps1 -ConfigPath .\setup.json` | Azure resources and `config\SecurityInsight.custom.ps1` |
 | `setup\ConfigWizard\Start-SetupWizard.ps1` | A local setup wizard: serves a page on `localhost` only while the script runs and opens it in your browser. You answer tenant, workspace, mail, CMDB, Azure OpenAI and Shodan questions; it sets up the sign-in, creates the Log Analytics resources and writes your configuration file. The sign-in is a **user-assigned managed identity** by default: created, granted and attached to the VM you name (for Container Apps, the jobs' own identity). A service principal with a certificate or a client secret is there when you choose it; on a server outside Azure, where no managed identity can exist, the wizard says so and offers a certificate first, then a secret. It configures the install and nothing else. | `.\setup\ConfigWizard\Start-SetupWizard.ps1`, stop it with Ctrl+C | Managed identity (or a service principal), workspace, data collection endpoint, storage, configuration file |
 | `Bootstrap-ContainerAppJob.ps1` | Creates or updates the Container Apps hosting: registry, image built in your registry, Container Apps environment, one job per engine with its schedule, and the pipeline job. The jobs sign in as a user-assigned managed identity by default; a service principal by client secret (`-UseClientSecret`) or by certificate (`-CertificateKeyVaultName` with `-CertificateSecretName`) when you choose it. An install whose configuration already carries a client secret keeps it until you run it with `-UseManagedIdentity`. | `.\Bootstrap-ContainerAppJob.ps1 -ResourceGroupName <rg> -Location <region> -UseManagedIdentity -GrantIdentityRoles` | Container Apps jobs (endpoint, identity, azure, publicip, privilege tier classifier, Risk Analysis Summary and Detailed, trend) |

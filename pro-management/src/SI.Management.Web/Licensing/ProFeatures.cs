@@ -23,6 +23,8 @@ public static class ProFeatures
 {
     public const string Governance = "governance", CmdbConnectors = "cmdb-connectors", Alerts = "alerts", Access = "access",
         Audit = "audit", Templates = "templates", Ai = "ai",
+        // the management presentation (PowerPoint): the Community edition keeps the Executive report's PDF print
+        Presentation = "presentation",
         // the licence request to Invardia (Get Started's licence step): no licence to ask about without Pro
         Licence = "licence";
 
@@ -36,6 +38,7 @@ public static class ProFeatures
         [Audit] = "The audit trail",
         [Templates] = "Template releases, conformance and deviations",
         [Ai] = "Ask about your estate (the AI chat)",
+        [Presentation] = "Management presentations (PowerPoint)",
         [Licence] = "The licence request to Invardia",
     };
 
@@ -65,6 +68,7 @@ public static class ProFeatures
         ["/Templates"] = Templates,
         ["/Admin/Deviations"] = Templates,
         ["/Chat"] = Ai,
+        ["/Management/Presentation"] = Presentation,
     };
 
     /// The actions of the shared action bar that are paid: every governance action. Export stays in both versions.

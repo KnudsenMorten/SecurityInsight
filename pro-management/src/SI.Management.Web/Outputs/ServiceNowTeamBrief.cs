@@ -77,6 +77,7 @@ public static class ServiceNowTeamBrief
         var missing = facts.SelectMany(f => f.StatusMissing).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         bool? cols = exists != true ? null : missing.Count > 0 ? false : facts.Any(f => f.StatusExists == true) ? true : null;
         lines.Add(new(S, "status-table-columns", cols, cols == false ? $"{t} still needs: {string.Join(", ", missing)} -- nothing is sent until they are there." : $"{t} has every column of the staging status table."));
+        lines.Add(new(S, "status-table-access", null, TableAccessText(t)));
         var noBatchId = outputs.Where(o => o.Schema.Any(l => string.Equals(l.Column, ServiceNowStagingStatus.BatchIdColumn, StringComparison.OrdinalIgnoreCase) && l.Kind == "missing")).Select(o => o.Table ?? o.Info.Label).ToList();
         bool? batchCol = noBatchId.Count > 0 ? false : outputs.Any(o => o.Schema.Count > 0) ? true : null;
         lines.Add(new(S, "status-batch-id", batchCol, "Both data staging tables have the column u_si_batch_id (string, 100) -- every data row carries its batch." + (noBatchId.Count > 0 ? " Missing in: " + string.Join(", ", noBatchId) + "." : "")));
@@ -91,15 +92,27 @@ public static class ServiceNowTeamBrief
         var facts = outputs.Select(o => o.Latest?.Facts).Where(f => f is not null).Select(f => f!).ToList();
         bool Any(Func<SnowCheckFacts, bool> p) => facts.Any(p);
 
-        // ---- the roles of the integration user, each with what it is for
-        const string R = "Roles of the integration user SecurityInsight signs in with";
-        lines.Add(new(R, "role-send", null, "import_set_loader and import_transformer -- to send rows through the Import Set API (insertMultiple). Shown on the first send."));
+        // ---- #962 WHO signs in: every role below goes on that one user (never a secret, never a secret name)
+        const string U = "The ServiceNow user SecurityInsight signs in with";
+        lines.Add(new(U, "signin-user", null, SignInText(c)));
+        lines.Add(new(U, "signin-active", null, "The user is active, may use web services (REST), and its password does not expire without your SecurityInsight admin being told -- an expired password stops every sync."));
+
+        // ---- the roles of the integration user, each with what it is for. #962 (owner 2026-10-31: "dont make things optional if
+        // it causes si to make warnings"): every role here is needed -- one left out stops the sync or warns on every run
+        const string R = "Roles of the integration user SecurityInsight signs in with (every one is needed)";
+        lines.Add(new(R, "role-send", null, "import_set_loader and import_transformer -- to send rows through the Import Set API (insertMultiple), including the staging status rows. Without them every send is refused (403). Shown on the first send."));
         bool? cols = Any(f => f.ConnectionKind == "role" || f.ColumnsRole.Length > 0) ? false : Any(f => f.ColumnsRead) ? true : null;
-        lines.Add(new(R, "role-columns", cols, "personalize_dictionary -- to read the staging table and its columns, so SecurityInsight checks them before it sends." +
+        lines.Add(new(R, "role-columns", cols, "personalize_dictionary -- to read the staging table and its columns (sys_db_object, sys_dictionary), so SecurityInsight checks them before it sends. Without it nothing is sent." +
             (cols == false ? " Missing today: ServiceNow refuses the read with 403 \"unauthorized to access table: sys_db_object\"." : "")));
         bool? map = Any(f => f.MappingRole.Length > 0) ? false : Any(f => f.Mapping is "name" or "label") ? true : null;
-        lines.Add(new(R, "role-mapping", map, "import_admin (optional) -- to read the REST Insert Multiple column mapping, so SecurityInsight can tell whether it is right." +
-            (map == false ? " Missing today: the mapping cannot be read; without the role it is not checked." : "")));
+        lines.Add(new(R, "role-mapping", map, "import_admin -- to read the REST Insert Multiple column mapping (sys_rest_insert_multiple and its column mappings), so SecurityInsight can tell whether rows are matched by column name. Without it SecurityInsight warns on every check." +
+            (map == false ? " Missing today: the mapping cannot be read." : "")));
+        lines.Add(new(R, "role-import-result", null, "Read on sys_import_set_row (import_admin gives it on a standard instance) -- to read your import's result for each batch. Without it every run warns that the import result cannot be read."));
+        var all = outputs.Select(o => o.Table).Append(statusTable).Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var scoped = all.Where(t => t.StartsWith("x_", StringComparison.OrdinalIgnoreCase)).ToList();
+        lines.Add(new(R, "role-tables", null, scoped.Count > 0
+            ? "The role of your scoped application that its access controls (ACLs) use for read and create on " + string.Join(", ", scoped) + ". These tables belong to a scoped application, so the import roles alone do not open them."
+            : "Read and create on every staging table" + (all.Count > 0 ? " (" + string.Join(", ", all) + ")" : "") + " -- SecurityInsight writes the rows and reads one back after each page and each status row."));
 
         // ---- per staging table
         foreach (var o in outputs)
@@ -117,6 +130,7 @@ public static class ServiceNowTeamBrief
             else lines.Add(new(sec, "table-columns", null, $"{t} has every column SecurityInsight sends, at least as long as the schema says -- checked once the columns can be read."));
             bool? byName = f is null || f.Mapping.Length == 0 || f.Mapping == "unknown" ? null : f.Mapping == "name";
             lines.Add(new(sec, "rest-insert-multiple", byName, $"A REST Insert Multiple record (sys_rest_insert_multiple) for {t} with Column mappings = Column name. By default ServiceNow matches by label, and the rows land empty."));
+            lines.Add(new(sec, "table-access", null, TableAccessText(t)));
             lines.Add(new(sec, "transform", null, $"A transform map from {t} to " + (ServiceNowTeamPack.TargetOf(o.Info.Output)?.Intended ?? "its target") + " -- your own; SecurityInsight does not read it."));
         }
 
@@ -139,8 +153,39 @@ public static class ServiceNowTeamBrief
             _ => "",
         };
         lines.Add(new("Network", "reachable", reach, "The instance is reachable over https from Azure, where SecurityInsight runs -- if your instance allows only listed IP addresses, add SecurityInsight's outbound address (your SecurityInsight admin has it)." + why));
+
+        // ---- #962 every call SecurityInsight makes, with the access it needs: the team can check each one against its ACLs
+        const string K = "Every call SecurityInsight makes to your instance";
+        var ci = outputs.FirstOrDefault(o => o.Info.Output == "servicenow-ci")?.Table?.Trim();
+        var vi = outputs.FirstOrDefault(o => o.Info.Output == "servicenow-vulnerable-item")?.Table?.Trim();
+        var st = string.IsNullOrWhiteSpace(statusTable) ? ServiceNowStagingStatus.DefaultTable : statusTable.Trim();
+        string N(string? t, string fallback) => string.IsNullOrWhiteSpace(t) ? fallback : t;
+        lines.Add(new(K, "call-tables", null, "GET /api/now/table/sys_db_object -- read (personalize_dictionary): does each staging table exist, does it extend Import Set Row."));
+        lines.Add(new(K, "call-columns", null, "GET /api/now/table/sys_dictionary -- read (personalize_dictionary): each staging table's columns, types and lengths."));
+        lines.Add(new(K, "call-mapping", null, "GET /api/now/table/sys_rest_insert_multiple and sys_rest_insert_multiple_column_mapping -- read (import_admin): the column mapping."));
+        lines.Add(new(K, "call-send-ci", null, $"POST /api/now/import/{N(ci, "<CI staging table>")}/insertMultiple -- create (import_set_loader, import_transformer, the tables' role): the CI rows."));
+        lines.Add(new(K, "call-send-vi", null, $"POST /api/now/import/{N(vi, "<vulnerable item staging table>")}/insertMultiple -- create (the same roles): the vulnerable items, when that output is switched on."));
+        lines.Add(new(K, "call-send-status", null, $"POST /api/now/import/{st} -- create (the same roles): the batch's writing row and its end row."));
+        lines.Add(new(K, "call-readback", null, "GET /api/now/table/<each staging table> -- read (the tables' role): one row back after each page, and each staging status row after it is written."));
+        lines.Add(new(K, "call-import-result", null, "GET /api/now/table/sys_import_set_row and /api/now/stats/sys_import_set_row -- read (import_admin): your import's result for each batch."));
         return lines;
     }
+
+    /// #962 PURE. Who signs in, from the connector's secret REFERENCES (their keys only -- never a value, never a name).
+    public static string SignInText(ConnectorRow? c)
+    {
+        var refs = Obj(c?.SecretRefsJson);
+        bool Has(string k) => refs.Any(p => string.Equals(p.Key, k, StringComparison.OrdinalIgnoreCase) && p.Value is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s));
+        if (Has("user") && Has("password"))
+            return "SecurityInsight signs in with a ServiceNow user name and password, which your SecurityInsight admin entered. Give every role below to THIS user.";
+        if (Has("apikey"))
+            return "SecurityInsight signs in with a ServiceNow API key, which your SecurityInsight admin entered. Give every role below to the user the key belongs to.";
+        return "Not chosen yet: your SecurityInsight admin enters either a ServiceNow user name and password or an API key. Every role below goes on that user.";
+    }
+
+    /// #962 PURE. A staging table's access settings in ServiceNow (System Definition > Tables > the table > Application Access).
+    public static string TableAccessText(string table) =>
+        $"{table}: on the table's Application Access tab -- Accessible from = All application scopes; Can read and Can create on; Allow access to this table via web services on. Its access controls (ACLs) give the user's role read and create.";
 
     /// The text the Copy button copies and the download holds: what is still to do first, then what is done. No secret, ever.
     public static string PlainText(ConnectorRow? c, IReadOnlyList<Line> lines, DateTime now, IReadOnlyList<TableDef>? tables = null)

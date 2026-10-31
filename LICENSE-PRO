@@ -41,6 +41,7 @@ pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs.
   /Templates
   /Admin/Deviations
   /Chat
+  /Management/Presentation
 
   Finding actions of the shared action bar: exemption-request, comment, status, task, escalate-vendor, assign-department
 

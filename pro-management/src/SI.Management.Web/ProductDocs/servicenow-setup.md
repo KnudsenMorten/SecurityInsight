@@ -72,15 +72,35 @@ target shares are on [The SecurityInsight data contract](data-out-contract).
 
 ## Roles of the integration user
 
+Every role and setting below goes on the ONE ServiceNow user SecurityInsight signs in as: the user name and password, or
+the user an API key belongs to, that your SecurityInsight admin entered. **Every line is needed**: one left out stops the
+sync or makes SecurityInsight warn on every run.
+
 | Role | What for | Without it |
 |---|---|---|
 | `import_set_loader` and `import_transformer` | Sending rows through the Import Set API (`insertMultiple`), including the staging status rows | The send is refused (403) |
 | `personalize_dictionary` | Reading the staging table (`sys_db_object`) and its columns (`sys_dictionary`) | ServiceNow answers 403 `unauthorized to access table: sys_db_object`. The check before each sync fails, and **nothing is sent** |
-| `import_admin` (optional) | Reading the REST Insert Multiple column mapping | The mapping is not checked; the read-back of the first call still catches empty rows |
-| Read on `sys_import_set_row` | Reading your import's result per batch (the `feedback` row) | A warning in the run log; the import result is not shown |
+| `import_admin` | Reading the REST Insert Multiple column mapping (`sys_rest_insert_multiple`, `sys_rest_insert_multiple_column_mapping`) | A warning on every check: the mapping is not checked |
+| Read on `sys_import_set_row` (`import_admin` gives it on a standard instance) | Reading your import's result per batch | A warning on every run; the import result is not shown |
+| Read and create on the three staging tables -- for a **scoped application**'s tables (`x_<scope>_...`), the application's own role its access controls use | Writing the rows, and reading one row back after each page and each staging status row after it is written | The send or the read-back is refused (403) |
 
-SecurityInsight also reads rows back from the staging tables (`/api/now/table/<staging table>`): one row after the first
-call of each page, and each staging status row after it is written. The user needs read access to the three tables.
+**Each of the three staging tables** (System Definition > Tables > the table > *Application Access*): *Accessible from* =
+All application scopes; *Can read* and *Can create* on; *Allow access to this table via web services* on.
+
+### Every call SecurityInsight makes
+
+| Call | Access | What for |
+|---|---|---|
+| `GET /api/now/table/sys_db_object` | read (`personalize_dictionary`) | Does each staging table exist, does it extend Import Set Row |
+| `GET /api/now/table/sys_dictionary` | read (`personalize_dictionary`) | Each staging table's columns, types and lengths |
+| `GET /api/now/table/sys_rest_insert_multiple`, `.../sys_rest_insert_multiple_column_mapping` | read (`import_admin`) | The column mapping |
+| `POST /api/now/import/<CI staging table>/insertMultiple` | create (import roles + the tables' role) | The CI rows |
+| `POST /api/now/import/<vulnerable item staging table>/insertMultiple` | create (the same) | The vulnerable items, when that output is on |
+| `POST /api/now/import/<staging status table>` | create (the same) | The batch's writing row and end row |
+| `GET /api/now/table/<each staging table>` | read (the tables' role) | The read-back of one row per page and of each status row |
+| `GET /api/now/table/sys_import_set_row`, `/api/now/stats/sys_import_set_row` | read (`import_admin`) | Your import's result per batch |
+
+The section **For your ServiceNow team** on the connector page shows this same list, ticked from the newest checks.
 
 ## The credential
 

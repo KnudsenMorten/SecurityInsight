@@ -86,8 +86,11 @@ columns and example rows (`rest/u_si_staging_status.json`).
    this table one row at a time, which maps by name; the record keeps it that way.
 5. Give both data staging tables the contract's columns, `u_si_batch_id` among them (see
    [The contract's columns](servicenow-columns#the-contracts-columns)).
-6. The integration user needs `import_set_loader` and `import_transformer`, as for the data staging tables, and read
-   access to `sys_import_set_row` for the import result.
+6. The integration user needs every role on [Roles of the integration user](servicenow-setup#roles-of-the-integration-user):
+   `import_set_loader` and `import_transformer`, `personalize_dictionary`, `import_admin` (it also reads
+   `sys_import_set_row` for the import result) and, for a scoped application's table, the application's role that gives
+   read and create on it. On the table's *Application Access* tab: *Accessible from* = All application scopes; *Can read*
+   and *Can create* on; *Allow access to this table via web services* on.
 7. The staging status table needs no transform map: your importer reads it.
 8. Tell your SecurityInsight admin the table name. If it is not `u_si_staging_status`, they set it in SecurityInsight
    (the setting *Data out: ServiceNow staging status table*).

@@ -8381,6 +8381,56 @@ Every setup, install, bootstrap, wizard, validation and grant script runs on pla
 
 **The checks before anything is created.** The install asks Azure first and creates nothing until every check passes: the sign-in (a person in Azure Cloud Shell or the browser, the Invardia Support session, or a sign-in the installation page hands over -- then nothing is signed in again, and an application installing is treated as the service principal it is: its own Azure roles and directory roles are read, Contributor with User Access Administrator is enough, and the people who administer the web app must be named and exist in the directory), the tenant and subscription, the permissions, the resource providers, the names, the region and the quota. The region check reads Azure's own metadata for every resource type SecurityInsight creates -- Log Analytics, the data collection endpoint, storage, Key Vault, the container registry, the Container Apps environment and jobs, the managed identity and, for Pro, the database server, the database and the web app -- together with the storage SKUs' restrictions for the subscription and the regions the subscription may use. A refusal stops the install with one line: which resource, which region, and which regions accept everything (the same geography first); the default region itself is never changed. The quota check makes sure the region has room for one more Container Apps environment and, when the install's environment already exists, that it allows the cores SecurityInsight's own job sizing can use at once. A tenant without Exchange Online is told that mail is not set up and can be set up later in Get Started -- information, not a warning. Long waits (registering resource providers, building the image, creating the database) say what they are waiting for about once a minute, so the progress on the installation page never goes quiet. A sign-in handed over by the installation page cannot be renewed by the install: when it is about to run out, the next step does not start and the install says to restart it with a fresh code -- it resumes where it stopped.
 
+### 11a. The install launcher: two lines (framework INSTALL-1)
+
+An install is two lines. Line 1 downloads ONE small file; line 2 runs it with every setting written out as a parameter:
+
+```powershell
+Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> <every other parameter>
+```
+
+The full installer (`setup/Install-SecurityInsight.ps1`) is not one file: it loads `setup/_shared/*`, builds images from
+the package and needs the whole SecurityInsight package next to it. The downloaded file is therefore a LAUNCHER
+(`setup/Install-SecurityInsight.Launcher.ps1`, PowerShell 7 or Windows PowerShell 5.1, no module, one file):
+
+1. It reads the public release on GitHub, anonymously: `api.github.com/repos/KnudsenMorten/SecurityInsight/releases/latest`,
+   or `releases/tags/v<version>` with `-Version`.
+2. It downloads the release asset `SecurityInsight-v<version>.zip` into a NEW, empty folder in the temp folder
+   (`securityinsight-release-<version>-<random>`).
+3. It checks the download before anything runs: not empty; the size and SHA-256 the release states (when it states them);
+   the zip opens; it holds `setup/Install-SecurityInsight.ps1`; its `VERSION` is the release's version. A failed check
+   stops with the reason in plain words, exit 3, the folder removed, nothing installed.
+4. It unpacks the zip (an entry that would land outside the folder is refused) and runs the full installer FROM there with
+   exactly the parameters it was given (`$PSBoundParameters`, without its own `-Version`, `-KeepDownload`). The
+   installer's exit code is the launcher's.
+5. A successful install removes the folder (`-KeepDownload` keeps it); a stop keeps it, and `-Resume` finds it again from
+   a small note (`~/clouddrive/invardia/securityinsight-launcher.json` in Cloud Shell, else `.invardia/` in the user
+   profile) that holds the folder, its version and channel per install id -- never a parameter, never a secret. When the
+   folder is gone (a new Cloud Shell session), `-Resume` downloads the release again; the install keeps its own progress
+   in its state folder.
+
+**Its parameters are the full installer's**, the same names, types, validations and defaults, plus `-Version` and
+`-KeepDownload`; `SIv3-InstallLauncher` fails when the two sets differ. It prints `Install-SecurityInsight launcher
+<version>` first and each stage in plain words.
+
+**Pro or Community is ONE line of the launcher**: `$script:SIInstallChannel = 'community'` in the repository and the
+GitHub copy; the copy handed to Invardia for `invardia.com/support/si/` says `'pro'` (`release/Build-SISupportScripts.ps1`
+`Set-SIInstallLauncherStamp`, which also writes the release version into `$__siLauncherVersion`). The Pro copy installs
+the SAME public release and, before it runs it, writes `'pro'` into the unpacked installer's one edition line
+(`$siEditionStamp`) -- the same one-line change the full installer's own contract defines; the edition is never a
+parameter. Nothing Pro or licensed is downloaded before a licence exists: the install claims its key, and the updater
+pulls the licensed Pro code through Invardia later.
+
+**The hand-over.** The support-script build writes the pro-stamped launcher into the set handed to Invardia AS
+`Install-SecurityInsight.ps1`, with its `Install-SecurityInsight.doc.json` (the two lines, every parameter, the network
+hosts: GitHub's four first, then the installer's), its SHA256SUMS line and a manifest entry (`kind: launcher`,
+`channel: pro`). It embeds nothing. The full installer's own package doc is not handed over beside it: that page is the
+launcher's. Unsigned, as every SecurityInsight script.
+
+**Hosts a customer must allow** for the launcher: `github.com`, `api.github.com`, `objects.githubusercontent.com`,
+`release-assets.githubusercontent.com`; then the installer's own.
+
 ### 12. Licence bound to your tenant
 
 A Pro licence names the tenant(s) it is for. SecurityInsight checks it against the tenant the run really works in: with a managed identity, the tenant in the identity's own sign-in token (which no setting can change); with a service principal, the tenant it signs in to. A licence copied to another tenant does not unlock Pro there.

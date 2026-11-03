@@ -389,7 +389,7 @@ Describe 'WIRING: the gate runs each suite in its own process, and only ever sto
 }
 
 Describe 'TEST-RUN-1: the selection for a FIX release, and no batch longer than ~3 minutes' {
-    It '-ListOnly -SelectionFile writes the selection (Release-SI reads it); a commit gated at ITS OWN base = no change, only the CORE SET' {
+    It '-ListOnly -SelectionFile writes the selection (Release-SI reads it); a commit gated at ITS OWN base = no change, only the CORE SET (empty since 2026-11-03: nothing runs)' {
         # 2026-10-07 on the test VM: a gate whose base was HEAD failed to bind -Changed ($null instead of an empty list)
         $sf = Join-Path ([IO.Path]::GetTempPath()) ('si-sel-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
         try {
@@ -406,9 +406,12 @@ Describe 'TEST-RUN-1: the selection for a FIX release, and no batch longer than 
             # what the release command's STOP reads: how many suites there are, and the selection's measured seconds
             [int]$sel.AllSuites | Should -Be @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'tests\pester') -Filter '*.Tests.ps1' -File).Count
             [int]$sel.AllSuites | Should -BeGreaterThan @($sel.Suites).Count
-            [double]$sel.MeasuredSeconds | Should -BeGreaterThan 0
-            [double]$sel.LongestSeconds | Should -BeLessOrEqual ([double]$sel.MeasuredSeconds)
-            "$($sel.LongestSuite)" | Should -Match '\.Tests\.ps1$'
+            # owner 2026-11-03: no core set -- no change = nothing to run, nothing measured
+            if (@($sel.Suites).Count) {
+                [double]$sel.MeasuredSeconds | Should -BeGreaterThan 0
+                [double]$sel.LongestSeconds | Should -BeLessOrEqual ([double]$sel.MeasuredSeconds)
+                "$($sel.LongestSuite)" | Should -Match '\.Tests\.ps1$'
+            } else { [double]$sel.MeasuredSeconds | Should -Be 0 }
         } finally { Remove-Item -LiteralPath $sf -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -669,19 +672,9 @@ Describe 'THE QUICK GATE selects the PIM way (owner 2026-10-13: "yes, build it t
         ([IO.File]::ReadAllText($rf) | ConvertFrom-Json).Status | Should -Be 'REFUSED'
         ($out -join "`n") | Should -Not -Match 'QUICK GATE:'
     }
-    It 'the REAL map: a core set of 8-12 suites that exist here, about 2 minutes of measured time, with the tree-wide guards the owner named' {
-        @($script:Map.Core).Count | Should -BeGreaterOrEqual 8
-        @($script:Map.Core).Count | Should -BeLessOrEqual 12
-        foreach ($r in 'SIv3-NoPsModules', 'SIv3-NoPsModulesSetup', 'SI-PublishPayloadSanitization', 'SIv3-SettingInfo', 'SIv3-NoMergeLeftovers', 'SIv3-ManagementRoles', 'SIv3-AuditTrail') { @($script:Map.Core | Where-Object { $_ -eq "$r.Tests.ps1" }).Count | Should -Be 1 -Because $r }
-        $pub = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'solution.publish.json') -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
-        $d = ([IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\pester\suite-durations.json')) | ConvertFrom-Json).pwsh
-        $sum = 0.0
-        foreach ($s in $script:Map.Core) {
-            $here = Test-Path -LiteralPath (Join-Path $script:SIRoot "tests\pester\$s"); $pro = $pub -and (@($pub.excludePaths) -contains "tests/pester/$s")
-            ($here -or $pro) | Should -BeTrue -Because "$s is a core suite"
-            if ($d.$s) { $sum += [double]$d.$s }
-        }
-        $sum | Should -BeLessOrEqual 150
+    It 'the REAL map: NO core set -- a quick gate runs only the suites related to the changed files (owner 2026-11-03, SI / PIM / EPS / Invardia)' {
+        # "lets say we chg and it impacts 10 files, then we only do the tests related to those 10 files"
+        @($script:Map.Core).Count | Should -Be 0
         $script:Map.Quick.BroadOver | Should -Be 3; $script:Map.Quick.NamedMax | Should -Be 3; $script:Map.Quick.HubLoads | Should -Be 20
         # TEST-FAST (owner 2026-11-02): a 5-minute HANG time and a 10-minute TARGET -- no time limit in the map at all
         $script:Map.Quick.HangSeconds | Should -Be 300; $script:Map.Quick.TargetSeconds | Should -Be 600

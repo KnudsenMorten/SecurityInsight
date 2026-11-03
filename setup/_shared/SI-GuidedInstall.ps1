@@ -2119,9 +2119,15 @@ function Get-SIInstallStepTable {
         }
         if ($ctx.Edition -eq 'pro') {
             if (-not $ctx.Pro) {
-                throw (New-SIInstallFailure -Message 'This package is the Community edition, but the install was given a SecurityInsight Pro licence.' -ActionText 'Start the install from your installation page on invardia.com: it downloads the Pro package.')
+                # framework INSTALL-1: the Pro launcher installs the PUBLIC package (no Pro-only files) WITHOUT a licence -- the
+                # whole environment, nothing runs; the Pro parts arrive with the licence through the updater. Only a licence
+                # FILE given to a package without the Pro steps is refused (it cannot be installed here).
+                if (-not $ctx.AwaitLicence) {
+                    throw (New-SIInstallFailure -Message 'This package is the Community edition, but the install was given a SecurityInsight Pro licence.' -ActionText 'Start the install from your installation page on invardia.com: it downloads the Pro package.')
+                }
+            } else {
+                $null = & $ctx.ProSteps['preflight-licence'] $ctx
             }
-            $null = & $ctx.ProSteps['preflight-licence'] $ctx
         }
         New-SIInstallResult -Message ('Tenant {0}, subscription {1}.' -f $tid, $sub)
     }

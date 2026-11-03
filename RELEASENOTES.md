@@ -1,3 +1,10 @@
+## v3.0.22 — The Pro install without a licence starts
+
+### Install
+
+- The Pro install from invardia.com (no licence yet) no longer stops at "Check the tenant and subscription": it deploys the
+  whole environment and waits for the licence, as intended.
+
 ## v3.0.21 — One install command, every setting a parameter
 
 ### Install

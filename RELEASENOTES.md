@@ -1,3 +1,10 @@
+## v3.0.24 — Running the install again in the same window signs you in
+
+### Install
+
+- A second run of the install in the same PowerShell window signs you in again instead of stopping with "You are not
+  signed in".
+
 ## v3.0.23 — The install goes on in a new subscription
 
 ### Install

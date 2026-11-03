@@ -126,6 +126,10 @@ function Connect-SISetupAzure {
     $existing = $st.Connection
     $reuse = (-not $Force) -and ($existing -is [hashtable]) -and (-not $app) -and (-not $Identity) -and
              ((-not $TenantId) -or ([string]$existing.TenantId -eq $TenantId) -or ($existing.Mode -eq 'ManagedIdentity'))
+    # 2026-11-03 (FVF, a second run in one window): a person's connection left by an earlier run whose sign-in this run does
+    # not hold is NEVER reused -- the person is signed in again (else Get-SISetupAzureContext answers $null and the install
+    # stops "not signed in")
+    if ($reuse -and [string]$existing.Mode -eq 'User' -and -not $existing['IsApp'] -and -not (Test-SISetupUserSignedIn)) { $reuse = $false; $st.Connection = $null }
     if (-not $reuse) {
         if ($app -or $Identity) {
             if (Test-SISetupUserSignedIn) { Disconnect-SISetupUser }

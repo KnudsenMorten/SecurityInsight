@@ -1,3 +1,11 @@
+## v3.0.23 — The install goes on in a new subscription
+
+### Install
+
+- In a subscription where Container Apps was never used, the install no longer stops at the quota check (Azure shows
+  "0 of 0" until the install registers Container Apps): the quota is checked when the environment is created.
+- Running the install again in the same PowerShell window signs you in again instead of stopping at the subscription check.
+
 ## v3.0.22 — The Pro install without a licence starts
 
 ### Install
@@ -6240,7 +6248,7 @@ Single hot-path helper used by 6 call sites: `Get/Set-SIAssetTypeProfile`, `Get/
 
 ## v2.2.308 — Sanitize remaining customer-name literals in `INTERNAL/New-SISolutionConfig.ps1` .EXAMPLE block
 
-`SOLUTIONS/SecurityInsight/INTERNAL/New-SISolutionConfig.ps1` `.EXAMPLE` block still had real customer literals (`stfvfsecurityinsight`, `IT-Alerts@fjernvarmefyn.dk`, `oai-fvf-security-insight`) in the doc-comment. Same pattern as v2.2.298 cleanup; never executed (comment-help block only) so no runtime change. Replaced with generic placeholders.
+`SOLUTIONS/SecurityInsight/INTERNAL/New-SISolutionConfig.ps1` `.EXAMPLE` block still had real customer literals (`<customer storage account>`, `IT-Alerts@<customer-domain>`, `<customer OpenAI resource>`) in the doc-comment. Same pattern as v2.2.298 cleanup; never executed (comment-help block only) so no runtime change. Replaced with generic placeholders.
 
 ---
 
@@ -6507,8 +6515,8 @@ Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 Two internal provisioning scripts had a real customer email/domain hardcoded in their `.PARAMETER` / `.EXAMPLE` doc blocks (in-place since v2.2.186):
 
-- `SOLUTIONS/PlatformConfiguration/INTERNAL/Provision/Set-PlatformDefaultsSmtp.ps1` — `svc-automation@fjernvarmefyn.dk` → `svc-automation@<your-domain>` (in `.PARAMETER SmtpFrom` and `.EXAMPLE`)
-- `SOLUTIONS/SecurityInsight/internal/New-SISolutionConfig.ps1` — `IT-Alerts@fjernvarmefyn.dk`, `stfvfsecurityinsight`, `oai-fvf-security-insight` → generic placeholders
+- `SOLUTIONS/PlatformConfiguration/INTERNAL/Provision/Set-PlatformDefaultsSmtp.ps1` — `svc-automation@<customer-domain>` → `svc-automation@<your-domain>` (in `.PARAMETER SmtpFrom` and `.EXAMPLE`)
+- `SOLUTIONS/SecurityInsight/internal/New-SISolutionConfig.ps1` — `IT-Alerts@<customer-domain>`, `<customer storage account>`, `<customer OpenAI resource>` → generic placeholders
 
 These are doc literals only (in script comment-help blocks); they are never executed and never written into any generated customer config. No runtime change.
 

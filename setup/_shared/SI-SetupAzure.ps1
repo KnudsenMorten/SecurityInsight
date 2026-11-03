@@ -193,6 +193,10 @@ function Get-SISetupAzureContext {
         # an app configured through the SI_SPN_* globals counts as signed in (the engines' own rule)
         try { $c = Resolve-SIAzRestAuth } catch { return $null }
     }
+    # 2026-11-03 (an install run twice in ONE PowerShell window, the second from a newer package): a person's connection left
+    # by the earlier run while this run holds no sign-in of that person (its tokens live with the earlier run) is NOT a
+    # sign-in -- $null, so the install signs the person in again instead of failing at its first Azure call
+    if (-not $sess -and [string]$c.Mode -eq 'User' -and -not $c['IsApp'] -and (Get-Command -Name Test-SISetupUserSignedIn -ErrorAction SilentlyContinue) -and -not (Test-SISetupUserSignedIn)) { return $null }
     if ($SubscriptionId) {
         if ($sess) { Assert-SISupportSubscription -SubscriptionId $SubscriptionId -Session $sess }
         $st.SubscriptionId = $SubscriptionId

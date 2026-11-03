@@ -2359,7 +2359,12 @@ function Get-SIInstallStepTable {
             if (-not $row) { $lines += 'Container Apps environments: the quota could not be read -- checked when the environment is created' }
             else {
                 $cur = [double](Get-SIInstallProp $row 'currentValue'); $lim = [double](Get-SIInstallProp $row 'limit')
-                if ($cur + 1 -gt $lim) {
+                if ($lim -le 0 -and $cur -le 0) {
+                    # 2026-11-03 (a new subscription): before Microsoft.App is registered -- the install registers it -- Azure
+                    # answers 0 of 0; that is not a quota, it is "not known yet". Checked again when the environment is created.
+                    $lines += 'Container Apps environments: Azure shows no quota yet (Microsoft.App is registered by the install) -- checked when the environment is created'
+                }
+                elseif ($cur + 1 -gt $lim) {
                     throw (New-SIInstallFailure -Message ('The subscription has no room for another Container Apps environment in {0}: it uses {1} of its {2}, and SecurityInsight needs one more. Nothing was changed.' -f $loc, $cur, $lim) `
                         -ActionText ('Ask for a higher quota (Azure portal: Quotas > Container Apps > {0} > Managed environment count), or choose another region on the installation page, then run the install command again:' -f $loc) -Command $ctx.ResumeCommand)
                 }

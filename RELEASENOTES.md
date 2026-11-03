@@ -1,3 +1,14 @@
+## v3.0.28 — The install checks the region first
+
+### Install
+
+- Before anything is created, the install asks Azure whether your region takes new resources in this subscription. If
+  it does not, it stops at once and names nearby regions that do. A policy that refuses the check is reported, never a
+  stop.
+- A private install reads each private endpoint's address from its network interface, the one place Azure always
+  fills in.
+- Code comments use example host names only.
+
 ## v3.0.27 — Install in two lines, everywhere
 
 ### Install
@@ -5752,7 +5763,7 @@ None of these change runtime behavior in v2.2.323. They're inert until v2.2.324 
 
 ### Bug
 
-Operator's `myfamilynetwork` Detailed report showed PublicIP severity breakdown:
+The internal Detailed report showed PublicIP severity breakdown:
 
 ```
 Public IP : Critical=0  High=109  Medium=21  Low=0    (total 130)

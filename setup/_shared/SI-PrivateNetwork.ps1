@@ -1355,32 +1355,79 @@ function Invoke-SIPrivateNetworkPeering {
     Set-SIVnetPeering -Arm $Arm -SpokeVnetId ([string]$Target['VnetId']) -HubVnetId ([string]$Target['HubVnetId']) -Sleep $Sleep
 }
 
+function Get-SIPrivateEndpointNicPairs {
+    <# READ ONLY. The (name, address) pairs of one private endpoint, read from ITS NETWORK INTERFACE -- the source of truth
+       for the address: properties.networkInterfaces[].id -> GET the interface -> each ipConfigurations[].properties
+       .privateIPAddress, named by that configuration's privateLinkConnectionProperties.fqdns. Azure leaves the endpoint's
+       customDnsConfigs EMPTY once a private DNS zone group is attached, so the endpoint itself is not enough.
+       Returns @( ,@(<fqdn>, @(<ip>)) ... ); an interface that cannot be read gives nothing (the caller falls back). #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, $Endpoint)
+    $pairs = @()
+    foreach ($nr in @(Get-SIPnProp $Endpoint @('properties', 'networkInterfaces') | Where-Object { $_ })) {
+        $nid = [string](Get-SIPnProp $nr @('id'))
+        if (-not $nid) { continue }
+        $nic = $null
+        try { $nic = & $Arm 'GET' ('{0}?api-version={1}' -f $nid, $script:SIPnNetApi) $null } catch { $nic = $null }
+        foreach ($ic in @(Get-SIPnProp $nic @('properties', 'ipConfigurations') | Where-Object { $_ })) {
+            $ip = [string](Get-SIPnProp $ic @('properties', 'privateIPAddress'))
+            if (-not $ip) { continue }
+            foreach ($fq in @(Get-SIPnProp $ic @('properties', 'privateLinkConnectionProperties', 'fqdns') | Where-Object { $_ })) { $pairs += , @([string]$fq, @($ip)) }
+        }
+    }
+    , $pairs
+}
+
 function Get-SIPrivateLinkRecords {
     <# READ ONLY. The A records of the install's private endpoints (pe-si-*) in -ResourceGroupId, as the customer adds them
-       in the hub's zones: @( @{ Zone; Name; Fqdn; Ip } ). From each endpoint's zone group (Azure's own record sets), else
-       its customDnsConfigs. #>
+       in the hub's zones: @( @{ Zone; Name; Fqdn; Ip; Source; ZoneGroupIp } ).
+       The address comes from the endpoint's NETWORK INTERFACE (Get-SIPrivateEndpointNicPairs) -- the source of truth.
+       The zone group's record sets are a cross-check (ZoneGroupIp is set when Azure's zone record says something else) and
+       the source only when the interface cannot be read; the endpoint's customDnsConfigs are the last fallback, because
+       Azure leaves them empty once a zone group is attached. Source = 'nic' | 'zonegroup' | 'customdns'. #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$ResourceGroupId)
     $prefix = (Get-SIPrivateNetworkNames).EndpointPrefix
     $out = New-Object System.Collections.Generic.List[object]
+    # the record's name in the privatelink zone: the name before the service's public suffix (a zone group's fqdn already
+    # names the privatelink zone)
+    $nameOf = { param($fq, $kind) if ($fq.EndsWith('.' + $kind.Zone)) { $fq.Substring(0, $fq.Length - $kind.Zone.Length - 1) } elseif ($fq.EndsWith('.' + $kind.Suffix)) { $fq.Substring(0, $fq.Length - $kind.Suffix.Length - 1) } else { ($fq -split '\.')[0] } }
+    $toMap = {
+        param($pairs, $kind)
+        $m = [ordered]@{}
+        foreach ($p in @($pairs)) {
+            $fq = ([string]$p[0]).TrimEnd('.').ToLowerInvariant()
+            $ip = [string](@($p[1] | Where-Object { $_ })[0])
+            if (-not $fq -or -not $ip) { continue }
+            $n = & $nameOf $fq $kind
+            if (-not $m.Contains($n)) { $m[$n] = $ip }
+        }
+        $m
+    }
     foreach ($k in @($script:SIPnKinds.Keys)) {
         $kind = $script:SIPnKinds[$k]
         $id = '{0}/providers/Microsoft.Network/privateEndpoints/{1}{2}' -f $ResourceGroupId.TrimEnd('/'), $prefix, $k
         $pe = & $Arm 'GET' ('{0}?api-version={1}' -f $id, $script:SIPnNetApi) $null
         if (-not $pe) { continue }
-        $pairs = @()
+        # 1. the network interface -- the source of truth
+        $nicMap = & $toMap (Get-SIPrivateEndpointNicPairs -Arm $Arm -Endpoint $pe) $kind
+        # 2. the zone group's record sets -- the cross-check
+        $zgPairs = @()
         $zg = & $Arm 'GET' ('{0}/privateDnsZoneGroups/{1}?api-version={2}' -f $id, (Get-SIPrivateNetworkNames).ZoneGroup, $script:SIPnNetApi) $null
         foreach ($c in @(Get-SIPnProp $zg @('properties', 'privateDnsZoneConfigs') | Where-Object { $_ })) {
-            foreach ($rs in @(Get-SIPnProp $c @('properties', 'recordSets') | Where-Object { $_ })) { $pairs += , @([string](Get-SIPnProp $rs @('fqdn')), @(Get-SIPnProp $rs @('ipAddresses'))) }
+            foreach ($rs in @(Get-SIPnProp $c @('properties', 'recordSets') | Where-Object { $_ })) { $zgPairs += , @([string](Get-SIPnProp $rs @('fqdn')), @(Get-SIPnProp $rs @('ipAddresses'))) }
         }
-        if (-not $pairs.Count) { foreach ($c in @(Get-SIPnProp $pe @('properties', 'customDnsConfigs') | Where-Object { $_ })) { $pairs += , @([string](Get-SIPnProp $c @('fqdn')), @(Get-SIPnProp $c @('ipAddresses'))) } }
-        foreach ($p in $pairs) {
-            $fq = ([string]$p[0]).TrimEnd('.').ToLowerInvariant()
-            $ip = [string](@($p[1] | Where-Object { $_ })[0])
-            if (-not $fq -or -not $ip) { continue }
-            # the record's name in the privatelink zone: the name before the service's public suffix (a zone group's fqdn
-            # already names the privatelink zone)
-            $name = if ($fq.EndsWith('.' + $kind.Zone)) { $fq.Substring(0, $fq.Length - $kind.Zone.Length - 1) } elseif ($fq.EndsWith('.' + $kind.Suffix)) { $fq.Substring(0, $fq.Length - $kind.Suffix.Length - 1) } else { ($fq -split '\.')[0] }
-            if (-not @($out | Where-Object { $_.Zone -eq $kind.Zone -and $_.Name -eq $name }).Count) { $out.Add(@{ Zone = $kind.Zone; Name = $name; Fqdn = ('{0}.{1}' -f $name, $kind.Suffix); Ip = $ip }) }
+        $zgMap = & $toMap $zgPairs $kind
+        $use = $nicMap; $src = 'nic'
+        if (-not $use.Count) { $use = $zgMap; $src = 'zonegroup' }
+        # 3. the endpoint's customDnsConfigs -- the last fallback (empty once a zone group is attached)
+        if (-not $use.Count) {
+            $cd = @(); foreach ($c in @(Get-SIPnProp $pe @('properties', 'customDnsConfigs') | Where-Object { $_ })) { $cd += , @([string](Get-SIPnProp $c @('fqdn')), @(Get-SIPnProp $c @('ipAddresses'))) }
+            $use = & $toMap $cd $kind; $src = 'customdns'
+        }
+        foreach ($name in @($use.Keys)) {
+            if (@($out | Where-Object { $_.Zone -eq $kind.Zone -and $_.Name -eq $name }).Count) { continue }
+            $ip = [string]$use[$name]
+            $zgIp = if ($src -eq 'nic' -and $zgMap.Contains($name) -and [string]$zgMap[$name] -ne $ip) { [string]$zgMap[$name] } else { '' }
+            $out.Add(@{ Zone = $kind.Zone; Name = $name; Fqdn = ('{0}.{1}' -f $name, $kind.Suffix); Ip = $ip; Source = $src; ZoneGroupIp = $zgIp })
         }
     }
     $out.ToArray()
@@ -1477,7 +1524,11 @@ function Get-SINetworkHandOff {
         $L.Add('3. DNS, the private endpoints -- add these A records in YOUR zones of these names that the hub resolves (a network takes only one zone of a name, so SecurityInsight''s zones cannot also be linked where yours are):')
         foreach ($g in @($recs | Group-Object { $_.Zone })) {
             $L.Add(('   zone {0}' -f $g.Name))
-            foreach ($r in $g.Group) { $L.Add(('        {0,-40} A  {1}   ({2})' -f $r.Name, $r.Ip, $r.Fqdn)) }
+            foreach ($r in $g.Group) {
+                $L.Add(('        {0,-40} A  {1}   ({2})' -f $r.Name, $r.Ip, $r.Fqdn))
+                $zgIp = [string](Get-SIPnProp $r @('ZoneGroupIp'))
+                if ($zgIp) { $L.Add(('          note: Azure''s own zone record still says {0}; the endpoint''s network interface says {1} -- use {1}' -f $zgIp, $r.Ip)) }
+            }
         }
         $L.Add('   (when your hub has no zone of that name: link SecurityInsight''s zone of that name, in its resource group, to the hub instead)')
         $items.Add(@{ Kind = 'privatelink-records'; Done = $false })

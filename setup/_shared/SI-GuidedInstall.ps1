@@ -2336,11 +2336,23 @@ function Get-SIInstallStepTable {
             throw (New-SIInstallFailure -Message ('Azure does not accept {0} for this subscription.{1} Nothing was changed.' -f ($what -join '; '), $alt) `
                 -ActionText 'Choose one of those regions on the installation page (Azure region), then run the install command again:' -Command $ctx.ResumeCommand)
         }
+        # installer rule 9: the region's offer above is not enough -- Azure can still refuse NEW resources there for THIS
+        # subscription ("the region is not accepting new customers", RequestDisallowedByAzure). An ARM deployment VALIDATE of
+        # one resource per service asks it before anything exists (it creates nothing); a refusal stops here with the
+        # nearby regions that validate. Any other answer of the check is a note: the create-time catch stays.
+        $nw = Test-SIInstallRegionAcceptsNew -Ctx $ctx -Needs $needs -SubscriptionRegions $regs
+        if ($nw.Refused) {
+            throw (New-SIInstallFailure -Message (Get-SIInstallRegionRefusedText -Region $nw.Refused.Region -Alternatives @($nw.Refused.Alternatives)) `
+                -ActionText 'Choose another region on the installation page (Azure region), then run the install command again:' -Command $ctx.ResumeCommand)
+        }
+        $note = ''
+        if (@($nw.Accepted).Count) { $note += (' Azure''s deployment check accepts new resources in {0} for this subscription.' -f (@($nw.Accepted) -join ' and ')) }
+        if (@($nw.Notes).Count) { $note += (' ' + ((@($nw.Notes) | ForEach-Object { $_ + '.' }) -join ' ')) }
         $regions = @($needs | ForEach-Object { $_.Location } | Select-Object -Unique)
         if ($r.Unknown.Count) {
-            return (New-SIInstallResult -Message ('{0} accepts what Azure lists for this subscription; checked when created: {1}.' -f ($regions -join ' and '), ($r.Unknown -join ', ')))
+            return (New-SIInstallResult -Message ('{0} accepts what Azure lists for this subscription; checked when created: {1}.{2}' -f ($regions -join ' and '), ($r.Unknown -join ', '), $note))
         }
-        New-SIInstallResult -Message ('{0} accepts every resource SecurityInsight creates.' -f ($regions -join ' and '))
+        New-SIInstallResult -Message ('{0} accepts every resource SecurityInsight creates.{1}' -f ($regions -join ' and '), $note)
     }
 
     # #876: the subscription's quota in the region, before anything is created: one Container Apps environment more (when the
@@ -3223,6 +3235,204 @@ function Test-SIInstallRegionOffer {
         $alt = @(@($same) + @($cand | Where-Object { $same -notcontains $_ } | Sort-Object) | Select-Object -First 6)
     }
     @{ Refused = $refused; Unknown = $unknown; Alternatives = $alt }
+}
+
+function Get-SIInstallRegionProbeResources {
+    <#
+        PURE. Installer rule 9: ONE minimal resource per Azure service the install creates in -Needs (Get-SIInstallRegionNeeds),
+        each in -Region, for an ARM deployment VALIDATE -- Azure answers RequestDisallowedByAzure there, per resource, when the
+        region takes no new resources of that kind in this subscription; validate creates nothing. Names are the install's
+        planned names (preflight-names checked them). The database server needs an administrator: -AdminObjectId (the signed-in
+        account); without one it is left out (checked when created). Types of a service already probed (the jobs and the web
+        app = Container Apps, the database = the database server) are not repeated.
+        Returns @{ Resources = @(<template resource>); Covered = @(<label>); Left = @(<label>) }.
+    #>
+    param([Parameter(Mandatory)][object[]]$Needs, [Parameter(Mandatory)]$Names, [Parameter(Mandatory)][string]$Region, [string]$TenantId = '',
+          [string]$AdminObjectId = '', [string]$AdminType = 'User')
+    $res = @(); $covered = @(); $left = @()
+    foreach ($nd in $Needs) {
+        $t = '{0}/{1}' -f $nd.Namespace, $nd.Type
+        $r = switch ($t) {
+            'Microsoft.OperationalInsights/workspaces' { [ordered]@{ type = $t; apiVersion = '2022-10-01'; name = [string]$Names.Workspace; location = $Region; properties = [ordered]@{ sku = [ordered]@{ name = 'PerGB2018' } } } }
+            'Microsoft.Insights/dataCollectionEndpoints' { [ordered]@{ type = $t; apiVersion = '2022-06-01'; name = [string]$Names.Dce; location = $Region; properties = [ordered]@{} } }
+            'Microsoft.Storage/storageAccounts' { [ordered]@{ type = $t; apiVersion = '2023-01-01'; name = [string]$Names.StorageAccount; location = $Region; kind = 'StorageV2'; sku = [ordered]@{ name = 'Standard_LRS' } } }
+            'Microsoft.KeyVault/vaults' {
+                if (-not $TenantId) { $null } else {
+                    [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.KeyVault; location = $Region
+                        properties = [ordered]@{ tenantId = $TenantId; sku = [ordered]@{ family = 'A'; name = 'standard' }; enableRbacAuthorization = $true; accessPolicies = @() } }
+                }
+            }
+            'Microsoft.ContainerRegistry/registries' { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Basic' }; properties = [ordered]@{} } }
+            'Microsoft.App/managedEnvironments' { [ordered]@{ type = $t; apiVersion = '2024-03-01'; name = [string]$Names.ContainerEnv; location = $Region; properties = [ordered]@{} } }
+            'Microsoft.ManagedIdentity/userAssignedIdentities' { [ordered]@{ type = $t; apiVersion = '2023-01-31'; name = [string]$Names.ManagedIdentity; location = $Region } }
+            'Microsoft.Sql/servers' {
+                if (-not $AdminObjectId -or -not $TenantId) { $null } else {
+                    [ordered]@{ type = $t; apiVersion = '2021-11-01'; name = [string]$Names.SqlServer; location = $Region
+                        properties = [ordered]@{ minimalTlsVersion = '1.2'; administrators = [ordered]@{ administratorType = 'ActiveDirectory'; azureADOnlyAuthentication = $true
+                            login = 'SecurityInsight installer'; sid = $AdminObjectId; tenantId = $TenantId; principalType = $(if ($AdminType -eq 'User') { 'User' } else { 'Application' }) } } }
+                }
+            }
+            # the jobs and the web app (Container Apps, like the environment) and the database (the database server's)
+            'Microsoft.App/jobs' { 'same' } 'Microsoft.App/containerApps' { 'same' } 'Microsoft.Sql/servers/databases' { 'same' }
+            default { $null }
+        }
+        if ($r -is [string]) { continue }
+        if ($null -eq $r -or -not [string]$r['name']) { $left += $nd.Label; continue }
+        $res += $r; $covered += $nd.Label
+    }
+    @{ Resources = $res; Covered = $covered; Left = $left }
+}
+
+function Get-SIInstallRegionProbeRequest {
+    <#
+        PURE. The ARM deployment VALIDATE request for -Resources (installer rule 9, the method proven live by another product):
+        the install's resource group EXISTS -> POST <rg>/providers/Microsoft.Resources/deployments/<name>/validate with the
+        resources; it does NOT exist yet -> the same at SUBSCRIPTION scope (a top-level location) whose template makes the
+        resource group and a nested deployment into it holding the same resources. Validate creates nothing, not even the
+        group. Returns @{ Path; Body (a JSON string) }.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$Region,
+          [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Resources, [bool]$ResourceGroupExists, [string]$DeploymentName = 'si-preflight-region')
+    $inner = [ordered]@{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'; contentVersion = '1.0.0.0'; resources = @($Resources) }
+    if ($ResourceGroupExists) {
+        $path = '/subscriptions/{0}/resourcegroups/{1}/providers/Microsoft.Resources/deployments/{2}/validate?api-version=2021-04-01' -f $SubscriptionId, $ResourceGroup, $DeploymentName
+        $body = [ordered]@{ properties = [ordered]@{ mode = 'Incremental'; template = $inner } }
+    } else {
+        $path = '/subscriptions/{0}/providers/Microsoft.Resources/deployments/{1}/validate?api-version=2021-04-01' -f $SubscriptionId, $DeploymentName
+        $tpl = [ordered]@{ '$schema' = 'https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#'; contentVersion = '1.0.0.0'
+            resources = @(
+                [ordered]@{ type = 'Microsoft.Resources/resourceGroups'; apiVersion = '2021-04-01'; name = $ResourceGroup; location = $Region; properties = [ordered]@{} },
+                [ordered]@{ type = 'Microsoft.Resources/deployments'; apiVersion = '2021-04-01'; name = ($DeploymentName + '-rg'); resourceGroup = $ResourceGroup
+                    dependsOn = @(("[resourceId('Microsoft.Resources/resourceGroups', '{0}')]" -f $ResourceGroup))
+                    properties = [ordered]@{ mode = 'Incremental'; template = $inner } }) }
+        $body = [ordered]@{ location = $Region; properties = [ordered]@{ mode = 'Incremental'; template = $tpl } }
+    }
+    @{ Path = $path; Body = (ConvertTo-Json -InputObject $body -Depth 30 -Compress) }
+}
+
+function ConvertFrom-SIInstallValidateAnswer {
+    <#
+        PURE. What a deployment VALIDATE answered: @{ State = 'ok' | 'refused' | 'other'; Text }. 200/201 = ok. Any error
+        whose code -- anywhere in error.details, nested deployments included -- is RequestDisallowedByAzure = refused (the
+        region takes no new resources of that kind for this subscription; proven answer: HTTP 400 InvalidTemplateDeployment
+        with details[].code RequestDisallowedByAzure). Anything else (another error, 202, no answer) = other: never a stop
+        from this check, the other checks and the create-time catch decide.
+    #>
+    param($Response)
+    if ($null -eq $Response) { return @{ State = 'other'; Text = 'no answer' } }
+    $code = [int](Get-SIInstallProp $Response 'StatusCode'); $c = [string](Get-SIInstallProp $Response 'Content')
+    if ($code -in 200, 201) { return @{ State = 'ok'; Text = '' } }
+    $obj = $null; try { if ($c.Trim()) { $obj = $c | ConvertFrom-Json } } catch { $obj = $null }
+    $codes = New-Object System.Collections.Generic.List[string]; $msgs = New-Object System.Collections.Generic.List[string]
+    $policies = New-Object System.Collections.Generic.List[string]
+    $walk = $null
+    $walk = {
+        param($e, $depth)
+        if ($null -eq $e -or $depth -gt 12) { return }
+        foreach ($x in @($e)) {
+            if ($null -eq $x) { continue }
+            $cd = [string](Get-SIInstallProp $x 'code'); if ($cd) { $codes.Add($cd) }
+            $mg = [string](Get-SIInstallProp $x 'message'); if ($mg) { $msgs.Add($mg) }
+            # a policy's name: on the error itself, or in additionalInfo[].info (type PolicyViolation)
+            foreach ($src in @($x) + @(@(Get-SIInstallProp $x 'additionalInfo') | Where-Object { $_ } | ForEach-Object { Get-SIInstallProp $_ 'info' })) {
+                foreach ($pn in 'policyAssignmentDisplayName', 'policyDefinitionDisplayName') {
+                    $pv = [string](Get-SIInstallProp $src $pn); if ($pv -and -not $policies.Contains($pv)) { $policies.Add($pv) }
+                }
+            }
+            & $walk (Get-SIInstallProp $x 'error') ($depth + 1)
+            & $walk (Get-SIInstallProp $x 'details') ($depth + 1)
+        }
+    }
+    if ($obj) { & $walk $obj 0 }
+    # Azure's own refusal stops -- also when another resource of the same answer is refused by a policy
+    if ($codes -contains 'RequestDisallowedByAzure' -or $c -match 'RequestDisallowedByAzure') {
+        $m = @($msgs | Where-Object { $_ -match '(?i)not accepting|disallowed by azure|new customers' }) | Select-Object -First 1
+        return @{ State = 'refused'; Text = $(if ($m) { $m } else { 'RequestDisallowedByAzure' }) }
+    }
+    # a policy of the customer's refusing the check's test resources, or no right to run the check: NOT KNOWN, never a stop
+    if ($codes -contains 'RequestDisallowedByPolicy' -or $c -match 'RequestDisallowedByPolicy') {
+        return @{ State = 'unknown'; Text = ('An Azure Policy in your subscription refuses the check''s test resources{0} - the region could not be checked' -f $(if ($policies.Count) { ' (' + ($policies -join ', ') + ')' } else { '' })) }
+    }
+    if ($code -eq 403) { return @{ State = 'unknown'; Text = 'You may not run Azure''s deployment check here - the region could not be checked' } }
+    if ($code -eq 202) { return @{ State = 'other'; Text = 'Azure took the check but did not answer at once' } }
+    $first = @($msgs | Select-Object -Last 1) | Select-Object -First 1
+    @{ State = 'other'; Text = $(if ($first) { '{0} ({1})' -f $first, (@($codes | Select-Object -Unique) -join ', ') } elseif ($c.Trim()) { $c.Trim() } else { 'HTTP {0}' -f $code }) }
+}
+
+function Get-SIInstallNearbyRegions {
+    <# PURE. The regions to try instead of -Region, nearest first: its paired region(s), then the other physical regions of
+       its geography (the subscription's own /locations answer: metadata.pairedRegion, metadata.geographyGroup,
+       metadata.regionType), then the rest of the subscription's physical regions. -Region itself is never in the list. #>
+    param([Parameter(Mandatory)][string]$Region, [object[]]$SubscriptionRegions = @())
+    $key = ConvertTo-SIInstallRegionKey $Region
+    $all = @($SubscriptionRegions | Where-Object { $_ -and [string](Get-SIInstallProp $_ 'name') })
+    $phys = @($all | Where-Object { $rt = [string](Get-SIInstallProp (Get-SIInstallProp $_ 'metadata') 'regionType'); -not $rt -or $rt -eq 'Physical' })
+    $me = @($all | Where-Object { (ConvertTo-SIInstallRegionKey ([string](Get-SIInstallProp $_ 'name'))) -eq $key }) | Select-Object -First 1
+    $geo = [string](Get-SIInstallProp (Get-SIInstallProp $me 'metadata') 'geographyGroup')
+    $pair = @(@(Get-SIInstallProp (Get-SIInstallProp $me 'metadata') 'pairedRegion') | Where-Object { $_ } | ForEach-Object { ConvertTo-SIInstallRegionKey ([string](Get-SIInstallProp $_ 'name')) })
+    $names = @($phys | ForEach-Object { ConvertTo-SIInstallRegionKey ([string](Get-SIInstallProp $_ 'name')) })
+    $same = @($phys | Where-Object { $geo -and [string](Get-SIInstallProp (Get-SIInstallProp $_ 'metadata') 'geographyGroup') -eq $geo } | ForEach-Object { ConvertTo-SIInstallRegionKey ([string](Get-SIInstallProp $_ 'name')) })
+    $out = @(@($pair | Where-Object { $names -contains $_ }) + @($same) + @($names) | Where-Object { $_ -and $_ -ne $key } | Select-Object -Unique)
+    $out
+}
+
+function Invoke-SIInstallRegionValidate {
+    <# Installer rule 9: one deployment VALIDATE of -Needs moved to -Region, through the install's ARM helper (the Az seam,
+       Invoke-SIAzRestMethod). Never throws, creates nothing. Returns ConvertFrom-SIInstallValidateAnswer's answer plus Left
+       (the labels not probed). #>
+    param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][object[]]$Needs, [Parameter(Mandatory)][string]$Region, [bool]$ResourceGroupExists)
+    $v = $Ctx.Values
+    $p = Get-SIInstallRegionProbeResources -Needs $Needs -Names $Ctx.Names -Region $Region -TenantId ([string]$v['tenantId']) `
+        -AdminObjectId ([string]$Ctx.Facts['userObjectId']) -AdminType $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'Application' })
+    if (-not @($p.Resources).Count) { return @{ State = 'other'; Text = 'nothing to check'; Left = @($p.Left) } }
+    $q = Get-SIInstallRegionProbeRequest -SubscriptionId ([string]$v['subscriptionId']) -ResourceGroup ([string]$Ctx.Names.ResourceGroup) -Region $Region -Resources $p.Resources -ResourceGroupExists $ResourceGroupExists
+    $r = $null
+    try { $r = Invoke-SIInstallAz -Ctx $Ctx -Command 'Invoke-SIAzRestMethod' -Arguments ([ordered]@{ Method = 'POST'; Path = $q.Path; Payload = $q.Body }) }
+    catch { $r = [pscustomobject]@{ StatusCode = 0; Content = [string]$_.Exception.Message } }
+    $a = ConvertFrom-SIInstallValidateAnswer -Response $r
+    $a['Left'] = @($p.Left)
+    $a
+}
+
+function Test-SIInstallRegionAcceptsNew {
+    <#
+        Installer rule 9: does each region of -Needs accept NEW resources in THIS subscription? One deployment VALIDATE per
+        region (the Pro database may have its own). A refusal (RequestDisallowedByAzure) also tries the nearby regions
+        (Get-SIInstallNearbyRegions, the same validate with that region's resources) and keeps the first -Want that answer
+        ok, after at most -MaxTries tries. Returns @{ Refused = @{ Region; Alternatives } or $null; Notes = @(<text>);
+        Accepted = @(<region>) }. Never throws, creates nothing.
+    #>
+    param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][object[]]$Needs, [object[]]$SubscriptionRegions = @(), [int]$Want = 3, [int]$MaxTries = 8)
+    $rgExists = $false
+    try { $rgExists = $null -ne (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzResourceGroup' -Arguments ([ordered]@{ Name = [string]$Ctx.Names.ResourceGroup; ErrorAction = 'SilentlyContinue' })) } catch { $rgExists = $false }
+    $notes = @(); $accepted = @()
+    # one group per region, in the order the needs name them (the install's own region first; Group-Object would sort)
+    $groups = [ordered]@{}
+    foreach ($nd in $Needs) { $k = [string]$nd.Location; if (-not $groups.Contains($k)) { $groups[$k] = New-Object System.Collections.Generic.List[object] }; $groups[$k].Add($nd) }
+    foreach ($region in @($groups.Keys)) {
+        $g = [pscustomobject]@{ Name = $region; Group = $groups[$region].ToArray() }
+        $a = Invoke-SIInstallRegionValidate -Ctx $Ctx -Needs @($g.Group) -Region $region -ResourceGroupExists $rgExists
+        if ($a.State -eq 'ok') { $accepted += $region; continue }
+        # a policy / no right: NOT KNOWN, said as Azure's words were given (once), and the install goes on
+        if ($a.State -eq 'unknown') { if ($notes -notcontains $a.Text) { $notes += $a.Text }; continue }
+        if ($a.State -ne 'refused') { $notes += ('Azure''s deployment check could not confirm {0}: {1} -- it is checked when each resource is created' -f $region, $a.Text); continue }
+        $alt = @(); $tries = 0
+        foreach ($cand in @(Get-SIInstallNearbyRegions -Region $region -SubscriptionRegions $SubscriptionRegions)) {
+            if ($alt.Count -ge $Want -or $tries -ge $MaxTries) { break }
+            $tries++
+            $moved = @($g.Group | ForEach-Object { $o = $_.PSObject.Copy(); $o.Location = $cand; $o })
+            if ((Invoke-SIInstallRegionValidate -Ctx $Ctx -Needs $moved -Region $cand -ResourceGroupExists $rgExists).State -eq 'ok') { $alt += $cand }
+        }
+        return @{ Refused = @{ Region = $region; Alternatives = $alt }; Notes = $notes; Accepted = $accepted }
+    }
+    @{ Refused = $null; Notes = $notes; Accepted = $accepted }
+}
+
+function Get-SIInstallRegionRefusedText {
+    <# PURE. The one plain sentence when a region takes no new resources for this subscription (installer rule 9). #>
+    param([Parameter(Mandatory)][string]$Region, [string[]]$Alternatives = @())
+    $alt = @($Alternatives | Where-Object { $_ })
+    'Azure does not accept new resources in {0} for this subscription (the region is not taking new customers). Choose another region{1}.' -f $Region, $(if ($alt.Count) { ', for example ' + ($alt -join ', ') } else { '' })
 }
 
 function Invoke-SIInstallArmGetJson {

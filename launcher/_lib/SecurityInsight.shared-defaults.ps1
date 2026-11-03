@@ -164,7 +164,7 @@ if (-not $global:SI_SPN_ObjectId -and $global:SI_SPN_AppId) {
 #   $global:SMTPFrom     = visible from-address header on outbound mail
 #
 # INTERNAL automation pattern (this is your case):
-#   Platform-defaults sets $global:SMTPUser to the FROM ADDRESS (legacy 2linkit
+#   Platform-defaults sets $global:SMTPUser to the FROM ADDRESS (legacy
 #   convention -- the variable name is "SMTPUser" but its content is semantically
 #   the from-address). The actual SMTP relay LOGIN + PASSWORD live in Key Vault
 #   under secret names 'SMTPuser' + 'SMTPpassword'. When we have a platform
@@ -199,7 +199,7 @@ if ($global:Context -and ($global:Mail_SendAnonymous -ne $true)) {
     if (-not $global:SMTPFrom -and $global:SMTPUser) {
         $global:SMTPFrom = $global:SMTPUser
         $global:SMTPUser = $null   # clear so KV pull below populates the actual login
-        Write-Verbose "SI shared-defaults: promoted platform-defaults `$global:SMTPUser to `$global:SMTPFrom (legacy 2linkit convention); will pull actual SMTPUser+Password from KV below"
+        Write-Verbose "SI shared-defaults: promoted platform-defaults `$global:SMTPUser to `$global:SMTPFrom (legacy convention); will pull actual SMTPUser+Password from KV below"
     }
     # Force-pull SMTPUser from KV (overrides any earlier value)
     if (-not $global:SMTPUser) {

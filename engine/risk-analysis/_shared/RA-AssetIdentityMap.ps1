@@ -24,7 +24,7 @@
       * EG carries no ARM resourceId for Azure nodes -- `Get-DiscoveryFromAzureViaEG.ps1:182` falls
         back to NodeId, and every EG-discovered id in the table is `eg:az:<hex node id>`;
       * EG and ARM disagree about names -- EG says `master (sql-ait-mfnpr/master)`, ARM-derived
-        profiling says `master (rg-sql-2linkit)`;
+        profiling says `master (rg-sql-example)`;
       * EG mixes device nodes into Azure findings, and those devices are not Azure assets at all.
     The profile tables are built from ARM / MDE / Entra, so this map is both the correct source and
     the fresher one.
@@ -330,7 +330,7 @@ function Get-SIAssetIdSource {
 # ================================================================================================
 # ONE ASSET, ONE IDENTITY  (operator, 2026-10-02: "i dont like correlation is not working" / "this is same device")
 # ================================================================================================
-# 🔴 Measured 2026-10-02: the Top 50 listed one server twice -- MGMT1 (153 findings) and mgmt1.2linkit.local (35).
+# 🔴 Measured 2026-10-02: the Top 50 listed one server twice -- SERVER1 (153 findings) and server1.contoso.local (35).
 # The device reports already carried the RIGHT asset id (the profile's), only under ExposureGraph's name; the Azure
 # reports carried the VM's ARM id, which -- since #204 -- the endpoint profile records on that same device. Every
 # later step (the Top 50, the AI rollup, the published tables) groups by name, so the identity was resolved and then

@@ -13,6 +13,7 @@
       RefuseKeyAccess    the first N writes that switch a resource to a Key Vault key fail "AzureKeyVaultMissingPermissions"
       ClusterState       the provisioning state a new Log Analytics cluster gets (default Succeeded)
       RefuseWrites       path prefixes (lower case) a write under which is refused 'AuthorizationFailed' (#866: the customer's hub)
+      NoCustomDnsConfigs a new private endpoint gets NO customDnsConfigs at all (#1073: the address is only on its network interface)
     State and helpers are global (the scripts under test run in their own scope); New-SIArmStore resets the state, Remove-SIArmStore (AfterAll) drops the state and the helpers.
 #>
 
@@ -66,7 +67,11 @@ $global:SIArmStoreFake = {
             if ($kids.Count) { return [pscustomobject]@{ value = @($kids | ForEach-Object { ConvertTo-SIArmStoreObject $S.Items[$_] }) } }
             return $null
         }
-        'DELETE' { foreach ($k in @($S.Items.Keys | Where-Object { $_ -eq $key -or $_.StartsWith($key + '/') })) { $S.Items.Remove($k) }; return $null }
+        'DELETE' {
+            # #1073: deleting a private endpoint deletes its network interface too
+            if ($key -match '/privateendpoints/[^/]+$' -and $S.Items.Contains($key)) { foreach ($n in @($S.Items[$key]['properties']['networkInterfaces'])) { if ($n -and $n['id']) { $S.Items.Remove(([string]$n['id']).ToLowerInvariant()) } } }
+            foreach ($k in @($S.Items.Keys | Where-Object { $_ -eq $key -or $_.StartsWith($key + '/') })) { $S.Items.Remove($k) }; return $null
+        }
         'POST' { return $null }
     }
     $b = ConvertTo-SIArmStoreHash $Body
@@ -87,13 +92,30 @@ $global:SIArmStoreFake = {
         '(?i)/privateEndpoints/[^/]+$' {
             foreach ($c in @($r['properties']['privateLinkServiceConnections'])) { if ($c) { $c['properties']['privateLinkServiceConnectionState'] = [ordered]@{ status = $(if ($S.PendingEndpoints) { 'Pending' } else { 'Approved' }) } } }
             # #866: Azure fills in the endpoint's name(s) and private address(es) (customDnsConfigs)
+            # #1073: ... and makes the endpoint's NETWORK INTERFACE (<endpoint>.nic.<id>, in the endpoint's resource group) whose
+            # ipConfigurations carry the address (privateIPAddress) and the names (privateLinkConnectionProperties.fqdns);
+            # the endpoint points at it (networkInterfaces[].id). customDnsConfigs stay EMPTY while a zone group is attached.
             $sfx = @{ sqlserver = 'database.windows.net'; vault = 'vault.azure.net'; blob = 'blob.core.windows.net'; queue = 'queue.core.windows.net'; table = 'table.core.windows.net'; registry = 'azurecr.io' }
             $c0 = @($r['properties']['privateLinkServiceConnections'])[0]
             if ($c0) {
                 $g = ([string]@($c0['properties']['groupIds'])[0]).ToLowerInvariant(); $res = ([string]$c0['properties']['privateLinkServiceId'] -split '/')[-1]
-                $n = @($S.Items.Keys | Where-Object { $_ -match '/privateendpoints/[^/]+$' }).Count
-                if ($sfx.Contains($g)) { $r['properties']['customDnsConfigs'] = @([ordered]@{ fqdn = ('{0}.{1}' -f $res, $sfx[$g]); ipAddresses = @(('10.200.13.{0}' -f (68 + $n))) }) }
+                if ($sfx.Contains($g)) {
+                    $nicId = ('{0}/providers/Microsoft.Network/networkInterfaces/{1}.nic.0001' -f ($p -replace '(?i)/providers/Microsoft\.Network/privateEndpoints/[^/]+$', ''), $r['name'])
+                    $old = $S.Items[$nicId.ToLowerInvariant()]
+                    $ip = if ($old) { [string]$old['properties']['ipConfigurations'][0]['properties']['privateIPAddress'] } else { '10.200.13.{0}' -f (68 + @($S.Items.Keys | Where-Object { $_ -match '/privateendpoints/[^/]+$' }).Count) }
+                    $fqdn = '{0}.{1}' -f $res, $sfx[$g]
+                    $S.Items[$nicId.ToLowerInvariant()] = ConvertTo-SIArmStoreHash ([ordered]@{ id = $nicId; name = ($nicId -split '/')[-1]; properties = [ordered]@{ provisioningState = 'Succeeded'
+                        ipConfigurations = @([ordered]@{ name = ('privateEndpointIpConfig.{0}' -f $g); properties = [ordered]@{ privateIPAddress = $ip; privateIPAllocationMethod = 'Dynamic'; privateLinkConnectionProperties = [ordered]@{ groupId = $g; requiredMemberName = $g; fqdns = @($fqdn) } } }) } })
+                    $r['properties']['networkInterfaces'] = @([ordered]@{ id = $nicId })
+                    $hasGroup = @($S.Items.Keys | Where-Object { $_.StartsWith($key + '/privatednszonegroups/') }).Count
+                    $r['properties']['customDnsConfigs'] = $(if ($hasGroup -or $S['NoCustomDnsConfigs']) { @() } else { @([ordered]@{ fqdn = $fqdn; ipAddresses = @($ip) }) })
+                }
             }
+        }
+        '(?i)/privateEndpoints/[^/]+/privateDnsZoneGroups/[^/]+$' {
+            # #1073: attaching a zone group EMPTIES the endpoint's customDnsConfigs (Azure's behaviour)
+            $peKey = ($key -replace '/privatednszonegroups/[^/]+$', '')
+            if ($S.Items.Contains($peKey)) { $S.Items[$peKey]['properties']['customDnsConfigs'] = @() }
         }
         '(?i)/managedEnvironments/[^/]+$' { $r['properties']['defaultDomain'] = ('{0}.westeurope.azurecontainerapps.io' -f $r['name']); $r['properties']['staticIp'] = '10.20.0.10' }
         '(?i)/vaults/([^/]+)/keys/([^/]+)$' {

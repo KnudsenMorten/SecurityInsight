@@ -63,7 +63,7 @@ function Get-DiscoveryFromMDE {
         Add-SIFullSourceObject -SourceSystem 'mde' -Object $m -AnchorColumn 'MdeDeviceId' -AnchorValue ([string]$m.id)
         $name = if ($m.computerDnsName) { $m.computerDnsName } else { $m.id }
         # NormalizedKey wants the SHORT hostname for cross-source merge.
-        # MDE returns FQDN (e.g. "strv-mok-dt-03.2linkit.local") while EG + Entra
+        # MDE returns FQDN (e.g. "pc-01.contoso.local") while EG + Entra
         # return short names ("strv-mok-dt-03"). Different NormalizedKey -> no
         # merge -> 2-3 separate rows for the same device. Keep MDE_DeviceName as
         # the original (forensics + display); use short name for routing only.

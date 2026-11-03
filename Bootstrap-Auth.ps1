@@ -51,7 +51,7 @@ param(
     #   1. Try canonical SI_-prefixed names ('SI_SPN_AppId' / 'SI_SPN_Secret') --
     #      mirrors the global variable names so customers with a dedicated SI SPN
     #      get parity between their KV layout and their custom.ps1 globals.
-    #   2. Fall back to the 2linkit internal-mode names
+    #   2. Fall back to the internal-mode names
     #      ('Modern-ApplicationId-Azure' / 'Modern-Secret-Azure') so existing
     #      internal deployments keep working without flag changes.
     # When supplied explicitly, the auto-detect is skipped and exactly the
@@ -307,7 +307,7 @@ if ($staticSpnPresent) {
             $candidatePairs += ,@($SpnAppIdSecretName, $SpnSecretSecretName)
         } else {
             $candidatePairs += ,@('SI_SPN_AppId',           'SI_SPN_Secret')           # priority 1 (preferred -- matches global names)
-            $candidatePairs += ,@('Modern-ApplicationId-Azure','Modern-Secret-Azure')  # priority 2 (2linkit internal mode)
+            $candidatePairs += ,@('Modern-ApplicationId-Azure','Modern-Secret-Azure')  # priority 2 (internal mode)
         }
 
         $spnAppId = $null; $spnSecret = $null; $resolvedAppName = $null; $resolvedSecretName = $null

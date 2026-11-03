@@ -1698,6 +1698,8 @@ function Get-SIInstallInfra {
     $v = $Ctx.Values; $n = $Ctx.Names
     $r = Invoke-SIInstallScript -Ctx $Ctx -RelativePath 'setup/ConfigWizard/backend/Initialize-SIInfra.ps1' -Arguments ([ordered]@{
         SpnObjectId = [string]$Ctx.Facts['userObjectId']; TenantId = [string]$v['tenantId']; SubscriptionId = [string]$v['subscriptionId']
+        # 2026-11-03 (FVF): the signed-in PERSON is a User -- labelled ServicePrincipal, Azure refused every grant
+        SpnPrincipalType = $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'ServicePrincipal' })
         ResourceGroupName = $n.ResourceGroup; Location = [string]$v['location']; WorkspaceName = $n.Workspace; DceName = $n.Dce
         StorageAccountName = $n.StorageAccount; CreateKeyVault = $true; KeyVaultName = $n.KeyVault
         Ring = 'prod'; Edition = $Ctx.Edition; Hosting = 'ca'; Owner = [string]$v['owner']

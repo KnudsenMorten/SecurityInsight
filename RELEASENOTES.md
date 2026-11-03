@@ -1,3 +1,10 @@
+## v3.0.25 — The install gives the person installing their data access
+
+### Install
+
+- The install grants the person who installs (a user, not an app) the data roles on the new workspace, storage and Key
+  Vault -- Azure refused them before because they were asked for as an app.
+
 ## v3.0.24 — Running the install again in the same window signs you in
 
 ### Install

@@ -416,6 +416,53 @@ Describe 'TEST-RUN-1: the selection for a FIX release, and no batch longer than 
     }
 }
 
+Describe 'SELECT ONCE (owner 2026-11-03: "cut the overhead too, keep to only the needed"): a selection handed in is used as it is' {
+    It 'the check: only a quick selection with its reasons, for the same base commit, for a quick gate without -Paths' {
+        $b = 'a' * 40
+        $ok = [pscustomobject]@{ Mode = 'quick'; Full = $false; Base = $b; Reasons = [pscustomobject]@{ 'X.Tests.ps1' = 'core set' } }
+        (Test-SIFastGateSelectionIn -Doc $ok -DocBaseSha $b -BaseSha $b.ToUpperInvariant()).Use | Should -BeTrue
+        # NEGATIVE: every other case selects again, with the reason said
+        (Test-SIFastGateSelectionIn -Doc $null -DocBaseSha $b -BaseSha $b).Why | Should -Match 'could not be read'
+        (Test-SIFastGateSelectionIn -Doc $ok -DocBaseSha $b -BaseSha ('b' * 40)).Why | Should -Match 'another base'
+        (Test-SIFastGateSelectionIn -Doc $ok -DocBaseSha '' -BaseSha $b).Use | Should -BeFalse
+        foreach ($sw in 'Full', 'Precise', 'Scale') { $a = @{ Doc = $ok; DocBaseSha = $b; BaseSha = $b; $sw = $true }; (Test-SIFastGateSelectionIn @a).Use | Should -BeFalse -Because $sw }
+        (Test-SIFastGateSelectionIn -Doc $ok -DocBaseSha $b -BaseSha $b -Paths 'a/b.ps1').Use | Should -BeFalse
+        (Test-SIFastGateSelectionIn -Doc ([pscustomobject]@{ Mode = 'full'; Full = $true; Base = $b; Reasons = $ok.Reasons }) -DocBaseSha $b -BaseSha $b).Use | Should -BeFalse
+        (Test-SIFastGateSelectionIn -Doc ([pscustomobject]@{ Mode = 'quick'; Full = $false; Base = $b }) -DocBaseSha $b -BaseSha $b).Why | Should -Match 'no reasons'
+    }
+    It 'BEHAVIOUR: the selection handed back in gives the SAME selection (suites, reasons, changed paths, web app, notes) and selects nothing; for another base it is not used' {
+        $exe = (Get-Process -Id $PID).Path; $gate = Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1'
+        $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $s1 = Join-Path ([IO.Path]::GetTempPath()) "si-sel1-$id.json"; $s2 = Join-Path ([IO.Path]::GetTempPath()) "si-sel2-$id.json"; $s3 = Join-Path ([IO.Path]::GetTempPath()) "si-sel3-$id.json"
+        try {
+            $null = & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $gate -Base 'HEAD~1' -ListOnly -SelectionFile $s1 2>&1
+            $LASTEXITCODE | Should -Be 0
+            $o2 = @(& $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $gate -Base 'HEAD~1' -ListOnly -SelectionIn $s1 -SelectionFile $s2 2>&1 | ForEach-Object { "$_" })
+            $LASTEXITCODE | Should -Be 0
+            ($o2 -join "`n") | Should -Match 'the selection handed in is used'
+            $a = [IO.File]::ReadAllText($s1) | ConvertFrom-Json; $c = [IO.File]::ReadAllText($s2) | ConvertFrom-Json
+            $a.Reasons | Should -Not -BeNullOrEmpty
+            foreach ($k in 'Suites', 'Changed', 'Dotnet', 'Unmapped', 'Notes', 'Hubs', 'Base', 'Mode', 'CoreSet', 'MeasuredSeconds') { (ConvertTo-Json -InputObject $c.$k -Compress -Depth 6) | Should -Be (ConvertTo-Json -InputObject $a.$k -Compress -Depth 6) -Because $k }
+            (ConvertTo-Json -InputObject $c.Reasons -Compress) | Should -Be (ConvertTo-Json -InputObject $a.Reasons -Compress)
+            (ConvertTo-Json -InputObject $c.DotnetClasses -Compress -Depth 6) | Should -Be (ConvertTo-Json -InputObject $a.DotnetClasses -Compress -Depth 6)
+            # NEGATIVE: handed in for another base -- said, and the gate selects itself
+            $o3 = @(& $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $gate -Base 'HEAD' -Paths ' ' -ListOnly -SelectionIn $s1 -SelectionFile $s3 2>&1 | ForEach-Object { "$_" })
+            ($o3 -join "`n") | Should -Match 'is not used: it was made for another base'
+            @(([IO.File]::ReadAllText($s3) | ConvertFrom-Json).Changed).Count | Should -Be 0
+        } finally { foreach ($f in $s1, $s2, $s3) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+    }
+    It 'WIRING: -SelectionFile carries every suite''s reason; with a selection used, no suite''s text and no code is read for selecting -- only the suites that run here' {
+        $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
+        $g | Should -Match 'Suites = @\(\$reasons\.Keys\); Reasons = \$reasons;'
+        $g | Should -Match '\[string\]\$SelectionIn,'
+        $g | Should -Match 'if \(-not \$pre\) \{ foreach \(\$s in \$allSuites\) \{ \$suiteText\[\$s\.Name\] = \[IO\.File\]::ReadAllText'
+        # the selection (code index, changed lines) sits in the branch a handed-in selection skips
+        $g.IndexOf('} elseif ($Full) {') | Should -BeGreaterThan $g.IndexOf('if ($pre) {')
+        $g.IndexOf('$codeText = @{}') | Should -BeGreaterThan $g.IndexOf('} elseif ($Full) {')
+        $g | Should -Match "foreach \(\`$k in @\(\`$reasons\.Keys\)\) \{ if \(-not \`$suiteText\.ContainsKey\(\`$k\)\)"
+    }
+}
+
 Describe 'ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13: "no boddy can trigger full test, newer ! only me can start that")' {
     BeforeAll {
         $script:GateFile = Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1'

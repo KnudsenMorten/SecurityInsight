@@ -72,6 +72,9 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter()]          [string]$SpnObjectId,
+    # what -SpnObjectId is: an app / managed identity (ServicePrincipal, the default) or the PERSON installing (User -- the
+    # guided install passes the signed-in person; Azure refuses a role grant whose principal type does not match)
+    [Parameter()]          [ValidateSet('ServicePrincipal', 'User', 'Group')] [string]$SpnPrincipalType = 'ServicePrincipal',
     [Parameter()]          [string]$ManagedIdentityName,
     [Parameter(Mandatory)] [string]$TenantId,
     [Parameter(Mandatory)] [string]$SubscriptionId,
@@ -286,7 +289,7 @@ function _GrantRbac {
         Where-Object { $_.Scope -ieq $Scope })
     if ($existing.Count) { _Info ("RBAC '{0}' already in place at {1}" -f $RoleName, $Scope); return }
     try {
-        $null = New-SIRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName $RoleName -Scope $Scope -PrincipalType ServicePrincipal
+        $null = New-SIRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName $RoleName -Scope $Scope -PrincipalType $SpnPrincipalType
         _Ok ("RBAC '{0}' granted at {1}" -f $RoleName, $Scope)
         $script:rbacScopes += ("{0}|{1}" -f $Scope, $RoleName)
     } catch {

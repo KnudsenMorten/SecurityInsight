@@ -122,6 +122,11 @@ param(
     # the selection as JSON (Full, Base, Changed, Suites, Dotnet, Unmapped, OverBudget, AllSuites, MeasuredSeconds,
     # LongestSeconds) -- setup\Release-SI.ps1 reads it (-ListOnly)
     [string]$SelectionFile,
+    # SELECT ONCE (owner 2026-11-03: "cut the overhead too"): a selection this gate already made for this commit and -Base
+    # (-ListOnly -SelectionFile: setup\Release-SI.ps1 step 1a, or tests\Invoke-GateOnTestVm.ps1's lane split) -- used as it
+    # is, nothing is selected again (no suite's text read, no changed line diffed). Ignored, said, when it is not for this
+    # base or for a quick selection (Test-SIFastGateSelectionIn).
+    [string]$SelectionIn,
     [switch]$UpdateDurations,
     [string]$ResultFile,
     # TEST-FAST (owner 2026-11-02: "remove these limits"): DEPRECATED and INERT -- no clock ends a run any more. Kept so an
@@ -1133,6 +1138,27 @@ function Get-SIFastGateChangedPaths {
     @($all | Where-Object { $_ -and $_.StartsWith($prefix) } | ForEach-Object { $_.Substring($prefix.Length) } | Sort-Object -Unique)
 }
 
+function Test-SIFastGateSelectionIn {
+    <#
+        PURE. SELECT ONCE: may this gate use -Doc (a -SelectionFile written by this gate's -ListOnly) instead of selecting
+        again? Only a QUICK selection (Mode quick, not Full) that carries every suite's reason (Reasons), made for the same
+        base commit (-DocBaseSha / -BaseSha: both resolved to full commit ids), and only for a quick gate (not -Full,
+        -Precise or -Scale: those select differently). -Paths (files named without a diff) select differently as well.
+        Returns @{ Use; Why }.
+    #>
+    param($Doc, [string]$DocBaseSha = '', [string]$BaseSha = '', [switch]$Full, [switch]$Precise, [switch]$Scale, [string]$Paths = '')
+    $no = { param($w) [pscustomobject]@{ Use = $false; Why = $w } }
+    if (-not $Doc) { return (& $no 'the selection file could not be read') }
+    if ($Full -or $Precise -or $Scale) { return (& $no 'a full run, -Precise or -Scale selects for itself') }
+    if ("$Paths".Trim()) { return (& $no '-Paths selects for itself') }
+    $p = { param([string]$n) [bool]$Doc.PSObject.Properties[$n] }
+    if ((& $p 'Full') -and $Doc.Full) { return (& $no 'it is a full selection') }
+    if (-not (& $p 'Mode') -or "$($Doc.Mode)" -ne 'quick') { return (& $no 'it is not a quick selection') }
+    if (-not (& $p 'Reasons') -or -not $Doc.Reasons) { return (& $no 'it carries no reasons (an older gate wrote it)') }
+    if (-not $BaseSha -or -not $DocBaseSha -or $BaseSha.ToLowerInvariant() -ne $DocBaseSha.ToLowerInvariant()) { return (& $no ('it was made for another base ({0})' -f "$($Doc.Base)")) }
+    [pscustomobject]@{ Use = $true; Why = '' }
+}
+
 if ($DefineOnly) { return }   # tests: the functions only
 
 # ---- ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13) -- before anything else; -ListOnly runs nothing and may list ----
@@ -1175,8 +1201,31 @@ $reasons = [ordered]@{}; $dotnetPick = [ordered]@{}; $unmapped = @(); $changed =
 $phase = [ordered]@{}; $selectSw = [Diagnostics.Stopwatch]::StartNew()
 if ($Precise -and -not $ListOnly) { Write-Host '  -Precise (the older covering selection) is a diagnostic: -ListOnly only -- the gate is the quick gate' -ForegroundColor Red; exit 2 }
 # every suite's text: the selection reads it, and the run asks which suites need SQL (a full run too)
-$suiteText = @{}; foreach ($s in $allSuites) { $suiteText[$s.Name] = [IO.File]::ReadAllText($s.FullName) }
-if ($Full) {
+$suiteText = @{}
+# SELECT ONCE: a selection already made for this commit and base (-SelectionIn) is used as it is -- nothing selected again
+$pre = $null
+if ("$SelectionIn".Trim()) {
+    $pdoc = $null; try { $pdoc = [IO.File]::ReadAllText($SelectionIn) | ConvertFrom-Json } catch { $pdoc = $null }
+    $rb = { param([string]$c) if (-not "$c".Trim()) { return '' }; $x = "$(& git -C $repoRoot rev-parse --verify --quiet ($c.Trim() + '^{commit}') 2>$null)".Trim(); $global:LASTEXITCODE = 0; $x }
+    $useBase = if ($Base) { $Base } else { "$(& git -C $repoRoot merge-base HEAD origin/si-v3 2>$null)".Trim() }; $global:LASTEXITCODE = 0
+    $pk = Test-SIFastGateSelectionIn -Doc $pdoc -DocBaseSha $(if ($pdoc -and $pdoc.PSObject.Properties['Base']) { & $rb "$($pdoc.Base)" } else { '' }) -BaseSha (& $rb $useBase) -Full:$Full -Precise:$Precise -Scale:$Scale -Paths $Paths
+    if ($pk.Use) { $pre = $pdoc; if (-not $Base) { $Base = $useBase } }
+    else { Write-Host ('  NOTE the selection handed in (-SelectionIn) is not used: {0} -- the gate selects itself' -f $pk.Why) -ForegroundColor DarkYellow }
+}
+if (-not $pre) { foreach ($s in $allSuites) { $suiteText[$s.Name] = [IO.File]::ReadAllText($s.FullName) } }
+if ($pre) {
+    # the selection as it was made: the changed paths, every suite with its reason, the web app projects, the notes
+    $changed = @($pre.Changed | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $known = @{}; foreach ($s in $allSuites) { $known[$s.Name] = $true }
+    foreach ($pp in $pre.Reasons.PSObject.Properties) { if ($known.ContainsKey($pp.Name)) { $reasons[$pp.Name] = [string]$pp.Value } }
+    foreach ($d in @($pre.Dotnet | Where-Object { $_ })) { if ($dotnetAll -contains [string]$d) { $dotnetPick[[string]$d] = 'selected' } }
+    $unmapped = @($pre.Unmapped | Where-Object { $_ })
+    $pv = { param([string]$n) if ($pre.PSObject.Properties[$n]) { $pre.$n } else { $null } }
+    $quickSel = [pscustomobject]@{ Core = [bool](& $pv 'CoreSet'); Broad = $(if (& $pv 'Broad') { & $pv 'Broad' } else { [ordered]@{} }); Hubs = @(& $pv 'Hubs' | Where-Object { $_ }); Narrow = @(& $pv 'Narrow' | Where-Object { $_ })
+                                   Notes = @(& $pv 'Notes' | Where-Object { $_ }); TextReaders = (& $pv 'TextReaders') }
+    if ($NoSafety) { foreach ($k in @($reasons.Keys)) { if ("$($reasons[$k])" -like 'core set*') { $reasons.Remove($k) } } }
+    Write-Host ('  the selection handed in is used (made once for this commit and base: {0} suite(s)) -- nothing is selected again' -f $reasons.Count) -ForegroundColor DarkGray
+} elseif ($Full) {
     foreach ($s in $allSuites) { $reasons[$s.Name] = 'full' }
     foreach ($d in $dotnetAll) { $dotnetPick[$d] = 'full' }
 } else {
@@ -1236,6 +1285,8 @@ if ($onlyList.Count) {
     foreach ($k in @($reasons.Keys)) { if ($onlyList -notcontains $k) { $reasons.Remove($k) } }
     foreach ($n in $onlyList) { if (-not $reasons.Contains($n) -and @($allSuites | Where-Object Name -eq $n).Count) { $reasons[$n] = 'this lane''s share (-Only)' } }
 }
+# a selection handed in read no suite's text: the suites that run here are read now (the run asks which of them need SQL)
+foreach ($k in @($reasons.Keys)) { if (-not $suiteText.ContainsKey($k)) { $sp = Join-Path $pesterDir $k; if (Test-Path -LiteralPath $sp) { $suiteText[$k] = [IO.File]::ReadAllText($sp) } } }
 # the web app's test classes that cover the change (fast-gate.map.json dotnetFilter) -- decided here, so -ListOnly shows it
 $dotnetPlan = @()
 if ($dotnetPick.Count) {
@@ -1280,7 +1331,8 @@ if (-not $Full) {
 }
 if ($SelectionFile) {
     $sd = Split-Path -Parent $SelectionFile; if ($sd -and -not (Test-Path -LiteralPath $sd)) { New-Item -ItemType Directory -Force -Path $sd | Out-Null }
-    $selDoc = [ordered]@{ Full = [bool]$Full; Hotfix = [bool]$Hotfix; Base = "$Base"; Changed = @($changed); Suites = @($reasons.Keys); Dotnet = @($dotnetPick.Keys); Unmapped = @($unmapped)
+    # Reasons: every suite with why it runs -- what a gate handed this file (-SelectionIn) runs as it is (select once)
+    $selDoc = [ordered]@{ Full = [bool]$Full; Hotfix = [bool]$Hotfix; Base = "$Base"; Changed = @($changed); Suites = @($reasons.Keys); Reasons = $reasons; Dotnet = @($dotnetPick.Keys); Unmapped = @($unmapped)
                           OverBudget = @($overBudget.Keys); Dropped = @(); DotnetClasses = [ordered]@{} }
     foreach ($pj in $dotnetPlan) { $selDoc.DotnetClasses[$pj.Name] = $(if ($pj.Whole) { @('*') } else { @($pj.Classes) }) }
     # for the release command's STOP (setup\Release-SI.ps1: a selection of every suite, or one that cannot fit the

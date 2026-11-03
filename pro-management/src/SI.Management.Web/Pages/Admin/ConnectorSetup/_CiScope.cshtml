@@ -1,0 +1,76 @@
+@* #1055 WHICH CIs ARE SENT (owner 2026-11-02: "we should NOT be syncing these assets [mobile phones] into snow"; "we need to
+   be able to filter on this in the snow connectors"; "add all the filter options on the snow connector"). ONE home: the
+   output scope item cmdb-servicenow -- shown and edited here, on the ServiceNow data-out connector; Connectors > Scope shows
+   the same item. Every choice with its counts for this install: how many CIs hold it, how many of those would be sent. *@
+@model SI.Management.Web.Pages.Admin.ConnectorSetup.EditModel
+@using SI.Management.Core.ProData
+@using SI.Management.Web.Pages.Admin.ConnectorSetup
+@using SI.Management.Web.Outputs
+@using SI.Management.Web.Auth
+@{
+    var s = Model.CiScope;
+    var edit = User.IsAdmin();
+    var p = Model.CiPreview;
+    IReadOnlyList<CiChoiceField> fields = p?.Fields ?? CiRules.Fields.Select(f => new CiChoiceField(f.Field, f.Label, f.Values.Select(v => new CiChoice(v, 0, 0, true)).ToList())).ToList();
+    string Counted(CiChoice c) => p is null ? "" : $" ({Fmt.Int(c.Cis)} CI(s), {Fmt.Int(c.Sent)} sent)";
+}
+<section class="card" aria-labelledby="h-ci-scope" id="ci-scope" data-ci-scope>
+    <h2 id="h-ci-scope">Which CIs are sent @if (p is not null) { <span class="badge" data-ci-scope-count>@Fmt.Int(p.Sent) of @Fmt.Int(p.Total)</span> }</h2>
+    <p class="hint">The CIs this connector sends to ServiceNow (the CI output), by tier, asset kind and the CI's own category -- asset type, OS family and class. A CI is sent when it matches one of the <strong>include</strong> rules (none set = every CI) and none of the <strong>leave out</strong> rules. A rule matches a CI when every field it ticks holds one of the ticked values (several ticked in one field = any of them). A CI that leaves the scope gets one out-of-scope row and is never closed by it; @(Model.CiOutputOn ? "its vulnerable items are out of scope too." : "with the CI output switched on, its vulnerable items are out of scope too.")</p>
+    @if (Model.CiScopeProblem is { } prob) { <p class="notice warn" role="status" data-ci-scope-problem>@prob</p> }
+    @if (Model.CiScopeMessages.Count > 0) { <div class="notice error" role="alert" data-ci-scope-messages><ul>@foreach (var m in Model.CiScopeMessages) { <li>@m</li> }</ul></div> }
+    @if (s is not null)
+    {
+        <p data-ci-scope-now>In force: @(Model.CiScopeInForce?.Describe() ?? "everything (no scope)")</p>
+        @if (Model.CiScopePosted) { <p class="notice info" role="status" data-ci-scope-posted>Counted with the choices below (not staged): @s.Describe()</p> }
+        @if (p is not null) { <p class="notice @(p.LeftOutByRules > 0 ? "attn" : "info")" role="status" data-ci-scope-effect>@p.Words.</p> }
+        <form method="post" asp-page-handler="CiScopeStage" class="stack" data-ci-scope-form>
+            <input type="hidden" name="Name" value="@Model.Name" />
+            <fieldset class="filters" disabled="@(!edit)">
+                <fieldset data-ci-scope-tiers><legend>Tier (none ticked = every tier)</legend>
+                    @for (var t = 0; t <= 3; t++) { <label><input type="checkbox" name="CiTiers" value="@t" checked="@s.Tiers.Contains(t)" /> @ReportVocabulary.Tiers[t]</label> }
+                </fieldset>
+                <fieldset data-ci-scope-kinds><legend>Asset kind (none ticked = every kind)</legend>
+                    @foreach (var k in ReportVocabulary.AssetKinds) { <label><input type="checkbox" name="CiKinds" value="@k" checked="@s.AssetKinds.Contains(k, StringComparer.OrdinalIgnoreCase)" /> @SI.Management.Web.Pages.Reports.OutputsModel.AssetKindChoiceWords(k)</label> }
+                </fieldset>
+                @foreach (var include in new[] { true, false })
+                {
+                    var rules = include ? s.CiInclude : s.CiExclude;
+                    var slots = rules.Count + EditModel.CiRuleSlots;
+                    <h3>@(include ? "Include only" : "Leave out")</h3>
+                    <p class="hint">@(include ? "Optional. Ticked here = only the CIs that match this rule (or another include rule) are sent." : "Each rule leaves out the CIs that match ALL its ticked fields -- e.g. asset type Unknown together with OS family iOS and Android.")</p>
+                    @for (var i = 0; i < slots; i++)
+                    {
+                        var rule = i < rules.Count ? rules[i] : null;
+                        <details class="ci-rule" open="@(rule is not null)" data-ci-rule="@(include ? "include" : "exclude")-@i">
+                            <summary>@(rule is not null ? (include ? "Include: " : "Leave out: ") + rule.Describe() : (include ? "+ Add an include rule" : "+ Add a leave-out rule"))</summary>
+                            @foreach (var f in fields)
+                            {
+                                var chosen = rule?.Fields.FirstOrDefault(x => x.Field == f.Field)?.Values ?? Array.Empty<string>();
+                                <fieldset class="scroll-list" data-ci-rule-field="@f.Field"><legend>@f.Label</legend>
+                                    @foreach (var c in f.Choices)
+                                    {
+                                        <label><input type="checkbox" name="@EditModel.CiRuleParam(include, i, f.Field)" value="@c.Value" checked="@chosen.Contains(c.Value, StringComparer.OrdinalIgnoreCase)" /> @c.Value<span class="hint" data-ci-choice-count="@f.Field|@c.Value">@Counted(c)</span>@if (!c.InCatalog) { <span class="hint"> (not in the classification catalog)</span> }</label>
+                                    }
+                                    @foreach (var extra in chosen.Where(v => !f.Choices.Any(c => string.Equals(c.Value, v, StringComparison.OrdinalIgnoreCase))))
+                                    {
+                                        <label><input type="checkbox" name="@EditModel.CiRuleParam(include, i, f.Field)" value="@extra" checked /> @extra <span class="hint">(no CI holds it now)</span></label>
+                                    }
+                                </fieldset>
+                            }
+                        </details>
+                    }
+                }
+            </fieldset>
+            <div class="filters">
+                <div class="actions"><button type="submit" asp-page-handler="CiScopeCount" class="secondary" data-ci-scope-count-button>Count with these choices</button></div>
+                @if (edit)
+                {
+                    <div class="wide"><label for="ci-reason">Reason (recorded with the change)</label><input id="ci-reason" type="text" name="CiReason" maxlength="400" placeholder="why" /></div>
+                    <div class="actions"><button type="submit" data-ci-scope-stage>Stage for Review &amp; commit</button></div>
+                }
+            </div>
+            <p class="hint">Nothing is written here. The change is written on <a href="/Changes">Review &amp; commit</a> (recorded in the change log) and applies from the next ServiceNow sync. The same scope shows on <a href="/Connectors/Scope">Connectors &gt; Scope</a> (CMDB connector, ServiceNow).</p>
+        </form>
+    }
+</section>

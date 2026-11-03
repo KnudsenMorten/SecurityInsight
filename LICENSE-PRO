@@ -95,7 +95,10 @@ These paths are delivered only to licensed customers through the private Automat
   setup/Grant-SISupportAppDatabase.ps1
   setup/_shared/SI-SupportAppDatabase.ps1
   setup/Invoke-SISupportSqlAccessJob.ps1
+  setup/Install-SISupportGrantProcedure.ps1
   setup/_shared/SI-SupportSqlJob.ps1
+  setup/Invoke-SISupportReadJob.ps1
+  setup/_shared/SI-SupportReadJob.ps1
   setup/_shared/SI-MissingJobs.ps1
   setup/Publish-SIRelease.ps1
   setup/Publish-SICommunityRelease.ps1

@@ -280,13 +280,16 @@ public sealed class ExemptionWorkflow
     /// #283: "listed" = one of <see cref="Roster.Deciders"/> for the node -- a Category Owner of the category, a Domain
     /// Owner of the domain (or '*'), or a holder of the older approver role.
     public static bool CanDecide(ClaimsPrincipal user, Roster roster, string domain, string? category, IAccessScope? access = null) =>
-        (access ?? DefaultAccess).CanListed(user, AccessAction.Approve, DomainTarget(domain), roster.IsDecider(user.ChangeName(), domain, category)).Allowed;
+        (access ?? DefaultAccess).CanListed(user, AccessAction.Approve, DomainTarget(domain), roster.IsDecider(RosterName(user), domain, category)).Allowed;
     /// A domain-level decision (no category): the domain's owners and approvers.
     public static bool CanDecide(ClaimsPrincipal user, Roster roster, string domain, IAccessScope? access = null) => CanDecide(user, roster, domain, (string?)null, access);
+    /// #995: the name a roster entry (an owner / approver, stored by sign-in name) is matched against -- the sign-in name
+    /// the directory issued for one of its own members only; a guest's (chosen by its home tenant) never matches ("").
+    internal static string RosterName(ClaimsPrincipal user) => user.DirectoryMemberName() ?? "";
     /// The review counterpart of <see cref="CanDecide(ClaimsPrincipal, Roster, string, IAccessScope?)"/>: the owners of
     /// the exemption's category or domain. Same seam.
     public static bool CanReview(ClaimsPrincipal user, Roster roster, string domainKey, string? category, IAccessScope? access = null) =>
-        (access ?? DefaultAccess).CanListed(user, AccessAction.Review, DomainTarget(domainKey), roster.IsReviewer(user.ChangeName(), domainKey, category)).Allowed;
+        (access ?? DefaultAccess).CanListed(user, AccessAction.Review, DomainTarget(domainKey), roster.IsReviewer(RosterName(user), domainKey, category)).Allowed;
     public static bool CanReview(ClaimsPrincipal user, Roster roster, string domainKey, IAccessScope? access = null) => CanReview(user, roster, domainKey, (string?)null, access);
 
     private static readonly IAccessScope DefaultAccess = new AccessScopeService();
@@ -365,7 +368,9 @@ public sealed class ExemptionWorkflow
         findings = await WithCategoriesAsync(findings, ct);
         var dept = ready ? await DepartmentRouteAsync(departmentId, ct) : null;
         var isBa = dept is { Any: true } && await IsBusinessApproverAsync(user, dept.DepartmentId, ct);
-        return ExemptionPreview.Build(roster, findings, (d, c) => CanDecide(user, roster, d, c, _access), alreadyExempted, dept, isBa);
+        var preview = ExemptionPreview.Build(roster, findings, (d, c) => CanDecide(user, roster, d, c, _access), alreadyExempted, dept, isBa);
+        // #996: "Approve now" is approving one's own request -- offered only where the install allows self-approval
+        return preview.CanApproveAll && !(await _settings.ReadAsync(ct)).AllowSelfApproval ? preview with { CanApproveAll = false } : preview;
     }
 
     /// <summary>
@@ -458,7 +463,22 @@ public sealed class ExemptionWorkflow
             var routed = toDept && row.RoutedToDepartment;
             if (toDept && !routed) cannotStore = true;
             if (routed) asked = dept!.Names;
-            if (form.ApproveNow && (CanDecide(user, roster, domain, category, _access) || (routed && userIsBa)))
+            var mayDecide = CanDecide(user, roster, domain, category, _access) || (routed && userIsBa);
+            // #996: approving in the same step is approving one's own request -- the same four-eyes rule as a decision
+            // (SIWeb_ExemptionAllowSelfApproval); with it off the request waits for another owner or approver
+            if (form.ApproveNow && mayDecide && !s.AllowSelfApproval)
+            {
+                notes.Add($"request #{id} ({label}) waits for another owner or approver (or an Admin): this install does not let whoever asks for an exemption approve it too");
+                created.Add(row);
+                if (s.MailEnabled)
+                {
+                    var to = approver is not null ? new[] { approver } : routed ? dept!.Mails.ToArray() : asked.ToArray();
+                    var link = await LinkAsync("/Exemptions/Decide", new Dictionary<string, string?> { ["id"] = id.ToString(System.Globalization.CultureInfo.InvariantCulture) }, ct);
+                    await MailAsync(ExemptionMailComposer.Request(row, items, to, link), by, ct);
+                }
+                continue;
+            }
+            if (form.ApproveNow && mayDecide)
             {
                 var (st, n) = await _store.ApproveAsync(id, by, "approved when requested", ct);
                 if (st == WriteStatus.Saved)
@@ -507,6 +527,14 @@ public sealed class ExemptionWorkflow
         return $"only the owners of {r.ScopeLabel} (or an Admin) decide this request" + (asked.Count > 0 ? $" -- it is asked of {string.Join(", ", asked)}" : "");
     }
 
+    /// #996: the signed-in person is the one who asked for this request -- by the name the request recorded (the same name
+    /// every change is recorded with, <see cref="UserExtensions.ChangeName"/>), case-insensitive.
+    public static bool IsRequester(ClaimsPrincipal user, RequestRow r)
+    {
+        var by = user.ChangeName();
+        return by.Length > 0 && string.Equals((r.RequestedBy ?? "").Trim(), by.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<WriteResult> ApproveAsync(ClaimsPrincipal user, long requestId, string? comment, CancellationToken ct) =>
         await DecideAsync(user, requestId, true, comment, ct);
 
@@ -521,6 +549,10 @@ public sealed class ExemptionWorkflow
         var roster = new Roster(await _store.RolesAsync(ct));
         if (!CanDecide(user, roster, r.Domain, r.Category, _access) && !await DepartmentDecidesAsync(user, r, ct)) return new(WriteStatus.Refused, NotYoursToDecide(roster, r, await AskedOfAsync(roster, r, ct)));
         if (r.State != ExemptionStates.Requested) return new(WriteStatus.Stale, $"request #{requestId} is already {r.State} -- nothing was written");
+        // #996: four eyes -- whoever asked for an exemption does not approve it too (unless the install switched
+        // SIWeb_ExemptionAllowSelfApproval on); rejecting one's own request stays possible
+        if (approve && IsRequester(user, r) && !(await _settings.ReadAsync(ct)).AllowSelfApproval)
+            return new(WriteStatus.Refused, $"you asked for request #{requestId} yourself -- another owner or approver (or an Admin) decides it; nothing was written");
         var c = (comment ?? "").Trim();
         if (c.Length > 400) return new(WriteStatus.Refused, "the comment is longer than 400 characters");
         if (!approve && c.Length < 3) return new(WriteStatus.Refused, "say why it is rejected (at least 3 characters) -- the requester gets the comment");

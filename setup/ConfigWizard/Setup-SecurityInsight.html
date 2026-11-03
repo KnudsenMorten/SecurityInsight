@@ -239,8 +239,8 @@
           <div class="toggle-group" data-toggle-key="credStorage">
             <label data-val="KeyVault" data-host-type-block="azureVMMI,azureContainerMI"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
             <label data-val="LocalCertStore" data-cred-block="certThumb" data-host-type-block="win,azureVMMI"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
-            <label data-val="Inline" data-cred-block="kvSecret"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span> <b style="color:#c62828;">(testing only)</b></label>
           </div>
+          <p class="card-sub" data-host-type-block="win" style="margin-top:8px;">A client secret is kept only in Azure Key Vault, never in the configuration file. A server outside Azure has no managed identity that could read Key Vault, so a new sign-in there uses a certificate in this server's certificate store.</p>
           <label style="display:block; margin-top:12px;"><input type="checkbox" id="f_includeTagContributor" data-key="includeTagContributor" /> Also allow asset tagging (grant <b>Tag Contributor</b>) <span class="help" data-tip="SecurityInsight only READS -- except the optional asset-tagging engine, which writes a criticality tag onto Azure resources. It needs the Tag Contributor role. Leave this off unless you will run asset-tagging; you can grant it later by re-running setup with it on.">?</span></label>
         </div>
 

@@ -44,7 +44,7 @@ public sealed class WeightsModel : ReportsPage
             else CurrentBody = State!.Weights.TryGetValue(Scope, out var w) && w.State == "override" ? w.Body : null;
             ModelBody = State!.Weights.TryGetValue("model", out var m) && m.State == "override" ? m.Body : null;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Log.LogError(ex, "weights"); Error = "The weights could not be read: " + ex.Message; return false; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Log.LogError(ex, "weights"); Error = "The weights could not be read: " + ViewerError.Text(ex); return false; }
         return true;
     }
 

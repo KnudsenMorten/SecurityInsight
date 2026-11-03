@@ -109,7 +109,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
             var counts = CountValues(rows, of).Select(x => new { value = x.Value, n = x.N, text = Fmt.Int(x.N) }).ToList();
             return new JsonResult(new { ok = true, column = col, total = rows.Count, values = counts });
         }
-        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
     }
 
     /// The counts of one dropdown for the current view (the page's own state in the URL).
@@ -146,7 +146,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         Normalize();
         FindingFilter f;
         try { f = ProDataFilters.Normalize(Filter()); }
-        catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; return; }
+        catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); return; }
         try
         {
             var cols = await _q.CollectionsAsync(60, ct);
@@ -173,7 +173,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading findings failed");
-            Error = "The findings could not be read from the Pro database: " + ex.Message;
+            Error = "The findings could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -317,7 +317,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
     {
         SI.Management.Web.Columns.DataTable? t;
         try { t = await ExportTableAsync("findings", false, ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (t is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var name = "securityinsight-findings-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + ".csv";
         return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(t.Csv(t.ExportKeys(false)))).ToArray(), "text/csv; charset=utf-8", name);
@@ -343,7 +343,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
             f = ProDataFilters.Normalize(Filter());
             t = await ExportTableAsync("findings", all, ct);
         }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (t is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var keys = t.ExportKeys(all);
         return await ExcelExport.FileAsync(all ? "findings-all-columns" : "findings", C ?? ExportRows?.FirstOrDefault()?.CollectionId, (x, info) =>
@@ -419,7 +419,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
                 await _changes.StageAsync(User, ChangeAccess.Stamp(change, ChangeAccess.ForFinding(f, ExemptScope)), ct);
                 staged++;
             }
-            catch (ArgumentException ex) { refused.Add($"{id}: {ex.Message}"); }
+            catch (ArgumentException ex) { refused.Add($"{id}: {ViewerError.Text(ex)}"); }
         }
         TempData["toast"] = staged > 0
             ? $"{Fmt.Int(staged)} exemption(s) staged -- nothing is written until you review and commit." + (refused.Count > 0 ? $" {Fmt.Int(refused.Count)} refused: {refused[0]}" : "")

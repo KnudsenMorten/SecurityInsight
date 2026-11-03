@@ -27,14 +27,19 @@
                          Entra device id to its Defender device id, both still on the record)
                   rekey  the CI's key changed (an asset id became a ledger id, or the ledger re-minted it)
                   merge  a CI's durable ids now belong to another CI that already existed
-      Conflicts   Name / OS / Domain / CMDB CI: two records of one CI disagree. 'Possible duplicate': another CI with the
-                  same host name and no shared durable id (the #298 shape) -- shown, never merged here.
+      Conflicts   Name / OS / Domain / CMDB CI: two records of one CI disagree. 'Possible duplicate': (#1053) another CI the
+                  correlation gatekeeper suspects is the same machine (sidata.CiSuspect: one hard id on both, or the same
+                  short name / FQDN label on 2-3 server / VM CIs -- SI-CorrelationSuspects.ps1), never one a person decided
+                  about -- shown, never merged here. It REPLACES the old rule (same host name, no shared durable id), which
+                  missed a short name against an FQDN and fired on every phone called "iphone".
 
     PURE functions build the rows (provable offline); Invoke-SIDataEvidence writes them through the -Invoke seam, guarded:
     a database whose schema predates the tables is told once and the collection load is not affected.
     PS 5.1 safe: no ?. / ??, no ternary. No Set-StrictMode (it leaks into the caller's scope).
 #>
 
+# #1053 the correlation gatekeeper's map (the CIs it suspects) -- loaded, not copied
+if (-not (Get-Command -Name Get-SICorrelationSuspectMapSql -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CorrelationSuspects.ps1') }
 # The shared identifier vocabulary (joinable = durable). Loaded, not copied.
 if (-not (Get-Command -Name Get-SIJoinableIdTypes -ErrorAction SilentlyContinue)) {
     . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared\SI-AssetIdentity.ps1')
@@ -130,6 +135,8 @@ function Build-SIDataEvidence {
           -Set               Build-SIDataAssets output (Assets, Members per AssetKey)
           -Index             New-SIDataIdentityIndex output (the correlation map: identifiers, join basis, join confidence)
           -EvidenceProfiles  lower(SI_AssetId) -> the record's Get-SIDataEvidenceProfileKql row (+ Kind)
+          -Suspects          #1053 lower(CI id) -> @{ OtherCiId; OtherName } (ConvertTo-SICorrelationSuspectMap): the CIs the
+                             correlation gatekeeper suspects; none = no possible duplicate
         Returns @{ Evidence; Conflicts; Correlation; Skipped }:
           Evidence     one row per (CI, record, key)
           Conflicts    one row per (CI, field, record) for every field two records disagree on, plus 'Possible duplicate'
@@ -141,14 +148,14 @@ function Build-SIDataEvidence {
         [Parameter(Mandatory)]$Set,
         [hashtable]$Index = @{},
         [hashtable]$EvidenceProfiles = @{},
-        [int]$MaxKeyLength = 256
+        [int]$MaxKeyLength = 256,
+        [hashtable]$Suspects = @{}
     )
     $joinable = @{}; foreach ($t in @(Get-SIJoinableIdTypes)) { $joinable[(Get-SICanonicalIdType -Type $t).ToLowerInvariant()] = $true }
     $evidence = New-Object System.Collections.Generic.List[object]
     $conflicts = New-Object System.Collections.Generic.List[object]
     $correlation = New-Object System.Collections.Generic.List[object]
     $skipped = 0
-    $byName = @{}   # short name -> @(AssetKey) for possible duplicates (endpoints and Azure VMs only)
     $assetOf = @{}; foreach ($a in @($Set.Assets)) { $assetOf[[string]$a.AssetKey] = $a }
 
     foreach ($a in @($Set.Assets)) {
@@ -281,23 +288,18 @@ function Build-SIDataEvidence {
             Records = $members.Count; SourceCount = $srcs.Count; Sources = ($srcs -join '; ')
             Confidence = (Get-SIEvidenceWeakest -Values @($rows | Where-Object { $_.Source -notin @('CMDB', 'ServiceNow') } | ForEach-Object { $_.Confidence })); JoinRule = $join
             Conflicts = $nConf; IdChanges = 0; PossibleDuplicateOf = $null; CmdbState = $cmdbState; CmdbSource = $cmdbSource; CmdbId = $cmdbId })
-        $sn = Get-SIEvidenceShortName ([string]$a.AssetName)
-        if ($sn -and ([string]$a.AssetKind -eq 'endpoint' -or ([string]$a.AssetKind -eq 'azure' -and $isVm))) {
-            if (-not $byName.ContainsKey($sn)) { $byName[$sn] = New-Object System.Collections.Generic.List[string] }
-            $byName[$sn].Add($key)
-        }
     }
 
-    # possible duplicates: two CIs with the same host name and no shared durable id (they would be ONE CI otherwise)
-    $corrOf = @{}; foreach ($c in $correlation) { $corrOf[$c.AssetKey] = $c }
-    foreach ($n in @($byName.Keys)) {
-        $keysOf = @($byName[$n] | Sort-Object)
-        if ($keysOf.Count -lt 2) { continue }
-        foreach ($k in $keysOf) {
-            $other = @($keysOf | Where-Object { $_ -ne $k })[0]
-            $corrOf[$k].PossibleDuplicateOf = $other
-            $oname = [string]$assetOf[$other].AssetName; if (-not $oname) { $oname = $other }
-            $conflicts.Add([pscustomobject]@{ AssetKey = $k; Field = 'Possible duplicate'; Source = 'SecurityInsight'; MemberAssetId = $other; Value = $oname })
+    # #1053 possible duplicates: the CIs the correlation gatekeeper suspects (-Suspects) -- the one rule, no second one here
+    if ($Suspects -and $Suspects.Count) {
+        foreach ($c in $correlation) {
+            $s = $Suspects[([string]$c.AssetKey).ToLowerInvariant()]
+            if ($null -eq $s -or -not [string]$s.OtherCiId) { continue }
+            $c.PossibleDuplicateOf = [string]$s.OtherCiId
+            $oname = [string]$s.OtherName
+            if (-not $oname -and $assetOf.ContainsKey([string]$s.OtherCiId)) { $oname = [string]$assetOf[[string]$s.OtherCiId].AssetName }
+            if (-not $oname) { $oname = [string]$s.OtherCiId }
+            $conflicts.Add([pscustomobject]@{ AssetKey = [string]$c.AssetKey; Field = 'Possible duplicate'; Source = 'SecurityInsight'; MemberAssetId = [string]$s.OtherCiId; Value = $oname })
         }
     }
     [pscustomobject]@{ Evidence = $evidence.ToArray(); Conflicts = $conflicts.ToArray(); Correlation = $correlation.ToArray(); Skipped = $skipped }
@@ -457,7 +459,16 @@ function Invoke-SIDataEvidence {
     )
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     if (-not $ChunkChars) { $chunkLocal = [long]0; $ChunkChars = [ref]$chunkLocal }
-    $built = Build-SIDataEvidence -Set $Set -Index $Index -EvidenceProfiles $EvidenceProfiles
+    # #1053 the CIs the correlation gatekeeper suspects (sidata.CiSuspect, written at the start of this data sync)
+    $suspects = @{}
+    if (Get-Command -Name Get-SICorrelationSuspectMapSql -ErrorAction SilentlyContinue) {
+        try {
+            $mr = & $Invoke (Get-SICorrelationSuspectMapSql) @{} 'reader'
+            $rows = @(foreach ($x in @($mr)) { if ($x -is [System.Collections.IList] -and -not ($x -is [string])) { foreach ($y in $x) { $y } } elseif ($null -ne $x) { $x } })
+            $suspects = ConvertTo-SICorrelationSuspectMap -Rows $rows
+        } catch { & $Log 'WARN' ("  the correlation suspects could not be read for the evidence ({0}) -- no possible duplicate is shown for this load" -f $_.Exception.Message) }
+    }
+    $built = Build-SIDataEvidence -Set $Set -Index $Index -EvidenceProfiles $EvidenceProfiles -Suspects $suspects
     $seenAt = Format-SIDataSqlTime -Time $CollectionTime
     $base = @{ LoadId = $CollectionId; SeenAt = $seenAt }
 

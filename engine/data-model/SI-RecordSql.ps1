@@ -533,7 +533,9 @@ function Get-SIRecordFeedDrops {
           $Settings, [int]$ShardCount = -1,
           # owner 2026-10-17 (guards heal themselves): every feed judged and NOT held is added here as a guard check
           # (@{ GuardId; Subject; Values; Detail }) -- the close hands them to the guard, which clears an earlier drop's episode
-          [System.Collections.Generic.List[object]]$Checks)
+          [System.Collections.Generic.List[object]]$Checks,
+          # #1056 the install's identity choice (Get-SIIdentityScopeChoice); not given = the install's settings
+          $IdentityChoice)
     try {
         if (-not @($Feeds).Count) { return }
         if ($ShardCount -lt 0) { $sc = 0; if (-not [int]::TryParse([string][Environment]::GetEnvironmentVariable('SI_SHARD_COUNT'), [ref]$sc)) { $sc = 1 }; $ShardCount = $sc }
@@ -562,8 +564,21 @@ function Get-SIRecordFeedDrops {
             $st = Get-SIItemValue $r 'State'
             if ($null -ne $st -and -not ($st -is [DBNull]) -and "$st") { $rc = Get-SIItemValue $r 'Records'; if ($null -eq $rc -or $rc -is [DBNull]) { $rc = 0 }; $by[$k].History.Add([pscustomobject]@{ Records = [int]$rc; State = [string]$st }) }
         }
+        # #1056 a customer's choice (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves records out
+        # of the Exposure Graph feed on purpose: they are added back to the count judged here, so the choice is never read as a
+        # broken source. Read only while a switch is on in this install; off, nothing changes.
+        $leftOut = @{}
+        if ($null -eq $IdentityChoice -and (Get-Command -Name Get-SIIdentityScopeChoice -ErrorAction SilentlyContinue)) { $IdentityChoice = Get-SIIdentityScopeChoice }
+        if ($null -ne $IdentityChoice -and $IdentityChoice.Any -and (Get-Command -Name Get-SIIdentityScopeLeftOutByFeed -ErrorAction SilentlyContinue)) {
+            $leftOut = Get-SIIdentityScopeLeftOutByFeed -Invoke $Invoke -CollectionTimeText $CollectionTimeText -Choice $IdentityChoice
+        }
         foreach ($k in $by.Keys) {
             $f = $by[$k]
+            $lk = ([string]$k).ToLowerInvariant()
+            if ($leftOut.ContainsKey($lk) -and [long]$leftOut[$lk] -gt 0) {
+                Write-Host ('[INFO] records: {0} {1}: {2} record(s) left out by the install''s choice this run are counted with the {3} recorded for the asset-drop check' -f $f.Provider, $f.RecordType, $leftOut[$lk], $f.Now)
+                $f.Now = [int]([Math]::Min([long][int]::MaxValue, [long]$f.Now + [long]$leftOut[$lk]))
+            }
             $v = Get-SIRecordFeedDropVerdict -Now $f.Now -History $f.History.ToArray() -Percent $Settings.Percent -MinRecords $Settings.MinRecords -Action $Settings.Action
             if ($null -ne $Checks) { $ck = Get-SIRecordFeedDropCheck -Feed $f -Verdict $v -Percent $Settings.Percent; if ($ck) { $Checks.Add($ck) } }
             if (-not $v.Drop) { continue }

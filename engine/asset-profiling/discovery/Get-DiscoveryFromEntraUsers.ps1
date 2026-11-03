@@ -38,18 +38,24 @@ function Get-DiscoveryFromEntraUsers {
 
     # bulk fetch tenant-wide role assignments (permanent + PIM
     # eligible) once, bucket by principalId for O(1) per-user lookup.
+    # #1049 F0: each phase's time (a log line + a cfg.StepPhaseTime row); measurement only
+    Reset-SIIdentityPhaseTotals
+    $ph = Start-SIIdentityPhase -Phase 'users: Entra roles (definitions, permanent, eligible)'
     Write-SIInfo '[perms] fetching tenant-wide Entra role definitions...'
     $roleDefMap   = Get-SIEntraRoleDefinitionMap -Token $token
     Write-SIInfo '[perms] role assignments (permanent)...'
     $permRolesMap = Get-SIEntraRoleAssignmentsByPrincipal -Token $token -RoleDefinitionMap $roleDefMap
     Write-SIInfo '[perms] role assignments (PIM eligible)...'
     $eligRolesMap = Get-SIEntraPIMEligibleByPrincipal -Token $token -RoleDefinitionMap $roleDefMap
+    $null = Stop-SIIdentityPhase $ph -Rows ([long](@($permRolesMap.Keys).Count + @($eligRolesMap.Keys).Count)) -Detail 'principals with a permanent or eligible role'
 
     # MFA registration bulk fetch -- ONE paged call returns the per-user
     # IsMfaRegistered/IsPasswordlessCapable/methodsRegistered map. Replaces v1's
     # per-user /authentication/methods loop. Permission: UserAuthenticationMethod.Read.All
     # OR AuditLog.Read.All (already required by Step1 onboarding).
+    $ph = Start-SIIdentityPhase -Phase 'users: MFA registration'
     $mfaRegMap = Get-SIEntraMfaRegistrationByPrincipal -Token $token
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $mfaRegMap) { $mfaRegMap.Count } else { 0 }))
 
     # #549 passwordless-only accounts: each kept user's authentication methods (GET /users/{id}/authentication/methods,
     # Graph $batch, UserAuthenticationMethod.Read.All), read per page of users below. A refused, throttled or partial read
@@ -79,6 +85,7 @@ function Get-DiscoveryFromEntraUsers {
 
     # transitive group -> role expansion. Discover which GROUPS hold
     # roles, then walk each role-assigned group's transitiveMembers + invert.
+    $ph = Start-SIIdentityPhase -Phase 'users: role-holding groups (members, PIM for Groups)'
     Write-SIInfo '[perms] discovering role-assigned groups...'
     $groupRoles = Get-SIRoleAssignedGroups -Token $token -PermanentRolesByPrincipal $permRolesMap -EligibleRolesByPrincipal $eligRolesMap
     Write-SIInfo ('[perms] {0} groups hold Entra roles -- expanding transitive memberships...' -f $groupRoles.Count)
@@ -92,6 +99,7 @@ function Get-DiscoveryFromEntraUsers {
         Get-SIPimForGroupsByPrincipal -Token $token -RoleAssignedGroupMap $groupRoles
     } else { @{} }
     Write-SIInfo ('[perms] {0} principals inherit at least one role via group membership' -f $memberToGroups.Count)
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$groupRoles.Count) -Detail 'role-holding groups'
     # shadow-admin guard: no group holds a role = nothing to expand -- the group reads are complete by definition
     if ($groupRoles.Count -eq 0 -and (Get-Command -Name Set-SIEntraRoleReadPart -ErrorAction SilentlyContinue)) {
         Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $true
@@ -109,7 +117,9 @@ function Get-DiscoveryFromEntraUsers {
 
     # Azure RBAC delegations (scope-aware Max). Caller must have
     # called Connect-AzAccount; SI bootstrap already does this for the SPN.
+    $ph = Start-SIIdentityPhase -Phase 'users: Azure RBAC'
     $azureLookup = Get-SIAzureDelegationsByPrincipal -ExcludeSubscriptionPatterns @($global:SI_AzureSubscriptionExcludePatterns)
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $azureLookup) { $azureLookup.Count } else { 0 })) -Detail 'principals with an Azure role'
 
     # Defender XDR IdentityInfo (synced AD groups + MFA + risk signals).
     # prefer $global:SI_DefenderWorkspaceResourceId (separate Defender/
@@ -118,7 +128,9 @@ function Get-DiscoveryFromEntraUsers {
     $defenderWs   = if ($global:SI_DefenderWorkspaceResourceId) { $global:SI_DefenderWorkspaceResourceId } else { $global:SI_WorkspaceResourceId }
     $defenderNote = if ($global:SI_DefenderWorkspaceResourceId) { 'separate Defender workspace' } else { 'same as output workspace' }
     Write-SIInfo ('[perms] fetching IdentityInfo from Log Analytics ({0})...' -f $defenderNote)
+    $ph = Start-SIIdentityPhase -Phase 'users: IdentityInfo (Log Analytics)'
     $identityInfoMap = Get-SIIdentityInfoByObjectId -WorkspaceResourceId $defenderWs
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $identityInfoMap) { $identityInfoMap.Count } else { 0 }))
     # v3 data model: how the Defender for Identity pull went -- a failed read leaves the mdi records FROZEN (absence proves
     # nothing), never "not seen"
     if ($null -ne $global:SIRecordCaptureState -and (Get-Command -Name Set-SIRecordPull -ErrorAction SilentlyContinue)) {
@@ -138,7 +150,9 @@ function Get-DiscoveryFromEntraUsers {
     # identity.schema.json (AdminCount, UserAccountControl, SidHistory, criticalityLevel,
     # nestedAdGroupNames, hasLeakedCredentials, etc.). Schema-driven row builder
     # walks sourcePath against the cached RawData blob -- no per-field hard-coding.
+    $ph = Start-SIIdentityPhase -Phase 'users: Exposure Graph identities'
     $egIdentitiesMap = Get-SIExposureGraphIdentities
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $egIdentitiesMap) { $egIdentitiesMap.Count } else { 0 }))
 
     $rows = New-Object System.Collections.ArrayList
     # include signInActivity + customSecurityAttributes
@@ -342,11 +356,16 @@ function Get-DiscoveryFromEntraUsers {
                 $su | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue ([bool]$streamState.Deleted) -Force
             }
             # #549 this page's kept users' sign-in methods, before their records are built
+            $amW = [System.Diagnostics.Stopwatch]::StartNew()
             try { & $readAuthMethods @($PageRows) } catch { }
+            Add-SIIdentityPhaseTotal -Phase 'users: sign-in methods (inside the user pages)' -Seconds $amW.Elapsed.TotalSeconds -Rows @($PageRows).Count -Calls 1
+            $amW.Restart()
             foreach ($su in $PageRows) { $batch.Add((& $buildUser $su)) }
+            Add-SIIdentityPhaseTotal -Phase 'users: records built (inside the user pages)' -Seconds $amW.Elapsed.TotalSeconds -Rows @($PageRows).Count
             $null = Add-SIDiscoverStreamAssets -Stream $stream -Assets $batch.ToArray()
         }
         $streamState = @{ Deleted = $false }
+        $phPages = Start-SIIdentityPhase -Phase 'users: user pages (read + sign-in methods + records)'
         $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'EntraUsers /users' -OnPage $onUsers
         $null = Write-SIIdDuplicateWarning $userDupWatch
         if (-not $page.Complete) {
@@ -360,6 +379,9 @@ function Get-DiscoveryFromEntraUsers {
             Write-Warning ('EntraUsers: deletedItems incomplete -- {0} (likely permission gap; {1} soft-deleted user(s) loaded, active users unaffected).' -f $delPage.Error, $delPage.Count)
         }
         if ($global:SI_DiscoverStreamCounts) { $global:SI_DiscoverStreamCounts['EntraUsers'] = [int]$page.Count + [int]$delPage.Count }
+        $null = Stop-SIIdentityPhase $phPages -Rows ([long]$page.Count + [long]$delPage.Count) -Detail ('{0} page(s)' -f ([int]$page.Pages + [int]$delPage.Pages))
+        Write-SIIdentityPhaseTotals -Prefix 'users:'
+        $null = Write-SIGraphRetrySummary
         Write-SIEntraAuthMethodsOutcome
         Write-SIInfo ('[perms] EntraUsers: {0} user(s) + {1} soft-deleted streamed into {2} part(s), page by page' -f $page.Count, $delPage.Count, $stream.Parts)
         return
@@ -415,7 +437,10 @@ function Get-DiscoveryFromEntraUsers {
     }
 
     # #549 the kept users' sign-in methods, before their records are built (soft-deleted users are left out by the selection)
+    $ph = Start-SIIdentityPhase -Phase 'users: sign-in methods'
     try { & $readAuthMethods $rows.ToArray() } catch { }
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$rows.Count)
+    $null = Write-SIGraphRetrySummary
     Write-SIEntraAuthMethodsOutcome
 
     $_total = $rows.Count; $_i = 0

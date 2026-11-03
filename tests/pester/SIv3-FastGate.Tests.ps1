@@ -3,10 +3,12 @@
     THE RELEASE GATE (tests\Invoke-FastGate.ps1). Every gate but a full run is THE QUICK GATE (owner 2026-10-13: "yes, build
     it the pim way"; "default release is quick"; "we even agreed on hard limit of max 10 min"): a core set + the few suites
     the change needs (narrow / broad / hub / unmapped / documents / release-bump / a changed suite / -Suites), the web app's
-    tests only for a web change and then only the matching classes, every suite in its own process in parallel, and a
-    HARD 20-minute stop (10 until 2026-10-28) that ends a suite's whole process tree and reports it TIMED OUT by name (the run: NOT TESTED).
-    These tests prove the selection (pure functions), the stop (a fake suite that sleeps past a SHORT test limit), the
-    refusal of "everything", and the older covering selection / full-run sharding that -Precise and -Full still use.
+    tests only for a web change and then only the matching classes, every suite in its own process in parallel.
+    TEST-FAST (owner 2026-11-02: "remove these limits"): NO clock ends a suite or the gate -- only a suite that prints
+    nothing for 5 minutes is ended (its whole process tree) and reported HUNG by name, red; 10 minutes is a target.
+    These tests prove the selection (pure functions), the hang rule (a fake suite that goes SILENT past a short test
+    hang time, and one that runs past it while printing and is NOT ended), the refusal of "everything", the target, and
+    the older covering selection that -Precise still lists. A full run goes through the same runner.
 #>
 
 BeforeAll {
@@ -181,10 +183,10 @@ Describe '#416 THE HOTFIX GATE: EVERY suite that covers the changed files (the b
         foreach ($n in 'SIv3-FastRoll.Tests.ps1', 'SIv3-Heavy.Tests.ps1', 'SIv3-Mention.Tests.ps1', 'SIv3-Mention2.Tests.ps1') { @($t.Suites.Keys) | Should -Contain $n }
         @($t.Dropped.Keys).Count | Should -Be 0
     }
-    It 'the budget is a WARNING: a missed hotfix budget says plainly which covering suites made it take longer' {
+    It 'the target is a WARNING: a missed target says plainly which covering suites made it take longer' {
         $b = Get-SIFastGateBudget -Mode hotfix -Seconds 1310 -OverBudget @('SIv3-Heavy.Tests.ps1')
         $b.Met | Should -BeFalse
-        $b.Text | Should -Match 'hotfix gate: 1[.,]?310 s of the 1[.,]?200 s limit \(20 minutes\) -- OVER THE 20-MINUTE LIMIT \(it took longer because SIv3-Heavy\.Tests\.ps1 covers the change\)'
+        $b.Text | Should -Match 'hotfix gate: 1[.,]?310 s -- the target is 10 minutes: OVER THE 10-MINUTE TARGET -- the run finished \(a target, not a limit\) \(it took longer because SIv3-Heavy\.Tests\.ps1 covers the change\)'
         (Get-SIFastGateBudget -Mode hotfix -Seconds 200 -OverBudget @('SIv3-Heavy.Tests.ps1')).Text | Should -Not -Match 'took longer'
     }
     It 'WIRING: no "left to the nightly" anywhere in the gate; the plain over-budget line is printed and OverBudget is in the selection file + result' {
@@ -227,77 +229,69 @@ Describe '#416 THE HOTFIX GATE: EVERY suite that covers the changed files (the b
         # the smoke set is within the safety list: the full cycle runs all of it too
         foreach ($s in $script:Map.Smoke) { $script:Map.Safety | Should -Contain $s }
     }
-    It 'THE 20-MINUTE LIMIT (owner 2026-10-13: 10 min; 2026-10-28: "extend to 20 min"): 1200 s for every release gate -- hotfix and fast alike; over it is said plainly; a full run has none' {
-        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 280; $b.Met | Should -BeTrue; $b.Target | Should -Be 1200; $b.Text | Should -Match 'hotfix gate: 280 s of the 1[.,]?200 s limit \(20 minutes\) -- met'
-        (Get-SIFastGateBudget -Mode hotfix -Seconds 1200).Met | Should -BeTrue
-        $o = Get-SIFastGateBudget -Mode hotfix -Seconds 1201; $o.Met | Should -BeFalse; $o.Text | Should -Match 'OVER THE 20-MINUTE LIMIT'
-        (Get-SIFastGateBudget -Mode fast -Seconds 1190).Met | Should -BeTrue
-        (Get-SIFastGateBudget -Mode fast -Seconds 1201).Text | Should -Match 'fast gate: 1[.,]?201 s of the 1[.,]?200 s limit \(20 minutes\) -- OVER THE 20-MINUTE LIMIT'
+    It 'THE 10-MINUTE TARGET (TEST-FAST, owner 2026-11-02: a target, not a limit): 600 s for every release gate -- hotfix, quick and fast alike; over it the run has finished and it says what to split next; a full run has none' {
+        $b = Get-SIFastGateBudget -Mode hotfix -Seconds 280; $b.Met | Should -BeTrue; $b.Target | Should -Be 600; $b.Text | Should -Match 'hotfix gate: 280 s -- the target is 10 minutes: met'
+        (Get-SIFastGateBudget -Mode quick -Seconds 600).Met | Should -BeTrue
+        $o = Get-SIFastGateBudget -Mode quick -Seconds 601 -Slowest @('A.Tests.ps1 (400 s)', 'B.Tests.ps1 (90 s)', 'C.Tests.ps1 (60 s)', 'D.Tests.ps1 (5 s)')
+        $o.Met | Should -BeFalse
+        $o.Text | Should -Match 'OVER THE 10-MINUTE TARGET -- the run finished \(a target, not a limit\); split next: A\.Tests\.ps1 \(400 s\), B\.Tests\.ps1 \(90 s\), C\.Tests\.ps1 \(60 s\)$'
+        @($o.SplitNext).Count | Should -Be 3
+        (Get-SIFastGateBudget -Mode quick -Seconds 200 -Slowest @('A (1 s)')).Text | Should -Not -Match 'split next'
+        (Get-SIFastGateBudget -Mode fast -Seconds 590).Met | Should -BeTrue
+        (Get-SIFastGateBudget -Mode quick -Seconds 900 -TargetSeconds 1200).Met | Should -BeTrue
         Get-SIFastGateBudget -Mode full -Seconds 5000 | Should -BeNullOrEmpty
+        # NEGATIVE: the words of the old limit are gone from the gate
+        $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
+        $g | Should -Not -Match 'OVER THE 20-MINUTE LIMIT'
+        $g | Should -Not -Match 'STOPPED at its 20-minute limit'
     }
-    It 'WIRING: the -Precise listing reaches the covering selection with the measured seconds; a FULL run builds the dotnet solution; the result carries Phases + Budget + OverBudget' {
+    It 'WIRING: the -Precise listing reaches the covering selection with the measured seconds; a FULL run takes the SAME runner (the web app''s whole projects in its own part); the result carries Phases + Budget (with what to split next) + OverBudget' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
         $g | Should -Match '-NoSafety:\$NoSafety -Hotfix -Seconds \$durations'
-        $g | Should -Match 'if \(-not \$NoDotnet -and \$map\.Solution -and \(Test-Path -LiteralPath \$sln\)'
         $g | Should -Not -Match 'if \(\$dotnetPick\.Count -and \(Get-Command dotnet'
         $g | Should -Match 'Phases = \$phase; Budget = \$null'
-        # never a reused MSBuild node on the shared test VM (MSB4166, 2026-10-09); such a crash builds once more
-        $g | Should -Match 'dotnet build \$sln -c Release --nologo -v q -nodeReuse:false'
-        $g | Should -Match "-match 'MSB4166'"
+        $g | Should -Match "Get-SIFastGateBudget -Mode \`$summary\.Mode -Seconds \`$summary\.Seconds -OverBudget @\(\`$overBudget\.Keys\) -Slowest \`$slowest -TargetSeconds \`$map\.Quick\.TargetSeconds"
+        # ONE run engine: the old sharded full-run path (its own dotnet job, batch timeouts, a deadline) is gone
+        $g | Should -Not -Match 'Start-Job'
+        $g | Should -Not -Match '# ---- 4\. run: the runtime'
+        $g | Should -Match "Mode = \`$\(if \(\`$Full\) \{ 'full' \} else \{ 'quick' \}\)"
+        # never a reused MSBuild node on the shared test VM (MSB4166, 2026-10-09); such a crash builds once more -- in the web app's part
+        $d = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')
+        $d | Should -Match '-nodeReuse:false'
+        $d | Should -Match "-match 'MSB4166'"
+        $d | Should -Match 'VSTEST_CONNECTION_TIMEOUT'
         $g | Should -Match "\`$phase\['dotnet build'\]"
         $g | Should -Not -Match 'Dropped = @\(\$dropped\.Keys\)'
         # the measured seconds are read BEFORE the selection (the hotfix budget counts them)
         $g.IndexOf('$durations = @{ pwsh = @{}; ps51 = @{} }') | Should -BeLessThan $g.IndexOf('$sel = Get-SIFastGateSelection')
     }
 }
-Describe 'the suites run in short batches from a queue, balanced by measured duration' {
-    It 'every suite lands in exactly one batch; batches stay under the target, a heavier suite is a batch of its own; heaviest first' {
-        $names = @('a', 'b', 'c', 'd', 'e', 'f')
-        $sec = @{ a = 300; b = 60; c = 50; d = 40; e = 10; f = 5 }
-        $b = @(New-SIFastGateBatches -Names $names -Seconds $sec -TargetSeconds 100)
-        (@($b | ForEach-Object { $_ }) | Sort-Object) -join ',' | Should -Be 'a,b,c,d,e,f'
-        @($b[0]) | Should -Be @('a')                                  # the heavy one alone, first
-        foreach ($x in @($b | Select-Object -Skip 1)) { $l = 0; foreach ($n in $x) { $l += $sec[$n] }; $l | Should -BeLessOrEqual 100 }
-    }
-    It 'the default target keeps several batches per worker (short-lived workers: a long 5.1 process slows down)' {
-        $names = @(1..40 | ForEach-Object { "s$_" })
-        @(New-SIFastGateBatches -Names $names -Workers 4).Count | Should -BeGreaterOrEqual 8
-        @(New-SIFastGateBatches -Names @('x') -Workers 4).Count | Should -Be 1
-        @(New-SIFastGateBatches -Names @() -Workers 4).Count | Should -Be 0
-    }
-}
-Describe 'a loaded machine makes the run slower, never red and never a silent pass (nightly 2026-10-07)' {
-    It 'a batch may run its measured time x5, never under 15 min (a hang is caught by its own batch, not the whole run)' {
-        Get-SIFastGateBatchTimeout -Names @('a', 'b') -Seconds @{ a = 1000; b = 156.5 } | Should -Be 5783
-        Get-SIFastGateBatchTimeout -Names @('a') -Seconds @{ a = 10 } | Should -Be 900
-        Get-SIFastGateBatchTimeout -Names @('unknown') | Should -Be 900
-    }
-    It 'the run deadline is never under -TimeoutMinutes and scales to 3x the slowest runtime''s ideal wall time' {
-        Get-SIFastGateDeadlineMinutes -TimeoutMinutes 60 -RuntimeSeconds @(9906, 8141) -Workers 4 | Should -Be 124
-        Get-SIFastGateDeadlineMinutes -TimeoutMinutes 40 -RuntimeSeconds @(300) -Workers 4 | Should -Be 40
-    }
-    It 'the run deadline is never shorter than 3x the LONGEST suite: one suite runs in one process, whatever the workers' {
-        Get-SIFastGateDeadlineMinutes -TimeoutMinutes 40 -RuntimeSeconds @(2400) -Workers 14 -LongestSeconds 1800 | Should -Be 90
-        Get-SIFastGateDeadlineMinutes -TimeoutMinutes 40 -RuntimeSeconds @(2400) -Workers 14 -LongestSeconds 60 | Should -Be 40
-    }
-    It 'workers follow the FREE cores, between half and all of cores / runtimes' {
-        Get-SIFastGateWorkers -Cores 8 -Runtimes 2 -LoadPercent 0 | Should -Be 4
-        Get-SIFastGateWorkers -Cores 8 -Runtimes 2 -LoadPercent 90 | Should -Be 2
-        Get-SIFastGateWorkers -Cores 8 -Runtimes 2 -LoadPercent 40 | Should -Be 3
-        Get-SIFastGateWorkers -Cores 1 -Runtimes 2 -LoadPercent 99 | Should -Be 1
-        # v3 = one runtime: an idle machine gives it every core
-        Get-SIFastGateWorkers -Cores 16 -Runtimes 1 -LoadPercent 0 | Should -Be 16
-    }
-    It 'WIRING: a timed-out or result-less batch is re-run once; what never ran is reported as such; dotnet survives a slow test host' {
+Describe 'TEST-FAST: no clock ends a run (owner 2026-11-02: "remove these limits")' {
+    It 'NEGATIVE: the time-limit machinery is gone -- no batch timeout, no run deadline, no measured-slow limit, no limit above which the owner''s words were needed' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $g | Should -Match 'Get-SIFastGateBatchTimeout -Names \$batch'
-        $g | Should -Match '\$p\.Attempt -lt 2'
-        $g | Should -Match "'NeverStarted'\s*\{\s*\`$agg\.Broken \+="
-        $g | Should -Match "'TimedOut'\s*\{\s*\`$agg\.Broken \+="
-        $g | Should -Match "'Deadline'\s*\{\s*\`$agg\.Broken \+="
-        $g | Should -Match "'NoResult'\s*\{\s*\`$agg\.Broken \+="
-        $g | Should -Match 'VSTEST_CONNECTION_TIMEOUT'
-        $g | Should -Match 'Get-SIFastGateDeadlineMinutes -TimeoutMinutes \$TimeoutMinutes'
+        foreach ($gone in 'Get-SIFastGateBatchTimeout', 'Get-SIFastGateDeadlineMinutes', 'Get-SIQuickGateSlowLimit', 'New-SIFastGateBatches', '$deadline', 'GateLimitSeconds -gt 1200', 'REFUSED: a gate longer than 20 minutes', 'NOT RUN -- the whole gate', 'TIMED OUT after') {
+            $g.Contains($gone) | Should -BeFalse -Because "$gone was a time limit"
+        }
+        Get-Command Get-SIFastGateBatchTimeout, Get-SIFastGateDeadlineMinutes, Get-SIQuickGateSlowLimit -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+    }
+    It 'the old limit parameters are inert and deprecated (kept so an older caller does not break) -- said, never applied' {
+        $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
+        $g | Should -Match '\[Parameter\(DontShow\)\]\[int\]\$TimeoutMinutes = 0'
+        $g | Should -Match '\[Parameter\(DontShow\)\]\[int\]\$SuiteLimitSeconds = 0'
+        $g | Should -Match '\[Parameter\(DontShow\)\]\[int\]\$GateLimitSeconds = 0'
+        $g | Should -Match 'are deprecated and do nothing: no time limit ends a run'
+        # the runner takes no limit at all -- only the hang time
+        (Get-Command Invoke-SIQuickGateRun).Parameters.Keys | Should -Not -Contain 'SuiteLimitSeconds'
+        (Get-Command Invoke-SIQuickGateRun).Parameters.Keys | Should -Not -Contain 'GateLimitSeconds'
+        (Get-Command Invoke-SIQuickGateRun).Parameters.Keys | Should -Contain 'HangSeconds'
+    }
+    It 'every suite prints a line per test, and the web app''s part streams its lines -- so silence means stuck, not slow' {
+        (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1')) | Should -Match "Output\.Verbosity = 'Detailed'"
+        $d = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')
+        ([regex]::Matches($d, '\[Console\]::Out\.WriteLine\(\$l\)')).Count | Should -BeGreaterOrEqual 3
+        $d | Should -Match "'--logger', 'console;verbosity=normal'"
+        # the web app's log counts as its printing too (Watch)
+        (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')) | Should -Match "Watch = @\(\(Join-Path \`$work 'dotnet\.log'\), \`$dres\)"
     }
 }
 Describe 'the safety suites are complete and never silently empty' {
@@ -329,7 +323,7 @@ Describe 'WIRING: v3 gates PowerShell 7 only by default (operator 2026-10-09: "y
     }
 }
 
-Describe 'WIRING: the gate runs each runtime sharded, and only ever stops what it started' {
+Describe 'WIRING: the gate runs each suite in its own process, and only ever stops what it started' {
     It 'the shard worker takes its list from a FILE (an array parameter through -File passes only its first value)' {
         $w = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1')
         $w | Should -Match '\[string\]\$ListFile'
@@ -338,20 +332,20 @@ Describe 'WIRING: the gate runs each runtime sharded, and only ever stops what i
     It 'a PowerShell 5.1 worker (the opt-in) gets the 5.1 module path; processes are stopped by their own id, never by name' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
         $g | Should -Match 'WindowsPowerShell\\v1\.0\\Modules'
-        $g | Should -Match 'Stop-Process -Id \$p\.Process\.Id'
+        $g | Should -Match 'Stop-SIGateProcessTree -Process \$r\.Process'
         $g | Should -Not -Match 'Stop-Process -Name'
         $g | Should -Match "'powershell\.exe'"
         $g | Should -Match "'pwsh\.exe'"
-        $g.Contains('''test'', $pj.Path, ''-c'', ''Release'', ''--no-build''') | Should -BeTrue -Because 'dotnet test runs --no-build after the one build'
+        (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')).Contains('''test'', [string]$pj.Path, ''-c'', ''Release'', ''--no-build''') | Should -BeTrue -Because 'dotnet test runs --no-build after the one build'
     }
-    It 'only the dev fast gate leaves out tests tagged Nightly; a full run (only on the owner''s words) and -Hotfix (a covering suite runs whole) run them; every batch is a fresh process from a queue' {
+    It 'only the dev fast gate leaves out tests tagged Nightly; a full run (only on the owner''s words) and the quick gate (a selected suite runs whole) run them; every suite is a fresh process from a queue' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Full:\$Full -Hotfix:\$Hotfix'
-        Get-SIFastGateExcludeTags | Should -Be 'Nightly,Scale'
-        Get-SIFastGateExcludeTags -Full | Should -Be 'Scale'
-        Get-SIFastGateExcludeTags -Scope PublicCopy | Should -Be 'PrivateRepo,Nightly,Scale'
+        $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Full:\$Full -Hotfix:\(-not \$Full\) -Scale:\$Scale'
+        Get-SIFastGateExcludeTags | Should -Be 'Nightly,Scale,Live'
+        Get-SIFastGateExcludeTags -Full | Should -Be 'Scale,Live'
+        Get-SIFastGateExcludeTags -Hotfix | Should -Be 'Scale,Live'
+        Get-SIFastGateExcludeTags -Scope PublicCopy | Should -Be 'PrivateRepo,Nightly,Scale,Live'
         $g | Should -Match 'Enqueue'
-        $g | Should -Match 'New-SIFastGateBatches'
         (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1')) | Should -Match 'Filter\.ExcludeTag'
     }
     It 'a PowerShell 7 gate leaves out the 5.1 parity probes by tag (Ps51: "not run", never a skip that turns a suite not green); the 5.1 opt-in runs them' {
@@ -361,7 +355,7 @@ Describe 'WIRING: the gate runs each runtime sharded, and only ever stops what i
         Add-SIFastGatePs51Tag -Exclude 'Scale' -Runtime 'both' | Should -Be 'Scale'
         Add-SIFastGatePs51Tag -Exclude 'Scale,Ps51' -Runtime 'pwsh' | Should -Be 'Scale,Ps51'
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        ([regex]::Matches($g, '(?m)^\s*\$exclude = Add-SIFastGatePs51Tag -Exclude \$exclude -Runtime \$Runtime\s*$')).Count | Should -Be 2 -Because 'the quick gate and the covering gate both apply it'
+        ([regex]::Matches($g, '(?m)^\s*\$exclude = Add-SIFastGatePs51Tag -Exclude \$exclude -Runtime \$Runtime\s*$')).Count | Should -Be 1 -Because 'the one run engine (quick gate and full run alike) applies it'
         # every 5.1 parity probe that skips itself on a PowerShell 7 gate carries the tag
         foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'tests\pester') -Filter '*.Tests.ps1' | Where-Object { $_.Name -ne 'SIv3-FastGate.Tests.ps1' })) {
             $lines = @(Get-Content -LiteralPath $f.FullName)
@@ -416,13 +410,6 @@ Describe 'TEST-RUN-1: the selection for a FIX release, and no batch longer than 
             [double]$sel.LongestSeconds | Should -BeLessOrEqual ([double]$sel.MeasuredSeconds)
             "$($sel.LongestSuite)" | Should -Match '\.Tests\.ps1$'
         } finally { Remove-Item -LiteralPath $sf -Force -ErrorAction SilentlyContinue }
-    }
-    It 'the default batch target is at most 180 s of measured time (a 5.1 batch of 240 s took 20 min on a busy VM); a heavier suite is alone' {
-        $names = @(1..300 | ForEach-Object { "s$_" }); $sec = @{}; foreach ($n in $names) { $sec[$n] = 40 }
-        $sec['s1'] = 400
-        $b = @(New-SIFastGateBatches -Names $names -Workers 8 -Seconds $sec)
-        @($b[0]) | Should -Be @('s1')
-        foreach ($x in @($b | Select-Object -Skip 1)) { $l = 0; foreach ($n in $x) { $l += $sec[$n] }; $l | Should -BeLessOrEqual 180 }
     }
 }
 
@@ -519,9 +506,9 @@ Describe 'ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13: "no boddy can trig
         $g | Should -Match 'if \(-not \$ListOnly -and -not \$fullRun\.Allowed\) \{ Stop-SIFastGateRefused -Decision \$fullRun \}'
         $second = $g.IndexOf('Test-SIFastGateFullRun -OwnerWords $OwnerWords -Selected $reasons.Count -Total $allSuites.Count')
         $second | Should -BeGreaterThan $first
-        $second | Should -BeLessThan $g.IndexOf('Start-Process -FilePath $exeOf[$rt]')
-        $second | Should -BeLessThan $g.IndexOf('$dotnetJob = Start-Job')
-        $g | Should -Match '\$summary\.OwnerWords = \[string\]\$fullRun\.Words'
+        $second | Should -BeLessThan $g.IndexOf('$runRes = @(Invoke-SIQuickGateRun')
+        $second | Should -BeLessThan $g.IndexOf('$items = New-Object System.Collections.Generic.List[object]')
+        $g | Should -Match 'SuiteResults = @\(\); OwnerWords = \[string\]\$fullRun\.Words'
         $g | Should -Match "Status = 'REFUSED'"
         $g | Should -Match '(?s)function Stop-SIFastGateRefused.*?exit 6'
         # the selection file carries what the release command's STOP reads
@@ -696,29 +683,34 @@ Describe 'THE QUICK GATE selects the PIM way (owner 2026-10-13: "yes, build it t
         }
         $sum | Should -BeLessOrEqual 150
         $script:Map.Quick.BroadOver | Should -Be 3; $script:Map.Quick.NamedMax | Should -Be 3; $script:Map.Quick.HubLoads | Should -Be 20
-        $script:Map.Quick.SuiteLimitSeconds | Should -Be 1200; $script:Map.Quick.GateLimitSeconds | Should -Be 1200
+        # TEST-FAST (owner 2026-11-02): a 5-minute HANG time and a 10-minute TARGET -- no time limit in the map at all
+        $script:Map.Quick.HangSeconds | Should -Be 300; $script:Map.Quick.TargetSeconds | Should -Be 600
+        $mj = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\pester\fast-gate.map.json')) | ConvertFrom-Json
+        $mj.quick.PSObject.Properties.Name | Should -Not -Contain 'suiteLimitSeconds'
+        $mj.quick.PSObject.Properties.Name | Should -Not -Contain 'gateLimitSeconds'
+        $script:Map.Quick.PSObject.Properties.Name | Should -Not -Contain 'SuiteLimitSeconds'
         @($script:Map.Hubs).Count | Should -BeGreaterThan 5
         foreach ($h in $script:Map.Hubs) { Test-Path -LiteralPath (Join-Path $script:SIRoot ($h -replace '/', '\')) | Should -BeTrue -Because "$h is a listed hub" }
-        # never above 20 minutes, whatever the file says
+        # a map without the keys falls back to 5 min / 10 min
         $tmp = Join-Path $TestDrive 'map.json'
-        $j = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\pester\fast-gate.map.json')) | ConvertFrom-Json
-        $j.quick.suiteLimitSeconds = 3600; $j.quick.gateLimitSeconds = 7200
-        [IO.File]::WriteAllText($tmp, ($j | ConvertTo-Json -Depth 8))
+        $mj.quick.PSObject.Properties.Remove('hangSeconds'); $mj.quick.PSObject.Properties.Remove('targetSeconds')
+        [IO.File]::WriteAllText($tmp, ($mj | ConvertTo-Json -Depth 8))
         $m2 = Get-SIFastGateMap -Path $tmp
-        $m2.Quick.SuiteLimitSeconds | Should -Be 1200; $m2.Quick.GateLimitSeconds | Should -Be 1200
+        $m2.Quick.HangSeconds | Should -Be 300; $m2.Quick.TargetSeconds | Should -Be 600
     }
 }
 
-Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed on hard limit of max 10 min")' {
+Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is ended (owner 2026-11-02)' {
     BeforeAll {
         $script:Pw = (Get-Process -Id $PID).Path
         $script:Shard = Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1'
-        # two FAKE suites: one passes at once, one sleeps far past the SHORT test limit -- after starting a child process
-        # of its own (its process tree must be ended with it)
+        # three FAKE suites: one passes at once; one goes SILENT far past the SHORT test hang time -- after starting a child
+        # process of its own (its process tree must be ended with it); one runs LONGER than the hang time but prints all along
         $script:Fake = Join-Path $TestDrive 'fake'; New-Item -ItemType Directory -Force -Path $script:Fake | Out-Null
         $script:ChildPidFile = Join-Path $script:Fake 'child.pid'
         [IO.File]::WriteAllText((Join-Path $script:Fake 'Quick-Fake.Tests.ps1'), "Describe 'quick' { It 'passes' { 1 | Should -Be 1 } }")
-        [IO.File]::WriteAllText((Join-Path $script:Fake 'Sleeper-Fake.Tests.ps1'), ("Describe 'sleeper' {{ It 'sleeps' {{ `$c = Start-Process -FilePath '{0}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 300' -PassThru -WindowStyle Hidden; [IO.File]::WriteAllText('{1}', [string]`$c.Id); Start-Sleep -Seconds 300 }} }}" -f $script:Pw, $script:ChildPidFile))
+        [IO.File]::WriteAllText((Join-Path $script:Fake 'Silent-Fake.Tests.ps1'), ("Describe 'silent' {{ It 'says nothing' {{ `$c = Start-Process -FilePath '{0}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 300' -PassThru -WindowStyle Hidden; [IO.File]::WriteAllText('{1}', [string]`$c.Id); Start-Sleep -Seconds 300 }} }}" -f $script:Pw, $script:ChildPidFile))
+        [IO.File]::WriteAllText((Join-Path $script:Fake 'Talker-Fake.Tests.ps1'), "Describe 'talker' { It 'works long and says so' { foreach (`$i in 1..12) { Write-Host ('tick {0}' -f `$i); Start-Sleep -Seconds 2 }; 1 | Should -Be 1 } }")
         $script:Item = {
             param([string]$Name, [string]$Work)
             $list = Join-Path $Work "$Name.txt"; $res = Join-Path $Work "$Name.json"
@@ -728,16 +720,16 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
                                Args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script:Shard, '-ListFile', $list, '-ResultFile', $res) }
         }
     }
-    It 'a suite past the per-suite limit is ENDED (its whole process tree) and reported TIMED OUT BY NAME; the other suite stands; the run is NOT TESTED' {
+    It 'a suite that prints NOTHING for the hang time is ENDED (its whole process tree) and reported HUNG BY NAME, red; the other suite stands' {
         $w = Join-Path $TestDrive 'run1'
-        $items = @((& $script:Item 'Sleeper-Fake.Tests.ps1' $w), (& $script:Item 'Quick-Fake.Tests.ps1' $w))
+        $items = @((& $script:Item 'Silent-Fake.Tests.ps1' $w), (& $script:Item 'Quick-Fake.Tests.ps1' $w))
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 4 -SuiteLimitSeconds 25 -GateLimitSeconds 120 -ProgressSeconds 5 6>$null)
+        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 4 -HangSeconds 10 -ProgressSeconds 5 6>$null)
         $sw.Stop()
-        $sw.Elapsed.TotalSeconds | Should -BeLessThan 90 -Because 'the limit stops it -- nothing waits for the 300 s sleep'
-        $sl = @($r | Where-Object Name -eq 'Sleeper-Fake.Tests.ps1')[0]
-        $sl.State | Should -Be 'TimedOut'; $sl.ExitCode | Should -Be 124
-        $sl.Note | Should -Match '^TIMED OUT after 0\.4 min -- its process tree was ended \(\d+ process\(es\)\)'
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 90 -Because 'the hang rule ends it -- nothing waits for the 300 s silence'
+        $sl = @($r | Where-Object Name -eq 'Silent-Fake.Tests.ps1')[0]
+        $sl.State | Should -Be 'Hung'; $sl.ExitCode | Should -Be 124
+        $sl.Note | Should -Match '^HUNG -- printed nothing for 0\.2 min \(after [\d.]+ min of running\) -- its process tree was ended \(\d+ process\(es\)\)'
         # the child the suite started is gone too (the tree, by process id)
         if (Test-Path -LiteralPath $script:ChildPidFile) {
             $cid = [int]([IO.File]::ReadAllText($script:ChildPidFile))
@@ -749,57 +741,43 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $qo = Get-SIQuickGateItemOutcome -Result $q
         $qo.Ok | Should -BeTrue; $qo.Passed | Should -Be 1
         $outs = @($r | ForEach-Object { Get-SIQuickGateItemOutcome -Result $_ })
-        @($outs | Where-Object { $_.Name -eq 'Sleeper-Fake.Tests.ps1' })[0].Ok | Should -BeFalse
+        $so = @($outs | Where-Object { $_.Name -eq 'Silent-Fake.Tests.ps1' })[0]
+        $so.Ok | Should -BeFalse
+        Get-SIQuickGateItemLabel -Outcome $so | Should -Be 'HUNG'
         $v = Get-SIQuickGateStatus -Outcomes $outs
-        $v.Status | Should -Be 'NOT TESTED'
-        @($v.TimedOut) | Should -Be @('Sleeper-Fake.Tests.ps1')
-        $v.Text | Should -Match '^NOT TESTED -- the gate was STOPPED at its 20-minute limit; a stopped run is never green \(TIMED OUT: Sleeper-Fake\.Tests\.ps1\)'
+        $v.Status | Should -Be 'FAIL'
+        @($v.Hung) | Should -Be @('Silent-Fake.Tests.ps1'); @($v.Stopped) | Should -Be @('Silent-Fake.Tests.ps1')
+        $v.Text | Should -Be 'FAIL -- HUNG (printed nothing, ended): Silent-Fake.Tests.ps1'
     }
-    It 'at the WHOLE gate''s limit: what runs is ended, what never started is NOT RUN -- by name; never green' {
+    It 'NO CLOCK: a suite that runs LONGER than the hang time but keeps printing is NOT ended; every queued suite starts (no whole-gate limit, no NOT RUN)' {
         $w = Join-Path $TestDrive 'run2'
-        $items = @((& $script:Item 'Sleeper-Fake.Tests.ps1' $w), (& $script:Item 'Quick-Fake.Tests.ps1' $w))
-        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 1 -SuiteLimitSeconds 600 -GateLimitSeconds 15 -ProgressSeconds 5 6>$null)
-        @($r | Where-Object Name -eq 'Sleeper-Fake.Tests.ps1')[0].State | Should -Be 'TimedOut'
-        @($r | Where-Object Name -eq 'Sleeper-Fake.Tests.ps1')[0].Note | Should -Match "the whole gate's limit of 0\.3 min"
-        $nr = @($r | Where-Object Name -eq 'Quick-Fake.Tests.ps1')[0]
-        $nr.State | Should -Be 'NotRun'; $nr.ExitCode | Should -Be 125
-        $nr.Note | Should -Match "^NOT RUN -- the whole gate's limit of 0\.3 min passed before it could start"
+        $items = @((& $script:Item 'Talker-Fake.Tests.ps1' $w), (& $script:Item 'Quick-Fake.Tests.ps1' $w))
+        # one at a time: the second waits the whole first run -- and still starts
+        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 1 -HangSeconds 8 -ProgressSeconds 5 6>$null)
+        $t = @($r | Where-Object Name -eq 'Talker-Fake.Tests.ps1')[0]
+        $t.State | Should -Be 'Done'; $t.Seconds | Should -BeGreaterThan 20
+        @($r | Where-Object Name -eq 'Quick-Fake.Tests.ps1')[0].State | Should -Be 'Done'
         $v = Get-SIQuickGateStatus -Outcomes @($r | ForEach-Object { Get-SIQuickGateItemOutcome -Result $_ })
-        $v.Status | Should -Be 'NOT TESTED'; @($v.NotRun) | Should -Be @('Quick-Fake.Tests.ps1')
+        $v.Status | Should -Be 'PASS'
+        @($v.TimedOut).Count | Should -Be 0; @($v.NotRun).Count | Should -Be 0
     }
-    It 'a suite MEASURED over 10 minutes is not stopped at 10 in a release gate (owner 2026-10-13: "accepted, skip 10 min for now"): it gets its measured time and the gate says so' {
-        Get-SIQuickGateSlowLimit -MeasuredSeconds 1800 | Should -Be 2700
-        Get-SIQuickGateSlowLimit -MeasuredSeconds 1200 | Should -Be 0
-        Get-SIQuickGateSlowLimit -MeasuredSeconds 600 | Should -Be 0
-        Get-SIQuickGateSlowLimit -MeasuredSeconds 120 | Should -Be 0
-        Get-SIQuickGateSlowLimit | Should -Be 0
-        # the runner honours an item's own limit: a sleeping fake suite with LimitSeconds 30 is NOT ended at the 10 s suite limit
-        $w = Join-Path $TestDrive 'run3'
-        $it = & $script:Item 'Quick-Fake.Tests.ps1' $w
-        $sl = & $script:Item 'Sleeper-Fake.Tests.ps1' $w; $sl | Add-Member -NotePropertyName LimitSeconds -NotePropertyValue 30 -Force
-        $r = @(Invoke-SIQuickGateRun -Items @($sl, $it) -Work $w -Throttle 4 -SuiteLimitSeconds 10 -GateLimitSeconds 120 -ProgressSeconds 5 6>$null)
-        $x = @($r | Where-Object Name -eq 'Sleeper-Fake.Tests.ps1')[0]
-        $x.State | Should -Be 'TimedOut'; $x.Seconds | Should -BeGreaterOrEqual 29
-        $x.Note | Should -Match '^TIMED OUT after 0\.5 min'
-        # wiring: the gate gives a measured-slow suite its time, widens the whole gate's limit and says so plainly
-        $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $g | Should -Match 'LimitSeconds = \$slow \}\)'
-        $g | Should -Match 'OVER THE 20-MINUTE LIMIT; it runs with its measured time'
-        $g | Should -Match '\$qGateLimit = \[Math\]::Max\(\$qGateLimit'
-        $g | Should -Match "Get-SIFastGateBudget -Mode 'quick' -Seconds \`$summary\.Seconds -OverBudget @\(\`$slowSuites\.Keys\)"
-    }
-    It 'the verdict: a red suite = FAIL; all green = PASS; a stopped one wins over both (never green)' {
+    It 'the verdict: a red suite = FAIL; a hung one = FAIL by name; all green = PASS; never NOT TESTED from time' {
         (Get-SIQuickGateStatus -Outcomes @([pscustomobject]@{ Name = 'a'; State = 'Done'; Ok = $true }, [pscustomobject]@{ Name = 'b'; State = 'Done'; Ok = $false })).Text | Should -Be 'FAIL -- RED: b'
         (Get-SIQuickGateStatus -Outcomes @([pscustomobject]@{ Name = 'a'; State = 'Done'; Ok = $true })).Status | Should -Be 'PASS'
-        (Get-SIQuickGateStatus -Outcomes @([pscustomobject]@{ Name = 'a'; State = 'Done'; Ok = $false }, [pscustomobject]@{ Name = 'c'; State = 'NotRun'; Ok = $false })).Status | Should -Be 'NOT TESTED'
+        $h = Get-SIQuickGateStatus -Outcomes @([pscustomobject]@{ Name = 'a'; State = 'Done'; Ok = $false }, [pscustomobject]@{ Name = 'c'; State = 'Hung'; Ok = $false })
+        $h.Status | Should -Be 'FAIL'
+        $h.Text | Should -Be 'FAIL -- HUNG (printed nothing, ended): c; RED: a'
+        # NEGATIVE: an old state from a clock is not a verdict any more -- it is simply not green
+        (Get-SIQuickGateStatus -Outcomes @([pscustomobject]@{ Name = 'x'; State = 'TimedOut'; Ok = $false })).Status | Should -Be 'FAIL'
     }
-    It 'WIRING: the quick gate runs before (and instead of) the full-run engine, refuses "everything" first, stops by process id, and carries every suite by name' {
+    It 'WIRING: one run engine for the quick gate and a full run; "everything" is refused first; a lane''s share (-Only) after that check; stops by process id; every suite by name' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $q = $g.IndexOf('# ---- 4q. THE QUICK GATE')
+        $q = $g.IndexOf('# ---- 4. THE RUN')
         $q | Should -BeGreaterThan $g.IndexOf('if ($ListOnly) { exit 0 }')
-        $q | Should -BeLessThan $g.IndexOf('$dotnetJob = Start-Job')
         $g.IndexOf('Test-SIFastGateFullRun -OwnerWords $OwnerWords -Selected $reasons.Count') | Should -BeLessThan $g.IndexOf('$runRes = @(Invoke-SIQuickGateRun')
-        $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Hotfix -Scale:\$Scale\r?\n'
+        $g.IndexOf('Test-SIFastGateFullRun -OwnerWords $OwnerWords -Selected $reasons.Count') | Should -BeLessThan $g.IndexOf('$onlyList = @($Only -split')
+        $g | Should -Match '\$runRes = @\(Invoke-SIQuickGateRun -Items \$items\.ToArray\(\) -Work \$work -Throttle \$qThrottle -HangSeconds \$qHang -ProgressSeconds \$ProgressSeconds -OnFinish \$describe -HangOverride \$qHangBy\)'
+        $g | Should -Match '\$qHang = if \(\$HangSeconds -gt 0\) \{ \$HangSeconds \} else \{ \$map\.Quick\.HangSeconds \}'
         $g | Should -Match 'Stop-SIGateProcessTree -Process \$r\.Process'
         $g | Should -Match "Kill', \[type\[\]\]@\(\[bool\]\)"
         $g | Should -Match 'taskkill\.exe /T /F /PID \$Process\.Id'
@@ -808,19 +786,14 @@ Describe 'THE QUICK GATE stops at its limit and reports (owner: "we even agreed 
         $g | Should -Match 'still running \(\{1\}\)'
         $g | Should -Match 'SuiteResults = @\(\)'
         $g | Should -Match "Status = \`$verdict\.Status"
-        $g | Should -Match 'QUICK GATE TIMED OUT: \{0\} after'
-        $g | Should -Match 'QUICK GATE NOT RUN: \{0\}'
-        # the limits can never be raised above 20 minutes
-        $g | Should -Match '\[ValidateRange\(0, 2400\)\]\[int\]\$SuiteLimitSeconds'
-        $g | Should -Match '\[ValidateRange\(0, 2400\)\]\[int\]\$GateLimitSeconds'
-        $g | Should -Match 'SuiteLimitSeconds = \[Math\]::Min\(1200'
+        $g | Should -Match '\{0\} HUNG: \{1\} -- printed nothing for'
         # the web app: built and tested in its own stoppable process, the PROJECT (never the solution), only on a web change
         $d = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')
-        $d | Should -Match 'dotnet build \(\[string\]\$pj\.Path\) -c Release --nologo -v q -nodeReuse:false'
+        $d | Should -Match 'dotnet build \(\[string\]\$pj\.Path\) -c Release --nologo -v minimal -nodeReuse:false'
         $d | Should -Not -Match '\.sln'
         $d | Should -Match "'test', \[string\]\`$pj\.Path, '-c', 'Release', '--no-build'"
         $g | Should -Match 'if \(-not \$NoDotnet -and \$dotnetPlan\.Count -and \(Get-Command dotnet'
         $g | Should -Match '-NoWhole:\(-not \$Precise\) -MaxClasses'
-        # (the release passing -TimeoutMinutes 10 and the VM's offline smoke limit are Pro / vendor files: SIv3-ReleaseSI and SIv3-GateOnTestVm check them)
+        # (the release and the VM's offline smoke are Pro / vendor files: SIv3-ReleaseSI and SIv3-GateOnTestVm check them)
     }
 }

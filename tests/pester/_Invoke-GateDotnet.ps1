@@ -3,7 +3,9 @@
 .SYNOPSIS
     The web app's part of the QUICK GATE (tests\Invoke-FastGate.ps1): builds the test projects the change touches and runs
     only their selected test classes, in THIS process -- started by the gate as one more item beside the Pester suites, so
-    the gate's hard 10-minute stop ends it (its whole process tree: dotnet, MSBuild, the test host) like any suite.
+    the gate's hang rule ends it (its whole process tree: dotnet, MSBuild, the test host) like any suite. TEST-FAST (owner
+    2026-11-02): no clock ends it; it is HUNG only when it prints nothing for 5 minutes -- so every build and test line
+    is streamed to standard output as it comes (and a line per test: the console logger at normal verbosity).
 
 .DESCRIPTION
     -PlanFile: JSON array of { Name; Path (the test .csproj); Filter (dotnet test --filter, '' = the whole project) }.
@@ -33,8 +35,8 @@ try {
     $built = $true
     foreach ($pj in $plan) {
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v q -nodeReuse:false 2>&1 | ForEach-Object { "$_" }); $bc = $LASTEXITCODE
-        if ($bc -and ($b -match 'MSB4166')) { & $log $b; $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v q -nodeReuse:false 2>&1 | ForEach-Object { "$_" }); $bc = $LASTEXITCODE }
+        $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE
+        if ($bc -and ($b -match 'MSB4166')) { & $log $b; $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE }
         & $log $b
         $errs = @($b | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match ':\s*error\s+[A-Z]+\d+' } | Select-Object -Unique -First 8)
         $out.Build += [ordered]@{ Project = [string]$pj.Name; Ok = ($bc -eq 0); Summary = $(if ($bc) { 'dotnet build FAILED' + $(if ($errs.Count) { ': ' + ($errs -join ' | ') } else { '' }) } else { 'built' }); Seconds = [int]$sw.Elapsed.TotalSeconds }
@@ -44,11 +46,11 @@ try {
     if ($built) {
         foreach ($pj in $plan) {
             $sw = [Diagnostics.Stopwatch]::StartNew()
-            $ta = @('test', [string]$pj.Path, '-c', 'Release', '--no-build', '--nologo')
+            $ta = @('test', [string]$pj.Path, '-c', 'Release', '--no-build', '--nologo', '--logger', 'console;verbosity=normal')
             if ("$($pj.Filter)") { $ta += @('--filter', [string]$pj.Filter) }
             $sum = ''; $tc = 0; $note = ''
             foreach ($attempt in 1, 2) {
-                $o = @(& dotnet @ta 2>&1 | ForEach-Object { "$_" }); $tc = $LASTEXITCODE
+                $o = @(& dotnet @ta 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $tc = $LASTEXITCODE
                 & $log $o
                 $sum = @($o | Where-Object { $_ -match '(Passed|Failed|Skipped)!\s+-' } | ForEach-Object { $_.Trim() }) -join ' '
                 $names = @(for ($k = 0; $k -lt $o.Count; $k++) {

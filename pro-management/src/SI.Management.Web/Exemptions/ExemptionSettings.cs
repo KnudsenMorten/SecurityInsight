@@ -25,6 +25,8 @@ public sealed class ExemptionSettings
     // #264 -- the bulk guard and how exempted findings are shown and counted
     public const string BulkMax = "SIWeb_Exemption_BulkMax";
     public const string ShowInViews = "SIWeb_Exempted_ShowInViews";
+    /// #996: may the person who asked for an exemption approve it too? Off by default (four eyes).
+    public const string AllowSelfApproval = "SIWeb_ExemptionAllowSelfApproval";
     /// Read by the engines too (Risk Analysis, the department reports), so they live in the engines' catalog
     /// (config\settings.catalog.locked.json) at solution scope; the web app reads them from any scope.
     public const string CountInManagement = "SI_Exempted_CountInManagement";
@@ -75,10 +77,14 @@ public sealed class ExemptionSettings
             "Whether the findings browser, the collection views, the asset pages and the CMDB pages show findings that an approved exemption covers.",
             "Off (the default): exempted findings are hidden; every view that leaves them out says \"N exempted not counted\" with a link to show them, and each view has a \"Show exempted\" tick that shows them for that view only (carried through its links and exports). On: they are shown, marked \"Exempted until <date>\", and the tick hides them. The data always keeps them: this only decides what a view shows.",
             "false", "off (hidden)", when: "Turn on if your analysts should see exempted findings by default, e.g. to review them."),
+        S(AllowSelfApproval, "bool", "Requester may approve their own exemption",
+            "Whether the person who asked for an exemption may also approve it.",
+            "Off (the default): a request is approved by someone other than the person who asked for it -- another owner or approver of its domain, a person of its department, or an Admin; the requester may still withdraw it by rejecting it. On: a requester who may decide the request may also approve it, and the change history shows the same person as requester and approver.",
+            "false", "off (four eyes)", when: "Only in a small team where one person both raises and accepts risk, and your policy allows it."),
     ];
 
     public sealed record Values(int DefaultMonths, bool AllowOpenEnded, int ReviewOverdueDays, bool MailEnabled, int ReviewDayOfMonth, int ExpiryWarningDays,
-        int BulkMax = 500, bool ShowInViews = false, bool CountInManagement = false, bool InDepartmentReports = false)
+        int BulkMax = 500, bool ShowInViews = false, bool CountInManagement = false, bool InDepartmentReports = false, bool AllowSelfApproval = false)
     {
         public static Values Defaults { get; } = new(6, false, 45, true, 1, 30);
     }
@@ -117,7 +123,8 @@ public sealed class ExemptionSettings
         list = list.OrderBy(r => r.Scope == "solution" ? 0 : 1).ToList();
         return new Values(Int(DefaultMonths, d.DefaultMonths, 1, 36), Bool(AllowOpenEnded, d.AllowOpenEnded), Int(ReviewOverdueDays, d.ReviewOverdueDays, 7, 400),
             Bool(MailEnabled, d.MailEnabled), Int(ReviewDayOfMonth, d.ReviewDayOfMonth, 1, 28), Int(ExpiryWarningDays, d.ExpiryWarningDays, 0, 180),
-            Int(BulkMax, d.BulkMax, 1, 2000), Bool(ShowInViews, d.ShowInViews), Bool(CountInManagement, d.CountInManagement), Bool(InDepartmentReports, d.InDepartmentReports));
+            Int(BulkMax, d.BulkMax, 1, 2000), Bool(ShowInViews, d.ShowInViews), Bool(CountInManagement, d.CountInManagement), Bool(InDepartmentReports, d.InDepartmentReports),
+            Bool(AllowSelfApproval, d.AllowSelfApproval));
     }
 
     private static string? Parse(string json)

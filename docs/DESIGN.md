@@ -10291,7 +10291,7 @@ ring; `off` or a ring list as for every other field):
 
 | key | type | what it is |
 |---|---|---|
-| `stepsDone` | whole number or null | the run's steps that ended (succeeded, failed or skipped) |
+| `stepsDone` | whole number or null | the run's steps that ended (succeeded, failed or skipped); for a run stopped or cancelled before its end, only the steps that ran to their end (succeeded, failed or timed out) -- never the step it was stopped in, nor the steps it never started |
 | `stepsTotal` | whole number or null | the run's steps that are not switched off |
 | `runningSteps` | array, at most 12 | each step running now: `{ step, sinceUtc, prevMin, endUtc, estimate }` |
 | `remainingSteps` | array, at most 30 | each step still waiting: `{ step, group, estimateMin }` |
@@ -10313,6 +10313,14 @@ of the settings database as the rest of the field (the newest ten runs and their
 requests). If the receiver refuses the heartbeat with these keys, it is sent again with `Pipeline` without them, so the
 rest of the record is never lost to them; anything that cannot be read or does not pass the agreed shape is left out with
 one plain line and the heartbeat still goes.
+
+**A run stopped or cancelled before its end.** Such a run never reads as finished: `stepsDone` counts only the steps that
+ran to their end (a run cancelled at step 8 of 12 reads 7 of 12, not 12 of 12), and `step` / `stepSinceUtc` name the step
+it was stopped at (the step closed while it ran, else the first step that ended without success). Its `state` is `idle`
+today. A separate value `stopped` is built and tested behind its own switch `SI_Uplink_SendPipelineStopped` (`off` on
+every ring until the receiver takes the value); while it is on and the receiver refuses a heartbeat with it, the heartbeat
+is sent again once with `idle`, so the rest of the record is never lost to it.
+
 **Error classes** (one per failed run, from the failure text — first match wins): `settings-error`, `licence-invalid`,
 `mi-unavailable`, `sql-login`, `config-missing`, `ingest-short-count`, `table-missing`, `platform-timeout`, `platform-5xx`,
 `kql-query-defect`, `throttled`, `ingest-4xx`, `graph-401`, `graph-403`, `defender-403`, `arm-403`, `kv-403`, `storage-403`,

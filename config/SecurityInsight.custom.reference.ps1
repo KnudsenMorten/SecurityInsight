@@ -511,6 +511,25 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_DisabledAssets_StateActions = $false   # finding / vulnerability lifecycle, close-loop, tickets
 # $global:SI_DisabledAssets_Connectors   = $false   # sent out by connectors and exports
 
+# A customer's choice: Exposure Graph identities that get no asset. Off by default; turn on only when your organisation
+# chose it. On, the identity collection records no asset for these objects, counts them in its log and on the Data
+# health page, and their existing CIs retire with a reason naming the setting. Real users (accounts synced to Entra ID),
+# AD-only groups, devices and findings are never affected.
+#   SI_Identity_SkipNeverSyncedDisabledAd: an on-premises AD account never synced to Entra ID becomes an asset only while
+#     it is enabled or privileged (admin count, critical or tier 0/1 AD group, assigned role, service account, sensitive).
+#   SI_Identity_SkipDeletedGroups: a group with an Entra object id becomes an asset only while Entra ID still has it
+#     (active or in its deleted items).
+
+# $global:SI_Identity_SkipNeverSyncedDisabledAd = $false   # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
+# $global:SI_Identity_SkipDeletedGroups         = $false   # groups: only those Entra ID still has (active or recently deleted) become assets
+
+# Retire at once on PROOF of deletion, per source. Off by default. On, an asset whose source proves it deleted (never merely
+# missing from a list -- that keeps the not-seen grace period) retires at once, and its open vulnerabilities close as
+# 'asset deleted in <source>', never as fixed. Restored / listed again = active again, its findings reopen.
+# $global:SI_DeletionProof_Entra  = $false   # a user, device or group in Entra ID's deleted items
+# $global:SI_DeletionProof_Azure  = $false   # an Azure resource with a Delete in the Resource Graph resource changes
+# $global:SI_DeletionProof_Intune = $false   # a managed device deleted in Intune's audit events (needs DeviceManagementApps.Read.All)
+
 # --- Optional copy of the provider records to Log Analytics ---
 # The records live in the database (correlation and the CI build run in SQL only). 'records' also posts them to
 # SI_Record_CL (+ SI_RecordRaw_CL for raw data) for Azure Monitor or workbooks -- a one-way copy; it costs ingestion.
@@ -3921,6 +3940,50 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     off.
 #   More info:        https://invardia.com/docs/si/settings/SI_ForceFullRun_Endpoint/
 #
+# Exposure Graph: no asset for groups Entra ID no longer has  [SI_Identity_SkipDeletedGroups]  (advanced)
+#   What it is for:   A customer's choice for groups the Exposure Graph still lists although Entra ID no longer has
+#                     them (neither active nor in its deleted items). On, only groups that still exist in Entra ID
+#                     (active or recently deleted) become assets. The others are counted and get no asset.
+#   Default:          Off: every group the Exposure Graph lists becomes an asset, as before
+#   If you change it: Stages: the identity collection reads the ids of Entra ID's groups and deleted groups once per
+#                     run and records no asset for an Exposure Graph group with an Entra object id that Entra ID does
+#                     not return; the run log and the Data health page show how many per run; the CI build retires the
+#                     existing CI of such a group at once, with a reason naming this setting. A run whose Entra ID
+#                     group read is not complete decides nothing: groups keep their last state. On-premises groups
+#                     that were never synced, users, devices and findings are not affected. Off again, the next run
+#                     records them again and their CIs come back.
+#   When to change:   Only when your organisation chose it: its Exposure Graph lists very many groups deleted long
+#                     ago, and they should not be assets.
+#   Risk:             Groups the customer chose not to keep stop being assets from the next run and their CIs retire
+#                     (CMDB / ServiceNow closures follow the retired CIs). A run whose Entra ID group read is not
+#                     complete changes nothing. Reversible: turn it off and the next run records them again and their
+#                     CIs come back.
+#   Recommended:      Off, unless your organisation chose it.
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipDeletedGroups/
+#
+# Exposure Graph: no asset for never-synced, disabled AD accounts  [SI_Identity_SkipNeverSyncedDisabledAd]  (advanced)
+#   What it is for:   A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but
+#                     that were never synced to Entra ID (no Entra object id). On, only the enabled or privileged ones
+#                     become assets: privileged = an admin count, a critical or tier 0/1 AD group (Domain Admins,
+#                     Enterprise Admins ...), an assigned role, a service account, a sensitive account or a Microsoft
+#                     criticality level. The others are counted and get no asset.
+#   Default:          Off: every on-premises AD account the Exposure Graph lists becomes an asset, as before
+#   If you change it: Stages: the identity collection records no asset for a never-synced AD account that is disabled
+#                     and not privileged; the run log and the Data health page show how many per run; the CI build
+#                     retires the existing CI of such an account at once, with a reason naming this setting (its
+#                     findings close as asset retired, never as fixed). Disabled = the account says so itself
+#                     (accountEnabled false, or the disabled flag of userAccountControl); an account that does not say
+#                     is kept. Accounts synced to Entra ID, groups, devices and findings are not affected. Off again,
+#                     the next run records them again and their CIs come back.
+#   When to change:   Only when your organisation chose it: its Exposure Graph lists very many old on-premises
+#                     accounts that never reached Entra ID and are disabled, and they should not be assets.
+#   Risk:             Objects the customer chose not to keep stop being assets from the next run and their CIs retire
+#                     (CMDB / ServiceNow closures follow the retired CIs). Accounts synced to Entra ID, groups,
+#                     devices and findings are not affected. Reversible: turn it off and the next run records them
+#                     again and their CIs come back.
+#   Recommended:      Off, unless your organisation chose it.
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipNeverSyncedDisabledAd/
+#
 # Full run for all profilers  [SI_ForceFullRun]  (advanced)
 #   What it is for:   Makes every asset-profiling engine process all assets on the next run, ignoring the per-asset
 #                     skip schedule and cached CMDB data.
@@ -6047,6 +6110,64 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     once.
 #   Recommended:      Keep 70.
 #   More info:        https://invardia.com/docs/si/settings/SI_SqlPacing_LowPercent/
+#
+# Retire at once: devices deleted in Intune  [SI_DeletionProof_Intune]  (advanced)
+#   What it is for:   Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete
+#                     of the managed device in Intune's audit events. Merely missing from a list is never proof -- it
+#                     keeps the not-seen grace period.
+#   Default:          Off: a device Intune no longer lists waits the not-seen grace period, as before
+#   If you change it: Stages: the CI build checks the Intune records missing from a complete collection against
+#                     Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once:
+#                     deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities
+#                     close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active.
+#                     A device listed again is active again and its findings reopen. A read that is not complete (for
+#                     example without the permission) decides nothing for what it did not return.
+#   When to change:   When a device deleted in Intune should not wait the grace period before it and its
+#                     vulnerabilities are retired.
+#   Risk:             Assets of devices deleted in Intune retire from the next CI build and their vulnerabilities
+#                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
+#                     decides them by the grace period again.
+#   Recommended:      Off, unless your organisation chose it.
+#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Intune/
+#
+# Retire at once: objects deleted in Entra ID  [SI_DeletionProof_Entra]  (advanced)
+#   What it is for:   Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group
+#                     is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the
+#                     not-seen grace period.
+#   Default:          Off: a user, device or group Entra ID no longer lists waits the not-seen grace period, as before
+#   If you change it: Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups)
+#                     missing from a complete collection against Entra ID's deleted items; a proven one is recorded,
+#                     its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace
+#                     period -- and its open vulnerabilities close as 'asset deleted in Entra ID', never as fixed. A
+#                     CI another source still sees stays active. An object restored in Entra ID is listed again: its
+#                     CI is active again and its findings reopen. A read that is not complete decides nothing for what
+#                     it did not return.
+#   When to change:   When an object deleted in Entra ID should not wait the grace period before it and its
+#                     vulnerabilities are retired.
+#   Risk:             Assets of objects deleted in Entra ID retire from the next CI build and their vulnerabilities
+#                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
+#                     decides them by the grace period again.
+#   Recommended:      Off, unless your organisation chose it.
+#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Entra/
+#
+# Retire at once: resources deleted in Azure  [SI_DeletionProof_Azure]  (advanced)
+#   What it is for:   Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource
+#                     Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it
+#                     keeps the not-seen grace period.
+#   Default:          Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before
+#   If you change it: Stages: the CI build checks the Azure records missing from a complete collection against the
+#                     resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in
+#                     Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset
+#                     deleted in Azure', never as fixed. A CI another source still sees stays active. A resource
+#                     listed again is active again and its findings reopen. A read that is not complete decides
+#                     nothing for what it did not return.
+#   When to change:   When an asset deleted in Azure should not wait the grace period before it and its
+#                     vulnerabilities are retired.
+#   Risk:             Assets of resources deleted in Azure retire from the next CI build and their vulnerabilities
+#                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
+#                     decides them by the grace period again.
+#   Recommended:      Off, unless your organisation chose it.
+#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Azure/
 #
 # Send the data health result to Invardia  [SI_Telemetry_SendHealth]  (advanced)
 #   What it is for:   Pro installs with an install key send Invardia the daily data health result -- the state and,

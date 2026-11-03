@@ -242,8 +242,8 @@ function Test-SICommunityChannelEntry {
     param([Parameter(Mandatory)]$Entry, [Parameter(Mandatory)][int]$Ring, [AllowNull()][object[]]$TrustedKeys,
           [long]$AppliedSequence = 0, [AllowEmptyString()][string]$RunningVersion = '', [long]$AcceptManualStepSequence = -1,
           [AllowEmptyString()][string]$DownloadPrefix = $script:SICommunityUpdateDownloadPrefix,
-          # Invardia's ring route (/api/updates/securityinsight/community/<ring>, 2026-10-28): the URL names the ring, so a
-          # manifest that carries no ring is accepted; one that names ANOTHER ring is still refused
+          # Invardia signs the ring into every Community manifest, so the update clients no longer pass this: a manifest that
+          # names no ring is refused like one that names another ring. Kept only for callers that read an entry for display.
           [switch]$RingOptional)
     $out = { param($a, $why, $v = $null)
         [pscustomobject]@{ Action = $a; Reason = $why
@@ -613,13 +613,18 @@ function Invoke-SICommunityUpdate {
 
         # ---- 2. verify before anything is downloaded ----
         $chk = Test-SICommunityChannelEntry -Entry $entry -Ring $cfg.Ring -TrustedKeys $keys -AppliedSequence ([long]$state.appliedSequence) `
-                    -RunningVersion $from -AcceptManualStepSequence $AcceptManualStepSequence -DownloadPrefix $cfg.DownloadPrefix -RingOptional
+                    -RunningVersion $from -AcceptManualStepSequence $AcceptManualStepSequence -DownloadPrefix $cfg.DownloadPrefix
         $res.Sequence = $chk.Sequence
         if ($chk.Action -eq 'refused') { return (& $done 'refused' ("{0} -- nothing changed" -f $chk.Reason)) }
         if ($chk.Action -eq 'hold') { return (& $done 'hold' ("{0} -- this install stays on {1}" -f $chk.Reason, $from)) }
         if ($chk.Action -eq 'current') {
             if ([long]$state.appliedSequence -lt $chk.Sequence) { $state.appliedSequence = $chk.Sequence; $state.appliedVersion = $chk.Version; $state.ring = $cfg.Ring }
             return (& $done 'current' $chk.Reason)
+        }
+        # forward-only, as the container updater and Pro: a FIRST manifest (nothing applied from the channel here yet) that
+        # names a version older than the one this install runs is held, never installed
+        if ($chk.IsRollback -and [long]$state.appliedSequence -le 0) {
+            return (& $done 'hold' ("HELD: ring {0} names {1}, older than the {2} this install runs, and no release has been applied from the channel here yet -- an update never moves this install backward on a first manifest" -f $cfg.Ring, $chk.Version, $from))
         }
         # owner 2026-10-28: a release of ANOTHER MAJOR VERSION is never installed as an update (a new major version is a new
         # installation beside the old one) -- refused before anything is downloaded

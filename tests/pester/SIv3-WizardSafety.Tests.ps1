@@ -20,8 +20,13 @@ BeforeAll {
     $script:NewSpn  = Join-Path $script:Wiz 'backend\New-SISpn.ps1'
 
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:Server, [ref]$null, [ref]$null)
-    $fn  = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-SIWizardRequestAllowed' }, $true) | Select-Object -First 1
-    if ($fn) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Test-SIWizardRequestAllowed', 'Test-SIWizardSessionSecret', 'Add-SIWizardSessionSecretToPage' }, $true))) {
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    $spnAst = [System.Management.Automation.Language.Parser]::ParseFile($script:NewSpn, [ref]$null, [ref]$null)
+    foreach ($fn in @($spnAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-SISpnCertKeyExportPolicy' }, $true))) {
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
 
     # Value of `$global:<Name> = <literal>` in a generated file, read from its AST (not by running it).
     function script:Get-AssignedLiteral($FileAst, [string]$Name) {
@@ -37,7 +42,7 @@ BeforeAll {
 Describe 'Write-SICustomConfig: every value stays a value' {
     BeforeAll {
         $script:Out = Join-Path $TestDrive 'SecurityInsight.custom.ps1'
-        $spn   = [pscustomobject]@{ AppId = 'app'; TenantId = 'tid'; ObjectId = 'oid'; CredKind = 'Secret'; CredValue = $script:Hostile; KvName = $null }
+        $spn   = [pscustomobject]@{ AppId = 'app'; TenantId = 'tid'; ObjectId = 'oid'; CredKind = 'Cert'; CertThumbprint = $script:Hostile; KvName = $null }
         $infra = [pscustomobject]@{ Location = 'westeurope'; SubscriptionId = 'sub'; WorkspaceName = "ws'x"; ResourceGroupName = 'rg'; WorkspaceResourceId = '/x'; DceName = 'dce'; DceIngestionUri = 'https://d'; DcrResourceGroupName = 'rg'; StorageAccountName = 'st'; StorageResourceGroupName = 'rg' }
         $smtp  = @{ Server = 'smtp.example.com'; Port = 587; User = 'u'; Password = $script:Curly; From = 'a@b.c'; MailTo = @("o'brien@example.com") }
         $oai   = @{ Endpoint = 'https://o'; Deployment = 'd'; ApiKey = 'k'; MaxSpendPerRun = 2.5 }
@@ -48,8 +53,8 @@ Describe 'Write-SICustomConfig: every value stays a value' {
         $script:Text = Get-Content -LiteralPath $script:Out -Raw
     }
     It 'the generated file parses' { $script:ParseErrs | Should -Be 0 }
-    It 'a hostile secret is stored verbatim, not executed' {
-        Get-AssignedLiteral $script:FileAst 'SI_SPN_Secret' | Should -Be $script:Hostile
+    It 'a hostile value is stored verbatim, not executed' {
+        Get-AssignedLiteral $script:FileAst 'SI_SPN_CertThumbprint' | Should -Be $script:Hostile
         Get-AssignedLiteral $script:FileAst 'SMTPPassword'  | Should -Be $script:Curly
         Get-AssignedLiteral $script:FileAst 'SI_WorkspaceName' | Should -Be "ws'x"
     }
@@ -67,11 +72,11 @@ Describe 'Write-SICustomConfig: every value stays a value' {
         ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) | Should -BeTrue
         $out2 = Join-Path $TestDrive 'dk.custom.ps1'
         $pw = 'r' + [char]0x00F8 + 'dgr' + [char]0x00F8 + 'd-' + [char]0x00E6 + [char]0x00E5
-        $spn = [pscustomobject]@{ AppId = 'a'; TenantId = 't'; ObjectId = 'o'; CredKind = 'Secret'; CredValue = $pw }
+        $spn = [pscustomobject]@{ AppId = 'a'; TenantId = 't'; ObjectId = 'o'; CredKind = 'Cert'; CertThumbprint = $pw }
         $infra = [pscustomobject]@{ Location = 'l'; SubscriptionId = 's'; WorkspaceName = 'w'; ResourceGroupName = 'r'; WorkspaceResourceId = '/x'; DceName = 'd'; DceIngestionUri = 'u'; DcrResourceGroupName = 'r'; StorageAccountName = 'st'; StorageResourceGroupName = 'r' }
         & $script:Writer -OutputPath $out2 -Spn $spn -Infra $infra *> $null
         $fa = [System.Management.Automation.Language.Parser]::ParseFile($out2, [ref]$null, [ref]$null)
-        Get-AssignedLiteral $fa 'SI_SPN_Secret' | Should -Be $pw
+        Get-AssignedLiteral $fa 'SI_SPN_CertThumbprint' | Should -Be $pw
     }
     It 'the wizard''s MaxSpendPerRun reaches the file, decimals and all (it became 4)' {
         $script:Text | Should -Match '\$global:MaxAiSpendPerRun\s+=\s+2\.5\b'
@@ -87,6 +92,79 @@ Describe 'Write-SICustomConfig: Secret + Key Vault mode resolves the secret' {
         $t = Get-Content -LiteralPath $out -Raw
         $t | Should -Match 'Get-SIKvSecret -VaultName \$global:SI_KeyVaultName -SecretName \$global:SI_SPN_KvSecretName'
         $t | Should -Match '\$global:SpnKeyVaultName\s+=\s+\$global:SI_KeyVaultName'
+    }
+}
+
+Describe 'NEGATIVE (2026-10-31): a client secret is never written into the configuration file' {
+    BeforeAll { $script:Inf = [pscustomobject]@{ Location = 'l'; SubscriptionId = 's'; WorkspaceName = 'w'; ResourceGroupName = 'r'; WorkspaceResourceId = '/x'; DceName = 'd'; DceIngestionUri = 'u'; DcrResourceGroupName = 'r'; StorageAccountName = 'st'; StorageResourceGroupName = 'r' } }
+    It 'a secret with no Key Vault is refused -- no file carries it' {
+        $out = Join-Path $TestDrive 'inline.custom.ps1'
+        $spn = [pscustomobject]@{ AppId = 'a'; TenantId = 't'; ObjectId = 'o'; CredKind = 'Secret'; CredValue = 'S3CRET-VALUE-1'; KvName = $null }
+        { & $script:Writer -OutputPath $out -Spn $spn -Infra $script:Inf *> $null } | Should -Throw '*never written into the configuration file*'
+        if (Test-Path -LiteralPath $out) { Get-Content -LiteralPath $out -Raw | Should -Not -Match 'S3CRET-VALUE-1' }
+    }
+    It 'a secret that also sits in Key Vault: only the vault and secret NAMES are written, never the value' {
+        $out = Join-Path $TestDrive 'kvval.custom.ps1'
+        $spn = [pscustomobject]@{ AppId = 'a'; TenantId = 't'; ObjectId = 'o'; CredKind = 'Secret'; CredValue = 'S3CRET-VALUE-2'; KvName = 'kv-x'; KvSecretName = 'SI-SPN-Secret' }
+        & $script:Writer -OutputPath $out -Spn $spn -Infra $script:Inf *> $null
+        $t = Get-Content -LiteralPath $out -Raw
+        $t | Should -Not -Match 'S3CRET-VALUE-2'
+        $t | Should -Match 'Get-SIKvSecret -VaultName \$global:SI_KeyVaultName -SecretName \$global:SI_SPN_KvSecretName'
+    }
+    It 'the wizard keeps a secret in Key Vault by default, refuses inline storage, and never sends the value back to the page' {
+        $srv = Get-Content -LiteralPath $script:Server -Raw
+        $srv | Should -Match "elseif \(\`$signIn\.CredKind -eq 'Cert'\) \{ 'LocalCertStore' \} else \{ 'KeyVault' \}"
+        $srv | Should -Match "if \(\`$spnArgs\.CredStorage -eq 'Inline'\) \{\s+throw"
+        $srv | Should -Match ([regex]::Escape('$spnOut = & $cmdletNewSISpn @spnArgs') + '\s+' + [regex]::Escape("if (`$spnOut -and `$spnOut.PSObject.Properties['CredValue']) { `$spnOut.CredValue = `$null }"))
+    }
+}
+
+Describe 'NEGATIVE (2026-10-31): only THIS wizard session can drive the local API -- not another program on the machine' {
+    It 'the session secret: equal = allowed; wrong, empty, missing or a prefix = refused' {
+        $s = 'a' * 64
+        Test-SIWizardSessionSecret -Presented $s -Expected $s | Should -BeTrue
+        Test-SIWizardSessionSecret -Presented ('b' * 64) -Expected $s | Should -BeFalse
+        Test-SIWizardSessionSecret -Presented '' -Expected $s | Should -BeFalse
+        Test-SIWizardSessionSecret -Presented $null -Expected $s | Should -BeFalse
+        Test-SIWizardSessionSecret -Presented ('a' * 63) -Expected $s | Should -BeFalse
+        Test-SIWizardSessionSecret -Presented ($s + 'a') -Expected $s | Should -BeFalse
+        Test-SIWizardSessionSecret -Presented '' -Expected '' | Should -BeFalse -Because 'no secret is never a match'
+    }
+    It 'the page carries the secret for its own calls (a meta tag in <head>)' {
+        $h = Add-SIWizardSessionSecretToPage -Html '<html><head><title>x</title></head><body></body></html>' -Secret 'abc123'
+        $h | Should -Match '<meta name="si-wizard-session" content="abc123">\s*</head>'
+    }
+    It 'WIRING: every /api/* call needs the X-SI-Wizard-Session header; the page is served only to the ?k= link; the page''s calls send it' {
+        $src = Get-Content -LiteralPath $script:Server -Raw
+        $src | Should -Match ([regex]::Escape("if (-not `$refusal -and -not (Test-SIWizardSessionSecret -Presented `$req.Headers['X-SI-Wizard-Session'] -Expected `$script:SIWizardSecret))"))
+        $src | Should -Match ([regex]::Escape("if (-not (Test-SIWizardSessionSecret -Presented `$req.QueryString['k'] -Expected `$script:SIWizardSecret))"))
+        $src | Should -Match ([regex]::Escape('$sessionRng.GetBytes($sessionBytes)'))
+        $src | Should -Match 'New-Object byte\[\] 32'
+        $src | Should -Match ([regex]::Escape('Start-Process $sessionUrl'))
+        $js = Get-Content -LiteralPath (Join-Path $script:Wiz 'app.js') -Raw
+        $js | Should -Match "h\['X-SI-Wizard-Session'\] = m\.content"
+        $js | Should -Match "fetch\('/api/state', \{ method: 'GET', headers: wizardApiHeaders\(\) \}\)"
+        $js | Should -Match "headers: wizardApiHeaders\(\{ 'Content-Type': 'application/json' \}\)"
+    }
+}
+
+Describe 'NEGATIVE (2026-10-31): the engine identity gets no role on the whole subscription; a host-only certificate key is not exportable' {
+    It 'New-SISpn assigns no Contributor (and no other role) at the subscription scope' {
+        $a = [System.Management.Automation.Language.Parser]::ParseFile($script:NewSpn, [ref]$null, [ref]$null)
+        $grants = @($a.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'New-SIRoleAssignment' }, $true))
+        foreach ($g in $grants) {
+            $g.Extent.Text | Should -Not -Match "'Contributor'"
+            $g.Extent.Text | Should -Not -Match '-Scope \$subScope'
+        }
+    }
+    It 'the certificate key: NonExportable unless a copy goes to Key Vault; the PFX is exported only then' {
+        Get-SISpnCertKeyExportPolicy -CredStorage 'LocalCertStore' | Should -Be 'NonExportable'
+        Get-SISpnCertKeyExportPolicy -CredStorage '' | Should -Be 'NonExportable'
+        Get-SISpnCertKeyExportPolicy -CredStorage 'KeyVault' | Should -Be 'Exportable'
+        $t = Get-Content -LiteralPath $script:NewSpn -Raw
+        $t | Should -Match '-KeySpec Signature -KeyExportPolicy \$keyExport'
+        $t | Should -Not -Match '-KeyExportPolicy Exportable'
+        $t | Should -Match "(?s)if \(\`$keyExport -eq 'Exportable'\) \{\s+\`$pfxPwd\s+=.{0,80}\`$pfxBytes = \`$cert\.Export"
     }
 }
 
@@ -138,7 +216,72 @@ Describe 'WIRING -- the fields the operator filled in reach the backend' {
     }
     It '-SkipPhase1 resolves the existing SPN instead of leaving it empty' {
         $u = Get-Content -LiteralPath (Join-Path $script:SIRoot 'Setup-SecurityInsight-Unattended.ps1') -Raw
-        $u | Should -Match '(?s)if \(\$SkipPhase1\) \{.{0,2500}Get-SIAzADServicePrincipal -ApplicationId \$skipAppId.{0,1500}ObjectId\s+=\s+\[string\]@\(\$skipSp\)\[0\]\.Id'
+        $u | Should -Match '(?s)if \(\$SkipPhase1\) \{.{0,2500}Get-SIAzADServicePrincipal -ApplicationId \$skipAppId.{0,3500}ObjectId\s+=\s+\[string\]@\(\$skipSp\)\[0\]\.Id'
+    }
+}
+
+Describe 'NEGATIVE (2026-11-01): the unattended setup stops BEFORE it creates anything when the credential could not end in a working configuration' {
+    BeforeAll {
+        . (Join-Path $script:SIRoot 'setup\_shared\SI-ServerSignIn.ps1')
+        $script:Unatt = Get-Content -LiteralPath (Join-Path $script:SIRoot 'Setup-SecurityInsight-Unattended.ps1') -Raw
+        $script:Inf2 = [pscustomobject]@{ Location = 'l'; SubscriptionId = 's'; WorkspaceName = 'w'; ResourceGroupName = 'r'; WorkspaceResourceId = '/x'; DceName = 'd'; DceIngestionUri = 'u'; DcrResourceGroupName = 'r'; StorageAccountName = 'st'; StorageResourceGroupName = 'r' }
+    }
+    It 'a client secret written into the file (Inline) is refused; so is a Key Vault store with no vault named' {
+        Test-SIUnattendedCredentialPlan -CredKind Secret -CredStorage Inline -KeyVaultName 'kv-x' | Should -Match 'never written into the configuration file.*nothing was created'
+        Test-SIUnattendedCredentialPlan -CredKind Secret -CredStorage KeyVault -KeyVaultName '' | Should -Match 'needs Auth_Community\.KeyVaultName.*client secret'
+        Test-SIUnattendedCredentialPlan -CredKind Cert -CredStorage KeyVault -KeyVaultName $null | Should -Match 'needs Auth_Community\.KeyVaultName.*certificate'
+        # what works stays allowed
+        Test-SIUnattendedCredentialPlan -CredKind Secret -CredStorage KeyVault -KeyVaultName 'kv-x' | Should -BeNullOrEmpty
+        Test-SIUnattendedCredentialPlan -CredKind Cert -CredStorage LocalCertStore | Should -BeNullOrEmpty
+        Test-SIUnattendedCredentialPlan -CredKind ManagedIdentity | Should -BeNullOrEmpty
+        # the JSON's own Inline reaches the check (Resolve keeps what the JSON says)
+        $r = Resolve-SIUnattendedSignIn -CredKind Secret -CredStorage Inline -HostKind AzureVm
+        Test-SIUnattendedCredentialPlan -CredKind $r.CredKind -CredStorage $r.CredStorage -KeyVaultName '' | Should -Not -BeNullOrEmpty
+    }
+    It 'WIRING: the check runs right after the sign-in is resolved, before Phase 1 creates an app or a secret' {
+        $script:Unatt | Should -Match '(?s)\$commSignIn = Resolve-SIUnattendedSignIn.{0,900}\$credWhy = Test-SIUnattendedCredentialPlan -CredKind \$commSignIn\.CredKind -CredStorage \$commSignIn\.CredStorage -KeyVaultName.{0,200}if \(\$credWhy\) \{ _Err \$credWhy; throw \$credWhy \}'
+        $script:Unatt.IndexOf('$credWhy = Test-SIUnattendedCredentialPlan') | Should -BeLessThan $script:Unatt.IndexOf('$spnOut = & $cmdletNewSISpn @spnArgs')
+    }
+    It '-SkipPhase1 for a client-secret install: the vault reference, or the existing file''s sign-in kept -- refused before Phase 2 when neither' {
+        $r = Get-SIUnattendedExistingSecretRef -KeyVaultName 'kv-x' -KvSecretName ''
+        $r.Ok | Should -BeTrue; $r.KvName | Should -Be 'kv-x'; $r.KvSecretName | Should -Be 'SI-SPN-Secret'
+        (Get-SIUnattendedExistingSecretRef -KeyVaultName 'kv-x' -KvSecretName 'Own-Name').KvSecretName | Should -Be 'Own-Name'
+        $k = Get-SIUnattendedExistingSecretRef -ExistingConfig $true
+        $k.Ok | Should -BeTrue; $k.KeepExisting | Should -BeTrue
+        $n = Get-SIUnattendedExistingSecretRef
+        $n.Ok | Should -BeFalse; $n.Reason | Should -Match 'never written into the configuration file\. Nothing was changed'
+        $script:Unatt | Should -Match '(?s)if \(\$SkipPhase1\) \{.{0,3000}\$skipRef = Get-SIUnattendedExistingSecretRef.{0,400}if \(-not \$skipRef\.Ok\) \{ _Err \$skipRef\.Reason; throw \$skipRef\.Reason \}'
+        $script:Unatt | Should -Match 'CredValue\s+=\s+\$null'
+        $script:Unatt.IndexOf('$skipRef = Get-SIUnattendedExistingSecretRef') | Should -BeLessThan $script:Unatt.IndexOf('$infraOut = & $cmdletInitInfra @infraArgs')
+    }
+    It 'the config step keeps the sign-in an existing file has (a re-run with -SkipPhase1), and writes no secret' {
+        $out = Join-Path $TestDrive 'keep.custom.ps1'
+        [IO.File]::WriteAllText($out, "`$global:SI_SPN_AppId = 'a'`r`n`$global:SI_SPN_Secret = 'OLD-INSTALL-SECRET'`r`n")
+        $spn = [pscustomobject]@{ AppId = 'a'; TenantId = 't'; ObjectId = 'o'; CredKind = 'Secret'; CredValue = $null; KvName = $null; KeepExistingSignIn = $true }
+        & $script:Writer -OutputPath $out -Spn $spn -Infra $script:Inf2 -Merge *> $null
+        $t = Get-Content -LiteralPath $out -Raw
+        $t | Should -Match ([regex]::Escape("`$global:SI_SPN_Secret = 'OLD-INSTALL-SECRET'")) -Because 'the existing install keeps working'
+        @([regex]::Matches($t, '\$global:SI_SPN_Secret\s*=')).Count | Should -Be 1 -Because 'nothing new about the secret is written'
+        # without an existing file (or with -Force) the same object is refused
+        { & $script:Writer -OutputPath (Join-Path $TestDrive 'nofile.custom.ps1') -Spn $spn -Infra $script:Inf2 -Merge *> $null } | Should -Throw '*never written into the configuration file*'
+        { & $script:Writer -OutputPath $out -Spn $spn -Infra $script:Inf2 -Force *> $null } | Should -Throw '*never written into the configuration file*'
+    }
+}
+
+Describe 'NEGATIVE (2026-11-01): the wizard page offers no way to write a client secret into the file' {
+    BeforeAll {
+        $script:AppJs = Get-Content -LiteralPath (Join-Path $script:Wiz 'app.js') -Raw
+        $script:Page  = Get-Content -LiteralPath (Join-Path $script:Wiz 'Setup-SecurityInsight.html') -Raw
+    }
+    It 'no Inline storage option on the page or in its rules; a secret is kept in Key Vault only' {
+        $script:Page | Should -Not -Match 'value="Inline"'
+        $script:AppJs | Should -Not -Match "'Inline'"
+        $script:AppJs | Should -Match "kvSecret:\s+\['KeyVault'\]"
+        $script:AppJs | Should -Match "win:\s+\['LocalCertStore'\]"
+    }
+    It 'a server outside Azure that picks a client secret is moved to a certificate (no identity there could read Key Vault), and the page says why' {
+        $script:AppJs | Should -Match "(?s)function snapCredStorage\(\).{0,900}state\.data\.credType = 'certThumb'"
+        $script:Page | Should -Match 'data-host-type-block="win"[^>]*>[^<]*(outside Azure|a certificate)'
     }
 }
 

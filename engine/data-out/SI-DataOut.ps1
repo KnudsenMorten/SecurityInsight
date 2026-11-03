@@ -37,11 +37,22 @@ if (-not (Get-Command -Name New-SIConnectorJobRunRecord -ErrorAction SilentlyCon
 # each output's time to cfg.StepPhaseTime (measurement only; a copy without the helper only logs it)
 $script:SIDataOutStepPhase = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-StepPhase.ps1')
 if (-not (Get-Command -Name Write-SIStepPhase -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $script:SIDataOutStepPhase)) { . $script:SIDataOutStepPhase }
+# the ServiceNow helpers, loaded HERE -- at this file's scope, where every data-out function lives -- not inside
+# Open-SIDataOutSnowSession: a file dot-sourced inside a function defines its functions in THAT function's scope only, so
+# Send-SIDataOutSnowPage could not see Compare-SISnowSendColumns and every ServiceNow push stopped ("not recognized",
+# live 2026-11-01). Each is loaded only when the function it brings is not there yet (a test's own seams stay); Pro only.
+foreach ($__siSnow in @(@('SI-ServiceNowClient.ps1', 'New-SISnowConnection'), @('SI-SnowImportSet.ps1', 'Invoke-SISnowImportSetPush'), @('SI-SnowVerify.ps1', 'Compare-SISnowSendColumns'))) {
+    $__siSnowPath = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'asset-cmdb', '_shared', $__siSnow[0])
+    if (-not (Get-Command -Name $__siSnow[1] -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $__siSnowPath)) { . $__siSnowPath }
+}
+Remove-Variable -Name __siSnow, __siSnowPath -ErrorAction SilentlyContinue
 
 # disabled accounts and devices -- SI_DisabledAssets_Connectors (data out is a connector: off leaves them out, frozen)
 if (-not (Get-Command -Name Test-SIDisabledIncluded -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-DisabledAssets.ps1')) }
 # #914 THE DATA-OUT CONTRACT (the action table, the envelope, the clear marker, the requests) and the output scope (#274)
 if (-not (Get-Command -Name Get-SIDataOutContractAction -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-DataOutContract.ps1')) }
+# #1043 THE PROGRESS OF EACH OUTPUT (phases, rows, the batch row's progress columns -- written batched, never in the way of the send)
+if (-not (Get-Command -Name New-SIDataOutProgress -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-DataOutProgress.ps1')) }
 # #961 ALWAYS dot-sourced, never "only when Get-SIOutputScope is missing": the container's entry loads the Pro settings layer
 # (and with it SI-OutputScope.ps1) and then starts this engine with '&' -- the engine SEES Get-SIOutputScope but not the
 # tables it keeps in its file's scope ($script:SIOutputScopeDestinations ...), so the ServiceNow hand-off failed with "You
@@ -193,12 +204,35 @@ function Get-SIDataOutFindingPageSql {
           -Part closed  the closed lifecycle rows the newest collection no longer has (sent once with their state), @Take
                         after (@AfterOwner, @AfterKey) -- the lifecycle table's own key.
     #>
-    param([Parameter(Mandatory)][ValidateSet('open', 'closed')][string]$Part, [bool]$WithState = $true)
+    param([Parameter(Mandatory)][ValidateSet('open', 'closed')][string]$Part, [bool]$WithState = $true, [switch]$StateKeysOnly)
+    # #1047 -Part closed -StateKeysOnly: only the closed rows whose item key is in the key set @KeyStage
+    # (sidata.DataOutKeyStage: the output's state keys, Read-SIDataOutClosedKeys) -- or whose key is longer than 380 (the
+    # item key is then hashed in PowerShell; such a row is always read). The item key as Get-SIDataOutItemKeyFull makes it
+    # for a closed row: '<CiId, or asset:<asset> when there is no CiId>|<finding key>'.
+    if ($Part -eq 'closed' -and $StateKeysOnly) {
+        return @'
+SELECT TOP (CONVERT(int, @Take)) CAST(NULL AS bigint) AS CiFindingId, s.CiId, CASE WHEN s.OwnerKey LIKE N'asset:%' THEN SUBSTRING(s.OwnerKey, 7, 400) END AS AssetId, s.FindingKey,
+       CAST(NULL AS float) AS RiskScore, CAST(NULL AS float) AS WeightedRiskScore, CAST(NULL AS tinyint) AS Tier, CAST(NULL AS nvarchar(max)) AS DocJson,
+       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality, JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
+       s.State, s.FirstDetected, s.LastSeen, s.ClosedAt, s.CloseReason, s.AbsentRuns, s.OwnerKey AS PageOwner
+FROM sidata.CiFindingState AS s
+LEFT JOIN sidata.Ci AS c ON c.CiId = s.CiId
+CROSS APPLY (SELECT CONVERT(nvarchar(max), CASE WHEN s.CiId IS NOT NULL AND DATALENGTH(s.CiId) > 0 THEN s.CiId
+                                               ELSE N'asset:' + ISNULL(CASE WHEN s.OwnerKey LIKE N'asset:%' THEN SUBSTRING(s.OwnerKey, 7, 400) END, N'') END)
+                    + N'|' + s.FindingKey AS ItemKey) AS ik
+WHERE s.State = N'closed'
+  AND (s.OwnerKey > @AfterOwner OR (s.OwnerKey = @AfterOwner AND s.FindingKey > @AfterKey))
+  AND NOT EXISTS (SELECT 1 FROM sidata.CiFinding AS f WHERE f.FindingKey = s.FindingKey AND COALESCE(f.CiId, N'asset:' + f.AssetId) = s.OwnerKey)
+  AND (DATALENGTH(ik.ItemKey) / 2 > 380
+       OR EXISTS (SELECT 1 FROM sidata.DataOutKeyStage AS k WHERE k.StageId = CONVERT(uniqueidentifier, @KeyStage) AND k.ItemKey = CONVERT(nvarchar(380), ik.ItemKey) COLLATE Latin1_General_100_BIN2))
+ORDER BY s.OwnerKey, s.FindingKey;
+'@
+    }
     if ($Part -eq 'open') {
         if (-not $WithState) {
             return @'
 SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
-       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.CmdbId, c.CmdbName, c.CmdbCriticality,
+       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality,
        JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
        CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS datetime2(3)) AS FirstDetected, CAST(NULL AS datetime2(3)) AS LastSeen,
        CAST(NULL AS datetime2(3)) AS ClosedAt, CAST(NULL AS nvarchar(32)) AS CloseReason, CAST(NULL AS int) AS AbsentRuns
@@ -210,7 +244,7 @@ ORDER BY f.CiFindingId;
         }
         return @'
 SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
-       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.CmdbId, c.CmdbName, c.CmdbCriticality,
+       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality,
        JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
        s.State, s.FirstDetected, s.LastSeen, s.ClosedAt, s.CloseReason, s.AbsentRuns
 FROM sidata.CiFinding AS f
@@ -223,7 +257,7 @@ ORDER BY f.CiFindingId;
     @'
 SELECT TOP (CONVERT(int, @Take)) CAST(NULL AS bigint) AS CiFindingId, s.CiId, CASE WHEN s.OwnerKey LIKE N'asset:%' THEN SUBSTRING(s.OwnerKey, 7, 400) END AS AssetId, s.FindingKey,
        CAST(NULL AS float) AS RiskScore, CAST(NULL AS float) AS WeightedRiskScore, CAST(NULL AS tinyint) AS Tier, CAST(NULL AS nvarchar(max)) AS DocJson,
-       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.CmdbId, c.CmdbName, c.CmdbCriticality, JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
+       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality, JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
        s.State, s.FirstDetected, s.LastSeen, s.ClosedAt, s.CloseReason, s.AbsentRuns, s.OwnerKey AS PageOwner
 FROM sidata.CiFindingState AS s
 LEFT JOIN sidata.Ci AS c ON c.CiId = s.CiId
@@ -391,12 +425,21 @@ function Get-SIDataOutNextPage {
                 return (Select-SIDataOutCursorPage -Cursor $c -Items $items)
             }
             'closed' {
-                $a = & $c.Invoke (Get-SIDataOutFindingPageSql -Part closed) @{ Take = $take; AfterOwner = [string]$c.AfterOwner; AfterKey = [string]$c.AfterKey } 'reader'; $rows = @(@($a) | Where-Object { $_ }); $a = $null
-                if ($rows.Count -eq 0) { $c.Phase = 'done'; continue }
+                # #1047 only the closed findings the output has a state row for (Enable-SIDataOutClosedKeys): staged once, on
+                # the first closed page
+                $ck = $(if ($c.ContainsKey('ClosedKeys')) { $c.ClosedKeys } else { $null })
+                if ($ck -and -not $ck.Set) { $ck.Set = Read-SIDataOutClosedKeys -Cursor $c }
+                if ($ck) {
+                    $a = & $c.Invoke (Get-SIDataOutFindingPageSql -Part closed -StateKeysOnly) @{ Take = $take; AfterOwner = [string]$c.AfterOwner; AfterKey = [string]$c.AfterKey; KeyStage = [string]$ck.Set.Id } 'reader'
+                } else {
+                    $a = & $c.Invoke (Get-SIDataOutFindingPageSql -Part closed) @{ Take = $take; AfterOwner = [string]$c.AfterOwner; AfterKey = [string]$c.AfterKey } 'reader'
+                }
+                $rows = @(@($a) | Where-Object { $_ }); $a = $null
+                if ($rows.Count -eq 0) { $c.Phase = 'done'; if ($ck) { Clear-SIDataOutKeySet -Set $ck.Set }; continue }
                 $items = @(foreach ($r in $rows) { ConvertFrom-SIDataOutFindingRow $r })
                 $c.Rows += $rows.Count
                 $c.AfterOwner = [string]$rows[$rows.Count - 1]['PageOwner']; $c.AfterKey = [string]$rows[$rows.Count - 1]['FindingKey']
-                if ($rows.Count -lt $take) { $c.Phase = 'done' }
+                if ($rows.Count -lt $take) { $c.Phase = 'done'; if ($ck) { Clear-SIDataOutKeySet -Set $ck.Set } }
                 $rows = $null
                 return (Select-SIDataOutCursorPage -Cursor $c -Items $items)
             }
@@ -438,6 +481,48 @@ function Get-SIDataOutNextPage {
         }
     }
 }
+
+function Read-SIDataOutClosedKeys {
+    <#
+        #1047 The output's state keys (cfg.DataOutItem, the settings database, a page at a time by key) staged into a key set
+        of the data database (sidata.DataOutKeyStage) -- the closed pass reads only the closed findings whose key is there
+        (Get-SIDataOutFindingPageSql -Part closed -StateKeysOnly). Returns the key set.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Cursor)
+    $ck = $Cursor.ClosedKeys
+    $set = New-SIDataOutKeySet -Stage $Cursor.Stage
+    $after = ''
+    while ($true) {
+        $a = & $ck.Store.Invoke (Get-SIDataOutStatePageSql) @{ OutputId = [string]$ck.OutputId; Take = 5000; After = $after } 'reader'
+        $rs = @(@($a) | Where-Object { $_ -is [System.Collections.IDictionary] }); $a = $null
+        if ($rs.Count -eq 0) { break }
+        $null = Add-SIDataOutKeys -Set $set -Keys ([string[]]@(foreach ($r in $rs) { [string]$r['ItemKey'] }))
+        $after = [string]$rs[$rs.Count - 1]['ItemKey']
+        if ($rs.Count -lt 5000) { break }
+    }
+    $set
+}
+
+function Test-SIDataOutScopeLeavesClosedOut {
+    <#
+        PURE. #1047 Does the scope leave out EVERY closed finding the newest collection no longer has? Such a finding is read
+        from the lifecycle alone -- it has no document -- so a scope filter on a field of the finding's document (not one the
+        row's columns fill) never passes for it: out of scope. Without a state row (never sent) it gets no row from the
+        action table (out_of_scope over none); only the closed findings the output has a state row for can get one.
+    #>
+    param($Scope)
+    if ($null -eq $Scope -or -not $Scope.PSObject.Properties['Filters']) { return $false }
+    foreach ($f in @($Scope.Filters)) {
+        if ($null -eq $f -or -not $f.Field) { continue }
+        if ($script:SIDataOutRowFields -notcontains ([string]$f.Field).ToLowerInvariant()) { return $true }
+    }
+    $false
+}
+
+# the fields ConvertFrom-SIDataOutFindingRow fills from the row's own columns (a closed finding read from the lifecycle has these)
+$script:SIDataOutRowFields = @('si_ci_id', 'si_asset_id', 'si_finding_key', 'si_risk_score', 'si_weighted_risk_score', 'si_tier', 'si_asset_name', 'si_class',
+    'si_asset_type', 'si_cmdb_id', 'si_cmdb_name', 'si_cmdb_criticality', 'si_cmdb_data_sensitivity', 'si_finding_state', 'si_first_detected',
+    'si_last_detected', 'si_close_reason', 'closed_at', 'absent_runs', 'record_id', 'item_key')
 
 function Read-SIDataOutItemPages {
     <#
@@ -727,7 +812,7 @@ function Set-SIDataOutValue {
     if ($p) {
         if ($IfMissing -and -not (Test-SIValueEmpty $p.Value)) { return }
         $p.Value = $Value
-    } else { $Item | Add-Member -NotePropertyName $Name -NotePropertyValue $Value }
+    } else { $Item.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($Name, $Value)) }   # #1047: not Add-Member (a cmdlet per value)
 }
 
 function ConvertFrom-SIDataOutCiRow {
@@ -745,35 +830,61 @@ function ConvertFrom-SIDataOutCiRow {
     return $it
 }
 
+# #1047 what ConvertFrom-SIDataOutFindingRow sets, in its order: the item's field, the row's column ('' = the value is made
+# here), only when the document has no value there
+$script:SIDataOutFindingRowSet = @(
+    @('si_ci_id', 'CiId', $true), @('si_asset_id', 'AssetId', $true), @('si_finding_key', 'FindingKey', $true), @('si_risk_score', 'RiskScore', $true),
+    @('si_weighted_risk_score', 'WeightedRiskScore', $true), @('si_tier', 'Tier', $true), @('si_asset_name', 'CiName', $true), @('si_class', 'CiClass', $true),
+    @('si_asset_type', 'CiAssetType', $true), @('si_cmdb_id', 'CmdbId', $true), @('si_cmdb_name', 'CmdbName', $true), @('si_cmdb_criticality', 'CmdbCriticality', $true),
+    @('si_cmdb_data_sensitivity', 'CmdbDataSensitivity', $true), @('si_finding_state', '', $false), @('si_first_detected', 'FirstDetected', $true),
+    @('si_last_detected', 'LastSeen', $false), @('si_close_reason', 'CloseReason', $false), @('closed_at', 'ClosedAt', $false), @('absent_runs', 'AbsentRuns', $false),
+    @('record_id', 'CiFindingId', $false))
+
 function ConvertFrom-SIDataOutFindingRow {
-    <# PURE. One finding row -> the CI-and-finding item: the finding's document, the CI's values, its lifecycle. #>
+    <#
+        PURE. One finding row -> the CI-and-finding item: the finding's document, the CI's values, its lifecycle.
+        #1047: each value set in one pass (the same fields, values, types and order as one Set-SIDataOutValue per field --
+        a cmdlet per value was ~20 Add-Member calls per finding: most of the 7.7 s a 5,000-row page took to read).
+    #>
     param([Parameter(Mandatory)]$Row)
     $it = ConvertFrom-SIDataOutJson $Row['DocJson']
-    Set-SIDataOutValue $it 'si_ci_id' $Row['CiId'] -IfMissing
-    Set-SIDataOutValue $it 'si_asset_id' $Row['AssetId'] -IfMissing
-    Set-SIDataOutValue $it 'si_finding_key' $Row['FindingKey'] -IfMissing
-    Set-SIDataOutValue $it 'si_risk_score' $Row['RiskScore'] -IfMissing
-    Set-SIDataOutValue $it 'si_weighted_risk_score' $Row['WeightedRiskScore'] -IfMissing
-    Set-SIDataOutValue $it 'si_tier' $Row['Tier'] -IfMissing
-    Set-SIDataOutValue $it 'si_asset_name' $Row['CiName'] -IfMissing
-    Set-SIDataOutValue $it 'si_class' $Row['CiClass'] -IfMissing
-    Set-SIDataOutValue $it 'si_asset_type' $Row['CiAssetType'] -IfMissing
-    Set-SIDataOutValue $it 'si_cmdb_id' $Row['CmdbId'] -IfMissing
-    Set-SIDataOutValue $it 'si_cmdb_name' $Row['CmdbName'] -IfMissing
-    Set-SIDataOutValue $it 'si_cmdb_criticality' $Row['CmdbCriticality'] -IfMissing
-    Set-SIDataOutValue $it 'si_cmdb_data_sensitivity' $Row['CmdbDataSensitivity'] -IfMissing
-    # the lifecycle in the core (sidata.CiFindingState); a finding the lifecycle has not seen yet is open
-    $state = $Row['State']; if ($state -is [System.DBNull] -or -not [string]$state) { $state = 'open' }
-    Set-SIDataOutValue $it 'si_finding_state' ([string]$state)
-    Set-SIDataOutValue $it 'si_first_detected' $Row['FirstDetected'] -IfMissing
-    Set-SIDataOutValue $it 'si_last_detected' $Row['LastSeen']
-    Set-SIDataOutValue $it 'si_close_reason' $Row['CloseReason']
-    Set-SIDataOutValue $it 'closed_at' $Row['ClosedAt']
-    Set-SIDataOutValue $it 'absent_runs' $Row['AbsentRuns']
-    Set-SIDataOutValue $it 'record_id' $Row['CiFindingId']
+    $props = $it.PSObject.Properties
+    foreach ($f in $script:SIDataOutFindingRowSet) {
+        $name = $f[0]
+        if ($f[1]) { $v = $Row[$f[1]] }
+        else {
+            # the lifecycle in the core (sidata.CiFindingState); a finding the lifecycle has not seen yet is open
+            $v = $Row['State']; if ($v -is [System.DBNull] -or -not [string]$v) { $v = 'open' }
+            $v = [string]$v
+        }
+        if ($v -is [System.DBNull]) { $v = $null }
+        $p = $props[$name]
+        if ($p) {
+            if ($f[2]) {
+                # Test-SIValueEmpty, its common cases inline
+                $pv = $p.Value
+                if ($null -eq $pv) { }
+                elseif ($pv -is [string]) { if (-not [string]::IsNullOrWhiteSpace($pv)) { continue } }
+                elseif ($pv -is [System.ValueType]) { continue }
+                elseif (-not (Test-SIValueEmpty $pv)) { continue }
+            }
+            $p.Value = $v
+        } else { $props.Add([System.Management.Automation.PSNoteProperty]::new($name, $v)) }
+    }
+    # #1055 the CI's OWN values (sidata.Ci), for the CI output's scope applied to the vulnerable items: always the CI's,
+    # never the finding document's (a closed finding read from the lifecycle has no document). Only when the page read them.
+    if ($Row -is [System.Collections.IDictionary] -and $Row.Contains('CiOsFamily')) {
+        foreach ($cf in @(@('ci_class', 'CiClass'), @('ci_asset_type', 'CiAssetType'), @('ci_os_family', 'CiOsFamily'), @('ci_tier', 'CiTier'))) {
+            $cv = $Row[$cf[1]]; if ($cv -is [System.DBNull]) { $cv = $null }
+            $cp = $props[$cf[0]]
+            if ($cp) { $cp.Value = $cv } else { $props.Add([System.Management.Automation.PSNoteProperty]::new($cf[0], $cv)) }
+        }
+    }
     # #914 the STABLE record id (u_source_record_id): '<CI key>|<finding key>' -- the row id above changes when the findings
     # are rebuilt, so it is never sent as a record id
-    Set-SIDataOutValue $it 'item_key' (Get-SIDataOutItemKeyFull -Grain 'ci_finding' -Item $it)
+    $ik = Get-SIDataOutItemKeyFull -Grain 'ci_finding' -Item $it
+    $p = $props['item_key']
+    if ($p) { $p.Value = $ik } else { $props.Add([System.Management.Automation.PSNoteProperty]::new('item_key', $ik)) }
     return $it
 }
 
@@ -1279,14 +1390,19 @@ function Get-SIDataOutSheetPage {
     while ($true) {
         switch ($W.Phase) {
             'items' {
+                # #1043 the workbook's progress: read, build, and "send" = the page handed to the workbook
+                $prog = $(if ($W.ContainsKey('Progress')) { $W.Progress } else { $null })
+                Step-SIDataOutProgress -Progress $prog -Phase read
                 $pg = Get-SIDataOutNextPage -Cursor $W.Cursor
                 if ($null -eq $pg) { $W.Phase = 'carry'; $W.PrevAfter = ''; $W.PrevDone = (-not $W.HasCarry); continue }
+                Step-SIDataOutProgress -Progress $prog -Phase build -RowsRead (@($pg.Items).Count)
                 $r = Invoke-SIDataOutWriterPage -W $W -Items @($pg.Items) -Frozen ([string[]]@($pg.Frozen))
                 $pg = $null
                 if ($null -eq $r) { continue }
                 Add-SIDataOutCommit -W $W -Page $r
                 $cells = @(foreach ($m in $r.Mapped) { , [object[]](ConvertTo-SIDataOutCells -Row $m -Header $W.Header) })
                 $r = $null
+                if ($prog) { Step-SIDataOutProgress -Progress $prog -ItemsBuilt $cells.Count -PagesSent 1 -RowsSent $cells.Count -Phase send }
                 return , (ConvertTo-SIDataOutSheetRows -Columns $W.SheetColumns -CellRows $cells)
             }
             'carry' {
@@ -1541,7 +1657,7 @@ function Close-SIDataOutSnowBatch {
     $state = if ($s.Held) { 'held' } elseif ($s.Failed -or $nErr -gt 0 -or $s.NotAccepted -gt 0) { 'failed' } else { 'complete' }
     $notSent = [long]([Math]::Max(0, $s.Delta - $s.Sent))
     $reason = switch ($state) {
-        'complete' { ('{0} row(s) accepted by {1}' -f $s.Sent, $s.Table) }
+        'complete' { ('{0} row(s) accepted by {1}' -f $s.Sent, $s.Table) + $(if ($s.ContainsKey('HeldRows') -and [long]$s.HeldRows -gt 0) { ('; {0} row(s) not in this batch -- a value is longer than its column in {1}; they go once the column is wider' -f $s.HeldRows, $s.Table) } else { '' }) }
         'held'     { [string]$s.Reason }
         default    { ('{0} of {1} row(s) accepted by {2}; {3} not accepted -- {4}' -f $s.Sent, $s.Delta, $s.Table, $notSent, $(if ($s.Failed) { $s.Failed } else { (@($s.Errors) | Select-Object -First 3) -join ' | ' })) }
     }
@@ -1561,9 +1677,15 @@ function Send-SIDataOutSnowPage {
     <#
         ONE PAGE of new and changed rows to the Import Set table (the session's): checked against the table's columns first
         (a value that would be cut HOLDS the push from here on -- that check is recorded -- and nothing more is sent); then
-        sent. Returns @{ Ok; Held; Reason; Errors } for the page.
+        sent. Returns @{ Ok; Held; Reason; Errors; HeldIndex } for the page.
+        -HoldCutRows (the data-out writers, owner 2026-11-01): when EVERY problem of the check is a value longer than its
+        column, ONLY the rows with such a value are held -- not sent, never cut, never sent with the value left out -- and
+        the rest of the page is sent; later pages go on. HeldIndex names the held rows (indexes into -Rows): the caller
+        must not record them as sent, so they go again on the next run. The session counts them (HeldRows, CutHeld per
+        column) for the run's reason and the check record (Close-SIDataOutSnowSession). A missing column or a mapping by
+        label still holds the whole push.
     #>
-    param([Parameter(Mandatory)][hashtable]$Session, [AllowEmptyCollection()][object[]]$Rows = @())
+    param([Parameter(Mandatory)][hashtable]$Session, [AllowEmptyCollection()][object[]]$Rows = @(), [switch]$HoldCutRows)
     $s = $Session
     # an empty value is left out (the Import Set API cannot tell empty from not sent): the clear marker u_si_cleared says
     # which columns SecurityInsight knows are empty (#914 a)
@@ -1573,30 +1695,132 @@ function Send-SIDataOutSnowPage {
             else { foreach ($p in $r.PSObject.Properties) { if (-not (Test-SIValueEmpty $p.Value)) { $h[$p.Name] = $p.Value } } }
             $h })
     $s.Delta += $rows.Count
-    if ($rows.Count -eq 0) { return [pscustomobject]@{ Ok = $true; Held = $false; Reason = ''; Errors = @() } }
-    if ($s.Held) { return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = @() } }
+    if ($rows.Count -eq 0) { return [pscustomobject]@{ Ok = $true; Held = $false; Reason = ''; Errors = @(); HeldIndex = @() } }
+    if ($s.Held) { return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = @(); HeldIndex = @() } }
+    $heldIx = @()
     $cols = $null; if ($s.Check -and $s.Check.Columns) { $cols = $s.Check.Columns }
     if ($cols -and $cols.Read) {
         $mapState = 'unknown'; if ($s.Check.Mapping) { $mapState = [string]$s.Check.Mapping.State }
         $cmp = Compare-SISnowSendColumns -Header $s.Header -Rows $rows -Columns @($cols.Columns) -Mapping $mapState -Table $s.Table
-        if ($cmp.Hold) {
+        $cutOnly = $HoldCutRows -and $cmp.Hold -and $cmp.PSObject.Properties['Cut'] -and @($cmp.Cut).Count -gt 0 -and
+                   @($cmp.Problems).Count -gt 0 -and @(@($cmp.Problems) | Where-Object { [string]$_.Kind -ne 'cut' }).Count -eq 0
+        if ($cutOnly) {
+            # hold ONLY the rows with a value that would be cut; the rest of the page goes on (never cut, never left out)
+            if (-not $s.ContainsKey('CutHeld') -or $null -eq $s.CutHeld) { $s.CutHeld = [ordered]@{} }
+            if (-not $s.ContainsKey('HeldRows')) { $s.HeldRows = 0L }
+            $set = New-Object 'System.Collections.Generic.HashSet[int]'
+            foreach ($c in @($cmp.Cut)) {
+                [void]$set.Add([int]$c.Index)
+                $col = [string]$c.Column
+                if (-not $s.CutHeld.Contains($col)) { $s.CutHeld[$col] = @{ Values = 0L; Longest = 0; Max = [int]$c.Max } }
+                $a = $s.CutHeld[$col]; $a.Values++; if ([int]$c.Length -gt $a.Longest) { $a.Longest = [int]$c.Length }; $a.Max = [int]$c.Max
+            }
+            $heldIx = @($set | Sort-Object)
+            $s.HeldRows += [long]$heldIx.Count
+            # the held rows are not part of this batch: never planned, never counted as not accepted
+            $s.Delta -= [long]$heldIx.Count
+            $rows = @(for ($i = 0; $i -lt $rows.Count; $i++) { if (-not $set.Contains($i)) { $rows[$i] } })
+            if ($rows.Count -eq 0) { return [pscustomobject]@{ Ok = $true; Held = $false; Reason = ''; Errors = @(); HeldIndex = $heldIx } }
+        }
+        elseif ($cmp.Hold) {
             # recorded as the run's check (the values that would be cut), as the check before the run would have said it
             $chk = Invoke-SISnowOutputCheck -Output ([string]$s.Entry.output) -Table $s.Table -Connection $s.Connection -ConnectionProblem $s.ConnProblem -Source $s.Source -Header $s.Header -Rows $rows
             if ($s.Store) { $null = Write-SISnowCheck -Store $s.Store -Result $chk -Trigger run -Connector $s.Connector }
             $s.Held = $true
             $what = $(if ($s.Sent -gt 0) { 'nothing more was sent ({0} row(s) were sent before)' -f $s.Sent } else { 'nothing was sent' })
             $s.Reason = ('held, {0} -- {1} The rows go on the next run once this is fixed.' -f $what, $(if ($chk.Hold) { $chk.Summary } else { ('{0}: {1}' -f $s.Table, ((@($cmp.Problems) | Select-Object -First 3 | ForEach-Object { $_.Text }) -join '; ')) }))
-            return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = @() }
+            return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = @(); HeldIndex = @() }
         }
     }
     $push = Invoke-SISnowImportSetPush -Connection $s.Connection -Table $s.Table -Rows $rows
-    if ($push.Refused) { $s.Failed = [string]$push.Reason; return [pscustomobject]@{ Ok = $false; Held = $false; Reason = [string]$push.Reason; Errors = @() } }
+    if ($push.Refused) { $s.Failed = [string]$push.Reason; return [pscustomobject]@{ Ok = $false; Held = $false; Reason = [string]$push.Reason; Errors = @(); HeldIndex = $heldIx } }
     $s.Sent += [long]$push.Sent
     if ($s.ContainsKey('ImportSets')) { foreach ($x in @($push.ImportSets)) { if ($x) { $s.ImportSets.Add([string]$x) } } }
     if ($s.ContainsKey('NotAccepted')) { $s.NotAccepted += [long]([Math]::Max(0, $rows.Count - [int]$push.Sent)) }
     foreach ($e in @($push.Errors)) { if ($e) { $s.Errors.Add([string]$e) } }
     if ([string]$push.Reason) { $s.PushReason = [string]$push.Reason }
-    [pscustomobject]@{ Ok = $true; Held = $false; Reason = [string]$push.Reason; Errors = @($push.Errors | Where-Object { $_ }) }
+    [pscustomobject]@{ Ok = $true; Held = $false; Reason = [string]$push.Reason; Errors = @($push.Errors | Where-Object { $_ }); HeldIndex = $heldIx }
+}
+
+function Get-SIDataOutCutHeldText {
+    <#
+        PURE. The reason for rows held because a value is longer than its column (Send-SIDataOutSnowPage -HoldCutRows):
+        '<n> row(s) held -- <column> is longer than the column in <table> (up to <x> characters, the column holds <y>);
+        widen the column, they go on the next run. <sent> row(s) sent.' -Examples: up to 5 names, said after it.
+    #>
+    param([long]$Held, [System.Collections.IDictionary]$CutHeld, [string]$Table, [long]$Sent, [AllowEmptyCollection()][string[]]$Examples = @())
+    $parts = @(foreach ($k in @($CutHeld.Keys)) { $a = $CutHeld[$k]; '{0} is longer than the column in {1} (up to {2} characters, the column holds {3})' -f $k, $Table, $a.Longest, $a.Max })
+    $t = ('{0} row(s) held -- {1}; widen the column, they go on the next run. {2} row(s) sent.' -f $Held, ($parts -join '; '), $Sent)
+    $ex = @($Examples | Where-Object { $_ })
+    if ($ex.Count) { $t += (' Held: {0}{1}.' -f ((@($ex) | Select-Object -First 5) -join ', '), $(if ($Held -gt 5) { (' (and {0} more)' -f ($Held - [Math]::Min(5, $ex.Count))) } else { '' })) }
+    $t
+}
+
+function Select-SIDataOutSentPage {
+    <#
+        PURE. A contract page (Invoke-SIDataOutContractPage / Invoke-SIDataOutContractGonePage) without the rows that were
+        held (-Held: indexes into Page.Rows): Rows, State and Changes of the held rows left out, the counts per action
+        recounted from what was sent. Page.Gone is kept (those keys are not rows of the page). Returns @{ Page; HeldKeys;
+        HeldNames; Replaces (the u_si_replaces of held rows) }. -NameCol: the column that names a row.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Page, [AllowEmptyCollection()][int[]]$Held = @(), [string]$NameCol)
+    $set = New-Object 'System.Collections.Generic.HashSet[int]'; foreach ($i in @($Held)) { [void]$set.Add([int]$i) }
+    $rows = @($Page.Rows); $state = @($Page.State)
+    $parallel = ($state.Count -eq $rows.Count)
+    $keepRows = New-Object System.Collections.Generic.List[object]; $keepState = New-Object System.Collections.Generic.List[object]
+    $hk = New-Object System.Collections.Generic.List[string]; $hn = New-Object System.Collections.Generic.List[string]; $rp = New-Object System.Collections.Generic.List[string]
+    $counts = New-SIDataOutActionCounts
+    $droppedHeld = 0L
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+        $r = $rows[$i]
+        if ($set.Contains($i)) {
+            if ($r.Contains('u_action') -and [string]$r['u_action'] -eq 'held') { $droppedHeld++ }
+            $k = $(if ($parallel -and $state[$i]) { [string]$state[$i]['k'] } else { '' })
+            if ($k) { $hk.Add($k) }
+            $nm = $(if ($NameCol -and $r.Contains($NameCol)) { [string]$r[$NameCol] } else { '' })
+            $hn.Add($(if ($nm -and $k -and $nm -ne $k) { '{0} ({1})' -f $nm, $k } elseif ($nm) { $nm } else { $k }))
+            if ($r.Contains('u_si_replaces') -and [string]$r['u_si_replaces']) { $rp.Add([string]$r['u_si_replaces']) }
+            continue
+        }
+        $keepRows.Add($r); if ($parallel) { $keepState.Add($state[$i]) }
+        if ($r.Contains('u_action') -and [string]$r['u_action']) { Add-SIDataOutActionCount -Counts $counts -Action ([string]$r['u_action']) }
+    }
+    # 'held' also counts the records the contract itself held without a row (a CI not delivered yet): kept as the page said
+    if ($Page.Counts -and $Page.Counts.Contains('held')) { $counts['held'] = [long]$Page.Counts['held'] - $droppedHeld }
+    $hkSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal); foreach ($k in $hk) { [void]$hkSet.Add($k) }
+    $p2 = @{}; foreach ($k in @($Page.Keys)) { $p2[$k] = $Page[$k] }
+    $p2.Rows = $keepRows.ToArray()
+    $p2.State = $(if ($parallel) { $keepState.ToArray() } else { @($state | Where-Object { $_ -and -not $hkSet.Contains([string]$_['k']) }) })
+    $p2.Changes = @(@($Page.Changes) | Where-Object { $_ -and -not $hkSet.Contains([string]$_.ObjectKey) })
+    $p2.Counts = $counts
+    @{ Page = $p2; HeldKeys = $hk.ToArray(); HeldNames = $hn.ToArray(); Replaces = $rp.ToArray() }
+}
+
+function Test-SIDataOutSnowStopped {
+    <#
+        #1043 PURE. Is the session's push over for this run? Failed (a page refused, or the batch could not start), held (by
+        the check, before or while sending), or a page whose rows were not accepted (its batch ends failed and is never
+        imported). Then no further page is read, built or sent -- live 2026-11-01 a refused push read and built every one of
+        715,093 findings while nothing more could be sent. Unavailable (no Pro) is not stopped: its rows are only counted.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Session)
+    $s = $Session
+    if ($s.Unavailable) { return $false }
+    [bool]($s.Failed -or $s.Held -or ($null -ne $s.Errors -and $s.Errors.Count -gt 0) -or ($s.ContainsKey('NotAccepted') -and [long]$s.NotAccepted -gt 0))
+}
+
+function Write-SIDataOutSnowStop {
+    <# #1043 The stop, said ONCE and AT ONCE with its reason (not only at the close). Returns $true when the push is stopped. #>
+    param([Parameter(Mandatory)][hashtable]$Session, [scriptblock]$Log, [string]$Label = '', [long]$Pages = 0)
+    $s = $Session
+    if (-not (Test-SIDataOutSnowStopped -Session $s)) { return $false }
+    if ($s.ContainsKey('StopSaid') -and $s.StopSaid) { return $true }
+    $s.StopSaid = $true
+    $why = $(if ($s.Held) { [string]$s.Reason } elseif ($s.Failed) { [string]$s.Failed } else { 'rows not accepted: ' + ((@($s.Errors) | Select-Object -First 3) -join ' | ') })
+    $end = $(if ($s.Held) { 'held' } else { 'failed' })
+    $before = $(if ([long]$s.Sent -gt 0) { '{0} row(s) were sent before' -f $s.Sent } else { 'nothing was sent' })
+    if ($Log) { & $Log 'WARN' ('{0}: the push STOPPED after {1} page(s) -- {2} No further page is read or sent this run ({3}); the batch ends {4}, nothing more is recorded as sent, and the rows go on the next run.' -f $Label, $Pages, ($why.TrimEnd('.') + '.'), $before, $end) }
+    $true
 }
 
 function Close-SIDataOutSnowSession {
@@ -1605,17 +1829,34 @@ function Close-SIDataOutSnowSession {
     $s = $Session
     # #912 the end row first: what ServiceNow reads for this batch (complete | failed | held)
     Close-SIDataOutSnowBatch -Session $s
-    if ($s.Failed -and -not $s.Unavailable) { return [pscustomobject]@{ Ok = $false; Reason = $s.Failed; Errors = $s.Errors.ToArray(); Target = $s.Table } }
+    # rows held because a value is longer than its column (Send-SIDataOutSnowPage -HoldCutRows): the rest was sent; the
+    # held rows are counted and named, and the check is recorded once for the run (the status page, data health, the mail)
+    $heldRows = $(if ($s.ContainsKey('HeldRows')) { [long]$s.HeldRows } else { 0L })
+    $cutText = ''
+    if ($heldRows -gt 0) {
+        $cutText = Get-SIDataOutCutHeldText -Held $heldRows -CutHeld $s.CutHeld -Table ([string]$s.Table) -Sent ([long]$s.Sent) -Examples ([string[]]@($(if ($s.ContainsKey('CutHeldNames') -and $s.CutHeldNames) { $s.CutHeldNames.ToArray() })))
+        if ($s.Store -and -not $s.Held) {
+            $probs = @(foreach ($k in @($s.CutHeld.Keys)) { $a = $s.CutHeld[$k]; [pscustomobject]@{ Column = [string]$k; Kind = 'cut'; Text = ('{0} value(s) of {1} are longer than the column (up to {2} characters, the column holds {3}): their rows are held, the rest is sent' -f $a.Values, $k, $a.Longest, $a.Max) } })
+            $c0 = $s.Check
+            $chk = [pscustomobject]@{ Output = [string]$s.Entry.output; Table = [string]$s.Table; Source = [string]$s.Source; Outcome = 'failed'; Hold = $true; Summary = ('{0}: {1}' -f $s.Table, $cutText)
+                Connection = $(if ($c0) { $c0.Connection }); Columns = $(if ($c0) { $c0.Columns }); Mapping = $(if ($c0) { $c0.Mapping })
+                Compare = [pscustomobject]@{ Hold = $true; Problems = $probs; Warnings = @() }; StatusTable = $(if ($c0 -and $c0.PSObject.Properties['StatusTable']) { $c0.StatusTable }) }
+            $null = Write-SISnowCheck -Store $s.Store -Result $chk -Trigger run -Connector $s.Connector
+        }
+    }
+    if ($s.Failed -and -not $s.Unavailable) { return [pscustomobject]@{ Ok = $false; Reason = $s.Failed; Errors = $s.Errors.ToArray(); Target = $s.Table; HeldRows = $heldRows; HeldReason = $cutText } }
     if ($s.Unavailable) {
         if ($s.Delta -eq 0) { return [pscustomobject]@{ Ok = $true; Reason = 'nothing new or changed to send'; Errors = @(); Target = $s.Table } }
         return [pscustomobject]@{ Ok = $false; Reason = 'the ServiceNow hand-off is part of SecurityInsight Pro'; Errors = @(); Target = $s.Table }
     }
-    if ($s.Delta -eq 0) {
+    # #1043 a push stopped at once (held before its first page) read no rows: it is HELD, never "nothing to send";
+    # #1042 a push whose every row was held for a value too long for its column is held in part, never "nothing to send"
+    if ($s.Delta -eq 0 -and $heldRows -eq 0 -and -not ($s.ContainsKey('StopSaid') -and $s.StopSaid)) {
         $why = 'nothing new or changed to send'; if ($s.Check -and $s.Check.Outcome -ne 'ok') { $why += ('; the ServiceNow check says: {0}' -f $s.Check.Summary) }
         return [pscustomobject]@{ Ok = $true; Reason = $why; Errors = @(); Target = $s.Table }
     }
-    if ($s.Held) { return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = $s.Errors.ToArray(); Target = $s.Table } }
-    [pscustomobject]@{ Ok = $true; Reason = $s.PushReason; Errors = $s.Errors.ToArray(); Target = $s.Table }
+    if ($s.Held) { return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = $s.Errors.ToArray(); Target = $s.Table; HeldRows = $heldRows; HeldReason = $cutText } }
+    [pscustomobject]@{ Ok = $true; Reason = $s.PushReason; Errors = $s.Errors.ToArray(); Target = $s.Table; HeldRows = $heldRows; HeldReason = $cutText }
 }
 
 # =====================================================================================================================
@@ -1636,11 +1877,11 @@ function Write-SIDataOutBatchRecord {
 }
 
 function Get-SIDataOutContractStateSql {
-    <# #914: what an output last sent for ONE PAGE of keys (@keys, a JSON array): the hash AND the row with its meta, always. #>
+    <# #914: what an output last sent for ONE PAGE of keys (@KeyList, a JSON array -- never a parameter named 'keys': a hashtable's .Keys would then return that value): the hash AND the row with its meta, always. #>
     @'
 IF OBJECT_ID('cfg.DataOutItem') IS NOT NULL
 SELECT d.ItemKey, d.RowHash, d.RowJson
-FROM OPENJSON(@keys) WITH (k nvarchar(380) '$') AS p
+FROM OPENJSON(@KeyList) WITH (k nvarchar(380) '$') AS p
 JOIN cfg.DataOutItem AS d ON d.OutputId = @OutputId AND d.ItemKey = p.k;
 '@
 }
@@ -1650,10 +1891,13 @@ function Read-SIDataOutContractState {
     param($Store, [Parameter(Mandatory)][string]$OutputId, [AllowEmptyCollection()][string[]]$Keys = @())
     $out = @{}
     if (-not $Store -or -not $Store.Invoke) { return $out }
-    $ks = @($Keys | Where-Object { $_ } | Select-Object -Unique)
+    # #1047 one pass with a set (Select-Object -Unique compares every key with every key kept so far: 0.75 s a page);
+    # the first of each key, in order, as before
+    $seenK = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $ks = @(foreach ($k0 in @($Keys)) { if ($k0 -and $seenK.Add([string]$k0)) { [string]$k0 } })
     for ($i = 0; $i -lt $ks.Count; $i += 2000) {
         $part = @($ks[$i..([Math]::Min($i + 2000, $ks.Count) - 1)])
-        $a = & $Store.Invoke (Get-SIDataOutContractStateSql) @{ OutputId = $OutputId; keys = (ConvertTo-Json -InputObject @($part) -Compress) } 'reader'
+        $a = & $Store.Invoke (Get-SIDataOutContractStateSql) @{ OutputId = $OutputId; KeyList = (ConvertTo-Json -InputObject @($part) -Compress) } 'reader'
         foreach ($r in @($a)) {
             if (-not ($r -is [System.Collections.IDictionary])) { continue }
             $out[[string]$r['ItemKey']] = [pscustomobject]@{ Hash = [string]$r['RowHash']; Json = $(if ($null -eq $r['RowJson'] -or $r['RowJson'] -is [System.DBNull]) { '' } else { [string]$r['RowJson'] }) }
@@ -1765,6 +2009,8 @@ function Invoke-SIDataOutContractPage {
         -NoState: a test batch -- nothing recorded.
     #>
     param([Parameter(Mandatory)][hashtable]$W, [AllowEmptyCollection()][object[]]$Items = @(), [AllowEmptyCollection()][string[]]$Frozen = @(), [switch]$NoState)
+    # #1043 the time of each part of the build (in memory; a handful of watches per page, never per row)
+    $pp = $(if ($W.ContainsKey('Progress')) { $W.Progress } else { $null }); $pw = [Diagnostics.Stopwatch]::StartNew()
     if (-not $NoState -and @($Frozen | Where-Object { $_ }).Count) { $null = Add-SIDataOutKeys -Set $W.FrozenSet -Keys ([string[]]@($Frozen)) }
     $out = [string]$W.OutputId
     $grain = [string]$W.Grain
@@ -1772,24 +2018,25 @@ function Invoke-SIDataOutContractPage {
     if ($kept.Count -eq 0) { return $null }
     if ($grain -eq 'ci_finding') { foreach ($it in $kept) { if (-not [string](Get-SIItemValue $it 'item_key')) { Set-SIDataOutValue $it 'item_key' (Get-SIDataOutItemKeyFull -Grain 'ci_finding' -Item $it) } } }
     $keys = @(foreach ($it in $kept) { Get-SIDataOutItemKey -Grain $grain -Item $it })
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'key' -Watch $pw }
     # an item already seen on an earlier page keeps that page's row
     $take = @(0..($kept.Count - 1))
     if (-not $NoState) {
         $added = Add-SIDataOutKeys -Set $W.Seen -Keys ([string[]]$keys)
-        $take = @($take | Where-Object { $added.Contains([string]$keys[$_]) })
+        $take = @(foreach ($t0 in $take) { if ($added.Contains([string]$keys[$t0])) { $t0 } })
     }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'seen' -Watch $pw }
     if ($take.Count -eq 0) { return $null }
     $items2 = @(foreach ($i in $take) { $kept[$i] }); $keys2 = [string[]]@(foreach ($i in $take) { $keys[$i] })
-    $mapped = @(Invoke-SIOutputMap -Map $W.Map -Items $items2 -ValueMaps $W.ValueMaps -Context $W.Ctx)
-    if ($mapped.Count -ne $items2.Count) { throw 'the mapped rows do not line up with the items' }
     $prev = Read-SIDataOutContractState -Store $W.Store -OutputId $out -Keys $keys2
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'state' -Watch $pw }
     # (f) re-keying: the previous key of each CI on the page (sidata.AssetIdHistory, the data database)
     $ciOf = @(foreach ($it in $items2) { [string](Get-SIItemValue $it 'si_ci_id') })
     $repl = @{}
     if ($W.DataInvoke) {
         try {
             $ck = @($ciOf | Where-Object { $_ } | Select-Object -Unique)
-            if ($ck.Count) { $repl = ConvertTo-SIDataOutReplacesMap -Rows @(@(& $W.DataInvoke (Get-SIDataOutReplacesSql) @{ keys = (ConvertTo-Json -InputObject @($ck) -Compress) } 'reader') | Where-Object { $_ -is [System.Collections.IDictionary] }) }
+            if ($ck.Count) { $repl = ConvertTo-SIDataOutReplacesMap -Rows @(@(& $W.DataInvoke (Get-SIDataOutReplacesSql) @{ KeyList = (ConvertTo-Json -InputObject @($ck) -Compress) } 'reader') | Where-Object { $_ -is [System.Collections.IDictionary] }) }
         } catch { if (-not $W.ReplacesWarned) { $W.ReplacesWarned = $true; & $W.Log 'WARN' ('{0}: the re-keyed CIs could not be read ({1}) -- no u_si_replaces this run' -f $W.Label, $_.Exception.Message) } }
     }
     $oldKeys = @{}
@@ -1799,25 +2046,53 @@ function Invoke-SIDataOutContractPage {
         $oldKeys[$keys2[$i]] = $ok
     }
     $oldState = @{}; if ($oldKeys.Count) { $oldState = Read-SIDataOutContractState -Store $W.Store -OutputId $out -Keys ([string[]]@($oldKeys.Values)) }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'rekey' -Watch $pw }
     # (g) the CIs of the vulnerable items, delivered in a complete batch (only when the CI output is switched on)
     $ciOk = $null
     if ($grain -eq 'ci_finding' -and $W.CiCheck) { $ciOk = Get-SIDataOutContractCiDelivered -Store $W.Store -CiKeys ([string[]]@($ciOf | Where-Object { $_ } | Select-Object -Unique)) }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'ci-check' -Watch $pw }
     $rows = New-Object System.Collections.Generic.List[object]
     $state = New-Object System.Collections.Generic.List[object]
     $chs = New-Object System.Collections.Generic.List[object]
     $counts = New-SIDataOutActionCounts
     $unchanged = 0
     $at = [datetime]::UtcNow
+    # #1047 WHAT EACH ITEM IS first (its scope, its CI, its class, its action), THEN the map -- only for the items that get a
+    # mapped row. Measured on one page of the pilot's shape (5,000 findings, 2.8 KB documents, ~9 % in scope): mapping EVERY
+    # item was 11.3 of the page's 21.5 s; an item out of scope that the target never had gets no row, so it is not mapped.
+    # The rows, their order and their values are unchanged (the map is per item: Invoke-SIOutputMap keeps nothing between
+    # items). An item sent before and now out of scope still gets its out_of_scope row: the decision reads its state row
+    # first, exactly as before; the gone pass is untouched (every item still counts as seen).
+    $dm = New-Object 'object[]' $items2.Count; $needMap = New-Object System.Collections.Generic.List[int]
     for ($i = 0; $i -lt $items2.Count; $i++) {
         $it = $items2[$i]; $k = $keys2[$i]
         $meta = Get-SIDataOutStateMeta -Prev $prev[$k] -Grain $grain
         $reason = ''
         $now = ''
         if (-not (Test-SIDataOutInScope -Grain $grain -Item $it -Scope $W.Scope)) { $now = 'out_of_scope' }
+        # #1055 a vulnerable item whose CI the CI output's scope leaves out is out of scope too -- one out_of_scope row over
+        # a sent record (closed as 'Out of scope', never as fixed), never held "CI not delivered" for a CI that is never sent
+        elseif ($grain -eq 'ci_finding' -and $ciOf[$i] -and $W.ContainsKey('CiScope') -and $null -ne $W.CiScope -and -not (Test-SIDataOutCiOfItemInScope -Item $it -CiScope $W.CiScope)) {
+            $now = 'out_of_scope'; $reason = ('its CI ({0}) is outside the CI output''s scope ({1}) -- closed as out of scope, not as fixed' -f $ciOf[$i], (Get-SIOutputScopeText $W.CiScope))
+        }
         elseif ($grain -eq 'ci_finding' -and -not $ciOf[$i]) { $now = 'held'; $reason = 'the finding has no CI key -- it is held, never sent without its CI' }
         elseif ($null -ne $ciOk -and -not $ciOk.Contains($ciOf[$i])) { $now = 'held'; $reason = ('its CI ({0}) is not delivered in a complete batch yet -- the item is held, never sent without its CI' -f $ciOf[$i]) }
         else { $now = Get-SIDataOutRecordClass -Grain $grain -Item $it }
         $dec = Get-SIDataOutContractAction -Now $now -Base $meta.Base -Resync:([bool]$W.Resync)
+        $dm[$i] = @{ Meta = $meta; Now = $now; Reason = $reason; Dec = $dec }
+        if ($dec.Send -and -not ($now -eq 'held' -and $meta.Cells.Count)) { $needMap.Add($i) }
+    }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'decide' -Watch $pw }
+    $mapped = New-Object 'object[]' $items2.Count
+    if ($needMap.Count) {
+        $mm = @(Invoke-SIOutputMap -Map $W.Map -Items @(foreach ($i in $needMap) { $items2[$i] }) -ValueMaps $W.ValueMaps -Context $W.Ctx)
+        if ($mm.Count -ne $needMap.Count) { throw 'the mapped rows do not line up with the items' }
+        for ($j = 0; $j -lt $needMap.Count; $j++) { $mapped[$needMap[$j]] = $mm[$j] }
+    }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'map' -Watch $pw }
+    for ($i = 0; $i -lt $items2.Count; $i++) {
+        $it = $items2[$i]; $k = $keys2[$i]
+        $meta = $dm[$i].Meta; $now = $dm[$i].Now; $reason = $dm[$i].Reason; $dec = $dm[$i].Dec
         if (-not $dec.Send) {
             if ($now -eq 'held') { Add-SIDataOutActionCount -Counts $counts -Action held }
             continue
@@ -1853,6 +2128,7 @@ function Invoke-SIDataOutContractPage {
             }
         }
     }
+    if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'rows' -Watch $pw }
     @{ Rows = $rows.ToArray(); State = $state.ToArray(); Changes = $chs.ToArray(); Counts = $counts; Unchanged = $unchanged }
 }
 
@@ -1880,6 +2156,9 @@ function Invoke-SIDataOutContractGonePage {
     foreach ($r in $rs) {
         $k = [string]$r['ItemKey']
         if ($seen.Contains($k)) { continue }
+        # held this run because a value is longer than its column (or the old key of such a re-keyed record): never gone --
+        # its state row stays as it is, and it goes on the next run once the column is wider
+        if ($W.ContainsKey('CutHeldKeys') -and $W.CutHeldKeys -and $W.CutHeldKeys.Contains($k)) { continue }
         $meta = Get-SIDataOutStateMeta -Prev ([pscustomobject]@{ Hash = [string]$r['RowHash']; Json = $(if ($r['RowJson'] -is [System.DBNull]) { '' } else { [string]$r['RowJson'] }) }) -Grain $W.Grain
         # re-keyed: the new key's row carries u_si_replaces -- the old key gets no row of its own and leaves the state
         if ($W.Replaced.Contains($k)) { $gone.Add($k); continue }
@@ -1960,8 +2239,14 @@ function Invoke-SIDataOutSnowContract {
         back; then the writing row), every page of items with its rows, what was sent before and is not in this run's items,
         the end row. Returns the destination's answer (@{ Ok; Held; Reason; Errors; Target }).
     #>
-    param([Parameter(Mandatory)][hashtable]$W, [scriptblock]$SnowConnect)
+    param([Parameter(Mandatory)][hashtable]$W, [scriptblock]$SnowConnect,
+          # #1044 (2) THE FULL-DATA PRE-FLIGHT: with -MeasureInto (New-SISnowLengthMeasure) every page is built exactly as the push
+          # builds it (the scope, the action, the map, the envelope) and MEASURED -- no session, no batch, no row sent, no state
+          # read for sending and none written. -MeasureLimits: the column lengths (column, lower case -> max) for the counts.
+          $MeasureInto, [System.Collections.IDictionary]$MeasureLimits)
     $e = $W.Entry; $out = [string]$e.output
+    if (-not $W.ContainsKey('CutHeldKeys') -or $null -eq $W.CutHeldKeys) { $W.CutHeldKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal) }
+    if (-not $W.ContainsKey('Replaced') -or $null -eq $W.Replaced) { $W.Replaced = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal) }
     $spec = Get-SIDataOutContractSpec -Output $out
     # the contract's columns are always sent, whatever a customer's change to the map removed (they are checked against the
     # staging table like every other column: one that is missing there HOLDS the push)
@@ -1981,20 +2266,49 @@ function Invoke-SIDataOutSnowContract {
     # silently becomes "everything"
     $W.Scope = Get-SIOutputScope -Destination ([string]$spec.Scope)
     & $W.Log 'INFO' ('{0}: scope {1} ({2})' -f $W.Label, (Get-SIOutputScopeText $W.Scope), $spec.Scope)
+    # #1047 the closed pass reads only the closed findings this output has a state row for, when the scope leaves every
+    # other one out anyway (the pilot, 2026-11-01: 778,211 closed lifecycle rows read in 5,000-row pages, ~4 h, for no row)
+    $cur = $W.Cursor
+    if ($spec.Grain -eq 'ci_finding' -and $cur -and $cur.Invoke -and $cur.Stage -and [string]$cur.Phase -eq 'start' -and [string]$cur.Grain -eq 'ci_finding' -and $W.Store -and $W.Store.Invoke -and
+        -not ($cur.ContainsKey('NoClosedKeys') -and $cur.NoClosedKeys) -and (Test-SIDataOutScopeLeavesClosedOut -Scope $W.Scope)) {
+        $cur.ClosedKeys = @{ Store = $W.Store; OutputId = $out; Set = $null }
+        & $W.Log 'INFO' ('{0}: the scope leaves out every closed finding read without its document -- the closed pass reads only those sent before' -f $W.Label)
+    }
     # (g) the CI reference check: on when the CI output is switched on in this install
-    $W.CiCheck = $false
+    $W.CiCheck = $false; $W.CiScope = $null
     if ($spec.Grain -eq 'ci_finding' -and $W.Store) {
         # Get-SIDataOutCatalog answers ONE list (return , ...): assigned first, then enumerated
         $ciEntry = $null; try { $cat = Get-SIDataOutCatalog; $ciEntry = @($cat | Where-Object { [string]$_.output -eq 'servicenow-ci' }) | Select-Object -First 1 } catch { $ciEntry = $null }
-        if ($ciEntry -and (Test-SIDataOutSwitchedOn -Entry $ciEntry -Edition 'pro')) { $W.CiCheck = $true }
+        if ($ciEntry -and (Test-SIDataOutSwitchedOn -Entry $ciEntry -Edition 'pro')) {
+            $W.CiCheck = $true
+            # #1055 the CI output's scope: a vulnerable item whose CI it leaves out is out of scope too (a scope that cannot
+            # be read FAILS the output, as the output's own scope)
+            $W.CiScope = Get-SIOutputScope -Destination 'cmdb-servicenow'
+            if ($null -ne $W.CiScope) { & $W.Log 'INFO' ('{0}: the CI output''s scope applies to the vulnerable items'' CIs: {1}' -f $W.Label, (Get-SIOutputScopeText $W.CiScope)) }
+        }
         else { & $W.Log 'INFO' ('{0}: the CI output is switched off -- the vulnerable items are sent without the check that their CI was delivered first' -f $W.Label) }
     }
+    if ($null -ne $MeasureInto) {
+        # the batch id a push carries (its length counts like every other value); nothing is opened or written
+        if (Get-Command -Name Get-SISnowBatchId -ErrorAction SilentlyContinue) { try { $W.BatchId = [string](Get-SISnowBatchId -RunId $W.RunId -Output $out) } catch { } }
+        $mp = 0L
+        while ($null -ne ($mpg = Get-SIDataOutNextPage -Cursor $W.Cursor)) {
+            $mr = Invoke-SIDataOutContractPage -W $W -Items @($mpg.Items) -NoState; $mpg = $null
+            if ($null -ne $mr) { $mp++; Add-SISnowLengthMeasure -Measure $MeasureInto -Rows @($mr.Rows) -NameCol ([string]$W.NameCol) -Limits $MeasureLimits }
+            $mr = $null
+        }
+        & $W.Log 'INFO' ('{0}: measured {1:N0} row(s) in {2:N0} page(s) against the column lengths -- nothing sent' -f $W.Label, [long]$MeasureInto.Rows, $mp)
+        return [pscustomobject]@{ Ok = $true; Why = ''; Pages = $mp; Rows = [long]$MeasureInto.Rows; Measured = $true }
+    }
     # the prelude runs inside Open-SIDataOutSnowSession (dynamic scope): its variables carry names no caller uses
-    $__siContractLog = $W.Log; $__siContractRes = $W.Res
+    $__siContractLog = $W.Log; $__siContractRes = $W.Res; $__siContractProg = $(if ($W.ContainsKey('Progress')) { $W.Progress } else { $null })
     $prelude = {
         param($sess)
         $null = Stop-SIDataOutStaleBatches -Session $sess -Log $__siContractLog
+        # #1043 the last batch's import result, read back: its own phase
+        Step-SIDataOutProgress -Progress $__siContractProg -Phase readback
         $fb = Read-SIDataOutBatchFeedback -Session $sess -Log $__siContractLog
+        Step-SIDataOutProgress -Progress $__siContractProg -Phase read
         if ($fb -and $fb.Errors -gt 0) { $__siContractRes['ImportErrors'] = [long]$fb.Errors; $__siContractRes['ImportErrorBatch'] = [string]$fb.BatchId }
     }
     $mode = $(if ($W.Resync) { 'resync' } else { 'live' })
@@ -2018,12 +2332,33 @@ function Invoke-SIDataOutSnowContract {
         $no = Reset-SIDataOutOrphanState -Store $W.Store -OutputId $out -RunId $W.RunId -Connector ([string]$e.connector)
         if ($no -gt 0) { & $W.Log 'WARN' ('{0}: {1} row(s) of an earlier run that stopped before its batch was complete go again in this batch' -f $e.label, $no) }
     }
+    # #1043 the batch has its row: the progress is recorded there from here (batched), and once now
+    $prog = $__siContractProg
+    if ($prog -and $sn.BatchState -eq 'writing' -and -not $W.WhatIf) { Set-SIDataOutProgressBatch -Progress $prog -Store $W.Store -BatchId ([string]$sn.BatchId); Write-SIDataOutProgress -Progress $prog }
     $send = {
         param($pg)
         if ($null -eq $pg) { return }
         if ($sn.Failed -or $sn.Unavailable) { $sn.Delta += @($pg.Rows).Count; return }
+        Step-SIDataOutProgress -Progress $prog -Phase send
+        $sent0 = [long]$sn.Sent
+        $pr = Send-SIDataOutSnowPage -Session $sn -Rows @($pg.Rows) -HoldCutRows
+        # rows held because a value is longer than its column: left out of the page -- never counted as sent, never
+        # recorded (no state row: they go again, as new or changed, on the next run), named in the run's reason
+        if ($pr.PSObject.Properties['HeldIndex'] -and @($pr.HeldIndex).Count) {
+            $sel = Select-SIDataOutSentPage -Page $pg -Held ([int[]]@($pr.HeldIndex)) -NameCol $W.NameCol
+            $pg = $sel.Page
+            if (-not $sn.ContainsKey('CutHeldNames') -or $null -eq $sn.CutHeldNames) { $sn.CutHeldNames = New-Object System.Collections.Generic.List[string] }
+            foreach ($nm in @($sel.HeldNames)) { if ($nm -and $sn.CutHeldNames.Count -lt 5) { $sn.CutHeldNames.Add([string]$nm) } }
+            # a held row is never told to the target as gone, and a re-keyed record whose new row is held keeps its old key
+            # (its state row stays; the old key gets no gone row while the new row waits)
+            foreach ($hk in @($sel.HeldKeys) + @($sel.Replaces)) { if ($hk) { [void]$W.CutHeldKeys.Add([string]$hk) } }
+            foreach ($rk in @($sel.Replaces)) { if ($rk) { [void]$W.Replaced.Remove([string]$rk) } }
+        }
         Add-SIDataOutContractCounts -W $W -Session $sn -Page $pg
-        $pr = Send-SIDataOutSnowPage -Session $sn -Rows @($pg.Rows)
+        # #1043 counted in memory: the rows the target took, the rows this page holds (u_action held, the push held, or --
+        # #1042 -- a row held for a value too long for its column)
+        $cutN = $(if ($pr.PSObject.Properties['HeldIndex']) { @($pr.HeldIndex).Count } else { 0 })
+        if ($prog) { Step-SIDataOutProgress -Progress $prog -PagesSent 1 -RowsSent ([long]$sn.Sent - $sent0) -RowsHeld ([long]$pg.Counts['held'] + $cutN + $(if ($pr.Held) { @($pg.Rows).Count } else { 0 })) }
         # a page that LANDED WHOLE is recorded; a held page, or one with rows not accepted, is not (the batch ends failed or
         # held and its rows go again)
         if ($pr.Ok -and @($pr.Errors).Count -eq 0) {
@@ -2033,14 +2368,35 @@ function Invoke-SIDataOutSnowContract {
         }
     }
     $pgIn = $first
-    while ($null -ne $pgIn -or $null -ne ($pgIn = Get-SIDataOutNextPage -Cursor $W.Cursor)) {
+    # #1043 a push that is over (failed / held / rows not accepted) is said AT ONCE and reads no further page
+    $nPages = 0L
+    while ($true) {
+        if (Write-SIDataOutSnowStop -Session $sn -Log $W.Log -Label $W.Label -Pages $nPages) { break }
+        if ($null -eq $pgIn) {
+            Step-SIDataOutProgress -Progress $prog -Phase read
+            $pgIn = Get-SIDataOutNextPage -Cursor $W.Cursor
+            if ($null -eq $pgIn) { break }
+        }
+        Step-SIDataOutProgress -Progress $prog -Phase build -RowsRead (@($pgIn.Items).Count)
         $r = Invoke-SIDataOutContractPage -W $W -Items @($pgIn.Items) -Frozen ([string[]]@($pgIn.Frozen)); $pgIn = $null
+        if ($prog -and $null -ne $r) { Step-SIDataOutProgress -Progress $prog -ItemsBuilt (@($r.Rows).Count) }
+        if ($null -ne $r) { $nPages++ }
         & $send $r
         $r = $null
     }
+    Write-SIDataOutProgress -Progress $prog
     # what was sent before and is not in this run's items
     $W.PrevAfter = ''; $W.PrevDone = $false
-    while ($null -ne ($g = Invoke-SIDataOutContractGonePage -W $W)) { & $send $g; $g = $null }
+    while (-not (Write-SIDataOutSnowStop -Session $sn -Log $W.Log -Label $W.Label -Pages $nPages)) {
+        Step-SIDataOutProgress -Progress $prog -Phase build
+        if ($null -eq ($g = Invoke-SIDataOutContractGonePage -W $W)) { break }
+        if ($prog) { Step-SIDataOutProgress -Progress $prog -ItemsBuilt (@($g.Rows).Count) }
+        $nPages++
+        & $send $g; $g = $null
+    }
+    # #1043 stopped: what was built and not accepted is NOT SENT (counted on the run record; never recorded as sent)
+    if ($sn.ContainsKey('StopSaid') -and $sn.StopSaid) { $W.Res['NotSent'] = [long][Math]::Max(0, [long]$sn.Delta - [long]$sn.Sent); $W.Res['StoppedAfterPages'] = $nPages }
+    Step-SIDataOutProgress -Progress $prog -Phase close
     $dw = Close-SIDataOutSnowSession -Session $sn
     # the state rows that go (told already / re-keyed): only after a COMPLETE batch (or, without a staging status table,
     # a run in which every row landed)
@@ -2130,10 +2486,21 @@ function Invoke-SIDataOutWriter {
         [ValidateSet('', 'community', 'pro')][string]$Edition = '',
         # #914: the data database for the contract's look-ups (the re-keyed CIs) when the items do not come from it (tests,
         # the CI build); default: the cursor's own
-        [scriptblock]$DataInvoke
+        [scriptblock]$DataInvoke,
+        # #1043 the progress of the output (SI-DataOutProgress.ps1) -- on by default; -NoProgress turns it off (tests: the
+        # send's time with and without it); -ProgressClock { [datetime] UTC } is the tests' clock
+        [switch]$NoProgress,
+        [scriptblock]$ProgressClock,
+        # #1044 (2) the full-data pre-flight of a ServiceNow contract output: the pages built as the push builds them and measured
+        # into -MeasureInto (New-SISnowLengthMeasure) -- nothing sent, no batch, no state, no run recorded. Returns
+        # @{ Ok; Why; Pages; Rows; Measured } instead of a run result.
+        $MeasureInto, [System.Collections.IDictionary]$MeasureLimits
     )
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     $id = [string]$Entry.output
+    if ($null -ne $MeasureInto -and -not ($Entry.kind -eq 'servicenow-importset' -and (Test-SIDataOutContractOutput -Output $id))) {
+        return [pscustomobject]@{ Ok = $false; Why = ('{0} is not a ServiceNow contract output -- not measured' -f $id); Pages = 0L; Rows = 0L; Measured = $false }
+    }
     if (-not $Selected -and [string](Get-SIItemValue $Entry 'step') -eq 'ci-build' -and -not (Test-SIDataOutSwitchedOn -Entry $Entry -Edition $Edition)) {
         & $Log 'INFO' ('{0}: switched off (SI_DataOut_Outputs) -- not written; every row is in the database and the web app' -f $Entry.label)
         # an output that ran before records that it is off now (never a silent output)
@@ -2167,6 +2534,13 @@ function Invoke-SIDataOutWriter {
         }
         $W.HasCarry = ($W.CarrySet.Count -gt 0 -or $W.CarryPrefixes.Count -gt 0)
         if (@($FrozenKeys | Where-Object { $_ }).Count) { $null = Add-SIDataOutKeys -Set $W.FrozenSet -Keys ([string[]]@($FrozenKeys)) }
+        # #1043 the output's progress, in memory (written batched: Step-SIDataOutProgress); the plan read ONCE, before the first page
+        $W.Progress = $null
+        if (-not $NoProgress) {
+            $pa = @{ Output = $id; Label = [string]$Entry.label; Log = $Log; Planned = (Get-SIDataOutPlannedEstimate -OutputId $id -Grain ([string]$Map.grain) -Store $Store -Cursor $cur) }
+            if ($ProgressClock) { $pa['Clock'] = $ProgressClock }
+            $W.Progress = New-SIDataOutProgress @pa
+        }
 
         $dw = $null
         if ($WhatIf) {
@@ -2216,7 +2590,10 @@ function Invoke-SIDataOutWriter {
             # #914 THE CONTRACT: the full current scoped state, every row with its u_action, one batch
             $W.DataInvoke = $(if ($DataInvoke) { $DataInvoke } elseif ($cur -and $cur.ContainsKey('Invoke')) { $cur.Invoke } else { $null })
             $W.Replaced = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)); $W.ReplacesWarned = $false
-            $W.BatchId = ''; $W.Resync = $false; $W.Scope = $null; $W.CiCheck = $false; $W.Contract = $true; $W.ContractGone = (New-Object System.Collections.Generic.List[string]); $W.SentWritten = 0; $W.SentUpdated = 0
+            $W.BatchId = ''; $W.Resync = $false; $W.Scope = $null; $W.CiCheck = $false; $W.CiScope = $null; $W.Contract = $true; $W.ContractGone = (New-Object System.Collections.Generic.List[string]); $W.SentWritten = 0; $W.SentUpdated = 0
+            $W.CutHeldKeys = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal))
+            # #1044 (2) measured only: returned before anything is recorded (the finally clears the key sets)
+            if ($null -ne $MeasureInto) { return (Invoke-SIDataOutSnowContract -W $W -MeasureInto $MeasureInto -MeasureLimits $MeasureLimits) }
             $dw = Invoke-SIDataOutSnowContract -W $W -SnowConnect $SnowConnect
             $sent.Written = [int]$W.SentWritten; $sent.Updated = [int]$W.SentUpdated
         }
@@ -2229,11 +2606,47 @@ function Invoke-SIDataOutWriter {
                 $no = Reset-SIDataOutOrphanState -Store $Store -OutputId $id -RunId $RunId -Connector ([string]$Entry.connector)
                 if ($no -gt 0) { & $Log 'WARN' ('{0}: {1} row(s) of an earlier run that stopped before its batch was complete go again in this batch' -f $Entry.label, $no) }
             }
-            while ($null -ne ($pg = Get-SIDataOutNextPage -Cursor $cur)) {
+            # #1043 the progress: recorded on the batch row from here (batched), and once now
+            $prog = $W.Progress
+            if ($prog -and $sn.BatchState -eq 'writing') { Set-SIDataOutProgressBatch -Progress $prog -Store $Store -BatchId ([string]$sn.BatchId); Write-SIDataOutProgress -Progress $prog }
+            $nPages = 0L
+            while ($true) {
+                # #1043 a push that is over (failed / held / rows not accepted) is said AT ONCE and reads no further page
+                if (Write-SIDataOutSnowStop -Session $sn -Log $Log -Label ([string]$Entry.label) -Pages $nPages) { $res['NotSent'] = [long][Math]::Max(0, [long]$sn.Delta - [long]$sn.Sent); $res['StoppedAfterPages'] = $nPages; break }
+                Step-SIDataOutProgress -Progress $prog -Phase read
+                if ($null -eq ($pg = Get-SIDataOutNextPage -Cursor $cur)) { break }
+                $nPages++
+                Step-SIDataOutProgress -Progress $prog -Phase build -RowsRead (@($pg.Items).Count)
                 $r = Invoke-SIDataOutWriterPage -W $W -Items @($pg.Items) -Frozen ([string[]]@($pg.Frozen)); $pg = $null
                 if ($null -eq $r) { continue }
+                if ($prog) { Step-SIDataOutProgress -Progress $prog -ItemsBuilt (@($r.DeltaRows).Count) }
                 if ($sn.Failed -or $sn.Unavailable) { $sn.Delta += @($r.DeltaRows).Count; continue }
-                $pr = Send-SIDataOutSnowPage -Session $sn -Rows @($r.DeltaRows)
+                Step-SIDataOutProgress -Progress $prog -Phase send
+                $sent0 = [long]$sn.Sent
+                $pr = Send-SIDataOutSnowPage -Session $sn -Rows @($r.DeltaRows) -HoldCutRows
+                $cutN = $(if ($pr.PSObject.Properties['HeldIndex']) { @($pr.HeldIndex).Count } else { 0 })
+                if ($prog) { Step-SIDataOutProgress -Progress $prog -PagesSent 1 -RowsSent ([long]$sn.Sent - $sent0) -RowsHeld ($cutN + $(if ($pr.Held) { @($r.DeltaRows).Count } else { 0 })) }
+                # rows held because a value is longer than its column: their state and change entries are left out (they go
+                # again on the next run), the rest of the page is recorded as sent
+                if ($pr.PSObject.Properties['HeldIndex'] -and @($pr.HeldIndex).Count) {
+                    $dk = @($r.DeltaState.Keys)
+                    $hs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+                    if (-not $sn.ContainsKey('CutHeldNames') -or $null -eq $sn.CutHeldNames) { $sn.CutHeldNames = New-Object System.Collections.Generic.List[string] }
+                    foreach ($hi in @($pr.HeldIndex)) {
+                        if ([int]$hi -ge $dk.Count) { continue }
+                        $hk = [string]$dk[[int]$hi]; [void]$hs.Add($hk)
+                        $hr = @($r.DeltaRows)[[int]$hi]
+                        $nm = $(if ($nameCol -and $hr) { [string](Get-SIItemValue $hr $nameCol) } else { '' })
+                        if ($sn.CutHeldNames.Count -lt 5) { $sn.CutHeldNames.Add($(if ($nm -and $nm -ne $hk) { '{0} ({1})' -f $nm, $hk } else { $hk })) }
+                    }
+                    $ds2 = [ordered]@{}; foreach ($k2 in $dk) { if (-not $hs.Contains([string]$k2)) { $ds2[$k2] = $r.DeltaState[$k2] } }
+                    $hW = @(@($r.Changes) | Where-Object { $_ -and $hs.Contains([string]$_.ObjectKey) -and $_.Action -eq 'written' }).Count
+                    $hU = @(@($r.Changes) | Where-Object { $_ -and $hs.Contains([string]$_.ObjectKey) -and $_.Action -eq 'updated' }).Count
+                    $r.DeltaState = $ds2
+                    $r.Changes = @(@($r.Changes) | Where-Object { $_ -and -not $hs.Contains([string]$_.ObjectKey) })
+                    $r.Written = [int]$r.Written - $hW; $r.Updated = [int]$r.Updated - $hU
+                    $res.Written -= $hW; $res.Updated -= $hU
+                }
                 # a page that LANDED is recorded (its state only when every row of it landed); a held page is not -- it is
                 # sent again on the next run
                 if ($pr.Ok) {
@@ -2242,6 +2655,7 @@ function Invoke-SIDataOutWriter {
                 }
                 $r = $null
             }
+            Step-SIDataOutProgress -Progress $prog -Phase close
             $dw = Close-SIDataOutSnowSession -Session $sn
         }
         else { $dw = [pscustomobject]@{ Ok = $false; Reason = ("the output kind '{0}' is not written here" -f $Entry.kind); Errors = @(); Target = '' } }
@@ -2254,6 +2668,16 @@ function Invoke-SIDataOutWriter {
         elseif (-not $dw.Ok) { $res.Outcome = 'failed'; $res.Why = [string]$dw.Reason }
         elseif ($res.Errors -gt 0) { $res.Outcome = 'partial'; $res.Why = [string]$dw.Reason }
         elseif ($dw.Reason -and $res.Outcome -ne 'whatif') { $res.Why = [string]$dw.Reason }
+        # owner 2026-11-01: rows held because a value is longer than its column -- the rest WAS sent. Never 'success' while
+        # rows are held: the output is 'held' by the check (a run issue, the daily mail, the web app's run list; not tried
+        # again by the data-out job -- another try sends the same rows and holds the same ones), the reason counts and names
+        # them. With rows not accepted as well, 'partial' stays (that one is tried again) and the reason says both.
+        $rowsHeld = $(if ($dw.PSObject.Properties['HeldRows']) { [long]$dw.HeldRows } else { 0L })
+        if ($rowsHeld -gt 0) {
+            $res['HeldRows'] = $rowsHeld
+            if ($res.Outcome -eq 'success') { $res.Outcome = 'held'; $res['HeldByCheck'] = $true; $res['HeldInPart'] = $true; $res.Why = ('held in part: {0}' -f [string]$dw.HeldReason) }
+            elseif ($res.Outcome -ne 'held') { $res.Why = (@($res.Why, ('held in part: {0}' -f [string]$dw.HeldReason)) | Where-Object { $_ }) -join ' | ' }
+        }
         # no longer in this output: sent before, not seen now -- never an item left out as disabled (what was sent for it
         # stays) nor one of a report the newest run could not complete. Logged and its state removed only when the
         # destination took the whole run.
@@ -2287,10 +2711,23 @@ function Invoke-SIDataOutWriter {
             if ($W.OwnCarry) { Clear-SIDataOutKeySet -Set $W.CarrySet }
         }
     }
+    # #1043 the end of the output's progress: the time of every phase (the final line, the batch row's last progress) and
+    # the stalls as a note on the run record. Never fails the output.
+    if ($W -and $W.ContainsKey('Progress') -and $W.Progress) {
+        try {
+            $plan = $(if ($W.ContainsKey('Snow') -and $W.Snow) { [long]$W.Snow.Delta } else { [long]$res.Rows })
+            Complete-SIDataOutProgress -Progress $W.Progress -Planned $plan
+            $pn = Get-SIDataOutProgressNotes -Progress $W.Progress
+            if ($pn) { $res['Stalls'] = [int]$W.Progress.Stalls; $res.Why = (@($res.Why, $pn) | Where-Object { $_ }) -join ' | ' }
+        } catch { }
+    }
     if (-not $res.Contains('Carried')) { $res['Carried'] = 0 }
+    if ($res.Contains('StoppedAfterPages')) { $res.Why = (@($res.Why, ('the push stopped after {0} page(s); no further page was read -- {1} row(s) built were not sent' -f $res.StoppedAfterPages, $res.NotSent)) | Where-Object { $_ }) -join ' | ' }
     $line = '{0}: {1} row(s); {2} new, {3} changed, {4} no longer sent, {5} unchanged{6}' -f $Entry.label, $res.Rows, $res.Written, $res.Updated, $res.Removed, $res.Unchanged, $(if ($res.Target) { ' -> ' + $res.Target } else { '' })
-    $heldByCheck = ($res.Outcome -eq 'held')
+    $heldInPart = ($res.Contains('HeldInPart') -and $res.HeldInPart)
+    $heldByCheck = ($res.Outcome -eq 'held') -and -not $heldInPart
     if ($res.Outcome -eq 'failed') { & $Log 'WARN' ('{0}: not written -- {1}' -f $Entry.label, $res.Why) }
+    elseif ($heldInPart) { & $Log 'WARN' ('{0} -- {1}' -f $line, $res.Why) }
     elseif ($heldByCheck) { & $Log 'WARN' ('{0}: {1} new and {2} changed row(s) {3}' -f $Entry.label, $res.Written, $res.Updated, $res.Why) }
     elseif ($res.Outcome -eq 'partial') { & $Log 'WARN' ('{0} -- {1}' -f $line, $res.Why) }
     else { & $Log 'OK' $line }
@@ -2303,7 +2740,10 @@ function Invoke-SIDataOutWriter {
                 -Opened $(if ($heldByCheck) { $sent.Written } else { $res.Written }) -Updated $(if ($heldByCheck) { $sent.Updated } else { $res.Updated }) -Closed $(if ($heldByCheck) { 0 } else { $res.Removed }) `
                 -Errors $res.Errors -Why $res.Why -ErrorText $(if ($res.Outcome -eq 'failed') { $res.Why } else { '' })
             if ($heldByCheck) { $rec['Held'] = [int](($res.Written + $res.Updated) - ($sent.Written + $sent.Updated)) }
+            elseif ($res.Contains('HeldRows') -and [long]$res.HeldRows -gt 0) { $rec['Held'] = [int]$res.HeldRows }
             $rec['Unchanged'] = $res.Unchanged
+            # #1043 a push that stopped: the rows built and not accepted are counted NOT SENT (never as sent)
+            if ($res.Contains('NotSent')) { $rec['NotSent'] = [int]$res.NotSent }
             $e1 = Write-SIConnectorRun -Store $Store -Record $rec
             if ($e1) { & $Log 'WARN' ('{0}: the run could not be recorded -- {1}' -f $Entry.label, $e1) }
         } catch { & $Log 'WARN' ('{0}: the run could not be recorded -- {1}' -f $Entry.label, $_.Exception.Message) }
@@ -2425,6 +2865,101 @@ IF @id IS NOT NULL AND (ISNULL(@rows, 0) > 0 OR (OBJECT_ID('sidata.Finding') IS 
 IF OBJECT_ID('sidata.CiFinding') IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.CiFinding) SET @ci = 1;
 SELECT @rows AS PublishedRows, @pub AS PublishedHas, @ci AS CiHas;
 '@
+}
+
+# =====================================================================================================================
+#  #1044 (2) THE FULL-DATA LENGTH PRE-FLIGHT (owner 2026-11-01: "we need to find answers and improve")
+#  The pilot's first push found a too-long value only INSIDE the push, one page at a time. The check at connector set-up
+#  (Verify), the daily check and the check after an update now measure EVERY row the push would send -- built by the
+#  push's own path (Invoke-SIDataOutWriter -> Invoke-SIDataOutSnowContract -MeasureInto), nothing sent -- against the
+#  table's column lengths, before the push day.
+# =====================================================================================================================
+
+function Get-SIDataOutDataRunSql {
+    <# PURE. The newest pipeline run that has ENDED (cfg.FlowRun): new data reaches the outputs only through a run, so a daily
+       measure is repeated only when this changed. One row: FlowRunId, EndedUtc (none = no run, or no table). #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.FlowRun') IS NOT NULL
+    SELECT TOP (1) FlowRunId, EndedUtc FROM cfg.FlowRun WHERE EndedUtc IS NOT NULL ORDER BY EndedUtc DESC;
+'@
+}
+
+function Get-SIDataOutDataRun {
+    <# The newest ended pipeline run's id ('' = not known: the measure runs). -Store: the settings database. Never throws. #>
+    param($Store)
+    try {
+        if (-not $Store -or -not $Store.Invoke) { return '' }
+        $row = @(@(& $Store.Invoke (Get-SIDataOutDataRunSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] }) | Select-Object -First 1
+        if (-not $row) { return '' }
+        $e = $row['EndedUtc']; $es = ''
+        if ($e -is [datetime]) { $es = $e.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) } elseif ($e -isnot [System.DBNull]) { $es = [string]$e }
+        ('{0}@{1}' -f [string]$row['FlowRunId'], $es)
+    } catch { '' }
+}
+
+function Measure-SIDataOutSnowLengths {
+    <#
+        ONE ServiceNow contract output, measured on the FULL data: every page read from the data database (-Invoke), built by
+        the push's own path and measured (Add-SISnowLengthMeasure) -- per column the longest value, its record and, with
+        -Limits (column, lower case -> max length), how many are longer. Nothing is sent, no batch is opened, no state and no
+        run is recorded. Returns @{ Ok; Why; Measure (New-SISnowLengthMeasure); Pages; DataRun }. Never throws.
+        -Store: the settings database (the scope, the state each action is decided from); -Model / -Catalog / -Disabled*: tests.
+    #>
+    param([Parameter(Mandatory)][string]$Output, [Parameter(Mandatory)][scriptblock]$Invoke, $Store, [System.Collections.IDictionary]$Limits,
+          $Model, [object[]]$Catalog, [scriptblock]$Log, $DisabledPolicy, [string[]]$DisabledCis, [int]$PageSize = 5000)
+    if (-not $Log) { $Log = { param($l, $m) } }
+    $acc = New-SISnowLengthMeasure
+    try {
+        if (-not (Test-SIDataOutContractOutput -Output $Output)) { return [pscustomobject]@{ Ok = $false; Why = ('{0} is not a ServiceNow output' -f $Output); Measure = $null; Pages = 0L; DataRun = '' } }
+        if (-not $Catalog) { $Catalog = Get-SIDataOutCatalog }
+        $e = @($Catalog | Where-Object { $_ -and [string]$_.output -eq $Output }) | Select-Object -First 1
+        if (-not $e) { return [pscustomobject]@{ Ok = $false; Why = ('{0} is not in the data-out catalog' -f $Output); Measure = $null; Pages = 0L; DataRun = '' } }
+        if (-not $Model) { $Model = Get-SIDataModel }
+        $map = $Model.Outputs[$Output]
+        if ($null -eq $map) { return [pscustomobject]@{ Ok = $false; Why = ('the output map {0} is not in the data model' -f $Output); Measure = $null; Pages = 0L; DataRun = '' } }
+        $vm = $null; if ($Model['value-maps']) { $vm = $Model['value-maps'].maps }
+        # the disabled accounts are left out exactly as the push leaves them out (SI_DisabledAssets_Connectors)
+        $doDisabled = $null
+        if (-not (Test-SIDisabledIncluded -Stage Connectors -Policy $DisabledPolicy)) {
+            $dcis = @()
+            if ($null -ne $DisabledCis) { $dcis = @($DisabledCis) }
+            else { try { $dcis = @(@(& $Invoke (Get-SIDataOutDisabledCiSql) @{} 'reader') | Where-Object { $_ } | ForEach-Object { [string]$_['CiId'] } | Where-Object { $_ }) } catch { } }
+            $doDisabled = [pscustomobject]@{ Cis = [string[]]@($dcis); Include = $false }
+        }
+        $dataRun = Get-SIDataOutDataRun -Store $Store
+        $cur = New-SIDataOutItemCursor -Invoke $Invoke -Grain ([string]$map.grain) -Disabled $doDisabled -PageSize $PageSize
+        $r = Invoke-SIDataOutWriter -Entry $e -Map $map -Cursor $cur -ValueMaps $vm -Store $Store -Log $Log -Selected -NoProgress -PageSize $PageSize -MeasureInto $acc -MeasureLimits $Limits
+        if (-not $r -or -not $r.PSObject.Properties['Measured'] -or -not $r.Ok) {
+            $why = if ($r -and $r.PSObject.Properties['Why'] -and $r.Why) { [string]$r.Why } else { 'the output could not be built' }
+            return [pscustomobject]@{ Ok = $false; Why = $why; Measure = $null; Pages = 0L; DataRun = $dataRun }
+        }
+        [pscustomobject]@{ Ok = $true; Why = ''; Measure = $acc; Pages = [long]$r.Pages; DataRun = $dataRun }
+    } catch {
+        [pscustomobject]@{ Ok = $false; Why = [string]$_.Exception.Message; Measure = $null; Pages = 0L; DataRun = '' }
+    }
+}
+
+function Get-SIDataOutSnowMeasureContext {
+    <#
+        What the ServiceNow checks measure with (Invoke-SISnowChecks): @{ Invoke; Store; Log } -- the install's
+        data database (SI_ProSqlServer / SI_ProSqlDatabase, or SI_Pro_DataSqlServer / SI_Pro_DataSqlDatabase, as the data-out
+        job) and its settings database. $null when no data database is configured here (the checks then say "not measured").
+    #>
+    param($Store, [scriptblock]$Log)
+    try {
+        if (-not (Get-Command -Name Resolve-SIDataSettings -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'data-sql', 'SI-DataModel.ps1')) }
+        if (-not (Get-Command -Name New-SIDataSqlInvoke -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'data-sql', 'SI-DataSql.ps1')) }
+        $g = @{}
+        foreach ($n in 'SI_ProSqlServer', 'SI_ProSqlDatabase', 'SI_Pro_DataSqlServer', 'SI_Pro_DataSqlDatabase', 'SI_Pro_DataRetentionDays', 'SI_Pro_DataLookbackDays', 'SI_AssetProperties', 'SI_AssetProperties_RetentionDays') {
+            $g[$n] = Get-Variable -Name $n -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+        }
+        $settings = Resolve-SIDataSettings -Globals $g
+        if (@($settings.Problems).Count) { return $null }
+        $inv = New-SIDataSqlInvoke -Server $settings.Server -Database $settings.Database -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint -CommandTimeoutSec 0
+        # data, not a closure: a GetNewClosure() block cannot see the functions its caller dot-sourced
+        [pscustomobject]@{ Invoke = $inv; Store = $Store; Log = $Log }
+    } catch { $null }
 }
 
 # =====================================================================================================================

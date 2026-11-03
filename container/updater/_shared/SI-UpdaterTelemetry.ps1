@@ -121,10 +121,11 @@ function Send-SIUpdaterFailureReports {
         reported as step 'updater'. Returns the results. NEVER throws.
           -On           the telemetry switch (Test-SIUpdaterTelemetryOn)
           -InstallKey / -TenantId   identified mode (the key from the Key Vault); '' = anonymous
+          -InstallId     Invardia S16: the install's LASTING id (SI-InstallId) -- InstallId on the identified reports; '' = none
           -Send          { param($Step, $Text) } -- the test seam (no context, no network)
     #>
     param([int]$ExitCode = 0, [bool]$On = $true, [AllowEmptyString()][string]$InstallKey = '', [AllowEmptyString()][string]$TenantId = '',
-          $StartedAt, [scriptblock]$Send, [scriptblock]$Log)
+          $StartedAt, [scriptblock]$Send, [scriptblock]$Log, [AllowEmptyString()][string]$InstallId = '')
     $out = New-Object System.Collections.Generic.List[object]
     try {
         if (-not $Log) { $Log = { param($m) } }
@@ -145,6 +146,8 @@ function Send-SIUpdaterFailureReports {
             $edition = if ("$InstallKey".Trim()) { 'pro' } else { '' }
             # the ring: what this updater run resolved (its own state), else the setting -- framework §8.4 / §8.7
             $ctxArgs = @{ License = $null; InstallKey = "$InstallKey"; TenantId = "$TenantId"; Edition = $edition; UpdaterRing = $global:SI_UpdaterResolvedRing }
+            # Invardia S16: the lasting id rides on the identified reports (a telemetry client without the parameter: left out)
+            if ((Get-Command -Name Get-SITelemetryContext).Parameters.ContainsKey('LastingInstallId')) { $ctxArgs.LastingInstallId = "$InstallId" }
             # Version = the ENGINE release this install runs (the one this run just applied, or found running) -- never the
             # updater's own image release, which moves only on its next run; its own build label rides as `build`
             $engineVer = Get-SIUpdaterReportedVersion

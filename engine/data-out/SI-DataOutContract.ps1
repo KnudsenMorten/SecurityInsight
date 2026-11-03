@@ -216,13 +216,46 @@ function Test-SIDataOutInScope {
     param([Parameter(Mandatory)][ValidateSet('ci', 'ci_finding')][string]$Grain, $Item, $Scope)
     if ($null -eq $Scope) { return $true }
     if ($Grain -eq 'ci') {
-        return (Test-SIOutputScopeAsset -Scope $Scope -Tier (Get-SIItemValue $Item 'si_tier') -Kind (ConvertTo-SIDataOutAssetKind ([string](Get-SIItemValue $Item 'si_class'))))
+        # #1055 and the CI rules (include / exclude) on the CI's asset type, OS family and class
+        return (Test-SIOutputScopeAsset -Scope $Scope -Tier (Get-SIItemValue $Item 'si_tier') -Kind (ConvertTo-SIDataOutAssetKind ([string](Get-SIItemValue $Item 'si_class'))) `
+            -Fields (Get-SIDataOutCiRuleFields -Item $Item))
     }
     $fields = @{}
     foreach ($f in @($Scope.Filters)) { if ($f) { $fields[$f.Field] = Get-SIItemValue $Item $f.Field } }
     $reports = @(Get-SIOutputScopeNames (Get-SIItemValue $Item 'si_report_name'))
     Test-SIOutputScopeFinding -Scope $Scope -Severity ([string](Get-SIItemValue $Item 'si_severity')) -Tier (Get-SIItemValue $Item 'si_tier') `
         -Domain ([string](Get-SIItemValue $Item 'si_security_domain')) -Reports $reports -Fields $fields
+}
+
+function Get-SIDataOutCiRuleFields {
+    <#
+        PURE. #1055 The CI's values for the CI rules (si_asset_type, si_os_family, si_class) of an item. A CI item: its own.
+        A vulnerable item (-OfCi): its CI's -- the CI columns the findings page reads (ci_asset_type, ci_os_family, ci_class,
+        from sidata.Ci), each falling back to the finding's own value -- so a vulnerable item is judged by the same values as
+        its CI.
+    #>
+    param($Item, [switch]$OfCi)
+    $h = @{}
+    foreach ($f in @(Get-SIOutputScopeCiRuleFields)) {
+        $v = $null
+        if ($OfCi) { $v = Get-SIItemValue $Item ('ci_' + $f.Substring(3)) }
+        if ($null -eq $v -or "$v".Trim() -eq '') { $v = Get-SIItemValue $Item $f }
+        $h[$f] = $v
+    }
+    $h
+}
+
+function Test-SIDataOutCiOfItemInScope {
+    <#
+        PURE. #1055 Does a VULNERABLE ITEM's CI pass the CI output's scope (-CiScope: 'cmdb-servicenow')? Its tier, its kind
+        and the CI rules, all from its CI's values. Out = the item is out of scope too (never held "CI not delivered" for a
+        CI the scope never sends).
+    #>
+    param($Item, $CiScope)
+    if ($null -eq $CiScope) { return $true }
+    $tier = Get-SIItemValue $Item 'ci_tier'; if ($null -eq $tier -or "$tier".Trim() -eq '') { $tier = Get-SIItemValue $Item 'si_tier' }
+    $cls = [string](Get-SIItemValue $Item 'ci_class'); if (-not $cls.Trim()) { $cls = [string](Get-SIItemValue $Item 'si_class') }
+    Test-SIOutputScopeAsset -Scope $CiScope -Tier $tier -Kind (ConvertTo-SIDataOutAssetKind $cls) -Fields (Get-SIDataOutCiRuleFields -Item $Item -OfCi)
 }
 
 # =====================================================================================================================
@@ -398,12 +431,12 @@ function New-SIDataOutBatchParams {
 # =====================================================================================================================
 
 function Get-SIDataOutReplacesSql {
-    <# For a page of CI keys (@keys, a JSON array): the previous key each replaces (rekey / merge), newest first. #>
+    <# For a page of CI keys (@KeyList, a JSON array): the previous key each replaces (rekey / merge), newest first. #>
     @'
 SET NOCOUNT ON;
 IF OBJECT_ID('sidata.AssetIdHistory') IS NULL SELECT CAST(NULL AS nvarchar(400)) AS CurrentId, CAST(NULL AS nvarchar(400)) AS PreviousId WHERE 1 = 0;
 ELSE SELECT h.CurrentId, h.PreviousId FROM sidata.AssetIdHistory AS h
-     JOIN OPENJSON(@keys) WITH (k nvarchar(400) '$') AS p ON p.k = h.CurrentId
+     JOIN OPENJSON(@KeyList) WITH (k nvarchar(400) '$') AS p ON p.k = h.CurrentId
      WHERE h.EventType IN (N'rekey', N'merge') AND h.PreviousId <> h.CurrentId
      ORDER BY h.DetectedAt DESC;
 '@

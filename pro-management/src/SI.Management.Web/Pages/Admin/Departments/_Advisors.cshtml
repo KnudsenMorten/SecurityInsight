@@ -24,7 +24,7 @@
             avail = await SignIn.AvailableAsync(Context.RequestAborted);
         }
     }
-    catch (Exception ex) when (ex is not OperationCanceledException) { problem = "The advisors could not be read: " + ex.Message; }
+    catch (Exception ex) when (ex is not OperationCanceledException) { problem = "The advisors could not be read: " + SI.Management.Web.ViewerError.Text(ex); }
     var now = SignIn.Now;
     var id = Model.DepartmentId;
 }
@@ -48,7 +48,10 @@
                                 <td>@a.DisplayName <span class="badge">@AdvisorKinds.Label(a.Kind)</span>@if (a.IsExternal) { <span class="badge">external</span> }</td>
                                 <td>@a.Mail</td>
                                 <td>@a.Company</td>
-                                <td class="wrap">@a.ObjectId</td>
+                                <td class="wrap">
+                                    @a.ObjectId
+                                    @if (string.IsNullOrWhiteSpace(a.ObjectId) && a.Active) { <span class="hint" data-mail-only>@SI.Management.Web.Departments.MailOnlyMatch.AdminNote</span> }
+                                </td>
                                 <td>@if (a.Active) { <text>active</text> } else { <text>revoked </text>@Fmt.Time(a.RevokedAt, "date")<text> by @a.RevokedBy: @a.RevokeReason</text> }</td>
                                 <td>
                                     @if (a.Active)
@@ -84,7 +87,7 @@
             </form>
             <details class="hint">
                 <summary>Sign-in with their own company account (Entra B2B guest)</summary>
-                <p>1. Invite the advisor as a guest: Entra admin center &gt; Users &gt; Invite external user (their work address). 2. Give the guest the app role <strong>SecurityInsight Department</strong> on the SecurityInsight enterprise application (earlier: SecurityInsight Management) (it lets them sign in and grants nothing by itself). 3. Optional, stronger: once they accepted, put their guest object id on the advisor here. They are matched by that object id, or by the address Entra signs them in with. Remove the guest (or revoke the advisor here) to end it.</p>
+                <p>1. Invite the advisor as a guest: Entra admin center &gt; Users &gt; Invite external user (their work address). 2. Give the guest the app role <strong>SecurityInsight Department</strong> on the SecurityInsight enterprise application (earlier: SecurityInsight Management) (it lets them sign in and grants nothing by itself). 3. Optional, stronger: once they accepted, put their guest object id on the advisor here. A guest is matched by that object id only -- an advisor kept by mail address alone is matched only for an account of your own directory, so record the guest's object id, or send them a sign-in link. Remove the guest (or revoke the advisor here) to end it.</p>
             </details>
         }
         <h3>Send a sign-in link</h3>

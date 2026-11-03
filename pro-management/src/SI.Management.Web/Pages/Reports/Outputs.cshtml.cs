@@ -68,7 +68,7 @@ public class OutputsModel : ReportsPage
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogWarning(ex, "the preview counts could not be read");
-            Preview = new ReportPreviewData([], [], null, "the preview counts could not be read: " + ex.Message);
+            Preview = new ReportPreviewData([], [], null, "the preview counts could not be read: " + ViewerError.Text(ex));
         }
         foreach (var d in Destinations.Where(d => !d.Asset))
         {
@@ -145,11 +145,16 @@ public class OutputsModel : ReportsPage
     {
         if (!await LoadAsync(ct)) return Page();
         if (OutputScope.Find(Destination ?? "") is { } d)
-            Posted[d.Key] = new OutputScope(d.Key, Templates, Reports, Severities, Tiers, Domains, AssetKinds) { Filters = PostedFilters() };
+            Posted[d.Key] = KeepCiRules(new OutputScope(d.Key, Templates, Reports, Severities, Tiers, Domains, AssetKinds) { Filters = PostedFilters() });
         await PrepareAsync(ct);
         return Page();
     }
 
+    /// #1055 the CI rules (include / exclude) of the ServiceNow CI output are set on the ServiceNow connector's page; this
+    /// form does not carry them, so a change here keeps the ones in force (never drops them by omission).
+    public OutputScope KeepCiRules(OutputScope posted) => CiRules.Supports(posted.Destination) && State is { } st
+        ? posted with { CiInclude = st.ScopeOf(posted.Destination).CiInclude, CiExclude = st.ScopeOf(posted.Destination).CiExclude }
+        : posted;
     /// The address parameter of a filter field.
     public static string FilterParam(string field) => "F." + field;
 
@@ -189,7 +194,7 @@ public class OutputsModel : ReportsPage
             var counts = await Store.ValueCountsAsync(column, ct);
             return new JsonResult(new { ok = true, column = col, values = counts.Select(x => new { value = x.Value, label = col == "Tiers" && int.TryParse(x.Value, out var t) && t is >= 0 and <= 3 ? ReportVocabulary.Tiers[t] : x.Value, n = x.N, text = Fmt.Int(x.N) }) });
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
     }
 
     /// The scope an export of <paramref name="dest"/> applies and the words for it: the one the page counted (posted, carried
@@ -243,7 +248,7 @@ public class OutputsModel : ReportsPage
         if (!await LoadAsync(ct)) return Page();
         var d = OutputScope.Find(Destination ?? "");
         if (d is null) { Messages.Add("Not staged: choose a destination"); await PrepareAsync(ct); return Page(); }
-        var scope = new OutputScope(d.Key, Templates, Reports, Severities, Tiers, Domains, AssetKinds) { Filters = PostedFilters() };
+        var scope = KeepCiRules(new OutputScope(d.Key, Templates, Reports, Severities, Tiers, Domains, AssetKinds) { Filters = PostedFilters() });
         var (w, why) = WriteFor(State!, scope);
         if (why.Count > 0) { Messages.AddRange(why.Select(x => "Not staged: " + x)); await PrepareAsync(ct); return Page(); }
         var staged = await StageAsync(ReportChanges.Output, $"Output scope {d.Label}: {scope.Describe()}", w is null ? Array.Empty<ItemWrite>() : new[] { w }, ct);

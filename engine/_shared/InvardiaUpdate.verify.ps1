@@ -13,7 +13,8 @@
   * Test-InvardiaManifestSignature  RS256 (PKCS#1 v1.5, SHA-256) over the base64-DECODED manifest bytes;
   * Test-InvardiaManifest           signature + product + kind + version + SHA-256 + sequence (no replay) + https link;
                                     manualStep / minFromVersion HOLD;
-  * Invoke-InvardiaManifestPull     POST <base>/api/updates/<product>/manifest {kind, licence, ring} + X-Invardia-Install-Key;
+  * Invoke-InvardiaManifestPull     POST <base>/api/updates/<product>/manifest {kind, licence, ring} + X-Invardia-Install-Key
+                                    (+ X-Invardia-Install-Id when the product passes its lasting install id -- Invardia S16);
   * Save-InvardiaArchive / Test-InvardiaArchiveFile   the download is a zip of the SIGNED size + SHA-256.
   PS 5.1 + 7. No modules. Nothing here writes anything.
 #>
@@ -139,10 +140,16 @@ function Invoke-InvardiaManifestPull {
     <# The pull. -Http { param($Method, $Url, $Body, $Headers) } -> @{ status; body; error } (the product's own HTTP helper). #>
     # -Ring (UPDATE-1.7): the environment's OWN ring (0-3), set in the product; Invardia answers with what the product
     # published for that ring (204 when nothing). Required -- Invardia answers 422 without it.
+    # -InstallId (Invardia S16): the install's own LASTING id, kept by the product. Sent as X-Invardia-Install-Id only when it
+    # is a GUID (lower-cased); '' = no header. Never made up here -- a wrong id would lock the install key.
     param([Parameter(Mandatory)][string]$Product, [Parameter(Mandatory)][scriptblock]$Http, [string]$BaseUrl = '', [Parameter(Mandatory)][string]$InstallKey, [Parameter(Mandatory)][string]$LicenceText, [string]$Kind = 'code',
+          [AllowEmptyString()][AllowNull()][string]$InstallId = '',
           [Parameter(Mandatory)][ValidateRange(0, 3)][int]$Ring)
     $base = if ("$BaseUrl".Trim()) { "$BaseUrl".Trim().TrimEnd('/') } else { $script:InvardiaUpdateDefaultBase }
-    $r = & $Http 'POST' "$base/api/updates/$Product/manifest" @{ kind = $Kind; licence = $LicenceText; ring = $Ring } @{ 'X-Invardia-Install-Key' = $InstallKey }
+    $h = @{ 'X-Invardia-Install-Key' = $InstallKey }
+    $iid = "$InstallId".Trim().ToLowerInvariant()
+    if ($iid -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { $h['X-Invardia-Install-Id'] = $iid }
+    $r = & $Http 'POST' "$base/api/updates/$Product/manifest" @{ kind = $Kind; licence = $LicenceText; ring = $Ring } $h
     $pullStatus = [int]$r.status
     return @{ status = $pullStatus; body = $r.body; reason = $(if ($pullStatus -eq 200) { '' } else { Get-InvardiaPullReason -Status $pullStatus -Body $r.body -ErrorText "$($r.error)" }) }
 }

@@ -231,7 +231,14 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
         # read from the run records and the Risk Analysis Detailed job's running execution (a container; elsewhere: as before)
         $cleanRa = $null
         if ($seams -and $seams.PSObject.Methods['Running']) { $cleanRa = { $seams.Running('risk-analysis-detailed') } }
-        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa
+        # #1038 part 3: the clean-up is housekeeping -- it gives way to a data sync and a data out started on their own (by
+        # hand, by support, on their own schedule), asked before every range, as it does to a pipeline run. Only the jobs this
+        # install has (none listed = both asked; a job that is not there answers "not found" = not running).
+        $cleanJobs = @('asset-datasync', 'data-out')
+        if (@($installed).Count) { $cleanJobs = @($cleanJobs | Where-Object { @($installed) -contains ('caj-si-' + $_) }) }
+        $cleanJob = $null
+        if ($seams -and $seams.PSObject.Methods['Running']) { $cleanJob = { param($j) $seams.Running($j) } }
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
 if ($pipeDefinition.Mode -eq 'schedules' -and -not $pipeRequest -and -not $Cancel) {
@@ -606,6 +613,39 @@ if ($HostKind -eq 'Container' -and "$env:CONTAINER_APP_JOB_NAME".Trim()) {
     }
     $flowStartImage = & $readFlowImage
     if ($flowStartImage) { $codeCurrent = { Test-SIPipelineCodeCurrent -StartImage $flowStartImage -NowImage (& $readFlowImage) } }
+}
+
+# ---- #1050 (owner 2026-11-01): AN INDEX THAT DID NOT FIT AN UPDATE is built in an idle window. A filtered index cannot pause,
+# so an update whose estimate said it would not fit left it waiting (cfg.IndexBuild). When nothing is going (no run, no open
+# step, no data sync, no data out, no updater) and the index's estimate ends before the next scheduled run -- or it has waited
+# 7 days, once -- this wake-up starts the updater (SI_UPDATER_MODE = index-build: it takes the install's lock, as an update
+# does, and beats it while the index builds). One plain line when it starts; nothing said while it waits (the update's own
+# log and the index's row say why). Never stops the wake-up.
+if ($HostKind -eq 'Container' -and $updaterJobName -and $proStore -and $runStore -and $updateRunning) {
+    try {
+        if (-not (Get-Command -Name Get-SIIndexBuildWindowDecision -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-IndexBuild.ps1') }
+        $ixRows = @(Read-SIIndexBuildRows -Invoke $proStore.Invoke)
+        if (@($ixRows | Where-Object { $_.State -eq 'waiting' }).Count) {
+            if (-not (Get-Command -Name Get-SIDataHousekeepingBusy -ErrorAction SilentlyContinue)) {
+                . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
+                . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataSql.ps1')
+            }
+            $ixJobs = @('asset-datasync', 'data-out')
+            if (@($installed).Count) { $ixJobs = @($ixJobs | Where-Object { @($installed) -contains ('caj-si-' + $_) }) }
+            $ixJobRunning = if ($seams -and $seams.PSObject.Methods['Running']) { { param($j) $seams.Running($j) } } else { $null }
+            $ixBusy = Get-SIDataHousekeepingBusy -SettingsInvoke $proStore.Invoke -JobRunning $ixJobRunning -Jobs $ixJobs
+            $ixNow = [datetime]::UtcNow
+            $ixDue = Get-SIJobFlowDue -Definition $pipeDefinition -Previous $runStore.Load() -NowUtc $ixNow
+            $ixUpd = ''; try { $ixUpd = [string](& $updateRunning) } catch { $ixUpd = 'whether the updater runs could not be read' }
+            $ixDec = Get-SIIndexBuildWindowDecision -Rows $ixRows -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -RunDue ([string]$ixDue.Action -in @('Start', 'Resume', 'Busy') -or [bool]$pipeRequest)
+            if ($ixDec.Start) {
+                if (-not (Get-Command -Name New-SIUpdateNowStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
+                $ixJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $updaterJobName) $null
+                $ixR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $updaterJobName) (New-SIUpdateNowStartTemplate -Job $ixJob -Mode (Get-SIIndexBuildContract).Mode)
+                & $say 'INFO' ('index {0} on {1}: the updater builds it now ({2}) -- execution {3}' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixDec.Why, $(if ($ixR -and $ixR.PSObject.Properties['name']) { [string]$ixR.name } else { '(started)' }))
+            }
+        }
+    } catch { & $say 'WARN' ('an index waiting for an idle window was not looked at by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
 
 # ---- a CANCELLED run is final (live 2026-10-19, ring 2): what a runner that never saw the cancel left running, or started

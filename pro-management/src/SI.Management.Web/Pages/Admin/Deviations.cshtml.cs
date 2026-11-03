@@ -104,7 +104,7 @@ public sealed class DeviationsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the deviation report failed");
-            Error = "The deviation report could not be read from the Pro database: " + ex.Message;
+            Error = "The deviation report could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }

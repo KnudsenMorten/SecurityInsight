@@ -87,7 +87,7 @@ public sealed class MappingModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the {Mapping} could not be read", Spec.Id);
-            Error = $"The {Spec.Title.ToLowerInvariant()} could not be read from the Pro database: " + ex.Message;
+            Error = $"The {Spec.Title.ToLowerInvariant()} could not be read from the Pro database: " + ViewerError.Text(ex);
             InForce = new(Spec.BucketDefault, Spec.FallbackDefault, new Dictionary<string, string>(), Array.Empty<DimensionMapping.Rule>());
             return Array.Empty<DataModelRow>();
         }
@@ -158,7 +158,7 @@ public sealed class MappingModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the {Mapping} preview could not be read", Spec.Id);
-            PreviewNotice = "The preview could not be counted: " + ex.Message;
+            PreviewNotice = "The preview could not be counted: " + ViewerError.Text(ex);
         }
     }
 

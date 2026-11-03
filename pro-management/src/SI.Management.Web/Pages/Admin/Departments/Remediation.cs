@@ -34,7 +34,7 @@ public sealed class FlowsModel(DepartmentRepository departments, GovernanceRepos
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "remediation flows");
-            Error = "The remediation flows could not be read: " + ex.Message;
+            Error = "The remediation flows could not be read: " + ViewerError.Text(ex);
         }
     }
 

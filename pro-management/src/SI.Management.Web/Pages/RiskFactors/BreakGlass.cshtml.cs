@@ -78,7 +78,7 @@ public sealed class BreakGlassModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the break glass rules could not be read");
-            Error = "The break glass rules could not be read from the Pro database: " + ex.Message;
+            Error = "The break glass rules could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         // the accounts are their own read: a database that cannot answer it still shows (and changes) the rules
         try
@@ -93,7 +93,7 @@ public sealed class BreakGlassModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the break glass accounts could not be read");
-            AccountsError = "The break glass accounts could not be read from the Pro database: " + ex.Message;
+            AccountsError = "The break glass accounts could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

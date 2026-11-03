@@ -72,11 +72,11 @@ public sealed class NewModel : PageModel
             if (depts.Count == 1 && depts[0] is { } one && await _tasks.Store.ReadyAsync(ct)) People = await _tasks.Store.PeopleAsync(one, ct);
             return true;
         }
-        catch (ArgumentException ex) { Error = "The selection is not valid: " + ex.Message; return false; }
+        catch (ArgumentException ex) { Error = "The selection is not valid: " + ViewerError.Text(ex); return false; }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the findings of a task request failed");
-            Error = "The selected findings could not be read: " + ex.Message;
+            Error = "The selected findings could not be read: " + ViewerError.Text(ex);
             return false;
         }
     }

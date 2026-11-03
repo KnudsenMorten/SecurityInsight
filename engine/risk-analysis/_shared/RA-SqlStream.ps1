@@ -1169,10 +1169,19 @@ function Write-RAPhaseTimesToSql {
 }
 
 function Format-RAAfterReportsLine {
-    <# PURE (#873 A). The time of one pass after the reports (the JSON file, the workbook, the AI summary, the key figures). #>
-    param([Parameter(Mandatory)][string]$What, [double]$Seconds, [long]$Rows = -1)
+    <# PURE (#873 A). The time of one pass after the reports (the JSON file, the workbook, the AI summary, the key figures).
+       -FetchSeconds / -DecodeSeconds (2026-10-31): the pager's measured time reading the pages from SQL and decoding them
+       (New-RARowPager State.FetchSec / DecodeSec) -- said when given (>= 0), so a live run shows where a pass's time goes.
+       -Note: one plain remark (e.g. that the key figures were counted in the AI summary's pass). #>
+    param([Parameter(Mandatory)][string]$What, [double]$Seconds, [long]$Rows = -1, [double]$FetchSeconds = -1, [double]$DecodeSeconds = -1, [string]$Note = '')
     $inv = [System.Globalization.CultureInfo]::InvariantCulture
-    $r = ''; if ($Rows -ge 0) { $r = (' ({0} row(s) read)' -f $Rows) }
+    $parts = New-Object System.Collections.Generic.List[string]
+    if ($Rows -ge 0) { $parts.Add(('{0} row(s) read' -f $Rows)) }
+    if ($FetchSeconds -ge 0 -and $DecodeSeconds -ge 0) { $parts.Add(('reading from SQL {0} s, decoding {1} s' -f $FetchSeconds.ToString('0.0', $inv), $DecodeSeconds.ToString('0.0', $inv))) }
+    elseif ($FetchSeconds -ge 0) { $parts.Add(('reading from SQL {0} s' -f $FetchSeconds.ToString('0.0', $inv))) }
+    elseif ($DecodeSeconds -ge 0) { $parts.Add(('decoding {0} s' -f $DecodeSeconds.ToString('0.0', $inv))) }
+    if (-not [string]::IsNullOrWhiteSpace($Note)) { $parts.Add($Note.Trim()) }
+    $r = ''; if ($parts.Count -gt 0) { $r = (' ({0})' -f ($parts -join '; ')) }
     ('[phases] after the reports: {0} in {1} s{2}' -f $What, $Seconds.ToString('0.0', $inv), $r)
 }
 

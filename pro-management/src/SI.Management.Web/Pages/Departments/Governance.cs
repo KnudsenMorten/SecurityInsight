@@ -26,7 +26,7 @@ public sealed record DepartmentGovernance(IReadOnlyDictionary<string, long> Coun
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new(new Dictionary<string, long>(), [], [], "The governance log could not be read: " + ex.Message);
+            return new(new Dictionary<string, long>(), [], [], "The governance log could not be read: " + ViewerError.Text(ex));
         }
     }
 }

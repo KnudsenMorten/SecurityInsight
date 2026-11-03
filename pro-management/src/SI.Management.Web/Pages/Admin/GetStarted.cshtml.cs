@@ -126,7 +126,7 @@ public sealed class GetStartedModel : PageModel
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "the settings of a Get Started step could not be read");
-                Problem = "The settings could not be read from the Pro database: " + ex.Message;
+                Problem = "The settings could not be read from the Pro database: " + ViewerError.Text(ex);
             }
         }
         if (step.Form == "access")
@@ -144,7 +144,7 @@ public sealed class GetStartedModel : PageModel
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "the connectors could not be read");
-                Problem ??= "The connectors could not be read from the Pro database: " + ex.Message;
+                Problem ??= "The connectors could not be read from the Pro database: " + ViewerError.Text(ex);
             }
             ConnectorForms ??= GetStartedConnector.PrefillAll(ConnectorRows);
         }
@@ -266,7 +266,7 @@ public sealed class GetStartedModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "Run now from Get Started failed");
-            return "The collection could not be started: " + ex.Message;
+            return "The collection could not be started: " + ViewerError.Text(ex);
         }
     }
 
@@ -322,6 +322,9 @@ public sealed class GetStartedModel : PageModel
             audit.AfterJson = "[" + string.Join(",", writes.Select(x => ConnectorRepository.DefinitionJson(x.W))) + "]";
         }
         var why = writes.SelectMany(x => ConnectorRepository.Validate(x.W).Select(r => GetStartedConnector.TitleOf(x.W.Kind, x.W.Direction, x.W.Name) + ": " + r)).ToList();
+        // where a connector's credential is sent and which secrets it reads: SuperAdmin (the same rule as Review & commit)
+        if (!User.IsSuperAdmin())
+            why.AddRange(writes.Where(x => ConnectorRepository.NeedsSuperAdmin(x.Current, x.W)).Select(x => GetStartedConnector.TitleOf(x.W.Kind, x.W.Direction, x.W.Name) + ": " + ConnectorRepository.SuperAdminWhy(x.W.Name)));
         if (why.Count > 0)
         {
             var text = "Nothing was saved: " + string.Join("; ", why);
@@ -372,7 +375,7 @@ public sealed class GetStartedModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "Run once from Get Started failed");
-            return $"{label} could not be started: " + ex.Message;
+            return $"{label} could not be started: " + ViewerError.Text(ex);
         }
     }
 
@@ -391,7 +394,7 @@ public sealed class GetStartedModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the test mail could not be queued");
-            return "The test mail could not be queued: " + ex.Message;
+            return "The test mail could not be queued: " + ViewerError.Text(ex);
         }
     }
 

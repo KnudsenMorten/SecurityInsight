@@ -14,6 +14,9 @@ public sealed class NoAccessModel(IAccessStore access, ILogger<NoAccessModel> lo
 {
     public IReadOnlyList<(string Name, string? Mail)> SuperAdmins { get; private set; } = Array.Empty<(string, string?)>();
 
+    /// #995: a guest is never matched by an entry that names them by e-mail address only -- the page says so.
+    public bool Guest => SI.Management.Web.Departments.MailOnlyMatch.IsGuest(User);
+
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         if (AnyAccessHandler.HasRole(User)) return LocalRedirect("~/");

@@ -1019,6 +1019,7 @@ function Format-SIDataQualityChange {
         'retire' { return ('{0}{1} % of all active CIs' -f $sign, $c.ToString('N0', $Culture)) }
         'class' { return ('{0}{1} % of all active CIs' -f $sign, $c.ToString('N0', $Culture)) }
         'classgap' { return ('{0} to classify' -f $c.ToString('N0', $Culture)) }
+        'corr' { return ('{0} to look at' -f $c.ToString('N0', $Culture)) }
         default { return ('{0}{1} %' -f $sign, $c.ToString('N0', $Culture)) }
     }
 }
@@ -1038,7 +1039,7 @@ function Get-SIDataQualityRunHealthLines {
     param([AllowEmptyCollection()][object[]]$Anomalies = @(), [System.Globalization.CultureInfo]$Culture = [System.Globalization.CultureInfo]::InvariantCulture)
     @($Anomalies | ForEach-Object {
         $f = @(Get-SIDataQualityFields $_)
-        if ([string]$_.Rule -eq 'classification-incomplete') {
+        if ([string]$_.Rule -eq 'classification-incomplete' -or [string]$_.Rule -eq 'correlation-suspect') {
             'data quality: {0}: {1} -- {2}' -f $_.Label, (Format-SIDataQualityNumber $_.Now 'classgap' $Culture), $_.Cause
         } elseif ($f.Count) {
             'data quality: {0}: their average fill is {1}, expected {2} from the last 3 runs ({3}); the largest: {4} is {5}, expected {6} ({7})' -f $_.Label,
@@ -1190,6 +1191,8 @@ function ConvertTo-SIDataQualityMail {
         if ($fl.Count) {
             [void]$nums.Append(('<ul style="{0}margin:-4px 0 12px 0;padding:0 0 0 22px;color:{1};font-size:13px;line-height:1.5;">' -f $L.Font, $L.Muted))
             foreach ($f in $fl) {
+                # #1053 a correlation suspect is a group, not a value per run: its line names the CIs, the evidence and the impact
+                if ([string]$x.Rule -eq 'correlation-suspect') { [void]$nums.Append(('<li data-field="{0}" style="margin:0 0 4px 0;">{1}</li>' -f (& $enc $f.Key), (& $enc $f.Label))); continue }
                 $name = Get-SIDataQualityFieldName ([string]$f.Key); if (-not $name) { $name = [string]$f.Label }
                 [void]$nums.Append(('<li data-field="{0}" style="margin:0 0 4px 0;">{1}: {2} now, expected {3}, change {4}</li>' -f `
                     (& $enc $f.Key), (& $enc $name), (& $enc (Format-SIDataQualityNumber $f.Now $f.Kind $Culture)), (& $enc (Format-SIDataQualityExpected $f $Culture)), (& $enc (Format-SIDataQualityChange $f $Culture))))
@@ -1423,7 +1426,10 @@ function Invoke-SIDataQuality {
     #>
     param([Parameter(Mandatory)][scriptblock]$Query, [Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$SettingsInvoke, [scriptblock]$Send,
           [System.Collections.IDictionary]$Globals, [string]$RunId = ([guid]::NewGuid().ToString()), [datetime]$Now = [datetime]::UtcNow,
-          [int]$LookbackDays = 3, [switch]$DryRun, [scriptblock]$Log = { param($l, $m) }, [string]$DataModelRoot)
+          [int]$LookbackDays = 3, [switch]$DryRun, [scriptblock]$Log = { param($l, $m) }, [string]$DataModelRoot,
+          # #1053 the correlation gatekeeper's result of this run (Invoke-SICorrelationSuspects, run at the start of the data
+          # sync): its key numbers (kind corr) and its warnings (rule correlation-suspect) join the run's -- none = not checked
+          $CorrelationSuspects)
     $res = [ordered]@{ Status = ''; RunId = $RunId; CollectionTime = $null; Metrics = @(); Anomalies = @(); Learning = $true; EarlierRuns = 0; Lines = @(); Mailed = $false; MailNote = ''; MailState = ''; Problems = @(); NotRun = @() }
     if (-not $SettingsInvoke) { $SettingsInvoke = $Invoke }
     try {
@@ -1450,6 +1456,10 @@ function Invoke-SIDataQuality {
             }
         }
         $metrics = @(Add-SIDataQualityZeros -Metrics @($fp.Metrics) -History $history -Unread @($fp.Unread))
+        # #1053 the correlation suspects' numbers (kind corr: stored with the run for the trend, never compared)
+        if ($CorrelationSuspects -and [string]$CorrelationSuspects.Status -in @('ok', 'no-schema')) {
+            $metrics = @($metrics) + @(@($CorrelationSuspects.Metrics) | Where-Object { $_ } | ForEach-Object { New-SIDataQualityMetric -Key ([string]$_.Key) -Kind 'corr' -Label ([string]$_.Label) -Value ([double]$_.Value) -Step ([string]$_.Step) })
+        }
         $res.Metrics = $metrics
         $cmp = Find-SIDataQualityAnomalies -Metrics $metrics -History $history -Settings $settings
         $res.Learning = [bool]$cmp.Learning; $res.EarlierRuns = [int]$cmp.EarlierRuns
@@ -1485,12 +1495,16 @@ function Invoke-SIDataQuality {
         $classGaps = @(Find-SIDataQualityClassificationGaps -Metrics $metrics -Groups $fp.ClassGroups)
         if ($classGaps.Count) { $anomalies = @(@($classGaps) + @($anomalies)) }
         $res['ClassificationIssue'] = Get-SIDataQualityClassificationIssue -Anomalies $classGaps
+        # #1053 correlation suspects: an absolute rule as well (any group nobody decided about), first -- every CI named
+        $corrGaps = @()
+        if ($CorrelationSuspects -and [string]$CorrelationSuspects.Status -in @('ok', 'no-schema')) { $corrGaps = @(@($CorrelationSuspects.Anomalies) | Where-Object { $_ }) }
+        if ($corrGaps.Count) { $anomalies = @(@($corrGaps) + @($anomalies)) }
         $res.Anomalies = $anomalies
         $culture = if (Get-Command -Name Get-SIGuardCulture -ErrorAction SilentlyContinue) { Get-SIGuardCulture -Globals $Globals } else { [System.Globalization.CultureInfo]::InvariantCulture }
         $res.Lines = @(Get-SIDataQualitySummaryLines -Anomalies $anomalies -Culture $culture)
         if ($cmp.Learning) {
             & $Log 'INFO' ('data quality: {0} key numbers measured; learning ({1} earlier run(s), 3 are needed before anything is compared)' -f $metrics.Count, $cmp.EarlierRuns)
-            foreach ($l in @(Get-SIDataQualityRunHealthLines -Anomalies $classGaps -Culture $culture)) { & $Log 'WARN' $l }
+            foreach ($l in @(Get-SIDataQualityRunHealthLines -Anomalies (@($corrGaps) + @($classGaps)) -Culture $culture)) { & $Log 'WARN' $l }
         }
         elseif (-not $anomalies.Count) { & $Log 'OK' ('data quality: {0} key numbers measured, all within the expected range of the last 3 runs' -f $metrics.Count) }
         else { foreach ($l in $res.Lines) { & $Log 'WARN' $l } }

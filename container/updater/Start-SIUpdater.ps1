@@ -89,7 +89,8 @@ $siAutoRoot = Find-SIUpdaterLicenceRoot
 # solution's copy). The image has no Azure CLI. (The fast roll stays the RELEASE's: _shared/SI-UpdaterFastRoll.ps1.)
 # SI-NightlySchedule.ps1 (owner 2026-10-21): the update runs at 18:30 in its Azure region's zone -- the job's UTC ticks, the other one ends here
 # #911 (e): SI-UpdateWatch.ps1 -- a step with no log line for 20 minutes says "still working: <step>" (never mistaken for a hang)
-foreach ($siUpdLib in 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-NightlySchedule.ps1', 'SI-UpdateWatch.ps1') {
+# SI-WebKeyRing.ps1: the web app's sign-in keys encrypted with its own Key Vault key (the key, its grant, the web app's setting)
+foreach ($siUpdLib in 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-NightlySchedule.ps1', 'SI-UpdateWatch.ps1', 'SI-WebKeyRing.ps1') {
     if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)))) { . ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)) }
 }
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ProAutomation.ps1')))) {
@@ -455,13 +456,17 @@ function Invoke-SIUpdaterTemplatePackGate {
         Returns @{ Channel; Action = published | held; Version; Fingerprint; Reason }. Throws when the publish fails.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$PackFile, [Parameter(Mandatory)][string]$PackVersion,
-          [AllowEmptyString()][string]$RingKey, [string]$Origin = 'feed', [string]$Deployed, [string]$AcceptFingerprint)
+          [AllowEmptyString()][string]$RingKey, [string]$Origin = 'feed', [string]$Deployed, [string]$AcceptFingerprint,
+          # the signed manifest the pack came with (kept with the staged pack: the install job verifies it again)
+          [AllowEmptyString()][string]$ManifestB64 = '', [AllowEmptyString()][string]$Signature = '', [AllowEmptyString()][string]$KeyId = '')
     $out = { param($act, $fp, $why) [pscustomobject]@{ Channel = $true; Action = $act; Version = $PackVersion; Fingerprint = $fp; Reason = $why } }
     $publish = Join-Path $SIRoot 'setup/Publish-SITemplates.ps1'
     if (-not (Test-Path -LiteralPath $publish) -or -not (Get-Command -Name $publish).Parameters.ContainsKey('PackPath')) {
         return (& $out 'held' '' ("HELD: template pack {0} is approved, but SecurityInsight {1} cannot take template packs -- update the code first" -f $PackVersion, $Deployed))
     }
-    $plan = & $publish -InstallPath $SIRoot -Store $Store -PackPath $PackFile -Stage -StageOrigin $Origin -StageRing $RingKey -PassThru | Where-Object { $_ -and $_.PSObject.Properties['Mode'] } | Select-Object -Last 1
+    $stageArgs = @{ InstallPath = $SIRoot; Store = $Store; PackPath = $PackFile; Stage = $true; StageOrigin = $Origin; StageRing = $RingKey; PassThru = $true }
+    if ($ManifestB64 -and (Get-Command -Name $publish).Parameters.ContainsKey('StageManifestB64')) { $stageArgs.StageManifestB64 = $ManifestB64; $stageArgs.StageSignature = $Signature; $stageArgs.StageKeyId = $KeyId }
+    $plan = & $publish @stageArgs | Where-Object { $_ -and $_.PSObject.Properties['Mode'] } | Select-Object -Last 1
     if (-not $plan) { throw 'the template pack plan returned nothing' }
     $fp = [string]$plan.SelectionFingerprint
     $short = if ($fp) { $fp.Substring(0, [Math]::Min(12, $fp.Length)) } else { '' }
@@ -1008,10 +1013,34 @@ function Invoke-SIUpdaterCore {
         # the setup report's secret-handover control (cfg.InstallState 'SecretHandover', read by the heartbeat)
         if ($proStore -and (Get-Command -Name Get-SIHandoverControlState -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterStateRow -Store $proStore -Name 'SecretHandover' -State (Get-SIHandoverControlState -Result $ho) }
     }
+    # THE WEB APP'S SIGN-IN KEYS, ENCRYPTED (Pro, every run until done): its Key Vault key, the web identity's use of THAT key
+    # only, then DataProtection__KeyVaultKeyId on the web app (setup\_shared\SI-WebKeyRing.ps1). Never a failed update.
+    if ($proStore -and $updMode -ne 'apply-settings' -and (Get-Command -Name Invoke-SIUpdaterWebKeyRing -ErrorAction SilentlyContinue) -and (& $get 'SI_UPDATER_KEY_VAULT')) {
+        $global:SI_UpdaterStep = 'web-keyring'
+        try {
+            $wk = Invoke-SIUpdaterWebKeyRing -VaultName (& $get 'SI_UPDATER_KEY_VAULT') -SubscriptionId $sub -ResourceGroup $rg -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env)
+            foreach ($l in @($wk.Lines)) { Write-UpdLog $l }
+            foreach ($t in @($wk.Report)) { Write-UpdLog ('WARNING: ' + $t); Add-SIUpdaterFailureIf 'web-keyring' $t }
+            # the grant on the key (the updater may not give roles) or a vault without Azure RBAC: the customer's action,
+            # reported as such (Outcome warning, the command) -- never an update failure
+            foreach ($t in @($(if ($wk.PSObject.Properties['CustomerAction']) { $wk.CustomerAction }))) {
+                Write-UpdLog ('NOTE: ' + $t)
+                if (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue) { Add-SIUpdaterCustomerAction -Step 'web-keyring' -Text $t -Class 'arm-403' }
+            }
+        } catch { Write-UpdLog ('WARNING: web sign-in keys: {0}' -f $_.Exception.Message) }
+    }
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'
         return 0
+    }
+    # #1050: SI_UPDATER_MODE = index-build (started by the pipeline runner's wake-up in an idle window): ONE index that did not
+    # fit an update is built, under the install's lock -- no licence step, no update
+    if ($updMode -eq 'index-build') {
+        $global:SI_UpdaterStep = 'index-build'
+        if (-not (Get-Command -Name Invoke-SIUpdaterIndexWindow -ErrorAction SilentlyContinue)) { Write-UpdLog 'index build: this updater image cannot build indexes (no Pro database step) -- nothing done'; return 0 }
+        if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
+        return (Invoke-SIUpdaterIndexWindow -Store $proStore -SIRoot $siAutoRoot -SubscriptionId $sub -ResourceGroup $rg -Env $Env)
     }
     if ($edition -eq 'community') {
         # THE COMMUNITY EDITION (#750 (b)): no licence request to Invardia (a Community install holds no licence and must
@@ -1071,14 +1100,16 @@ function Invoke-SIUpdaterFailureReport {
         # #918: in a Pester session the process-wide value is the test gate's (SI_TEST_GATE=1), not the test's
         if (-not $Env.ContainsKey('SI_TELEMETRY_ENABLED') -and "$env:SI_TEST_GATE" -eq '1' -and (Get-Module -Name Pester)) { $tev = '' }
         $on = Test-SIUpdaterTelemetryOn -Settings $settings -EnvValue $tev
-        $key = ''
+        $key = ''; $iid = ''
         if ($on) {
             if ($ReadKey) { try { $key = [string](& $ReadKey) } catch { $key = '' } }
             elseif ((& $get 'SI_UPDATER_KEY_VAULT') -and -not (Get-Module -Name Pester)) {
                 try { $key = ([string](Get-SIKeyVaultSecretValue -VaultName (& $get 'SI_UPDATER_KEY_VAULT') -Name 'SI-Invardia-InstallKey')).Trim() } catch { $key = '' }
+                # Invardia S16: the install's LASTING id (SI-InstallId, read only) on the identified run reports; none = no field
+                if ($key) { try { $iid = ([string](Get-SIKeyVaultSecretValue -VaultName (& $get 'SI_UPDATER_KEY_VAULT') -Name 'SI-InstallId')).Trim() } catch { $iid = '' } }
             }
         }
-        $a = @{ ExitCode = $ExitCode; On = $on; InstallKey = $key; TenantId = (& $get 'SI_UPDATER_TENANT_ID'); StartedAt = $StartedAt; Log = { param($m) Write-UpdLog $m } }
+        $a = @{ ExitCode = $ExitCode; On = $on; InstallKey = $key; InstallId = $iid; TenantId = (& $get 'SI_UPDATER_TENANT_ID'); StartedAt = $StartedAt; Log = { param($m) Write-UpdLog $m } }
         if ($Send) { $a.Send = $Send }
         Send-SIUpdaterFailureReports @a
     } catch { @() }

@@ -76,7 +76,7 @@ public sealed class DomainRolesModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the security owners failed");
-            Error = "The security owners could not be read: " + ex.Message;
+            Error = "The security owners could not be read: " + ViewerError.Text(ex);
         }
     }
 

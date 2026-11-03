@@ -109,6 +109,33 @@ public static class LinkArea
         });
     }
 
+    /// A session a LINK started (a redeemed one-page magic link, a department sign-in link) -- not an Entra sign-in.
+    public static bool IsLinkPrincipal(System.Security.Claims.ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true && (user.IsInRole(Roles.MagicLink) || DepartmentSessions.IsSession(user));
+
+    /// <summary>
+    /// #993, WITHOUT the sign-in front: a link session lives in the app's own cookie, so the area's gate above never runs.
+    /// The same rule applies here: a link session reaches only an endpoint a link session may reach at all
+    /// (<see cref="EndpointAllowed"/>) and its own sign-out -- never a route left on the fallback policy (/about, /Docs,
+    /// /Preferences, a future page without its own policy). PURE.
+    /// </summary>
+    public static bool LinkPrincipalAllowed(System.Security.Claims.ClaimsPrincipal user, Endpoint? endpoint, PathString path) =>
+        !IsLinkPrincipal(user) || EndpointAllowed(endpoint) || path.Equals("/signout", StringComparison.OrdinalIgnoreCase);
+
+    /// After authentication (the session is known): a link session asking for an endpoint it may never reach gets 403.
+    public static void UseLinkPrincipalEndpointGate(WebApplication app)
+    {
+        app.Use(async (ctx, next) =>
+        {
+            if (!LinkPrincipalAllowed(ctx.User, ctx.GetEndpoint(), ctx.Request.Path))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+            await next();
+        });
+    }
+
     // the attributes that carry an app path: kept inside the area (a path already under /MagicLink, a //host link or an
     // absolute URL is left alone)
     private static readonly Regex AppPathAttr = new(@"(\s(?:href|src|action|formaction)\s*=\s*"")/(?!/)(?![Mm][Aa][Gg][Ii][Cc][Ll][Ii][Nn][Kk])",

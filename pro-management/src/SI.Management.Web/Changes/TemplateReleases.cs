@@ -554,7 +554,7 @@ SELECT N'Saved' AS Outcome;
         try { execution = await _jobs.StartWithEnvAsync(JobName, env, ct); }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException)
         {
-            return new WriteResult(WriteStatus.Refused, $"the template release job {JobName} could not be started: {ex.Message} -- nothing was written");
+            return new WriteResult(WriteStatus.Refused, $"the template release job {JobName} could not be started: {ViewerError.Text(ex)} -- nothing was written");
         }
         var valueObj = new JsonObject
         {

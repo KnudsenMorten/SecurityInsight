@@ -92,6 +92,11 @@ else
         <p class="hint">Nothing is written here. A staged change is written on <a href="/Changes">Review &amp; commit</a> and takes effect from the next close-loop run.</p>
     </form>
 
+    @if (Model.IsDataOut && Model.Current is not null)
+    {
+        <partial name="_CiScope" model="Model" />
+    }
+
     @if (Model.IsSnow)
     {
         <partial name="_ServiceNowGuide" model="Model" />

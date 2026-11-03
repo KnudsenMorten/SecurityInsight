@@ -105,7 +105,14 @@ function Open-SISqlConnectionRetry {
         $cto = $ConnectTimeoutSec
         $Connect = {
             param($Server, $Database, $Token)
-            $cn = New-Object System.Data.SqlClient.SqlConnection(("Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connect Timeout={2}" -f $Server, $Database, $cto))
+            # BUILT, never formatted: a server or database value is always ONE value (a ';' in it never adds a keyword).
+            # Self-contained (no function called by name -- this block travels as a value, see below).
+            $csb = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+            $h = "$Server".Trim(); if ($h.StartsWith('tcp:', [StringComparison]::OrdinalIgnoreCase)) { $h = $h.Substring(4) }
+            $ci = $h.IndexOf(','); if ($ci -ge 0) { $h = $h.Substring(0, $ci) }
+            $csb['Data Source'] = ('tcp:{0},1433' -f $h.Trim()); $csb['Initial Catalog'] = "$Database".Trim()
+            $csb['Encrypt'] = $true; $csb['TrustServerCertificate'] = $false; $csb['Connect Timeout'] = $cto
+            $cn = New-Object System.Data.SqlClient.SqlConnection($csb.ConnectionString)
             $cn.AccessToken = $Token
             try { $cn.Open() } catch { $cn.Dispose(); throw }
             $cn

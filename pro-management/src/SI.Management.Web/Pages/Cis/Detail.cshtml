@@ -23,6 +23,18 @@ else
 @if (d is not null && ci is not null)
 {
     var doc = d.Doc;
+    @* #1053 the correlation gatekeeper suspects this CI: named with the other CIs of its group, linked to the page that decides *@
+    @foreach (var sg in Model.Suspects)
+    {
+        var others = sg.Members.Where(m => m.CiId != ci.CiId).ToList();
+        <div class="notice warn" role="status" data-ci-suspect="@sg.Rule" data-severity="@sg.Severity">
+            <span class="badge @(sg.Severity == "high" ? "bad" : "warn")">correlation suspect</span>
+            @SI.Management.Web.Pages.Admin.CorrelationSuspectsModel.RuleText(sg.Rule)@if (others.Count > 0) { <text>: probably one machine with </text>@foreach (var o in others) { <a href="/Cis/Detail?id=@Uri.EscapeDataString(o.CiId)" data-ci-suspect-other="@o.CiId">@(string.IsNullOrWhiteSpace(o.Name) ? o.CiId : o.Name)</a><text> </text> } }.
+            @{ var impact = SI.Management.Web.Pages.Admin.CorrelationSuspectsModel.Impact(sg); }
+            @if (!string.IsNullOrEmpty(impact)) { <text> </text>@impact }
+            <a href="/Admin/CorrelationSuspects">Look at it and decide</a>
+        </div>
+    }
     <div class="grid-2">
         <section class="card" aria-labelledby="h-summary" data-ci="@ci.CiId">
             <h2 id="h-summary">Summary</h2>

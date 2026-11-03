@@ -104,7 +104,7 @@ public sealed class GuardsModel : PageModel
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
-            message = "Not ended: " + ex.Message; audit?.Refused(ex.Message);
+            message = "Not ended: " + ViewerError.Text(ex); audit?.Refused(ex.Message);
         }
         TempData["toast"] = message;
         TempData["toastKind"] = ok ? "ok" : "error";
@@ -181,7 +181,7 @@ public sealed class GuardsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             SI.Management.Web.Audit.AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not saved: " + ex.Message;
+            TempData["toast"] = "Not saved: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
         }
         return Redirect(Link(("handler", null)) + "#gctl-h");
@@ -294,11 +294,11 @@ public sealed class GuardsModel : PageModel
             if (_guardMode is not null) Mode = await _guardMode.ReadAsync(ct);
             CheckReleaseLink();
         }
-        catch (ArgumentException ex) { Error = ex.Message; }
+        catch (ArgumentException ex) { Error = ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the guard events failed");
-            Error = "The guard events could not be read: " + ex.Message;
+            Error = "The guard events could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -443,7 +443,7 @@ public sealed class GuardsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             SI.Management.Web.Audit.AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not released: " + ex.Message;
+            TempData["toast"] = "Not released: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
         }
         return Redirect(Link());
@@ -486,7 +486,7 @@ public sealed class GuardsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             SI.Management.Web.Audit.AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not done: " + ex.Message;
+            TempData["toast"] = "Not done: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
         }
         return Redirect(Link());
@@ -523,7 +523,7 @@ public sealed class GuardsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             SI.Management.Web.Audit.AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not acknowledged: " + ex.Message;
+            TempData["toast"] = "Not acknowledged: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
         }
         return Redirect(Link());
@@ -546,7 +546,7 @@ public sealed class GuardsModel : PageModel
             var counts = await _store.ValueCountsAsync(GridState(), from, c.Key, ct);
             return new JsonResult(new { ok = true, column = c.Key, values = counts.Select(x => new { value = x.Value, n = x.N, text = Fmt.Int(x.N) }) });
         }
-        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
     }
 
     public GridState GridState() => GridState(null, null, false);
@@ -621,7 +621,7 @@ public sealed class GuardsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             SI.Management.Web.Audit.AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not acknowledged: " + ex.Message;
+            TempData["toast"] = "Not acknowledged: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
         }
         return Redirect(back);

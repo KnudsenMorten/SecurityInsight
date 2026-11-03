@@ -178,7 +178,7 @@
                 {
                     <div class="notice @(l.Outcome == "ok" ? "ok" : l.Outcome == "failed" ? "error" : "warn")" role="status" data-snow-check="@l.Outcome" data-snow-for="@o.Info.Output">
                         <strong>@(l.Outcome == "ok" ? "OK" : l.Outcome == "failed" ? "Failed" : "Warning")</strong> --
-                        checked @Fmt.Time(l.CheckedAt) (@(l.Trigger switch { "verify" => "Verify" + (string.IsNullOrWhiteSpace(l.RequestedBy) ? "" : " by " + l.RequestedBy), "daily" => "the daily check", _ => "before a run" }))@(l.Table is { Length: > 0 } tt ? ", table " + tt : ""):
+                        checked @Fmt.Time(l.CheckedAt) (@(l.Trigger switch { "verify" => "Verify" + (string.IsNullOrWhiteSpace(l.RequestedBy) ? "" : " by " + l.RequestedBy), "daily" => "the daily check", "preflight" => "the check after an update", _ => "before a run" }))@(l.Table is { Length: > 0 } tt ? ", table " + tt : ""):
                         @l.Summary
                         @if (l.Outcome != "ok" && l.NotOkSince is { } since) { <div class="hint">Not ok since @Fmt.Time(since).</div> }
                     </div>

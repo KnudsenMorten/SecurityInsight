@@ -77,7 +77,7 @@ public sealed class SummaryModel(ICollectionViews views, ILogger<SummaryModel> l
         {
             Log.LogWarning(ex, "summary groupings state");
             StateReadFailed = true;
-            Error = ReadFailedText + " " + ex.Message;
+            Error = ReadFailedText + " " + ViewerError.Text(ex);
             return null;
         }
         if (!state.HasSummaryGroups)

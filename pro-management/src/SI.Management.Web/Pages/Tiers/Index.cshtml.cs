@@ -326,7 +326,7 @@ public sealed class IndexModel : SI.Management.Web.Pages.Cis.IndexModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the tier board's counts could not be read");
-            TilesError = "The counts per tier could not be read from the Pro database: " + ex.Message;
+            TilesError = "The counts per tier could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         Tiles = BuildTiles(counts);
         await MarkRowsAsync(ct);
@@ -486,7 +486,7 @@ public sealed class IndexModel : SI.Management.Web.Pages.Cis.IndexModel
             if (panel is null) return NotFound("That CI is not in the Pro database (it may have been retired, or the id is wrong).");
             return Partial("_TierPanel", panel);
         }
-        catch (ArgumentException ex) { return BadRequest("The request is not valid: " + ex.Message); }
+        catch (ArgumentException ex) { return BadRequest("The request is not valid: " + ViewerError.Text(ex)); }
     }
 
     /// The rules moved to another tier (empty when cfg.ItemOverride does not exist yet or cannot be read -- the board
@@ -575,7 +575,7 @@ public sealed class IndexModel : SI.Management.Web.Pages.Cis.IndexModel
                 default: r = (null, new[] { $"unknown action '{Action}'" }); break;
             }
         }
-        catch (ArgumentException ex) { r = (null, new[] { ex.Message }); }
+        catch (ArgumentException ex) { r = (null, new[] { ViewerError.Text(ex) }); }
         string message;
         if (r.change is not null)
         {

@@ -65,6 +65,52 @@ $ErrorActionPreference = 'Stop'
 # Azure over plain REST, and setup's own sign-in (no Az / Graph modules).
 . ([IO.Path]::Combine($PSScriptRoot, 'setup', '_shared', 'SI-SetupAzure.ps1'))
 
+function Format-SIBootstrapLiteral {
+    <# PURE. A value as a single-quoted PowerShell literal: every quote character PowerShell accepts (ASCII and the four
+       Unicode ones) is doubled, so a value can never end the literal and become code in the config file. #>
+    param([AllowNull()][AllowEmptyString()][object]$Value)
+    $s = if ($null -eq $Value) { '' } else { [string]$Value }
+    foreach ($q in @([char]0x27, [char]0x2018, [char]0x2019, [char]0x201A, [char]0x201B)) { $s = $s.Replace([string]$q, [string]$q + [string]$q) }
+    "'" + $s + "'"
+}
+
+function Test-SIBootstrapHostSecretRead {
+    <#
+        The configuration file names the client secret's Key Vault secret and reads it on EVERY load -- as the HOST, not as
+        the operator running this bootstrap (auth\Get-SIKvSecret.ps1: the run's own sign-in, else this server's managed
+        identity). So before the file is written, the read is tried exactly that way: in a separate, clean PowerShell
+        process with none of the operator's sign-in, only what the file will set. '' when the host can read it, else why
+        not -- and nothing is written (2026-11-01: a server outside Azure, or an identity without read on the vault, would
+        otherwise run every engine with no credential). The value is never printed or returned.
+        -Probe { param($VaultName, $SecretName, $Globals) } -> 'READ-OK' | 'READ-EMPTY' | 'READ-FAIL: <why>' (tests).
+    #>
+    param([Parameter(Mandatory)][string]$VaultName, [Parameter(Mandatory)][string]$SecretName, [hashtable]$Globals = @{}, [scriptblock]$Probe)
+    if (-not $Probe) {
+        $Probe = {
+            param($v, $s, $g)
+            $kvHelper = Join-Path $PSScriptRoot 'auth\Get-SIKvSecret.ps1'
+            $set = (@($g.Keys | Where-Object { "$($g[$_])" } | ForEach-Object { '$global:{0} = {1}' -f $_, (Format-SIBootstrapLiteral $g[$_]) })) -join '; '
+            $code = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    $set
+    . $(Format-SIBootstrapLiteral $kvHelper)
+    `$x = Get-SIKvSecret -VaultName $(Format-SIBootstrapLiteral $v) -SecretName $(Format-SIBootstrapLiteral $s) -WarningAction SilentlyContinue
+    if ([string]::IsNullOrEmpty([string]`$x)) { 'READ-EMPTY' } else { 'READ-OK' }
+} catch { 'READ-FAIL: ' + `$_.Exception.Message }
+"@
+            $exe = (Get-Process -Id $PID).Path
+            $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+            @(& $exe -NoProfile -NonInteractive -EncodedCommand $enc 2>$null) | Where-Object { "$_" -like 'READ-*' } | Select-Object -Last 1
+        }
+    }
+    $r = ''
+    try { $r = [string](& $Probe $VaultName $SecretName $Globals) } catch { $r = 'READ-FAIL: ' + $_.Exception.Message }
+    if ($r -eq 'READ-OK') { return '' }
+    $why = if ($r -like 'READ-FAIL:*') { $r.Substring(10).Trim() } elseif ($r -eq 'READ-EMPTY') { 'the read returned no value (no read right, or no such secret)' } else { 'the read gave no answer' }
+    ("this server cannot read the client secret '{0}' from Key Vault '{1}' by itself ({2}). The configuration file would name it, and every engine would then run with no credential -- nothing was written. Either give this server's managed identity 'Key Vault Secrets User' on the vault, or move this install to certificate sign-in (SI_SPN_CertThumbprint; setup\Setup-SecurityInsight-Unattended.ps1 with Auth_Community.CredKind Cert)." -f $SecretName, $VaultName, $why)
+}
+
 function Connect-SIBootstrapOperator {
     # The OPERATOR (a person) does the Key Vault reads, the service-principal lookup and the role grant.
     # Reuses a sign-in already made in this PowerShell session; otherwise signs in (Azure Cloud Shell:
@@ -337,6 +383,16 @@ if (-not $spnObjectId) {
 }
 Write-Host ('       SPN ObjectId : {0}' -f $spnObjectId)
 
+# The file will name the Key Vault secret, and the HOST reads it on every load (never the operator): proven here, before
+# anything is written -- a host that cannot read it would run every engine with no credential (2026-11-01).
+if ($spnAuthMethod -ne 'cert' -and $resolvedSecretName) {
+    $hostWhy = Test-SIBootstrapHostSecretRead -VaultName $KeyVaultName -SecretName $resolvedSecretName -Globals @{
+        SI_SPN_AppId = $spnAppId; SI_SPN_TenantId = $tenantId
+        SI_ManagedIdentityClientId = [string]$global:SI_ManagedIdentityClientId; SI_KvMiClientId = [string]$global:SI_KvMiClientId; SI_UAMI_ClientId = [string]$global:SI_UAMI_ClientId }
+    if ($hostWhy) { throw $hostWhy }
+    Write-Host '       the host reads the secret from Key Vault by itself -- checked'
+}
+
 Write-Host '[3/4] Building auth block ...'
 # v2.2.267 -- emit cert thumbprint OR client secret based on resolved
 # auth method. Engine ($useCert in Invoke-Output.ps1) prefers cert when
@@ -344,8 +400,8 @@ Write-Host '[3/4] Building auth block ...'
 # emitted when the resolved method is actually 'secret'.
 if ($spnAuthMethod -eq 'cert') {
     $_credLines = @"
-`$global:SI_SPN_CertThumbprint     = '$spnCertThumb'
-`$global:SI_SPN_CertStoreLocation  = '$spnCertLoc'
+`$global:SI_SPN_CertThumbprint     = $(Format-SIBootstrapLiteral $spnCertThumb)
+`$global:SI_SPN_CertStoreLocation  = $(Format-SIBootstrapLiteral $spnCertLoc)
 "@
     $_legacyAliasLines = @"
 `$global:SI_Graph_AppId            = `$global:SI_SPN_AppId
@@ -355,9 +411,25 @@ if ($spnAuthMethod -eq 'cert') {
 `$global:SI_LogIngest_ObjectId     = `$global:SI_SPN_ObjectId
 "@
 } else {
-    $_credLines = @"
-`$global:SI_SPN_Secret             = '$spnSecret'
+    # The client secret itself is NEVER written into this file (2026-10-31): one read from Key Vault stays a Key Vault
+    # read on every load (the names only), and one that is already in this file (an older install) stays where it is --
+    # the block below only points at it. Every name is written as a quoted literal (Format-SIBootstrapLiteral).
+    $_credLines = if ($resolvedSecretName) {
+@"
+`$global:SI_KeyVaultName           = $(Format-SIBootstrapLiteral $KeyVaultName)
+`$global:SI_SPN_KvSecretName       = $(Format-SIBootstrapLiteral $resolvedSecretName)
+if (-not `$global:SI_SPN_Secret) {
+    try {
+        . (Join-Path `$PSScriptRoot '..\auth\Get-SIKvSecret.ps1')
+        `$global:SI_SPN_Secret = Get-SIKvSecret -VaultName `$global:SI_KeyVaultName -SecretName `$global:SI_SPN_KvSecretName
+    } catch { Write-Warning ("SI custom: the SPN secret could not be read from Key Vault: {0}" -f `$_.Exception.Message) }
+}
 "@
+    } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_Secret)) {
+        '# the SPN secret: $global:SI_SPN_Secret as set earlier in this file (not repeated here)'
+    } else {
+        '$global:SI_SPN_Secret             = $global:SI_Graph_Secret   # set earlier in this file (not repeated here)'
+    }
     $_legacyAliasLines = @"
 `$global:SI_Graph_AppId            = `$global:SI_SPN_AppId
 `$global:SI_Graph_Secret           = `$global:SI_SPN_Secret
@@ -378,18 +450,18 @@ $block = @"
 # Static globals here OVERRIDE Bootstrap-Auth's KV lookup on next run --
 # delete these lines + re-run if you want a fresh KV pull.
 # Auth method resolved this run: $spnAuthMethod
-`$global:SI_SPN_AppId              = '$spnAppId'
-`$global:SI_SPN_TenantId           = '$tenantId'
-`$global:SI_SPN_ObjectId           = '$spnObjectId'
+`$global:SI_SPN_AppId              = $(Format-SIBootstrapLiteral $spnAppId)
+`$global:SI_SPN_TenantId           = $(Format-SIBootstrapLiteral $tenantId)
+`$global:SI_SPN_ObjectId           = $(Format-SIBootstrapLiteral $spnObjectId)
 $_credLines
 
 # Backwards-compat aliases for 25 callers that still read the
 # old names. New code reads SI_SPN_* directly.
 $_legacyAliasLines
 
-`$global:SI_WorkspaceResourceId    = '$wsResId'
-`$global:SI_DceName                = '$dceName'
-`$global:SI_DcrResourceGroup       = '$dcrRG'
+`$global:SI_WorkspaceResourceId    = $(Format-SIBootstrapLiteral $wsResId)
+`$global:SI_DceName                = $(Format-SIBootstrapLiteral $dceName)
+`$global:SI_DcrResourceGroup       = $(Format-SIBootstrapLiteral $dcrRG)
 "@
 
 Write-Host '[4/5] Appending to custom.ps1 ...'

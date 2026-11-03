@@ -63,7 +63,7 @@ public sealed class ReportChanges : IStagedChangeHandler
                 case "outputscope":
                     var s = OutputScope.FromBody(w.Key, w.Body);
                     if (s is null) why.Add($"{w.Key}: the output scope is not a JSON object");
-                    else why.AddRange(s.Validate(s.Templates, s.Reports).Select(x => $"{w.Key}: {x}"));
+                    else why.AddRange(s.Validate(s.Templates, s.Reports).Concat(CiRules.ValidateBody(w.Key, w.Body)).Distinct().Select(x => $"{w.Key}: {x}"));
                     break;
                 case "weights":
                     if (!w.Key.StartsWith("report/", StringComparison.Ordinal)) { why.Add($"{w.Key}: only per-report weights are written here"); break; }

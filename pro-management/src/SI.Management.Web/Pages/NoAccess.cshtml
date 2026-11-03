@@ -37,6 +37,7 @@
         {
             <p>Ask the person who installed SecurityInsight in your organisation to add you on the Access page.</p>
         }
+        @if (Model.Guest) { <p data-guest-note>@SI.Management.Web.Departments.MailOnlyMatch.GuestNote</p> }
         <p>Once you are added, open this page again (it can take a few seconds).</p>
     </div>
 </main>

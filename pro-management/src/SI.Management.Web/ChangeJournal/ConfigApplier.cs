@@ -139,6 +139,9 @@ public sealed class ConfigApplier
         return p;
     }
 
+    /// The other settings whose stored rows name the same Key Vault secret.
+    public const string OtherNamersSql = "IF OBJECT_ID(N'cfg.Setting') IS NOT NULL SELECT DISTINCT Name FROM cfg.Setting WHERE KeyVaultSecretName = @Kv AND Name <> @Name;";
+
     /// Writes one record back. Saved, or Stale ("changed since"), or Refused with the database's reason.
     public async Task<WriteResult> ApplyAsync(ConfigWrite w, string actor, CancellationToken ct)
     {
@@ -150,6 +153,20 @@ public sealed class ConfigApplier
         if (e.Name == "jobflow" && w.Op != "Remove" && w.ExpectedContent is { } ex && ConfigEntities.Parse(ex) is { } now
             && ConfigEntities.Text(now["Mode"]) != ConfigEntities.Text(w.Record["Mode"]))
             return new WriteResult(WriteStatus.Refused, "the pipeline's mode (pipeline or own schedules) also switches the jobs' timers -- switch it on " + SI.Management.Web.Navigation.NavModel.PathOf("/Admin/Jobs") + "; the definition itself can be restored once the mode matches");
+        // a setting's Key Vault reference written back (an undo, a restored or imported backup) names its own secret only
+        if (e.Name == "setting" && w.Op != "Remove" && ConfigEntities.Text(w.Record["KeyVaultSecretName"]) is { Length: > 0 } kv)
+        {
+            var setting = ConfigEntities.Text(w.Record["Name"]);
+            if (SI.Management.Web.Settings.SecretSettingPolicy.WhyNotStored(setting, kv) is { } why)
+                return new WriteResult(WriteStatus.Refused, $"{e.Label}: {ConfigEntities.KeyOf(e, w.Record)} is not written back -- {why}");
+            // a customer's own name belongs to ONE setting: another secret setting that names it now keeps it
+            if (!SI.Management.Web.Settings.SecretSettingPolicy.IsOwnName(setting, kv))
+            {
+            var others = (await _sql.QueryAsync(OtherNamersSql, new Dictionary<string, object?> { ["Kv"] = kv, ["Name"] = setting }, ct)).Select(r => r.Str("Name") ?? "").Where(x => x.Length > 0).ToList();
+            if (others.Count > 0 && SI.Management.Web.Settings.SecretSettingPolicy.WhyNotStored(setting, kv, others) is { } shared)
+                return new WriteResult(WriteStatus.Refused, $"{e.Label}: {ConfigEntities.KeyOf(e, w.Record)} is not written back -- {shared}");
+            }
+        }
         var rows = await _sql.QueryAsync(WriteSql(e, w.Op), ParamsFor(e, w, actor), ct);
         var outcome = rows.FirstOrDefault()?.Str("Outcome");
         return outcome switch

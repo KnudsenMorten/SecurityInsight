@@ -67,7 +67,9 @@ public sealed partial record ChatPageContext
         {
             if (filters.Count >= MaxFilters) break;
             if (k is null || !KeyPattern().IsMatch(k) || Ignored.Contains(k)) continue;
-            if (Clean(v) is { } c) filters[k] = c;
+            // only a tool argument's name, with a value that argument takes: anything else on the URL is not passed on
+            if (!ToolArguments.Contains(k)) continue;
+            if (Clean(v) is { } c && ValueFits(k, c)) filters[k] = c;
         }
         return new ChatPageContext
         {
@@ -78,6 +80,35 @@ public sealed partial record ChatPageContext
             SelectedFinding = Clean(raw.SelectedFinding, 64),
             Filters = filters,
         };
+    }
+
+    /// The argument names of the curated tools (collectionId has its own field): the only filter keys passed on.
+    public static readonly IReadOnlySet<string> ToolArguments = EstateToolbox.All
+        .SelectMany(t => { using var d = JsonDocument.Parse(t.ParametersJsonSchema); return d.RootElement.GetProperty("properties").EnumerateObject().Select(p => p.Name).ToList(); })
+        .Where(n => n != "collectionId").ToHashSet(StringComparer.Ordinal);
+
+    /// The fixed values of the arguments that take a list (severity, tier, domain, asset kind, sort, dimension, grain).
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> Fixed = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+    {
+        ["severity"] = ToolVocabulary.Severities.Concat(ToolVocabulary.SeverityWords.SelectMany(w => w.Item2.Append(w.Item1))).ToList(),
+        ["tier"] = ProData.ProDataFilters.Tiers.Concat(ToolVocabulary.TierWords.SelectMany(w => w.Item2.Append(w.Item1))).ToList(),
+        ["domain"] = ToolVocabulary.Domains.Concat(ToolVocabulary.DomainWords.SelectMany(w => w.Item2.Append(w.Item1))).ToList(),
+        ["assetKind"] = ProData.ProDataFilters.AssetKinds.Concat(ToolVocabulary.AssetKindWords.SelectMany(w => w.Item2.Append(w.Item1))).ToList(),
+        ["sort"] = ProData.FindingSorts.All.ToList(),
+        ["dimension"] = ProData.TrendDimensions.All.ToList(),
+        ["grain"] = ProData.Grains.All.ToList(),
+    };
+
+    /// A value the argument takes: each part of a list value (comma / pipe separated) is one of the argument's values; a
+    /// number argument is a whole number; a free-text argument (text, report) passes as it is (bounded and cleaned).
+    private static bool ValueFits(string key, string value)
+    {
+        if (Fixed.TryGetValue(key, out var allowed))
+            return value.Split([',', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(p => allowed.Any(a => ToolVocabulary.Key(a) == ToolVocabulary.Key(p)));
+        if (key is "days" or "weeks" or "top" or "skip" or "rows")
+            return int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
+        return true;
     }
 
     private static string? Clean(string? v, int max = MaxValueLength)

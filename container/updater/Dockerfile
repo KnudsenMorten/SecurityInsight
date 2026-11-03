@@ -4,7 +4,7 @@
 # SI-UpdateRest.ps1, SI-AcrBuild.ps1, SI-FastRoll.ps1); the build context is packed with .NET (System.Formats.Tar),
 # no tar binary. Nothing of SecurityInsight's engine code is baked in: every run downloads exactly the ref the ring
 # approves, so this image changes only when the updater itself changes.
-FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04
+FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04@sha256:663a172849444279d8e7b50e19977b6e42380eae6856bdc8931ca08e2e03e92a
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core \

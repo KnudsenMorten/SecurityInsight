@@ -24,6 +24,12 @@
                                                                    app (SI_SPN_AppId, when the install has one) and the web app
                                                                    (-ManagementAppId or SI_Management_AppId)
 
+      Just-in-time support grant (#1021)             both levels:  the CONSENT (this level) in each product database, the
+                                                                   standing READ-ONLY role si_support_read, the signed
+                                                                   procedures, and Storage Queue Data Message Sender on the
+                                                                   queue si-support-requests + Container Apps Jobs Operator on
+                                                                   the job caj-si-support-grant (where the install has them)
+
     -Remove takes every one of these away again (the group membership, its own database users and the ownership): the
     CUSTOMER's off-switch for the Support app (framework section 4.1a), and the ONLY removal of its database access in
     SecurityInsight -- no other script, step or update calls it.
@@ -50,7 +56,7 @@ param(
     [ValidatePattern('^$|^[0-9a-fA-F-]{36}$')][string]$ManagementAppId = ''
 )
 
-#Requires -Version 5.1   # after the help and the param block: before the help, it hides the help from Get-Help
+#Requires -Version 7.0   # after the help and the param block: before the help, it hides the help from Get-Help
 # framework section 12.7 / 12.10: the documentation link first, a transcript of the run, -WhatIf writes nothing
 . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-ScriptRun.ps1'))
 $siRun = Start-SIScriptRun -Script 'Grant-SISupportAccess' -Quiet:($false)
@@ -190,6 +196,69 @@ if ($sqlServer -and $dbs.Count) {
         }
     } elseif ($Level -eq 'setup' -and -not $Remove) { $failed++; Show 'WARN' "could not read the Entra admin of $sqlServer" }
 } else { Show 'skipped' 'no Pro database in this install' }
+
+# ---- 2b. THE JUST-IN-TIME SUPPORT GRANT (#1021; framework SECAUDIT-1a) ----
+# This script IS the customer's consent: its level is recorded in each product database (cfg.SupportConsent, Source
+# customer), with the Support app's standing READ-ONLY role and the signed procedures the support grant job opens and closes
+# its access through -- at most at this level, for at most 24 hours. Plus its two Azure roles for the support grant ONLY:
+# Storage Queue Data Message Sender on the queue si-support-requests and Container Apps Jobs Operator on the job
+# caj-si-support-grant. Nothing of the access above is changed here. -Remove takes the consent and the two roles away.
+# Only where the database carries the support grant's tables (a Pro install the update has reached). The statements are
+# written out here (this script is a free one and loads no Pro file); the signed procedures themselves are installed by the
+# guided install or setup\Install-SISupportGrantProcedure.ps1 (they need the release's own text).
+if ($sqlServer -and $dbs.Count) {
+    $sgTok = Get-Token 'https://database.windows.net/'
+    $AppId = ([guid]$AppId).ToString()
+    $sgRun = {
+        param([string]$Db, [string]$Sql)
+        $cn = New-Object System.Data.SqlClient.SqlConnection("Server=tcp:$sqlServer,1433;Database=$Db;Encrypt=True;Connect Timeout=30;")
+        $cn.AccessToken = $sgTok; $cn.Open()
+        try { $c = $cn.CreateCommand(); $c.CommandText = $Sql; $c.CommandTimeout = 0; [string]$c.ExecuteScalar() } finally { $cn.Dispose() }
+    }
+    foreach ($db in $dbs) {
+        if ($Remove) {
+            if (-not $PSCmdlet.ShouldProcess("$db on $sqlServer", 'remove the consent to the support grant')) { Show 'plan' ("{0}: remove the consent to the support grant" -f $db); continue }
+            try { $null = & $sgRun $db "IF OBJECT_ID(N'cfg.SupportConsent') IS NOT NULL DELETE FROM cfg.SupportConsent WHERE Id = 1; SELECT N'removed';"; Show 'removed' ("{0}: the consent to the support grant" -f $db) }
+            catch { $failed++; Show 'FAILED' ("{0}: remove the consent -- {1}" -f $db, $_.Exception.Message); $tasks.Add(("-- as the SQL Entra admin, in database {0}:  DELETE FROM cfg.SupportConsent WHERE Id = 1;" -f $db)) }
+            continue
+        }
+        # the Support app in the standing READ-ONLY role where the database has it (the role and its rights -- metadata and health,
+        # no data -- are made by the support grant's own install step), and the consent at this level
+        $sgSql = @(
+            "DECLARE @n sysname = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K')), @s nvarchar(400);",
+            "IF @n IS NOT NULL AND DATABASE_PRINCIPAL_ID(N'si_support_read') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n)) BEGIN SET @s = N'ALTER ROLE [si_support_read] ADD MEMBER ' + QUOTENAME(@n) + N';'; EXEC (@s); END",
+            "IF OBJECT_ID(N'cfg.SupportConsent') IS NOT NULL BEGIN",
+            "  IF NOT EXISTS (SELECT 1 FROM cfg.SupportConsent WHERE Id = 1) INSERT cfg.SupportConsent (Id, AppId, [Level], Source, ConsentedBy) VALUES (1, CONVERT(uniqueidentifier, N'$AppId'), N'$Level', N'customer', N'Grant-SISupportAccess');",
+            "  ELSE UPDATE cfg.SupportConsent SET AppId = CONVERT(uniqueidentifier, N'$AppId'), [Level] = N'$Level', Source = N'customer', ConsentedBy = N'Grant-SISupportAccess', ConsentedUtc = SYSUTCDATETIME() WHERE Id = 1;",
+            "END",
+            "SELECT CASE WHEN OBJECT_ID(N'cfg.SupportConsent') IS NULL THEN N'no support grant here yet (the update brings it)' ELSE ISNULL((SELECT [Level] + N' (' + Source + N')' FROM cfg.SupportConsent WHERE Id = 1), N'') END;") -join "`n"
+        if (-not $PSCmdlet.ShouldProcess("$db on $sqlServer", "the read-only role and the consent ($Level)")) { Show 'plan' ("{0}: the read-only role si_support_read and the consent to the support grant ({1})" -f $db, $Level); continue }
+        try { $v = & $sgRun $db $sgSql; Show 'ok' ("{0}: read-only role; consent {1}" -f $db, $v) }
+        catch { $failed++; Show 'FAILED' ("{0}: the read-only role / consent -- {1}" -f $db, $_.Exception.Message); $tasks.Add(("-- as the SQL Entra admin, in database {0}:`n{1}" -f $db, $sgSql)) }
+    }
+    # the two Azure roles, each on its ONE resource
+    $sgRg = [string]$global:SI_Bootstrap_ResourceGroupName
+    $sgAcct = [string]$global:SI_StorageAccount
+    $sgScopes = @()
+    if ($sgAcct) { $a = @(Get-SIArmResource -ResourceType 'Microsoft.Storage/storageAccounts' -Name $sgAcct -ErrorAction SilentlyContinue)[0]; if ($a) { $sgScopes += [pscustomobject]@{ Role = 'Storage Queue Data Message Sender'; Scope = ($a.ResourceId + '/queueServices/default/queues/si-support-requests') } } }
+    $j = @(Get-SIArmResource -ResourceType 'Microsoft.App/jobs' -Name 'caj-si-support-grant' -ErrorAction SilentlyContinue)[0]
+    if ($j) { $sgScopes += [pscustomobject]@{ Role = 'Container Apps Jobs Operator'; Scope = [string]$j.ResourceId } }
+    elseif (-not $Remove) { Show 'note' 'the job caj-si-support-grant is not there yet (the next update makes it) -- run this again after the update for its role' }
+    foreach ($s in $sgScopes) {
+        $have = @(Get-SIAzRoleAssignment -ObjectId $sp.id -Scope $s.Scope -RoleDefinitionName $s.Role -ErrorAction SilentlyContinue | Where-Object { ([string]$_.Scope).TrimEnd('/') -ieq $s.Scope.TrimEnd('/') })
+        if (-not $Remove -and -not $have.Count) {
+            if ($PSCmdlet.ShouldProcess("$($s.Role) on $(($s.Scope -split '/')[-1])", 'grant')) {
+                try { New-SIRoleAssignment -ObjectId $sp.id -Scope $s.Scope -RoleDefinitionName $s.Role -PrincipalType ServicePrincipal | Out-Null; Show 'granted' ("{0} on {1}" -f $s.Role, ($s.Scope -split '/')[-1]) }
+                catch { $failed++; Show 'FAILED' ("{0} on {1} -- {2}" -f $s.Role, ($s.Scope -split '/')[-1], $_.Exception.Message); $tasks.Add(('# Azure role "{0}" on "{1}" for the Invardia support app ({2}) -- Azure portal: the resource > Access control (IAM) > Add > Add role assignment > {0}' -f $s.Role, $s.Scope, $sp.id)) }
+            } else { Show 'plan' ("grant {0} on {1}" -f $s.Role, ($s.Scope -split '/')[-1]) }
+        } elseif ($Remove -and $have.Count) {
+            if ($PSCmdlet.ShouldProcess("$($s.Role) on $(($s.Scope -split '/')[-1])", 'remove')) {
+                try { Remove-SIRoleAssignment -ObjectId $sp.id -Scope $s.Scope -RoleDefinitionName $s.Role | Out-Null; Show 'removed' ("{0} on {1}" -f $s.Role, ($s.Scope -split '/')[-1]) }
+                catch { $failed++; Show 'FAILED' ("remove {0} -- {1}" -f $s.Role, $_.Exception.Message) }
+            } else { Show 'plan' ("remove {0} on {1}" -f $s.Role, ($s.Scope -split '/')[-1]) }
+        } elseif (-not $Remove) { Show 'present' ("{0} on {1}" -f $s.Role, ($s.Scope -split '/')[-1]) }
+    }
+}
 
 # ---- 3. owner of SI's app registrations ----
 $apps = @(@([string]$global:SI_SPN_AppId, $ManagementAppId) | Where-Object { $_ } | Select-Object -Unique)

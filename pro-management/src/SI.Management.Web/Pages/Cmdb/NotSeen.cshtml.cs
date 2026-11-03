@@ -43,7 +43,7 @@ public sealed class NotSeenModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the asset lifecycle could not be read");
-            Error = "The assets SecurityInsight no longer sees could not be read from the Pro database: " + ex.Message;
+            Error = "The assets SecurityInsight no longer sees could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -102,7 +102,7 @@ public sealed class NotSeenModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "an early retirement failed");
-            r = new RetireEarlyResult(false, "Not retired: " + ex.Message);
+            r = new RetireEarlyResult(false, "Not retired: " + ViewerError.Text(ex));
         }
         TempData["toast"] = r.Message;
         TempData["toastKind"] = r.Retired ? "ok" : "error";

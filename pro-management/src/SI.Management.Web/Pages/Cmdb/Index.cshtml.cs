@@ -47,7 +47,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the SQL CI table could not be read");
-            CiTableError = "The SQL CI table could not be read: " + ex.Message;
+            CiTableError = "The SQL CI table could not be read: " + ViewerError.Text(ex);
         }
         try
         {
@@ -61,7 +61,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the CMDB could not be read");
-            Error = "The CMDB could not be read from the Pro database: " + ex.Message;
+            Error = "The CMDB could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -165,7 +165,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         }
         string? services, members;
         try { services = await ReadAsync(ServicesFile, ct); members = await ReadAsync(MembersFile, ct); }
-        catch (InvalidDataException ex) { Error = ex.Message; return Page(); }
+        catch (InvalidDataException ex) { Error = ViewerError.Text(ex); return Page(); }
         if (services is null) { Error = "Choose the CMDB.csv file to import."; return Page(); }
         var parsed = CmdbCsv.Parse(services, members);
         FileErrors = parsed.Errors; FileWarnings = parsed.Warnings;
@@ -179,7 +179,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the CMDB import failed");
-            Error = "The import failed and nothing was written: " + ex.Message;
+            Error = "The import failed and nothing was written: " + ViewerError.Text(ex);
             return Page();
         }
         await LoadAsync(ct);

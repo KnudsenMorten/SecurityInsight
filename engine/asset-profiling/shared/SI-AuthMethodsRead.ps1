@@ -207,7 +207,12 @@ function Get-SIAuthMethodsPaceLine {
     <# PURE. #874: how the read went -- the requests, the most sent at once, how often Microsoft asked to slow down. Plain text. #>
     param([Parameter(Mandatory)]$State)
     if (-not $State.PSObject.Properties['Requests'] -or [int]$State.Requests -eq 0) { return $null }
-    ('[perms] sign-in methods: {0:N0} request(s) of 20 users, up to {1} at once; Microsoft asked to slow down {2:N0} time(s)' -f [int]$State.Requests, [int]$State.MaxConcurrency, [int]$State.ThrottledWaves)
+    $line = ('[perms] sign-in methods: {0:N0} request(s) of 20 users, up to {1} at once; Microsoft asked to slow down {2:N0} time(s)' -f [int]$State.Requests, [int]$State.MaxConcurrency, [int]$State.ThrottledWaves)
+    # #1049 F0: how long the read waited before asking again (only said when it waited at all)
+    if ($State.PSObject.Properties['SleptSeconds'] -and [double]$State.SleptSeconds -gt 0) {
+        $line += ('; {0} s waited before asking again' -f ([Math]::Round([double]$State.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture))
+    }
+    $line
 }
 
 function Get-SIEntraAuthMethodsState {
@@ -278,6 +283,7 @@ function Get-SIEntraPasswordlessByUser {
         $state | Add-Member -NotePropertyName ThrottledWaves -NotePropertyValue 0
         $state | Add-Member -NotePropertyName Requests -NotePropertyValue 0
     }
+    if (-not $state.PSObject.Properties['SleptSeconds']) { $state | Add-Member -NotePropertyName SleptSeconds -NotePropertyValue 0.0 }
     if (-not $PostMany) {
         if ($Post) {
             # the single-request seam (tests): the wave's requests one after another, a refusal stops the wave
@@ -395,6 +401,7 @@ function Get-SIEntraPasswordlessByUser {
                 $d = if ($waveWait -gt 0) { $waveWait } else { 1 }
                 if ($d -gt $MaxDelaySeconds) { $d = $MaxDelaySeconds }
                 & $Sleep $d
+                $state.SleptSeconds = [double]$state.SleptSeconds + [double]$d   # #1049 F0: the time waited, said in the pace line
                 $paid = $true
             }
         }
@@ -406,6 +413,7 @@ function Get-SIEntraPasswordlessByUser {
             $d = if ($wait -gt 0) { $wait } else { [int][Math]::Pow(2, $round - 1) }
             if ($d -gt $MaxDelaySeconds) { $d = $MaxDelaySeconds }
             & $Sleep $d
+            $state.SleptSeconds = [double]$state.SleptSeconds + [double]$d
         }
     }
 

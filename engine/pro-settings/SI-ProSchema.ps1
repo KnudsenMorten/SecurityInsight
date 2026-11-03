@@ -121,8 +121,15 @@ function Split-SIProSchemaBatches {
 # built on its own, outside any transaction, ONLINE + RESUMABLE with a MAX_DURATION inside a budget per update. At the end
 # of the budget it PAUSES (never rolls back); the next update RESUMES it; one that is running is left alone. A pending
 # index never fails the update -- the release's code works without it (an index only makes a read faster).
+# #1050 (live 2026-11-01, a ring 2 install: a FILTERED index on 17.2 M rows ran over two hours inside an update that said
+# "up to 10 min"): a filtered index cannot be resumable, so it cannot pause at the budget. It is started in an update ONLY
+# when its estimate (the table's pages at this database's measured rate, engine\_shared\SI-IndexBuild.ps1) fits the minutes
+# left; otherwise it WAITS (cfg.IndexBuild) and is built in an idle window by the updater (SI_UPDATER_MODE = index-build).
+# Every build runs on its own connection with the install's lock beaten while it runs (-Beat).
 $script:SIProSchemaLargeTableRows = 1000000
 $script:SIProSchemaIndexBudgetMinutes = @{ Applied = 10; Current = 40 }
+$siIxBuildFile = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-IndexBuild.ps1')
+if (Test-Path -LiteralPath $siIxBuildFile) { . $siIxBuildFile }
 
 function Get-SIProSchemaIndexStatements {
     <#
@@ -273,39 +280,110 @@ function Test-SIProSchemaIndexFiltered {
 
 function Invoke-SIProSchemaIndexStep {
     <#
-        Builds the deferred indexes, in file order, inside -BudgetMinutes. -Run (statement): runs ONE statement outside any
-        transaction (the runner's '#index' mode, or the plain invoke). Per index: there = built; RUNNING elsewhere = pending;
-        PAUSED = resumed; else created. A build that ends paused (its MAX_DURATION) is pending; any other error is a WARNING
-        and pending -- never a failed update. When the budget is spent the rest stay pending. NEVER throws.
-        Returns @{ Built; Pending; Warnings }.
+        Builds the deferred indexes, in file order, inside -BudgetMinutes. -Run (statement, beat): runs ONE statement outside
+        any transaction (the runner's '#index' mode, or the plain invoke) and calls the beat while it runs. Per index: there =
+        built; RUNNING elsewhere = pending; PAUSED = resumed; else created. A build that ends paused (its MAX_DURATION) is
+        pending; any other error is a WARNING and pending -- never a failed update. When the budget is spent the rest stay
+        pending. NEVER throws.
+        #1050: a FILTERED index (it cannot pause) is started only when -Estimate { param($Index) } -> @{ Known; Minutes; Pages;
+        Source } fits the minutes left; otherwise it WAITS (-Record 'waiting': cfg.IndexBuild, built later in an idle window)
+        with one plain line. -Force: the window's one-time build after 7 days (the estimate does not hold it back). -Record
+        { param($What, $Index, $Data) } -- 'waiting' / 'building' / 'built' / 'failed' / 'rate'; default: nothing recorded.
+        -Beat { param($What) }: the install's lock, while a build runs. Returns @{ Built; Pending; Waiting; Warnings; Lines }.
     #>
     param([object[]]$Deferred = @(), [Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][scriptblock]$Run, [int]$BudgetMinutes = 10,
-          [scriptblock]$Log = { param($m) }, [datetime]$StartUtc = [datetime]::UtcNow, [scriptblock]$Now = { [datetime]::UtcNow })
-    $res = [pscustomobject]@{ Built = @(); Pending = @(); Warnings = @() }
+          [scriptblock]$Log = { param($m) }, [datetime]$StartUtc = [datetime]::UtcNow, [scriptblock]$Now = { [datetime]::UtcNow },
+          [scriptblock]$Estimate, [scriptblock]$Record = { param($What, $Index, $Data) }, [scriptblock]$Beat = { param($What) }, [switch]$Force)
+    $res = [pscustomobject]@{ Built = @(); Pending = @(); Waiting = @(); Warnings = @(); Lines = @() }
     $built = New-Object System.Collections.Generic.List[string]; $pending = New-Object System.Collections.Generic.List[string]; $warn = New-Object System.Collections.Generic.List[string]
+    $waiting = New-Object System.Collections.Generic.List[string]; $lines = New-Object System.Collections.Generic.List[string]
+    $rec = { param($w, $i, $x) try { $null = & $Record $w $i $x } catch { } }
     foreach ($d in @($Deferred | Where-Object { $null -ne $_ })) {
         $key = ('{0}|{1}' -f $d.Table, $d.Name).ToLowerInvariant()
         $st = $null; try { $st = Get-SIProSchemaIndexState -Invoke $Invoke -LargeTableRows ([long]::MaxValue) } catch { $warn.Add(('{0}: the database could not be read ({1})' -f $d.Name, $_.Exception.Message)); $pending.Add($d.Name); continue }
-        if ($st.Indexes.ContainsKey($key)) { $built.Add($d.Name); continue }
+        $filtered = Test-SIProSchemaIndexFiltered -Index $d
+        if ($st.Indexes.ContainsKey($key)) { $built.Add($d.Name); if ($filtered) { & $rec 'built' $d $null }; continue }
         $b = $st.Builds[$key]
         if ($b -and $b.State -eq 'RUNNING') { & $Log ('  index {0} on {1}: being built elsewhere ({2}%) -- pending' -f $d.Name, $d.Table, $b.Percent); $pending.Add($d.Name); continue }
         $rem = $BudgetMinutes - ((& $Now) - $StartUtc).TotalMinutes
-        if ($rem -lt 1) { $pending.Add($d.Name); continue }
-        $left = [int][Math]::Floor($rem + 0.05)                  # whole minutes (a few seconds of reading do not cost one)
+        if ($rem -lt 1 -and -not $Force) { $pending.Add($d.Name); continue }
+        $left = [int][Math]::Max(1, [Math]::Floor($rem + 0.05))  # whole minutes (a few seconds of reading do not cost one)
+        # #1050: a filtered index runs to its end -- started only when its estimate fits what this update has left
+        $est = $null
+        if ($filtered -and -not $b) {
+            $est = if ($Estimate) { try { & $Estimate $d } catch { $null } } else { $null }
+            if (-not $est) { $est = [pscustomobject]@{ Known = $false; Minutes = 0; Pages = 0; Source = 'no estimate was made' } }
+            if (-not $Force -and (-not $est.Known -or [int]$est.Minutes -gt $left)) {
+                $line = Get-SIIndexWaitText -Name $d.Name -Table $d.Table -Estimate $est -BudgetMinutes $left
+                & $Log ('  ' + $line); $lines.Add($line); $waiting.Add($d.Name)
+                & $rec 'waiting' $d ([pscustomobject]@{ Statement = (Get-SIProSchemaIndexBuildSql -Index $d -Minutes $left); Estimate = $est; Why = $line })
+                continue
+            }
+        }
         $sql = Get-SIProSchemaIndexBuildSql -Index $d -BuildState $(if ($b) { $b.State } else { '' }) -Minutes $left
-        $how = if ($b) { "resumed at $($b.Percent)%" } elseif (Test-SIProSchemaIndexFiltered -Index $d) { 'built online (a filtered index cannot be resumable: it runs to the end)' } else { 'built online, resumable' }
-        & $Log ('  index {0} on {1}: {2} (up to {3} min)' -f $d.Name, $d.Table, $how, $left)
-        $err = $null
-        try { & $Run $sql } catch { $err = $_.Exception.Message }
+        $how = if ($b) { "resumed at $($b.Percent)%" }
+               elseif ($filtered -and $est -and $est.Known) { 'built online (a filtered index cannot pause: about {0} at this database''s rate, {1})' -f (Format-SIIndexDuration ([int]$est.Minutes)), $est.Source }
+               elseif ($filtered) { 'built online (a filtered index cannot pause: its time is not known -- built now, once)' }
+               else { 'built online, resumable' }
+        & $Log ('  index {0} on {1}: {2} (up to {3} min)' -f $d.Name, $d.Table, $how, $(if ($filtered -and $est -and $est.Known) { [int]$est.Minutes } else { $left }))
+        if ($filtered) { & $rec 'building' $d ([pscustomobject]@{ Estimate = $est }) }
+        $say = [pscustomobject]@{ Last = [datetime]::UtcNow }
+        $ixName = $d.Name; $beatOuter = $Beat; $logOuter = $Log
+        $beatThis = {
+            param($Minutes)
+            try { $null = & $beatOuter ('building index {0} ({1} min)' -f $ixName, $Minutes) } catch { }
+            if (([datetime]::UtcNow - $say.Last).TotalMinutes -ge 5) { $say.Last = [datetime]::UtcNow; & $logOuter ('  index {0}: still building ({1} min so far)' -f $ixName, $Minutes) }
+        }.GetNewClosure()
+        $err = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
+        try { $null = & $Run $sql $beatThis } catch { $err = $_.Exception.Message }
+        $sw.Stop()
         $after = $null; try { $after = Get-SIProSchemaIndexState -Invoke $Invoke -LargeTableRows ([long]::MaxValue) } catch { }
-        if ($after -and $after.Indexes.ContainsKey($key)) { $built.Add($d.Name); & $Log ('  index {0}: built' -f $d.Name); continue }
+        if ($after -and $after.Indexes.ContainsKey($key)) {
+            $built.Add($d.Name); & $Log ('  index {0}: built ({1:N0} s)' -f $d.Name, $sw.Elapsed.TotalSeconds)
+            # a create that ran from start to end measures this database's rate (a resumed one does not: part of it ran before)
+            if (-not $b -and $sw.Elapsed.TotalSeconds -ge 60) { & $rec 'rate' $d ([pscustomobject]@{ Seconds = $sw.Elapsed.TotalSeconds }) }
+            if ($filtered) { & $rec 'built' $d $null }
+            continue
+        }
         $pb = if ($after) { $after.Builds[$key] } else { $null }
         if ($pb) { $pending.Add($d.Name); & $Log ('  index {0}: paused at {1}% -- the next update resumes it' -f $d.Name, $pb.Percent); continue }
         $pending.Add($d.Name)
-        $warn.Add(('{0} on {1} was not built ({2}) -- the next update tries again; the release works without it' -f $d.Name, $d.Table, $(if ($err) { $err } else { 'no error, not there' })))
+        $w = '{0} on {1} was not built ({2}) -- the next update tries again; the release works without it' -f $d.Name, $d.Table, $(if ($err) { $err } else { 'no error, not there' })
+        $warn.Add($w)
+        if ($filtered) { & $rec 'failed' $d ([pscustomobject]@{ Why = $w }) }
     }
-    $res.Built = $built.ToArray(); $res.Pending = $pending.ToArray(); $res.Warnings = $warn.ToArray()
+    $res.Built = $built.ToArray(); $res.Pending = $pending.ToArray(); $res.Waiting = $waiting.ToArray(); $res.Warnings = $warn.ToArray(); $res.Lines = $lines.ToArray()
     $res
+}
+
+function New-SIProSchemaIndexRecorder {
+    <#
+        #1050: the -Record of the index step on a real database: 'waiting' / 'building' / 'built' / 'failed' -> the index's
+        cfg.IndexBuild row (Save-SIIndexBuildRow); 'rate' -> one measured build into this database's rate (the table's pages /
+        the seconds). Never throws (a row that cannot be written is said once in -Log).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log = { param($m) }, [string]$By = 'caj-si-updater')
+    $inv = $Invoke; $lg = $Log; $who = $By
+    # the functions, captured (a closure's own scope does not see functions dot-sourced into the updater's database step)
+    $fSave = ${function:Save-SIIndexBuildRow}; $fPages = ${function:Get-SIIndexTablePages}; $fRate = ${function:Add-SIIndexBuildRateSample}
+    {
+        param($What, $Index, $Data)
+        if (-not $fSave) { return }
+        $est = if ($Data -and $Data.PSObject.Properties['Estimate']) { $Data.Estimate } else { $null }
+        switch ($What) {
+            'rate' {
+                $pg = & $fPages -Invoke $inv -Table $Index.Table
+                if ($pg -and (& $fRate -Invoke $inv -Pages $pg.Pages -Seconds ([double]$Data.Seconds) -By $who)) { & $lg ('  index {0}: this database''s build rate recorded ({1:N0} pages in {2:N0} s)' -f $Index.Name, $pg.Pages, [double]$Data.Seconds) }
+            }
+            default {
+                $ok = & $fSave -Invoke $inv -Table $Index.Table -Index $Index.Name -State $What `
+                        -Statement $(if ($Data -and $Data.PSObject.Properties['Statement']) { [string]$Data.Statement } else { '' }) `
+                        -Pages $(if ($est -and $est.Pages) { [long]$est.Pages } else { $null }) -EstMinutes $(if ($est -and $est.Known) { [int]$est.Minutes } else { $null }) `
+                        -Source $(if ($est) { [string]$est.Source } else { '' }) -Why $(if ($Data -and $Data.PSObject.Properties['Why']) { [string]$Data.Why } else { '' }) -By $who
+                if (-not $ok -and $What -eq 'waiting') { & $lg ('  WARNING: index {0}: why it waits could not be recorded -- the next update records it again' -f $Index.Name) }
+            }
+        }
+    }.GetNewClosure()
 }
 
 # ---- A PAUSED INDEX BUILD THAT BLOCKS THE SCHEMA (2026-10-20, a large install, 1322 -> 3.0.0.202610201855) ----------
@@ -529,16 +607,23 @@ function New-SIProSchemaRunner {
     param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][scriptblock]$GetToken, [int]$CommandTimeoutSec = 0)
     $cs = 'Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $Server, $Database
     $timeout = $CommandTimeoutSec
+    # #1050: the build that beats while it runs, captured (this closure's own scope does not see a function dot-sourced into
+    # the updater's database step; a captured one runs where it was defined)
+    $buildCmd = ${function:Invoke-SIIndexBuildCommand}; $beatSec = if ($script:SIIndexBuild) { [int]$script:SIIndexBuild.BeatSeconds } else { 30 }
     {
-        param([string]$Name, [string[]]$Batches)
+        param([string]$Name, [string[]]$Batches, [scriptblock]$Beat)
         $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
         $cn.AccessToken = [string](& $GetToken)
         $cn.Open()
         $tx = $null
         try {
             if ($Name -eq '#index') {
-                # a deferred index (ONLINE, RESUMABLE): never inside a transaction -- a resumable build cannot be
-                foreach ($b in $Batches) { $cmd = $cn.CreateCommand(); $cmd.CommandText = $b; $cmd.CommandTimeout = $timeout; [void]$cmd.ExecuteNonQuery() }
+                # a deferred index (ONLINE, RESUMABLE): never inside a transaction -- a resumable build cannot be. #1050: run so
+                # that -Beat is called while it builds (the install's lock never looks abandoned during a long build)
+                foreach ($b in $Batches) {
+                    if ($buildCmd) { $null = & $buildCmd -Connection $cn -Sql $b -Beat $Beat -BeatSeconds $beatSec }
+                    else { $cmd = $cn.CreateCommand(); $cmd.CommandText = $b; $cmd.CommandTimeout = $timeout; [void]$cmd.ExecuteNonQuery() }
+                }
                 return
             }
             $tx = $cn.BeginTransaction()
@@ -561,13 +646,16 @@ function Invoke-SIProSchemaApply {
           2. -SkipWhenRecorded: the recorded fingerprint equals this one = 'noop' (visible and fast; nothing sent);
           3. every file in order, each in its own transaction (see the header) -- a failure stops at that file = 'failed';
           4. 'applied'. Recording is the caller's (Save-SIProSchemaState): the updater records after its grants too.
-        -Invoke (sql, params, mode): the database; -RunFile (name, batches): optional, a one-connection transaction.
+        -Invoke (sql, params, mode): the database; -RunFile (name, batches[, beat]): optional, a one-connection transaction.
         Returns @{ Action = applied | noop | refused | failed; Hash; Files; Applied; FailedFile; Reason; Findings; Plan }.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$RunFile, [string[]]$Names,
           [string]$ExtraFingerprint = '', [switch]$SkipWhenRecorded, [scriptblock]$Log, [long]$LargeTableRows = $script:SIProSchemaLargeTableRows,
           # a RUNNING index build on a table a file changes is waited for this long, never aborted (seams: -Sleep)
-          [int]$RunningWaitMinutes = $script:SIProSchemaRunningWaitMinutes, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+          [int]$RunningWaitMinutes = $script:SIProSchemaRunningWaitMinutes, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          # #1050: -Beat { param($What) } while an index builds (the updater: the install's lock); -IndexEstimate / -IndexRecord:
+          # seams for the estimate of a filtered index and the record of one that waits (default: the real database)
+          [scriptblock]$Beat, [scriptblock]$IndexEstimate, [scriptblock]$IndexRecord)
     if (-not $Log) { $Log = { param([string]$m) Write-Host $m } }
     $plan = Get-SIProSchemaPlan -SIRoot $SIRoot -Names $Names -ExtraFingerprint $ExtraFingerprint
     $names = @($plan.Files | ForEach-Object { $_.Name })
@@ -590,17 +678,28 @@ function Invoke-SIProSchemaApply {
         }
         $batchesOf[$f.Name] = $bs.ToArray()
     }
-    $runIx = if ($RunFile) { { param($s) & $RunFile '#index' @($s) } } else { { param($s) & $Invoke $s @{} 'nonquery' } }
+    $runIx = if ($RunFile) { { param($s, $b) & $RunFile '#index' @($s) $b } } else { { param($s, $b) & $Invoke $s @{} 'nonquery' } }
+    # #1050: the estimate of a filtered index (this database's measured rate) and the record of one that waits -- on the real
+    # database unless the caller brings its own (tests)
+    if (-not $IndexEstimate -and (Get-Command -Name New-SIIndexBuildEstimator -ErrorAction SilentlyContinue)) { $IndexEstimate = New-SIIndexBuildEstimator -Invoke $Invoke }
+    if (-not $IndexRecord -and (Get-Command -Name New-SIProSchemaIndexRecorder -ErrorAction SilentlyContinue) -and (Get-Command -Name Save-SIIndexBuildRow -ErrorAction SilentlyContinue)) { $IndexRecord = New-SIProSchemaIndexRecorder -Invoke $Invoke -Log $Log }
+    if (-not $IndexRecord) { $IndexRecord = { param($What, $Index, $Data) } }
+    if (-not $Beat) { $Beat = { param($What) } }
     $ixStep = { param([bool]$current)
         if (-not $deferred.Count) { return $null }
         $budget = Get-SIProSchemaIndexBudget -Invoke $Invoke -SchemaCurrent $current
         if (-not $RunFile) { $budget = [Math]::Min($budget, 1) }    # the plain invoke's statement timeout is short: one minute per build, it resumes
-        & $Log ('  indexes on large tables: {0} built outside the schema transaction, up to {1} min this update ({2})' -f $deferred.Count, $budget, (($deferred | ForEach-Object { $_.Name }) -join ', '))
-        $r = Invoke-SIProSchemaIndexStep -Deferred $deferred.ToArray() -Invoke $Invoke -Run $runIx -BudgetMinutes $budget -Log $Log
+        & $Log ('  indexes on large tables: {0} built outside the schema transaction, up to {1} min this update -- a filtered one only when its estimate fits ({2})' -f $deferred.Count, $budget, (($deferred | ForEach-Object { $_.Name }) -join ', '))
+        $r = Invoke-SIProSchemaIndexStep -Deferred $deferred.ToArray() -Invoke $Invoke -Run $runIx -BudgetMinutes $budget -Log $Log -Estimate $IndexEstimate -Record $IndexRecord -Beat $Beat
         foreach ($w in @($r.Warnings)) { & $Log ('  WARNING: index {0}' -f $w) }
         $r
     }
-    $ixText = { param($r) if ($r -and @($r.Pending).Count) { '; {0} index(es) on large tables still being built -- the next update goes on with them ({1})' -f @($r.Pending).Count, (@($r.Pending) -join ', ') } elseif ($r -and @($r.Built).Count) { '; {0} index(es) on large tables built' -f @($r.Built).Count } else { '' } }
+    $ixText = { param($r)
+        $t = ''
+        if ($r -and @($r.Pending).Count) { $t += '; {0} index(es) on large tables still being built -- the next update goes on with them ({1})' -f @($r.Pending).Count, (@($r.Pending) -join ', ') }
+        if ($r -and @($r.Waiting).Count) { $t += '; {0} index(es) on large tables wait for an idle window (they do not fit an update; the release works without them): {1}' -f @($r.Waiting).Count, (@($r.Waiting) -join ', ') }
+        if (-not $t -and $r -and @($r.Built).Count) { $t = '; {0} index(es) on large tables built' -f @($r.Built).Count }
+        $t }
     if ($SkipWhenRecorded) {
         $state = $null; try { $state = Read-SIProSchemaState -Invoke $Invoke } catch { $state = $null }
         if ($state -and $state.Hash -eq $plan.Hash) {

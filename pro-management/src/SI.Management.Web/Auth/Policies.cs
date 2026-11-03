@@ -68,6 +68,23 @@ public static class UserExtensions
         ?? user.FindFirst("oid")?.Value
         ?? "";
 
+    /// <summary>
+    /// #995: the sign-in name (preferred_username, else upn) ONLY when the directory issued it for one of its OWN members --
+    /// null for a B2B guest or any external account (the token's idp names another issuer, Entra's guest marker acct = 1,
+    /// or a "#EXT#" name), whose sign-in name its home tenant or provider chooses. A list that names people by sign-in name
+    /// (a department's mail-only entry, an advisor without an object id, the exemption roster) matches only this; a guest
+    /// is matched by object id only.
+    /// </summary>
+    public static string? DirectoryMemberName(this ClaimsPrincipal user)
+    {
+        var iss = user.FindFirst("iss")?.Value;
+        if (user.FindFirst("idp")?.Value is { Length: > 0 } idp && !string.Equals(idp.TrimEnd('/'), iss?.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) return null;
+        if (string.Equals(user.FindFirst("acct")?.Value, "1", StringComparison.Ordinal)) return null;
+        var name = user.FindFirst("preferred_username")?.Value ?? user.FindFirst(ClaimTypes.Upn)?.Value ?? user.FindFirst("upn")?.Value;
+        if (string.IsNullOrWhiteSpace(name) || name.Contains("#EXT#", StringComparison.OrdinalIgnoreCase)) return null;
+        return name.Trim();
+    }
+
     /// The effective role: what the sign-in resolved (app role + portal mapping), else the Entra app role alone.
     public static SiRole EffectiveRole(this ClaimsPrincipal user) => AccessClaims.EffectiveRole(user);
     /// A Delegated user's scopes (empty for every other role).

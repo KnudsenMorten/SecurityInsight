@@ -72,7 +72,16 @@ if (-not (Get-Command -Name Get-SICiLifecycleSettings -ErrorAction SilentlyConti
 # The same version 10 (2026-10-19, #772): every CI carries its OS family (si_os_family: Windows, Linux, macOS, iOS, Android,
 # Network OS, Other, Unknown -- the classification's new asset target over the OS name / platform and the device category),
 # posted to SI_CI_CL and stored in sidata.Ci.OsFamily. Both changes ship together, so ONE bump (9 -> 10) rebuilds every CI once.
-$script:SICiBuildVersion = 10
+# Version 11 (2026-11-02, #1052): an Active Directory computer account is never a device CI of its own -- a record an earlier
+# build took in as an Exposure Graph device (AD ids, no device id) is a GONE link, so its CI is retired at once with that
+# reason; an AD computer account's link is never its provider's primary link; and (Get-SICiMergedRetireSql) a CI whose records
+# now build another CI is retired at once, naming the survivor (one hard id, one active CI). CIs come out different, so every
+# CI is rebuilt once -- which is also what retires the old duplicates on the first build after the update.
+# Version 12 (2026-11-02, #1054): a source's placeholder name (data-model list placeholder_device_names, e.g. Defender's
+# "dummydevicename") never names a machine CI -- the name comes from another linked source, else a generated
+# 'unnamed-device-<short id>' (si_field_sources.si_asset_name.from = generated) that the correlation check flags. CI names
+# change, so every CI is rebuilt once.
+$script:SICiBuildVersion = 12
 # The three context lanes merged on si-v3 (2026-10-11): the logic hash is set once for the combined code.
 # 2026-10-12: the build's last write fills the columns the CI views read (Pro) -- no CI comes out different, so the hash is
 # re-baselined and the version stays 7. (Same day: a failure of that step is said at INFO, never as a warning of the build.)
@@ -121,7 +130,12 @@ $script:SICiBuildVersion = 10
 # different: re-baselined, version 10.
 # 2026-10-23 (the release merge): the CI build's two readers log through closures (a logger handed on could call itself:
 # call depth overflow) -- logging only, no CI comes out different: re-baselined, version 10.
-$script:SICiBuildLogicHash = 'db862af06e448305202bed4fb6d439da7d19492346d2af55a8080bade679a496'
+# 2026-11-02 (#1052, version 11; #1056: the install's identity choice, both OFF by default; #1053: a person's "same machine"
+# decision as one more edge of the grouping -- with no choice on and no decision stored, no CI comes out different):
+# re-baselined together when all three were merged for the next release.
+# 2026-11-02 (#1057: retire at once on a source's PROOF of deletion, three switches all OFF by default; #1054, version 12:
+# the placeholder name resolution of the CI's name) -- re-baselined together when both were merged for the next release.
+$script:SICiBuildLogicHash = 'ac7c2777d814c500b78ea4c711532aef29870c7226632ce3b83bec300675536b'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -285,7 +299,11 @@ function Get-SICiGroupingStepSql {
         so a record that shares none (most identities) is never touched by a round.
           prepare   the current records (lookback, a strong identifier, not a CMDB record): records gone are removed, the
                     others get their own key back as label, new ones are added -- on a stable tenant this writes little
-          edges     the shared identifiers of the current records (the index on IdType + IdValue)
+          edges     the shared identifiers of the current records (the index on IdType + IdValue) -- and (#1053) every
+                    "same machine" decision a person made that is in force (sidata.CiSuspectDecision, verdict same): its
+                    records share one more identifier, SiMergeDecision|<decision id>, so the rounds below MERGE them the
+                    way any shared identifier does. Removing the decision removes the edge: the records group apart again
+                    (and Get-SICiSplitDecisionSql gives the other side its own id back)
           round     ONE round of propagation: each record takes the smallest label over the shared identifiers it has --
                     answers the records relabelled; repeated by Invoke-SICiGrouping until 0
           batches   the batch number of every group, ~-BatchCis CIs a batch, in ordinal group order
@@ -320,7 +338,18 @@ FROM sidata.RecordIdentifier ri
 JOIN (SELECT ri2.IdType, ri2.IdValue FROM sidata.RecordIdentifier ri2 JOIN sidata.CiGroupMember m ON m.RecordKey = ri2.RecordKey
       GROUP BY ri2.IdType, ri2.IdValue HAVING COUNT(*) > 1) s ON s.IdType = ri.IdType AND s.IdValue = ri.IdValue
 WHERE EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = ri.RecordKey);
-SELECT @@ROWCOUNT AS Edges, (SELECT COUNT(DISTINCT RecordKey) FROM sidata.CiGroupEdge) AS Linked;
+DECLARE @edges INT = @@ROWCOUNT;
+IF OBJECT_ID(N'sidata.CiSuspectDecision') IS NOT NULL AND OBJECT_ID(N'sidata.CiSuspectDecisionRecord') IS NOT NULL
+BEGIN
+    INSERT sidata.CiGroupEdge (RecordKey, IdType, IdValue)
+    SELECT DISTINCT x.RecordKey, N'SiMergeDecision', CONVERT(NVARCHAR(20), x.DecisionId)
+    FROM sidata.CiSuspectDecisionRecord x
+    JOIN sidata.CiSuspectDecision d ON d.DecisionId = x.DecisionId AND d.Verdict = N'same' AND d.Removed = 0
+    WHERE x.RecordKey <> N'' AND EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = x.RecordKey)
+      AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupEdge e WHERE e.RecordKey = x.RecordKey AND e.IdType = N'SiMergeDecision' AND e.IdValue = CONVERT(NVARCHAR(20), x.DecisionId));
+    SET @edges = @edges + @@ROWCOUNT;
+END
+SELECT @edges AS Edges, (SELECT COUNT(DISTINCT RecordKey) FROM sidata.CiGroupEdge) AS Linked;
 '@
         }
         'round' {
@@ -363,6 +392,67 @@ SELECT (SELECT COUNT(*) FROM sidata.CiGroupMember) AS Records,
 "@
         }
     }
+}
+
+function Get-SICiSplitDecisionSql {
+    <#
+        #1053 SPLIT AGAIN. A "same machine" decision that a person removed (sidata.CiSuspectDecision verdict same, Removed = 1)
+        took its edge out of the grouping, so its records group apart again -- but the identity ledger still points every
+        identifier of them at the ONE CI they were merged into (SplitFromCiId), and would build them as one CI again. This
+        answers, per such decision, the identifiers of the records of every side whose CI at the time of the decision was NOT
+        the one they were merged into: IdType, IdValue, FromCiId. Remove-SICiSplitLedgerKeys takes exactly those keys out of
+        the ledger the build reads -- only while they still point at FromCiId -- so that side gets its own id (minted from its
+        own identifiers, as it was before the merge) and the ledger write-back points them there. A database without the
+        tables answers no row.
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CiSuspectDecision') IS NULL OR OBJECT_ID(N'sidata.CiSuspectDecisionRecord') IS NULL
+    SELECT CAST(NULL AS NVARCHAR(40)) AS IdType, CAST(NULL AS NVARCHAR(400)) AS IdValue, CAST(NULL AS NVARCHAR(64)) AS FromCiId WHERE 1 = 0;
+ELSE
+    SELECT DISTINCT ri.IdType, ri.IdValue, d.SplitFromCiId AS FromCiId
+    FROM sidata.CiSuspectDecision d
+    JOIN sidata.CiSuspectDecisionRecord x ON x.DecisionId = d.DecisionId AND x.RecordKey <> N'' AND x.CiId <> d.SplitFromCiId
+    JOIN sidata.RecordIdentifier ri ON ri.RecordKey = x.RecordKey
+    WHERE d.Verdict = N'same' AND d.Removed = 1 AND d.SplitFromCiId IS NOT NULL;
+'@
+}
+
+function ConvertTo-SICiSplitLedgerKeys {
+    <# PURE. The split rows (Get-SICiSplitDecisionSql) -> ledger key ("type|value", Get-SILedgerKey) -> the CI id it must no longer point at. #>
+    param([AllowEmptyCollection()][object[]]$Rows = @())
+    $out = @{}
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $t = [string](Get-SIItemValue $r 'IdType'); $v = [string](Get-SIItemValue $r 'IdValue'); $from = [string](Get-SIItemValue $r 'FromCiId')
+        if (-not $t -or -not $v -or -not $from) { continue }
+        $out[(Get-SILedgerKey -Type $t -Value $v)] = $from
+        # a long value is held in the ledger's table in its short form (ConvertTo-SILedgerStoredValue): that key too
+        if (Get-Command -Name ConvertTo-SILedgerStoredValue -ErrorAction SilentlyContinue) {
+            $sv = ConvertTo-SILedgerStoredValue -Value $v.ToLowerInvariant()
+            if ($sv -and $sv -ne $v.ToLowerInvariant()) { $out[(Get-SILedgerKey -Type $t -Value $sv)] = $from }
+        }
+    }
+    $out
+}
+
+function Remove-SICiSplitLedgerKeys {
+    <#
+        #1053 The ledger the build reads (-Ledger: "type|value" -> @{ CorrelationId; ... }) WITHOUT the keys of a split side
+        (-Split, ConvertTo-SICiSplitLedgerKeys) that still point at the CI they were merged into. Changes -Ledger in place
+        (it is this batch's copy, or the blob ledger the write-back merges into) and answers how many keys it took out. A key
+        that already points elsewhere -- the split took effect, or a real shared identifier joined them since -- is left.
+    #>
+    param([hashtable]$Ledger, [hashtable]$Split)
+    if ($null -eq $Ledger -or $null -eq $Split -or $Split.Count -eq 0) { return 0 }
+    $n = 0
+    foreach ($k in @($Split.Keys)) {
+        if (-not $Ledger.ContainsKey($k)) { continue }
+        $e = $Ledger[$k]
+        $cid = [string](Get-SIItemValue $e 'CorrelationId')
+        if ($cid -and $cid -eq [string]$Split[$k]) { [void]$Ledger.Remove($k); $n++ }
+    }
+    $n
 }
 
 function Invoke-SICiGrouping {
@@ -1451,6 +1541,122 @@ function Get-SICiRetireDays {
     $n = 0
     if ($null -ne $Value -and [int]::TryParse(([string]$Value).Trim(), [ref]$n) -and $n -ge 1) { return $n }
     return 7
+}
+
+function Get-SICiMergedRetireSql {
+    <#
+        #1052 ONE HARD ID, ONE ACTIVE CI (owner 2026-11-02). AFTER A BUILD THAT FINISHED, before the retire brake
+        (Get-SICiRetireSql): a CI that is not retired, that NO current record builds any more (no record of the grouping --
+        sidata.CiGroupMember -- points to it), and one of whose linked records (sidata.CiLink: provider + native id = the
+        record's key) is a CURRENT record of ANOTHER CI that is not retired, was MERGED into that CI: the identity ledger
+        moved its records (and with them its Defender / Azure / Entra / Intune ids and its Exposure Graph nodes) to the
+        survivor, and only its old row was left -- active, with the same hard ids as the survivor, sent to the CMDB as a
+        second CI (the pilot, 2026-11-02: a Defender device's CI and its merged twin; an Azure VM whose Exposure Graph node
+        id changed). It is retired AT ONCE, never deleted: Lifecycle and the document say 'retired', the reason names the
+        survivor, its content hash is cleared, the change is recorded (sidata.CiChange). The CMDB then gets its retired row
+        (the data-out action table: a retired CI is closed -- owner 2026-11-02: the ServiceNow re-key, u_si_replaces through
+        sidata.AssetIdHistory, is a later item). A CI whose records went to two or more CIs names the first (ordinal) and
+        counts the others.
+        ITS FINDINGS GO TO THE SURVIVOR IN THE SAME TRANSACTION (owner 2026-11-02, the pilot's vmvdpool13img2: the twin held
+        2,559 open findings, the survivor 4 -- a merge is not a fix, and no finding may belong to no CI): its stored findings
+        (sidata.CiFinding) and their lifecycle rows (sidata.CiFindingState) move to the survivor -- a finding the survivor
+        already has stays once, on the survivor --, the survivor's totals (RiskScore, WeightedRiskScore, OpenFindings: open,
+        not exempted, as the data sync counts them) are recomputed and the twin's set to none, and the twin's document says
+        si_merged_into, which the data sync's finding writer follows (Get-SIDataWriteCiFindingSql) so a finding collection
+        made before the merge lands on the survivor too; a CI an earlier merge pointed at the twin is re-pointed.
+        Answers Retired, IntoSeveral (of them, CIs whose records went to more than one CI), FindingsMoved, StatesMoved and SharedLive: hard ids
+        (any provider but the CMDB's) still linked to two or more active CIs AFTER this -- both with current records (an
+        operator never-merge, a proven wrong-merge split): reported, never acted on here.
+    #>
+    @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @r TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY, OldLifecycle NVARCHAR(16) NULL, IntoCiId NVARCHAR(64) NOT NULL, Provider NVARCHAR(32) NULL, NativeId NVARCHAR(450) NULL, Targets INT NOT NULL);
+WITH cand AS (
+    SELECT c.CiId, c.Lifecycle FROM sidata.Ci c
+    WHERE ISNULL(c.Lifecycle, N'') <> N'retired'
+      AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m JOIN sidata.CiRecord r ON r.RecordKey = m.RecordKey WHERE r.CiId = c.CiId)),
+mv AS (
+    SELECT x.CiId, x.Lifecycle, r.CiId AS IntoCiId, l.Provider, l.NativeId
+    FROM cand x
+    JOIN sidata.CiLink l ON l.CiId = x.CiId AND l.RecordType <> N'child_resource'
+    JOIN sidata.CiRecord r ON r.RecordKey = l.Provider + N':' + l.NativeId
+    JOIN sidata.Ci d ON d.CiId = r.CiId AND ISNULL(d.Lifecycle, N'') <> N'retired'
+    WHERE r.CiId IS NOT NULL AND r.CiId <> x.CiId
+      AND EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = r.RecordKey)),
+pick AS (
+    SELECT CiId, Lifecycle, IntoCiId, Provider, NativeId,
+           ROW_NUMBER() OVER (PARTITION BY CiId ORDER BY IntoCiId COLLATE Latin1_General_BIN2, Provider COLLATE Latin1_General_BIN2, NativeId COLLATE Latin1_General_BIN2) AS rn
+    FROM mv)
+INSERT @r (CiId, OldLifecycle, IntoCiId, Provider, NativeId, Targets)
+SELECT p.CiId, p.Lifecycle, p.IntoCiId, p.Provider, p.NativeId,
+       (SELECT COUNT(DISTINCT m2.IntoCiId) FROM mv m2 WHERE m2.CiId = p.CiId)
+FROM pick p WHERE p.rn = 1;
+BEGIN TRANSACTION;
+IF OBJECT_ID('sidata.CiChange') IS NOT NULL
+    INSERT sidata.CiChange (CiId, Field, OldValue, NewValue, Source, Reason, RunId)
+    SELECT x.CiId, N'si_lifecycle', x.OldLifecycle, N'retired', N'ci_build',
+           LEFT(N'merged into CI ' + x.IntoCiId + N': its ' + ISNULL(x.Provider, N'') + N' record ' + ISNULL(x.NativeId, N'') + N' builds that CI now', 512),
+           LEFT(@run, 64)
+    FROM @r x;
+UPDATE c SET Lifecycle = N'retired', ContentHash = NULL, UpdatedAt = SYSUTCDATETIME(),
+       DocJson = CASE WHEN ISJSON(c.DocJson) = 1 THEN JSON_MODIFY(JSON_MODIFY(JSON_MODIFY(c.DocJson, '$.si_lifecycle', N'retired'),
+                      '$.si_lifecycle_since', CONVERT(NVARCHAR(30), SYSUTCDATETIME(), 127) + N'Z'),
+                      '$.si_lifecycle_reason', LEFT(N'retired at once: merged into CI ' + x.IntoCiId
+                          + CASE WHEN x.Targets > 1 THEN N' (and ' + CAST(x.Targets - 1 AS NVARCHAR(12)) + N' more)' ELSE N'' END
+                          + N' -- its ' + ISNULL(x.Provider, N'') + N' record ' + ISNULL(x.NativeId, N'') + N' builds that CI now; one hard id, one active CI', 1000))
+                 ELSE c.DocJson END
+FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+-- the survivor is named on the twin, and a CI an earlier merge pointed at the twin now points at the survivor
+UPDATE c SET DocJson = JSON_MODIFY(c.DocJson, '$.si_merged_into', x.IntoCiId)
+FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId WHERE ISJSON(c.DocJson) = 1 /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+IF EXISTS (SELECT 1 FROM @r)
+    UPDATE o SET DocJson = JSON_MODIFY(o.DocJson, '$.si_merged_into', x.IntoCiId)
+    FROM sidata.Ci o JOIN @r x ON JSON_VALUE(o.DocJson, '$.si_merged_into') = x.CiId
+    WHERE ISNULL(o.Lifecycle, N'') = N'retired' AND ISJSON(o.DocJson) = 1 /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+-- THE FINDINGS FOLLOW: the twin's stored findings and their lifecycle rows move to the survivor (one row per finding)
+DECLARE @fm INT = 0, @sm INT = 0;
+IF OBJECT_ID('sidata.CiFinding') IS NOT NULL
+BEGIN
+    UPDATE f SET CiId = x.IntoCiId
+    FROM sidata.CiFinding f JOIN @r x ON f.CiId = x.CiId
+    WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFinding s WHERE s.CiId = x.IntoCiId AND s.FindingKey = f.FindingKey) /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+    SET @fm = @@ROWCOUNT;
+END;
+IF OBJECT_ID('sidata.CiFindingState') IS NOT NULL
+BEGIN
+    UPDATE st SET OwnerKey = x.IntoCiId, CiId = x.IntoCiId
+    FROM sidata.CiFindingState st JOIN @r x ON st.OwnerKey = x.CiId
+    WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = x.IntoCiId AND s.FindingKey = st.FindingKey) /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+    SET @sm = @@ROWCOUNT;
+    -- a finding both had: the survivor's lifecycle row keeps the EARLIER first detection
+    UPDATE s SET FirstDetected = st.FirstDetected
+    FROM sidata.CiFindingState s JOIN @r x ON s.OwnerKey = x.IntoCiId
+    JOIN sidata.CiFindingState st ON st.OwnerKey = x.CiId AND st.FindingKey = s.FindingKey
+    WHERE st.FirstDetected < s.FirstDetected /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+END;
+-- the totals as the data sync counts them (open, not exempted; a retired CI has none), for the CIs this touched
+IF OBJECT_ID('sidata.CiFinding') IS NOT NULL AND EXISTS (SELECT 1 FROM @r)
+BEGIN
+    DECLARE @tot TABLE (CiId NVARCHAR(64) PRIMARY KEY, Score FLOAT, Weighted FLOAT, Cnt INT);
+    DECLARE @hasState BIT = CASE WHEN OBJECT_ID('sidata.CiFindingState') IS NULL THEN 0 ELSE 1 END;
+    INSERT @tot SELECT f.CiId, SUM(ISNULL(f.RiskScore, 0)), SUM(ISNULL(f.WeightedRiskScore, 0)), COUNT(*)
+    FROM sidata.CiFinding f
+    OUTER APPLY (SELECT TOP (1) 1 AS Closed FROM sidata.CiFindingState s WHERE @hasState = 1 AND s.OwnerKey = f.CiId AND s.FindingKey = f.FindingKey AND s.State = N'closed') cl
+    WHERE f.CiId IN (SELECT IntoCiId FROM @r) AND ISNULL(f.ExemptionId, N'') = N'' AND cl.Closed IS NULL
+    GROUP BY f.CiId /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+    UPDATE c SET RiskScore = t.Score, WeightedRiskScore = t.Weighted, OpenFindings = ISNULL(t.Cnt, 0)
+    FROM sidata.Ci c LEFT JOIN @tot t ON t.CiId = c.CiId
+    WHERE c.CiId IN (SELECT IntoCiId FROM @r) /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+    UPDATE c SET RiskScore = 0, WeightedRiskScore = 0, OpenFindings = 0
+    FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+END;
+COMMIT TRANSACTION;
+SELECT (SELECT COUNT(*) FROM @r) AS Retired, (SELECT COUNT(*) FROM @r WHERE Targets > 1) AS IntoSeveral, @fm AS FindingsMoved, @sm AS StatesMoved,
+       (SELECT COUNT(*) FROM (SELECT l.Provider, l.NativeId FROM sidata.CiLink l JOIN sidata.Ci c ON c.CiId = l.CiId AND ISNULL(c.Lifecycle, N'') <> N'retired'
+                              WHERE l.RecordType <> N'child_resource' AND l.Provider NOT IN (N'cmdb', N'servicenow')
+                              GROUP BY l.Provider, l.NativeId HAVING COUNT(DISTINCT l.CiId) > 1) z) AS SharedLive;
+"@
 }
 
 function Get-SICiRetireSql {

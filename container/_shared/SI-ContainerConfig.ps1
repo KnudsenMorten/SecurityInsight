@@ -140,6 +140,19 @@ function Get-SIRetiredSettingNames {
     return @($script:SIRetiredSettings)
 }
 
+# #986 (2026-10-31): settings whose ONE source on a Pro install is the Pro database. They are never passed to a job as
+# SI_CFG_<name> when the install has a Pro database: the pipeline runner reads the start time from the database (cfg.JobFlow /
+# cfg.Setting), and a copy in the job's environment went stale the moment someone changed it (live: the job said 22:00
+# Europe/Paris while the runs started at 19:00 Europe/Amsterdam). The Community edition has no database: there the job's
+# environment IS the source, and these still travel. The update removes them from existing Pro jobs (setup\_shared\
+# SI-NightlySchedule.ps1, Invoke-SINightlyJobEnvCleanup).
+$script:SIConfigDbOwned = @('SI_Pipeline_StartTime', 'SI_Pipeline_TimeZone')
+
+function Get-SIConfigDbOwnedNames {
+    <# PURE. The settings a Pro install keeps in its database only (see $script:SIConfigDbOwned). #>
+    return @($script:SIConfigDbOwned)
+}
+
 # Job secrets an older setup created that no current job uses. Bootstrap removes them from an existing job after its
 # environment variables have been replaced (so nothing references them any more).
 $script:SIRetiredJobSecrets = @('si-storage-key')
@@ -457,6 +470,10 @@ function Test-SIEngineJobName {
 function Get-SIJobRetryLimitArg {
     <# PURE. The --replica-retry-limit a NEW job is created with: '0' for an engine job (Test-SIEngineJobName), else '1'. #>
     param([AllowEmptyString()][string]$Name, [string[]]$StepKeys)
+    # #1038 (1): the data-out job retries its own failed outputs -- Azure never starts it again as a whole new run
+    if ("$Name".Trim().ToLowerInvariant() -eq 'caj-si-data-out') { return '0' }
+    # #1021: the support grant job -- a request is answered once; a failed start is the Support session's to repeat
+    if ("$Name".Trim().ToLowerInvariant() -eq 'caj-si-support-grant') { return '0' }
     if (Test-SIEngineJobName -Name $Name -StepKeys $StepKeys) { '0' } else { '1' }
 }
 
@@ -940,6 +957,24 @@ function Get-SIContainerEngineDispatch {
             if ([bool](& $g 'SI_Pro_DataSync_DryRun')) { $a['DryRun'] = $true }
             $lb = & $int 'SI_Pro_DataLookbackDays'; if ($lb -gt 0) { $a['LookbackDays'] = $lb }
             return [pscustomobject]@{ Script = $script; Args = $a; Skip = $null }
+        }
+        'data-out' {
+            # #1038 (1): the data-out job (caj-si-data-out) -- the ServiceNow hand-off and the other outputs, from the newest
+            # collection the data sync marked ready. Off, with the reason, until a Pro database is configured (as the data sync).
+            $script = 'engine/data-out/Invoke-SIDataOutJob.ps1'
+            $srv = "$(& $g 'SI_Pro_DataSqlServer')".Trim(); if (-not $srv) { $srv = "$(& $g 'SI_ProSqlServer')".Trim() }
+            $db = "$(& $g 'SI_Pro_DataSqlDatabase')".Trim(); if (-not $db) { $db = "$(& $g 'SI_ProSqlDatabase')".Trim() }
+            if (-not $srv -or -not $db) {
+                return [pscustomobject]@{ Script = $script; Args = $a
+                    Skip = 'data out has no database: set SI_ProSqlServer and SI_ProSqlDatabase to enable it' }
+            }
+            return [pscustomobject]@{ Script = $script; Args = $a; Skip = $null }
+        }
+        'support-grant' {
+            # #1021: the support grant job (caj-si-support-grant) -- the Invardia Support app's database access, just in time,
+            # on a request on the queue si-support-requests. Never skipped here: without a Pro database it says so itself
+            # (its one SUPPORT-GRANT line, exit 2), so the Support session always reads an answer.
+            return [pscustomobject]@{ Script = 'engine/support-grant/Invoke-SISupportGrant.ps1'; Args = $a; Skip = $null }
         }
         'asset-cmdb-sql' {
             # The SQL CMDB connector (#271): every CI into the Pro database's CI table. Off, with the reason, until a Pro
@@ -1897,6 +1932,9 @@ function Get-SIBootstrapTriggerPlan {
         if ($Mode -eq 'flow') { return [pscustomobject]@{ Trigger = 'Schedule'; RememberCron = '' } }
         return [pscustomobject]@{ Trigger = 'Manual'; RememberCron = $Cron }
     }
+    # #1038 (1): a job that is only ever STARTED (the data-out job: by the data sync and by a person) -- Manual in both modes,
+    # no timer to remember (the map's 'manualOnly')
+    if ($Map -and $Map.Jobs.Contains($key) -and $Map.Jobs[$key].PSObject.Properties['ManualOnly'] -and $Map.Jobs[$key].ManualOnly) { return [pscustomobject]@{ Trigger = 'Manual'; RememberCron = '' } }
     $inFlow = $false
     if ($Map -and $Map.Jobs.Contains($key)) { $inFlow = (-not $Map.Jobs[$key].NeverInFlow) -and ($Map.DefaultFlow -contains $key) }
     # #306: the risk trend is written by Risk Analysis while the jobs run as a pipeline -- its job waits (runnable by hand)
@@ -1989,6 +2027,18 @@ function Get-SIExecutionGuardDecision {
         }
         return [pscustomobject]@{ Action = 'FlowBusy'
             Message = ('[flow] the flow is still running (execution {0}, started {1}); this wake-up does nothing.' -f $Other.name, $started) }
+    }
+    # #1038 (1): the data-out job is started by the data sync on every mark and by a person to resend -- a start while one
+    # sends is normal operation, not a guard (the running one sends the newest mark when it has finished): one plain line
+    if ($Engine -eq 'data-out' -or $Job -eq 'caj-si-data-out') {
+        return [pscustomobject]@{ Action = 'FlowBusy'
+            Message = ('[data-out] data out is already sending (execution {0}, started {1}); this start does nothing -- that run sends the newest marked collection.' -f $Other.name, $started) }
+    }
+    # #1021: the support grant job -- every start carries its own request on the queue, so one is never dropped; the signed
+    # procedures' lock keeps two grants on the same database apart (framework 4b: support always works)
+    if ($Engine -eq 'support-grant' -or $Job -eq 'caj-si-support-grant') {
+        return [pscustomobject]@{ Action = 'Run'
+            Message = ('[support-grant] another support grant execution is running ({0}, started {1}); this one reads its own request.' -f $Other.name, $started) }
     }
     [pscustomobject]@{ Action = 'Skip'
         Message = ('[guard] skipped: previous still running -- execution {0} of {1} (started {2}) has not finished; this execution ({3}) starts nothing.' -f $Other.name, $Job, $started, $Self) }

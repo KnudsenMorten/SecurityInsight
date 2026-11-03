@@ -71,14 +71,18 @@
     var lifeChosen = Model.LifecycleDefaulted && Model.DefaultLifecycle is { } dlv
         ? new[] { dlv }
         : SI.Management.Web.Pages.MultiFilter.ValuesOf(req, "lifecycle").Where(v => !string.Equals(v, CiLifecycleDefinitions.ClearedFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
-    ranked.Add((CiColumns.FilterRank("si_lifecycle"), new SI.Management.Web.Pages.MultiFilter
+    // #1058 (owner 2026-11-02: "i am missing a CI state filter option or cannot find it"): the SAME filter is offered in
+    // "+ Add filter" too (lifeFilterAdd below), mirrored -- a tick in either panel shows in the other
+    var lifeFilterMf = new SI.Management.Web.Pages.MultiFilter
     {
-        Id = id + "-mf-lifecycle", Name = "lifecycle", Label = "Lifecycle", Form = id + "-f",
+        Id = id + "-mf-lifecycle", Name = "lifecycle", Label = "Lifecycle", Form = id + "-f", Mirror = id + "-lifecycle",
         AllValue = Model.DefaultLifecycle is null ? null : CiLifecycleDefinitions.ClearedFilter,
         Choices = Model.LifecycleChoices().Select(c => new SI.Management.Web.Pages.FilterChoice(c.Value, c.Label, lifeNarrowed ? null : c.Count)).ToList(),
         Chosen = lifeChosen,
         Note = string.Join(" ", Model.LifecycleRules.States.Select(s => s.Definition)),
-    }));
+    };
+    ranked.Add((CiColumns.FilterRank("si_lifecycle"), lifeFilterMf));
+    var lifeFilterAdd = lifeFilterMf with { Id = id + "-af-lifecycle" };
     // the context filters: a prepared column with a short list of values (environment, MFA strength, risk level, device
     // value, Defender plan tier, department)
     // #855 item 3: the onboarding status (next to the lifecycle) in its words, its stored order first
@@ -180,6 +184,8 @@
                     <summary class="tool-button">+ Add filter</summary>
                     <div class="tool-panel filters-panel">
                         <p class="hint add-filter-hint">Every CI field held as a typed column. A filter added here is in the address, in a saved layout and in every export, like any other.</p>
+                        @* #1058 the lifecycle: the same filter as in "Filters" (its counts, the named default, All = every state) *@
+                        <div data-add-filter-column="Lifecycle"><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="lifeFilterAdd" /></div>
                         @foreach (var c in addable)
                         {
                             var p = SI.Management.Web.Pages.Cis.IndexModel.ContextFilterParam(c);

@@ -202,6 +202,78 @@ function Read-SIProSettings {
     & $Store.Invoke 'SELECT Name, Scope, ValueJson, KeyVaultSecretName, CONVERT(varchar(30), CONVERT(bigint, RowVersion)) AS Version FROM cfg.Setting' @{} 'reader' | ForEach-Object { $_ }
 }
 
+# WHICH KEY VAULT SECRET A SECRET SETTING MAY NAME -- the SAME lists as the web app's SecretSettingPolicy.cs
+# (pro-management/src/SI.Management.Web/Settings; a test keeps the two equal). A secret setting names its OWN secret only:
+# the product's name for it or a name under its fixed prefix; never a secret the product keeps for another purpose, never
+# another setting's. A name a customer chose before this rule, outside the product's SI- names, keeps working.
+$script:SISecretSettingFamilies = @(
+    [pscustomobject]@{ Key = 'openai'; Settings = @('OpenAI_apiKey'); Names = @('SI-OpenAI-Key'); Prefix = 'SI-OpenAI-' }
+    [pscustomobject]@{ Key = 'smtp'; Settings = @('SMTPPassword'); Names = @('SI-Smtp-Password'); Prefix = 'SI-Smtp-' }
+    [pscustomobject]@{ Key = 'shodan'; Settings = @('SI_Shodan_ApiKey', 'SHODAN_ApiKey'); Names = @('SI-Shodan-ApiKey'); Prefix = 'SI-Shodan-' }
+    [pscustomobject]@{ Key = 'spn'; Settings = @('SI_SPN_Secret', 'SpnClientSecret', 'SpnSecretName', 'SI_Graph_Secret', 'SI_LogIngest_Secret'); Names = @('SI-SPN-Secret', 'SecurityInsight-Secret'); Prefix = 'SI-SPN-Secret' }
+)
+$script:SISecretSettingReserved = @('SI-Invardia-InstallKey', 'SI-InstallId', 'SI-License', 'SI-Update-State', 'SI-Settings-Handover',
+    'SI-LicenceRequest-State', 'SI-LicenceRequest-Notice', 'SI-LicenceRequest-PullToken', 'SI-SPN-Cert')
+$script:SISecretSettingReservedPrefixes = @('SI-Invardia-', 'SI-LicenceRequest-', 'SI-SPN-Cert', 'SI-Connector-', 'SI-ServiceNow-', 'SI-Web-')
+
+if (-not (Get-Command -Name Test-SIAzureSqlHost -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($script:SIProRoot, 'engine', '_shared', 'SI-OutboundTrust.ps1')) }
+
+function Test-SIProSettingHost {
+    <#
+        PURE. '' = a stored value of -Name may be put in force; else why not. The settings that name where a credential goes:
+          SI_Pro_DataSqlServer    the engine sends its Azure SQL access token there: an Azure SQL host only
+          SI_Pro_DataSqlDatabase  a database name only (it is never part of the connection's server)
+          SI_Telemetry_Endpoint   the install key goes there: Invardia's own https address only
+          SI_LicenseRequest_BaseUrl  the install key and the licence pull token go there: Invardia's own https address only
+        Empty = the default applies (allowed).
+    #>
+    param([Parameter(Mandatory)][string]$Name, $Value)
+    $v = "$Value".Trim()
+    if (-not $v) { return '' }
+    switch ($Name) {
+        'SI_Pro_DataSqlServer'      { return (Test-SIAzureSqlHost -Server $v) }
+        'SI_Pro_DataSqlDatabase'    { return (Test-SISqlDatabaseName -Database $v) }
+        'SI_Telemetry_Endpoint'     { return (Test-SITelemetryEndpointHost -Endpoint $v) }
+        'SI_LicenseRequest_BaseUrl' { return (Test-SITelemetryEndpointHost -Endpoint $v) }
+    }
+    ''
+}
+
+function Get-SISecretSettingFamily {
+    <# PURE. The family of a secret setting; one the list does not name gets its own: prefix SI-<name with dashes>. #>
+    param([Parameter(Mandatory)][string]$Setting)
+    foreach ($f in $script:SISecretSettingFamilies) { if (@($f.Settings | Where-Object { $_ -ieq $Setting }).Count) { return $f } }
+    [pscustomobject]@{ Key = $Setting; Settings = @(); Names = @(); Prefix = ('SI-' + $Setting.Replace('_', '-')) }
+}
+
+function Test-SISecretSettingReference {
+    <#
+        PURE. '' = -SecretName may be used for -Setting; else why not, in plain words.
+        Default: a reference ALREADY STORED (the engine's read, setup's import) -- its own names, or a name the customer chose
+        before the rule (not under the product's SI- names, not another setting's). -New: a new or changed reference -- its
+        own names only (the web app's save).
+    #>
+    param([Parameter(Mandatory)][string]$Setting, [AllowEmptyString()][string]$SecretName = '', [switch]$New,
+          # the other secret settings whose stored rows name the SAME Key Vault secret: a customer's own name belongs to one
+          # setting (family) only -- named by two, it is used by neither (ConvertFrom-SIProSettingRows passes them)
+          [AllowNull()][AllowEmptyCollection()][string[]]$AlsoNamedBy = @())
+    $n = "$SecretName".Trim()
+    if ($n -cnotmatch '^[0-9A-Za-z-]{1,127}$') { return ("'{0}' is not a Key Vault secret name" -f $n) }
+    $f = Get-SISecretSettingFamily -Setting $Setting
+    $allowed = '{0}a name that starts with {1}' -f $(if (@($f.Names).Count) { (@($f.Names) -join ' or ') + ', or ' } else { '' }), $f.Prefix
+    $reserved = @($script:SISecretSettingReserved | Where-Object { $_ -ieq $n }).Count -or @($script:SISecretSettingReservedPrefixes | Where-Object { $n.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count
+    if ($reserved) { return ('{0} is a secret SecurityInsight keeps for another purpose -- {1} names its own secret: {2}' -f $n, $Setting, $allowed) }
+    $isOwn = { param($fam) @($fam.Names | Where-Object { $_ -ieq $n }).Count -or $n.StartsWith([string]$fam.Prefix, [StringComparison]::OrdinalIgnoreCase) }
+    if (& $isOwn $f) { return '' }
+    if ($New) { return ('{0} names its own Key Vault secret: {1}' -f $Setting, $allowed) }
+    foreach ($o in $script:SISecretSettingFamilies) { if ($o.Key -ne $f.Key -and (& $isOwn $o)) { return ('{0} is another setting''s secret -- {1} names its own: {2}' -f $n, $Setting, $allowed) } }
+    if ($n.StartsWith('SI-', [StringComparison]::OrdinalIgnoreCase)) { return ('{0} is not {1}''s own secret -- {1} names {2}' -f $n, $Setting, $allowed) }
+    foreach ($o in @($AlsoNamedBy | Where-Object { $_ })) {
+        if ((Get-SISecretSettingFamily -Setting $o).Key -ne $f.Key) { return ('{0} is also named by {1} -- a secret belongs to one setting; {2} names {3}' -f $n, $o, $Setting, $allowed) }
+    }
+    ''
+}
+
 function ConvertFrom-SIProSettingRows {
     <#
         PURE. cfg.Setting rows -> the values this engine runs with, validated against the catalog.
@@ -215,7 +287,17 @@ function ConvertFrom-SIProSettingRows {
           [AllowEmptyCollection()][string[]]$Retired = @())
     $byName = @{}; foreach ($s in $Catalog) { $byName[[string]$s.name] = $s }
     $values = [ordered]@{}; $secrets = [ordered]@{}; $refused = New-Object System.Collections.Generic.List[object]
+    $skippedSecret = New-Object System.Collections.Generic.List[object]
     $ordered = @($Rows | Where-Object { $_ } | Sort-Object { if ([string]$_.Scope -eq 'solution') { 0 } else { 1 } })
+    # which secret settings name each Key Vault secret (every scope): a customer's own name belongs to ONE setting
+    $namedBy = @{}
+    foreach ($r in $ordered) {
+        $kvn = "$([string]$r.KeyVaultSecretName)".Trim(); $sdef = $byName[[string]$r.Name]
+        if (-not $kvn -or -not $sdef -or -not $sdef.secret) { continue }
+        $kk = $kvn.ToLowerInvariant()
+        if (-not $namedBy.ContainsKey($kk)) { $namedBy[$kk] = New-Object System.Collections.Generic.List[string] }
+        if (-not $namedBy[$kk].Contains([string]$r.Name)) { $namedBy[$kk].Add([string]$r.Name) }
+    }
     foreach ($r in $ordered) {
         $name = [string]$r.Name; $scope = [string]$r.Scope
         if ($scope -ne 'solution' -and $scope -ne ('engine:' + $Engine)) { continue }    # another engine's setting
@@ -226,6 +308,10 @@ function ConvertFrom-SIProSettingRows {
         if ($s.secret) {
             if ($null -ne $r.ValueJson -and [string]$r.ValueJson -ne '') { $refused.Add([pscustomobject]@{ Name = $name; Scope = $scope; Reason = 'a secret must be a Key Vault reference, never a stored value' }); continue }
             if (-not $kv) { $refused.Add([pscustomobject]@{ Name = $name; Scope = $scope; Reason = 'a secret setting without a Key Vault secret name' }); continue }
+            # a secret setting names its OWN Key Vault secret only: another name is left out of the run and said (never a stop)
+            $also = @($namedBy[$kv.Trim().ToLowerInvariant()] | Where-Object { $_ -and $_ -ne $name })
+            $own = Test-SISecretSettingReference -Setting $name -SecretName $kv -AlsoNamedBy $also
+            if ($own) { $skippedSecret.Add([pscustomobject]@{ Name = $name; Scope = $scope; Reason = $own }); continue }
             $secrets[$name] = $kv; continue
         }
         if ($kv) { $refused.Add([pscustomobject]@{ Name = $name; Scope = $scope; Reason = 'only a secret setting may point at Key Vault' }); continue }
@@ -239,7 +325,7 @@ function ConvertFrom-SIProSettingRows {
         if ($s.type -eq 'number') { $v = ConvertTo-SISettingNumber $v }
         $values[$name] = $v
     }
-    [pscustomobject]@{ Values = $values; Secrets = $secrets; Refused = $refused.ToArray() }
+    [pscustomobject]@{ Values = $values; Secrets = $secrets; Refused = $refused.ToArray(); SkippedSecrets = $skippedSecret.ToArray() }
 }
 
 # The web app's own settings (stored at scope engine:management-web, never in the engines' catalog) that an ENGINE reads too.
@@ -638,6 +724,10 @@ function Invoke-SIProSettingsLayer {
         }
         foreach ($k in @($c.Values.Keys)) {
             if ($ExcludeNames -contains $k) { if (-not $skipped.Contains($k)) { $skipped.Add($k) }; continue }
+            # where a credential goes: the SQL server the engine's token is sent to (an Azure SQL host) and the uplink the
+            # install key is sent to (Invardia's own) -- another value is left out of this run and said, never a stop
+            $hostWhy = Test-SIProSettingHost -Name $k -Value $c.Values[$k]
+            if ($hostWhy) { Write-Warning ('[pro-settings] {0} is not used in this run: {1}. The value from the job''s own settings applies.' -f $k, $hostWhy); continue }
             Set-Variable -Name $k -Value $c.Values[$k] -Scope Global
         }
         # MAIL-1: every mail's footer and subject name the environment as the web app's header does -- its name, tenant name and
@@ -649,7 +739,13 @@ function Invoke-SIProSettingsLayer {
             if (-not [string](Get-Variable -Name ([string]$wv.Name) -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) { Set-Variable -Name ([string]$wv.Name) -Value $wv.Value -Scope Global }
         }
         foreach ($k in @($c.Secrets.Keys)) { if ($ExcludeNames -contains $k) { $skipped.Add($k); [void]$c.Secrets.Remove($k) } }
+        foreach ($sk in @($c.SkippedSecrets | Where-Object { $_ })) {
+            Write-Warning ('[pro-settings] {0} ({1}) is not used in this run: {2}. A SuperAdmin points it at its own secret on Settings.' -f $sk.Name, $sk.Scope, $sk.Reason)
+        }
         $global:SI_ProSettingsSkipped = $skipped.ToArray()
+        # the Key Vault secret NAMES the secret settings name (names only, never a value): a connector never names one of
+        # them (Test-SIConnectorSecretBinding)
+        $global:SI_ProSecretSettingNames = @(@($rows) | Where-Object { $_ -and "$([string]$_.KeyVaultSecretName)".Trim() } | ForEach-Object { "$([string]$_.KeyVaultSecretName)".Trim() } | Sort-Object -Unique)
         if ($c.Secrets.Count) {
             if (-not $ResolveSecret) {
                 if (-not (Get-Command Get-SIKvSecret -ErrorAction SilentlyContinue)) { . (Join-Path $script:SIProRoot 'auth\Get-SIKvSecret.ps1') }
@@ -823,7 +919,13 @@ function Set-SIProSetting {
     if ($Scope -ne 'solution' -and $Scope -notmatch '^engine:[a-z0-9\-]+$') { throw "'$Scope' is not a valid scope" }
     $json = $null; $kv = $null
     if ($Action -eq 'Set') {
-        if ($s.secret) { if (-not $KeyVaultSecretName) { throw "$Name is a secret: give its Key Vault secret name, never the value" }; $kv = $KeyVaultSecretName }
+        if ($s.secret) {
+            if (-not $KeyVaultSecretName) { throw "$Name is a secret: give its Key Vault secret name, never the value" }
+            # the same rule the engine reads with: a secret setting names its own Key Vault secret
+            $ownWhy = Test-SISecretSettingReference -Setting $Name -SecretName $KeyVaultSecretName
+            if ($ownWhy) { throw "${Name}: $ownWhy" }
+            $kv = $KeyVaultSecretName
+        }
         else {
             $why = Test-SISettingValue -Setting $s -Value $Value
             if ($why) { throw "$Name $why" }

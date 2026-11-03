@@ -92,7 +92,7 @@ public class OutputFieldsModel : PageModel
                         + " -- the scope in force: " + (scope?.Describe() ?? "everything (no scope)");
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the rows of {Output} could not be counted", e.Output); SnowCounts[e.Output] = "the rows could not be counted: " + ex.Message; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the rows of {Output} could not be counted", e.Output); SnowCounts[e.Output] = "the rows could not be counted: " + ViewerError.Text(ex); }
         }
     }
 
@@ -115,7 +115,9 @@ public class OutputFieldsModel : PageModel
         if (e is null || ServiceNowOutputs.Of(e.Output) is null || AreaOf(e) != Area) return NotFound("not a ServiceNow output");
         await LoadMapsAsync(ct);
         var (scope, resolved) = await ScopeOfAsync(e, ct);
-        var words = e.Output == "servicenow-ci" ? "the output's filter: " + FilterWords(MapFilter(e.Output)) : "the scope in force: " + (scope?.Describe() ?? "everything (no scope)");
+        // #1055 the CI export applies the CI scope (cmdb-servicenow: tier, asset kind, the CI rules), as the connector page's export
+        if (e.Output == "servicenow-ci") scope = await CiScopeAsync(ct);
+        var words = e.Output == "servicenow-ci" ? "the output's filter: " + FilterWords(MapFilter(e.Output)) + "; the CI scope in force: " + (scope?.Describe() ?? "everything (no scope)") : "the scope in force: " + (scope?.Describe() ?? "everything (no scope)");
         var file = await HttpContext.RequestServices.GetRequiredService<ScopeExport>().WriteServiceNowAsync(e, scope, resolved, words, "", format == "csv", ct);
         if (SI.Management.Web.Audit.AuditScope.Current is { } a) a.Reason = words + "; " + file.Rows.ToString(System.Globalization.CultureInfo.InvariantCulture) + " row(s)";
         return File(file.Stream, file.ContentType, file.Name);
@@ -260,6 +262,14 @@ public class OutputFieldsModel : PageModel
     }
 
     /// The vulnerability connector's scope for the vulnerable items' sample rows (null for the CI hand-off, or when unread).
+    /// #1055 the CI output's scope in force (the output scope item cmdb-servicenow), or null when it cannot be read.
+    private async Task<OutputScope?> CiScopeAsync(CancellationToken ct)
+    {
+        if (HttpContext.RequestServices.GetService<SI.Management.Web.Reports.IReportStore>() is not { } store) return null;
+        try { return await store.SchemaAsync(ct) ? (await store.LoadAsync(ct)).ScopeOf("cmdb-servicenow") : null; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the CI scope could not be read; the CI export is not scoped"); return null; }
+    }
+
     private async Task<(OutputScope? Scope, IReadOnlySet<string>? Resolved)> ScopeOfAsync(DataOutEntry e, CancellationToken ct)
     {
         if (e.Output != "servicenow-vulnerable-item" || HttpContext.RequestServices.GetService<SI.Management.Web.Reports.IReportStore>() is not { } store) return (null, null);
@@ -283,7 +293,7 @@ public class OutputFieldsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the output maps could not be read");
-            Error = "The output maps could not be read from the Pro database: " + ex.Message;
+            Error = "The output maps could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -338,7 +348,7 @@ public class OutputFieldsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the output preview could not be read");
-            PreviewResult = new OutputPreviewResult(columns.Select(c => c.Name).ToList(), Array.Empty<IReadOnlyList<string>>(), "The preview could not be read from the Pro database: " + ex.Message);
+            PreviewResult = new OutputPreviewResult(columns.Select(c => c.Name).ToList(), Array.Empty<IReadOnlyList<string>>(), "The preview could not be read from the Pro database: " + ViewerError.Text(ex));
         }
     }
 
@@ -382,7 +392,7 @@ public class OutputFieldsModel : PageModel
         {
             (StagedChange? change, IReadOnlyList<string> why) r;
             try { r = await _changes.NewAsync(Selected.Entry.Output, s.Action, s.Target, s.From, null, s.Name, Reason, ct, s.Position, s.SetPosition); }
-            catch (ArgumentException ex) { r = (null, new[] { ex.Message }); }
+            catch (ArgumentException ex) { r = (null, new[] { ViewerError.Text(ex) }); }
             if (r.change is null) { refused.Add(s.Target + ": " + string.Join("; ", r.why)); continue; }
             var gate = ChangeAccess.Check(access, User, r.change);
             if (!gate.Allowed) return AccessResults.Refused(Request, gate);
@@ -429,7 +439,7 @@ public class OutputFieldsModel : PageModel
         if (!User.IsAdmin()) return Forbid();
         (StagedChange? change, IReadOnlyList<string> why) r;
         try { r = await _changes.NewAsync(Output ?? "", Action ?? "", Target ?? "", From, Op, Name, Reason, ct); }
-        catch (ArgumentException ex) { r = (null, new[] { ex.Message }); }
+        catch (ArgumentException ex) { r = (null, new[] { ViewerError.Text(ex) }); }
         string message;
         if (r.change is not null)
         {

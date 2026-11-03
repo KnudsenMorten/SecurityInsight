@@ -379,7 +379,7 @@ Describe 'the level: security unless asked for, licensed and present; nothing do
             $said = New-Object System.Collections.Generic.List[string]
             Initialize-SIFullAssetProperties -Engine endpoint -SIRoot $empty -Setting 'full' -Log { param($l, $m) $said.Add($m) } | Should -BeNullOrEmpty
             Test-SIFullAssetPropertiesOn | Should -BeFalse
-            ($said -join ' ') | Should -Match 'SecurityInsight Pro feature'
+            ($said -join ' ') | Should -Match 'does not include the full asset metadata publisher'
         } finally { Remove-Item -LiteralPath $empty -Recurse -Force }
         Initialize-SIFullAssetProperties -Engine publicip -SIRoot $script:SIRoot -Setting 'full' | Should -BeNullOrEmpty -Because 'public IPs are a property, never a CI (3.6)'
         @(Get-SIFullAssetPropertiesEngineSources 'endpoint') | Should -Be @('mde', 'entra-device', 'exposure-graph', 'intune-device')

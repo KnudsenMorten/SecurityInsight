@@ -426,6 +426,10 @@ function New-SIGuardClearTelemetryRecord {
     else {
         $r.ClaimedTenantId = [string]$Context.TenantId
         $r.Host = $(if ($HostName) { $HostName } else { [string][System.Environment]::MachineName })
+        # Invardia S16: the install's LASTING id (SI-InstallId) on the identified report -- never the anonymous id; none = no field
+        if ($Context.PSObject.Properties['LastingInstallId'] -and (Get-Command -Name ConvertTo-SIInvardiaInstallId -ErrorAction SilentlyContinue)) {
+            $lid = ConvertTo-SIInvardiaInstallId ([string]$Context.LastingInstallId); if ($lid) { $r.InstallId = $lid }
+        }
         $t = [string]$Text
         if (Get-Command -Name ConvertTo-AitUplinkRedacted -ErrorAction SilentlyContinue) { try { $t = [string](ConvertTo-AitUplinkRedacted -Text $t) } catch { } }
         $t = $t.Trim(); if ($t.Length -gt 500) { $t = $t.Substring(0, 497) + '...' }

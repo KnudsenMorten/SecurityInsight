@@ -370,7 +370,11 @@ function Get-SIEgRecordType {
     <# PURE. An Exposure Graph node label -> the eg mapping's record type ('' = a node SecurityInsight does not record). #>
     param([AllowNull()][string]$NodeLabel)
     $l = ([string]$NodeLabel).Trim().ToLowerInvariant()
-    if ($l -in 'device', 'computer-account') { return 'device' }
+    if ($l -eq 'device') { return 'device' }
+    # #1052 an AD computer account is never a device record (it was: every one of them became a device CI of its own --
+    # a domain controller's Tier 0 landed on its empty duplicate). Its own record type; it joins its Defender device only
+    # by the safe match (Get-SIEgAdComputers.ps1) and is no CI without one.
+    if ($l -eq 'computer-account') { return 'computer_account' }
     if ($l -in 'user', 'group') { return 'user' }
     if ($l -in 'serviceprincipal', 'managedidentity') { return 'service_principal' }
     if ($l -in 'microsoft.network/publicipaddresses', 'ip') { return 'public_ip' }

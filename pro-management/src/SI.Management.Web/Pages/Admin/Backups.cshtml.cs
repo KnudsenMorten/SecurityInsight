@@ -86,7 +86,7 @@ public sealed class BackupsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the configuration backups failed");
-            Error = "The configuration backups could not be read: " + ex.Message;
+            Error = "The configuration backups could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -119,7 +119,7 @@ public sealed class BackupsModel : PageModel
         {
             _log.LogError(ex, "Back up now failed");
             AuditScope.Current?.Failed(ex.Message);
-            return Back("The backup failed: " + ex.Message, false);
+            return Back("The backup failed: " + ViewerError.Text(ex), false);
         }
     }
 
@@ -223,7 +223,7 @@ public sealed class BackupsModel : PageModel
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or UnauthorizedAccessException)
         {
-            return Refused(ex.Message, BackupId);
+            return Refused(ViewerError.Text(ex), BackupId);
         }
     }
 

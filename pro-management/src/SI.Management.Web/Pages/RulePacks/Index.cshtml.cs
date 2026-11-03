@@ -53,14 +53,14 @@ public sealed class IndexModel : PageModel
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _log.LogWarning(ex, "the rule proposals could not be read");
-                    ProposalError = "What this pack would set could not be read from the CIs: " + ex.Message;
+                    ProposalError = "What this pack would set could not be read from the CIs: " + ViewerError.Text(ex);
                 }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the rule packs could not be read");
-            Error = "The rule packs could not be read from the Pro database: " + ex.Message;
+            Error = "The rule packs could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

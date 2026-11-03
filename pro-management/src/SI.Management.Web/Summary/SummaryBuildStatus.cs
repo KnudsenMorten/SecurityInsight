@@ -68,7 +68,7 @@ public static class SummaryBuildStatus
             return new DataSyncState(activity, next);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return new DataSyncState(DataSyncActivity.Unknown, null, ex.Message); }
+        catch (Exception ex) { return new DataSyncState(DataSyncActivity.Unknown, null, ViewerError.Text(ex)); }
     }
 
     /// The page's words for a view that is not written for the collection. <paramref name="others"/>: views of this collection

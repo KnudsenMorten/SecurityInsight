@@ -7,16 +7,17 @@
 # BUILD CONTEXT: the same staged folder as ./Dockerfile (deploy\Deploy-SIManagement.ps1 -Apply builds both):
 #   az acr build --registry <acr> --image si-management-mcp:<tag> --file pro-management/Dockerfile.mcp <stage>
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# Base images pinned by digest and the .NET restore locked (packages.lock.json, --locked-mode): see ./Dockerfile.
+FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da AS build
 WORKDIR /src
-COPY pro-management/src/SI.Management.Core/SI.Management.Core.csproj pro-management/src/SI.Management.Core/
-COPY pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj pro-management/src/SI.Management.Mcp/
-RUN dotnet restore pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj
+COPY pro-management/src/SI.Management.Core/SI.Management.Core.csproj pro-management/src/SI.Management.Core/packages.lock.json pro-management/src/SI.Management.Core/
+COPY pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj pro-management/src/SI.Management.Mcp/packages.lock.json pro-management/src/SI.Management.Mcp/
+RUN dotnet restore pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj --locked-mode
 COPY pro-management/src/SI.Management.Core/ pro-management/src/SI.Management.Core/
 COPY pro-management/src/SI.Management.Mcp/ pro-management/src/SI.Management.Mcp/
 RUN dotnet publish pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj -c Release -o /app --no-restore -p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:ea721098d6ea2894ff9bd8387821a1659d4765d6c014b8d648bb1da16f016f5a AS runtime
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_HTTP_PORTS=8080 \

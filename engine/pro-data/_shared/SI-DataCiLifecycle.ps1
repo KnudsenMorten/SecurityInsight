@@ -171,8 +171,13 @@ IF @complete = N'1' AND OBJECT_ID('sidata.RaReportStatus') IS NOT NULL AND COL_L
 -- finding on such a CI is closed as 'asset_retired' -- also one this collection still reports -- and is neither seen nor
 -- reopened while the CI stays retired. A CI that is active again (reactivated) reopens its still-reported findings as usual,
 -- the history says 'asset reactivated'.
-DECLARE @ret TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY);
-IF OBJECT_ID('sidata.Ci') IS NOT NULL INSERT @ret SELECT CiId FROM sidata.Ci WHERE Lifecycle = N'retired';
+-- #1057 a CI retired on a PROOF OF DELETION closes its findings as 'asset deleted in <source>' (Why) -- never as fixed
+DECLARE @ret TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY, Why NVARCHAR(32) NULL);
+IF OBJECT_ID('sidata.Ci') IS NOT NULL INSERT @ret (CiId, Why)
+    SELECT c.CiId, CASE WHEN ISJSON(c.DocJson) = 1 THEN CASE WHEN JSON_VALUE(c.DocJson, '$.si_lifecycle_reason') LIKE N'retired at once: deleted in Entra ID%' THEN N'asset deleted in Entra ID'
+                                                             WHEN JSON_VALUE(c.DocJson, '$.si_lifecycle_reason') LIKE N'retired at once: deleted in Azure%' THEN N'asset deleted in Azure'
+                                                             WHEN JSON_VALUE(c.DocJson, '$.si_lifecycle_reason') LIKE N'retired at once: deleted in Intune%' THEN N'asset deleted in Intune' END END
+    FROM sidata.Ci c WHERE c.Lifecycle = N'retired';
 DECLARE @reo TABLE (OwnerKey NVARCHAR(450) NOT NULL, FindingKey NVARCHAR(256) NOT NULL, WasReason NVARCHAR(64) NULL, PRIMARY KEY (OwnerKey, FindingKey));
 DECLARE @retiredClosed INT = 0, @rekeyed INT = 0;
 -- REKEYED: an open finding under an asset key ('asset:<id>', no CI) that this collection reports under a CI instead -- the
@@ -220,13 +225,13 @@ FROM #lcf f WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.Owne
 SET @opened = @@ROWCOUNT;
 -- a NEW finding on a retired CI gets its record, closed as asset_retired at once (it is known, never counted open)
 INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId, ClosedAt, CloseReason)
-SELECT f.OwnerKey, f.FindingKey, f.CiId, N'closed', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N''), @t, N'asset_retired'
+SELECT f.OwnerKey, f.FindingKey, f.CiId, N'closed', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N''), @t, ISNULL((SELECT r.Why FROM @ret r WHERE r.CiId = f.CiId), N'asset_retired')
 FROM #lcf f WHERE EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = f.CiId)
   AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = f.OwnerKey AND s.FindingKey = f.FindingKey);
 SET @retiredClosed = @@ROWCOUNT;
 -- every open finding of a retired CI closes now as asset_retired -- still reported or not; a still-reported one records
 -- that this collection saw it (LastSeen) -- whatever the run's completeness: the retirement is the CI's decision, not an absence
-UPDATE s SET State = N'closed', ClosedAt = @t, CloseReason = N'asset_retired', LastSnapshot = @t, AbsentRuns = 0,
+UPDATE s SET State = N'closed', ClosedAt = @t, CloseReason = ISNULL(r.Why, N'asset_retired'), LastSnapshot = @t, AbsentRuns = 0,
        LastSeen = CASE WHEN EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey) THEN @t ELSE s.LastSeen END
 FROM sidata.CiFindingState s JOIN @ret r ON r.CiId = s.CiId
 WHERE s.State <> N'closed'/*R:s.OwnerKey*/;
@@ -237,7 +242,7 @@ BEGIN
            State = CASE WHEN s.AbsentRuns + 1 >= @after THEN N'closed' ELSE s.State END,
            ClosedAt = CASE WHEN s.AbsentRuns + 1 >= @after THEN @t ELSE s.ClosedAt END,
            CloseReason = CASE WHEN s.AbsentRuns + 1 < @after THEN s.CloseReason
-                              WHEN NULLIF(s.CiId, N'') IS NOT NULL AND c.Lifecycle = N'retired' THEN N'asset_retired'
+                              WHEN NULLIF(s.CiId, N'') IS NOT NULL AND c.Lifecycle = N'retired' THEN ISNULL((SELECT r.Why FROM @ret r WHERE r.CiId = s.CiId), N'asset_retired')
                               WHEN NULLIF(s.CiId, N'') IS NOT NULL AND (c.CiId IS NULL OR c.Lifecycle = N'not_seen') THEN N'no_longer_monitored'
                               -- the same finding is reported under a CI now (proven above) -- a change of key, not a fix
                               WHEN EXISTS (SELECT 1 FROM #rk k WHERE k.OwnerKey = s.OwnerKey AND k.FindingKey = s.FindingKey) THEN N'rekeyed'
@@ -276,7 +281,7 @@ IF OBJECT_ID('sidata.CiChange') IS NOT NULL
            CASE WHEN s.State = N'closed' THEN N'closed' WHEN s.ReopenedAt = @t THEN N'reopened' ELSE N'open' END,
            LEFT(s.DetectedBy, 64),
            LEFT(CONCAT(s.FindingKey, CASE WHEN s.State = N'closed' THEN CONCAT(N' -- ', s.CloseReason)
-                                          WHEN EXISTS (SELECT 1 FROM @reo o WHERE o.OwnerKey = s.OwnerKey AND o.FindingKey = s.FindingKey AND o.WasReason = N'asset_retired') THEN N' -- asset reactivated'
+                                          WHEN EXISTS (SELECT 1 FROM @reo o WHERE o.OwnerKey = s.OwnerKey AND o.FindingKey = s.FindingKey AND (o.WasReason = N'asset_retired' OR o.WasReason LIKE N'asset deleted in %')) THEN N' -- asset reactivated'
                                           ELSE N'' END), 512), NULL
     FROM sidata.CiFindingState s
     WHERE NULLIF(s.CiId, N'') IS NOT NULL/*R:s.OwnerKey*/
@@ -288,7 +293,7 @@ COMMIT TRANSACTION;
 DROP TABLE #lcf;
 DROP TABLE #rk;
 SELECT @opened AS Opened, @seen AS Seen, @reopened AS Reopened, @closed AS Closed, @absent AS Absent, @frozen AS Frozen, 0 AS Skipped, N'' AS Note, @carried AS Carried, 0 AS Repaired,
-       @retiredClosed AS RetiredClosed, (SELECT COUNT(*) FROM @reo WHERE WasReason = N'asset_retired') AS Reactivated, @rekeyed AS Rekeyed;
+       @retiredClosed AS RetiredClosed, (SELECT COUNT(*) FROM @reo WHERE WasReason = N'asset_retired' OR WasReason LIKE N'asset deleted in %') AS Reactivated, @rekeyed AS Rekeyed;
 '@
     $fill = ''
     if ($WithDisabledOwners) {

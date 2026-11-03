@@ -32,7 +32,7 @@ public sealed class DataHealthModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the data health results could not be read");
-            Error = "The data health results could not be read from the Pro database: " + ex.Message;
+            Error = "The data health results could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         // owner 2026-10-20 ("verify table schema matches + get alerts"): a ServiceNow output whose newest check is not ok
         if (HttpContext?.RequestServices.GetService<SI.Management.Web.Outputs.IServiceNowCheckStore>() is { } snow)
@@ -74,7 +74,7 @@ public sealed class DataHealthModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "a data health override failed");
-            r = (false, "Not saved: " + ex.Message);
+            r = (false, "Not saved: " + ViewerError.Text(ex));
         }
         if (!r.Saved) audit?.Refused(r.Message);
         return Toast(r.Saved, r.Message);
@@ -93,7 +93,7 @@ public sealed class DataHealthModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "taking a data health override back failed");
-            r = (false, "Not taken back: " + ex.Message);
+            r = (false, "Not taken back: " + ViewerError.Text(ex));
         }
         if (!r.Saved) audit?.Refused(r.Message);
         return Toast(r.Saved, r.Message);

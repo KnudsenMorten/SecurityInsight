@@ -85,7 +85,7 @@ public sealed class ExchangeAdminClient : IExchangeAdminClient
         try { resp = await _http.SendAsync(req, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            return new ExchangeCallResult(ExchangeOutcome.Failed, 0, "Exchange Online could not be reached: " + ex.Message, Array.Empty<JsonElement>());
+            return new ExchangeCallResult(ExchangeOutcome.Failed, 0, "Exchange Online could not be reached: " + ViewerError.Text(ex), Array.Empty<JsonElement>());
         }
         using (resp)
         {

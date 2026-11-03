@@ -155,7 +155,7 @@ public sealed class GatesFormModel
             if (!Regex.IsMatch(s.Path ?? "", @"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")) why.Add($"'{s.Path}' is not a switch path");
         foreach (var r in Split(MatchesRegex))
         {
-            try { _ = new Regex(r); } catch (ArgumentException ex) { why.Add($"'{r}' is not a valid pattern: {ex.Message}"); }
+            try { _ = new Regex(r); } catch (ArgumentException ex) { why.Add($"'{r}' is not a valid pattern: {ViewerError.Text(ex)}"); }
         }
         return why;
     }

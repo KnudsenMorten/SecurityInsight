@@ -153,7 +153,7 @@ public sealed class MailVerifier
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the mail job could not be started for a restriction check");
-            return (false, "The mail job could not be started: " + ex.Message);
+            return (false, "The mail job could not be started: " + ViewerError.Text(ex));
         }
     }
 }

@@ -640,6 +640,14 @@ function New-SIVulnTargetSql {
         [scriptblock]$Invoke
     )
     if (-not $Invoke) {
+        # the Azure SQL access token goes ONLY to an Azure SQL server; the connection string is built, never formatted
+        if (-not (Get-Command -Name Test-SIAzureSqlHost -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-OutboundTrust.ps1')) }
+        $hostWhy = Test-SIAzureSqlHost -Server $Server
+        if ($hostWhy) { throw ("New-SIVulnTargetSql: the SQL target is not used -- {0}" -f $hostWhy) }
+        $csb = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+        $csb['Data Source'] = ('tcp:{0},1433' -f (Get-SISqlServerHostName -Server $Server)); $csb['Initial Catalog'] = $Database
+        $csb['Encrypt'] = $true; $csb['TrustServerCertificate'] = $false; $csb['Connect Timeout'] = 30
+        $csText = $csb.ConnectionString
         $srv = $Server; $db = $Database; $app = $AppId; $ten = $TenantId
         # A GetNewClosure() block runs in its own module scope and cannot see functions the caller dot-sourced, so
         # the token function travels INTO the closure as a value. (Found live: the fake seam in the tests hid it.)
@@ -670,8 +678,7 @@ function New-SIVulnTargetSql {
                 $tokenCache.Until = [datetime]::UtcNow.AddMinutes(45)
             }
             $token = $tokenCache.Token
-            $cs = 'Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $srv, $db
-            $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
+            $cn = New-Object System.Data.SqlClient.SqlConnection($csText)
             $cn.AccessToken = $token
             try {
                 $cn.Open()

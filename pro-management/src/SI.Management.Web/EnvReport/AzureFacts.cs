@@ -105,7 +105,7 @@ public sealed class ArmAzureFactsReader(HttpClient http, TokenCredential cred, I
                 resources.Add(Describe(r, full));
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: resources"); error = "the resources could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: resources"); error = "the resources could not be read: " + ViewerError.Text(ex); }
         try
         {
             var ra = await GetAsync(rg + "/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()", ct);
@@ -123,7 +123,7 @@ public sealed class ArmAzureFactsReader(HttpClient http, TokenCredential cred, I
                 roles.Add(new AzureRoleAssignment(p?["principalId"]?.GetValue<string>() ?? "", p?["principalType"]?.GetValue<string>() ?? "", name, p?["scope"]?.GetValue<string>() ?? ""));
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: role assignments"); error = (error is null ? "" : error + "; ") + "the role assignments could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: role assignments"); error = (error is null ? "" : error + "; ") + "the role assignments could not be read: " + ViewerError.Text(ex); }
         return new AzureFacts(o.SubscriptionId, o.ResourceGroup, resources, roles, error);
     }
 

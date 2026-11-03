@@ -33,7 +33,7 @@ public abstract class DepartmentAdminModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "department tables");
-            Error = "The Pro database could not be read: " + ex.Message;
+            Error = "The Pro database could not be read: " + ViewerError.Text(ex);
         }
         return Ready;
     }
@@ -71,7 +71,7 @@ public abstract class DepartmentAdminModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "{What} failed", what);
-            return new WriteResult(WriteStatus.Refused, $"{what} could not be saved -- the Pro database answered: {ex.Message}");
+            return new WriteResult(WriteStatus.Refused, $"{what} could not be saved -- the Pro database answered: {ViewerError.Text(ex)}");
         }
     }
 }
@@ -128,7 +128,7 @@ public sealed class IndexModel(DepartmentRepository repo, DepartmentPeopleResolv
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "departments");
-            Error = "The departments could not be read: " + ex.Message;
+            Error = "The departments could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -200,7 +200,7 @@ public sealed class EditModel(DepartmentRepository repo, DepartmentPeopleResolve
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "department {Id}", Id);
-            Error = "The department could not be read: " + ex.Message;
+            Error = "The department could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -273,13 +273,13 @@ public sealed class RulesModel(DepartmentRepository repo, ISettingsStoreReader s
     {
         string key;
         try { key = ProDataFilters.AssetKey(Asset)!; }
-        catch (ArgumentException ex) { CheckNote = ex.Message; return; }
+        catch (ArgumentException ex) { CheckNote = ViewerError.Text(ex); return; }
         (string? Name, string? Kind, IReadOnlyList<AssetTagValue> Tags, string? StoredSource, string? StoredDepartment)? facts;
         try { facts = await Repo.AssetFactsAsync(key, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogWarning(ex, "asset facts for the responsibility check");
-            CheckNote = "The asset's data could not be read from the Pro database: " + ex.Message + " (run setup\\Initialize-SIDataSql.ps1 again if a table is missing; it only adds).";
+            CheckNote = "The asset's data could not be read from the Pro database: " + ViewerError.Text(ex) + " (run setup\\Initialize-SIDataSql.ps1 again if a table is missing; it only adds).";
             return;
         }
         if (facts is null) { CheckNote = "That asset key is not in the Pro database's CI list."; return; }

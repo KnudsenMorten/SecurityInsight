@@ -112,7 +112,7 @@ public static class MgmtDeck
                 }
                 else if (sections.Contains("topassets")) errors["topassets"] = "The Risk Analysis view is not available in this installation.";
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { if (sections.Contains("topassets")) errors["topassets"] = "The Risk Analysis view could not be read: " + ex.Message; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { if (sections.Contains("topassets")) errors["topassets"] = "The Risk Analysis view could not be read: " + ViewerError.Text(ex); }
         }
         if (sections.Contains("tier0"))
         {
@@ -128,7 +128,7 @@ public static class MgmtDeck
                 }
                 else errors["tier0"] = "The tier-0 ranking is not available in this installation.";
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { errors["tier0"] = "The tier-0 ranking could not be read: " + ex.Message; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { errors["tier0"] = "The tier-0 ranking could not be read: " + ViewerError.Text(ex); }
         }
         if (sections.Contains("domains") || sections.Contains("closure"))
         {
@@ -140,7 +140,7 @@ public static class MgmtDeck
                     if (q is null) errors["domains"] = "The domain scores are not available in this installation.";
                     else domains = SI.Management.Web.Pages.Management.DomainsModel.Build((await q.TrendAsync(ProDataFilters.Normalize(new TrendRequest { Days = 90, Dimension = TrendDimensions.Domain, Measure = TrendMeasures.Score }), ct)).Data);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException) { errors["domains"] = "The domain scores could not be read: " + ex.Message; }
+                catch (Exception ex) when (ex is not OperationCanceledException) { errors["domains"] = "The domain scores could not be read: " + ViewerError.Text(ex); }
             }
             if (sections.Contains("closure"))
             {
@@ -149,7 +149,7 @@ public static class MgmtDeck
                     if (q is null) errors["closure"] = "The opened and closed counts are not available in this installation.";
                     else closure = ProDataQueries.Bucket((await q.LifecycleAsync(91, ct)).Data, Grains.Week);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException) { errors["closure"] = "The opened and closed counts could not be read: " + ex.Message; }
+                catch (Exception ex) when (ex is not OperationCanceledException) { errors["closure"] = "The opened and closed counts could not be read: " + ViewerError.Text(ex); }
             }
         }
         var (seen, catchUp) = await ExecutiveFigures.ScopeDaysAsync(services, ct);

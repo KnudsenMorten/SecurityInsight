@@ -39,12 +39,14 @@ public sealed class SettingsSaver
             if (s is null) { errors[name] = $"'{name}' is not a known setting"; continue; }
             var posted = form.ContainsKey("v:" + s.Name) || form["reset:" + s.Name] == "1";
             if (!posted) continue;
-            if (s.NeedsSuperAdmin && !user.IsSuperAdmin()) { errors[s.Name] = "SuperAdmin required to change it"; continue; }
             if (s.SetupOnly) { errors[s.Name] = CatalogSetting.SetupOnlyNote + " -- it cannot be changed here"; continue; }
             var post = new FieldPost(s.Name, form["v:" + s.Name].LastOrDefault(), form["reset:" + s.Name] == "1", form["ver:" + s.Name].ToString(), form["scope:" + s.Name].ToString());
             var scope = string.IsNullOrWhiteSpace(post.Scope) ? s.DefaultScope : post.Scope.Trim();
             var current = rows.FirstOrDefault(r => r.Name.Equals(s.Name, StringComparison.OrdinalIgnoreCase) && r.Scope == scope);
             var (write, error) = SettingsForm.Plan(s, post, current);
+            // the licence settings, a secret's Key Vault reference and the hosts a secret goes to: a CHANGE needs SuperAdmin
+            // (a field posted as it already is changes nothing and is left alone)
+            if (s.NeedsSuperAdmin && !user.IsSuperAdmin() && (error is not null || write is not null)) { errors[s.Name] = "SuperAdmin required to change it"; continue; }
             if (error is not null) { errors[s.Name] = error; continue; }
             if (write is null) continue;
             var (_, refusal) = _writer.Prepare(write);

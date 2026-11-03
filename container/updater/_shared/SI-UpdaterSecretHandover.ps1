@@ -424,6 +424,50 @@ function Invoke-SIUpdaterSecretHandover {
     [pscustomobject]@{ Key = $key; Apply = $apply; Grant = $grant; Report = $report.ToArray(); CustomerAction = $action.ToArray() }
 }
 
+function Invoke-SIUpdaterWebKeyRing {
+    <#
+        THE WEB APP'S SIGN-IN KEYS, ENCRYPTED WITH ITS OWN KEY VAULT KEY (setup\_shared\SI-WebKeyRing.ps1, Invoke-SIWebKeyRingConverge)
+        -- the updater's seams: Key Vault through the run's REST seam, ARM through Invoke-SIUpdaterArm, the web app's setting by
+        one read-modify-write of its template (its first container, the others kept). Returns @{ Ok; KeyId; Lines; Report }.
+    #>
+    param([Parameter(Mandatory)][string]$VaultName, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
+          [string]$WebApp = 'ca-si-management', [scriptblock]$Rest)
+    if (-not (Get-Command -Name Invoke-SIWebKeyRingConverge -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Ok = $false; KeyId = ''; Lines = @(); Report = @() } }
+    if (-not $Rest) { $Rest = Get-SIUpdaterRest }
+    $kv = { param($m, $u, $b) Invoke-SIHandoverKv -Rest $Rest -Method $m -Uri $u -Body $b }
+    $arm = {
+        param($m, $p, $api, $b)
+        try { $j = Invoke-SIUpdaterArm -Method $m -Path $p -ApiVersion $api -Body $b; [pscustomobject]@{ Status = 200; Json = $j } }
+        catch { $st = if ("$($_.Exception.Message)" -match 'HTTP (\d{3})') { [int]$Matches[1] } else { 0 }; [pscustomobject]@{ Status = $st; Json = $null } }
+    }
+    $app = $null; try { $app = Get-SIUpdaterContainerApp -App $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } catch { $app = $null }
+    if (-not $app) { return [pscustomobject]@{ Ok = $false; KeyId = ''; Lines = @(); Report = @() } }   # no web app here: nothing to protect
+    $first = @($app.properties.template.containers | Where-Object { $_ })[0]
+    $cur = ''; foreach ($e in @($first.env | Where-Object { $_ })) { if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $cur = [string]$e.value } }
+    $setEnv = {
+        param($name, $value)
+        $a = Get-SIUpdaterContainerApp -App $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
+        $tpl = $a.properties.template
+        $cs = @($tpl.containers | Where-Object { $_ })
+        $vars = New-Object System.Collections.Generic.List[object]
+        foreach ($e in @($cs[0].env | Where-Object { $_ })) { if ([string]$e.name -ne $name) { $vars.Add($e) } }
+        $vars.Add([pscustomobject]@{ name = $name; value = $value })
+        $cs[0] | Add-Member -NotePropertyName env -NotePropertyValue $vars.ToArray() -Force
+        $tpl | Add-Member -NotePropertyName containers -NotePropertyValue $cs -Force
+        if ($tpl.PSObject.Properties['revisionSuffix']) { $tpl.PSObject.Properties.Remove('revisionSuffix') }
+        $null = Invoke-SIUpdaterArm -Method PATCH -Path ([string]$a.id) -Body ([ordered]@{ properties = [ordered]@{ template = $tpl } })
+        $true
+    }
+    # (no GetNewClosure: the blocks run inside Invoke-SIWebKeyRingConverge, called from here, and see this call's values)
+    # the updater only CHECKS the web identity's grant on the key (it has no right to give roles): a missing one is the
+    # customer's action (the setup command), never a failed update
+    Invoke-SIWebKeyRingConverge -Arm $arm -KeyVault $kv -SetEnv $setEnv -VaultName $VaultName -CheckGrantOnly `
+        -GrantCommand ('the web app setup with its usual values and -SigninStoreKeyVaultName {0} -Apply (pro-management\deploy\Deploy-SIManagement.ps1, as an Owner of the web app''s resource group)' -f $VaultName) `
+        -VaultId (Get-SIUpdaterVaultId -VaultName $VaultName -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) `
+        -PrincipalIds @(Get-SIUpdaterWebPrincipalIds -WebApp $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) `
+        -SubscriptionId $SubscriptionId -CurrentEnv $cur
+}
+
 function Get-SIHandoverSetupCommand {
     <# PURE. The exact command that gives the updater its Key Vault rights (Key Vault Crypto Officer for the hand-over key):
        the updater setup with its role grants, for THIS install's subscription and resource group. #>

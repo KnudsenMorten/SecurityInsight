@@ -43,7 +43,7 @@ public static partial class OutputMapRules
     public const int MaxName = 128;
 
     /// The closed output operation set (engine\data-model\SI-DataModelTemplates.ps1 Get-SIOutputMapOps; a test compares).
-    public static readonly string[] Ops = { "enum", "first", "join", "join_ids", "render", "format_date", "round", "mask", "domain_part", "if_class", "lower", "upper" };
+    public static readonly string[] Ops = { "enum", "first", "join", "join_ids", "render", "format_date", "round", "mask", "domain_part", "finding_key", "if_class", "lower", "upper" };
 
     /// The system tokens a column may read instead of a field. #914: $action, $batch_id, $cleared, $reason, $replaces are the
     /// data-out contract's envelope (u_action, u_si_batch_id, u_si_cleared, u_si_reason, u_si_replaces), filled when the row is sent.

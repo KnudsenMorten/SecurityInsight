@@ -179,7 +179,7 @@ public static class JobFlow
     /// on its own daily schedule -- OwnSchedule), the daily configuration backup (#404: its own timer, after the working day,
     /// before the pipeline), the hourly status report to Invardia (#718: its own timer, whether or not a pipeline runs) and
     /// a retired job (Retired).
-    public static bool NeverInFlow(string key) => key is "templates" or "schema" or "schema-discovery" or "flow" or "config-backup" or "heartbeat" || OwnSchedule(key) || Retired(key);
+    public static bool NeverInFlow(string key) => key is "templates" or "schema" or "schema-discovery" or "flow" or "config-backup" or "heartbeat" or "data-out" or "support-grant" || OwnSchedule(key) || Retired(key);
 
     /// #412 (operator 2026-10-06, "we dont pull in the same data twice"): asset-properties does nothing any more -- the
     /// endpoint, identity and azure profilers read each source once and publish the full asset metadata themselves. Never a

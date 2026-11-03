@@ -46,7 +46,7 @@ public sealed class EditModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "asset tagging could not be read");
-            Error = "Asset tagging could not be read from the Pro database: " + ex.Message;
+            Error = "Asset tagging could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }

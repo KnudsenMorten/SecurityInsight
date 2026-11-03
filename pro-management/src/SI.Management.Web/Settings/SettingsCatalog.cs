@@ -60,9 +60,10 @@ public sealed class CatalogSetting
     /// The setting's More info, whichever way it is defined.
     [JsonIgnore] public SettingInfo MoreInfo => SettingInfoComposer.For(this);
 
-    /// Who may change it: the licence settings are the install's lifecycle and need SuperAdmin (#253); every other
-    /// setting is Admin. The page disables the field and the save refuses it by this same rule.
-    [JsonIgnore] public bool NeedsSuperAdmin => SI.Management.Web.Auth.AccessLifecycle.IsLicenceSetting(Name);
+    /// Who may change it: the licence settings are the install's lifecycle and need SuperAdmin (#253), and so do every
+    /// secret setting's Key Vault reference and the hosts a secret is sent to (SecretSettingPolicy); every other setting
+    /// is Admin. The page disables the field and the save refuses it by this same rule.
+    [JsonIgnore] public bool NeedsSuperAdmin => SecretSettingPolicy.NeedsSuperAdmin(Name, Secret);
 
     /// The scopes a value may be written at: 'solution', and 'engine:&lt;folder&gt;' for every engine the catalog names.
     public IEnumerable<string> AllowedScopes() => WebOnly ? new[] { WebScope } : new[] { "solution" }.Concat(Engines.Select(e => "engine:" + e));

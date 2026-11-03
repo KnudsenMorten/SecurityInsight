@@ -67,7 +67,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the risk index could not be read");
-            Error = "The risk index could not be read from the Pro database: " + ex.Message;
+            Error = "The risk index could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }
@@ -136,7 +136,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the risk index dry run could not read findings");
-            Messages = new[] { "The dry run could not read the current findings: " + ex.Message };
+            Messages = new[] { "The dry run could not read the current findings: " + ViewerError.Text(ex) };
         }
         return Page();
     }

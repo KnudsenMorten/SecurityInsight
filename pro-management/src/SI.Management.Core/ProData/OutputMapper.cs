@@ -106,11 +106,25 @@ public static class OutputMapper
                 return JsonValue.Create(Math.Round(n, int.TryParse(arg, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dg) ? dg : 0));
             case "mask": return value is null || Text(value).Trim().Length == 0 ? value : JsonValue.Create("***");
             case "domain_part": var s = Text(value); var j = s.IndexOf('.'); return JsonValue.Create(j < 0 ? "" : s[(j + 1)..]);
+            case "finding_key": return FindingKey(value);
             case "if_class": return Text(Get(item, "si_class")) == arg ? value : null;
             case "lower": return value is null ? null : JsonValue.Create(Text(value).ToLowerInvariant());
             case "upper": return value is null ? null : JsonValue.Create(Text(value).ToUpperInvariant());
             default: throw new ArgumentException($"unknown output operation '{name}'");
         }
+    }
+
+    /// The finding's id as the ServiceNow staging spec gives it (u_vulnerability: 100 characters) -- the engine's op
+    /// 'finding_key' (SI-OutputMapper.ps1): a CVE upper case; an id longer than 100 cut to its first 59 characters + '~' +
+    /// the SHA-1 of the whole id (upper case in, lower-case hex out).
+    public static JsonNode? FindingKey(JsonNode? value)
+    {
+        var c = Text(value).Trim();
+        if (c.Length == 0) return JsonValue.Create("");
+        if (c.StartsWith("CVE-", System.StringComparison.OrdinalIgnoreCase) && c.Length <= 100) return JsonValue.Create(c.ToUpperInvariant());
+        if (c.Length <= 100) return JsonValue.Create(c);
+        var h = System.Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(c.ToUpperInvariant()))).ToLowerInvariant();
+        return JsonValue.Create(c[..59] + "~" + h);
     }
 
     /// A value looked up in a value map (the engine's Get-SIValueMapResult): longest key first; $match exact / prefix /

@@ -45,7 +45,7 @@ public sealed class LifecycleModel(SettingsCatalog catalog, ISettingsStoreReader
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogWarning(ex, "the lifecycle settings could not be read");
-            Error = "The stored values could not be read from the Pro database (" + ex.Message + "). The shipped defaults are shown; a value you changed may differ.";
+            Error = "The stored values could not be read from the Pro database (" + ViewerError.Text(ex) + "). The shipped defaults are shown; a value you changed may differ.";
         }
         View = Build(catalog, rows);
     }

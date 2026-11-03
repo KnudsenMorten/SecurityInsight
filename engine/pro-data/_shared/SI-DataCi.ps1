@@ -321,7 +321,7 @@ SET XACT_ABORT ON;
 BEGIN TRAN;
 $clear
 INSERT $table (CiId, AssetId, FindingKey, FindingType, Title, Severity, Tier, RiskScore, WeightedRiskScore, RiskRating, SecurityDomain, DetectedBy, RiskFactors, ExemptionId, CollectionTime, DocJson, Component$sc$catCols)
-SELECT COALESCE(NULLIF(LTRIM(RTRIM(x.CiId)), N''), ci.CiId, lk.CiId), LEFT(x.AssetId, 400), LEFT(x.FindingKey, 256), x.FindingType, LEFT(x.Title, 1000), x.Severity, CASE WHEN x.Tier BETWEEN 0 AND 255 THEN x.Tier END, x.RiskScore,
+SELECT COALESCE(NULLIF(mg.IntoCiId, N''), rc.CiId), LEFT(x.AssetId, 400), LEFT(x.FindingKey, 256), x.FindingType, LEFT(x.Title, 1000), x.Severity, CASE WHEN x.Tier BETWEEN 0 AND 255 THEN x.Tier END, x.RiskScore,
        x.WeightedRiskScore, x.RiskRating, x.SecurityDomain, LEFT(x.DetectedBy, 2000), LEFT(x.RiskFactors, 2000), x.ExemptionId,
        ISNULL(TRY_CONVERT(datetime2(3), x.CollectionTime, 127), SYSUTCDATETIME()), x.DocJson, NULLIF(LEFT(LTRIM(RTRIM(x.Component)), 64), N'')$sv$catVals
 FROM OPENJSON(@j) WITH (CiId nvarchar(64), AssetId nvarchar(max), FindingKey nvarchar(max), FindingType nvarchar(32), Title nvarchar(max), Severity nvarchar(16), Tier int,
@@ -331,6 +331,11 @@ OUTER APPLY (SELECT TOP (1) c.CiId FROM sidata.Ci c WHERE NULLIF(LTRIM(RTRIM(x.C
 OUTER APPLY (SELECT TOP (1) l.CiId FROM sidata.CiLink l
              WHERE NULLIF(LTRIM(RTRIM(x.CiId)), N'') IS NULL AND ci.CiId IS NULL AND LEN(x.AssetId) BETWEEN 1 AND 450 AND l.NativeId = LOWER(x.AssetId)
              ORDER BY l.IsPrimary DESC, CASE WHEN l.State IN (N'active', N'frozen') THEN 0 ELSE 1 END, l.LastSeen DESC) lk
+CROSS APPLY (SELECT COALESCE(NULLIF(LTRIM(RTRIM(x.CiId)), N''), ci.CiId, lk.CiId) AS CiId) rc
+-- #1052 a CI merged into another (retired, si_merged_into -- Get-SICiMergedRetireSql): its findings land on the survivor,
+-- also those of a finding collection made before the merge
+OUTER APPLY (SELECT TOP (1) LEFT(JSON_VALUE(m.DocJson, '$.si_merged_into'), 64) AS IntoCiId FROM sidata.Ci m
+             WHERE rc.CiId IS NOT NULL AND m.CiId = rc.CiId AND m.Lifecycle = N'retired' AND ISJSON(m.DocJson) = 1) mg
 WHERE x.FindingKey IS NOT NULL;
 DECLARE @n INT = @@ROWCOUNT;
 COMMIT;
@@ -2168,7 +2173,9 @@ function Invoke-SIDataCiSync {
         & $ph 'findings per CI: lifecycle' ([long]$(if ($lc) { [long]$lc.Seen + [long]$lc.Opened } else { -1 }))
         return [pscustomobject]@{ Findings = $nF; Totals = $nT; DocFields = $nD; ViewColumns = $nC; DryRun = $false; Lifecycle = $lc; Status = 'ok'; Rows = $state.Read; Expected = $expected; Pages = $state.Pages; Issues = $issues.ToArray()
                                   # per report: what the data out keeps as it was (the findings of reports this run could not complete)
-                                  FrozenReports = [string[]]@($frozenReports); RunComplete = [bool]$cmp.Complete }
+                                  FrozenReports = [string[]]@($frozenReports); RunComplete = [bool]$cmp.Complete
+                                  # #1038 (1): the collection the stored findings per CI were made from (the data-out mark's key)
+                                  CollectionTime = [string]$snap }
     } catch {
         & $Log 'WARN' ("v3 model    : the findings per CI were not stored this run -- {0}. It is tried again on the next run; the findings load is not affected." -f $_.Exception.Message)
         & $say 'FAILED' ("the findings per CI of the newest collection were not stored -- {0}. The stored findings are kept as they are; no finding is closed this run" -f $_.Exception.Message)

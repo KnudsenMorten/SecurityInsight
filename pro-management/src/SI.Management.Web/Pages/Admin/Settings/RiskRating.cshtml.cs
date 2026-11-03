@@ -108,7 +108,7 @@ public sealed class RiskRatingModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the risk rating thresholds could not be read");
-            Error = "The risk rating thresholds could not be read from the Pro database: " + ex.Message;
+            Error = "The risk rating thresholds could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         try
         {
@@ -136,7 +136,7 @@ public sealed class RiskRatingModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the risk rating preview could not be read");
-            PreviewNotice = "The findings could not be counted: " + ex.Message;
+            PreviewNotice = "The findings could not be counted: " + ViewerError.Text(ex);
         }
     }
 

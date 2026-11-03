@@ -64,7 +64,7 @@ public sealed class ExportImportModel(IConfigBackupStore backups, ConfigEntities
     public async Task OnGetAsync(CancellationToken ct)
     {
         try { await LoadAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "export / import"); Error = "The configuration could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "export / import"); Error = "The configuration could not be read: " + ViewerError.Text(ex); }
     }
 
     private IActionResult Back(string message, bool ok, string? token = null)
@@ -152,7 +152,7 @@ public sealed class ExportImportModel(IConfigBackupStore backups, ConfigEntities
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or UnauthorizedAccessException)
         {
-            return Refused(ex.Message, T);
+            return Refused(ViewerError.Text(ex), T);
         }
     }
 }

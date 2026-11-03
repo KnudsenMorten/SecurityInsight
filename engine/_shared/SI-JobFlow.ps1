@@ -107,7 +107,10 @@ function Get-SIJobFlowMap {
                                                    # #748 'required': the update adds the step to a stored pipeline without it (where its job is installed)
                                                    Required = $(if ($j.PSObject.Properties['required']) { [bool]$j.required } else { $false })
                                                    # #636 'defaultEnabled': false = a new pipeline has the step switched off (Risk Analysis Summary)
-                                                   DefaultEnabled = $(if ($j.PSObject.Properties['defaultEnabled']) { [bool]$j.defaultEnabled } else { $true }) }
+                                                   DefaultEnabled = $(if ($j.PSObject.Properties['defaultEnabled']) { [bool]$j.defaultEnabled } else { $true })
+                                                   # #1038 (1) 'manualOnly': only ever STARTED (the data-out job: by the data sync on its mark and by
+                                                   # a person to resend) -- Manual in both modes, never a timer, never a step
+                                                   ManualOnly = $(if ($j.PSObject.Properties['manualOnly']) { [bool]$j.manualOnly } else { $false }) }
     }
     # #306: the default PIPELINE (stages in order, each with its steps); a map without one gets it from defaultFlow by stage.
     # A stage's 'withPrevious' names the steps that start together with the step above them (DefaultsLevel 2), and its

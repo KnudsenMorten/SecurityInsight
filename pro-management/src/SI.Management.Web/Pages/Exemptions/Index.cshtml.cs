@@ -77,7 +77,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the exemptions failed");
-            Error = "The exemptions could not be read from the Pro database: " + ex.Message;
+            Error = "The exemptions could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

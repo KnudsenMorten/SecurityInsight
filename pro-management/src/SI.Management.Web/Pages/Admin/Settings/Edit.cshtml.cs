@@ -74,6 +74,8 @@ public sealed class EditModel : PageModel
         // the licence settings are the install's lifecycle: SuperAdmin (#253)
         if (AccessLifecycle.IsLicenceSetting(Name) && !User.IsSuperAdmin()) return AccessResults.Refused(Request, AccessDecision.No("the licence settings need SuperAdmin"));
         if (!await LoadAsync(ct)) return NotFound();
+        // a secret's Key Vault reference and the hosts a secret is sent to: SuperAdmin
+        if (Setting!.NeedsSuperAdmin && !User.IsSuperAdmin()) return AccessResults.Refused(Request, AccessDecision.No($"{Setting.Name} needs SuperAdmin to change"));
         var change = BuildChange();
         var result = await _writer.WriteAsync(change, User.ChangeName(), ct);
         switch (result.Status)

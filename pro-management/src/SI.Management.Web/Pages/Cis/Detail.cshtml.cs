@@ -16,9 +16,14 @@ public sealed class DetailModel : PageModel
     private readonly ILogger<DetailModel> _log;
     private readonly SI.Management.Web.Changes.CiOverrideStore? _overrides;
     private readonly ICiGraphViews? _graph;
+    private readonly SI.Management.Web.Changes.CorrelationSuspectStore? _suspects;
 
-    public DetailModel(ICiViews cis, ILogger<DetailModel> log, SI.Management.Web.Changes.CiOverrideStore? overrides = null, ICiGraphViews? graph = null)
-    { _cis = cis; _log = log; _overrides = overrides; _graph = graph; }
+    public DetailModel(ICiViews cis, ILogger<DetailModel> log, SI.Management.Web.Changes.CiOverrideStore? overrides = null, ICiGraphViews? graph = null,
+        SI.Management.Web.Changes.CorrelationSuspectStore? suspects = null)
+    { _cis = cis; _log = log; _overrides = overrides; _graph = graph; _suspects = suspects; }
+
+    /// #1053 the correlation suspects this CI is part of (the gatekeeper's current set); empty = none, or not readable.
+    public IReadOnlyList<SI.Management.Web.Changes.CorrelationSuspectGroup> Suspects { get; private set; } = Array.Empty<SI.Management.Web.Changes.CorrelationSuspectGroup>();
 
     /// #462 the manual overrides of this CI (in force, expired, recently removed); null = could not be read / no table.
     public IReadOnlyList<SI.Management.Web.Changes.CiOverrideRow>? Overrides { get; private set; }
@@ -59,6 +64,11 @@ public sealed class DetailModel : PageModel
                 try { if (await _overrides.TableExistsAsync(ct)) Overrides = await _overrides.ListAsync(Ci.Ci.CiId, ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the manual overrides of CI {Id} could not be read", Id); }
             }
+            if (_suspects is not null)
+            {
+                try { if (await _suspects.TableExistsAsync(ct)) Suspects = (await _suspects.ForCiAsync(Ci.Ci.CiId, ct)).Where(s => !s.Dismissed).ToList(); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the correlation suspects of CI {Id} could not be read", Id); }
+            }
             if (_graph is not null)
             {
                 try
@@ -70,7 +80,7 @@ public sealed class DetailModel : PageModel
                 catch (Exception ex) when (ex is not OperationCanceledException and not ArgumentException)
                 {
                     _log.LogWarning(ex, "the graph of CI {Id} could not be read", Id);
-                    GraphError = "The services, relations and history of this CI could not be read: " + ex.Message;
+                    GraphError = "The services, relations and history of this CI could not be read: " + ViewerError.Text(ex);
                 }
             }
             if (Ci.Trend.Count > 0)
@@ -81,12 +91,12 @@ public sealed class DetailModel : PageModel
                     new ChartSeries("Open findings", Ci.Trend.Select(d => (double?)d.OpenFindings).ToList(), 3),
                 }, null, "The CI's risk per day");
         }
-        catch (ArgumentException ex) { Error = "The request is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The request is not valid: " + ViewerError.Text(ex); }
         catch (ViewTimeoutException ex) { Error = SI.Management.Web.Pages.Collection.CollectionPageModel.TimeoutText(ex.Limit, null); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the CI {Id} could not be read", Id);
-            Error = "The CI could not be read from the Pro database: " + ex.Message;
+            Error = "The CI could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         return Page();
     }

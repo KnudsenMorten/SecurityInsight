@@ -89,11 +89,11 @@ public sealed class FindingModel : PageModel
             Thread = await _thread.LoadAsync(User, Target, Here, ct);
             return true;
         }
-        catch (ArgumentException ex) { Error = ex.Message; return false; }
+        catch (ArgumentException ex) { Error = ViewerError.Text(ex); return false; }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading a finding's governance failed");
-            Error = "The finding's governance could not be read: " + ex.Message;
+            Error = "The finding's governance could not be read: " + ViewerError.Text(ex);
             return false;
         }
     }

@@ -6,7 +6,7 @@
 @{
     var f = Model;
 }
-<details class="colfilter multifilter@(f.Compact ? " compact" : "")" id="@f.Id" data-multifilter data-filter="@f.Name" data-counts-url="@f.CountsUrl" data-mf-fill="@(f.Fill ? f.Form ?? "" : null)">
+<details class="colfilter multifilter@(f.Compact ? " compact" : "")" id="@f.Id" data-multifilter data-filter="@f.Name" data-counts-url="@f.CountsUrl" data-mf-fill="@(f.Fill ? f.Form ?? "" : null)" data-mf-mirror="@f.Mirror">
     <summary aria-label="Filter @f.Label: @f.Summary">@if (!f.Compact) { <span class="mf-name">@f.Label</span> }<span class="mf-summary" data-mf-summary>@f.Summary</span></summary>
     <div class="mf-panel">
         @* autocomplete="off": the ticks are what the server drew -- a browser restoring old ticks on a reload put "All" and

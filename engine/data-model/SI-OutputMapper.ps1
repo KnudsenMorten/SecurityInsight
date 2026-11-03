@@ -14,7 +14,7 @@
              #914 the contract envelope, filled by the data-out writer: $action $batch_id $cleared $reason $replaces
       op     the CLOSED output operation set (no code runs from a map):
              enum:<value-map>  first  join:<sep>  join_ids:<sep>  render:<a>:<b>  format_date  round:<n>  mask
-             domain_part  if_class:<class>  lower  upper
+             domain_part  finding_key  if_class:<class>  lower  upper
       filter { "<field>": [ values ] } -- only items whose field is one of the values
       as     optional: the name the output gives the column (the customer's rename); default the target. The target stays
              the column's KEY -- what an override matches on -- so a renamed column keeps its place and its UpgradeAvailable
@@ -112,6 +112,18 @@ function Invoke-SIOutputOp {
         'round' { $n = ConvertTo-SINumberOrNull $Value; if ($null -eq $n) { return $null }; $d = 0; if ($arg) { $d = [int]$arg }; return [Math]::Round($n, $d) }
         'mask' { if (Test-SIValueEmpty $Value) { return $Value }; return '***' }
         'domain_part' { $s = [string]$Value; $j = $s.IndexOf('.'); if ($j -lt 0) { return '' }; return $s.Substring($j + 1) }
+        'finding_key' {
+            # the finding's id as the ServiceNow staging spec gives it (columns.csv, u_vulnerability: 100 characters): a CVE
+            # upper case; an id longer than 100 cut to its first 59 characters + '~' + the SHA-1 of the whole id (upper case
+            # in, lower-case hex out) -- stable, readable, the same as the vulnerability sync's Get-SIVulnFindingKey
+            $c = ([string]$Value).Trim()
+            if (-not $c) { return '' }
+            if ($c -match '^(?i)CVE-' -and $c.Length -le 100) { return $c.ToUpperInvariant() }
+            if ($c.Length -le 100) { return $c }
+            $sha = [System.Security.Cryptography.SHA1]::Create()
+            try { $h = (@($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($c.ToUpperInvariant())) | ForEach-Object { $_.ToString('x2') })) -join '' } finally { $sha.Dispose() }
+            return ($c.Substring(0, 59) + '~' + $h)
+        }
         'if_class' { if ([string](Get-SIItemValue $Item 'si_class') -eq $arg) { return $Value }; return $null }
         'lower' { if ($null -eq $Value) { return $null }; return ([string]$Value).ToLowerInvariant() }
         'upper' { if ($null -eq $Value) { return $null }; return ([string]$Value).ToUpperInvariant() }

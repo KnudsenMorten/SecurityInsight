@@ -91,11 +91,11 @@ public sealed class MapModel : PageModel
             foreach (var s in Services) Lanes[s.ServiceId] = await _store.ServiceAssetsAsync(s.ServiceId, Filter, 0, PageSize, ct);
             if (User.IsAdmin()) Pending = (await _changes.PendingAsync(User, ct)).Where(p => p.Kind == ChangeKinds.CmdbLink).ToList();
         }
-        catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the service map could not be read");
-            Error = "The service map could not be read from the Pro database: " + ex.Message;
+            Error = "The service map could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -116,7 +116,7 @@ public sealed class MapModel : PageModel
                 : throw new ArgumentException("unknown lane");
             return new JsonResult(new { items = items.Select(ToCard), more = skip + items.Count < total, total });
         }
-        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ViewerError.Text(ex) }); }
     }
 
     // ---- staging (Admin): the drop handler posts here ----
@@ -144,7 +144,7 @@ public sealed class MapModel : PageModel
             }
             r = Action is "link" or "unlink" ? await _cmdb.NewLinkAsync(ServiceId, list, Action == "link", Reason, ct) : (null, new[] { $"unknown action '{Action}'" });
         }
-        catch (ArgumentException ex) { r = (null, new[] { ex.Message }); }
+        catch (ArgumentException ex) { r = (null, new[] { ViewerError.Text(ex) }); }
         string message;
         if (r.change is not null)
         {

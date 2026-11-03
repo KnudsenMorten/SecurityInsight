@@ -158,6 +158,8 @@ public static class NavModel
         new("Operations", "/Admin/Performance", "Performance", "reader"),
         // #577: each run's key numbers against the median of the last 3 runs -- warnings only, never a block
         new("Operations", "/Admin/DataQuality", "Data quality", "reader"),
+        // #1053 the correlation gatekeeper: CIs that are probably one machine (or one machine that is probably two)
+        new("Operations", "/Admin/CorrelationSuspects", "Correlation suspects", "reader"),
         // the connectors' state for an Admin; their runs moved to Configuration > Connectors > Runs (owner 2026-10-19)
         Group("Operations", "Connector state", "admin",
             new("/Admin/Connectors", "Status", "admin"), new("/Admin/CloseLoop", "Close-loop state", "admin"), new("/Admin/Resend", "Resend and undo", "admin")),

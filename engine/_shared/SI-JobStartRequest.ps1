@@ -36,6 +36,11 @@ $script:SIJobStartRequestAllowed = @{
     'risk-analysis-detailed' = @('SI_RA_REPORT_TEMPLATE', 'SI_RA_MODE', 'SI_RA_SEND_TO_LOG_ANALYTICS', 'SI_RA_SEND_MAIL')
 }
 
+# Names applied ONLY from a request bound to THIS execution (the start that ran with it). A request handed back by a
+# skipped execution is taken by whichever execution of the job comes next -- a scheduled one too -- so it never carries
+# these: a scheduled run is never switched off Log Analytics or mail, or moved to another report, by a row in the table.
+$script:SIJobStartRequestBoundOnly = @('SI_RA_REPORT_TEMPLATE', 'SI_RA_MODE', 'SI_RA_SEND_TO_LOG_ANALYTICS', 'SI_RA_SEND_MAIL')
+
 function Get-SIJobStartRequestAllowed {
     <# PURE. The names a start request may set on job -Job (caj-si-<x> or <x>). #>
     param([string]$Job)
@@ -49,7 +54,7 @@ function Get-SIJobStartRequestClaimSql {
     # the row bound to this execution, else (oldest first) one handed back by a skipped execution of the same job
     @"
 UPDATE r SET AppliedUtc = SYSUTCDATETIME(), Outcome = N'applied', ExecutionName = @Exec, Detail = N'taken by execution ' + @Exec
-OUTPUT inserted.RequestId, inserted.EnvJson, inserted.RequestedBy
+OUTPUT inserted.RequestId, inserted.EnvJson, inserted.RequestedBy, deleted.ExecutionName AS BoundTo
 FROM cfg.JobTriggerRequest r
 WHERE r.RequestId = (SELECT TOP (1) q.RequestId FROM cfg.JobTriggerRequest q WITH (UPDLOCK, READPAST)
                      WHERE q.JobName = @Job AND q.Action = N'start-env' AND q.AppliedUtc IS NULL
@@ -72,14 +77,17 @@ function Get-SIJobStartRequestReleaseSql {
 function ConvertFrom-SIJobStartRequestEnv {
     <#
         PURE. The values of a start request (-EnvJson, a JSON object of name -> value) that job -Job may set.
+        -HandedBack: the request was handed back by a skipped execution (not bound to this one) -- the bound-only names
+        ($script:SIJobStartRequestBoundOnly) are refused too.
         @{ Env = ordered name -> value; Dropped = names refused }.
     #>
-    param([string]$EnvJson, [string]$Job)
+    param([string]$EnvJson, [string]$Job, [switch]$HandedBack)
     $r = @{ Env = [ordered]@{}; Dropped = @() }
     if (-not ([string]$EnvJson).Trim()) { return $r }
     try { $o = $EnvJson | ConvertFrom-Json -ErrorAction Stop } catch { $r.Dropped = @('(the values are not valid JSON)'); return $r }
     if ($null -eq $o -or $o -isnot [System.Management.Automation.PSCustomObject]) { $r.Dropped = @('(the values are not a JSON object)'); return $r }
     $allowed = @(Get-SIJobStartRequestAllowed -Job $Job)
+    if ($HandedBack) { $allowed = @($allowed | Where-Object { $script:SIJobStartRequestBoundOnly -cnotcontains $_ }) }
     foreach ($p in $o.PSObject.Properties) {
         $n = [string]$p.Name; $v = [string]$p.Value
         if ($allowed -ccontains $n -and $v.Length -le 1000) { $r.Env[$n] = $v } else { $r.Dropped += $n }
@@ -115,10 +123,15 @@ function Invoke-SIJobStartRequestClaim {
     if (-not $rows.Count) { return $none }
     $row = $rows[0]
     $get = { param($n) if ($row -is [System.Collections.IDictionary]) { $row[$n] } else { $row.$n } }
-    $c = ConvertFrom-SIJobStartRequestEnv -EnvJson ([string](& $get 'EnvJson')) -Job $Job
+    # bound to THIS execution (the web app bound it to the start it made) or handed back by a skipped one
+    $handedBack = -not [string]::Equals([string](& $get 'BoundTo'), $Execution, [StringComparison]::Ordinal)
+    $c = ConvertFrom-SIJobStartRequestEnv -EnvJson ([string](& $get 'EnvJson')) -Job $Job -HandedBack:$handedBack
     foreach ($k in $c.Env.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$c.Env[$k]) }
     $line = '[start-request] started by {0}: {1}' -f [string](& $get 'RequestedBy'), $(if ($c.Env.Count) { (@($c.Env.Keys) -join ', ') } else { 'no values' })
     if (@($c.Dropped).Count) { $line += (' (not allowed for this job, not set: {0})' -f (@($c.Dropped) -join ', ')) }
+    if ($handedBack -and @($c.Dropped | Where-Object { $script:SIJobStartRequestBoundOnly -ccontains $_ }).Count) {
+        $line += ' -- the request was handed back by another execution: it never changes this run''s report, Log Analytics or mail'
+    }
     @{ Claimed = $true; RequestId = (& $get 'RequestId'); Names = @($c.Env.Keys); Line = $line }
 }
 

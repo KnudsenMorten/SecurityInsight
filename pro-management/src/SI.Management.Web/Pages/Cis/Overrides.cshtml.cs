@@ -51,7 +51,7 @@ public sealed class OverridesModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the manual CI overrides could not be read");
-            Error = "The manual overrides could not be read from the Pro database: " + ex.Message;
+            Error = "The manual overrides could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

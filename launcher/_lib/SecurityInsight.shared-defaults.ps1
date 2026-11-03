@@ -98,6 +98,22 @@ $global:SI_DisabledAssets_RiskAnalysis = $false   # reach the Risk Analysis repo
 $global:SI_DisabledAssets_StateActions = $false   # finding / vulnerability lifecycle, close-loop, ticket open and close (needs collection)
 $global:SI_DisabledAssets_Connectors   = $false   # sent out by connectors and exports (needs collection)
 
+# --- A customer's choice: Exposure Graph identities that get no asset (#1056) ---
+# Off by default -- an install that does not turn them on works exactly as before. On (per install, the customer's own
+# choice): the identity collection records no asset for the objects below, counts them in its log and on the Data health
+# page, and their existing CIs retire with a reason naming the setting. Real users, groups, devices and findings are not
+# affected. Read by engine\asset-profiling\shared\SI-IdentityScopeChoice.ps1.
+$global:SI_Identity_SkipNeverSyncedDisabledAd = $false   # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
+$global:SI_Identity_SkipDeletedGroups         = $false   # groups: only those Entra ID still has (active or recently deleted) become assets
+
+# --- Retire at once on proof of deletion (#1057) ---
+# Off by default -- an install that does not turn them on works exactly as before. On (per install, per source): an asset
+# whose source PROVES it deleted (never merely missing) retires at once instead of after the grace period, and its open
+# vulnerabilities close as 'asset deleted in <source>'. Read by engine\data-model\SI-DeletionProof.ps1.
+$global:SI_DeletionProof_Entra  = $false   # a user, device or group in Entra ID's deleted items retires at once
+$global:SI_DeletionProof_Azure  = $false   # an Azure resource with a Delete in the resource changes retires at once
+$global:SI_DeletionProof_Intune = $false   # a managed device deleted in Intune's audit events retires at once
+
 # --- CI build ---
 # Every CI is rebuilt in full at least this often (days); the runs between build only the CIs whose input changed.
 # 0 = a full build every run. Read by engine\data-model\SI-CiBuildSql.ps1 (Get-SICiFullReconcileDecision).

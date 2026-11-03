@@ -878,6 +878,13 @@ function Invoke-SIUpdateNightlySchedule {
             if (@($p9.Lines).Count) { Step '9l. NIGHTLY 19:00 (the daily pipeline)' }
             foreach ($l in @($p9.Lines)) { if ($p9.Action -eq 'failed') { Warn $l } else { Info $l } }
         }
+        # 9m #986: the pipeline's start time lives in the Pro database only -- its stale copy is removed from the jobs' settings
+        # (a start time the customer chose that exists only there is kept in the database first)
+        if ($rest -and (Get-Command -Name Invoke-SINightlyJobEnvCleanup -ErrorAction SilentlyContinue)) {
+            $je = Invoke-SINightlyJobEnvCleanup -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Sql $sql -WhatIf:$wi
+            if (@($je.Lines).Count) { Step '9m. THE PIPELINE''S START TIME (the database only)' }
+            foreach ($l in @($je.Lines)) { if ($je.Action -eq 'failed') { Warn $l } else { Info $l } }
+        }
     } catch { Warn ("nightly schedule: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
 }
 # #830 THE REPORT-ROW COPY (setup/_shared/SI-ReportCopyDefault.ps1): the copy of the Risk Analysis report rows to Log Analytics
@@ -1146,6 +1153,35 @@ function Invoke-SIUpdateOwnSqlConnector {
         foreach ($l in @($r.Lines)) { if ($r.Action -eq 'failed') { Warn $l } else { Info $l } }
         $global:SI_UpdateOwnSqlConnector = $r
     } catch { Warn ("connectors: SecurityInsight's own SQL vulnerability target was not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
+
+# #1021 THE SUPPORT GRANT (setup/_shared/SI-SupportGrantUpdate.ps1; rule: existing installs reach the new-install state): the
+# queue si-support-requests the Invardia Support session puts its request on (made, read back), and ONCE a DERIVED consent
+# from the Support app's Key Vault role (owner 2026-11-01) into an empty cfg.SupportConsent. The job itself comes from the
+# missing-jobs step; signing the procedures, the Support app's read-only user and its two Azure roles need rights the updater
+# does not have -- the one Support-session step per install (setup\Install-SISupportGrantProcedure.ps1). Pro only. Silent
+# when there is nothing to do. Never fails the update. -DetectOnly: the plan.
+function Invoke-SIUpdateSupportGrant {
+    $lib = Join-Path $PSScriptRoot '_shared/SI-SupportGrantUpdate.ps1'
+    if (-not (Test-Path -LiteralPath $lib) -or -not $rest) { return }
+    try {
+        . $lib
+        $envOr = { param($n) $v = [Environment]::GetEnvironmentVariable($n); if ("$v".Trim()) { "$v".Trim() } else { '' } }
+        $gv = { param($n) if ($globals.ContainsKey($n) -and "$($globals[$n])".Trim()) { "$($globals[$n])".Trim() } else { '' } }
+        $proSrv = & $envOr 'SI_UPDATER_PRO_SQL_SERVER'; if (-not $proSrv) { $proSrv = & $gv 'SI_ProSqlServer' }
+        $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
+        if (-not $proSrv -or -not $proDb) { return }
+        if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
+        $wi = (-not $Apply -or $DetectOnly)
+        $lines = New-Object System.Collections.Generic.List[object]
+        $q = Invoke-SISupportGrantQueueEnsure -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Account (& $gv 'SI_StorageAccount') -WhatIf:$wi
+        if ($q.Line) { $lines.Add(@($q.Action, $q.Line)) }
+        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $dc = Invoke-SISupportGrantDerivedConsent -Rest $rest -Sql $sql -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -VaultName (& $gv 'SI_KeyVaultName') -WhatIf:$wi
+        if ($dc.Line) { $lines.Add(@($dc.Action, $dc.Line)) }
+        if ($lines.Count) { Step '9p. SUPPORT ACCESS (just in time)' }
+        foreach ($l in $lines) { if ($l[0] -eq 'failed') { Warn $l[1] } else { Info $l[1] } }
+    } catch { Warn ("support access: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
 }
 
 # #903 ONE SERVICENOW CONNECTOR FEEDS BOTH DATA-OUT OUTPUTS (setup/_shared/SI-SnowDataOutConnector.ps1; owner 2026-10-26: "if
@@ -1454,7 +1490,7 @@ function Invoke-SIUpdateSigninStore {
         $r
     } catch { Warn ("sign-in front store: not checked ({0}) -- the update goes on; the front keeps what it runs; the next update tries again." -f $_.Exception.Message); $null }
 }
-function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
+function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
 $script:SISqlTierJobs = @()
 
 # #756 THE CODE IS CURRENT, THE SIZES STILL FOLLOW THE SETTINGS (live 2026-10-19: SI_Bootstrap_SqlServiceObjective = S2 set,

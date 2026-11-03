@@ -1693,6 +1693,33 @@
       "advanced": false,
       "group": "Sign-in & Azure resources"
     },
+    "SI_DeletionProof_Azure": {
+      "label": "Retire at once: resources deleted in Azure",
+      "purpose": "Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it keeps the not-seen grace period.",
+      "defaultText": "Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before",
+      "effect": "Stages: the CI build checks the Azure records missing from a complete collection against the resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Azure', never as fixed. A CI another source still sees stays active. A resource listed again is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
+      "whenToChange": "When an asset deleted in Azure should not wait the grace period before it and its vulnerabilities are retired.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_DeletionProof_Entra": {
+      "label": "Retire at once: objects deleted in Entra ID",
+      "purpose": "Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
+      "defaultText": "Off: a user, device or group Entra ID no longer lists waits the not-seen grace period, as before",
+      "effect": "Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups) missing from a complete collection against Entra ID's deleted items; a proven one is recorded, its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Entra ID', never as fixed. A CI another source still sees stays active. An object restored in Entra ID is listed again: its CI is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
+      "whenToChange": "When an object deleted in Entra ID should not wait the grace period before it and its vulnerabilities are retired.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_DeletionProof_Intune": {
+      "label": "Retire at once: devices deleted in Intune",
+      "purpose": "Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete of the managed device in Intune's audit events. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
+      "defaultText": "Off: a device Intune no longer lists waits the not-seen grace period, as before",
+      "effect": "Stages: the CI build checks the Intune records missing from a complete collection against Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once: deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active. A device listed again is active again and its findings reopen. A read that is not complete (for example without the permission) decides nothing for what it did not return.",
+      "whenToChange": "When a device deleted in Intune should not wait the grace period before it and its vulnerabilities are retired.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
     "SI_DisableAI": {
       "label": "Turn off AI classification (all engines)",
       "purpose": "A master switch that turns off AI asset classification for every collection engine, whatever else is switched on.",
@@ -2981,6 +3008,24 @@
       "advanced": false,
       "group": "Collection scope & limits",
       "needs": "SI_DisabledAssets_Collect"
+    },
+    "SI_Identity_SkipNeverSyncedDisabledAd": {
+      "label": "Exposure Graph: no asset for never-synced, disabled AD accounts",
+      "purpose": "A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but that were never synced to Entra ID (no Entra object id). On, only the enabled or privileged ones become assets: privileged = an admin count, a critical or tier 0/1 AD group (Domain Admins, Enterprise Admins ...), an assigned role, a service account, a sensitive account or a Microsoft criticality level. The others are counted and get no asset.",
+      "defaultText": "Off: every on-premises AD account the Exposure Graph lists becomes an asset, as before",
+      "effect": "Stages: the identity collection records no asset for a never-synced AD account that is disabled and not privileged; the run log and the Data health page show how many per run; the CI build retires the existing CI of such an account at once, with a reason naming this setting (its findings close as asset retired, never as fixed). Disabled = the account says so itself (accountEnabled false, or the disabled flag of userAccountControl); an account that does not say is kept. Accounts synced to Entra ID, groups, devices and findings are not affected. Off again, the next run records them again and their CIs come back.",
+      "whenToChange": "Only when your organisation chose it: its Exposure Graph lists very many old on-premises accounts that never reached Entra ID and are disabled, and they should not be assets.",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Identity_SkipDeletedGroups": {
+      "label": "Exposure Graph: no asset for groups Entra ID no longer has",
+      "purpose": "A customer's choice for groups the Exposure Graph still lists although Entra ID no longer has them (neither active nor in its deleted items). On, only groups that still exist in Entra ID (active or recently deleted) become assets. The others are counted and get no asset.",
+      "defaultText": "Off: every group the Exposure Graph lists becomes an asset, as before",
+      "effect": "Stages: the identity collection reads the ids of Entra ID's groups and deleted groups once per run and records no asset for an Exposure Graph group with an Entra object id that Entra ID does not return; the run log and the Data health page show how many per run; the CI build retires the existing CI of such a group at once, with a reason naming this setting. A run whose Entra ID group read is not complete decides nothing: groups keep their last state. On-premises groups that were never synced, users, devices and findings are not affected. Off again, the next run records them again and their CIs come back.",
+      "whenToChange": "Only when your organisation chose it: its Exposure Graph lists very many groups deleted long ago, and they should not be assets.",
+      "advanced": true,
+      "group": "Collection scope & limits"
     },
     "SI_RiskAnalysis_BuildSummaryByAI": {
       "label": "AI summary in the report mail (container jobs)",
@@ -5560,6 +5605,15 @@
       ]
     },
     {
+      "name": "Exposure Graph identities without an asset",
+      "category": "Collection scope & limits",
+      "description": "A customer's own choice, off by default: Exposure Graph identities that get no asset. What is left out is counted in each run's log and on the Data health page; existing CIs retire with a reason naming the setting.",
+      "settings": [
+        "SI_Identity_SkipNeverSyncedDisabledAd",
+        "SI_Identity_SkipDeletedGroups"
+      ]
+    },
+    {
       "name": "Extra details",
       "category": "Collection scope & limits",
       "description": "Optional data the collections can add.",
@@ -5742,7 +5796,10 @@
         "SI_Pro_AssetRetire_GraceDays_ServicePrincipal",
         "SI_Pro_AssetRetire_GraceDays_User",
         "SI_Pro_AssetRetire_GraceDays_AzureVm",
-        "SI_Pro_AssetRetire_GraceDays_AzureResource"
+        "SI_Pro_AssetRetire_GraceDays_AzureResource",
+        "SI_DeletionProof_Entra",
+        "SI_DeletionProof_Azure",
+        "SI_DeletionProof_Intune"
       ]
     },
     {

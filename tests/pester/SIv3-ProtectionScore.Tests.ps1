@@ -136,9 +136,12 @@ Describe 'the Risk Analysis mail shows the protection score, never the old 0-100
         }
     }
     It 'the stale flag of a CI from the database is TEXT: ''false'' is an active CI (live 2026-10-22: every CI was counted inactive)' {
+        # the key figures' setup (the CI walk) is RA-KpiTally.ps1's New-RAKpiState since 2026-10-31 (one copy for both passes)
         $ra = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
+        $kt = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-KpiTally.ps1'))
         $ra | Should -Not -Match '\[bool\]\$__c\.si_stale_'
-        $ra | Should -Match "\(\[string\]\`$__c\.si_stale_\)\.Trim\(\) -in 'true', '1'"
+        $kt | Should -Not -Match '\[bool\]\$__c\.si_stale_'
+        $kt | Should -Match "\(\[string\]\`$__c\.si_stale_\)\.Trim\(\) -in 'true', '1'"
         [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-CiContext.ps1')) | Should -Match "'si_stale_' -NotePropertyValue \`$\(if .*\{ 'true' \} else \{ 'false' \}\)"
         # the same read on the shapes both sources give
         foreach ($c in @(@('false', $false), @('true', $true), @($false, $false), @($true, $true), @('1', $true), @('0', $false))) {
@@ -185,7 +188,12 @@ Describe 'the Risk Analysis mail shows the protection score, never the old 0-100
     }
     It 'the engine computes it in the Detailed run, after the cache override, and keeps it for the Summary run' {
         $ra = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
-        $ra | Should -Match '(?s)New-SIProtectionTally.*Add-SIProtectionRow -Tally \$__prot -Row \$r.*Complete-SIProtectionTally -Tally \$__prot.*NotePropertyName Protection'
+        # the tally is counted by the key figures' functions (RA-KpiTally.ps1, 2026-10-31): the inventory in New-RAKpiState, each
+        # row in Add-RAKpiRow; the engine takes the tally from the key figures' pass and completes it after the cache override
+        $kt = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-KpiTally.ps1'))
+        $kt | Should -Match '(?s)function New-RAKpiState.*New-SIProtectionTally -CollectionTime \$Now.*Add-SIProtectionAsset -Tally \$__prot.*\$st\.Prot = \$__prot'
+        $kt | Should -Match '(?s)function Add-RAKpiRow.*if \(\$null -ne \$State\.Prot\) \{ Add-SIProtectionRow -Tally \$State\.Prot -Row \$r \}'
+        $ra | Should -Match '(?s)Invoke-RAKpiPass -FromAiPass.*\$__prot  = \$__kpiPass\.State\.Prot.*Complete-SIProtectionTally -Tally \$__prot.*NotePropertyName Protection'
         $ra.IndexOf('Complete-SIProtectionTally -Tally $__prot') | Should -BeGreaterThan $ra.IndexOf('OVERRIDE with cached values')
         [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-ExecView.ps1')) | Should -Match "kpiOut\['Protection'\]"
     }
@@ -220,8 +228,10 @@ Describe 'Pro: the Detailed mail waits for the STORED score (owner 2026-10-22: o
     }
     It 'a Pro Detailed run keeps its mail for the stored score instead of counting one; a mail that cannot be kept is sent at once, saying why' {
         $ra = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
-        $ra | Should -Match '\$script:RAProtectionFromStore = \(Get-RAReportGrainLabel'
-        $ra | Should -Match "-not \[string\]::IsNullOrWhiteSpace\(\[string\]\`$global:SI_ProSettingsVersion\) -and \[bool\]\`$script:RAStreamOn"
+        # the decision is made in the key figures' setup (RA-KpiTally.ps1 New-RAKpiState, 2026-10-31)
+        $kt = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-KpiTally.ps1'))
+        $kt | Should -Match '\$script:RAProtectionFromStore = \(Get-RAReportGrainLabel'
+        $kt | Should -Match "-not \[string\]::IsNullOrWhiteSpace\(\[string\]\`$global:SI_ProSettingsVersion\) -and \[bool\]\`$script:RAStreamOn"
         $ra | Should -Match '(?s)if \(\$script:RAProtectionFromStore\) \{.{0,1600}Invoke-SIRaMailOutbox -Invoke \$__oInv -Role producer.{0,1500}-ProtectionPending.{0,400}Add-SIRaMailOutbox -Invoke \$__oInv.{0,900}\$__sendNow = \$false'
         $ra | Should -Match "(?s)\} catch \{.{0,300}ConvertTo-RAReportMailHtml -Kpi \`$kpi @__mailArgs -GroupingsHtml \`$__sgHtml -ProtectionReason \(Get-SIProtectionReason 'no-wait'"
         $ra | Should -Match '(?s)if \(\$__sendNow\) \{\s+Write-Step'

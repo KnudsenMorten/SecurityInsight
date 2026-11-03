@@ -122,6 +122,9 @@ function New-SIImageLayerPlan {
     $none = { param($why) [pscustomobject]@{ HasBase = $false; BaseRepo = $BaseRepo; BaseTag = ''; BaseImage = ''; BaseDockerfile = ''; AppDockerfile = ''; Reason = $why } }
     try { $s = Split-SIDockerfile -Text $DockerfileText } catch { return (& $none ("built as it is: {0}" -f $_.Exception.Message)) }
     if (-not @($s.Base).Count) { return (& $none 'built as it is: no instruction before the first COPY (nothing to cache)') }
+    # a FROM PINNED to a digest in the release's Dockerfile (image:tag@sha256:...) is built exactly as pinned: the pin is the
+    # digest -- a live digest read for the tag never replaces it (and is never appended to it)
+    if ($s.From -match '@sha256:[0-9a-fA-F]{64}$') { $FromDigest = '' }
     $baseText = (@($s.Base | ForEach-Object { $_.Text }) -join "`n")
     $runs = [bool](@($s.Base | Where-Object { $_.Keyword -eq 'RUN' }).Count)
     $hashIn = "FROM $($s.From)@$FromDigest`n$baseText`n" + (@($Floating) -join "`n") + $(if ($runs -and $Week) { "`nweek=$Week" } else { '' })
@@ -132,7 +135,7 @@ function New-SIImageLayerPlan {
         HasBase = $true; BaseRepo = $BaseRepo; BaseTag = $tag; BaseImage = ('{0}:{1}' -f $BaseRepo, $tag)
         BaseDockerfile = ((@($hdr, $from) + @($s.Base | ForEach-Object { $_.Text })) -join "`n") + "`n"
         AppDockerfile  = ((@($hdr, ('FROM {0}/{1}:{2}' -f $LoginServer, $BaseRepo, $tag)) + @($s.App | ForEach-Object { $_.Text })) -join "`n") + "`n"
-        Reason = ('base {0}:{1} (FROM {2}{3})' -f $BaseRepo, $tag, $s.From, $(if ($FromDigest) { '@' + $FromDigest.Substring(0, [Math]::Min(19, $FromDigest.Length)) } else { ', digest unknown' }))
+        Reason = ('base {0}:{1} (FROM {2}{3})' -f $BaseRepo, $tag, $s.From, $(if ($FromDigest) { '@' + $FromDigest.Substring(0, [Math]::Min(19, $FromDigest.Length)) } elseif ($s.From -match '@sha256:') { ', pinned' } else { ', digest unknown' }))
     }
 }
 

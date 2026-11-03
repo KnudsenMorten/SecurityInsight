@@ -94,7 +94,7 @@ public sealed class ApplyModel : PageModel
         var allowed = Resolved.Targets.Where(t => !refusedIds.Contains(t.Finding.FindingId)).ToList();
         ActionOutcome outcome;
         try { outcome = await action.ExecuteAsync(User, allowed, form, ct); }
-        catch (ArgumentException ex) { return Fail(action, "Nothing was done: " + ex.Message, 200, form); }
+        catch (ArgumentException ex) { return Fail(action, "Nothing was done: " + ViewerError.Text(ex), 200, form); }
         Results = Resolved.Missing.Concat(refused).Concat(outcome.Results).ToList();
         var done = Results.Count(r => r.Done);
         var no = Results.Count - done;

@@ -226,6 +226,7 @@ Describe 'the builders send nothing' {
         $isPro = { param($full) $rel = $full.Substring($script:SIRoot.TrimEnd('\').Length + 1); [bool](@($proPaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '\') }).Count) }
         $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' | Where-Object { $_.FullName -notmatch '\\tests\\' -and $_.Name -notin 'SI-Telemetry.ps1' -and -not (& $isPro $_.FullName) } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match 'New-SITelemetry(RunRecord|Heartbeat)' } | ForEach-Object { $_.Name })
-        $callers | Should -Be @('SI-TelemetrySend.ps1')
+        # the support grant (Community AND Pro) reports each grant / close on the uplink through the sender's own send (framework SECAUDIT-1a)
+        @($callers | Sort-Object) | Should -Be @('Invoke-SISupportGrant.ps1', 'SI-TelemetrySend.ps1')
     }
 }

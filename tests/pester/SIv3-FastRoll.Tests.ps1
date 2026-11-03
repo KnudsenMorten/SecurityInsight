@@ -62,7 +62,12 @@ Describe 'two-layer images: the cached base and the thin code layer' {
         $p = New-SIImageLayerPlan -DockerfileText ([IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Dockerfile'))) -BaseRepo 'si-updater-base' -LoginServer 'reg.io' -FromDigest 'sha256:abc' -Week '2026-W41'
         $p.HasBase | Should -BeTrue
         $p.BaseTag | Should -Match '^[0-9a-f]{16}$'
-        $p.BaseDockerfile | Should -Match 'FROM mcr\.microsoft\.com/powershell:lts-ubuntu-22\.04@sha256:abc'
+        # the release's Dockerfile pins its FROM to a digest: the base is built from exactly that pin -- a live digest read
+        # for the tag (here sha256:abc) never replaces it, nor is it appended to it
+        $pin = ([regex]::Match([IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Dockerfile')), '(?m)^FROM (\S+@sha256:[0-9a-f]{64})\s*$')).Groups[1].Value
+        $pin | Should -Not -BeNullOrEmpty
+        $p.BaseDockerfile | Should -Match ('(?m)^FROM {0}$' -f [regex]::Escape($pin))
+        $p.BaseDockerfile | Should -Not -Match 'sha256:abc'
         $p.BaseDockerfile | Should -Match 'apt-get install -y --no-install-recommends ca-certificates'
         $p.BaseDockerfile | Should -Not -Match 'InstallAzureCLIDeb|az extension|azure-cli'
         $p.BaseDockerfile | Should -Not -Match 'COPY'
@@ -70,6 +75,15 @@ Describe 'two-layer images: the cached base and the thin code layer' {
         $p.AppDockerfile | Should -Match 'COPY container/updater/Start-SIUpdater.ps1'
         $p.AppDockerfile | Should -Match 'ENTRYPOINT'
         $p.AppDockerfile | Should -Not -Match 'apt-get'
+    }
+    It 'a FROM pinned to a digest: built as pinned, the base hash moves with the pin and not with a live digest' {
+        $pa = 'sha256:' + ('a' * 64); $pb = 'sha256:' + ('b' * 64)
+        $df = { param($d) "FROM mcr.microsoft.com/powershell:lts@$d`nRUN apt-get update`nCOPY . /app/`nENTRYPOINT [`"pwsh`"]" }
+        $p = New-SIImageLayerPlan -DockerfileText (& $df $pa) -BaseRepo b -LoginServer r -FromDigest 'sha256:1' -Week 'W1'
+        $p.BaseDockerfile | Should -Match ('(?m)^FROM mcr\.microsoft\.com/powershell:lts@{0}$' -f $pa)
+        $p.BaseDockerfile | Should -Not -Match 'sha256:1\b'
+        (New-SIImageLayerPlan -DockerfileText (& $df $pa) -BaseRepo b -LoginServer r -FromDigest 'sha256:2' -Week 'W1').BaseTag | Should -Be $p.BaseTag
+        (New-SIImageLayerPlan -DockerfileText (& $df $pb) -BaseRepo b -LoginServer r -FromDigest 'sha256:1' -Week 'W1').BaseTag | Should -Not -Be $p.BaseTag
     }
     It 'the base hash is stable, and moves with the FROM digest, the base lines, a module version, and the week (only when the base RUNs)' {
         $df = "FROM mcr.microsoft.com/powershell:lts`nRUN apt-get update`nCOPY . /app/`nENTRYPOINT [`"pwsh`"]"

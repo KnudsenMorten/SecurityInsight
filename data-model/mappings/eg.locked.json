@@ -2,7 +2,7 @@
   "$comment": "Field mapping for provider 'eg': SI field <- provider source path(s) + normalisation. Template kind: field-mapping. Source paths are dot paths into the provider object the collector builds (objects below); [*] walks an array; several sources = the first non-empty one unless combine says otherwise. Customer overrides: mappings/eg.custom.json, per (field, recordTypes).",
   "kind": "field-mapping",
   "provider": "eg",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Exposure Graph (advanced hunting ExposureGraphNodes): one record per node; the node's EntityIds carry the other providers' ids. Identity nodes follow the v2.2 rule, extended for on-prem AD (operator 2026-10-09): a node with an Entra object id is a record that enriches its Entra object; a node with no Entra id but an on-prem AD identity (a domain SID, an AD account name, AD critical groups or an admin count) is kept as an AD identity record linked by SID; any other node is dropped. SIEntityIds holds the ids the identity fetch resolved.",
   "objects": [
     {
@@ -10,8 +10,7 @@
       "class": "device",
       "match": {
         "nodeLabels": [
-          "device",
-          "computer-account"
+          "device"
         ]
       },
       "parts": {
@@ -19,6 +18,21 @@
       },
       "key": "node.NodeId",
       "timestamp": "node.NodeProperties.rawData.lastSeen"
+    },
+    {
+      "recordType": "computer_account",
+      "class": "device",
+      "match": {
+        "nodeLabels": [
+          "computer-account"
+        ]
+      },
+      "parts": {
+        "node": "ExposureGraphNodes row of an AD computer account (Get-SIEgAdComputers.ps1): NodeId, NodeName, NodeProperties.rawData.*, SIEntityIds (its AD ids, and the Defender device id ONLY when the safe match found one), SIDeviceMatch"
+      },
+      "key": "node.NodeId",
+      "timestamp": "node.NodeProperties.rawData.lastSeen",
+      "note": "#1052 (owner 2026-11-02): an AD computer account is never a device CI of its own. Its ONE strong identifier is the Defender device id of the safe match (mde_device_id from SIEntityIds) -- it then enriches that device's CI (si_device_roles). No safe match = no strong identifier = no CI. eg_node_id / ad_sid / ad_object_guid are deliberately NOT mapped for it: as join keys they named the old wrong device CIs."
     },
     {
       "recordType": "user",
@@ -150,6 +164,75 @@
         "first",
         "lower"
       ]
+    },
+    {
+      "field": "mde_device_id",
+      "recordTypes": [
+        "computer_account"
+      ],
+      "sources": [
+        "node.SIEntityIds"
+      ],
+      "normalize": [
+        "select:type=SenseDeviceId:id",
+        "first",
+        "lower"
+      ],
+      "note": "#1052 only the safe match (Resolve-SIEgAdComputerMatch) puts a Defender device id here -- never the graph's own EntityIds"
+    },
+    {
+      "field": "si_asset_name",
+      "recordTypes": [
+        "computer_account"
+      ],
+      "sources": [
+        "node.NodeName"
+      ],
+      "normalize": [
+        "trim"
+      ],
+      "note": "#1052 the account's own name (a record name; mde / intune / entra / azure outrank eg for a device's name)"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "computer_account"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isDomainController"
+      ],
+      "normalize": [
+        "if_true:domain_controller"
+      ],
+      "combine": "union",
+      "note": "#1052 what the AD computer account knows reaches its Defender device's CI (only through the safe match)"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "computer_account"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isExchangeServerDnsName",
+        "node.NodeProperties.rawData.isTaggedAsExchangeServer"
+      ],
+      "normalize": [
+        "if_true:exchange"
+      ],
+      "combine": "union"
+    },
+    {
+      "field": "si_device_roles",
+      "recordTypes": [
+        "computer_account"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.isAdfsServer"
+      ],
+      "normalize": [
+        "if_true:adfs"
+      ],
+      "combine": "union"
     },
     {
       "field": "entra_device_id",

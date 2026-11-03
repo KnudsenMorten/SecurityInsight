@@ -191,7 +191,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
             ExpandPage = (await Views.GridAsync(new GridQuery(plan.Spec, plan.Parameters, plan.Scope, new GridRequest { Size = ExpandRows }), ct)).Data;
             return Partial("_WeightedExpand", this);
         }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException) { return StatusCode(StatusCodes.Status504GatewayTimeout, "This took too long: open the service instead."); }
     }
 
@@ -240,7 +240,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
         PivotFields = PivotSql.Available(Cmdb);
         await LoadSavedAsync(ct);
         try { Pivot = FromQuery(); }
-        catch (ArgumentException ex) { Error = "The pivot is not valid: " + ex.Message; return; }
+        catch (ArgumentException ex) { Error = "The pivot is not valid: " + ViewerError.Text(ex); return; }
         if (Pivot is null && View is { } id)
         {
             OpenView = SavedViews.FirstOrDefault(v => v.Id == id);
@@ -248,7 +248,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
             else
             {
                 try { Pivot = PivotRequest.Parse(OpenView.State); }
-                catch (ArgumentException ex) { Notice ??= "That saved view can no longer be read (" + ex.Message + "). The default pivot is shown."; }
+                catch (ArgumentException ex) { Notice ??= "That saved view can no longer be read (" + ViewerError.Text(ex) + "). The default pivot is shown."; }
             }
         }
         Pivot ??= PivotSql.Default(PivotFields.Any(f => f.Key == "service"));
@@ -266,7 +266,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
             }
         }
         // #812: the pivot reads the collection's stored cube; a field it does not carry, or a cube not written yet, is said
-        catch (PivotNotStoredException ex) { PivotResult = null; PivotChoices.Clear(); PivotNote = ex.Message; }
+        catch (PivotNotStoredException ex) { PivotResult = null; PivotChoices.Clear(); PivotNote = ViewerError.Text(ex); }
         catch (NotSupportedException) { PivotNote = "The pivot is not available in this installation."; }
         catch (ViewTimeoutException ex)
         {
@@ -342,7 +342,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
     {
         IActionResult? refused;
         try { refused = await PivotForExportAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (refused is not null) return refused;
         var (headers, rows) = Flat();
         var q = PivotResult!.Request;
@@ -368,7 +368,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
     {
         IActionResult? refused;
         try { refused = await PivotForExportAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (refused is not null) return refused;
         var (headers, rows) = Flat();
         var sb = new StringBuilder();
@@ -389,7 +389,7 @@ public sealed class WeightedRiskModel(ICollectionViews views, ILogger<WeightedRi
         if (PivotView.NameProblem(name) is { } problem) return Back(problem);
         PivotRequest q;
         try { q = PivotRequest.Parse(state ?? ""); }
-        catch (ArgumentException ex) { return BadRequest("The pivot is not valid: " + ex.Message); }
+        catch (ArgumentException ex) { return BadRequest("The pivot is not valid: " + ViewerError.Text(ex)); }
         var text = q.QueryString();
         if (text.Length > PivotView.MaxState) return Back("This pivot is too large to save: remove some filter values.");
         if (!await store.ReadyAsync(ct)) return Back("Saved views need the latest database setup (setup\\Import-SIProSettings.ps1 -CreateSchema): run it once, then save again.");

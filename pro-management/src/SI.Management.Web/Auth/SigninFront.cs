@@ -135,10 +135,22 @@ public static class SigninFront
             return (true, "access", "");
         }
         if (accessTokenOnly) return (false, "id", "an ID token is not accepted here (access tokens only)");
+        // #994: a token with no scp is not therefore a person's ID token -- an application's own token (client credentials)
+        // has no scp either. Entra marks it (idtyp = app) and an access token carries the claims an ID token never does
+        // (azp / azpacr in v2, appid / appidacr in v1): any of them = not an ID token of a signed-in person
+        if (IsAppOnlyOrAccessToken(principal)) return (false, "id", "an application's token is not a signed-in person's ID token");
         if (iss != issuerV2) return (false, "id", "an ID token must come from the tenant's v2.0 issuer");
         if (!auds.Any(a => a.Equals(client, StringComparison.OrdinalIgnoreCase)) || auds.Count != 1) return (false, "id", "an ID token's audience must be this app's client id");
         return (true, "id", "");
     }
+
+    /// The claims only an access token carries (an ID token never does), and Entra's own "this is an app" marker.
+    public static readonly IReadOnlyList<string> AccessTokenOnlyClaims = ["azp", "azpacr", "appid", "appidacr"];
+
+    /// PURE. An application's token (idtyp = app), or any access token (it carries azp / azpacr / appid / appidacr).
+    public static bool IsAppOnlyOrAccessToken(ClaimsPrincipal principal) =>
+        string.Equals(principal.FindFirst("idtyp")?.Value, "app", StringComparison.OrdinalIgnoreCase)
+        || AccessTokenOnlyClaims.Any(c => principal.FindFirst(c) is not null);
 
     /// The bearer check itself (also used by the tests to prove exactly what is accepted).
     public static void ConfigureJwt(JwtBearerOptions o, string instance, string tenantId, string clientId, bool accessTokenOnly = false)

@@ -100,7 +100,10 @@ SELECT N'Saved' AS Outcome, @new AS Version;
 
     /// The words for a secret value typed where its Key Vault secret NAME belongs (operator 2026-10-09: the Azure OpenAI
     /// key typed into the name field).
-    public const string NotTheKey = "This field takes the name of the secret in your Key Vault, not the key itself";
+    /// The start of the change log's reason for a change only a SuperAdmin makes (a secret's reference, a host a secret goes to).
+    public const string SecurityChangeMark = "security change: ";
+
+    public const string NotTheKey ="This field takes the name of the secret in your Key Vault, not the key itself";
     private static readonly Regex HexRun = new("^[0-9A-Fa-f]{32,}$", RegexOptions.CultureInvariant);
     private static readonly Regex KeyChars = new("[+/=]", RegexOptions.CultureInvariant);
 
@@ -155,12 +158,16 @@ SELECT N'Saved' AS Outcome, @new AS Version;
             // a key typed into the name field would be stored as plain text in cfg.Setting: refused, and never echoed back
             if (LooksLikeKey(kv)) return (null, NotTheKey);
             if (!KvName.IsMatch(kv)) return (null, $"'{kv}' is not a Key Vault secret name (letters, digits and dashes, at most 127)");
+            // a secret setting names its OWN Key Vault secret only (SecretSettingPolicy; the engine applies the same rule)
+            if (SecretSettingPolicy.WhyNotNew(s.Name, kv) is { } own) return (null, own);
             return (new PreparedChange(c with { Name = s.Name }, s, null, kv), null);
         }
         if (!string.IsNullOrEmpty(c.KeyVaultSecretName)) return (null, $"only a secret setting may point at Key Vault -- {s.Name} is not a secret");
         var why = SettingValidator.Validate(s, c.Value);
         if (why is not null) return (null, $"{s.Name} {why}");
-        var json = c.Value is { } v ? SettingJson.ToStoredText(v) : "null";
+        // where a secret or the install's credential goes: the host is checked (OutboundHostPolicy; the engine checks it again)
+        if (c.Value is { ValueKind: JsonValueKind.String } hv && OutboundHostPolicy.WhyNot(s.Name, hv.GetString()) is { } hostWhy) return (null, $"{s.Name} {hostWhy}");
+        var json =c.Value is { } v ? SettingJson.ToStoredText(v) : "null";
         return (new PreparedChange(c with { Name = s.Name }, s, json, null), null);
     }
 
@@ -171,6 +178,14 @@ SELECT N'Saved' AS Outcome, @new AS Version;
         if (string.IsNullOrWhiteSpace(changedBy)) return new WriteResult(WriteStatus.Refused, "the signed-in user has no name to record");
         var reason = string.IsNullOrWhiteSpace(change.Reason) ? null : change.Reason.Trim();
         if (reason is { Length: > 400 }) return new WriteResult(WriteStatus.Refused, "the reason is longer than 400 characters");
+        // a secret's reference or a host a secret is sent to: recorded as a SECURITY change in the change log and the audit row
+        if (p.Setting.NeedsSuperAdmin)
+        {
+            reason = SecurityChangeMark + (reason ?? $"{p.Change.Name} {(p.Change.Action == "Reset" ? "reset" : "changed")}");
+            if (reason.Length > 400) reason = reason[..400];
+            if (SI.Management.Web.Audit.AuditScope.Current is { } audit && !(audit.Reason ?? "").StartsWith(SecurityChangeMark, StringComparison.Ordinal))
+                audit.Reason = SecurityChangeMark + audit.Reason;
+        }
         var parameters = new Dictionary<string, object?>
         {
             ["Name"] = p.Change.Name, ["Scope"] = p.Change.Scope, ["Action"] = p.Change.Action,

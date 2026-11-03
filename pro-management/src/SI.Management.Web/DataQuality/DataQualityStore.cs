@@ -31,6 +31,17 @@ public sealed record DataQualityAnomaly(string MetricKey, string Kind, string La
 
     /// Whether this is a classification-incomplete warning.
     public bool IsClassification => string.Equals(Rule, ClassificationRule, StringComparison.OrdinalIgnoreCase);
+
+    /// #1053 the rule of a CORRELATION SUSPECTS warning (the correlation gatekeeper, engine\pro-data\_shared\
+    /// SI-CorrelationSuspects.ps1): CIs that are probably one machine, or devices with a placeholder name -- any group nobody
+    /// decided about, from the first run on; each group (every CI by name, the evidence, the tier impact) is listed inside it.
+    public const string CorrelationRule = "correlation-suspect";
+
+    /// Whether this is a correlation-suspects warning.
+    public bool IsCorrelation => string.Equals(Rule, CorrelationRule, StringComparison.OrdinalIgnoreCase);
+
+    /// A warning whose groups (not a value per run) are listed inside it: classification incomplete, correlation suspects.
+    public bool HasGroups => IsClassification || IsCorrelation;
 }
 
 /// <summary>
@@ -315,7 +326,7 @@ FROM sidata.DataQualityRun WHERE MailState = N'sent' AND ComputedAt < @Before OR
 
         // the fields inside the one-per-source warnings (read only when the run has such a warning)
         var fields = new Dictionary<string, IReadOnlyList<DataQualityAnomalyField>>(StringComparer.OrdinalIgnoreCase);
-        if (hasFields && anomalies.Any(a => a.IsSource || a.IsClassification))
+        if (hasFields && anomalies.Any(a => a.IsSource || a.HasGroups))
         {
             foreach (var g in (await Read(FieldsSql, ById(run.RunId), ct)).GroupBy(r => r.Str("MetricKey") ?? "", StringComparer.OrdinalIgnoreCase))
                 fields[g.Key] = g.Select(ToField).ToList();
@@ -437,9 +448,11 @@ public static class DataQualityText
     public const string GroupReports = "Report rows";
     public const string GroupKeyFill = "Key column fill";
     public const string GroupFieldFill = "Field fill per source";
+    /// #1053 the correlation gatekeeper's numbers (groups per rule) -- stored for the trend, never compared.
+    public const string GroupCorrelation = "Correlation suspects";
 
     /// The groups in the order the panel lists them.
-    public static readonly IReadOnlyList<string> Groups = [GroupSources, GroupCis, GroupClasses, GroupTiers, GroupReports, GroupKeyFill, GroupFieldFill];
+    public static readonly IReadOnlyList<string> Groups = [GroupSources, GroupCis, GroupClasses, GroupTiers, GroupReports, GroupKeyFill, GroupFieldFill, GroupCorrelation];
 
     public static int GroupOrder(string group)
     {
@@ -450,6 +463,7 @@ public static class DataQualityText
     /// Which group a key number belongs to (by its key, then its kind).
     public static string Group(string key, string kind)
     {
+        if (key.StartsWith("corr.", StringComparison.OrdinalIgnoreCase) || kind == "corr") return GroupCorrelation;
         if (key.StartsWith("fill.src.", StringComparison.OrdinalIgnoreCase)) return GroupFieldFill;
         if (key.StartsWith("fill.", StringComparison.OrdinalIgnoreCase) || kind == "fill") return GroupKeyFill;
         if (key.StartsWith("rows.", StringComparison.OrdinalIgnoreCase) || kind == "rows") return GroupReports;
@@ -477,6 +491,7 @@ public static class DataQualityText
             "fill" => sign + x.ToString("N1", c) + " points",
             "tier" or "retire" or "class" => sign + x.ToString("N0", c) + " % of all active CIs",
             "classgap" => x.ToString("N0", c) + " to classify",
+            "corr" => x.ToString("N0", c) + " to look at",
             _ => sign + x.ToString("N0", c) + " %",
         };
     }
@@ -501,12 +516,15 @@ public static class DataQualityText
         "class-shift" => "the asset class moved",
         DataQualityAnomaly.SourceRule => "the source fills fewer fields",
         DataQualityAnomaly.ClassificationRule => "something is not classified",
+        DataQualityAnomaly.CorrelationRule => "CIs are probably one machine",
         _ => rule,
     };
 
     /// What changed, as one sentence: the number now, the three earlier values and the change. A one-per-source warning
     /// says how many fields and their average fill (the fields themselves are listed under it).
-    public static string WhatChanged(DataQualityAnomaly a, CultureInfo c) => a.IsClassification
+    public static string WhatChanged(DataQualityAnomaly a, CultureInfo c) => a.IsCorrelation
+        ? $"{a.Label}: {Number(a.Now, a.Kind, c)}. The automatic correlation rules could not decide these -- each group below names its CIs, why they are suspected and, where their tiers differ, which CI carries the most critical one. This is never compared with earlier runs: it clears itself when the CIs are merged, or when an Admin decides about them on {SI.Management.Web.Navigation.NavModel.PathOf("/Admin/CorrelationSuspects")}."
+        : a.IsClassification
         ? $"{a.Label}: {Number(a.Now, a.Kind, c)}. Every finding must carry a risk rating, a tier 0-3 and an asset, and every active CI a tier 0-3 -- this is never compared with earlier runs: any count above 0 is a warning, and it clears itself on the first run where it is 0. The groups below say which reports or asset types and why."
         : a.IsSource
         ? $"{a.Label} at once. On average they are filled on {Number(a.Now, a.Kind, c)} of the source's records. The 3 runs before had {Expected(a, c)} (expected about {Number(a.Expected, a.Kind, c)}), so this run is {Change(a, c)} off -- {Rule(a.Rule)}."
@@ -567,6 +585,7 @@ public static class DataQualityText
         "tier-shift" => "One tier rule or override can move many assets. Check the tier rules, overrides and classification changed recently. Correct the rule, then re-run from the step.",
         "retire-rise" => "Many assets were not seen in this run. Check that every collection ran and its source answered -- an asset that stays unseen retires after its grace period.",
         "class-shift" => "Many assets changed asset type. Check the asset type mapping and the classification rows changed recently. Correct them, then re-run from the step.",
+        DataQualityAnomaly.CorrelationRule => "Open " + SI.Management.Web.Navigation.NavModel.PathOf("/Admin/CorrelationSuspects") + ": check each group's CIs in their sources. When they are one machine, an Admin decides \"The same machine\" and the next CI build merges them (the oldest CI keeps its id and the most critical tier follows the findings); when they are different machines, \"Not the same machine\" stops the warning. A placeholder name is fixed at the source. Nothing was blocked.",
         DataQualityAnomaly.ClassificationRule => "A report that gives a finding no tier means its asset (for an attack path: the target it reaches) has no CI with a tier; a CI without a tier means no tier rule matched it. Add or correct the tier rule (Configuration), or report the report to support when it emits no risk rating, then re-run from the step.",
         DataQualityAnomaly.SourceRule => "Many fields of one source going empty at once points at the source, not at one field: check that the source's collection ran completely and still has its permissions (" + SI.Management.Web.Navigation.NavModel.PathOf("/Admin/RunHealth") + "), and whether the source's field mapping was changed. Correct it, then re-run from the step that collects the source.",
         _ => "Check the settings changed recently, correct the one that caused this, then re-run from the step.",

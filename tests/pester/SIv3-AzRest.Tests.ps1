@@ -465,6 +465,23 @@ Describe 'the Az context, workspace, resource group and role lookups the engines
         $j = (BodyText $put.Body) | ConvertFrom-Json
         $j.properties.roleDefinitionId | Should -Be '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/rd1'
         $j.properties.principalId | Should -Be 'oid-2'
+        $j.properties.PSObject.Properties['description'] | Should -BeNullOrEmpty -Because 'no description unless one is given'
+    }
+    It 'a role assignment can carry its own description, and a read returns it (2026-11-01: setup marks the grants it takes back)' {
+        $script:Handler = { param($m, $u, $h, $b)
+            if ($u -like '*/roleDefinitions?api-version=*') { return (Json 200 @{ value = @(@{ name = 'rd1'; id = '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/rd1'; properties = @{ roleName = 'Key Vault Secrets Officer' } }) }) }
+            if ($m -eq 'PUT') { return (Json 201 @{ id = 'ra-new'; name = 'n'; properties = @{ principalType = 'User' } }) }
+        }
+        $null = New-SIAzRoleAssignment -ObjectId 'oid-3' -RoleDefinitionName 'Key Vault Secrets Officer' -Scope '/subscriptions/x/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv' -Description 'marked by setup' -ErrorAction Stop
+        ((BodyText (@($script:Calls | Where-Object { $_.Method -eq 'PUT' })[0]).Body) | ConvertFrom-Json).properties.description | Should -Be 'marked by setup'
+        $script:Calls.Clear()
+        $script:Handler = { param($m, $u)
+            if ($u -like '*/roleDefinitions?*' -and $u -match 'CustomRole') { return (Json 200 @{ value = @() }) }
+            if ($u -like '*/roleDefinitions?*') { return (Json 200 @{ value = @(@{ name = 'rd1'; id = '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/rd1'; properties = @{ roleName = 'Key Vault Secrets Officer'; type = 'BuiltInRole' } }) }) }
+            if ($u -like '*/roleAssignments?*') { return (Json 200 @{ value = @(@{ id = 'ra1'; name = 'ra1'; properties = @{ scope = '/s'; principalId = 'oid-3'; principalType = 'User'; description = 'marked by setup'; roleDefinitionId = '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/rd1' } }) }) }
+            if ($u -like 'https://graph.microsoft.com/*getByIds') { return (Json 200 @{ value = @() }) }
+        }
+        (@(Get-SIAzRoleAssignment -ObjectId 'oid-3' -Scope '/subscriptions/x' -ErrorAction SilentlyContinue)[0]).Description | Should -Be 'marked by setup'
     }
     It 'tags: read as TagsProperty, written with a Merge PATCH' {
         $script:Handler = { param($m, $u) if ($u -like '*/providers/Microsoft.Resources/tags/default*') { Json 200 @{ id = 't'; properties = @{ tags = @{ Owner = 'x' } } } } }

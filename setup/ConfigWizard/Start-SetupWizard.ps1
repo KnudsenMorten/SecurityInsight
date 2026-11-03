@@ -298,8 +298,16 @@ try {
 _Ok "listening on $prefix"
 Write-Host ""
 
+# this session's secret (see Test-SIWizardSessionSecret below): only the link printed here opens the wizard
+$sessionBytes = New-Object byte[] 32
+$sessionRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try { $sessionRng.GetBytes($sessionBytes) } finally { $sessionRng.Dispose() }
+$script:SIWizardSecret = ([BitConverter]::ToString($sessionBytes)).Replace('-', '').ToLowerInvariant()
+$sessionUrl = '{0}?k={1}' -f $prefix, $script:SIWizardSecret
+_Info "open the wizard with this link (it works only for this session): $sessionUrl"
+
 if (-not $NoBrowser) {
-    try { Start-Process $prefix | Out-Null; _Info "browser launched" }
+    try { Start-Process $sessionUrl | Out-Null; _Info "browser launched" }
     catch { _Warn "could not auto-launch browser: $($_.Exception.Message)" }
 }
 
@@ -372,6 +380,29 @@ function Test-SIWizardRequestAllowed {
     return $null
 }
 
+# A SECRET FOR THIS ONE WIZARD SESSION (2026-10-31). The host / origin / content-type check above keeps other web pages
+# out, but not another program on this machine: it can send the same request to localhost. Every /api/* call must carry
+# this session's secret (X-SI-Wizard-Session), and the page itself is served only to the link the wizard opens (?k=<secret>)
+# -- the secret then sits in the page for its own calls. 256 random bits (made where the listener starts), compared in
+# constant time; it lives only in this process and the link printed on this console. Pure helpers, tested directly.
+function Test-SIWizardSessionSecret {
+    <# $true only when -Presented equals -Expected (constant time); an empty value on either side is never a match. #>
+    param([AllowEmptyString()][AllowNull()][string]$Presented, [AllowEmptyString()][AllowNull()][string]$Expected)
+    if ([string]::IsNullOrEmpty($Presented) -or [string]::IsNullOrEmpty($Expected)) { return $false }
+    $a = [Text.Encoding]::UTF8.GetBytes($Presented); $b = [Text.Encoding]::UTF8.GetBytes($Expected)
+    $diff = $a.Length -bxor $b.Length
+    for ($i = 0; $i -lt $b.Length; $i++) { $x = if ($i -lt $a.Length) { $a[$i] } else { 0 }; $diff = $diff -bor ($x -bxor $b[$i]) }
+    return ($diff -eq 0)
+}
+function Add-SIWizardSessionSecretToPage {
+    <# The page's HTML with the session secret in a meta tag the page script reads for its own /api calls. #>
+    param([Parameter(Mandatory)][string]$Html, [Parameter(Mandatory)][string]$Secret)
+    $tag = '<meta name="si-wizard-session" content="{0}">' -f $Secret
+    $i = $Html.IndexOf('</head>', [StringComparison]::OrdinalIgnoreCase)
+    if ($i -lt 0) { return $tag + $Html }
+    $Html.Substring(0, $i) + $tag + "`n" + $Html.Substring($i)
+}
+
 function Send-Bytes {
     param($Response, [byte[]]$Bytes, [string]$ContentType, [int]$Status = 200)
     $Response.StatusCode    = $Status
@@ -410,6 +441,7 @@ try {
             if ($url -like '/api/*') {
                 $refusal = Test-SIWizardRequestAllowed -HostHeader $req.Headers['Host'] -Origin $req.Headers['Origin'] `
                              -Method $req.HttpMethod -ContentType $req.ContentType -Port $Port
+                if (-not $refusal -and -not (Test-SIWizardSessionSecret -Presented $req.Headers['X-SI-Wizard-Session'] -Expected $script:SIWizardSecret)) { $refusal = 'not this wizard session (open the link the wizard printed)' }
                 if ($refusal) {
                     _Warn ("refused {0} {1}: {2}" -f $req.HttpMethod, $url, $refusal)
                     Send-Json -Response $res -Object @{ error = $refusal } -Status 403
@@ -418,8 +450,16 @@ try {
             }
             switch -Regex ($url) {
                 '^/$|^/index\.html$' {
-                    $bytes = [System.IO.File]::ReadAllBytes($indexHtml)
-                    Send-Bytes -Response $res -Bytes $bytes -ContentType $mime['.html']
+                    # the page (and the session secret in it) only for the link the wizard opened / printed
+                    if (-not (Test-SIWizardSessionSecret -Presented $req.QueryString['k'] -Expected $script:SIWizardSecret)) {
+                        _Warn ("refused {0} {1}: not this wizard session's link" -f $req.HttpMethod, $url)
+                        Send-Text -Response $res -Text 'Open the link the SecurityInsight setup wizard printed in its PowerShell window.' -Status 403
+                        break
+                    }
+                    $page = Add-SIWizardSessionSecretToPage -Html ([System.IO.File]::ReadAllText($indexHtml)) -Secret $script:SIWizardSecret
+                    $res.Headers['Cache-Control'] = 'no-store'
+                    $res.Headers['Referrer-Policy'] = 'no-referrer'
+                    Send-Text -Response $res -Text $page -ContentType $mime['.html']
                     break
                 }
                 '^/api/state$' {
@@ -590,7 +630,12 @@ try {
                             TenantId       = $st.tenantId
                             SubscriptionId = $st.subscriptionId
                             CredKind       = $signIn.CredKind
-                            CredStorage    = if ($st.spn.credStorage) { $st.spn.credStorage } elseif ($signIn.CredKind -eq 'Cert') { 'LocalCertStore' } else { 'Inline' }
+                            CredStorage    = if ($st.spn.credStorage) { $st.spn.credStorage } elseif ($signIn.CredKind -eq 'Cert') { 'LocalCertStore' } else { 'KeyVault' }
+                        }
+                        # a client secret is kept in Key Vault only -- never written into the configuration file, never
+                        # sent back to the page (2026-10-31)
+                        if ($spnArgs.CredStorage -eq 'Inline') {
+                            throw 'A client secret is kept only in Key Vault: choose Key Vault storage (and its name), or sign in by certificate or managed identity.'
                         }
                         if ($st.spn.keyVaultName)   { $spnArgs.KeyVaultName    = $st.spn.keyVaultName }
                         if ($st.spn.kvSecretName)   { $spnArgs.KvSecretName    = $st.spn.kvSecretName }
@@ -614,6 +659,7 @@ try {
                             $spnArgs.ExistingThumbprint = [string]$st.spn.existingThumbprint
                         }
                         $spnOut = & $cmdletNewSISpn @spnArgs
+                        if ($spnOut -and $spnOut.PSObject.Properties['CredValue']) { $spnOut.CredValue = $null }
                         # Soft-failure on consent: SPN was created and the perms requested,
                         # but a Global Admin still has to click the consent URL. Don't fail
                         # the whole apply -- continue with infra + config so the operator

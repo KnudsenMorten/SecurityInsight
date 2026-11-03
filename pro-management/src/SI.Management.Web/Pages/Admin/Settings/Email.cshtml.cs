@@ -100,7 +100,7 @@ public sealed partial class EmailModel : PageModel
         Recipients = MailMode.RecipientSettings.Select(r => (Setting: _catalog.Find(r.Setting), r.MailType)).Where(r => r.Setting is not null)
             .Select(r => (r.Setting!, r.MailType)).ToList();
         try { Rows = (await _reader.ReadSettingsAsync(ct)).Rows.ToLookup(r => r.Name, StringComparer.OrdinalIgnoreCase); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Setting"); Error = "The settings could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Setting"); Error = "The settings could not be read: " + ViewerError.Text(ex); }
         Overview = await _mail.LoadAsync(ct);
         MailboxSteps = StepsOf(Rows.SelectMany(g => g), User, _config, _jobs.Value);
     }
@@ -189,7 +189,7 @@ public sealed partial class EmailModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "queueing the test mail failed");
-            TestError = "The test mail could not be queued: " + ex.Message;
+            TestError = "The test mail could not be queued: " + ViewerError.Text(ex);
         }
         Overview = await _mail.LoadAsync(ct);
         return Page();
@@ -219,7 +219,7 @@ public sealed partial class EmailModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "building a link failed");
-            LinkError = "The link could not be built: " + ex.Message;
+            LinkError = "The link could not be built: " + ViewerError.Text(ex);
         }
         return Page();
     }

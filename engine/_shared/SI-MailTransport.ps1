@@ -102,6 +102,7 @@ function Get-SIMailEnvironment {
                    .InvardiaEnvironment, recorded from Invardia's answer), '' when not known
     #>
     param([System.Collections.IDictionary]$Globals)
+    Initialize-SIMailTransportState
     $g = { param($n) $v = Get-SIMailSetting -Name $n -Globals $Globals; if ($null -eq $v) { '' } else { "$v".Trim() } }
     $first = { param([string[]]$names) foreach ($n in $names) { $v = & $g $n; if ($v) { return $v } }; '' }
     # a subject never shows an id (support: "it shows tenant id" -- the install id GUID stood where the name belongs): the
@@ -133,6 +134,20 @@ $script:SIMailProduct = 'SecurityInsight'
 $script:SIMailSubjectMax = 120
 $script:SIMailSubjectEnvMax = 48
 
+# THE TRANSPORT'S OWN VALUES, also when this file was loaded in another scope than the function that runs (live 2026-11-01:
+# the close-loop mail's technical review threw "Substring ... length (-3)" -- $script:SIMailSubjectEnvMax was empty where
+# Get-SIMailSubjectEnvironment ran). Every function that reads them calls this first; a value already set is kept.
+function Initialize-SIMailTransportState {
+    if ($null -eq $script:SIMailTransportRoot) { $script:SIMailTransportRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
+    if ($null -eq $script:SIMailGraphInlineMaxMb) { $script:SIMailGraphInlineMaxMb = 3 }
+    if ($null -eq $script:SIMailRestrictionCache) { $script:SIMailRestrictionCache = @{} }
+    if ($null -eq $script:SIMailAllowedStates) { $script:SIMailAllowedStates = @('verified', 'legacy-policy') }
+    if ($null -eq $script:SIMailProduct) { $script:SIMailProduct = 'SecurityInsight' }
+    if ($null -eq $script:SIMailSubjectMax) { $script:SIMailSubjectMax = 120 }
+    if ($null -eq $script:SIMailSubjectEnvMax) { $script:SIMailSubjectEnvMax = 48 }
+    if ($null -eq $script:SIMailForwardSentinels) { $script:SIMailForwardSentinels = @('false', 'none', 'n/a', 'na', 'null', 'nil', 'no', '0', '-', '--', 'empty') }
+}
+
 function ConvertTo-SIMailSeverityWord {
     <# PURE. The subject's severity word from a -Severity value: 'Failed' | 'Warning' | 'Action needed' | '' (none). #>
     param([AllowNull()][AllowEmptyString()][string]$Severity)
@@ -151,6 +166,7 @@ function Get-SIMailSubjectEnvironment {
         ('Internal (ring 1, PRO)') loses that part here; brackets are taken out (they would break the format).
     #>
     param($Environment)
+    Initialize-SIMailTransportState
     if (-not $Environment) { return '' }
     $n = "$($Environment.Name)".Trim()
     if (-not $n -and -not $Environment.PSObject.Properties['Name']) { $n = "$($Environment.Display)".Trim() }
@@ -178,7 +194,9 @@ function Get-SIMailSubject {
         - idempotent: a subject already in the format is returned as it is (never wrapped twice).
     #>
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Subject, $Environment,
-          [AllowNull()][AllowEmptyString()][string]$Severity, [AllowNull()][AllowEmptyString()][string]$Ticket, [int]$MaxLength = $script:SIMailSubjectMax)
+          [AllowNull()][AllowEmptyString()][string]$Severity, [AllowNull()][AllowEmptyString()][string]$Ticket, [int]$MaxLength = 0)
+    Initialize-SIMailTransportState
+    if ($MaxLength -le 0) { $MaxLength = $script:SIMailSubjectMax }
     $product = ' [' + $script:SIMailProduct + ']'
     $name = Get-SIMailSubjectEnvironment -Environment $Environment
     $prefix = if ($name) { '[' + $name + '] ' } else { '' }
@@ -259,6 +277,7 @@ function Get-SIMailSettings {    <#
         Kept property-compatible with the older relay object (Get-SIGuardSmtp / Get-SICloseLoopMailSmtp return it).
     #>
     param([System.Collections.IDictionary]$Globals)
+    Initialize-SIMailTransportState
     $g = { param($n) Get-SIMailSetting -Name $n -Globals $Globals }
     $problems = New-Object System.Collections.Generic.List[string]
     $server = "$(& $g 'SmtpServer')".Trim()
@@ -407,6 +426,7 @@ function Get-SIMailGraphToken {
 function Get-SIMailGraphError {
     <# PURE. @{ Code; Message } from a Graph error body. #>
     param([string]$Body)
+    Initialize-SIMailTransportState
     try { $e = (ConvertFrom-Json -InputObject $Body).error; return [pscustomobject]@{ Code = [string]$e.code; Message = [string]$e.message } } catch { }
     [pscustomobject]@{ Code = ''; Message = "$Body" }
 }
@@ -447,6 +467,7 @@ function Get-SIMailRestrictionVerdict {
           error          a probe failed in a way that says nothing
     #>
     param([bool]$TokenHasMailSend, [string]$Self, [string]$Other, [string]$Mailbox, [string]$ProbeMailbox, [string]$Attestation)
+    Initialize-SIMailTransportState
     $s = { param($st, $d) [pscustomobject]@{ State = $st; Detail = $d; AllowsSend = ($script:SIMailAllowedStates -contains $st) } }
     if ($Self -eq 'not-found') { return (& $s 'not-granted' ("the mailbox {0} does not exist (or is not a mailbox)" -f $Mailbox)) }
     if ($Self -eq 'denied') { return (& $s 'not-granted' ("SecurityInsight may not send as {0} yet: Exchange's 'Application Mail.Send' role assignment for its identity is missing or not active yet (it can take up to 2 hours) -- setup\Set-SIMail.ps1" -f $Mailbox)) }
@@ -476,6 +497,7 @@ function Get-SIMailRestriction {
         returns @{ State; Detail; AllowsSend; Mailbox; CheckedUtc }. Cached per process and mailbox. Never throws.
     #>
     param([Parameter(Mandatory)]$Settings, [scriptblock]$Http, [scriptblock]$TokenProvider, [switch]$Force)
+    Initialize-SIMailTransportState
     $mb = [string]$Settings.SharedMailbox
     $key = ('{0}|{1}' -f $mb, $Settings.ProbeMailbox).ToLowerInvariant()
     if (-not $Force -and $script:SIMailRestrictionCache.ContainsKey($key)) { return $script:SIMailRestrictionCache[$key] }
@@ -612,6 +634,7 @@ function ConvertTo-SIMailForward {
     <# PURE. A stored / typed forward as the transport uses it: '' for a blank or a sentinel (FALSE, none, n/a, 0, ...) and
        for anything that is not a real mail address (never used); else the address, lower-case. #>
     param([AllowNull()][AllowEmptyString()][string]$Value)
+    Initialize-SIMailTransportState
     $v = "$Value".Trim()
     if (-not $v -or $script:SIMailForwardSentinels -contains $v.ToLowerInvariant()) { return '' }
     if (-not (Test-SIMailAddress $v)) { return '' }
@@ -668,6 +691,7 @@ function Get-SIMailForwardMap {
        test) set one; else the Pro database through the same seam as the send record (Get-SIMailSendRecordInvoke). Cannot
        be read = @{} (every address as given) and ONE line in the log. Never throws. #>
     param([scriptblock]$Invoke)
+    Initialize-SIMailTransportState
     if ($global:SI_MailForwardMap -is [hashtable]) { return $global:SI_MailForwardMap }
     if ($script:SIMailForwardCache -and $script:SIMailForwardCache.Until -gt [datetime]::UtcNow) { return $script:SIMailForwardCache.Map }
     $map = @{}
@@ -697,6 +721,7 @@ function Send-SIMail {
           # MAIL-3 (#653): the subject's severity word (Failed | Warning | ActionNeeded; none = a report or information mail)
           # and a support ticket number -- both optional; Get-SIMailSubject builds the whole subject
           [AllowNull()][AllowEmptyString()][string]$Severity, [AllowNull()][AllowEmptyString()][string]$Ticket)
+    Initialize-SIMailTransportState
     $res = [ordered]@{ Sent = $false; Mode = [string]$Settings.Mode; Off = [bool]$Settings.Off; Error = $null; Dropped = @(); Restriction = $null; Text = ''; Pdf = $null; PdfError = $null }
     $fail = { param($m) $res.Error = $m; Write-Host ('   mail NOT sent: ' + $m); [pscustomobject]$res }
     $mode = if ($Settings.Mode) { [string]$Settings.Mode } else { 'smtp' }

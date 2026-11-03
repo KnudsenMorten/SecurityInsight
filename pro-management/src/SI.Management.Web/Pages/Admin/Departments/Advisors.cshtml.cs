@@ -51,7 +51,7 @@ public sealed class AdvisorsModel : PageModel
     private static async Task<WriteResult> Safely(Func<Task<WriteResult>> write, string what)
     {
         try { return await write(); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return new WriteResult(WriteStatus.Refused, $"{what} could not be saved -- the Pro database answered: {ex.Message}"); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return new WriteResult(WriteStatus.Refused, $"{what} could not be saved -- the Pro database answered: {ViewerError.Text(ex)}"); }
     }
 
     private AccessDecision Gate() => _access.Can(User, AccessAction.Administer);

@@ -106,25 +106,30 @@ Rules:
     public Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, bool isAdmin, CancellationToken ct)
         => AskAsync(history, question, isAdmin, null, ct);
 
-    public async Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, bool isAdmin, ChatPageContext? context, CancellationToken ct)
+    public Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, bool isAdmin, ChatPageContext? context, CancellationToken ct)
+        => AskAsync(history, question, ToolCaller.Unscoped(isAdmin), context, ct);
+
+    /// The most characters of earlier conversation replayed to the model with one question (the browser posts the
+    /// conversation, so its size is the caller's to choose -- this bounds what one question costs). The newest turns are
+    /// kept; older ones are dropped whole.
+    public const int MaxHistoryChars = 16000;
+
+    public async Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, ToolCaller caller, ChatPageContext? context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(question)) throw new ArgumentException("A question is required.", nameof(question));
         if (question.Length > MaxQuestionChars) throw new ArgumentException($"The question is longer than {MaxQuestionChars} characters.", nameof(question));
 
-        // The role decides the tool list BEFORE the model sees anything: a Viewer's model is never told settings_read exists.
-        // The data-driven enums (severity, domain, report) are read from the newest collection.
-        var tools = await _tools.SpecsAsync(isAdmin, ct).ConfigureAwait(false);
+        // The role decides the tool list BEFORE the model sees anything: a Viewer's model is never told settings_read exists,
+        // and a caller whose view is limited to some departments is offered only the tools that apply that limit.
+        // The data-driven enums (severity, domain, report) are read from the newest collection (never for a limited caller).
+        var tools = await _tools.SpecsAsync(caller, ct).ConfigureAwait(false);
         var allowed = tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
         var messages = new List<ModelMessage> { new SystemMessage(SystemPrompt) };
-        // the page's context: structured data, sanitised again here, in its own message after the rules
-        if (ChatPageContext.Sanitize(context) is { } page) messages.Add(new SystemMessage(ContextPreamble + page.ToJson()));
-        foreach (var turn in (history ?? []).TakeLast(Math.Max(0, _o.MaxHistoryTurns)))
-        {
-            // Only user/assistant TEXT is replayed; a client cannot smuggle in a system or tool message.
-            if (string.Equals(turn.Role, "user", StringComparison.OrdinalIgnoreCase)) messages.Add(new UserMessage(Clip(turn.Content, MaxQuestionChars)));
-            else if (string.Equals(turn.Role, "assistant", StringComparison.OrdinalIgnoreCase)) messages.Add(new AssistantMessage(Clip(turn.Content, 8000), []));
-        }
+        // the page's context: structured data, sanitised again here -- a USER-role data message, never system authority
+        // (it comes from the page's URL, which anyone can craft)
+        if (ChatPageContext.Sanitize(context) is { } page) messages.Add(new UserMessage(ContextPreamble + page.ToJson()));
+        foreach (var m in Replay(history, Math.Max(0, _o.MaxHistoryTurns))) messages.Add(m);
         messages.Add(new UserMessage(question));
 
         var traces = new List<ToolCallTrace>();
@@ -148,12 +153,12 @@ Rules:
                 {
                     try
                     {
-                        var output = await _tools.InvokeAsync(call.Name, call.ArgumentsJson, isAdmin, ct).ConfigureAwait(false);
+                        var output = await _tools.InvokeAsync(call.Name, call.ArgumentsJson, caller, ct).ConfigureAwait(false);
                         traces.Add(new ToolCallTrace(call.Name, call.ArgumentsJson, output.Query, output.Source));
                         CollectAssets(output.ResultJson, assets);
                         content = Clip(output.ResultJson, _o.MaxToolResultChars);
                     }
-                    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or System.Text.Json.JsonException)
+                    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or System.Text.Json.JsonException or TimeoutException)
                     {
                         content = System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
                     }
@@ -170,6 +175,29 @@ Rules:
     {
         if (traces is null || traces.Count == 0) return "No estate data was queried for this answer.";
         return "Based on: " + string.Join(", ", traces.Select(t => t.Tool).Distinct(StringComparer.Ordinal)) + " (each call's query is attached).";
+    }
+
+    /// <summary>
+    /// The earlier turns replayed to the model: only user / assistant TEXT (a client cannot smuggle in a system or tool
+    /// message), each clipped, at most <paramref name="maxTurns"/> turns and <see cref="MaxHistoryChars"/> characters in all
+    /// -- the newest kept, older turns dropped whole.
+    /// </summary>
+    internal static IReadOnlyList<ModelMessage> Replay(IReadOnlyList<ChatTurn>? history, int maxTurns)
+    {
+        var picked = new List<ModelMessage>();
+        var used = 0;
+        foreach (var turn in (history ?? []).Where(t => t is not null).TakeLast(maxTurns).Reverse())
+        {
+            ModelMessage? m = null; var text = "";
+            if (string.Equals(turn.Role, "user", StringComparison.OrdinalIgnoreCase)) { text = Clip(turn.Content, MaxQuestionChars); m = new UserMessage(text); }
+            else if (string.Equals(turn.Role, "assistant", StringComparison.OrdinalIgnoreCase)) { text = Clip(turn.Content, 8000); m = new AssistantMessage(text, []); }
+            if (m is null) continue;
+            if (used + text.Length > MaxHistoryChars) break;
+            used += text.Length;
+            picked.Add(m);
+        }
+        picked.Reverse();
+        return picked;
     }
 
     public const int MaxAssets = 200;

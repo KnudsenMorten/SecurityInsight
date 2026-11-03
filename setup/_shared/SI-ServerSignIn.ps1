@@ -156,7 +156,7 @@ function Get-SIServerSignInConfigLines {
           ManagedIdentity: tenant, the identity's client id (empty = the host's system-assigned identity), its principal
                            id when known, the managed identity switches -- and no service principal app id or secret
           Certificate:     tenant, app id, the certificate thumbprint (LocalMachine\My or CurrentUser\My)
-          Secret:          tenant, app id, the secret from Key Vault (-KeyVaultName) or written inline
+          Secret:          tenant, app id, the secret read from Key Vault (-KeyVaultName) -- never written into the file
     #>
     param([Parameter(Mandatory)][ValidateSet('ManagedIdentity', 'Certificate', 'Secret')][string]$Method,
           [AllowEmptyString()][string]$TenantId = '', [AllowEmptyString()][string]$AppId = '',
@@ -196,7 +196,8 @@ function Get-SIServerSignInConfigLines {
                 $l.Add('    } catch { Write-Warning ("SI custom: the SPN secret could not be read from Key Vault: {0}" -f $_.Exception.Message) }')
                 $l.Add('}')
             } elseif ($Secret) {
-                $l.Add(("`$global:SI_SPN_Secret   = {0}" -f (& $q $Secret)))
+                # a client secret is never written into the configuration file (2026-10-31): it stays in Key Vault
+                throw 'a client secret is never written into the configuration file -- give -KeyVaultName (the secret stays in Key Vault), or sign in by certificate or managed identity'
             }
         }
     }
@@ -214,13 +215,13 @@ function Resolve-SIUnattendedSignIn {
           outside Azure               -> a service principal by certificate (no managed identity can exist there)
         Returns @{ CredKind (ManagedIdentity|Cert|Secret: what New-SISpn / Write-SICustomConfig call it); Identity
                    (container-jobs|user-assigned|system-assigned|none); CredStorage (the JSON's, else LocalCertStore for a
-                   certificate, Inline for a secret); DefaultUsed; Note }.
+                   certificate, KeyVault for a secret -- never Inline); DefaultUsed; Note }.
     #>
     param([AllowNull()][AllowEmptyString()][string]$CredKind = '', [AllowNull()][AllowEmptyString()][string]$CredStorage = '',
           [bool]$ContainerEnabled = $false, [ValidateSet('AzureVm', 'Arc', 'Outside')][string]$HostKind = 'Outside')
     $m = ConvertTo-SIServerSignInMethod $CredKind
     $kindOf = @{ ManagedIdentity = 'ManagedIdentity'; Certificate = 'Cert'; Secret = 'Secret' }
-    $storeOf = { param($k) if ("$CredStorage".Trim()) { "$CredStorage".Trim() } elseif ($k -eq 'Cert') { 'LocalCertStore' } elseif ($k -eq 'Secret') { 'Inline' } else { '' } }
+    $storeOf = { param($k) if ("$CredStorage".Trim()) { "$CredStorage".Trim() } elseif ($k -eq 'Cert') { 'LocalCertStore' } elseif ($k -eq 'Secret') { 'KeyVault' } else { '' } }
     $o = { param($k, $id, $def, $note) [pscustomobject]@{ CredKind = $k; Identity = $id; CredStorage = (& $storeOf $k); DefaultUsed = [bool]$def; Note = $note } }
     if ($ContainerEnabled) {
         if (-not $m -or $m -eq 'ManagedIdentity') { return (& $o 'ManagedIdentity' 'container-jobs' (-not $m) 'the Container Apps jobs sign in as their user-assigned managed identity') }
@@ -229,6 +230,44 @@ function Resolve-SIUnattendedSignIn {
     $d = Resolve-SIServerSignIn -HostKind $HostKind -Choice $m
     $k = $kindOf[[string]$d.Method]
     & $o $k $(if ($k -eq 'ManagedIdentity') { [string]$d.Identity } else { 'none' }) $d.DefaultUsed ([string]$d.Note)
+}
+
+function Test-SIUnattendedCredentialPlan {
+    <#
+        PURE. Checked BEFORE the unattended setup creates anything (2026-11-01): would the credential the JSON asks for end in
+        a working configuration? '' when it would, else the reason -- the setup then stops with nothing created (no app
+        registration, no secret nobody holds, no resources).
+          a client secret written into the configuration file (CredStorage Inline)  -> refused (v3 never writes one there)
+          CredStorage KeyVault without Auth_Community.KeyVaultName                   -> refused (where would it go?)
+        A managed identity needs neither. -CredKind / -CredStorage as Resolve-SIUnattendedSignIn returns them.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$CredKind = '', [AllowNull()][AllowEmptyString()][string]$CredStorage = '',
+          [AllowNull()][AllowEmptyString()][string]$KeyVaultName = '')
+    if ("$CredKind" -eq 'ManagedIdentity' -or -not "$CredKind".Trim()) { return '' }
+    if ("$CredKind" -eq 'Secret' -and "$CredStorage" -eq 'Inline') {
+        return 'Auth_Community: a client secret is never written into the configuration file (CredStorage Inline). Set CredStorage to KeyVault with Auth_Community.KeyVaultName (the secret stays in Key Vault), or sign in by certificate (CredKind Cert) or managed identity -- nothing was created.'
+    }
+    if ("$CredStorage" -eq 'KeyVault' -and -not "$KeyVaultName".Trim()) {
+        return ('Auth_Community: CredStorage KeyVault needs Auth_Community.KeyVaultName -- the vault (in the install''s subscription) that keeps the {0}. Name it, or sign in by certificate kept on this server (CredKind Cert, CredStorage LocalCertStore) -- nothing was created.' -f $(if ("$CredKind" -eq 'Secret') { 'client secret' } else { 'certificate' }))
+    }
+    ''
+}
+
+function Get-SIUnattendedExistingSecretRef {
+    <#
+        PURE. -SkipPhase1 for an existing install that signs in by CLIENT SECRET: where that secret is kept, so the config step
+        writes its Key Vault reference (never the secret). From Auth_Community: KeyVaultName (+ KvSecretName, default
+        SI-SPN-Secret -- the name setup stores it under). Without a vault, -ExistingConfig (the install's configuration file
+        is there) keeps the sign-in the file already has (the config step only adds what is missing). Returns
+        @{ Ok; KvName; KvSecretName; KeepExisting; Reason }.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$KeyVaultName = '', [AllowNull()][AllowEmptyString()][string]$KvSecretName = '', [bool]$ExistingConfig = $false)
+    if ("$KeyVaultName".Trim()) {
+        return [pscustomobject]@{ Ok = $true; KvName = "$KeyVaultName".Trim(); KvSecretName = $(if ("$KvSecretName".Trim()) { "$KvSecretName".Trim() } else { 'SI-SPN-Secret' }); KeepExisting = $false; Reason = '' }
+    }
+    if ($ExistingConfig) { return [pscustomobject]@{ Ok = $true; KvName = $null; KvSecretName = $null; KeepExisting = $true; Reason = 'the sign-in already in the configuration file is kept as it is' } }
+    [pscustomobject]@{ Ok = $false; KvName = $null; KvSecretName = $null; KeepExisting = $false
+        Reason = '-SkipPhase1 with a client-secret sign-in: name the Key Vault that keeps the secret (Auth_Community.KeyVaultName, and KvSecretName when it is not SI-SPN-Secret) -- a client secret is never written into the configuration file. Nothing was changed.' }
 }
 
 function Get-SIServerArcGrantHint {

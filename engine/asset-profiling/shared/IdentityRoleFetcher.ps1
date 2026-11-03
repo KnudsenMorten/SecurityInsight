@@ -19,6 +19,8 @@ if (-not (Get-Command -Name Read-SILaParts -ErrorAction SilentlyContinue)) { . (
 . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'auth\Get-SIGraphToken.ps1')
 # the run's outcome notes (a role read that was not complete makes the run partial for the role facts -- #899)
 if (-not (Get-Command -Name Add-SIEntraRolesPartialNote -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-RunOutcome.ps1') }
+# #1049 F0: each phase's time as a log line and a cfg.StepPhaseTime row (measurement only)
+if (-not (Get-Command -Name Start-SIIdentityPhase -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-IdentityPhaseTime.ps1') }
 
 # per-process bulk-fetch cache. The Entra User + Entra SP
 # discoveries each ran the same 6 bulk fetches (~8 Graph + 1 LA + N Az
@@ -504,6 +506,10 @@ function Invoke-SIGraphPaged {
                 $key = "HTTP$status"
                 if (-not $script:_SIGraphRetryCount.ContainsKey($key)) { $script:_SIGraphRetryCount[$key] = 0 }
                 $script:_SIGraphRetryCount[$key]++
+                # #1049 F0: the same counts and the time waited, process-wide -- said once per source (Write-SIGraphRetrySummary)
+                if ($null -eq $global:SI_GraphRetryCount) { $global:SI_GraphRetryCount = @{} }
+                $global:SI_GraphRetryCount[$key] = 1 + [int]$global:SI_GraphRetryCount[$key]
+                $global:SI_GraphRetrySleptSeconds = [double]$global:SI_GraphRetrySleptSeconds + [double]$delay
                 Write-Verbose ('Graph transient error (HTTP {0}) on {1} -- retry {2}/{3} in {4}s' -f $status, $url, $attempt, $maxAttempts, $delay)
                 Start-Sleep -Seconds $delay
             }
@@ -2009,7 +2015,7 @@ function Invoke-SIEgIdentityQueriesParallel {
     }
     $qs = New-Object System.Collections.Generic.List[string]; foreach ($q in @($Queries)) { $qs.Add([string]$q) }
     $cuts = 0
-    $st = [pscustomobject]@{ Concurrency = 1; MaxConcurrency = 1; ThrottledWaves = 0; Requests = 0; Cap = 0; PerAnswer = 0L }
+    $st = [pscustomobject]@{ Concurrency = 1; MaxConcurrency = 1; ThrottledWaves = 0; Requests = 0; Cap = 0; PerAnswer = 0L; Slept = 0.0 }
     $attempts = @{}
     $pending = New-Object System.Collections.Generic.List[int]
     for ($i = 0; $i -lt $qs.Count; $i++) { $pending.Add($i) }
@@ -2059,10 +2065,10 @@ function Invoke-SIEgIdentityQueriesParallel {
         if ($retry.Count) {
             $pending.InsertRange(0, $retry)
             $d = [Math]::Max($backoff, $(if ($throttled) { [Math]::Max(1, $wait) } else { 0 }))
-            if ($d -gt 0) { & $Sleep $d }
+            if ($d -gt 0) { & $Sleep $d; $st.Slept = [double]$st.Slept + [double]$d }   # #1049 F0: the time waited
         }
     }
-    [pscustomobject]@{ Kind = 'result'; Failed = $failed.ToArray(); Requests = [int]$st.Requests; MaxConcurrency = [int]$st.MaxConcurrency; ThrottledWaves = [int]$st.ThrottledWaves; Cuts = $cuts }
+    [pscustomobject]@{ Kind = 'result'; Failed = $failed.ToArray(); Requests = [int]$st.Requests; MaxConcurrency = [int]$st.MaxConcurrency; ThrottledWaves = [int]$st.ThrottledWaves; Cuts = $cuts; SleptSeconds = [double]$st.Slept }
 }
 
 function Get-SIEgAdIdentity {
@@ -2173,6 +2179,31 @@ function Get-SIExposureGraphIdentities {
         $egKeep = Get-SIEgIdentityKeepKeys -SIRoot $siRoot
         if ($null -ne $egKeep) { Write-SIInfo ('[perms] EG identity nodes: keeping {0} rawData field(s) the profile, rules and mapping read' -f $egKeep.Count) }
     }
+    # #1056 A CUSTOMER'S CHOICE (SI-IdentityScopeChoice.ps1): two per-install switches, OFF by default -- off, nothing below
+    # changes. On, a never-synced disabled non-privileged AD account (SI_Identity_SkipNeverSyncedDisabledAd) and a group Entra
+    # ID no longer has (SI_Identity_SkipDeletedGroups) are not RECORDED (no asset); they are counted. The index is unchanged.
+    if (-not (Get-Command -Name Get-SIIdentityScopeChoice -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-IdentityScopeChoice.ps1') }
+    $scopeChoice = Get-SIIdentityScopeChoice
+    $scopeOn = [bool]($scopeChoice.Any -and ($egCaptureRecords -or $egCaptureFull))
+    $scopeCounter = $null; $scopeCritical = $null; $scopeGroups = $null; $scopeGroupsUnknown = $false
+    if ($scopeOn) {
+        $scopeCounter = New-SIIdentityScopeCounter -Choice $scopeChoice
+        if ($scopeChoice.SkipNeverSyncedDisabledAd) { $scopeCritical = Get-SIIdentityCriticalAdGroupNames -SIRoot $siRoot }
+        if ($scopeChoice.SkipDeletedGroups) {
+            $scEg = Read-SIEntraGroupIds
+            if ($scEg.Ok) {
+                $scopeGroups = $scEg.Ids
+                Write-SIInfo ('[perms] Entra ID groups for SI_Identity_SkipDeletedGroups: {0:N0} active, {1:N0} in the deleted items' -f $scEg.Active, $scEg.Deleted)
+            } else {
+                # absence proves nothing: no group with an Entra id is recorded this run and the Exposure Graph pull is not
+                # complete, so no group CI retires and none comes back on a read that failed
+                $scopeGroupsUnknown = $true
+                $scC = $scopeCounter['SI_Identity_SkipDeletedGroups']; if ($scC) { $scC.Applied = $false; $scC.Detail = [string]$scEg.Error }
+                Write-Warning ('Entra ID groups could not be read completely ({0}) -- SI_Identity_SkipDeletedGroups decides nothing this run; groups keep their last state.' -f $scEg.Error)
+                if ($egCaptureRecords) { Set-SIRecordPull -Provider 'eg' -Complete $false -ErrorText ('the Entra ID group list for SI_Identity_SkipDeletedGroups could not be read: ' + [string]$scEg.Error) }
+            }
+        }
+    }
     $skipNoProps = 0; $skipNoOid = 0; $kept = 0; $adKept = 0; $dropped = 0; $rowsTotal = 0; $sampleRowKeys = ''
     $perLabelTotal = @{}; $perLabelKept = @{}; $perLabelSkipNoOid = @{}; $perLabelAdKept = @{}
     $diagSamplesPerLabel = @{}   # per-label: capture first 1 raw EntityIds payload that fails to extract -- helps diagnose schema drift
@@ -2248,6 +2279,13 @@ function Get-SIExposureGraphIdentities {
             if ($egCaptureRecords -or $egCaptureFull) {
                 $adId = Get-SIEgAdIdentity -RawData $rawData -Sid $sid
                 if ($adId.IsAd) {
+                    if ($scopeOn) {
+                        # #1056 1C: a never-synced, disabled, non-privileged AD account gets no record (counted)
+                        $sd = Get-SIEgIdentityScopeDecision -NodeLabel $nodeLabel -AadObjectId '' -RawData $rawData -Choice $scopeChoice -CriticalGroups $scopeCritical
+                        $keptBy = ''; if ($nodeLabel -eq 'user' -and $scopeChoice.SkipNeverSyncedDisabledAd) { $keptBy = 'SI_Identity_SkipNeverSyncedDisabledAd' }
+                        Add-SIIdentityScopeCount -Counter $scopeCounter -Decision $sd -KeptBy $keptBy
+                        if (-not $sd.Keep) { continue }
+                    }
                     $adKept++; if (-not $perLabelAdKept.ContainsKey($nodeLabel)) { $perLabelAdKept[$nodeLabel] = 0 }; $perLabelAdKept[$nodeLabel]++
                     $egNode = ConvertTo-SIFullExposureGraphNode -Row $row
                     if ($egCaptureFull) { Add-SIFullSourceObject -SourceSystem 'exposure-graph' -Object $egNode -AnchorColumn 'ExposureGraphNodeId' -AnchorValue ([string]$row.NodeId) }
@@ -2299,8 +2337,17 @@ function Get-SIExposureGraphIdentities {
         }
         $kept++; $perLabelKept[$nodeLabel]++
 
+        # #1056 2B: a group Entra ID no longer has (active or deleted) is not recorded -- it stays in the index above (it
+        # enriches nothing that exists), and is counted
+        $scopeKeep = $true
+        if ($scopeOn -and $nodeLabel -eq 'group') {
+            $sd = Get-SIEgIdentityScopeDecision -NodeLabel $nodeLabel -AadObjectId $aadOid -RawData $rawData -Choice $scopeChoice -EntraGroups $scopeGroups -GroupsUnknown:$scopeGroupsUnknown
+            $keptBy = ''; if ($scopeChoice.SkipDeletedGroups) { $keptBy = 'SI_Identity_SkipDeletedGroups' }
+            Add-SIIdentityScopeCount -Counter $scopeCounter -Decision $sd -KeptBy $keptBy
+            $scopeKeep = [bool]$sd.Keep
+        }
         # the v2.2 rule (above): only a kept node is a record, and it carries the Entra object id it was kept for
-        if ($egCaptureRecords -or $egCaptureFull) {
+        if ($scopeKeep -and ($egCaptureRecords -or $egCaptureFull)) {
             $egNode = ConvertTo-SIFullExposureGraphNode -Row $row
             # full asset metadata keeps (a copy of) the source's node as it is -- its hook also captures the record part,
             # which the call below replaces with the one that carries the Entra object id
@@ -2387,7 +2434,7 @@ function Get-SIExposureGraphIdentities {
                 $fx = $egSpec[[int]$f.Index]
                 Write-Warning ('  EG fetch failed for label={0} bucket={1}/{2} -- {3}' -f $label, $fx[1], $fx[0], $f.Error)
             }
-            Write-SIInfo ('     [{0,-18}] count={1,5}  fetched={2,5}  ({3} buckets; {4} request(s), up to {5} at once, Microsoft asked to slow down {6} time(s){7})' -f $label, $rowCount, $fetched, $bucketCount, $egRes.Requests, $egRes.MaxConcurrency, $egRes.ThrottledWaves, $(if ($egRes.Cuts) { ('; {0} cut bucket(s) read again in halves' -f $egRes.Cuts) } else { '' }))
+            Write-SIInfo ('     [{0,-18}] count={1,5}  fetched={2,5}  ({3} buckets; {4} request(s), up to {5} at once, Microsoft asked to slow down {6} time(s){7})' -f $label, $rowCount, $fetched, $bucketCount, $egRes.Requests, $egRes.MaxConcurrency, $egRes.ThrottledWaves, ($(if ($egRes.Cuts) { ('; {0} cut bucket(s) read again in halves' -f $egRes.Cuts) } else { '' }) + $(if ($egRes -and $egRes.PSObject.Properties['SleptSeconds'] -and [double]$egRes.SleptSeconds -gt 0) { ('; {0} s waited before asking again' -f ([Math]::Round([double]$egRes.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)) } else { '' })))
             if ($failedBuckets -gt 0) {
                 Write-Warning ('  EG identity nodes for label={0} are INCOMPLETE: {1} of {2} bucket(s) failed after retries. Identities in those buckets carry no EG enrichment this run (UNKNOWN, not absent).' -f $label, $failedBuckets, $bucketCount)
             }
@@ -2404,6 +2451,14 @@ function Get-SIExposureGraphIdentities {
     Write-SIInfo ('[perms] EG identity nodes: {0} of {1} have an Entra object id (recorded, enriching their Entra object); {2} have no Entra id but an on-prem AD identity (recorded as AD identities, linked by SID); {3} are neither Entra nor AD and {4} have no properties -- those {5} are dropped (the v2.2 rule, extended for on-prem AD).' -f $kept, $rowsTotal, $adKept, $dropped, $skipNoProps, ($dropped + $skipNoProps))
     foreach ($k in ($perLabelTotal.Keys | Sort-Object)) {
         Write-SIInfo ('     [{0,-18}] total={1,5}  kept={2,5}  skip-no-aadOid={3}  (of those kept as AD identities={4})' -f $k, $perLabelTotal[$k], $perLabelKept[$k], $perLabelSkipNoOid[$k], [int]$perLabelAdKept[$k])
+    }
+    # #1056 the run report of the customer's choice: one line per switch, and one row per switch in sidata.CollectionLeftOut
+    # (the Data health page; the asset-drop check adds them back before it judges the Exposure Graph feed)
+    if ($scopeOn -and $null -ne $scopeCounter) {
+        $scopeCounts = @($scopeCounter.Values)
+        foreach ($sc in $scopeCounts) { Write-SIInfo ('[perms] ' + (Format-SIIdentityScopeLine -Count $sc)) }
+        $script:_SICache['EgIdentityScopeCounts'] = $scopeCounts
+        $null = Write-SIIdentityScopeCounts -Counts $scopeCounts
     }
     if ($global:SI_Verbose) {
         foreach ($k in ($diagSamplesPerLabel.Keys | Sort-Object)) {

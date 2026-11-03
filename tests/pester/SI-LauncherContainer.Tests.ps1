@@ -102,14 +102,6 @@ Describe 'ContainerArtifacts' {
         if ($err -and $err.Count) { throw ("Parse error: " + $err[0].Message) }
     }
 
-    It 'Start-SIInContainer.ps1 references SI_HostMode (set OR consumed)' {
-        $body = Get-Content -Raw -LiteralPath (Join-Path $script:ContainerRoot 'Start-SIInContainer.ps1')
-        if ($body -notmatch 'SI_HostMode') {
-            Set-ItResult -Skipped -Because 'Start-SIInContainer.ps1 does not yet reference SI_HostMode -- known gap, container-mode runtime detection planned'
-        } else {
-            $body | Should -Match 'SI_HostMode'
-        }
-    }
 
     It 'Dockerfile declares FROM' {
         $body = Get-Content -Raw -LiteralPath (Join-Path $script:ContainerRoot 'Dockerfile')
@@ -192,7 +184,10 @@ Describe 'OutputContracts' {
 }
 
 # ============================================================================
-Describe 'OutputArtifacts' {
+# Tag Live: these read the output of a REAL launcher run on the host (RA sidecars, the workbook, a Shodan scan). The test VM
+# never has one, so every gate leaves the tag out and names it as not run (tests\Invoke-FastGate.ps1); run them on a host
+# after a launcher run with -Tag Live.
+Describe 'OutputArtifacts' -Tag 'Live' {
 # ============================================================================
 
     Context 'RA Excel + JSON sidecars (skipped when no recent run)' {

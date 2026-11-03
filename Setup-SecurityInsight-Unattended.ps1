@@ -379,6 +379,10 @@ if (-not $SkipPhase1) {
                       -ContainerEnabled ([bool]$cfg.Container.Enabled) -HostKind ([string]$commHost.Kind)
     if ($commSignIn.DefaultUsed -and $commHost.Kind -eq 'Outside' -and -not [bool]$cfg.Container.Enabled) { _Warn (Get-SIServerNoManagedIdentityNote) }
     _Info ("sign-in      : {0} -- {1}" -f $commSignIn.CredKind, $commSignIn.Note)
+    # BEFORE anything is created: a credential that could not end in a working configuration stops here (a client secret
+    # written into the file, or a Key Vault store with no vault named) -- never after an app and its secret exist
+    $credWhy = Test-SIUnattendedCredentialPlan -CredKind $commSignIn.CredKind -CredStorage $commSignIn.CredStorage -KeyVaultName ([string](_CfgValue $cfg.Auth_Community 'KeyVaultName'))
+    if ($credWhy) { _Err $credWhy; throw $credWhy }
 }
 
 # ----------------------------------------------------------------------------
@@ -398,7 +402,18 @@ if ($SkipPhase1) {
     $skipSp = Get-SIAzADServicePrincipal -ApplicationId $skipAppId -ErrorAction Stop
     if (-not $skipSp) { throw ("-SkipPhase1: no service principal for AppId {0} in tenant {1}." -f $skipAppId, $cfg.Sub.TenantId) }
     $skipThumb  = if ($skipAuth.PSObject.Properties['CertificateThumbprint']) { [string]$skipAuth.CertificateThumbprint } else { '' }
-    $skipSecret = if ($skipAuth.PSObject.Properties['Secret']) { [string]$skipAuth.Secret } else { '' }
+    # A client-secret install: the secret is never written into the configuration file -- the config step writes where it
+    # is kept (Auth_Community.KeyVaultName / KvSecretName), or keeps the sign-in the existing file has. Checked HERE, before
+    # Phase 2 builds anything.
+    $skipRef = $null
+    if (-not $skipThumb) {
+        . (Join-Path $repoRoot 'setup\_shared\SI-ServerSignIn.ps1')
+        $skipCfgFile = Join-Path $repoRoot 'config\SecurityInsight.custom.ps1'
+        $skipRef = Get-SIUnattendedExistingSecretRef -KeyVaultName ([string](_CfgValue $skipAuth 'KeyVaultName')) -KvSecretName ([string](_CfgValue $skipAuth 'KvSecretName')) `
+                       -ExistingConfig ((Test-Path -LiteralPath $skipCfgFile) -and -not $ForceConfigOverwrite)
+        if (-not $skipRef.Ok) { _Err $skipRef.Reason; throw $skipRef.Reason }
+        if ($skipRef.KeepExisting) { _Info ("client secret: {0}" -f $skipRef.Reason) } else { _Info ("client secret: Key Vault {0} / {1} (read on every load; never written into the file)" -f $skipRef.KvName, $skipRef.KvSecretName) }
+    }
     $spnOut = [pscustomobject]@{
         AppId          = $skipAppId
         ObjectId       = [string]@($skipSp)[0].Id
@@ -406,8 +421,10 @@ if ($SkipPhase1) {
         DisplayName    = [string]@($skipSp)[0].DisplayName
         CredKind       = if ($skipThumb) { 'Cert' } else { 'Secret' }
         CertThumbprint = if ($skipThumb) { $skipThumb } else { $null }
-        CredValue      = if (-not $skipThumb -and $skipSecret) { $skipSecret } else { $null }
-        KvName         = $null
+        CredValue      = $null
+        KvName         = if ($skipRef) { $skipRef.KvName } else { $null }
+        KvSecretName   = if ($skipRef) { $skipRef.KvSecretName } else { $null }
+        KeepExistingSignIn = [bool]($skipRef -and $skipRef.KeepExisting)
         ConsentStatus  = 'unknown'
     }
     _Ok ("existing SPN resolved: AppId {0}, ObjectId {1}" -f $spnOut.AppId, $spnOut.ObjectId)

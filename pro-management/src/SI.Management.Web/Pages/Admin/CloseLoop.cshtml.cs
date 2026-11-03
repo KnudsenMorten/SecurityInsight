@@ -20,7 +20,7 @@ public sealed class CloseLoopModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the vuln schema failed");
-            Error = "The close-loop state could not be read: " + ex.Message;
+            Error = "The close-loop state could not be read: " + ViewerError.Text(ex);
         }
     }
 }

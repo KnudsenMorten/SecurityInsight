@@ -79,7 +79,7 @@ public sealed class EstateToolbox
             "Findings of one Risk Analysis collection from the Pro database (the newest unless collectionId is given), filtered and paged. Each row: asset, tier, severity, domain, report, CVE / configuration id, title, risk score. "
             + "'Top vulnerabilities', 'top risks' or 'top N findings' = sort \"risk\" with NO severity filter. Filter values are read ignoring case and common synonyms are mapped (the result's notes say how); "
             + "a filter that matches nothing returns a note listing the values present -- that is NOT proof that none exist.",
-            $$$"""{"type":"object","properties":{"collectionId":{"type":"string","maxLength":64,"description":"A collection id (omit for the newest)."},"tier":{"type":"string","enum":{{{EnumJson(ProDataFilters.Tiers)}}},"description":"Asset tier; 0 is the most critical."},"severity":{"type":"string","enum":{{{EnumJson(ToolVocabulary.Severities)}}},"description":"Most severe first. There is no 'Critical' severity: the most severe is 'Very High'."},"domain":{"type":"string","enum":{{{EnumJson(ToolVocabulary.Domains)}}}},"report":{"type":"string","maxLength":200,"description":"Exact Risk Analysis report name, as listed by filter_values."},"assetKind":{"type":"string","enum":{{{EnumJson(ProDataFilters.AssetKinds)}}}},"text":{"type":"string","maxLength":200,"description":"Matched literally in asset name, title, CVE, configuration id, report."},"sort":{"type":"string","enum":{{{EnumJson(FindingSorts.All)}}},"description":"risk = highest risk score first; importance (default) = asset tier, then risk score; severity = Very High first, severity-asc = Low first (by rank, never alphabetical)."},"skip":{"type":"integer","minimum":0,"maximum":100000},"top":{"type":"integer","minimum":1,"maximum":100,"description":"Rows (default 25)."}},"additionalProperties":false}""",
+            $$$"""{"type":"object","properties":{"collectionId":{"type":"string","maxLength":64,"description":"A collection id (omit for the newest)."},"tier":{"type":"string","enum":{{{EnumJson(ProDataFilters.Tiers)}}},"description":"Asset tier; 0 is the most critical."},"severity":{"type":"string","enum":{{{EnumJson(ToolVocabulary.Severities)}}},"description":"Most severe first. There is no 'Critical' severity: the most severe is 'Very High'."},"domain":{"type":"string","enum":{{{EnumJson(ToolVocabulary.Domains)}}}},"report":{"type":"string","maxLength":200,"description":"Exact Risk Analysis report name, as listed by filter_values."},"assetKind":{"type":"string","enum":{{{EnumJson(ProDataFilters.AssetKinds)}}}},"text":{"type":"string","maxLength":200,"minLength":2,"description":"Matched literally in asset name, title, CVE, configuration id, report (at least 2 characters)."},"sort":{"type":"string","enum":{{{EnumJson(FindingSorts.All)}}},"description":"risk = highest risk score first; importance (default) = asset tier, then risk score; severity = Very High first, severity-asc = Low first (by rank, never alphabetical)."},"skip":{"type":"integer","minimum":0,"maximum":100000},"top":{"type":"integer","minimum":1,"maximum":100,"description":"Rows (default 25)."}},"additionalProperties":false}""",
             false),
         new(TrendAnalytics,
             "Trend analytics from the Pro database: findings, assets with findings, the average and the highest risk score per finding, and the Very High + High findings per day, split by one dimension (tier, severity, domain, report or none) and filtered by the others. From the pre-computed daily aggregate; the newest collection of each day counts. "
@@ -100,6 +100,16 @@ public sealed class EstateToolbox
     /// only when the data is known and the list is short -- otherwise filter_values lists it).
     public static readonly IReadOnlyList<string> EnumerableArguments = ["severity", "tier", "domain", "assetKind", "sort", "dimension", "grain"];
 
+    /// The tools that apply the caller's row visibility to EVERY row they read (#253 x #254): the only tools a caller whose
+    /// view is limited to some departments is offered and may run. Every other tool reads across the whole estate (Log
+    /// Analytics, estate-wide aggregates, run heartbeats, settings) and is refused for such a caller.
+    public static readonly IReadOnlySet<string> RowFiltered = new HashSet<string>(StringComparer.Ordinal) { FindingsQuery };
+
+    /// The longest one tool call may run (its database / Log Analytics reads are cancelled after it): a question to the
+    /// chat or an MCP call can never hold the shared Pro database for longer.
+    public static readonly TimeSpan DefaultCallTimeout = TimeSpan.FromSeconds(120);
+    public TimeSpan CallTimeout { get; init; } = DefaultCallTimeout;
+
     private readonly IEstateQueries _q;
     private readonly ISettingsReader _settings;
     private readonly IProDataQueries? _pro;
@@ -113,14 +123,24 @@ public sealed class EstateToolbox
     }
 
     /// The tools a caller may see. A Viewer never gets an Admin-only tool.
-    public static IReadOnlyList<ToolSpec> For(bool isAdmin) => All.Where(t => isAdmin || !t.AdminOnly).ToList();
+    public static IReadOnlyList<ToolSpec> For(bool isAdmin) => For(ToolCaller.Unscoped(isAdmin));
+
+    /// The tools this caller may see: never an Admin-only tool to a non-Admin, and only the row-filtered tools to a caller
+    /// whose view is limited to some rows.
+    public static IReadOnlyList<ToolSpec> For(ToolCaller caller) =>
+        All.Where(t => (caller.IsAdmin || !t.AdminOnly) && (!caller.Scoped || RowFiltered.Contains(t.Name))).ToList();
 
     /// The same tools, with the enums of the data-driven arguments (severity, domain, report) read from the newest
     /// collection: the values present are listed, so the model picks a real value instead of guessing one. When the
     /// data cannot be read, the fixed lists stay.
-    public async Task<IReadOnlyList<ToolSpec>> SpecsAsync(bool isAdmin, CancellationToken ct)
+    public Task<IReadOnlyList<ToolSpec>> SpecsAsync(bool isAdmin, CancellationToken ct) => SpecsAsync(ToolCaller.Unscoped(isAdmin), ct);
+
+    /// The same, for one caller: a caller whose view is limited gets the fixed lists only (the values present are read
+    /// across the whole estate, so they are never put in front of such a caller).
+    public async Task<IReadOnlyList<ToolSpec>> SpecsAsync(ToolCaller caller, CancellationToken ct)
     {
-        var specs = For(isAdmin);
+        var specs = For(caller);
+        if (caller.Scoped) return specs;
         var v = await TryValuesAsync(null, ct).ConfigureAwait(false);
         if (v is null) return specs;
         return specs.Select(s => s.Name is FindingsQuery or TrendAnalytics ? s with { ParametersJsonSchema = WithEnums(s.ParametersJsonSchema, v) } : s).ToList();
@@ -142,12 +162,32 @@ public sealed class EstateToolbox
 
     /// Runs one tool by name with JSON arguments. Unknown tools and unknown arguments are refused; an Admin-only
     /// tool called without the Admin role throws UnauthorizedAccessException.
-    public async Task<ToolOutput> InvokeAsync(string name, string? argumentsJson, bool isAdmin, CancellationToken ct)
+    public Task<ToolOutput> InvokeAsync(string name, string? argumentsJson, bool isAdmin, CancellationToken ct) =>
+        InvokeAsync(name, argumentsJson, ToolCaller.Unscoped(isAdmin), ct);
+
+    /// <summary>
+    /// Runs one tool for one caller. A caller whose view is limited to some rows may run only the row-filtered tools
+    /// (<see cref="RowFiltered"/>), each with the caller's predicate on every row it reads; any other tool throws
+    /// UnauthorizedAccessException. The call is bounded by <see cref="CallTimeout"/> (a TimeoutException past it).
+    /// </summary>
+    public async Task<ToolOutput> InvokeAsync(string name, string? argumentsJson, ToolCaller caller, CancellationToken ct)
     {
         var spec = All.FirstOrDefault(t => t.Name == name) ?? throw new ArgumentException($"Unknown tool '{name}'.");
-        if (spec.AdminOnly && !isAdmin) throw new UnauthorizedAccessException($"'{name}' requires the Admin role.");
+        if (spec.AdminOnly && !caller.IsAdmin) throw new UnauthorizedAccessException($"'{name}' requires the Admin role.");
+        if (caller.Scoped && !RowFiltered.Contains(name))
+            throw new UnauthorizedAccessException($"'{name}' is not available to an account limited to departments: it reads across every department.");
         var args = ParseArgs(argumentsJson, spec);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(CallTimeout);
+        try { return await RunAsync(name, args, caller, limit.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && limit.IsCancellationRequested)
+        {
+            throw new TimeoutException($"'{name}' took longer than {(int)CallTimeout.TotalSeconds} seconds and was stopped -- ask a narrower question.");
+        }
+    }
 
+    private async Task<ToolOutput> RunAsync(string name, Args args, ToolCaller caller, CancellationToken ct)
+    {
         switch (name)
         {
             // every risk score in an answer is a whole number (the shared ScoreFormat), so a reply quotes it as the pages show it
@@ -164,7 +204,7 @@ public sealed class EstateToolbox
             case RunHealth: return Out(await _q.RunHealthAsync(args.Int("days", DefaultRunHealthDays), ct).ConfigureAwait(false));
             case SettingsRead:
                 return Out(await _settings.ReadAsync(args.Str("name"), args.Int("days", DefaultDays), args.Int("rows", DefaultHistoryRows), ct).ConfigureAwait(false));
-            case FindingsQuery: return await FindingsAsync(args, ct).ConfigureAwait(false);
+            case FindingsQuery: return await FindingsAsync(args, caller, ct).ConfigureAwait(false);
             case TrendAnalytics: return await TrendAsync(args, ct).ConfigureAwait(false);
             case VulnLifecycle:
             {
@@ -202,7 +242,7 @@ public sealed class EstateToolbox
 
     private static QueryResult<T> Map<T>(QueryResult<T> r, Func<T, T> f) => r with { Data = f(r.Data) };
 
-    private async Task<ToolOutput> FindingsAsync(Args args, CancellationToken ct)
+    private async Task<ToolOutput> FindingsAsync(Args args, ToolCaller caller, CancellationToken ct)
     {
         var notes = new List<string>();
         var collection = ProDataFilters.Id(args.Str("collectionId"), "collection");
@@ -215,10 +255,13 @@ public sealed class EstateToolbox
         if (_pro is null) return NotConfigured(new FindingPage(Array.Empty<FindingRow>(), 0, 0, 25));
 
         // the values present are read only when a data-driven filter was given (or the answer comes back empty)
-        var v = rawSeverity is null && rawDomain is null && rawReport is null ? null : await TryValuesAsync(collection, ct).ConfigureAwait(false);
+        // a caller whose view is limited is never shown the values present across the whole estate
+        var v = caller.Scoped || (rawSeverity is null && rawDomain is null && rawReport is null) ? null : await TryValuesAsync(collection, ct).ConfigureAwait(false);
         var f = ProDataFilters.Normalize(new FindingFilter
         {
             CollectionId = collection, Tier = tier, AssetKind = kind, Text = args.Str("text"), Sort = sort,
+            // the caller's rows only (#253 x #254): the predicate goes on the read itself
+            Visibility = caller.Visibility,
             Severity = ToolVocabulary.Resolve("severity", rawSeverity, v?.Severity, ToolVocabulary.Severities, ToolVocabulary.SeverityWords, notes),
             Domain = ToolVocabulary.Resolve("domain", rawDomain, v?.Domain, ToolVocabulary.Domains, ToolVocabulary.DomainWords, notes),
             Report = ToolVocabulary.Resolve("report", rawReport, v?.Report, Array.Empty<string>(), Array.Empty<(string, string[])>(), notes, containsMatch: true),
@@ -232,7 +275,7 @@ public sealed class EstateToolbox
                 notes.Add(f.CollectionId is null ? "the newest collection has no findings at all (no filter was applied)" : $"collection '{f.CollectionId}' has no findings, or does not exist (no filter was applied)");
             else
             {
-                v ??= await TryValuesAsync(collection, ct).ConfigureAwait(false);
+                if (!caller.Scoped) v ??= await TryValuesAsync(collection, ct).ConfigureAwait(false);
                 notes.Add(NoRows(filters, v, "in this collection"));
             }
         }
@@ -366,9 +409,34 @@ public sealed class EstateToolbox
             foreach (var p in doc.RootElement.EnumerateObject())
             {
                 if (!allowed.Contains(p.Name)) throw new ArgumentException($"'{spec.Name}' has no argument '{p.Name}'.");
+                // the schema's bounds hold on the server too (a client that ignores the schema is refused, never served)
+                CheckBounds(spec.Name, p.Name, p.Value, schema.RootElement.GetProperty("properties").GetProperty(p.Name));
                 dict[p.Name] = p.Value.Clone();
             }
         }
         return new Args(dict);
+    }
+
+    /// The schema's minimum / maximum (integers) and minLength / maxLength (strings), enforced on what was sent.
+    private static void CheckBounds(string tool, string name, JsonElement value, JsonElement prop)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return;
+        double? Num(string k) => prop.TryGetProperty(k, out var x) && x.ValueKind == JsonValueKind.Number ? x.GetDouble() : null;
+        var type = prop.TryGetProperty("type", out var ty) ? ty.GetString() : null;
+        if (type == "integer")
+        {
+            double? n = value.ValueKind == JsonValueKind.Number ? value.GetDouble()
+                : value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : null;
+            if (n is null) return;   // the type itself is checked where the value is read
+            if (Num("minimum") is { } min && n < min) throw new ArgumentException($"'{tool}': '{name}' is at least {min}.");
+            if (Num("maximum") is { } max && n > max) throw new ArgumentException($"'{tool}': '{name}' is at most {max}.");
+        }
+        else if (type == "string" && value.ValueKind == JsonValueKind.String)
+        {
+            var len = (value.GetString() ?? "").Trim().Length;
+            if (len == 0) return;   // an empty value is "not given"
+            if (Num("maxLength") is { } max && len > max) throw new ArgumentException($"'{tool}': '{name}' is at most {max} characters.");
+            if (Num("minLength") is { } min && len < min) throw new ArgumentException($"'{tool}': '{name}' is at least {min} characters.");
+        }
     }
 }

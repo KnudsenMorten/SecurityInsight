@@ -128,7 +128,7 @@ public sealed class ClosureModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "{What} failed", what);
-            Errors.Add($"The {what} could not be read: {ex.Message}");
+            Errors.Add($"The {what} could not be read: {ViewerError.Text(ex)}");
         }
     }
 

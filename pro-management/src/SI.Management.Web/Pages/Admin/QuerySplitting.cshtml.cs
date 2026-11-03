@@ -39,7 +39,7 @@ public sealed class QuerySplittingModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the bucket counts could not be read");
-            Error = "The bucket counts could not be read from the database: " + ex.Message;
+            Error = "The bucket counts could not be read from the database: " + ViewerError.Text(ex);
         }
     }
 

@@ -216,7 +216,13 @@ function Invoke-SIUpdaterDatabase {
     if ($Store.PSObject.Properties['GetToken'] -and $Store.GetToken -and $Store.PSObject.Properties['Server'] -and $Store.Server) {
         $runFile = New-SIProSchemaRunner -Server $Store.Server -Database $Store.Database -GetToken $Store.GetToken
     }
-    $apply = Invoke-SIProSchemaApply -SIRoot $SIRoot -Invoke $Store.Invoke -RunFile $runFile -ExtraFingerprint $grantSql -SkipWhenRecorded -Log { param($m) Write-UpdLog $m }
+    # #1050: the install's lock is beaten while an index builds (a long build never leaves it looking abandoned: a runner takes
+    # over a lock 15 minutes old) -- through the lock this update registered at its run gate
+    $ixBeat = { param($what) if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What $what -MinSeconds 30 } }
+    $applyArgs = @{ SIRoot = $SIRoot; Invoke = $Store.Invoke; RunFile = $runFile; ExtraFingerprint = $grantSql; SkipWhenRecorded = $true; Log = { param($m) Write-UpdLog $m } }
+    # (a release before #1050 has no -Beat: its apply runs as it always did)
+    if ((Get-Command -Name Invoke-SIProSchemaApply).Parameters.ContainsKey('Beat')) { $applyArgs.Beat = $ixBeat }
+    $apply = Invoke-SIProSchemaApply @applyArgs
     switch ($apply.Action) {
         'refused' {
             $null = Send-SIUpdaterDatabaseGuard -SIRoot $SIRoot -Store $Store -GuardId 'schema.gate.refused' -Outcome 'refused' -Subject $apply.FailedFile -Detail $apply.Reason
@@ -271,4 +277,84 @@ function Invoke-SIUpdaterDatabase {
     catch { $recorded = $false; Write-UpdLog ("WARNING: the applied schema could not be recorded: {0}" -f $_.Exception.Message) }
     $why = '{0}; grants {1}; schema {2} {3}' -f $apply.Reason, $(if ($principals.Count) { 'applied for ' + ($principals -join ', ') } else { 'none (no web app on this install)' }), $apply.Hash.Substring(0, 12), $(if ($recorded) { 'recorded' } else { 'NOT recorded' })
     & $res $true 'applied' $why $apply.Hash $principals
+}
+
+function Invoke-SIUpdaterIndexWindow {
+    <#
+        #1050 (owner 2026-11-01): SI_UPDATER_MODE = index-build -- the pipeline runner's wake-up started this run in an idle
+        window. ONE index that did not fit an update (cfg.IndexBuild, state waiting -- the one that has waited longest) is
+        built from its stored statement, under the install's lock (the run gate, as an update takes it), with the lock beaten
+        while it builds; a pipeline run that wants to start meanwhile waits for it. Built: the row says so and the build's
+        rate is recorded for the next estimate. A failed build waits again (said in plain words). Nothing else runs.
+        -Seams (tests): RunGate { param($Holder) }, ExitGate { param($Holder) }, Build { param($Sql, $Beat) } -> seconds,
+        Beat { param($Holder, $What) }. Returns the exit code (0; a build that failed is a WARNING, never a failed update).
+    #>
+    param($Store, [string]$SIRoot, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [hashtable]$Env = @{}, [hashtable]$Seams = @{})
+    if (-not $Store) { Write-UpdLog 'index build: this install has no Pro database -- nothing to build'; return 0 }
+    if (-not (Get-Command -Name Read-SIIndexBuildRows -ErrorAction SilentlyContinue)) {
+        $f = if ($SIRoot) { [IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-IndexBuild.ps1') } else { '' }
+        if (-not $f -or -not (Test-Path -LiteralPath $f)) { Write-UpdLog 'index build: this updater image does not carry the index build -- nothing done (the next update brings it)'; return 0 }
+        . $f
+    }
+    $rows = @()
+    try { $rows = @(Read-SIIndexBuildRows -Invoke $Store.Invoke) } catch { Write-UpdLog ('index build: the waiting indexes could not be read ({0}) -- nothing done' -f $_.Exception.Message); return 0 }
+    $now = [datetime]::UtcNow
+    $pick = @($rows | Where-Object { $_.State -eq 'waiting' -and "$($_.Statement)".Trim() } | Sort-Object { if ($_.SinceUtc) { ([datetime]$_.SinceUtc).ToUniversalTime() } else { [datetime]::MaxValue } })[0]
+    if (-not $pick) { Write-UpdLog 'index build: no index waits -- nothing to build'; return 0 }
+    $force = (-not $pick.ForcedUtc) -and $pick.SinceUtc -and (($now - ([datetime]$pick.SinceUtc).ToUniversalTime()).TotalDays -ge (Get-SIIndexBuildContract).WaitDays)
+    $holder = if (Get-Command -Name Get-SIUpdaterRunGateHolder -ErrorAction SilentlyContinue) { Get-SIUpdaterRunGateHolder -Env $Env } else { 'caj-si-updater' }
+    $real = -not (Get-Module -Name Pester)
+    $g = if ($Seams['RunGate']) { & $Seams.RunGate $holder }
+         elseif ($real -and (Get-Command -Name Invoke-SIUpdaterRunGate -ErrorAction SilentlyContinue)) { Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -What ('an index build of SecurityInsight: {0}' -f $pick.Name) -SubscriptionId $SubscriptionId }
+         else { [pscustomobject]@{ Go = $true; Reason = 'no run gate here'; LockTaken = $false } }
+    if (-not $g.Go) { Write-UpdLog ('index build: not now -- {0}; the pipeline runner starts it again at its next idle wake-up' -f $g.Reason); return 0 }
+    if ($g.LockTaken -and (Get-Command -Name Register-SIUpdaterLockBeat -ErrorAction SilentlyContinue)) { Register-SIUpdaterLockBeat -Store $Store -Holder $holder -Beat $(if ($Seams['Beat']) { $Seams['Beat'] } else { $null }) -Real:([bool]$real) }
+    $est = if ($pick.EstMinutes) { 'about ' + (Format-SIIndexDuration ([int]$pick.EstMinutes)) } else { 'its time is not known' }
+    try {
+        $there = $false
+        try {
+            $n = @(Get-SIIndexReaderRows (& $Store.Invoke "SET NOCOUNT ON; SELECT COUNT(*) AS N FROM sys.indexes WHERE name = @I AND object_id = OBJECT_ID(@T);" ([ordered]@{ I = $pick.Name; T = $pick.Table }) 'reader'))
+            $there = $n.Count -gt 0 -and [int](Get-SIIndexRowValue $n[0] 'N') -gt 0
+        } catch { $there = $false }
+        if ($there) { $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State built -Why 'found built'; Write-UpdLog ('index build: {0} on {1} is there already -- nothing to build' -f $pick.Name, $pick.Table); return 0 }
+        Write-UpdLog ('index build: {0} on {1} -- built now in an idle window ({2}){3}' -f $pick.Name, $pick.Table, $est, $(if ($force) { '; it has waited 7 days without an idle window long enough, so it is built now, once -- the next pipeline run waits for it' } else { '' }))
+        $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State building -Forced:$force -Why $(if ($force) { 'built after 7 days of waiting (once)' } else { 'built in an idle window' })
+        $say = [pscustomobject]@{ Last = [datetime]::UtcNow }
+        $ixName = $pick.Name
+        # the functions, captured (a closure's own scope does not see the functions of the updater's script)
+        $fBeat = ${function:Invoke-SIUpdaterLockBeat}; $fLog = ${function:Write-UpdLog}; $every = (Get-SIIndexBuildContract).SayEveryMinutes
+        $beat = {
+            param($Minutes)
+            if ($fBeat) { $null = & $fBeat -What ('building index {0} ({1} min)' -f $ixName, $Minutes) -MinSeconds 30 }
+            if (([datetime]::UtcNow - $say.Last).TotalMinutes -ge $every) { $say.Last = [datetime]::UtcNow; if ($fLog) { & $fLog ('index build: {0} still building ({1} min so far)' -f $ixName, $Minutes) } }
+        }.GetNewClosure()
+        $secs = 0.0
+        try {
+            if ($Seams['Build']) { $secs = [double](& $Seams.Build $pick.Statement $beat) }
+            else {
+                # the shared open (engine\_shared\SI-SqlRetry.ps1: the token, a retry on a database that is not ready yet)
+                if (-not (Get-Command -Name Open-SISqlConnectionRetry -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-SqlRetry.ps1')) }
+                $tokOf = $Store.GetToken
+                $cn = Open-SISqlConnectionRetry -Server ([string]$Store.Server) -Database ([string]$Store.Database) -Token { param($Fresh) [string](& $tokOf) }.GetNewClosure()
+                try { $secs = Invoke-SIIndexBuildCommand -Connection $cn -Sql $pick.Statement -Beat $beat } finally { $cn.Dispose() }
+            }
+        } catch {
+            $why = 'the build in an idle window failed ({0}) -- it waits for the next window; the release works without it' -f $_.Exception.Message
+            $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State waiting -Why $why
+            Write-UpdLog ('WARNING: index build: {0}: {1}' -f $pick.Name, $why)
+            return 0
+        }
+        $took = Format-SIIndexDuration ([int][Math]::Ceiling($secs / 60.0))
+        $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State built -Why ('built in {0}' -f $took)
+        $pg = Get-SIIndexTablePages -Invoke $Store.Invoke -Table $pick.Table
+        if ($pg) { $null = Add-SIIndexBuildRateSample -Invoke $Store.Invoke -Pages $pg.Pages -Seconds $secs }
+        Write-UpdLog ('index build: {0} on {1} built in {2} (estimated {3})' -f $pick.Name, $pick.Table, $took, $est)
+        0
+    } finally {
+        if (Get-Command -Name Unregister-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterLockBeat }
+        if ($g.LockTaken) {
+            $null = if ($Seams['ExitGate']) { & $Seams.ExitGate $holder } elseif ($real -and (Get-Command -Name Exit-SIUpdaterRunGate -ErrorAction SilentlyContinue)) { Exit-SIUpdaterRunGate -Store $Store -Holder $holder } else { $null }
+            Write-UpdLog 'index build: the install''s lock is released'
+        }
+    }
 }

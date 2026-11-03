@@ -871,6 +871,57 @@ function Get-SIInstallDefaultSeams {
     }
 }
 
+# The mark the installer's own Key Vault Secrets Officer carries on Azure's side (the role assignment's description).
+$script:SIInstallKvOfficerMark = 'SecurityInsight setup: the installer''s access for the install''s own secrets -- removed again when the install finishes'
+
+function Complete-SIInstallKvOfficer {
+    <#
+        THE END OF A FINISHED INSTALL: the installer's 'Key Vault Secrets Officer' on the install's own vault is removed
+        again -- but only when THIS install gave it (the key-vault step recorded kvOfficerGrantedAt); a role the person
+        already held is never touched. Read back: the role is checked gone. Returns '' when done or nothing to do, else
+        the reason (a warning with what to remove by hand). The fact is cleared only after a confirmed removal, so the next
+        run tries again. Never throws.
+    #>
+    # 2026-11-01: the grant ALSO carries its own mark on Azure's side (the role assignment's description,
+    # $script:SIInstallKvOfficerMark) -- an install whose own record (kvOfficerGrantedAt) was lost still finds and removes the
+    # assignment it gave. An assignment without the mark and without the record is the person's own, never touched.
+    param([Parameter(Mandatory)]$Ctx)
+    try {
+        $f = $Ctx.Facts
+        if (-not ($f -is [System.Collections.IDictionary])) { return '' }
+        $oid = [string]$f['userObjectId']; $kvId = [string]$f['keyVaultId']
+        if (-not $oid -or -not $kvId) { return '' }
+        $role = 'Key Vault Secrets Officer'
+        $atVault = { param($list) @($list | Where-Object { $_ -and ([string](Get-SIInstallProp $_ 'Scope')).TrimEnd('/') -ieq $kvId.TrimEnd('/') }) }
+        $given = [string]$f['kvOfficerGrantedAt']
+        $marked = @()
+        try {
+            $marked = @(& $atVault (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role; ErrorAction = 'SilentlyContinue' })) |
+                        Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $script:SIInstallKvOfficerMark })
+        } catch { if (-not $given) { return '' } }
+        if (-not $given -and -not $marked.Count) { return '' }
+        $why = ''
+        try {
+            if ($marked.Count) {
+                foreach ($m in $marked) { $null = Invoke-SIInstallAz -Ctx $Ctx -Command 'Remove-SIRoleAssignment' -Arguments ([ordered]@{ RoleAssignmentId = [string](Get-SIInstallProp $m 'RoleAssignmentId'); ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role }) }
+            } else {
+                $null = Invoke-SIInstallAz -Ctx $Ctx -Command 'Remove-SIRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role })
+            }
+            $left = @(& $atVault (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role; ErrorAction = 'SilentlyContinue' })))
+            # given by this install: nothing of the role may be left; found by its mark only: the marked ones must be gone
+            if ($given) { if ($left.Count) { $why = 'it is still assigned after the removal' } }
+            elseif (@($left | Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $script:SIInstallKvOfficerMark }).Count) { $why = 'it is still assigned after the removal' }
+        } catch { $why = $_.Exception.Message }
+        if (-not $why) {
+            $Ctx.Facts['kvOfficerGrantedAt'] = $null
+            Write-SIInstallConsole -Ctx $Ctx -Text ('Your "{0}" on the install''s Key Vault, given for the install''s own secrets, was removed again (read back).' -f $role) -Color Green
+            return ''
+        }
+        Write-SIInstallConsole -Ctx $Ctx -Text ('Your "{0}" on the install''s Key Vault ({1}) could not be removed: {2}. Remove it in the vault''s Access control (IAM), or run the install command again.' -f $role, $kvId, $why) -Color Yellow
+        return $why
+    } catch { return [string]$_.Exception.Message }
+}
+
 function Invoke-SIInstallAz {
     <# An Az cmdlet through the seam. An error the call was told to swallow (-ErrorAction SilentlyContinue) is still SHOWN
        and logged (operator 2026-10-04: "let me get detailed error messages instead of stealing them"); the result is
@@ -2314,7 +2365,9 @@ function Get-SIInstallStepTable {
         $oid = [string]$ctx.Facts['userObjectId']
         $have = @(Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Secrets Officer'; ErrorAction = 'SilentlyContinue' }))
         if (-not $have.Count) {
-            $null = Invoke-SIInstallAz -Ctx $ctx -Command 'New-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Secrets Officer'; ErrorAction = 'Stop' })
+            # the grant carries its own mark (the assignment's description), so the end of the install finds it even when
+            # this record (kvOfficerGrantedAt) is lost -- Complete-SIInstallKvOfficer
+            $null = Invoke-SIInstallAz -Ctx $ctx -Command 'New-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Secrets Officer'; Description = $script:SIInstallKvOfficerMark; ErrorAction = 'Stop' })
             $ctx.Facts['kvOfficerGrantedAt'] = (& $ctx.Seams.Now).ToString('o')
         }
         Update-SIInstallConfigFile -Ctx $ctx
@@ -3452,6 +3505,9 @@ function Invoke-SIGuidedInstallRun {
     # the updater job is started ONCE at the end of a finished install (as the first run is): the licence record the web
     # app reads then exists now, not only after the night's run (Start-SIInstallUpdaterOnce, Pro only; never fails the install)
     try { if (($ctx.Data -or $ctx.Pro) -and (Get-Command -Name Start-SIInstallUpdaterOnce -ErrorAction SilentlyContinue)) { $null = Start-SIInstallUpdaterOnce -Ctx $ctx } } catch { }
+    # the installer's Key Vault Secrets Officer, given by THIS install for its own secrets, is taken back at the end of a
+    # finished install (Complete-SIInstallKvOfficer; read back; a failure is a warning, never a failed install)
+    $null = Complete-SIInstallKvOfficer -Ctx $ctx
     $outputs = Get-SIInstallOutputs -Ctx $ctx
     $pendingCount = @($ctx.State['pending'].Keys).Count
     $null = Send-SIInstallEvent -Ctx $ctx -StepId 'completed' -State 'completed' -Outputs $outputs `

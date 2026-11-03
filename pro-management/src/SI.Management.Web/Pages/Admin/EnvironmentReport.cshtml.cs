@@ -20,7 +20,7 @@ public sealed class EnvironmentReportModel(EnvironmentReportService reports, ILo
     public async Task OnGetAsync(CancellationToken ct)
     {
         try { Report = await reports.BuildAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "environment report"); Error = "The environment report could not be built: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "environment report"); Error = "The environment report could not be built: " + ViewerError.Text(ex); }
     }
 
     /// Export JSON: the same facts as the page.

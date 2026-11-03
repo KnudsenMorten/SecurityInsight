@@ -16,6 +16,8 @@
     .\setup\Set-SIProSetting.ps1 -Name SI_Guard_RaOutputRowDrop_Enabled -Value false -Reason '...' -Apply
 .EXAMPLE
     .\setup\Set-SIProSetting.ps1 -Name SI_Guard_RaOutputRowDrop_Enabled -Reset -Reason 'back to the default' -Apply
+.EXAMPLE
+    .\setup\Set-SIProSetting.ps1 -Name Mail_CloseLoop_Daily_To -Value 'one@example.com' -Reason 'one recipient for the daily mail' -Apply
 
 .LINK
     https://invardia.com/docs/si/scripts/Set-SIProSetting/
@@ -23,7 +25,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][string]$Name,
-    # The value as text (true / false, a number, a word, or JSON for a list). Not for a secret: give -KeyVaultSecretName.
+    # The value as text (true / false, a number, a word, or JSON for a list). A list also takes plain text as ONE item
+    # (a mail address setting, name ending in _To: addresses separated by commas). Not for a secret: give -KeyVaultSecretName.
     [string]$Value,
     [string]$KeyVaultSecretName,
     # Remove the row: the setting goes back to its default.
@@ -68,6 +71,18 @@ if ($action -eq 'Set' -and -not $s.secret) {
         'bool' { if ($Value -match '^(?i)(true|false|1|0|on|off|yes|no)$') { $typed = $Value -match '^(?i)(true|1|on|yes)$' } else { throw "$Name is a switch: give true or false" } }
         'int'  { $n = 0L; if ([long]::TryParse($Value, [ref]$n)) { $typed = $n } else { throw "$Name is a whole number" } }
         'number' { $d = 0.0; if ([double]::TryParse($Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { $typed = $d } else { throw "$Name is a number" } }
+        'list' {
+            # a list stays a list with ONE item too: PowerShell 7's ConvertFrom-Json hands a one-item JSON array back as
+            # its item, which the setting's own check then refuses ("must be a list")
+            if ($Value -match '^\s*\[') { $p = $Value | ConvertFrom-Json; $typed = [object[]]@(foreach ($x in $p) { $x }) }
+            elseif ($Value -match '^\s*\{') { $typed = $Value | ConvertFrom-Json }
+            elseif ($Name -match '_To$') {
+                # the mail address settings (name ends in _To): a plain value is the addresses, comma-separated
+                $typed = [object[]]@(([string]$Value -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            }
+            elseif ("$Value".Trim()) { $typed = [object[]]@(([string]$Value).Trim()) }   # every other list: plain text is ONE item (JSON for several)
+            else { $typed = [object[]]@() }
+        }
         default { if ($Value -match '^\s*[\[\{]') { $typed = $Value | ConvertFrom-Json } }
     }
 }

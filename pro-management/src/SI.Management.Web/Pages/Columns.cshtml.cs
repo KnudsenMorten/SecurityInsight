@@ -89,7 +89,7 @@ public sealed class ColumnsModel(IColumnLayoutStore store) : PageModel
     {
         if (!ValidView(View)) return BadRequest("unknown view");
         try { return Back(await change(), standard); }
-        catch (ArgumentException ex) { return Back(new ColumnChooserActions.Outcome(false, false, "Not saved: " + ex.Message + ".")); }
+        catch (ArgumentException ex) { return Back(new ColumnChooserActions.Outcome(false, false, "Not saved: " + ViewerError.Text(ex) + ".")); }
     }
 
     [SI.Management.Web.Audit.Audited("view.columns.save")]

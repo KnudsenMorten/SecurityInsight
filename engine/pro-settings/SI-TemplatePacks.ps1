@@ -473,6 +473,19 @@ function New-SIProTemplatePack {
     $pack
 }
 
+function Get-SIProPackItemsDigest {
+    <#
+        PURE. What a pack's ITEMS are, as one SHA-256: every item's kind, key, body hash and content hash, ordered ordinally
+        (the pack's version, code version and name left out -- the same templates rebuilt by a later release give the same
+        digest). -Pack: a parsed pack (its Items); -Rows: template rows (Get-SITemplateRows).
+    #>
+    param($Pack, [object[]]$Rows)
+    $src = if ($null -ne $Pack) { @($Pack.Items) } else { @($Rows) }
+    $lines = [string[]]@($src | Where-Object { $_ } | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.Kind, $_.ItemKey, ([string]$_.BodyHash).ToLowerInvariant(), ([string]$_.ContentHash).ToLowerInvariant() })
+    if ($lines.Count -gt 1) { [Array]::Sort($lines, [StringComparer]::Ordinal) }
+    Get-SIProTextHash ($lines -join "`n")
+}
+
 function Get-SIProProcessCache {
     <# #416: a cache that lives as long as the PROCESS (also across `& script` calls), by name. Results of pure work only. #>
     param([Parameter(Mandatory)][string]$Name)
@@ -834,7 +847,10 @@ function Save-SIProTemplatePackStaged {
         immutable once published); the same version with the same CONTENT fingerprint is 'Same' (the text staged first is
         kept). Returns 'Staged' | 'Same' | 'Conflict' | 'Missing'.
     #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][ValidateSet('feed', 'shipped', 'file')][string]$Origin, [string]$Ring)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][ValidateSet('feed', 'shipped', 'file')][string]$Origin, [string]$Ring,
+          # a pack from Invardia: the SIGNED manifest it came with, kept with the pack (and added to a pack of the same SHA-256
+          # staged before it was kept) -- the install job verifies it again (Test-SIProStagedPackAnchor)
+          [string]$ManifestB64, [string]$Signature, [string]$KeyId)
     # #416: the same pack text is checked once per process (a full pack is 2.7 MB of JSON with 780 items whose hashes are
     # all verified -- seconds each time, and one update stages the shipped pack more than once)
     $memo = Get-SIProProcessCache -Name 'StagedPackSummary'
@@ -871,15 +887,27 @@ SELECT 'Staged' AS Outcome;
     $rows = @(& $Store.Invoke $sql ([ordered]@{ PackVersion = [string]$p.PackVersion; CodeVersion = [string]$p.CodeVersion; Sha256 = $parsed.Sha256
         Fingerprint = [string]$p.Fingerprint; Ring = $(if ($Ring) { $Ring } else { $null }); Origin = $Origin; IsFull = [bool]$scope.Full
         ItemCount = [int]$p.ItemCount; ScopeJson = $scopeJson; PackJson = $Text; By = (Get-SIProSessionActor); LogName = $script:SIProReleaseLogName }) 'reader' | ForEach-Object { $_ })
-    if ($rows.Count) { return [string](Get-SIProRowValue $rows[0] 'Outcome') }
-    'Staged'
+    $outcome = if ($rows.Count) { [string](Get-SIProRowValue $rows[0] 'Outcome') } else { 'Staged' }
+    if ($ManifestB64 -and $outcome -in @('Staged', 'Same')) {
+        # the columns are added in place (an older schema has none): the statement is compiled only when they exist
+        $msql = @'
+IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestB64') IS NOT NULL
+    EXEC sp_executesql N'UPDATE cfg.TemplatePackStaged SET ManifestB64 = @M, ManifestSignature = @S, ManifestKeyId = @K WHERE PackVersion = @V AND Sha256 = @Sha AND ManifestB64 IS NULL',
+        N'@M nvarchar(max), @S nvarchar(2048), @K nvarchar(128), @V nvarchar(32), @Sha char(64)', @M = @M, @S = @S, @K = @K, @V = @V, @Sha = @Sha;
+'@
+        try { $null = & $Store.Invoke $msql ([ordered]@{ M = $ManifestB64; S = $Signature; K = $KeyId; V = [string]$p.PackVersion; Sha = $parsed.Sha256 }) 'nonquery' }
+        catch { Write-Warning ("the signed manifest of template pack {0} could not be kept with it: {1}" -f $p.PackVersion, $_.Exception.Message) }
+    }
+    $outcome
 }
 
 function Read-SIProTemplatePackStaged {
     <# The staged packs (no pack text), or one with its text (-PackVersion). Empty without the table. #>
     param([Parameter(Mandatory)]$Store, [string]$PackVersion)
     if ($PackVersion) {
-        return @(& $Store.Invoke "IF OBJECT_ID('cfg.TemplatePackStaged') IS NOT NULL SELECT PackVersion, CodeVersion, Sha256, Fingerprint, Ring, Origin, IsFull, ItemCount, PackJson, StagedAt, StagedBy FROM cfg.TemplatePackStaged WHERE PackVersion = @PackVersion" @{ PackVersion = $PackVersion } 'reader' | ForEach-Object { $_ })
+        # every column: with it the signed manifest a pack from Invardia came with (ManifestB64 / ManifestSignature /
+        # ManifestKeyId, added in place -- an older schema has none)
+        return @(& $Store.Invoke "IF OBJECT_ID('cfg.TemplatePackStaged') IS NOT NULL SELECT * FROM cfg.TemplatePackStaged WHERE PackVersion = @PackVersion" @{ PackVersion = $PackVersion } 'reader' | ForEach-Object { $_ })
     }
     @(& $Store.Invoke "IF OBJECT_ID('cfg.TemplatePackStaged') IS NOT NULL SELECT PackVersion, CodeVersion, Sha256, Fingerprint, Ring, Origin, IsFull, ItemCount, StagedAt, StagedBy FROM cfg.TemplatePackStaged" @{} 'reader' | ForEach-Object { $_ })
 }
@@ -891,7 +919,55 @@ function Read-SIProStagedPackText {
     if (-not $r) { throw ("template pack {0} is not staged on this install" -f $PackVersion) }
     $text = [string](Get-SIProRowValue $r 'PackJson'); $sha = ([string](Get-SIProRowValue $r 'Sha256')).Trim().ToLowerInvariant()
     if ((Get-SIProTextHash $text) -ne $sha) { throw ("the staged template pack {0} does not match the SHA-256 it was staged with -- it was changed in the database" -f $PackVersion) }
-    [pscustomobject]@{ Text = $text; Sha256 = $sha; Origin = [string](Get-SIProRowValue $r 'Origin'); Ring = [string](Get-SIProRowValue $r 'Ring') }
+    [pscustomobject]@{ Text = $text; Sha256 = $sha; Origin = [string](Get-SIProRowValue $r 'Origin'); Ring = [string](Get-SIProRowValue $r 'Ring')
+                       ManifestB64 = [string](Get-SIProRowValue $r 'ManifestB64'); Signature = [string](Get-SIProRowValue $r 'ManifestSignature'); KeyId = [string](Get-SIProRowValue $r 'ManifestKeyId') }
+}
+
+function Test-SIProStagedPackAnchor {
+    <#
+        THE STAGED PACK'S HASH IS ANCHORED OUTSIDE ITS ROW (the install job, setup\Publish-SITemplates.ps1 -FromStaged). The row's
+        own SHA-256 proves only that the row agrees with itself.
+          Origin 'feed'     a pack from Invardia: a SIGNED manifest kept with it must verify against the update-signing keys
+                            EMBEDDED in this release (-TrustedKeys; default engine\_shared\SI-InvardiaUpdateKeys.json) and be
+                            the templates manifest of THIS version with THIS SHA-256.
+          Origin 'shipped'  the templates shipped with this release: the staged items must be the items this release ships
+                            (-ShippedDigest, Get-SIProPackItemsDigest of the release's own build) -- else refused.
+          Origin 'file'     staged by an admin with the file (setup) -- said.
+        A staged row never changes once staged (cfg.TR_TemplatePackStaged_Pinned) and the engine's role may not write the
+        table. PURE given -TrustedKeys / -ShippedDigest. Returns @{ Ok; Reason }.
+    #>
+    param([Parameter(Mandatory)]$Staged, [Parameter(Mandatory)][string]$PackVersion, [string]$SIRoot, [object[]]$TrustedKeys,
+          # the items digest of the pack THIS release ships (Get-SIProPackItemsDigest), for a pack staged as 'shipped'
+          [AllowEmptyString()][string]$ShippedDigest = '')
+    $out = { param($ok, $why) [pscustomobject]@{ Ok = [bool]$ok; Reason = $why } }
+    $origin = [string]$Staged.Origin
+    if ($origin -eq 'shipped') {
+        $mine = ''
+        try { if ($Staged.PSObject.Properties['Text'] -and "$($Staged.Text)".Trim()) { $mine = Get-SIProPackItemsDigest -Pack (ConvertFrom-SIProJson ([string]$Staged.Text)) } } catch { $mine = '' }
+        if (-not $ShippedDigest -or -not $mine -or $mine -ne $ShippedDigest) {
+            return (& $out $false ("template pack {0} is not the pack shipped with this release (its items differ from the release's own)" -f $PackVersion))
+        }
+        return (& $out $true ("template pack {0}: the templates shipped with this release" -f $PackVersion))
+    }
+    if ($origin -ne 'feed') { return (& $out $true ("template pack {0} was staged from a file an admin staged" -f $PackVersion)) }
+    if (-not "$($Staged.ManifestB64)".Trim() -or -not "$($Staged.Signature)".Trim()) {
+        return (& $out $true ("template pack {0} was staged by an earlier SecurityInsight release" -f $PackVersion))
+    }
+    if (-not (Get-Command -Name Test-SIInvardiaManifestSignature -ErrorAction SilentlyContinue)) {
+        $root = if ($SIRoot) { $SIRoot } else { $script:SIProRoot }
+        $verifier = [IO.Path]::Combine($root, 'engine', '_shared', 'SI-InvardiaUpdate.ps1')
+        if (-not (Test-Path -LiteralPath $verifier)) { return (& $out $false 'its signed manifest cannot be verified: this release has no update verifier') }
+        . $verifier
+    }
+    if ($null -eq $TrustedKeys) { $TrustedKeys = @((Get-SIInvardiaTrustedKeys).Keys) }
+    $sig = Test-SIInvardiaManifestSignature -ManifestB64 ([string]$Staged.ManifestB64) -Signature ([string]$Staged.Signature) -KeyId ([string]$Staged.KeyId) -TrustedKeys $TrustedKeys
+    if (-not $sig.Ok) { return (& $out $false ("its signed manifest does not verify: {0}" -f $sig.Reason)) }
+    $m = $sig.Manifest
+    $mv = { param($n) if ($m.PSObject.Properties[$n]) { "$($m.$n)".Trim() } else { '' } }
+    if ((& $mv 'kind') -ne 'templates') { return (& $out $false ("its signed manifest is for '{0}', not a template pack" -f (& $mv 'kind'))) }
+    if ((& $mv 'version') -ne $PackVersion) { return (& $out $false ("its signed manifest names version {0}, not {1}" -f (& $mv 'version'), $PackVersion)) }
+    if ((& $mv 'sha256').ToLowerInvariant() -ne ([string]$Staged.Sha256).Trim().ToLowerInvariant()) { return (& $out $false 'the pack is not the one its signed manifest names (the SHA-256 differs)') }
+    & $out $true ("template pack {0}: the signed manifest from Invardia verifies and names this pack" -f $PackVersion)
 }
 
 function Set-SIProTemplateRelease {

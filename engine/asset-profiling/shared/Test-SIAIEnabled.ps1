@@ -61,7 +61,39 @@ function Test-SIAIEnabled {
         return $false
     }
 
+    # The key goes ONLY to an Azure OpenAI endpoint (https, an Azure OpenAI / AI services host): another one is left out
+    # and said once per session -- AI is skipped, the run goes on.
+    $why = Test-SIOpenAIEndpoint -Endpoint ([string]$global:OpenAI_endpoint)
+    if ($why) {
+        if (-not [bool](Get-Variable -Name 'SI_AIEndpointWarned' -ValueOnly -Scope Global -ErrorAction SilentlyContinue)) {
+            Write-Warning ('OpenAI_endpoint is not used: {0}. AI is skipped in this run.' -f $why)
+            $global:SI_AIEndpointWarned = $true
+        }
+        return $false
+    }
+
     return $true
+}
+
+function Test-SIOpenAIEndpoint {
+    <#
+        PURE. '' = -Endpoint (the base, or a full request URI) is an Azure OpenAI endpoint the api-key may go to: https, no
+        user info, a host under one of the Azure OpenAI / AI services suffixes (public and sovereign clouds). Else why not.
+    #>
+    param([AllowEmptyString()][string]$Endpoint = '')
+    $suffixes = @('.openai.azure.com', '.cognitiveservices.azure.com', '.services.ai.azure.com',
+        '.openai.azure.us', '.cognitiveservices.azure.us', '.openai.azure.cn', '.cognitiveservices.azure.cn',
+        # an Azure API Management gateway in front of Azure OpenAI (the web app's OutboundHostPolicy.OpenAiSuffixes)
+        '.azure-api.net', '.azure-api.us', '.azure-api.cn')
+    $e = "$Endpoint".Trim()
+    if (-not $e) { return 'no endpoint is set' }
+    $u = $null
+    if (-not [Uri]::TryCreate($e, [UriKind]::Absolute, [ref]$u)) { return ("'{0}' is not an address" -f $e) }
+    if ($u.Scheme -ne 'https') { return ("'{0}' is not https" -f $e) }
+    if ($u.UserInfo) { return ("'{0}' carries a user name" -f $u.Host) }
+    $h = $u.Host.ToLowerInvariant()
+    foreach ($s in $suffixes) { if ($h.EndsWith($s) -and $h.Length -gt $s.Length) { return '' } }
+    ("'{0}' is not an Azure OpenAI host (*.openai.azure.com or *.cognitiveservices.azure.com)" -f $u.Host)
 }
 
 function Get-SIOpenAIApiVersion {

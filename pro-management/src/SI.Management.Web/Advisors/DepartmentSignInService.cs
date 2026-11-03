@@ -258,8 +258,9 @@ public sealed class DepartmentGrants : IDepartmentGrants
         var ids = new List<string>();
         if (AccessClaims.ObjectId(user) is { } oid) ids.Add(oid);
         ids.AddRange(groups);
-        // the UPN Entra issued (a B2B guest's is their home address) -- never a mail claim the user can edit
-        var upn = user.FindFirst("preferred_username")?.Value ?? user.FindFirst(ClaimTypes.Upn)?.Value;
+        // #995: a mail-only entry matches the sign-in name the DIRECTORY issued for one of its own members -- never a
+        // guest's or an external account's (its home tenant / provider chooses that name): a guest matches by object id only
+        var upn = user.DirectoryMemberName();
         if (ids.Count == 0 && string.IsNullOrWhiteSpace(upn)) return null;
         var key = "si-dept-person|" + string.Join(",", ids.Select(i => i.ToLowerInvariant()).OrderBy(i => i, StringComparer.Ordinal)) + "|" + upn?.ToLowerInvariant();
         if (!_cache.TryGetValue(key, out IReadOnlyList<DepartmentPerson>? people) || people is null)

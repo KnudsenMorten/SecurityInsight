@@ -38,6 +38,9 @@ public sealed record MultiFilter
     /// A filter with a NAMED default (the CI list's lifecycle: active): the value "All" is sent as, so ticking All clears the
     /// default instead of bringing it back (null = "All" sends nothing, the usual filter).
     public string? AllValue { get; init; }
+    /// #1058 the SAME filter offered in two panels (the CI list's lifecycle: "Filters" and "+ Add filter"): every filter
+    /// with the same key shows the same ticks -- a tick in one is made in the others (js/app/multi-filter.js). null = alone.
+    public string? Mirror { get; init; }
     /// The text of the Apply button (a page whose filters submit together says "Apply").
     public string Apply { get; init; } = "Apply";
     /// The button only CLOSES the list, it submits nothing: the filter is one field of a larger form that is saved by its

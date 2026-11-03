@@ -442,3 +442,33 @@ Describe 'scope and no git' {
         ($out -join "`n") | Should -Match 'nothing is released to ring 3'
     }
 }
+
+Describe 'NEGATIVE (2026-10-31): forward-only from the first manifest, and a manifest must name its ring' {
+    It 'a FIRST manifest (nothing applied from the channel yet) that names a version OLDER than the install is held -- nothing downloaded, nothing changed' {
+        $root = New-Install -Version '3.1.1'; $before = Snapshot $root; $zip = New-Release '3.0.9'
+        $w = New-World (New-Channel @{ 3 = (New-Entry $zip '3.0.9' 3 5) }) @{ (Url '3.0.9') = $zip }
+        $r = Run $root $w
+        $r.Action | Should -Be 'hold'
+        $r.Reason | Should -Match 'older than the 3\.1\.1 this install runs'
+        $w.Downloads.Count | Should -Be 0
+        Same $before (Snapshot $root) | Should -BeTrue
+        (Read-SICommunityUpdateState -Root $root).appliedSequence | Should -Be 0
+    }
+    It 'a signed manifest that names NO ring is refused by the VM client -- nothing downloaded, nothing changed' {
+        $root = New-Install; $before = Snapshot $root; $zip = New-Release '3.1.0'
+        $w = New-World (New-Channel @{ 3 = (New-Entry $zip '3.1.0' 3 5 -Extra @{ ring = $null }) }) @{ (Url '3.1.0') = $zip }
+        $r = Run $root $w
+        $r.Action | Should -Be 'refused'
+        $r.Reason | Should -Match "signed for ring ''"
+        $w.Downloads.Count | Should -Be 0
+        Same $before (Snapshot $root) | Should -BeTrue
+    }
+    It 'neither update client passes -RingOptional any more (the container updater reads the same check)' {
+        foreach ($f in 'engine\_shared\SI-CommunityUpdate.ps1', 'container\updater\_shared\SI-UpdaterCommunity.ps1') {
+            $a = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $script:SIRoot $f), [ref]$null, [ref]$null)
+            $calls = @($a.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Test-SICommunityChannelEntry' }, $true))
+            $calls.Count | Should -BeGreaterThan 0 -Because $f
+            foreach ($c in $calls) { $c.Extent.Text | Should -Not -Match '-RingOptional' -Because $f }
+        }
+    }
+}

@@ -333,6 +333,18 @@ function Get-SICiLifecycle {
         if ($res.Lifecycle -ne 'active' -and $res.LastSeen) { $res.NotSeenDays = [int][Math]::Floor(($now - $res.LastSeen).TotalDays) }
         return [pscustomobject]$res
     }
+    # #1057 PROOF OF DELETION WINS over the not-seen / grace-period window (owner 2026-11-02): no link active or held, and a
+    # source proved its object deleted (a gone link with 'deleted') -- retired at once, "deleted in <source>"
+    $deleted = @($gone | Where-Object { [string](Get-SILifecycleValue $_ 'deleted') })
+    if ($deleted.Count -gt 0) {
+        $res.Lifecycle = 'retired'; $res.LastSeen = & $newest ($gone.ToArray() + $notSeen.ToArray())
+        $res.Since = $(if ($prevState -eq 'retired' -and $prevSince) { $prevSince } else { $now })
+        $srcs = (@(foreach ($x in $deleted) { [string](Get-SILifecycleValue $x 'deleted') }) | Select-Object -Unique) -join ', '
+        $res.Reason = ('retired at once: deleted in {0} ({1} -- {2})' -f $srcs, (& $names $deleted), [string](Get-SILifecycleValue $deleted[0] 'reason'))
+        if ($prevState -ne 'retired') { $res.Change = 'retired' } elseif ($prevReason) { $res.Reason = $prevReason }
+        if ($res.LastSeen) { $res.NotSeenDays = [int][Math]::Floor(($now - $res.LastSeen).TotalDays) }
+        return [pscustomobject]$res
+    }
     if ($notSeen.Count -eq 0) {
         # every link is gone (positive evidence): retired at once
         $res.Lifecycle = 'retired'; $res.LastSeen = & $newest $gone

@@ -96,7 +96,7 @@ public sealed class AccessModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the access assignments could not be read");
-            Error = "The people with access could not be read from the Pro database: " + ex.Message;
+            Error = "The people with access could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         // the domains to offer: the known ones, plus every domain present in the data, plus any already assigned
         var set = new SortedSet<string>(SecurityDomains.Known, StringComparer.OrdinalIgnoreCase);

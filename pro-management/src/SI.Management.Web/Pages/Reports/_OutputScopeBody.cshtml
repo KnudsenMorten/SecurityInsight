@@ -75,6 +75,12 @@ else if (Model.Preview?.CollectionTime is { } ctime) { <p class="hint">Preview c
                         var kindFilter = Mf(d.Key, "AssetKinds", "Asset kind", ReportVocabulary.AssetKinds, s.AssetKinds.Select(k => k.ToLowerInvariant()), OutputsModel.AssetKindChoiceWords, counts: false);
                         <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="kindFilter" /></div>
                         <p class="notice warn" data-scope-unsent-hint="@string.Join("|", OutputsModel.UnsentKinds)" hidden="@(OutputsModel.UnsentTicked(s).Count == 0)">@OutputsModel.UnsentHint</p>
+                        @if (CiRules.Supports(d.Key))
+                        {
+                            @* #1055 the CI rules (asset type, OS family, class -- include / leave out) live on the ServiceNow
+                               connector's page, with the counts per category; a change here keeps them *@
+                            <p class="hint" data-scope-ci-rules="@d.Key">CI rules (asset type, OS family, class): @(s.HasCiRules ? string.Join("; ", s.CiInclude.Select(r => "only " + r.Describe()).Concat(s.CiExclude.Select(r => "leave out " + r.Describe()))) : "none") -- set on the ServiceNow data-out connector's page (<a href="/Admin/ConnectorSetup">Connectors &gt; Setup</a>), with the counts per category. A change here keeps them.</p>
+                        }
                     }
                     @{ var tierFilter = Mf(d.Key, "Tiers", "Tier", new[] { "0", "1", "2", "3" }, s.Tiers.Select(SI.Management.Web.Pages.MultiFilter.Key), t => ReportVocabulary.Tiers[int.Parse(t)], counts: !d.Asset); }
                     <div><partial name="~/Pages/Shared/_MultiFilter.cshtml" model="tierFilter" /></div>

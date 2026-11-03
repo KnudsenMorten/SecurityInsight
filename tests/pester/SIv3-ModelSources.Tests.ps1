@@ -5,8 +5,9 @@
     provider uses. OFFLINE: every REST call is a seam (the queries are text, the answers are fakes).
 
       * #497  the Entra reads ask the on-premises AD ids at every level; the Entra user / device, Defender for Identity and
-              the Exposure Graph's AD computer-account nodes map them (ad_sid, ad_object_guid, si_ad_distinguished_name,
-              si_ad_domain); a hybrid Entra device and its AD computer node are ONE CI (ad_sid); the computer-account read
+              si_ad_domain map them (ad_sid, ad_object_guid, si_ad_distinguished_name, si_ad_domain); the Exposure Graph's
+              AD computer-account nodes are computer_account records, no CI without a safe Defender match (#1052,
+              SIv3-ComputerAccountDevice); the computer-account read
               pages by count, a failed page is not complete, a graph without such nodes is "not present";
       * #498  Intune: the read-only permission is in the catalog, the grant plan and the update's permission note; the
               device record joins its Entra device by entra_device_id;
@@ -84,23 +85,24 @@ Describe '#497 on-premises AD from the cloud signals' {
         $r = @((& $script:Rows).Rows)[0]
         $r.si_ad_distinguished_name | Should -Be 'CN=Bo,OU=Users,DC=contoso,DC=local'
     }
-    It 'an AD computer-account node of the Exposure Graph becomes an eg device record with its AD ids (EntityIds or rawData)' {
+    It 'an AD computer-account node of the Exposure Graph becomes an eg computer_account record (#1052: never a device record); its AD ids stay on the node, never a join key' {
         $rows = @(
             [pscustomobject]@{ NodeId = 'N1'; NodeLabel = 'computer-account'; NodeName = 'SRV01'; EntityIds = @('{"type":"SecurityIdentifier","id":"' + $script:Sid + '"}'); NodeProperties = '{"rawData":{"objectGuid":"' + $script:Guid + '"}}' }
             [pscustomobject]@{ NodeId = 'N2'; NodeLabel = 'computer-account'; NodeName = 'SRV02'; EntityIds = @(); NodeProperties = [pscustomobject]@{ rawData = [pscustomobject]@{ objectSid = 'S-1-5-21-9-9-9-2001' } } }
         )
         $asked = New-Object System.Collections.Generic.List[string]
-        $q = { param($k) $asked.Add($k); if ($k -match '\| count') { @{ Ok = $true; Rows = @([pscustomobject]@{ Count = 2 }); Error = '' } } else { @{ Ok = $true; Rows = $rows; Error = '' } } }
+        $q = { param($k) $asked.Add($k); if ($k -match '\| count') { @{ Ok = $true; Rows = @([pscustomobject]@{ Count = 2 }); Error = '' } } elseif ($k -match 'by DomainSid') { @{ Ok = $true; Rows = @(); Error = '' } } else { @{ Ok = $true; Rows = $rows; Error = '' } } }
         $out = Invoke-SIEgAdComputerCapture -Query $q
-        ($out.Nodes, $out.Buckets, $out.Failed, $out.Present) | Should -Be @(2, 1, 0, $true)
+        ($out.Nodes, $out.Buckets, $out.Failed, $out.Present, $out.NoDevice) | Should -Be @(2, 1, 0, $true, 2)
         $asked[0] | Should -Match "NodeLabel == 'computer-account'\s+\| count"
         $res = & $script:Rows
         @($res.Errors) | Should -BeNullOrEmpty
-        $n1 = @($res.Rows | Where-Object eg_node_id -eq 'n1')[0]
-        $n1.si_record_type | Should -Be 'device'
-        $n1.ad_sid | Should -Be $script:Sid
-        $n1.ad_object_guid | Should -Be $script:Guid
-        (@($res.Rows | Where-Object eg_node_id -eq 'n2')[0]).ad_sid | Should -Be 'S-1-5-21-9-9-9-2001'
+        @($res.Rows | Where-Object si_record_type -eq 'computer_account').Count | Should -Be 2
+        @($res.Rows | Where-Object si_record_type -eq 'device').Count | Should -Be 0
+        $n1 = @($res.Rows | Where-Object si_record_key -eq 'eg:n1')[0]
+        ($n1.ad_sid, $n1.ad_object_guid, $n1.eg_node_id, $n1.mde_device_id) | Should -Be @($null, $null, $null, $null)
+        $n1.si_asset_name | Should -Be 'SRV01'
+        @((ConvertTo-SIEgAdComputerNode -Row $rows[0]).SIEntityIds | ForEach-Object { $_.id }) | Should -Be @($script:Sid, $script:Guid) -Because 'the AD ids stay on the node (no Defender id: no safe match)'
         $global:SIRecordCaptureState.Pulls['eg'].Complete | Should -BeTrue
     }
     It 'pages by count (every node in one hash bucket); a failed page is not complete, never "gone"' {
@@ -123,13 +125,14 @@ Describe '#497 on-premises AD from the cloud signals' {
         $out.Text | Should -Match 'source is not present'
         $asked.Count | Should -Be 1
     }
-    It 'a hybrid-joined Entra device and its AD computer node are ONE CI (ad_sid)' {
+    It '#1052 an AD computer node with no safe Defender match is NO CI -- not on its own, and never fused into a device by its SID' {
         Add-SIRecordPart -Provider entra -RecordType device -Key 'aad-dev-1' -Part device -Object ([pscustomobject]@{ id = 'obj-1'; deviceId = 'aad-dev-1'; displayName = 'SRV01'; onPremisesSecurityIdentifier = $script:Sid; onPremisesSyncEnabled = $true })
-        $null = Invoke-SIEgAdComputerCapture -Query { param($k) if ($k -match '\| count') { @{ Ok = $true; Rows = @([pscustomobject]@{ Count = 1 }); Error = '' } } else { @{ Ok = $true; Rows = @([pscustomobject]@{ NodeId = 'N1'; NodeLabel = 'computer-account'; NodeName = 'SRV01'; EntityIds = @('{"type":"SecurityIdentifier","id":"' + $script:Sid + '"}'); NodeProperties = '{}' }); Error = '' } } }
+        $null = Invoke-SIEgAdComputerCapture -Query { param($k) if ($k -match '\| count') { @{ Ok = $true; Rows = @([pscustomobject]@{ Count = 1 }); Error = '' } } elseif ($k -match 'by DomainSid') { @{ Ok = $true; Rows = @(); Error = '' } } else { @{ Ok = $true; Rows = @([pscustomobject]@{ NodeId = 'N1'; NodeLabel = 'computer-account'; NodeName = 'SRV01'; EntityIds = @('{"type":"SecurityIdentifier","id":"' + $script:Sid + '"}'); NodeProperties = '{}' }); Error = '' } } }
         $res = & $script:Rows
         $g = Get-SICiGroups -Records @($res.Rows)
-        @($g.Groups).Count | Should -Be 1
-        @($g.Groups[0].Members).Count | Should -Be 2
+        @($g.Groups).Count | Should -Be 1 -Because 'the Entra device alone'
+        @($g.Groups[0].Members).Count | Should -Be 1
+        @($g.Unkeyable).Count | Should -Be 1 -Because 'the computer account: a record, no CI'
     }
     It 'the endpoint discover runs the AD computer capture as a records-only source' {
         $d = & $script:Read 'engine\asset-profiling\stages\Invoke-Discover.ps1'

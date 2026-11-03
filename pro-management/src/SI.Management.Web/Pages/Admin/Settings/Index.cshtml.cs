@@ -87,15 +87,15 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading cfg.Setting failed");
-            Error = "The settings database could not be read: " + ex.Message;
+            Error = "The settings database could not be read: " + ViewerError.Text(ex);
             Query = SqlSettingsReader.SettingsSql;
         }
         try { Installed = await _installed.ReadAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the installed licence failed"); InstalledError = ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the installed licence failed"); InstalledError = ViewerError.Text(ex); }
         try { Licence = await _licence.ReadAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the licence request state failed"); LicenceError = ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the licence request state failed"); LicenceError = ViewerError.Text(ex); }
         try { Updates = await _updates.ReadAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the update state failed"); UpdatesError = ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the update state failed"); UpdatesError = ViewerError.Text(ex); }
         ClaimAgainRequest? pending = null;
         try { pending = await _claimAgain.PendingAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "reading the claim-again request failed"); }
@@ -172,7 +172,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the claim-again request failed");
-            message = "The request could not be saved: " + ex.Message;
+            message = "The request could not be saved: " + ViewerError.Text(ex);
             audit?.Set(AuditOutcomes.Error, message);
         }
         TempData["toast"] = message;

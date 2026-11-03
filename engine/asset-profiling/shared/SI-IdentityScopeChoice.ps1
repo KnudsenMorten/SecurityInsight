@@ -1,0 +1,430 @@
+#Requires -Version 5.1
+<#
+    A CUSTOMER'S CHOICE: WHICH EXPOSURE GRAPH IDENTITIES BECOME ASSETS (REQUIREMENTS #1056, owner approved 2026-11-01).
+
+    Two per-install switches, OFF by default -- an install that does not set them works exactly as before:
+      SI_Identity_SkipNeverSyncedDisabledAd  (customer choice "1C")  an on-premises AD account the Exposure Graph lists but
+                                             that was never synced to Entra ID (the node has no Entra object id) becomes an
+                                             asset only while it is ENABLED or PRIVILEGED. A disabled, non-privileged one gets
+                                             no record and no CI; it is counted.
+      SI_Identity_SkipDeletedGroups          (customer choice "2B")  a group node WITH an Entra object id becomes an asset
+                                             only while Entra ID still has the group (active, or in its deleted items). A
+                                             group Entra no longer returns at all gets no record and no CI; it is counted.
+    Real users, groups, devices and findings are not affected: an account synced to Entra (it has an Entra object id), an
+    AD-only group, a device, a service principal and every finding are never touched by either switch.
+
+    THE STAGES
+      collection   the Exposure Graph identity read (IdentityRoleFetcher.ps1) asks Get-SIEgIdentityScopeDecision for every
+                   Exposure Graph user / group node it would record; a node left out is not recorded (no record part, no
+                   full-metadata copy). The index that enriches the Entra objects is unchanged.
+      run report   one plain line per switch in the identity step's log (Format-SIIdentityScopeLine) and one row per switch
+                   and run in sidata.CollectionLeftOut (Write-SIIdentityScopeCounts) -- the Data health page shows them.
+      asset drop   the collection's asset-drop check adds the records a switch left out this run back to the count it
+                   judges (Get-SIIdentityScopeLeftOutByFeed), so a customer's choice is never read as a broken source.
+      CI build     a CI whose Exposure Graph record a switch now leaves out RETIRES with a reason naming the switch -- the
+                   record's link is 'gone' (Get-SIRecordLeftOutByIdentityChoice, SI-CiBuild.ps1 Get-SIRecordLink), never
+                   a silent vanish and never a 30-day "not seen" wait. Switched off again, the next collection records the
+                   node again and the CI is reactivated.
+
+    THE SIGNALS (all already in SecurityInsight)
+      never synced  the node has no Entra object id (the identity read found none in EntityIds or rawData) --
+                    only AD ids (SecurityIdentifier / ActiveDirectoryObjectGuid)
+      disabled      rawData accountEnabled / isEnabled / enabled = false, or userAccountControl carries ACCOUNTDISABLE (the
+                    flag name, or bit 0x2 of the number). Unknown = NOT disabled: nothing is left out on a guess
+                    (the rule of SI-DisabledAssets.ps1)
+      privileged    any of: adminCount > 0 (AD's protected-account marker), a nested critical AD group
+                    (nestedCriticalAdGroups), membership of a tier 0 / tier 1 AD group of the privilege tier catalog
+                    (nestedAdGroupNames), an assigned role (assignedRoles), a service account (hasServicePrincipalName /
+                    isServiceAccount -- SI's service-account signal), a sensitive account (isSensitive), or a Microsoft
+                    criticality level (criticalityLevel)
+      group exists  its Entra object id is in Entra ID's groups or deleted groups (Read-SIEntraGroupIds: one paged read of
+                    /groups and /directory/deletedItems/microsoft.graph.group, ids only). A read that is not complete
+                    decides nothing: no group with an Entra id is recorded that run and the Exposure Graph pull is marked
+                    not complete, so nothing is retired and nothing comes back (absence proves nothing).
+
+    PURE functions except Read-SIEntraGroupIds (Graph, behind -Fetch), Write-SIIdentityScopeCounts and
+    Get-SIIdentityScopeLeftOutByFeed (SQL, behind -Invoke). PowerShell 5.1 and 7: no ?. / ??, no ternary.
+    Tests: tests\pester\SIv3-IdentityScopeChoice.Tests.ps1.
+#>
+
+$script:SIIdentityScopeSettings = [ordered]@{
+    SkipNeverSyncedDisabledAd = 'SI_Identity_SkipNeverSyncedDisabledAd'
+    SkipDeletedGroups         = 'SI_Identity_SkipDeletedGroups'
+}
+
+function ConvertTo-SIIdentityScopeFlag {
+    <# PURE. $true / $false / $null from a bool, 'true' / 'false', 1 / 0. Anything else is unknown ($null). #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $Value }
+    if ($Value -is [int] -or $Value -is [long]) { if ($Value -eq 1) { return $true }; if ($Value -eq 0) { return $false }; return $null }
+    $s = ([string]$Value).Trim()
+    if ($s -ieq 'true' -or $s -eq '1' -or $s -ieq 'on' -or $s -ieq 'yes') { return $true }
+    if ($s -ieq 'false' -or $s -eq '0' -or $s -ieq 'off' -or $s -ieq 'no') { return $false }
+    return $null
+}
+
+function Get-SIIdentityScopeChoice {
+    <#
+        PURE (reads the two globals unless -Values is passed). The install's choice:
+        @{ SkipNeverSyncedDisabledAd; SkipDeletedGroups; Any }. Not set, or anything that is not a clear yes = OFF.
+    #>
+    param([hashtable]$Values)
+    $out = [ordered]@{}
+    foreach ($k in $script:SIIdentityScopeSettings.Keys) {
+        $name = $script:SIIdentityScopeSettings[$k]
+        $raw = $null
+        if ($Values) { if ($Values.ContainsKey($name)) { $raw = $Values[$name] } elseif ($Values.ContainsKey($k)) { $raw = $Values[$k] } }
+        else { $raw = Get-Variable -Name $name -Scope Global -ValueOnly -ErrorAction SilentlyContinue }
+        $out[$k] = ((ConvertTo-SIIdentityScopeFlag $raw) -eq $true)
+    }
+    $out['Any'] = [bool]($out.SkipNeverSyncedDisabledAd -or $out.SkipDeletedGroups)
+    [pscustomobject]$out
+}
+
+function Get-SIIdentityScopeValue {
+    <# PURE. A named value of a dictionary or an object (case-insensitive), $null when it has none. #>
+    param([AllowNull()]$Bag, [string]$Name)
+    if ($null -eq $Bag) { return $null }
+    if ($Bag -is [System.Collections.IDictionary]) {
+        foreach ($k in $Bag.Keys) { if ([string]$k -ieq $Name) { return $Bag[$k] } }
+        return $null
+    }
+    $p = $Bag.PSObject.Properties[$Name]
+    if ($p) { return $p.Value }
+    return $null
+}
+
+function Get-SIIdentityScopeList {
+    <# PURE. A value as a list of non-empty items: an array, a comma / semicolon list in one text, a JSON array in text. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return @() }
+    if ($Value -is [string]) {
+        $t = $Value.Trim()
+        if (-not $t) { return @() }
+        if ($t.StartsWith('[')) { try { return @(@($t | ConvertFrom-Json) | Where-Object { $null -ne $_ -and "$_".Trim() }) } catch { } }
+        return @($t -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [System.Collections.IDictionary])) {
+        return @(@($Value) | Where-Object { $null -ne $_ -and "$_".Trim() })
+    }
+    return @($Value)
+}
+
+function Test-SIEgAdAccountDisabled {
+    <#
+        PURE. Does an Exposure Graph node's rawData SAY the account is disabled? $true, $false, or $null (it says nothing).
+        accountEnabled / isEnabled / enabled = false -> disabled; userAccountControl with ACCOUNTDISABLE (the flag name, or
+        bit 0x2 of the number) -> disabled. A DISABLED answer from any field wins; unknown is never disabled.
+    #>
+    param([AllowNull()]$RawData)
+    if ($null -eq $RawData) { return $null }
+    $sawEnabled = $false
+    foreach ($k in 'accountEnabled', 'isEnabled', 'enabled') {
+        $f = ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $RawData $k)
+        if ($f -eq $false) { return $true }
+        if ($f -eq $true) { $sawEnabled = $true }
+    }
+    $uac = Get-SIIdentityScopeValue $RawData 'userAccountControl'
+    if ($null -ne $uac) {
+        foreach ($v in (Get-SIIdentityScopeList $uac)) {
+            $s = ([string]$v).Trim()
+            if (-not $s) { continue }
+            $n = 0L
+            if ([long]::TryParse($s, [ref]$n)) { if ($n -band 2) { return $true }; $sawEnabled = $true; continue }
+            if ($s -match '^(?i)(AccountDisabled|ACCOUNTDISABLE|Account_Disabled|Disabled)$') { return $true }
+            $sawEnabled = $true   # a flag list without the disable flag says the account is enabled
+        }
+    }
+    if ($sawEnabled) { return $false }
+    return $null
+}
+
+function Get-SIIdentityCriticalAdGroupNames {
+    <#
+        The privilege tier catalog's tier 0 and tier 1 AD groups (Domain Admins, Enterprise Admins, Schema Admins, Account
+        Operators, Backup Operators ...) as a case-insensitive set: the shipped catalog plus the tenant's own catalog
+        (privilege-tier-catalog.custom.json) when it is there. -SIRoot: the solution folder. Never throws: a catalog that
+        cannot be read adds nothing (the other privilege signals still hold).
+    #>
+    param([string]$SIRoot)
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if (-not $SIRoot) { $SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) }
+    $dir = [IO.Path]::Combine($SIRoot, 'privilege-tier-catalog')
+    foreach ($file in @('privilege-tier-catalog.locked.json', 'privilege-tier-catalog.custom.json')) {
+        $p = [IO.Path]::Combine($dir, $file)
+        if (-not [IO.File]::Exists($p)) { continue }
+        try {
+            $doc = [IO.File]::ReadAllText($p) | ConvertFrom-Json
+            foreach ($sec in 'AD_BuiltInPermissionGroups_Tier0', 'AD_BuiltInPermissionGroups_Tier1', 'AD_CustomGroups_Tier0', 'AD_CustomGroups_Tier1') {
+                foreach ($e in @(Get-SIIdentityScopeValue $doc $sec)) {
+                    if ($null -eq $e) { continue }
+                    $n = [string](Get-SIIdentityScopeValue $e 'Name')
+                    if ($n -and $n.Trim()) { [void]$set.Add($n.Trim()) }
+                }
+            }
+        } catch { Write-Warning ('identity scope choice: the privilege tier catalog {0} could not be read -- {1}' -f $file, $_.Exception.Message) }
+    }
+    , $set
+}
+
+function Get-SIEgAdPrivilege {
+    <#
+        PURE. Is the account behind an Exposure Graph node privileged? @{ IsPrivileged; Why (the signals that said so) }.
+        -CriticalGroups: Get-SIIdentityCriticalAdGroupNames (names compared without case).
+    #>
+    param([AllowNull()]$RawData, [AllowNull()]$CriticalGroups)
+    $why = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $RawData) {
+        $ac = 0; if ([int]::TryParse([string](Get-SIIdentityScopeValue $RawData 'adminCount'), [ref]$ac) -and $ac -gt 0) { $why.Add('admin count') }
+        # nestedCriticalAdGroups: the graph writes a dictionary { type, data: [ ... ] } (eg.locked.json #690 (29)); a plain list is read too
+        $crit = Get-SIIdentityScopeValue $RawData 'nestedCriticalAdGroups'
+        $critItems = @()
+        if ($null -ne $crit) {
+            $data = $null
+            if ($crit -is [System.Collections.IDictionary] -or $crit -is [System.Management.Automation.PSCustomObject]) { $data = Get-SIIdentityScopeValue $crit 'data' }
+            if ($null -ne $data) { $critItems = @(Get-SIIdentityScopeList $data) }
+            elseif (-not ($crit -is [System.Management.Automation.PSCustomObject]) -and -not ($crit -is [System.Collections.IDictionary])) { $critItems = @(Get-SIIdentityScopeList $crit) }
+        }
+        if ($critItems.Count -gt 0) { $why.Add('critical AD group') }
+        if ($null -ne $CriticalGroups -and $CriticalGroups.Count -gt 0) {
+            foreach ($g in (Get-SIIdentityScopeList (Get-SIIdentityScopeValue $RawData 'nestedAdGroupNames'))) {
+                $gn = ([string]$g).Trim()
+                if ($gn -and $CriticalGroups.Contains($gn)) { $why.Add('tier 0/1 AD group ' + $gn); break }
+            }
+        }
+        if (@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $RawData 'assignedRoles')).Count -gt 0) { $why.Add('assigned role') }
+        foreach ($k in 'hasServicePrincipalName', 'isServiceAccount') {
+            if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $RawData $k)) -eq $true) { $why.Add('service account'); break }
+        }
+        if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $RawData 'isSensitive')) -eq $true) { $why.Add('sensitive account') }
+        $cl = Get-SIIdentityScopeValue $RawData 'criticalityLevel'
+        if ($null -ne $cl) {
+            $lvl = $cl
+            if ($cl -is [System.Collections.IDictionary] -or $cl -is [System.Management.Automation.PSCustomObject]) { $lvl = Get-SIIdentityScopeValue $cl 'criticalityLevel' }
+            if ($null -ne $lvl -and "$lvl".Trim() -ne '') { $why.Add('Microsoft criticality level') }
+        }
+    }
+    [pscustomobject]@{ IsPrivileged = ($why.Count -gt 0); Why = $why.ToArray() }
+}
+
+function Get-SIEgIdentityScopeDecision {
+    <#
+        PURE. Does one Exposure Graph identity node become a record (an asset) under the install's choice?
+          -NodeLabel     user | group | serviceprincipal | managedidentity
+          -AadObjectId   the Entra object id the identity read found ('' = never synced)
+          -RawData       the node's rawData
+          -Choice        Get-SIIdentityScopeChoice
+          -EntraGroups   the ids Entra ID returns (Read-SIEntraGroupIds .Ids); $null = not read
+          -GroupsUnknown the Entra group read was asked for and is NOT complete
+          -CriticalGroups Get-SIIdentityCriticalAdGroupNames
+        Returns @{ Keep; Setting (the switch that left it out, ''); Why; Held ($true = left out this run only because the
+        Entra group read was not complete) }.
+    #>
+    param([AllowEmptyString()][string]$NodeLabel = '', [AllowEmptyString()][string]$AadObjectId = '', [AllowNull()]$RawData,
+          [Parameter(Mandatory)]$Choice, [AllowNull()]$EntraGroups, [switch]$GroupsUnknown, [AllowNull()]$CriticalGroups)
+    $keep = [pscustomobject]@{ Keep = $true; Setting = ''; Why = ''; Held = $false }
+    if (-not $Choice -or -not $Choice.Any) { return $keep }
+    $label = ([string]$NodeLabel).Trim().ToLowerInvariant()
+    $oid = ([string]$AadObjectId).Trim().ToLowerInvariant()
+    if ($label -eq 'user' -and -not $oid -and $Choice.SkipNeverSyncedDisabledAd) {
+        if ((Test-SIEgAdAccountDisabled -RawData $RawData) -ne $true) { return $keep }
+        $priv = Get-SIEgAdPrivilege -RawData $RawData -CriticalGroups $CriticalGroups
+        if ($priv.IsPrivileged) { return $keep }
+        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipNeverSyncedDisabledAd; Why = 'an on-premises AD account never synced to Entra ID, disabled and not privileged'; Held = $false }
+    }
+    if ($label -eq 'group' -and $oid -and $Choice.SkipDeletedGroups) {
+        if ($GroupsUnknown) {
+            return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups; Why = 'the Entra ID group read was not complete this run -- the group keeps its last state'; Held = $true }
+        }
+        if ($null -eq $EntraGroups) { return $keep }
+        if ($EntraGroups.Contains($oid)) { return $keep }
+        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups; Why = 'a group Entra ID no longer has (neither active nor in its deleted items)'; Held = $false }
+    }
+    return $keep
+}
+
+function Read-SIEntraGroupIds {
+    <#
+        Every group id Entra ID has: active (/groups) and recently deleted (/directory/deletedItems/microsoft.graph.group),
+        ids only, page by page. Returns @{ Ok; Ids (HashSet, lower-case); Active; Deleted; Error }. Ok = $false when either
+        read failed: the caller then decides nothing about groups this run.
+        -Fetch: test seam { param($Url, $OnPage) } -- calls $OnPage with each page's rows; throws on a failed read.
+    #>
+    param([scriptblock]$Fetch)
+    $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $res = [ordered]@{ Ok = $false; Ids = $ids; Active = 0; Deleted = 0; Error = '' }
+    if (-not $Fetch) {
+        $Fetch = {
+            param($Url, $OnPage)
+            $tk = ''
+            if (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue) { $tk = [string](Get-SIGraphToken -Resource Graph) }
+            if (-not $tk) { throw 'no Microsoft Graph token' }
+            $null = Invoke-SIGraphPaged -RelativeUrl $Url -Token $tk -OnPage $OnPage
+        }
+    }
+    $state = @{ Active = 0; Deleted = 0 }
+    try {
+        & $Fetch '/groups?$select=id&$top=999' { param($rows) foreach ($r in @($rows)) { $i = [string](Get-SIIdentityScopeValue $r 'id'); if ($i) { if ($ids.Add($i.Trim().ToLowerInvariant())) { $state.Active++ } } } }
+        & $Fetch '/directory/deletedItems/microsoft.graph.group?$select=id&$top=999' { param($rows) foreach ($r in @($rows)) { $i = [string](Get-SIIdentityScopeValue $r 'id'); if ($i) { if ($ids.Add($i.Trim().ToLowerInvariant())) { $state.Deleted++ } } } }
+        $res.Ok = $true
+    } catch {
+        $res.Error = [string]$_.Exception.Message
+    }
+    $res.Active = [int]$state.Active; $res.Deleted = [int]$state.Deleted
+    [pscustomobject]$res
+}
+
+function New-SIIdentityScopeCounter {
+    <# A counter per switch for one run: @{ <setting> = @{ LeftOut; Held; Kept; Applied; Detail } }, both switches named. #>
+    param([Parameter(Mandatory)]$Choice)
+    $c = [ordered]@{}
+    foreach ($k in $script:SIIdentityScopeSettings.Keys) {
+        if (-not $Choice.$k) { continue }
+        $c[$script:SIIdentityScopeSettings[$k]] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k]; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = '' }
+    }
+    $c
+}
+
+function Add-SIIdentityScopeCount {
+    <# Counts one node's decision on the counter (a left-out node, or a node the switch looked at and kept). #>
+    param([Parameter(Mandatory)]$Counter, [Parameter(Mandatory)]$Decision, [string]$KeptBy = '')
+    if (-not $Decision.Keep) {
+        $c = $Counter[[string]$Decision.Setting]
+        if ($null -eq $c) { return }
+        if ($Decision.Held) { $c.Held++ } else { $c.LeftOut++ }
+        return
+    }
+    if ($KeptBy) { $c = $Counter[$KeptBy]; if ($null -ne $c) { $c.Kept++ } }
+}
+
+function Format-SIIdentityScopeLine {
+    <# PURE. The one plain line the identity step logs per switch (customer-facing: the setting named, counts only). #>
+    param([Parameter(Mandatory)]$Count)
+    $n = '{0:N0}' -f [long]$Count.LeftOut
+    switch ([string]$Count.Setting) {
+        'SI_Identity_SkipNeverSyncedDisabledAd' {
+            return ('Exposure Graph identities: {0} on-premises AD account(s) never synced to Entra ID, disabled and not privileged, got no asset (SI_Identity_SkipNeverSyncedDisabledAd is on); {1:N0} never-synced account(s) kept because they are enabled or privileged. Existing CIs of the accounts left out retire with that reason.' -f $n, [long]$Count.Kept)
+        }
+        'SI_Identity_SkipDeletedGroups' {
+            if (-not $Count.Applied) {
+                $why = 'no detail'; if ($Count.Detail) { $why = [string]$Count.Detail }
+                return ('Exposure Graph identities: SI_Identity_SkipDeletedGroups is on, but the Entra ID group list could not be read completely ({0}) -- {1:N0} group(s) with an Entra id were not recorded this run and keep their last state (nothing retires, nothing comes back).' -f $why, [long]$Count.Held)
+            }
+            return ('Exposure Graph identities: {0} group(s) Entra ID no longer has (neither active nor in its deleted items) got no asset (SI_Identity_SkipDeletedGroups is on); {1:N0} group(s) that still exist in Entra ID kept. Existing CIs of the groups left out retire with that reason.' -f $n, [long]$Count.Kept)
+        }
+    }
+    ('{0}: {1} left out' -f [string]$Count.Setting, $n)
+}
+
+function Get-SIIdentityScopeWriteSql {
+    <# The ONE statement that records this run's counts (sidata.CollectionLeftOut; nothing when the table is not there yet) and
+       keeps 400 days of them. @rows = [{ Setting; Feed; LeftOut; Kept; Held; Applied; Detail }], @engine. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CollectionLeftOut') IS NULL BEGIN SELECT 0 AS Written; RETURN; END
+INSERT sidata.CollectionLeftOut (Setting, Feed, Engine, LeftOut, Kept, Held, Applied, Detail)
+SELECT LEFT(x.Setting, 64), LEFT(ISNULL(x.Feed, N''), 64), LEFT(ISNULL(@engine, N''), 32), ISNULL(x.LeftOut, 0), x.Kept, ISNULL(x.Held, 0), ISNULL(x.Applied, 1), LEFT(x.Detail, 400)
+FROM OPENJSON(@rows) WITH (Setting NVARCHAR(64), Feed NVARCHAR(64), LeftOut BIGINT, Kept BIGINT, Held BIGINT, Applied BIT, Detail NVARCHAR(400)) x
+WHERE x.Setting IS NOT NULL;
+DECLARE @n INT = @@ROWCOUNT;
+DELETE FROM sidata.CollectionLeftOut WHERE CollectedAt < DATEADD(day, -400, SYSUTCDATETIME());
+SELECT @n AS Written;
+'@
+}
+
+function Write-SIIdentityScopeCounts {
+    <#
+        Records this run's counts in the install's database (one row per switch). -Invoke: the SQL seam
+        { param($Sql, $Params, $Mode) } (New-SIRecordSqlInvoke); none = no database, the log line is the record. Never throws.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Counts, [scriptblock]$Invoke, [string]$Engine = 'identity')
+    if (-not @($Counts).Count) { return 0 }
+    if (-not $Invoke) {
+        if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue)) {
+            $rs = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'SI-RecordSql.ps1')
+            if ([IO.File]::Exists($rs)) { try { . $rs } catch { } }
+        }
+        if (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) { $Invoke = New-SIRecordSqlInvoke }
+    }
+    if (-not $Invoke) { return 0 }
+    try {
+        $rows = @(foreach ($c in @($Counts)) { [ordered]@{ Setting = [string]$c.Setting; Feed = [string]$c.Feed; LeftOut = [long]$c.LeftOut; Kept = [long]$c.Kept; Held = [long]$c.Held; Applied = [bool]$c.Applied; Detail = [string]$c.Detail } })
+        $j = ConvertTo-Json -InputObject @($rows) -Compress -Depth 4
+        if (-not $j.TrimStart().StartsWith('[')) { $j = '[' + $j + ']' }
+        $r = @(& $Invoke (Get-SIIdentityScopeWriteSql) @{ rows = $j; engine = $Engine } 'rows') | Select-Object -First 1
+        return [int](Get-SIIdentityScopeValue $r 'Written')
+    } catch {
+        Write-Warning ('identity scope choice: the counts could not be recorded in the database -- {0}. The run log has them.' -f $_.Exception.Message)
+        return 0
+    }
+}
+
+function Get-SIIdentityScopeLeftOutSql {
+    <# The records each feed's switches left out of the collection @ctText (rows written at or after it), per feed. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CollectionLeftOut') IS NULL BEGIN SELECT CAST(NULL AS NVARCHAR(64)) AS Feed, CAST(0 AS BIGINT) AS LeftOut WHERE 1 = 0; RETURN; END
+DECLARE @ct DATETIME2(3) = TRY_CONVERT(DATETIME2(3), NULLIF(@ctText, N''), 127);
+SELECT l.Feed, SUM(l.LeftOut) AS LeftOut
+FROM sidata.CollectionLeftOut l
+WHERE @ct IS NOT NULL AND l.CollectedAt >= @ct AND l.Applied = 1
+  AND l.Id IN (SELECT MAX(i.Id) FROM sidata.CollectionLeftOut i WHERE i.CollectedAt >= @ct GROUP BY i.Setting)
+GROUP BY l.Feed;
+'@
+}
+
+function Get-SIIdentityScopeLeftOutByFeed {
+    <#
+        The records the switches left out of one collection, per feed ('eg|user' -> count) -- what the asset-drop check adds
+        back before it judges a feed. Only read while a switch is on in this install (-Choice); otherwise, or on any failure,
+        an empty map (the check judges as before). Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$CollectionTimeText, $Choice)
+    $out = @{}
+    if (-not $Choice) { $Choice = Get-SIIdentityScopeChoice }
+    if (-not $Choice.Any) { return $out }
+    try {
+        foreach ($r in @(& $Invoke (Get-SIIdentityScopeLeftOutSql) @{ ctText = $CollectionTimeText } 'rows')) {
+            if ($null -eq $r) { continue }
+            $f = [string](Get-SIIdentityScopeValue $r 'Feed'); if (-not $f) { continue }
+            $n = Get-SIIdentityScopeValue $r 'LeftOut'; if ($null -eq $n -or $n -is [DBNull]) { $n = 0 }
+            $out[$f.ToLowerInvariant()] = [long]$n
+        }
+    } catch { Write-Warning ('identity scope choice: the left-out counts could not be read for the asset-drop check -- {0}' -f $_.Exception.Message) }
+    $out
+}
+
+function Get-SIRecordLeftOutByIdentityChoice {
+    <#
+        PURE. The CI build's side: is this Exposure Graph record -- MISSING from a complete newer collection -- one the
+        install's choice now leaves out? Decided from the record's own stored SI fields (the node is not read again):
+          SI_Identity_SkipNeverSyncedDisabledAd  an eg user record of a user (si_identity_type user) with no Entra object id,
+                                                 whose stored fields show no privilege (si_admin_count, si_ad_critical_groups,
+                                                 si_is_sensitive_account, si_ms_criticality): the switch keeps every enabled
+                                                 or privileged never-synced account listed, so one that is no longer listed
+                                                 is disabled now (or gone from AD)
+          SI_Identity_SkipDeletedGroups          an eg user record of a group (si_identity_type group) with an Entra object id:
+                                                 the switch keeps every group Entra still has, so one no longer listed is gone
+        Returns @{ Gone; Reason } -- Gone = $false for anything else (the lifecycle's usual "not seen" applies).
+    #>
+    param([AllowNull()]$Record, [Parameter(Mandatory)]$Choice)
+    $no = [pscustomobject]@{ Gone = $false; Reason = '' }
+    if ($null -eq $Record -or -not $Choice -or -not $Choice.Any) { return $no }
+    if ([string](Get-SIIdentityScopeValue $Record 'si_provider') -ne 'eg' -or [string](Get-SIIdentityScopeValue $Record 'si_record_type') -ne 'user') { return $no }
+    $type = ([string](Get-SIIdentityScopeValue $Record 'si_identity_type')).Trim().ToLowerInvariant()
+    $oid = ([string]@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $Record 'entra_object_id'))[0]).Trim()
+    if ($type -eq 'user' -and -not $oid -and $Choice.SkipNeverSyncedDisabledAd) {
+        $ac = 0; if ([int]::TryParse([string](Get-SIIdentityScopeValue $Record 'si_admin_count'), [ref]$ac) -and $ac -gt 0) { return $no }
+        if (@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $Record 'si_ad_critical_groups')).Count -gt 0) { return $no }
+        if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $Record 'si_is_sensitive_account')) -eq $true) { return $no }
+        if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $Record 'si_is_service_account')) -eq $true) { return $no }
+        $crit = Get-SIIdentityScopeValue $Record 'si_ms_criticality'
+        if ($null -ne $crit -and "$crit".Trim() -ne '') { return $no }
+        return [pscustomobject]@{ Gone = $true; Reason = 'left out by the install''s choice SI_Identity_SkipNeverSyncedDisabledAd: an on-premises AD account never synced to Entra ID that the Exposure Graph no longer lists as enabled or privileged' }
+    }
+    if ($type -eq 'group' -and $oid -and $Choice.SkipDeletedGroups) {
+        return [pscustomobject]@{ Gone = $true; Reason = 'left out by the install''s choice SI_Identity_SkipDeletedGroups: a group Entra ID no longer has (neither active nor in its deleted items)' }
+    }
+    return $no
+}

@@ -173,6 +173,107 @@ SELECT N'Saved' AS Outcome;
         return true;
     }
 
+    /// PURE. Null = <paramref name="secretName"/> may be a secret reference of the connector <paramref name="connector"/>
+    /// (<paramref name="kind"/>); else why not. A connector names ITS OWN secrets only -- SI-Connector-&lt;name&gt;-..., the
+    /// install's ServiceNow credential (SI-ServiceNow-..., a servicenow connector only), or the customer's own name -- never
+    /// another connector's or a secret the product keeps (<see cref="KeptSecretPrefixes"/>). The same rule as
+    /// Test-SIConnectorSecretBinding (engine\asset-cmdb\_shared\SI-Connector.ps1).
+    /// The secrets the product keeps for itself and its settings -- never a connector's (the same list as Test-SIConnectorSecretBinding).
+    public static readonly IReadOnlyList<string> KeptSecretPrefixes =
+        ["SI-Invardia-", "SI-LicenceRequest-", "SI-License", "SI-InstallId", "SI-Update-State", "SI-Settings-Handover", "SI-SPN-", "SI-Web-", "SI-OpenAI-", "SI-Smtp-", "SI-Shodan-", "SecurityInsight-Secret"];
+
+    /// SI-Connector-&lt;name&gt;-... belongs to the connector with the LONGEST name the secret starts with
+    /// (<paramref name="connectors"/>: every connector of the install; null = not known here -- the write checks again with
+    /// them): SI-Connector-snow-prod-token is snow-prod's, never snow's. SI-ServiceNow-... is any servicenow connector's
+    /// (shared by design). A customer's own name that a secret SETTING names
+    /// (<paramref name="settingSecrets"/>) is that setting's.
+    public static string? SecretBindingWhyNot(string? connector, string? kind, string? secretName, IEnumerable<string>? connectors = null, IEnumerable<string>? settingSecrets = null)
+    {
+        var n = (secretName ?? "").Trim();
+        var me = (connector ?? "").Trim();
+        bool OwnedByMe(string prefix) =>
+            me.Length > 0 && n.StartsWith(prefix + me + "-", StringComparison.OrdinalIgnoreCase)
+            && !(connectors ?? Array.Empty<string>()).Any(o => !string.IsNullOrWhiteSpace(o) && o.Trim().Length > me.Length && n.StartsWith(prefix + o.Trim() + "-", StringComparison.OrdinalIgnoreCase));
+        if (n.StartsWith("SI-Connector-", StringComparison.OrdinalIgnoreCase))
+            return OwnedByMe("SI-Connector-") ? null : $"'{n}' is another connector's secret -- this connector's secrets are named SI-Connector-{me}-...";
+        // shared by design among the servicenow connectors (the install's credential; the data-out connector made from the
+        // close-loop's, #903) -- where it is sent is guarded by NeedsSuperAdmin instead
+        if (n.StartsWith("SI-ServiceNow-", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(kind, "servicenow", StringComparison.OrdinalIgnoreCase) ? null : $"'{n}' is the ServiceNow credential -- only a servicenow connector uses it";
+        if (KeptSecretPrefixes.Any(k => n.StartsWith(k, StringComparison.OrdinalIgnoreCase)))
+            return $"'{n}' is a secret SecurityInsight keeps for another purpose -- this connector's secrets are named SI-Connector-{me}-...";
+        if ((settingSecrets ?? Array.Empty<string>()).Any(s => string.Equals((s ?? "").Trim(), n, StringComparison.OrdinalIgnoreCase)))
+            return $"'{n}' is a setting's secret -- this connector's secrets are named SI-Connector-{me}-...";
+        return null;
+    }
+
+    // ------------------------------------------------------------------------------------------------ who may change where a secret goes
+
+    /// What decides WHERE a connector's credential is sent: the ServiceNow instance, the REST base address, the OAuth token
+    /// address, and which Key Vault secrets it reads. <see cref="NamesSecret"/>: it reads any secret at all.
+    public sealed record CredentialTarget(string Instance, string BaseUrl, string TokenUrl, string Refs, bool NamesSecret);
+
+    /// PURE. The credential target of a definition (its three JSON texts).
+    public static CredentialTarget TargetOf(string? settingsJson, string? secretRefsJson, string? mappingJson)
+    {
+        static JsonElement? P(string? t)
+        {
+            if (string.IsNullOrWhiteSpace(t)) return null;
+            try { using var d = JsonDocument.Parse(t); return d.RootElement.Clone(); } catch (JsonException) { return null; }
+        }
+        var s = P(settingsJson); var r = P(secretRefsJson); var m = P(mappingJson);
+        string refs;
+        if (r is { ValueKind: JsonValueKind.Object } ro)
+            refs = string.Join("\n", ro.EnumerateObject().Select(p => p.Name.ToLowerInvariant() + "=" + (p.Value.ValueKind == JsonValueKind.String ? (p.Value.GetString() ?? "").Trim() : p.Value.GetRawText()))
+                .Where(x => !x.EndsWith('=')).OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+        else refs = (secretRefsJson ?? "").Trim() is "{}" ? "" : (secretRefsJson ?? "").Trim();
+        static string T(string? v) => (v ?? "").Trim().TrimEnd('/');
+        return new CredentialTarget(T(Str(s, "instance")), T(Str(m, "baseUrl")), T(Str(Prop(m, "auth"), "tokenUrl")), refs, refs.Length > 0);
+    }
+
+    /// PURE. Does this write need SuperAdmin? It does when the connector reads any Key Vault secret (before or after) and the
+    /// write changes where it is sent or which secrets it reads: settings.instance, mapping.baseUrl, mapping.auth.tokenUrl or
+    /// the secret references -- a new connector that names a secret included. An Admin changes everything else (and removes
+    /// a connector). The same rule for a staged change, a direct write and an undo.
+    public static bool NeedsSuperAdmin(CredentialTarget? current, CredentialTarget next, bool remove = false)
+    {
+        if (remove) return false;
+        if (!next.NamesSecret && current?.NamesSecret != true) return false;
+        if (current is null) return true;
+        return !string.Equals(current.Instance, next.Instance, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(current.BaseUrl, next.BaseUrl, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(current.TokenUrl, next.TokenUrl, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(current.Refs, next.Refs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// PURE. The same for a write against the row it replaces (null = a new connector).
+    public static bool NeedsSuperAdmin(ConnectorRow? current, ConnectorWrite w) =>
+        NeedsSuperAdmin(current is null ? null : TargetOf(current.SettingsJson, current.SecretRefsJson, current.MappingJson),
+            TargetOf(w.SettingsJson, w.SecretRefsJson, w.MappingJson), w.Action == "Reset");
+
+    /// The words when an Admin tries it.
+    public static string SuperAdminWhy(string name) =>
+        $"connector {name}: only a SuperAdmin changes where its credential is sent or which Key Vault secrets it reads (its instance, base address, token address or secret references)";
+
+    /// The Key Vault secret names the secret settings name (a connector never names one of them).
+    public const string SettingSecretsSql = "IF OBJECT_ID(N'cfg.Setting') IS NOT NULL SELECT DISTINCT KeyVaultSecretName FROM cfg.Setting WHERE KeyVaultSecretName IS NOT NULL;";
+
+    /// PURE. Null = an operation's URL template stays on the connector's own host (starts with {{baseUrl}}, is a path, or is
+    /// an https URL with the base address's host and port); else why not. The same rule as Test-SIConnectorOperationUrl.
+    public static string? OperationUrlWhyNot(string? url, string? baseUrl)
+    {
+        var u = (url ?? "").Trim();
+        if (Regex.IsMatch(u, @"^\{\{\s*baseUrl\s*\}\}")) return null;
+        if (u.StartsWith('/') && !u.StartsWith("//", StringComparison.Ordinal)) return null;
+        if (Regex.IsMatch(u, @"^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*\{\{")) return "its host must be written out (or start with {{baseUrl}}), never a {{field}}";
+        if (!Uri.TryCreate((baseUrl ?? "").Trim(), UriKind.Absolute, out var b) || b.Scheme != Uri.UriSchemeHttps) return "the connector's base address is not an https address";
+        if (!Uri.TryCreate(u, UriKind.Absolute, out var a)) return $"'{u}' is not an address";
+        if (a.Scheme != Uri.UriSchemeHttps) return $"'{a.GetLeftPart(UriPartial.Authority)}' is not https";
+        if (!string.IsNullOrEmpty(a.UserInfo)) return $"'{a.Host}' carries a user name";
+        if (!string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase) || a.Port != b.Port) return $"'{a.Authority}' is not the connector's own host ({b.Authority})";
+        return null;
+    }
+
     private static (JsonElement? Value, string? Error) Parse(string? text, string what)
     {
         if (string.IsNullOrWhiteSpace(text)) return (null, null);
@@ -281,6 +382,9 @@ SELECT N'Saved' AS Outcome;
             if (!Regex.IsMatch(Str(op, "method") ?? "", "^(?i)(GET|POST|PUT|PATCH|DELETE)$")) why.Add($"mapping.operations.{k}.method must be GET, POST, PUT, PATCH or DELETE");
             var url = Str(op, "url");
             if (string.IsNullOrWhiteSpace(url)) why.Add($"mapping.operations.{k}.url is required");
+            // the connector's credential goes only to its own host: every operation stays on mapping.baseUrl's host, over https
+            else if ((baseUrl ?? "").StartsWith("https://", StringComparison.OrdinalIgnoreCase) && OperationUrlWhyNot(url, baseUrl) is { } uw)
+                why.Add($"mapping.operations.{k}.url must stay on the connector's own host ({baseUrl}): {uw}");
             if (k is "create" or "listOpen" && string.IsNullOrWhiteSpace(Str(op, "idPath")))
                 why.Add(k == "create" ? "mapping.operations.create.idPath is required: without the external id SecurityInsight cannot recognise the item it created" : "mapping.operations.listOpen.idPath is required");
             if (k == "listOpen" && Prop(op, "paging") is { } pg)
@@ -306,7 +410,9 @@ SELECT N'Saved' AS Outcome;
     }
 
     /// The reasons a write is refused (empty = accepted). Sends nothing. The same rules as ConvertFrom-SIConnectorRow.
-    public static IReadOnlyList<string> Validate(ConnectorWrite w)
+    /// <paramref name="connectors"/> / <paramref name="settingSecrets"/>: every connector's name and the secret settings' Key Vault
+    /// names (<see cref="SecretBindingWhyNot"/>) -- given by the write, which reads them; null where they are not known.
+    public static IReadOnlyList<string> Validate(ConnectorWrite w, IReadOnlyCollection<string>? connectors = null, IReadOnlyCollection<string>? settingSecrets = null)
     {
         var why = new List<string>();
         if (w.Action is not ("Set" or "Reset")) return new[] { $"unknown action '{w.Action}'" };
@@ -334,6 +440,9 @@ SELECT N'Saved' AS Outcome;
                 refNames.Add(p.Name);
                 if (p.Value.ValueKind != JsonValueKind.String || !IsSecretName(p.Value.GetString()))
                     why.Add($"the secret reference '{p.Name}' must be a Key Vault secret NAME (letters, digits, dashes) -- never the secret itself");
+                // a connector names ITS OWN secrets only
+                else if (SecretBindingWhyNot(w.Name, w.Kind, p.Value.GetString(), connectors, settingSecrets) is { } bw)
+                    why.Add($"the secret reference '{p.Name}': {bw}");
             }
         var (mapping, mErr) = Parse(w.MappingJson, "the mapping");
         if (mErr is not null) why.Add(mErr);
@@ -342,6 +451,8 @@ SELECT N'Saved' AS Outcome;
         {
             case "sql":
                 if (string.IsNullOrWhiteSpace(Str(settings, "server")) || string.IsNullOrWhiteSpace(Str(settings, "database"))) why.Add("a sql connector needs settings.server and settings.database");
+                // (the engine sends its Azure SQL token to settings.server only when it is an Azure SQL server: New-SIVulnTargetSql /
+                // New-SIDataSqlInvoke refuse any other -- a connector page's template keeps its placeholder until it is filled)
                 break;
             case "servicenow":
                 if (w.Direction == "vulnerability" && string.IsNullOrWhiteSpace(Str(settings, "table"))) why.Add("a servicenow connector needs settings.table (the vulnerable-item table)");
@@ -375,6 +486,14 @@ SELECT N'Saved' AS Outcome;
     {
         var why = Validate(w);
         if (why.Count > 0) return new WriteResult(WriteStatus.Refused, $"connector {w.Name}: " + string.Join("; ", why));
+        // a connector that reads a secret: checked again against every connector's name and the secret settings' names
+        if (w.Action != "Reset" && TargetOf(null, w.SecretRefsJson, null).NamesSecret)
+        {
+            var names = (await ListAsync(ct)).Select(r => r.Name).ToList();
+            var kept = (await _sql.QueryAsync(SettingSecretsSql, new Dictionary<string, object?>(), ct)).Select(r => r.Str("KeyVaultSecretName") ?? "").Where(x => x.Length > 0).ToList();
+            why = Validate(w, names, kept);
+            if (why.Count > 0) return new WriteResult(WriteStatus.Refused, $"connector {w.Name}: " + string.Join("; ", why));
+        }
         if (string.IsNullOrWhiteSpace(by)) return new WriteResult(WriteStatus.Refused, "the signed-in user has no name to record");
         var reason = string.IsNullOrWhiteSpace(w.Reason) ? null : w.Reason.Trim();
         if (reason is { Length: > 400 }) reason = reason[..400];

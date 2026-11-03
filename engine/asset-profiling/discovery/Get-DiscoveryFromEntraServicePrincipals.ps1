@@ -52,6 +52,9 @@ function Get-DiscoveryFromEntraServicePrincipals {
 
     # bulk-fetch tenant-wide role + perm data ONCE, then bucket by
     # principalId for O(1) per-SP lookup. Mirrors legacy IAC's batch model.
+    # #1049 F0: each phase's time (a log line + a cfg.StepPhaseTime row); measurement only
+    Reset-SIIdentityPhaseTotals
+    $ph = Start-SIIdentityPhase -Phase 'service principals: Entra roles + application role names'
     Write-SIInfo '[perms] fetching tenant-wide Entra role definitions...'
     $roleDefMap = Get-SIEntraRoleDefinitionMap -Token $token
     Write-SIInfo ('[perms] role assignments (permanent)...')
@@ -61,6 +64,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
     Write-SIInfo ('[perms] building appRole resolver (resourceSP appRoles[])...')
     $appRoleResolver = Get-SIAppRolePermissionResolver -Token $token
     Write-SIInfo ('[perms] {0} role defs, {1} principals with permanent roles, {2} with PIM eligible' -f $roleDefMap.Count, $permRolesMap.Count, $eligRolesMap.Count)
+    $null = Stop-SIIdentityPhase $ph -Rows ([long](@($permRolesMap.Keys).Count + @($eligRolesMap.Keys).Count)) -Detail 'principals with a permanent or eligible role'
     # #899: why the role facts are partial this run ('' = they are not) -- stamped on every service principal, so a worker of a
     # run collected in parts knows it too (Properties.collect.entra.RoleReadPartial)
     $rolePartial = ''; if (Get-Command -Name Get-SIEntraRoleReadPartialText -ErrorAction SilentlyContinue) { $rolePartial = [string](Get-SIEntraRoleReadPartialText) }
@@ -68,6 +72,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
 
     # transitive group -> role expansion (mostly affects User assets,
     # but SPs can also be group members so we wire the same lookup here).
+    $ph = Start-SIIdentityPhase -Phase 'service principals: role-holding groups (members, PIM for Groups)'
     Write-SIInfo '[perms] discovering role-assigned groups...'
     $groupRoles = Get-SIRoleAssignedGroups -Token $token -PermanentRolesByPrincipal $permRolesMap -EligibleRolesByPrincipal $eligRolesMap
     Write-SIInfo ('[perms] {0} groups hold Entra roles -- expanding transitive memberships...' -f $groupRoles.Count)
@@ -79,9 +84,12 @@ function Get-DiscoveryFromEntraServicePrincipals {
         Get-SIPimForGroupsByPrincipal -Token $token -RoleAssignedGroupMap $groupRoles
     } else { @{} }
     Write-SIInfo ('[perms] {0} principals inherit at least one role via group membership' -f $memberToGroups.Count)
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$groupRoles.Count) -Detail 'role-holding groups'
 
     # Azure RBAC delegations (scope-aware Max).
+    $ph = Start-SIIdentityPhase -Phase 'service principals: Azure RBAC'
     $azureLookup = Get-SIAzureDelegationsByPrincipal -ExcludeSubscriptionPatterns @($global:SI_AzureSubscriptionExcludePatterns)
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $azureLookup) { $azureLookup.Count } else { 0 })) -Detail 'principals with an Azure role'
 
     # SP sign-in activity from LA. same Defender-workspace
     # split as IdentityInfo -- AAD*SignInLogs typically live in the Sentinel/
@@ -89,14 +97,18 @@ function Get-DiscoveryFromEntraServicePrincipals {
     $defenderWs   = if ($global:SI_DefenderWorkspaceResourceId) { $global:SI_DefenderWorkspaceResourceId } else { $global:SI_WorkspaceResourceId }
     $defenderNote = if ($global:SI_DefenderWorkspaceResourceId) { 'separate Defender workspace' } else { 'same as output workspace' }
     Write-SIInfo ('[perms] fetching SP sign-in activity from Log Analytics ({0})...' -f $defenderNote)
+    $ph = Start-SIIdentityPhase -Phase 'service principals: sign-in activity (Log Analytics)'
     $spnSignInMap = Get-SISpnSignInLastActivity -WorkspaceResourceId $defenderWs
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $spnSignInMap) { $spnSignInMap.Count } else { 0 }))
     # no source answered a sign-in for the tenant: UNKNOWN -- each service principal's sign-in days stay empty, never -1
     # ("never signed in"); the lookup said so once
     $spnSignInKnown = Test-SISpnSignInKnown
 
     # EG identity enrichment (cached -- already pulled by Users discovery if it ran first;
     # otherwise this fires the bulk hunting query). Indexed by AAD ObjectId.
+    $ph = Start-SIIdentityPhase -Phase 'service principals: Exposure Graph identities'
     $egIdentitiesMap = Get-SIExposureGraphIdentities
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $egIdentitiesMap) { $egIdentitiesMap.Count } else { 0 }))
 
     $microsoftFirstPartyTenantId = 'f8cdef31-a31e-4b4a-93e4-5f571e91255a'
     # Default = include 1st-party SPs (parity with EG / Defender views).
@@ -149,7 +161,9 @@ function Get-DiscoveryFromEntraServicePrincipals {
         # per-SP perm enumeration (admin-consented application
         # perms + delegated oauth2 perms). Both are needed by the catalog
         # tier computer to classify the SP deterministically.
+        $apW = [System.Diagnostics.Stopwatch]::StartNew()
         $appPerms      = Get-SISPAppRoleAssignments -Token $token -ObjectId $sp.id -AppRoleResolver $appRoleResolver
+        Add-SIIdentityPhaseTotal -Phase 'service principals: application permissions (one read per principal)' -Seconds $apW.Elapsed.TotalSeconds -Rows 1 -Calls 1
         # delegated permissions: from the ONE read of the tenant's grants; when that read did not complete, per principal
         # as before (a failed read never becomes "no delegated permission")
         $delegPerms    = if ($oauthGrants -and $oauthGrants.Complete) { @(Get-SIOauth2ClientScopes -State $oauthGrants -ClientId ([string]$sp.id)) }
@@ -239,6 +253,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
     # the owners of every service principal, read ONCE before the principals (both paths): each record carries ENTRA_OwnerCount
     # for the identity profile, and the record capture adds the 'owners' part from the same read. Never fails the run.
     if (-not (Get-Command -Name Get-SISpOwnerCounts -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Get-SIDerivedSources.ps1') }
+    $ph = Start-SIIdentityPhase -Phase 'service principals: owners, application registrations, delegated grants'
     try { $null = Get-SISpOwnerCounts -Token $token -Refresh } catch { Write-Warning ('Service principal owners: ' + $_.Exception.Message) }
     # the application registrations, read ONCE before the principals: an application's owners count as the principal's.
     # Not read = $null: the principal's own owners decide, as before. Never fails the run.
@@ -249,6 +264,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
     # the delegated permission grants of the tenant in ONE read (instead of one request per service principal)
     $oauthGrants = $null
     try { $oauthGrants = Get-SIOauth2GrantsByClient -Token $token } catch { $oauthGrants = $null }
+    $null = Stop-SIIdentityPhase $ph
 
     # #475 STREAMING (the discover phase of a run collected in parts): each page's service principals become records and go
     # straight into their parts. Invoke-SIDiscover decided the parts before this source ran.
@@ -267,7 +283,11 @@ function Get-DiscoveryFromEntraServicePrincipals {
             }
             $null = Add-SIDiscoverStreamAssets -Stream $stream -Assets $batch.ToArray()
         }
+        $phPages = Start-SIIdentityPhase -Phase 'service principals: pages (read + permissions + records)'
         $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'EntraServicePrincipals /servicePrincipals' -OnPage $onSps
+        $null = Stop-SIIdentityPhase $phPages -Rows ([long]$page.Count) -Detail ('{0} page(s)' -f [int]$page.Pages)
+        Write-SIIdentityPhaseTotals -Prefix 'service principals:'
+        $null = Write-SIGraphRetrySummary
         $null = Write-SIIdDuplicateWarning $spDupWatch
         if (-not $page.Complete) {
             Write-Warning ('EntraServicePrincipals: {0} -- continuing with {1} SP(s) from {2} page(s); the run is NOT blocked.' -f $page.Error, $page.Count, $page.Pages)
@@ -313,4 +333,6 @@ function Get-DiscoveryFromEntraServicePrincipals {
         & $buildSp $sp
     }
     Write-SIPermissionFetchSummary -Label 'service principal'
+    Write-SIIdentityPhaseTotals -Prefix 'service principals:'
+    $null = Write-SIGraphRetrySummary
 }

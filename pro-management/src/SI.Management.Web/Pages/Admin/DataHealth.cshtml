@@ -31,6 +31,32 @@
         }
     </section>
 }
+@if (v.LeftOut.Count > 0)
+{
+    @* #1056 a customer's choice: Exposure Graph identities that get no asset, counted per identity run *@
+    <section class="card" aria-labelledby="h-left-out" data-data-health-left-out>
+        <h2 id="h-left-out">Left out by your choice</h2>
+        <p class="hint">Your organisation chose that these Exposure Graph objects get no asset (Settings: Collection scope &amp; limits, Exposure Graph identities without an asset). They are counted on every identity run; existing CIs of them retire with the setting as the reason. Real users, groups, devices and findings are not affected.</p>
+        <div class="table-wrap">
+            <table data-sortable>
+                <thead><tr><th>What</th><th>Setting</th><th>Run</th><th class="num">Left out</th><th class="num">Kept</th><th>Note</th></tr></thead>
+                <tbody>
+                    @foreach (var r in v.LeftOut)
+                    {
+                        <tr data-left-out-setting="@r.Setting" data-applied="@(r.Applied ? "true" : "false")">
+                            <td>@DataHealthLeftOutText.Label(r.Setting)</td>
+                            <td class="mono">@r.Setting</td>
+                            <td>@DataHealthRules.When(r.CollectedAt)</td>
+                            <td class="num">@Fmt.Int(r.LeftOut)</td>
+                            <td class="num">@(r.Kept is { } k ? Fmt.Int(k) : "--")</td>
+                            <td>@(r.Applied ? "" : $"Not decided this run ({r.Detail}); {Fmt.Int(r.Held)} kept their last state")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
 @if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
 else if (!v.HasTables) { <div class="notice" role="status" data-no-table>This database has no data health tables yet. The next update adds them; the verification job then runs the check every day.</div> }
 else

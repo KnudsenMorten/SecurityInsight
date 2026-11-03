@@ -56,19 +56,19 @@ Describe 'repeated items merge by the field''s rule' {
     It 'unions all four si_device_roles items with a custom eg file present' {
         $ov = New-Overlay @{ eg = [ordered]@{ kind = 'field-mapping'; provider = 'eg'; mappings = @() } }
         $model = Get-SIDataModel -Root $script:DmRoot -OverlayRoot $ov
-        @($model.Mappings['eg'].mappings | Where-Object { $_.field -eq 'si_device_roles' }).Count | Should -Be 4
+        @($model.Mappings['eg'].mappings | Where-Object { $_.field -eq 'si_device_roles' -and @($_.recordTypes) -contains 'device' }).Count | Should -Be 4
         $r = ConvertTo-SIRecord -Object $script:EgDevice -Mapping $model.Mappings['eg'] -RecordType 'device' -Catalog $model['field-catalog'] -ValueMaps $model['value-maps'].maps
         foreach ($role in 'domain_controller', 'exchange', 'adfs') { @($r.Record.si_device_roles) | Should -Contain $role }
     }
     It 'overrides only the shipped item at the same position; the plain key still overrides the first' {
         $locked = [IO.File]::ReadAllText((Join-Path $script:DmRoot 'mappings\eg.locked.json')) | ConvertFrom-Json
-        $roles = @($locked.mappings | Where-Object { $_.field -eq 'si_device_roles' })
+        $roles = @($locked.mappings | Where-Object { $_.field -eq 'si_device_roles' -and @($_.recordTypes) -contains 'device' })
         # the customer's file: the 1st item as shipped, the 2nd (isDomainController) removed
         $c1 = $roles[0] | ConvertTo-Json -Depth 10 | ConvertFrom-Json
         $c2 = $roles[1] | ConvertTo-Json -Depth 10 | ConvertFrom-Json; $c2 | Add-Member -NotePropertyName remove -NotePropertyValue $true
         $ov = New-Overlay @{ eg = [ordered]@{ kind = 'field-mapping'; provider = 'eg'; mappings = @($c1, $c2) } }
         $t = Get-SIDataModelTemplate -Name 'mappings/eg' -Root $script:DmRoot -OverlayRoot $ov
-        $left = @($t.Document.mappings | Where-Object { $_.field -eq 'si_device_roles' })
+        $left = @($t.Document.mappings | Where-Object { $_.field -eq 'si_device_roles' -and @($_.recordTypes) -contains 'device' })
         $left.Count | Should -Be 3
         @($left | ForEach-Object { @($_.sources)[0] }) | Should -Not -Contain 'node.NodeProperties.rawData.isDomainController'
         @($t.States | Where-Object State -eq 'Disabled').Key | Should -Be 'si_device_roles|device|#2'

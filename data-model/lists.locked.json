@@ -576,6 +576,44 @@
       "type": "values",
       "description": "The EXTENSION ATTRIBUTE and VALUE that mark an emergency-access (break-glass) account in YOUR directory -- nothing is shipped; the list is empty until you define it. Each entry is attribute=value: the attribute is extensionAttribute1 to extensionAttribute15 (the user's on-premises extension attributes) or the name of a directory extension (extension_<application id without dashes>_<name>); the value is the text the attribute must hold (compared whole, upper and lower case alike; never empty). Example: extensionAttribute6=Break_Glass_Account. A user that carries one of the entries is break-glass (si_is_break_glass, with the entry in si_break_glass_attribute and the rule named in si_break_glass_reason). The attribute is read with the user only while an entry names it. Customer: lists.custom.json -- Pro: the list's override.",
       "values": []
+    },
+    {
+      "id": "generic_device_names",
+      "type": "values",
+      "description": "Device names that many DIFFERENT devices share (phones, tablets, factory names). The correlation check (data quality: correlation suspects) never treats two CIs as the same machine because they carry one of these names. Lower case; * matches any text. Customer: lists.custom.json -- Pro: the list's override.",
+      "values": [
+        "iphone",
+        "iphone *",
+        "ipad",
+        "ipad *",
+        "android",
+        "android*",
+        "galaxy*",
+        "samsung*",
+        "pixel*",
+        "localhost",
+        "unknown",
+        "default",
+        "desktop",
+        "laptop",
+        "pc",
+        "computer",
+        "macbook*",
+        "imac*",
+        "surface*"
+      ]
+    },
+    {
+      "id": "placeholder_device_names",
+      "type": "values",
+      "description": "Names a source gives a device it has no name for. Such a name never names a CI: the CI build takes the name from another linked source (Entra, Intune, Azure ...), and when none has one it names the CI unnamed-device-<short id>. An active CI still named one of these, or named by the build, is listed as a data-quality warning (correlation suspects: placeholder name) -- a person cannot tell those devices apart in the CI overview, the reports or the CMDB. Lower case, compared whole. Customer: lists.custom.json -- Pro: the list's override.",
+      "values": [
+        "dummydevicename",
+        "unknown",
+        "localhost",
+        "(none)",
+        "n/a"
+      ]
     }
   ]
 }

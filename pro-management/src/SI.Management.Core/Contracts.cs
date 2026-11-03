@@ -61,4 +61,12 @@ public interface IChatService
     /// answers without it.
     Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, bool isAdmin, ChatPageContext? context, CancellationToken ct)
         => AskAsync(history, question, isAdmin, ct);
+
+    /// The same, for one caller (<see cref="ToolCaller"/>): a caller whose view is limited to some rows gets only the
+    /// tools that apply that limit. A service that cannot apply it refuses such a caller -- never an answer from the whole
+    /// estate.
+    Task<ChatAnswer> AskAsync(IReadOnlyList<ChatTurn> history, string question, ToolCaller caller, ChatPageContext? context, CancellationToken ct)
+        => caller.Scoped
+            ? throw new UnauthorizedAccessException("the chat cannot limit its answers to your departments here")
+            : AskAsync(history, question, caller.IsAdmin, context, ct);
 }

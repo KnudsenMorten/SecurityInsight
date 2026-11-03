@@ -2,8 +2,8 @@
 <#
     SECURITY BASELINE QUICK WINS (framework DOCS/REQUIREMENTS.md §12.11f CR8 items 4 + 5, §12.23 P7 / P8; SI #659).
     ONE library for the three changes, used by BOTH ways they reach an install:
-      - a NEW install: the setup scripts, ONLY while the switch below is on (default OFF -- REMOVE-ME, see
-        Test-SISecurityBaselineNewInstall);
+      - a NEW install: the setup scripts, while the switch below is on (default ON since 2026-10-31, see
+        Test-SISecurityBaselineNewInstall; Key Vault purge protection has its own switch, default OFF);
       - an EXISTING install: setup\Set-SICr8QuickWins.ps1, run through the Invardia Support app, one environment at a time
         (check first, a rollback record, read back after every change).
     The product updater changes NONE of this (§12.23 P8: "the updater changes no security; it only checks for drift").
@@ -35,20 +35,48 @@ $script:SIBaselineAuditDiagName = 'si-sql-audit'
 $script:SIBaselineAuditTable    = 'SQLSecurityAuditEvents'
 $script:SIBaselineAuditDays     = 90
 
-# REMOVE-ME once a fresh test install has proven all three on a new install: OFF by default. Customer sites are installed
-# with today's setup while this is new (owner 2026-10-14, §12.23 P8): nothing may change what a new install builds until
-# a fresh test install proves it. On: SI_SECURITY_BASELINE_NEW_INSTALL=1 in the environment of the install.
-$script:SIBaselineNewInstallDefault = $false
+# ON by default for a NEW install (2026-10-31, security audit): the registry's admin user off (only when every job and app
+# pulls as its managed identity) and SQL auditing on. Off for one install: SI_SECURITY_BASELINE_NEW_INSTALL=0. An EXISTING
+# install is not changed by this (owner decision: it gets the baseline from setup\Set-SISecurityBaseline.ps1, one
+# environment at a time). NOT YET PROVEN on a fresh test install -- the release that carries this needs that proof.
+$script:SIBaselineNewInstallDefault = $true
+# Key Vault purge protection is ONE-WAY (Azure never turns it off again), so it is NOT part of the default: OFF unless
+# SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=1 -- turning it on by default for every new install is the owner's decision.
+$script:SIBaselinePurgeProtectionDefault = $false
 
-function Test-SISecurityBaselineNewInstall {
-    <# PURE over the switch. True when a new install builds the security baseline (the registry's admin user off, Key
-       Vault purge protection on, SQL auditing on): SI_SECURITY_BASELINE_NEW_INSTALL = 1 / true / on / yes; anything
-       else (unset included) = the built-in default (OFF, see above). #>
-    param([AllowNull()][string]$Value = $env:SI_SECURITY_BASELINE_NEW_INSTALL, [bool]$Default = $script:SIBaselineNewInstallDefault)
+function ConvertFrom-SIBaselineSwitch {
+    <# PURE. 1 / true / on / yes = $true; 0 / false / off / no = $false; anything else (unset included) = -Default. #>
+    param([AllowNull()][string]$Value, [bool]$Default)
     $v = ([string]$Value).Trim().ToLowerInvariant()
     if ($v -in '1', 'true', 'on', 'yes') { return $true }
     if ($v -in '0', 'false', 'off', 'no') { return $false }
     return [bool]$Default
+}
+
+function Test-SISecurityBaselineNewInstall {
+    <# PURE over the switch. True when a new install builds the security baseline (the registry's admin user off, SQL
+       auditing on): SI_SECURITY_BASELINE_NEW_INSTALL = 1 / true / on / yes; 0 / false / off / no turns it off; anything
+       else (unset included) = the built-in default (ON, see above). Key Vault purge protection has its own switch
+       (Test-SISecurityBaselinePurgeProtection). #>
+    param([AllowNull()][string]$Value = $env:SI_SECURITY_BASELINE_NEW_INSTALL, [bool]$Default = $script:SIBaselineNewInstallDefault)
+    ConvertFrom-SIBaselineSwitch -Value $Value -Default $Default
+}
+
+function Test-SISecurityBaselineAppliesTo {
+    <# PURE. Does setup apply the new-install baseline to THIS resource? Only to one THIS install created (-CreatedByThisInstall:
+       the registry made in this run; the database server whose creation the guided install recorded), and only while the
+       new-install switch is on. Running setup again over a live install (a re-run, "run the install command again") never
+       changes a resource it did not create -- an existing install gets the baseline from setup\Set-SISecurityBaseline.ps1,
+       one environment at a time (owner decision; the updater changes no security, framework 12.23 P8). 2026-11-01. #>
+    param([bool]$CreatedByThisInstall, [AllowNull()][string]$Value = $env:SI_SECURITY_BASELINE_NEW_INSTALL, [bool]$Default = $script:SIBaselineNewInstallDefault)
+    [bool]$CreatedByThisInstall -and (Test-SISecurityBaselineNewInstall -Value $Value -Default $Default)
+}
+
+function Test-SISecurityBaselinePurgeProtection {
+    <# PURE over the switch. True when a new install's Key Vault is created with purge protection (ONE-WAY):
+       SI_SECURITY_BASELINE_KV_PURGE_PROTECTION = 1 / true / on / yes; anything else = the built-in default (OFF). #>
+    param([AllowNull()][string]$Value = $env:SI_SECURITY_BASELINE_KV_PURGE_PROTECTION, [bool]$Default = $script:SIBaselinePurgeProtectionDefault)
+    ConvertFrom-SIBaselineSwitch -Value $Value -Default $Default
 }
 
 function Get-SIBaselineProp {

@@ -65,7 +65,9 @@ public sealed partial class FindingTaskService
         {
             var session = DepartmentSessions.SignInId(user);
             var ids = session is null ? MembershipDepartmentScope.ObjectIds(user) : Array.Empty<string>();
-            var upn = session is null ? user.FindFirst("preferred_username")?.Value ?? user.FindFirst(ClaimTypes.Upn)?.Value : null;
+            // #995: a department person stored by mail is matched only by the sign-in name the directory issued for one of
+            // its OWN members -- never a guest's, whose name its home tenant chooses
+            var upn = session is null ? user.DirectoryMemberName() : null;
             if (session is not null || ids.Count > 0 || !string.IsNullOrWhiteSpace(upn)) people = await _store.PersonKeysAsync(ids, upn, session, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the department people of a signed-in user could not be read for their tasks"); }

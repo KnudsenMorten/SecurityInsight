@@ -105,7 +105,7 @@ public sealed partial class RuleFormModel
             if (s.Documents.Count != 1 || s.Documents[0].RootNode is not YamlMappingNode m) return (null, "the rule is not one YAML mapping");
             root = m;
         }
-        catch (YamlException ex) { return (null, "the rule is not valid YAML: " + ex.Message); }
+        catch (YamlException ex) { return (null, "the rule is not valid YAML: " + ViewerError.Text(ex)); }
         var f = new RuleFormModel();
         foreach (var (k, v) in root.Children)
         {

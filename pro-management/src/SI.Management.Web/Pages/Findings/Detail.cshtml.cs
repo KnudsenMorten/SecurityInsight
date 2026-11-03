@@ -53,6 +53,9 @@ public sealed class DetailModel : PageModel
             Query = r.Query;
             Detail = r.Data;
             if (Detail is null) return false;
+            // #990: a person whose view is limited to some departments opens only a finding of one of them -- any other
+            // finding is "not found" (404: the page never says it exists), on the page, its export and its exempt post
+            if (!await SeesAsync(Detail.Finding, ct)) { Detail = null; Query = null; return false; }
             Fields = Flatten(Detail.DetailJson);
             try
             {
@@ -65,11 +68,39 @@ public sealed class DetailModel : PageModel
             await LoadLinksAsync(Detail.Finding, ct);
             return true;
         }
-        catch (ArgumentException ex) { Error = ex.Message; return false; }
+        catch (ArgumentException ex) { Error = ViewerError.Text(ex); return false; }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading a finding failed");
-            Error = "The finding could not be read: " + ex.Message;
+            Error = "The finding could not be read: " + ViewerError.Text(ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// #990: may the signed-in person see this finding? Everyone whose view is not limited: yes. A person limited to some
+    /// departments: only when the finding's department (the one the data sync stamped, read from the governance store) is
+    /// one of theirs. FAIL CLOSED: no resolver, no governance store, no department or an unreadable one = not seen.
+    /// </summary>
+    private async Task<bool> SeesAsync(FindingRow f, CancellationToken ct)
+    {
+        var access = HttpContext?.RequestServices.GetService<IAccessScope>();
+        // no limit on this person's view (the role framework says so -- every role on the ladder whose scopes do not limit
+        // what it sees, and a one-page link, which is bound to this very finding): every finding
+        if (access?.Visibility(User) is null) return true;
+        var resolver = HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.IDepartmentScopeResolver>();
+        if (resolver is null) return false;
+        var mine = await resolver.ResolveAsync(User, ct);
+        if (mine.Unrestricted) return true;
+        if (HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.GovernanceService>() is not { } gov) return false;
+        try
+        {
+            var dept = await gov.Repository.FindingDepartmentAsync(f.CollectionId, f.FindingId, ct);
+            return dept?.DepartmentId is { } d && mine.Sees(d);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "the finding's department could not be read; a department-limited person does not see it");
             return false;
         }
     }

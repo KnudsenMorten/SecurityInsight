@@ -79,7 +79,7 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading tasks failed");
-            Error = "The tasks could not be read from the Pro database: " + ex.Message;
+            Error = "The tasks could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

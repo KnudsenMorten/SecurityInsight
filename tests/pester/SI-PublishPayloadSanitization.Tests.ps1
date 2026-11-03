@@ -131,7 +131,7 @@ BeforeDiscovery {
     # A VALUE is a secret only if it is a SOLID token with mixed case AND digits.
     # Calibrated against real false positives: 'sasPolicyExpirationPeriod',
     # 'Mail_SmtpPassword', 'dcr-si-publicip-profile', '__BUCKET_FILTER__' are all
-    # identifiers; '***REMOVED***' is not.
+    # identifiers; 'Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z' is not.
     function Test-SILooksLikeSecret {
         param([string]$Value)
         if ($Value.Length -lt 20) { return $false }
@@ -198,6 +198,12 @@ BeforeDiscovery {
                 if ($line -match $d.rx) {
                     $hit = $Matches[0]
                     if ($script:Allow -contains $hit.ToLowerInvariant()) { continue }
+                    # a .NET lock file's package hash (SHA-512, base64: 86 characters + '==') has the shape of a storage
+                    # key; ONLY that key, ONLY in packages.lock.json, is a public package hash, not a secret (2026-11-01)
+                    if ($d.name -eq 'storage account key' -and (Split-Path -Leaf $rel) -eq 'packages.lock.json' -and $line -match '^\s*"contentHash":\s*"[A-Za-z0-9+/]{86}=="\s*,?\s*$') { continue }
+                    # #1061 / framework PUB-FRONT: the vendored sign-in front's error text names the DOCUMENTED example host
+                    # (e.g. sql-x.database.windows.net) -- the one host PUB-FRONT's leak scan allows; ONLY that value, ONLY there
+                    if ($d.name -eq 'sql server host' -and $rel -like 'vendor\signin-front\*' -and $hit -ceq 'sql-x.database.windows.net') { continue }
                     $script:Findings += [pscustomobject]@{ File = $rel; Line = $lineNo; Kind = $d.name; Match = $hit }
                 }
             }

@@ -92,7 +92,7 @@ public sealed class MailSetupModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not MicrosoftIdentityWebChallengeUserException && ex.InnerException is not Microsoft.Identity.Client.MsalUiRequiredException)
         {
             _log.LogWarning(ex, "Exchange token");
-            Error = "No Exchange token could be acquired for your account: " + ex.Message;
+            Error = "No Exchange token could be acquired for your account: " + ViewerError.Text(ex);
             return Page();
         }
         var session = new ExchangeSession(TenantId, token.AccessToken, ExchangeAdminClient.Anchor(token.AppOnly, AdminUpn, _config["Exchange:TenantInitialDomain"]));

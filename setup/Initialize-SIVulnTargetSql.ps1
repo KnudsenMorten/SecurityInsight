@@ -30,7 +30,7 @@ param(
     [string]$CertThumbprint = [string]$global:SI_SPN_CertThumbprint
 )
 
-#Requires -Version 5.1   # after the help and the param block: before the help, it hides the help from Get-Help
+#Requires -Version 7.0   # after the help and the param block: before the help, it hides the help from Get-Help
 # framework section 12.7 / 12.10: the documentation link first, a transcript of the run, -WhatIf writes nothing
 . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-ScriptRun.ps1'))
 $siRun = Start-SIScriptRun -Script 'Initialize-SIVulnTargetSql' -Quiet:($false)

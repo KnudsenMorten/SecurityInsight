@@ -292,7 +292,7 @@ function Get-SIDataModelListContext {
     return $lists
 }
 
-function Get-SIOutputMapOps { return , @('enum', 'first', 'join', 'join_ids', 'render', 'format_date', 'round', 'mask', 'domain_part', 'if_class', 'lower', 'upper') }
+function Get-SIOutputMapOps { return , @('enum', 'first', 'join', 'join_ids', 'render', 'format_date', 'round', 'mask', 'domain_part', 'finding_key', 'if_class', 'lower', 'upper') }
 
 function Test-SIDataModel {
     <#

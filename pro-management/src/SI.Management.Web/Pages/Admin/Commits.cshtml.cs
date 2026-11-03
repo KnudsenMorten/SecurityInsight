@@ -73,7 +73,7 @@ public sealed class CommitsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the change journal failed");
-            Error = "The commit history could not be read: " + ex.Message;
+            Error = "The commit history could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -129,7 +129,7 @@ public sealed class CommitsModel : PageModel
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or UnauthorizedAccessException)
         {
             AuditScope.Current?.Refused(ex.Message);
-            TempData["toast"] = "Not staged: " + ex.Message;
+            TempData["toast"] = "Not staged: " + ViewerError.Text(ex);
             TempData["toastKind"] = "error";
             return Redirect("/Admin/Commits?id=" + Uri.EscapeDataString(Id ?? ""));
         }

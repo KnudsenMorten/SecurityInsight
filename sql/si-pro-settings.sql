@@ -254,6 +254,31 @@ CREATE TABLE cfg.InstallState (
     UpdatedBy   NVARCHAR(256)   NOT NULL
 );
 
+-- INDEXES THAT DID NOT FIT AN UPDATE (#1050, owner 2026-11-01): one row per index the update could not build in its time
+-- (a filtered index cannot pause; its estimate from this database's measured rate was longer than the update had). The
+-- statement is kept here, so the updater builds it later in an idle window (SI_UPDATER_MODE = index-build) without the
+-- release's files. State: waiting | building | built | failed. SinceUtc = the first time it waited (an index that has
+-- waited 7 days is built at the next idle moment, once: ForcedUtc). Written by the updater; read by the pipeline runner's
+-- wake-up (engine\_shared\SI-IndexBuild.ps1) and the status.
+IF OBJECT_ID('cfg.IndexBuild') IS NULL
+CREATE TABLE cfg.IndexBuild (
+    TableName    NVARCHAR(256)   NOT NULL,
+    IndexName    NVARCHAR(128)   NOT NULL,
+    Statement    NVARCHAR(MAX)   NOT NULL,
+    State        NVARCHAR(16)    NOT NULL,
+    Pages        BIGINT          NULL,
+    EstMinutes   INT             NULL,
+    RateSource   NVARCHAR(200)   NULL,
+    Why          NVARCHAR(1000)  NULL,
+    SinceUtc     DATETIME2(0)    NOT NULL,
+    LastStartUtc DATETIME2(0)    NULL,
+    LastEndUtc   DATETIME2(0)    NULL,
+    ForcedUtc    DATETIME2(0)    NULL,
+    UpdatedUtc   DATETIME2(0)    NOT NULL,
+    UpdatedBy    NVARCHAR(256)   NOT NULL,
+    CONSTRAINT PK_IndexBuild PRIMARY KEY (TableName, IndexName)
+);
+
 -- COMPONENTS OF THE INSTALLED CODE (CR3, #657; framework 12.11e item 3): one row per component -- a collection per source,
 -- the correlation, Risk Analysis per report, data out per channel (config\release-scopes.locked.json). The UPDATER writes
 -- the fingerprint of each after it installed a release (engine\_shared\SI-ReleaseControl.ps1, Save-SIReleaseScopeRecords):
@@ -294,6 +319,15 @@ CREATE TABLE cfg.TemplatePackStaged (
     CONSTRAINT CK_TemplatePackStaged_Origin CHECK (Origin IN ('feed', 'shipped', 'file')),
     CONSTRAINT CK_TemplatePackStaged_PackJson CHECK (ISJSON(PackJson) = 1)
 );
+
+-- A pack from Invardia keeps the SIGNED manifest it came with (manifestB64, signature, keyId): the install job checks the
+-- signature against the keys embedded in the release and the pack's SHA-256 against the signed one -- never against a
+-- value stored in this row alone.
+IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestB64') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD ManifestB64 NVARCHAR(MAX) NULL;
+
+IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestSignature') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD ManifestSignature NVARCHAR(2048) NULL;
+
+IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestKeyId') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD ManifestKeyId NVARCHAR(128) NULL;
 
 -- Phase E (REQUIREMENTS §9.3.3 E): CONNECTORS DEFINED IN SQL.
 -- One row per connector -- where the vulnerability close-loop sends its results (engine\asset-cmdb\_shared\SI-Connector.ps1).
@@ -559,6 +593,23 @@ CREATE TABLE cfg.DataOutBatch (
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DataOutBatch_Output' AND object_id = OBJECT_ID('cfg.DataOutBatch'))
 CREATE INDEX IX_DataOutBatch_Output ON cfg.DataOutBatch (OutputId, State, StartedAt DESC) INCLUDE (Mode, FinishedAt, FeedbackAt, RequestToken);
+
+-- #1043 THE PROGRESS OF A BATCH WHILE IT IS SENT (ADDED 2026-11-01, engine/data-out/SI-DataOutProgress.ps1): the phase the
+-- output is in (readback | read | build | send | close), the rows planned (an estimate until the end), sent and held, the
+-- pages sent and the time of the last sign of progress. Written batched -- at most once a minute and at each milestone, one
+-- small UPDATE by the batch's key, never retried -- so a SQL reader, the web app and the heartbeat (DataOut) see a long send
+-- as it goes, without the log's lag. Nullable: a batch written before this has none.
+IF COL_LENGTH('cfg.DataOutBatch', 'Phase') IS NULL ALTER TABLE cfg.DataOutBatch ADD Phase NVARCHAR(16) NULL;
+
+IF COL_LENGTH('cfg.DataOutBatch', 'RowsPlanned') IS NULL ALTER TABLE cfg.DataOutBatch ADD RowsPlanned BIGINT NULL;
+
+IF COL_LENGTH('cfg.DataOutBatch', 'RowsSent') IS NULL ALTER TABLE cfg.DataOutBatch ADD RowsSent BIGINT NULL;
+
+IF COL_LENGTH('cfg.DataOutBatch', 'RowsHeld') IS NULL ALTER TABLE cfg.DataOutBatch ADD RowsHeld BIGINT NULL;
+
+IF COL_LENGTH('cfg.DataOutBatch', 'PagesSent') IS NULL ALTER TABLE cfg.DataOutBatch ADD PagesSent BIGINT NULL;
+
+IF COL_LENGTH('cfg.DataOutBatch', 'LastProgressUtc') IS NULL ALTER TABLE cfg.DataOutBatch ADD LastProgressUtc DATETIME2(3) NULL;
 
 -- =============================================================================================
 -- THE CMDB (#256): business services, the assets that belong to them, and which source is authoritative.
@@ -1858,6 +1909,36 @@ BEGIN
     DECLARE @holder NVARCHAR(128) = (SELECT Holder FROM cfg.PipelineLock WHERE LockId = N''install'');
     IF @holder IS NULL OR (@me IS NOT NULL AND @me <> @holder)
         THROW 51462, N''cfg.PipelineQueue: a queued request is taken only by the runner that holds the install lock -- this runner does not (its lock was released by a cancel, or taken over); it starts nothing'', 1;
+END');
+
+-- THE UPDATE RING AND THE UPDATE STATE ARE THE UPDATER'S: cfg.InstallState 'Ring', 'UpdateState' and 'CommunityUpdateState'
+-- (the ring an install pulls for, and what was applied -- the Community edition's replay floor) are written by the updater
+-- and setup only. The engine's role (si_engine) writes other rows of the table; a change to these three by a member of
+-- si_engine that is not db_owner is refused (the statement fails, nothing is written) -- an insert, an update, a delete, and
+-- a rename of one of them (the row's old name counts as much as its new one).
+EXEC (N'CREATE OR ALTER TRIGGER cfg.TR_InstallState_UpdaterRows ON cfg.InstallState AFTER INSERT, UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF (SELECT COUNT(*) FROM (SELECT Name FROM inserted UNION ALL SELECT Name FROM deleted) AS x
+        WHERE x.Name IN (N''Ring'', N''UpdateState'', N''CommunityUpdateState'')) = 0 RETURN;
+    IF ISNULL(IS_ROLEMEMBER(N''si_engine''), 0) = 1 AND ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) = 0
+        THROW 51463, N''cfg.InstallState: the update ring and the update state are written by the updater only'', 1;
+END');
+
+-- A STAGED TEMPLATE PACK NEVER CHANGES ONCE STAGED: its version, origin, SHA-256 and text stay as staged, and the signed
+-- manifest kept with it is only ever ADDED (never changed or taken away). An update that does more is refused, whoever
+-- runs it (the statement fails, nothing is written); a new pack is a new version.
+EXEC (N'CREATE OR ALTER TRIGGER cfg.TR_TemplatePackStaged_Pinned ON cfg.TemplatePackStaged AFTER UPDATE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF (SELECT COUNT(*) FROM inserted) <> (SELECT COUNT(*) FROM inserted i JOIN deleted d ON d.PackVersion = i.PackVersion)
+       OR EXISTS (SELECT 1 FROM inserted i JOIN deleted d ON d.PackVersion = i.PackVersion
+                  WHERE CONVERT(varbinary(64), i.Origin) <> CONVERT(varbinary(64), d.Origin)
+                     OR CONVERT(varbinary(200), i.Sha256) <> CONVERT(varbinary(200), d.Sha256)
+                     OR CONVERT(varbinary(max), i.PackJson) <> CONVERT(varbinary(max), d.PackJson)
+                     OR (d.ManifestB64 IS NOT NULL AND (i.ManifestB64 IS NULL OR CONVERT(varbinary(max), i.ManifestB64) <> CONVERT(varbinary(max), d.ManifestB64)))
+                     OR (d.ManifestSignature IS NOT NULL AND (i.ManifestSignature IS NULL OR CONVERT(varbinary(max), i.ManifestSignature) <> CONVERT(varbinary(max), d.ManifestSignature))))
+        THROW 51464, N''cfg.TemplatePackStaged: a staged template pack never changes -- a new pack is a new version'', 1;
 END');
 
 -- CR8 (framework 12.11f item 1, SI #659): a change of a job's TRIGGER the web app asks for when it holds start-only rights
@@ -3200,6 +3281,271 @@ CREATE TABLE cfg.RaSourceAccept (
 -- one ACTIVE acceptance per report and table
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_RaSourceAccept_Active' AND object_id = OBJECT_ID('cfg.RaSourceAccept'))
 CREATE UNIQUE INDEX UX_RaSourceAccept_Active ON cfg.RaSourceAccept (ReportName, SourceTable) WHERE ClearedUtc IS NULL;
+-- >>> GENERATED SUPPORT GRANT (engine\pro-settings\SI-SupportGrantSql.ps1, Get-SISupportGrantSchemaSql) -- do not edit by hand
+
+IF SCHEMA_ID(N'cfg') IS NULL EXEC (N'CREATE SCHEMA cfg');
+
+-- the customer's consent to the Invardia Support app: ONE row (Id = 1)
+IF OBJECT_ID(N'cfg.SupportConsent') IS NULL
+CREATE TABLE cfg.SupportConsent (
+    Id           TINYINT          NOT NULL CONSTRAINT PK_SupportConsent PRIMARY KEY CONSTRAINT CK_SupportConsent_One CHECK (Id = 1),
+    AppId        UNIQUEIDENTIFIER NOT NULL,
+    [Level]      NVARCHAR(16)     NOT NULL CONSTRAINT CK_SupportConsent_Level CHECK ([Level] IN (N'troubleshoot', N'setup')),
+    Source       NVARCHAR(16)     NOT NULL CONSTRAINT CK_SupportConsent_Source CHECK (Source IN (N'customer', N'derived')),
+    ConsentedBy  NVARCHAR(256)    NOT NULL,
+    ConsentedUtc DATETIME2(0)     NOT NULL CONSTRAINT DF_SupportConsent_ConsentedUtc DEFAULT SYSUTCDATETIME()
+);
+
+-- the journal of every open, close and expiry
+IF OBJECT_ID(N'cfg.SupportGrant') IS NULL
+CREATE TABLE cfg.SupportGrant (
+    EntryId      BIGINT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_SupportGrant PRIMARY KEY,
+    GrantId      UNIQUEIDENTIFIER NOT NULL,
+    Action       NVARCHAR(8)      NOT NULL CONSTRAINT CK_SupportGrant_Action CHECK (Action IN (N'open', N'close', N'expire')),
+    LevelAsked   NVARCHAR(16)     NULL,
+    LevelGranted NVARCHAR(16)     NULL,
+    MaxUntilUtc  DATETIME2(0)     NULL,
+    Reason       NVARCHAR(200)    NULL,
+    Ticket       NVARCHAR(64)     NULL,
+    StartedBy    NVARCHAR(256)    NULL,
+    Outcome      NVARCHAR(16)     NOT NULL,
+    Detail       NVARCHAR(400)    NULL,
+    AtUtc        DATETIME2(0)     NOT NULL CONSTRAINT DF_SupportGrant_AtUtc DEFAULT SYSUTCDATETIME()
+);
+
+-- one row per role a grant holds open, written with the role change in one transaction
+IF OBJECT_ID(N'cfg.SupportJitMarker') IS NULL
+CREATE TABLE cfg.SupportJitMarker (
+    MarkerId     BIGINT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_SupportJitMarker PRIMARY KEY,
+    GrantId      UNIQUEIDENTIFIER NOT NULL,
+    RoleName     SYSNAME          NOT NULL CONSTRAINT CK_SupportJitMarker_Role CHECK (RoleName IN (N'db_owner', N'db_datareader')),
+    Sid          VARBINARY(85)    NOT NULL,
+    PreExisting  BIT              NOT NULL,
+    AddedUtc     DATETIME2(0)     NOT NULL CONSTRAINT DF_SupportJitMarker_AddedUtc DEFAULT SYSUTCDATETIME(),
+    ExpiresUtc   DATETIME2(0)     NOT NULL,
+    ClosedUtc    DATETIME2(0)     NULL,
+    CloseReason  NVARCHAR(16)     NULL
+);
+
+-- the consent is the customer's: written by the database owner (the customer's admin: Grant-SISupportAccess, the guided
+-- install), or ONCE into the empty table by the updater as a DERIVED consent (from the Support app's Key Vault role). Every
+-- other writer is refused -- the engine can never name a principal or raise a level.
+EXEC (N'CREATE OR ALTER TRIGGER cfg.TR_SupportConsent_Owner ON cfg.SupportConsent AFTER INSERT, UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) = 1 RETURN;
+    IF (NOT EXISTS (SELECT 1 FROM deleted)) AND NOT EXISTS (SELECT 1 FROM inserted WHERE Source <> N''derived'')
+       AND (SELECT COUNT(*) FROM cfg.SupportConsent) = (SELECT COUNT(*) FROM inserted)
+       AND (ISNULL(IS_ROLEMEMBER(N''si_updater''), 0) = 1 OR ISNULL(IS_ROLEMEMBER(N''db_ddladmin''), 0) = 1) RETURN;
+    THROW 51806, N''cfg.SupportConsent: the consent is written by the customer admin (Grant-SISupportAccess) only'', 1;
+END');
+
+-- si-support-grant v1: created once, never altered (that would drop its signature)
+IF OBJECT_ID(N'cfg.SupportGrantOpen') IS NULL EXEC (N'CREATE PROCEDURE cfg.SupportGrantOpen
+    @RequestId nvarchar(64), @Level nvarchar(16), @MaxUntilUtc nvarchar(40), @Reason nvarchar(400), @Ticket nvarchar(128) = NULL, @StartedBy nvarchar(256) = NULL
+AS
+BEGIN
+    -- si-support-grant v1 (SecurityInsight #1021): the Invardia Support app''s just-in-time grant. The principal is ALWAYS the Support app of
+    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most 24 hours.
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+    IF (NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N''si_support_signer%''))
+        THROW 51801, N''the support grant procedure is not signed -- Install-SISupportGrantProcedure has not run on this database'', 1;
+    DECLARE @now datetime2(0) = SYSUTCDATETIME();
+    DECLARE @until datetime2(0) = TRY_CONVERT(datetime2(0), REPLACE(REPLACE(@MaxUntilUtc, N''Z'', N''''), N''+00:00'', N''''), 126);
+    IF @Level IS NULL OR @Level NOT IN (N''troubleshoot'', N''setup'') THROW 51802, N''the level must be troubleshoot or setup'', 1;
+    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, 1442, @now) THROW 51802, N''maxUntil must be a UTC time in the next 24 hours'', 1;
+    IF LEN(LTRIM(RTRIM(ISNULL(@Reason, N'''')))) = 0 OR LEN(@Reason) > 200 THROW 51802, N''a reason of at most 200 characters is required'', 1;
+    IF TRY_CONVERT(uniqueidentifier, @RequestId) IS NULL THROW 51802, N''the request id must be a GUID'', 1;
+    DECLARE @app uniqueidentifier, @consent nvarchar(16);
+    SELECT @app = AppId, @consent = [Level] FROM cfg.SupportConsent WHERE Id = 1;
+    IF @app IS NULL THROW 51803, N''no consent: the customer has not granted the Invardia Support app access here (Grant-SISupportAccess)'', 1;
+    DECLARE @sid varbinary(85) = CONVERT(varbinary(16), @app);
+    DECLARE @uid int, @user sysname;
+    SELECT TOP (1) @uid = principal_id, @user = name FROM sys.database_principals WHERE sid = @sid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K'');
+    IF @uid IS NULL THROW 51804, N''the Invardia Support app has no database user here -- Install-SISupportGrantProcedure makes it'', 1;
+    DECLARE @granted nvarchar(16) = CASE WHEN @Level = N''setup'' AND @consent = N''setup'' THEN N''setup'' ELSE N''troubleshoot'' END;
+    DECLARE @role sysname = CASE @granted WHEN N''setup'' THEN N''db_owner'' ELSE N''db_datareader'' END;
+    DECLARE @grant uniqueidentifier = CONVERT(uniqueidentifier, @RequestId), @pre bit, @s nvarchar(400), @lk int;
+    BEGIN TRANSACTION;
+    EXEC @lk = sys.sp_getapplock @Resource = N''si-support-grant'', @LockMode = N''Exclusive'', @LockOwner = N''Transaction'', @LockTimeout = 60000;
+    IF @lk < 0 THROW 51805, N''another support grant holds the lock -- try again'', 1;
+    -- a new open extends what is open
+    UPDATE cfg.SupportJitMarker SET ExpiresUtc = @until WHERE ClosedUtc IS NULL AND ExpiresUtc < @until;
+    IF (NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND RoleName = @role AND Sid = @sid))
+    BEGIN
+        SET @pre = CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role)) THEN 1 ELSE 0 END;
+        IF @pre = 0 BEGIN SET @s = N''ALTER ROLE '' + QUOTENAME(@role) + N'' ADD MEMBER '' + QUOTENAME(@user) + N'';''; EXEC (@s); END
+        INSERT cfg.SupportJitMarker (GrantId, RoleName, Sid, PreExisting, ExpiresUtc) VALUES (@grant, @role, @sid, @pre, @until);
+    END
+    INSERT cfg.SupportGrant (GrantId, Action, LevelAsked, LevelGranted, MaxUntilUtc, Reason, Ticket, StartedBy, Outcome)
+    VALUES (@grant, N''open'', @Level, @granted, @until, LEFT(@Reason, 200), LEFT(@Ticket, 64), LEFT(@StartedBy, 256), N''granted'');
+    COMMIT TRANSACTION;
+    -- THE READ-BACK, from the catalog (never from the request)
+    SELECT DB_NAME() AS [Database], @granted AS LevelGranted, @role AS RoleName,
+           CONVERT(nvarchar(19), (SELECT MAX(ExpiresUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL), 126) + N''Z'' AS UntilUtc,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role)) THEN 1 ELSE 0 END AS RoleHeld,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N''si_support_read'')) THEN 1 ELSE 0 END AS ReadOnlyHeld;
+END');
+
+-- si-support-grant v1: created once, never altered (that would drop its signature)
+IF OBJECT_ID(N'cfg.SupportGrantClose') IS NULL EXEC (N'CREATE PROCEDURE cfg.SupportGrantClose
+    @RequestId nvarchar(64), @Reason nvarchar(400) = NULL, @StartedBy nvarchar(256) = NULL
+AS
+BEGIN
+    -- si-support-grant v1 (SecurityInsight #1021): removes ONLY what the open grant markers added (PreExisting = 0) -- never a user, never
+    -- the read-only role si_support_read, never another principal, never a membership the Support app had before the grant.
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+    IF (NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N''si_support_signer%''))
+        THROW 51801, N''the support grant procedure is not signed -- Install-SISupportGrantProcedure has not run on this database'', 1;
+    IF TRY_CONVERT(uniqueidentifier, @RequestId) IS NULL THROW 51802, N''the request id must be a GUID'', 1;
+    DECLARE @now datetime2(0) = SYSUTCDATETIME(), @s nvarchar(400), @role sysname, @sid varbinary(85), @user sysname, @n int = 0, @closed int = 0, @lk int;
+    DECLARE @todo TABLE (MarkerId bigint PRIMARY KEY, RoleName sysname, Sid varbinary(85), PreExisting bit);
+    DECLARE @gone TABLE (Sid varbinary(85) PRIMARY KEY);
+    BEGIN TRANSACTION;
+    EXEC @lk = sys.sp_getapplock @Resource = N''si-support-grant'', @LockMode = N''Exclusive'', @LockOwner = N''Transaction'', @LockTimeout = 60000;
+    IF @lk < 0 THROW 51805, N''another support grant holds the lock -- try again'', 1;
+    INSERT @todo (MarkerId, RoleName, Sid, PreExisting) SELECT MarkerId, RoleName, Sid, PreExisting FROM cfg.SupportJitMarker WITH (UPDLOCK) WHERE ClosedUtc IS NULL;
+    SET @closed = @@ROWCOUNT;
+    -- a role is removed only when a closing marker ADDED it and no marker that stays open holds the same role
+    DECLARE c CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT t.RoleName, t.Sid FROM @todo AS t
+        WHERE t.PreExisting = 0 AND t.RoleName IN (N''db_owner'', N''db_datareader'')
+          AND NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker AS k WHERE k.ClosedUtc IS NULL AND k.RoleName = t.RoleName AND k.Sid = t.Sid
+                          AND NOT EXISTS (SELECT 1 FROM @todo AS x WHERE x.MarkerId = k.MarkerId));
+    OPEN c; FETCH NEXT FROM c INTO @role, @sid;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @user = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = @sid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K''));
+        IF @user IS NOT NULL AND EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = DATABASE_PRINCIPAL_ID(@user) AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role))
+        BEGIN
+            SET @s = N''ALTER ROLE '' + QUOTENAME(@role) + N'' DROP MEMBER '' + QUOTENAME(@user) + N'';''; EXEC (@s); SET @n = @n + 1;
+            IF (NOT EXISTS (SELECT 1 FROM @gone WHERE Sid = @sid)) INSERT @gone (Sid) VALUES (@sid);
+        END
+        FETCH NEXT FROM c INTO @role, @sid;
+    END
+    CLOSE c; DEALLOCATE c;
+    UPDATE m SET ClosedUtc = @now, CloseReason = N''closed'' FROM cfg.SupportJitMarker AS m JOIN @todo AS t ON t.MarkerId = m.MarkerId;
+    INSERT cfg.SupportGrant (GrantId, Action, Reason, StartedBy, Outcome, Detail) VALUES (CONVERT(uniqueidentifier, @RequestId), N''close'', LEFT(@Reason, 200), LEFT(@StartedBy, 256), N''revoked'', CONVERT(nvarchar(20), @closed) + N'' open marker(s) closed, '' + CONVERT(nvarchar(20), @n) + N'' role membership(s) removed'');
+    COMMIT TRANSACTION;
+    -- the Support app''s open sessions end with its grant (a role change reaches a session only when it signs in again).
+    -- Best effort: a session that cannot be ended is counted, never a failure.
+    DECLARE @spid int, @ended int = 0, @notEnded int = 0;
+    DECLARE k CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT s.session_id FROM sys.dm_exec_sessions AS s JOIN @gone AS g ON s.original_security_id = g.Sid OR s.security_id = g.Sid WHERE s.session_id <> @@SPID;
+    OPEN k; FETCH NEXT FROM k INTO @spid;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY SET @s = N''KILL '' + CONVERT(nvarchar(12), @spid) + N'';''; EXEC (@s); SET @ended = @ended + 1; END TRY
+        BEGIN CATCH SET @notEnded = @notEnded + 1; END CATCH
+        FETCH NEXT FROM k INTO @spid;
+    END
+    CLOSE k; DEALLOCATE k;
+    -- THE READ-BACK (4a): what is still open, and whether the Support app still has its read-only access
+    DECLARE @app uniqueidentifier = (SELECT AppId FROM cfg.SupportConsent WHERE Id = 1);
+    DECLARE @asid varbinary(85) = CASE WHEN @app IS NULL THEN (SELECT TOP (1) Sid FROM @todo) ELSE CONVERT(varbinary(16), @app) END;
+    DECLARE @auid int = (SELECT TOP (1) principal_id FROM sys.database_principals WHERE sid = @asid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K''));
+    SELECT DB_NAME() AS [Database], @closed AS Closed, @n AS RolesRemoved, @ended AS SessionsEnded, @notEnded AS SessionsNotEnded,
+           (SELECT COUNT(*) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL) AS StillOpen,
+           CONVERT(nvarchar(19), (SELECT MAX(ExpiresUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL), 126) + N''Z'' AS UntilUtc,
+           (SELECT COUNT(*) FROM @todo AS t JOIN sys.database_principals AS u ON u.sid = t.Sid AND u.principal_id > 4
+              JOIN sys.database_role_members AS m ON m.member_principal_id = u.principal_id AND m.role_principal_id = DATABASE_PRINCIPAL_ID(t.RoleName)
+             WHERE t.PreExisting = 0 AND NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker AS o WHERE o.ClosedUtc IS NULL AND o.RoleName = t.RoleName AND o.Sid = t.Sid)) AS RolesStillHeld,
+           CASE WHEN @auid IS NULL THEN 0 ELSE 1 END AS UserPresent,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @auid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N''si_support_read'')) THEN 1 ELSE 0 END AS ReadOnlyHeld;
+END');
+
+-- si-support-grant v1: created once, never altered (that would drop its signature)
+IF OBJECT_ID(N'cfg.SupportGrantSweep') IS NULL EXEC (N'CREATE PROCEDURE cfg.SupportGrantSweep
+    @By nvarchar(64) = NULL
+AS
+BEGIN
+    -- si-support-grant v1 (SecurityInsight #1021): removes ONLY what the open grant markers added (PreExisting = 0) -- never a user, never
+    -- the read-only role si_support_read, never another principal, never a membership the Support app had before the grant.
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+    IF (NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N''si_support_signer%''))
+        THROW 51801, N''the support grant procedure is not signed -- Install-SISupportGrantProcedure has not run on this database'', 1;
+    DECLARE @now datetime2(0) = SYSUTCDATETIME(), @s nvarchar(400), @role sysname, @sid varbinary(85), @user sysname, @n int = 0, @closed int = 0, @lk int;
+    DECLARE @todo TABLE (MarkerId bigint PRIMARY KEY, RoleName sysname, Sid varbinary(85), PreExisting bit);
+    DECLARE @gone TABLE (Sid varbinary(85) PRIMARY KEY);
+    BEGIN TRANSACTION;
+    EXEC @lk = sys.sp_getapplock @Resource = N''si-support-grant'', @LockMode = N''Exclusive'', @LockOwner = N''Transaction'', @LockTimeout = 60000;
+    IF @lk < 0 THROW 51805, N''another support grant holds the lock -- try again'', 1;
+    INSERT @todo (MarkerId, RoleName, Sid, PreExisting) SELECT MarkerId, RoleName, Sid, PreExisting FROM cfg.SupportJitMarker WITH (UPDLOCK) WHERE ClosedUtc IS NULL AND ExpiresUtc <= @now;
+    SET @closed = @@ROWCOUNT;
+    -- a role is removed only when a closing marker ADDED it and no marker that stays open holds the same role
+    DECLARE c CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT t.RoleName, t.Sid FROM @todo AS t
+        WHERE t.PreExisting = 0 AND t.RoleName IN (N''db_owner'', N''db_datareader'')
+          AND NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker AS k WHERE k.ClosedUtc IS NULL AND k.RoleName = t.RoleName AND k.Sid = t.Sid
+                          AND NOT EXISTS (SELECT 1 FROM @todo AS x WHERE x.MarkerId = k.MarkerId));
+    OPEN c; FETCH NEXT FROM c INTO @role, @sid;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @user = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = @sid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K''));
+        IF @user IS NOT NULL AND EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = DATABASE_PRINCIPAL_ID(@user) AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role))
+        BEGIN
+            SET @s = N''ALTER ROLE '' + QUOTENAME(@role) + N'' DROP MEMBER '' + QUOTENAME(@user) + N'';''; EXEC (@s); SET @n = @n + 1;
+            IF (NOT EXISTS (SELECT 1 FROM @gone WHERE Sid = @sid)) INSERT @gone (Sid) VALUES (@sid);
+        END
+        FETCH NEXT FROM c INTO @role, @sid;
+    END
+    CLOSE c; DEALLOCATE c;
+    UPDATE m SET ClosedUtc = @now, CloseReason = N''expired'' FROM cfg.SupportJitMarker AS m JOIN @todo AS t ON t.MarkerId = m.MarkerId;
+    IF @closed > 0 INSERT cfg.SupportGrant (GrantId, Action, Reason, StartedBy, Outcome, Detail) VALUES (NEWID(), N''expire'', N''maxUntil passed'', LEFT(@By, 256), N''revoked'', CONVERT(nvarchar(20), @closed) + N'' open marker(s) expired, '' + CONVERT(nvarchar(20), @n) + N'' role membership(s) removed'');
+    COMMIT TRANSACTION;
+    -- the Support app''s open sessions end with its grant (a role change reaches a session only when it signs in again).
+    -- Best effort: a session that cannot be ended is counted, never a failure.
+    DECLARE @spid int, @ended int = 0, @notEnded int = 0;
+    DECLARE k CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT s.session_id FROM sys.dm_exec_sessions AS s JOIN @gone AS g ON s.original_security_id = g.Sid OR s.security_id = g.Sid WHERE s.session_id <> @@SPID;
+    OPEN k; FETCH NEXT FROM k INTO @spid;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY SET @s = N''KILL '' + CONVERT(nvarchar(12), @spid) + N'';''; EXEC (@s); SET @ended = @ended + 1; END TRY
+        BEGIN CATCH SET @notEnded = @notEnded + 1; END CATCH
+        FETCH NEXT FROM k INTO @spid;
+    END
+    CLOSE k; DEALLOCATE k;
+    -- THE READ-BACK (4a): what is still open, and whether the Support app still has its read-only access
+    DECLARE @app uniqueidentifier = (SELECT AppId FROM cfg.SupportConsent WHERE Id = 1);
+    DECLARE @asid varbinary(85) = CASE WHEN @app IS NULL THEN (SELECT TOP (1) Sid FROM @todo) ELSE CONVERT(varbinary(16), @app) END;
+    DECLARE @auid int = (SELECT TOP (1) principal_id FROM sys.database_principals WHERE sid = @asid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K''));
+    SELECT DB_NAME() AS [Database], @closed AS Closed, @n AS RolesRemoved, @ended AS SessionsEnded, @notEnded AS SessionsNotEnded,
+           (SELECT COUNT(*) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL) AS StillOpen,
+           CONVERT(nvarchar(19), (SELECT MAX(ExpiresUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL), 126) + N''Z'' AS UntilUtc,
+           (SELECT COUNT(*) FROM @todo AS t JOIN sys.database_principals AS u ON u.sid = t.Sid AND u.principal_id > 4
+              JOIN sys.database_role_members AS m ON m.member_principal_id = u.principal_id AND m.role_principal_id = DATABASE_PRINCIPAL_ID(t.RoleName)
+             WHERE t.PreExisting = 0 AND NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker AS o WHERE o.ClosedUtc IS NULL AND o.RoleName = t.RoleName AND o.Sid = t.Sid)) AS RolesStillHeld,
+           CASE WHEN @auid IS NULL THEN 0 ELSE 1 END AS UserPresent,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @auid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N''si_support_read'')) THEN 1 ELSE 0 END AS ReadOnlyHeld;
+END');
+
+-- si-support-grant v1: created once, never altered (that would drop its signature)
+IF OBJECT_ID(N'cfg.SupportGrantStatus') IS NULL EXEC (N'CREATE PROCEDURE cfg.SupportGrantStatus
+AS
+BEGIN
+    -- si-support-grant v1 (SecurityInsight #1021): READ ONLY -- the Support app''s access in this database, for the heartbeat and the job.
+    SET NOCOUNT ON;
+    DECLARE @now datetime2(0) = SYSUTCDATETIME(), @app uniqueidentifier, @consent nvarchar(16), @sid varbinary(85), @uid int;
+    SELECT @app = AppId, @consent = [Level] FROM cfg.SupportConsent WHERE Id = 1;
+    IF @app IS NOT NULL SET @sid = CONVERT(varbinary(16), @app);
+    SELECT TOP (1) @uid = principal_id FROM sys.database_principals WHERE sid = @sid AND principal_id > 4 AND type NOT IN (''R'', ''A'', ''C'', ''K'');
+    SELECT DB_NAME() AS [Database],
+           CASE WHEN EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N''si_support_signer%'') THEN 1 ELSE 0 END AS Signed,
+           @consent AS Consent,
+           CASE WHEN @uid IS NULL THEN 0 ELSE 1 END AS UserPresent,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N''si_support_read'')) THEN 1 ELSE 0 END AS ReadOnlyHeld,
+           (SELECT COUNT(*) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL) AS JitOpen,
+           CONVERT(nvarchar(19), (SELECT MAX(ExpiresUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL), 126) + N''Z'' AS JitUntilUtc,
+           CASE WHEN EXISTS (SELECT 1 FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND RoleName = N''db_owner'') THEN N''setup''
+                WHEN EXISTS (SELECT 1 FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL) THEN N''troubleshoot'' ELSE NULL END AS JitLevel,
+           (SELECT COUNT(*) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND ExpiresUtc <= @now) AS JitOverdue,
+           CASE WHEN @uid IS NOT NULL AND EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N''db_owner''))
+                 AND NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND RoleName = N''db_owner'' AND PreExisting = 0) THEN 1 ELSE 0 END AS StandingOwner;
+END');
+
+-- <<< GENERATED SUPPORT GRANT
+
 -- >>> GENERATED CONFIG JOURNAL (engine\pro-settings\Build-SIConfigJournalSql.ps1 from config\config-entities.locked.json) -- do not edit by hand
 
 -- the journal of setting (cfg.Setting)

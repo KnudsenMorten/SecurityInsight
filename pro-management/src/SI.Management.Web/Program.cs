@@ -96,6 +96,9 @@ else
     builder.Services.AddSingleton<IGroupMembershipSource>(sp => sp.GetRequiredService<NoDirectoryLookup>());
     builder.Services.AddSingleton<IDirectoryNames>(sp => sp.GetRequiredService<NoDirectoryLookup>());
 }
+// #999: the sign-in carry-over follows the carry-over at start's one-install rule (Auth/AccessCarryOver.cs)
+builder.Services.AddSingleton(sp => new SignInAppSharing(sp.GetRequiredService<IDirectoryNames>(), builder.Configuration["AzureAd:ClientId"] ?? "",
+    sp.GetRequiredService<ILogger<SignInAppSharing>>()));
 builder.Services.AddTransient<IClaimsTransformation, AccessClaimsTransformation>();
 
 builder.Services.AddAuthorization(o =>
@@ -122,6 +125,18 @@ builder.Services.AddSingleton<IAuthorizationHandler, AnyAccessHandler>();
 // #765: the Entra app role holders carried over into SecurityInsight's access table at start (people who never sign in,
 // and groups) -- once, through the same idempotent statement the sign-in uses; only when the directory lookup is on
 builder.Services.AddHostedService<AccessCarryOverAtStart>();
+// PER-CALLER LIMITS on the chat's questions (POST /Chat, its panel's Ask): each person at most ChatLimits:Concurrent questions
+// at once and ChatLimits:PerMinute a minute -- past either 429, so one person can never hold the shared Pro database or the
+// customer's Azure OpenAI deployment (Core/CallerLimits.cs; reading the page is never limited)
+var chatPerMinute = builder.Configuration.GetValue("ChatLimits:PerMinute", SI.Management.Core.CallerLimits.DefaultChatPerMinute);
+var chatConcurrent = builder.Configuration.GetValue("ChatLimits:Concurrent", SI.Management.Core.CallerLimits.DefaultChatConcurrent);
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.GlobalLimiter = SI.Management.Core.CallerLimits.Create<HttpContext>(ChatLimits.KeyOf, chatPerMinute, chatConcurrent);
+});
+// #990: a person whose view is limited to some departments reaches only the pages that apply that limit (Auth/DepartmentScopePageFilter.cs)
+builder.Services.AddSingleton<DepartmentScopePageFilter>();
 
 builder.Services.AddRazorPages(o =>
 {
@@ -134,6 +149,7 @@ builder.Services.AddRazorPages(o =>
             && !string.Equals(m.ViewEnginePath, "/Admin/DataHealth", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(m.ViewEnginePath, "/Admin/Performance", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(m.ViewEnginePath, "/Admin/DataQuality", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(m.ViewEnginePath, "/Admin/CorrelationSuspects", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(m.ViewEnginePath, "/Admin/QuerySplitting", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(m.ViewEnginePath, "/Admin/RunHealth/Reports", StringComparison.OrdinalIgnoreCase))
             m.EndpointMetadata.Add(new AuthorizeAttribute(Policies.Admin));
@@ -151,6 +167,8 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AuthorizePage("/Admin/Performance", Policies.Management);
     // #577: the data-quality warnings (Operations > Data quality) -- readers see them; Re-run from here is Admin (its handler checks it, like Admin > Jobs)
     o.Conventions.AuthorizePage("/Admin/DataQuality", Policies.Management);
+    // #1053: the correlation suspects (Operations > Correlation suspects) -- readers see them; a decision is Admin (its handlers check it)
+    o.Conventions.AuthorizePage("/Admin/CorrelationSuspects", Policies.Management);
     // #640: the Risk Analysis bucket counts (Operations > Risk Analysis query splitting) -- readers see them; a reset is Admin (its handler checks it)
     o.Conventions.AuthorizePage("/Admin/QuerySplitting", Policies.Management);
     // #641: every report of a Risk Analysis run with its verdict -- readers may view it (the run's report to Invardia links here)
@@ -226,7 +244,9 @@ builder.Services.AddRazorPages(o =>
 .AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Audit.AuditPageFilter>())
 // ONE WEB APP, BOTH VERSIONS (owner 2026-10-18): a paid page or handler without a Pro licence is refused HERE, server side, on
 // every request (Licensing/ProFeatures.cs) -- after the audit filter, so a refused change is on the audit trail as refused.
-.AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Licensing.ProFeaturePageFilter>());
+.AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Licensing.ProFeaturePageFilter>())
+// #990: department-limited people: only the pages on the department-safe list (403 on every other page, fail closed)
+.AddMvcOptions(m => m.Filters.AddService<DepartmentScopePageFilter>());
 builder.Services.AddSingleton(_ => SI.Management.Web.Audit.AuditActions.Default);
 builder.Services.AddSingleton<SI.Management.Web.Audit.AuditHealth>();
 builder.Services.AddSingleton<SI.Management.Web.Audit.IAuditWriter, SI.Management.Web.Audit.SqlAuditWriter>();
@@ -307,6 +327,19 @@ builder.Services.AddDataProtection().SetApplicationName("SecurityInsight Pro");
 if (AzureSqlExecutor.IsConfigured(estate))
     builder.Services.AddOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>()
         .Configure<ISqlExecutor, ILoggerFactory>((o, sql, lf) => o.XmlRepository = new SqlKeyRing(sql, lf.CreateLogger<SqlKeyRing>()));
+// The stored keys are ENCRYPTED with a Key Vault key only the web app's identity may use (Auth/KeyRingProtection.cs; the
+// updater creates the key, grants it and sets DataProtection__KeyVaultKeyId). Not set = the keys are stored as before.
+var keyRingKeyId = builder.Configuration["DataProtection:KeyVaultKeyId"];
+if (!string.IsNullOrWhiteSpace(keyRingKeyId) && KeyVaultKeyRingWrapper.IsKeyId(keyRingKeyId))
+{
+    builder.Services.AddSingleton<IKeyRingKeyWrapper>(sp => new KeyVaultKeyRingWrapper(sp.GetRequiredService<Azure.Core.TokenCredential>(), keyRingKeyId.Trim()));
+    builder.Services.AddOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>()
+        .Configure<IServiceProvider>((o, sp) => o.XmlEncryptor = new WrappedKeyXmlEncryptor(sp.GetRequiredService<IKeyRingKeyWrapper>()));
+    builder.Services.AddHostedService(sp => new KeyRingRotation(sp.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.IKeyManager>(),
+        sp.GetRequiredService<IKeyRingKeyWrapper>(),
+        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>>().Value.XmlRepository,
+        sp.GetRequiredService<ILogger<KeyRingRotation>>()));
+}
 
 builder.Services.AddSingleton(sp =>
 {
@@ -400,6 +433,10 @@ builder.Services.AddSingleton<RulePackStore>();
 builder.Services.AddSingleton<CiOverrideStore>();
 builder.Services.AddSingleton<CiOverrideChanges>();
 builder.Services.AddSingleton<IStagedChangeHandler>(sp => sp.GetRequiredService<CiOverrideChanges>());
+// #1053 the correlation gatekeeper: its suspects (sidata.CiSuspect) and a person's decisions about them, through Review & commit
+builder.Services.AddSingleton<CorrelationSuspectStore>();
+builder.Services.AddSingleton<CorrelationDecisionChanges>();
+builder.Services.AddSingleton<IStagedChangeHandler>(sp => sp.GetRequiredService<CorrelationDecisionChanges>());
 builder.Services.AddSingleton<TemplateConformance>();
 builder.Services.AddSingleton<ConnectorRepository>();
 // The deviation report (Admin > Deviations): read-only; CSV and Excel export.
@@ -604,6 +641,8 @@ builder.Services.AddSingleton<SI.Management.Web.GetStarted.GetStartedService>();
 // MAIL-2 notifications + the daily Get Started reminder, ENV-REPORT-1, CONFIG-IO-1 (Notify/WebFeatureServices.cs)
 SI.Management.Web.Notify.WebFeatureServices.AddWebFeatures(builder.Services, builder.Configuration);
 var app = builder.Build();
+// #997: a page never shows a database's or a service's error text -- it says what failed with a reference, logged here
+SI.Management.Web.ViewerError.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SI.ViewerError");
 
 app.UseForwardedHeaders();
 // CR7 Option A: behind the front a redeemed link browses under /MagicLink/s/ with its own session (Auth/LinkArea.cs)
@@ -641,7 +680,11 @@ if (signinFront) LinkArea.UseLinkAreaEndpointGate(app);
 // the slowest statement's shape) -- after routing, so the route is known; static files and the health probe are not timed.
 app.UsePageTiming();
 app.UseAuthentication();
+// #993: without the sign-in front a link session (one-page magic link, department sign-in link) shares the app's cookie --
+// it reaches only what it reaches behind the front (Auth/LinkArea.cs), never a route left on the fallback policy
+if (!signinFront) LinkArea.UseLinkPrincipalEndpointGate(app);
 app.UseAuthorization();
+app.UseRateLimiter();
 // #636: an old address of a retired page, opened in a browser, opens the page / named view that replaced it
 app.Use((ctx, next) => SI.Management.Web.Navigation.RetiredPages.Middleware(ctx, () => next()));
 app.UseStaticFiles();   // after authorization on purpose: the fallback policy covers the assets too

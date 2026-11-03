@@ -46,7 +46,8 @@ public sealed class RequestModel : PageModel
     /// Everyone who may decide at least one of the requests -- the requester may name one of them.
     public IReadOnlyList<string> Approvers => Groups.SelectMany(g => g.Deciders).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
     public IReadOnlyList<ExemptionWorkflow.RequestGroup> MineToDecide => Groups.Where(g => ExemptionWorkflow.CanDecide(User, Roster, g.Domain, g.Category)).ToList();
-    public bool MayApproveAny => MineToDecide.Count > 0;
+    /// #996: "Approve now" approves one's own request -- offered only where the install allows self-approval.
+    public bool MayApproveAny => Settings.AllowSelfApproval && MineToDecide.Count > 0;
     public string Back => Source == FromRows
         ? (Get("from") is { } p && p.StartsWith("/Collection/", StringComparison.Ordinal) ? p : "/Collection/Rows") + "?" + Query(k => k is not ("src" or "all" or "from"))
         : "/Findings?" + Query(k => FindingKeys.Contains(k));
@@ -90,11 +91,11 @@ public sealed class RequestModel : PageModel
             await AuditBulkRefusalAsync();
             if (Items.Count == 0 && Error is null) Error = All ? "No finding matches this filter." : "Select at least one finding first.";
         }
-        catch (ArgumentException ex) { Error = "The selection is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The selection is not valid: " + ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "resolving the findings of an exemption request failed");
-            Error = "The selected findings could not be read: " + ex.Message;
+            Error = "The selected findings could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -147,6 +148,10 @@ public sealed class RequestModel : PageModel
         var schema = HttpContext?.RequestServices.GetService<IExemptedSchema>();
         using var _ = SI.Management.Core.ProData.Exempted.Use(schema is not null && await schema.ReadyAsync(ct) ? SI.Management.Core.ProData.ExemptedScope.Exclude : null);
         var max = All ? Math.Min(ExemptionWorkflow.MaxItems, Settings.BulkMax) : ExemptionWorkflow.MaxItems;
+        // #990: a person whose view is limited to some departments requests only findings of those departments -- every
+        // read below carries that limit (the rows grid, the filter, each selected finding)
+        var mine = await DepartmentsAsync(ct);
+        var vis = mine.Rows;
         if (Source == FromRows)
         {
             var cols = (await _views.CollectionsAsync(ct)).Data;
@@ -161,9 +166,17 @@ public sealed class RequestModel : PageModel
             var key = Get("key");
             if (All && filters.Count == 0 && string.IsNullOrWhiteSpace(Get("q")) && string.IsNullOrWhiteSpace(key))
                 return Refuse(ExemptionBulkGuard.Check(false, 0, max).Reason!, 0);
-            var q = new GridQuery(CollectionViewSql.Rows,
-                new Dictionary<string, object?> { ["CollectionId"] = cur.CollectionId, ["AssetKey"] = key is null ? null : ProDataFilters.AssetKey(key) },
-                cur.Version, new GridRequest { Search = Get("q"), Filters = filters, Selected = sel, Size = 50 });
+            var spec = CollectionViewSql.Rows;
+            var parameters = new Dictionary<string, object?> { ["CollectionId"] = cur.CollectionId, ["AssetKey"] = key is null ? null : ProDataFilters.AssetKey(key) };
+            var scope = cur.Version;
+            if (vis is not null)
+            {
+                if (!DepartmentScope.CanRestrict(spec)) { Error = "This view cannot be limited to your departments."; return (Array.Empty<FindingRef>(), 0); }
+                spec = DepartmentScope.Restrict(spec, vis);
+                foreach (var kv in vis.Parameters) parameters[kv.Key] = kv.Value;
+                scope += "|" + vis.Key;
+            }
+            var q = new GridQuery(spec, parameters, scope, new GridRequest { Search = Get("q"), Filters = filters, Selected = sel, Size = 50 });
             var page = (await _views.ExportAsync(q, ct)).Data;
             if (All && ExemptionBulkGuard.Check(true, page.Total, max) is { Allowed: false } v && page.Total > 0) return Refuse(v.Reason!, page.Total);
             if (page.Total > max) { Error = $"{Fmt.Int(page.Total)} findings match -- at most {Fmt.Int(max)} can be requested at once. Narrow the filter."; return (Array.Empty<FindingRef>(), page.Total); }
@@ -181,6 +194,7 @@ public sealed class RequestModel : PageModel
                 CollectionId = c2, Tier = Get("tier"), Severity = Get("sev"), Domain = Get("dom"), Report = Get("rep"), AssetKind = Get("kind"), Text = Get("q"),
                 // #855 the lifecycle the findings browser listed (default active)
                 Lifecycle = SI.Management.Core.ProData.LifecycleFilter.Parse(new[] { Get("lifecycle") }),
+                Visibility = vis is null ? null : new VisibilityPredicate(vis.Sql, vis.Parameters),
             });
             var rows = (await _findings.ExportAsync(f, max + 1, ct)).Data;
             if (rows.Count > max) return Refuse(ExemptionBulkGuard.Check(true, rows.Count, max).Reason!.Replace(Fmt.Int(rows.Count) + " findings match", "More than " + Fmt.Int(max) + " findings match"), rows.Count);
@@ -188,8 +202,36 @@ public sealed class RequestModel : PageModel
         }
         var list = new List<FindingRef>();
         foreach (var id in GetAll("sel").Distinct().Take(GridSql.MaxSelected))
-            if ((await _findings.FindingAsync(c2, id, ct)).Data is { } d) list.Add(Ref(d.Finding));
+            if ((await _findings.FindingAsync(c2, id, ct)).Data is { } d && await SeesAsync(mine, d.Finding, ct)) list.Add(Ref(d.Finding));
         return (list, list.Count);
+    }
+
+    /// #990: the departments the signed-in person sees (the resolver every department-scoped page asks). Without a
+    /// resolver, the role framework's predicate alone.
+    private async Task<SI.Management.Web.Departments.DepartmentAccess> DepartmentsAsync(CancellationToken ct)
+    {
+        if (HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.IDepartmentScopeResolver>() is { } resolver) return await resolver.ResolveAsync(User, ct);
+        var p = HttpContext?.RequestServices.GetService<IAccessScope>()?.Visibility(User);
+        return p is null ? SI.Management.Web.Departments.DepartmentAccess.Everything
+            : new SI.Management.Web.Departments.DepartmentAccess(false, Array.Empty<int>(), RowVisibility.From(p, Array.Empty<int>()));
+    }
+
+    /// #990: may this person request this one finding? Unlimited: yes. Limited: only when the finding's department (the
+    /// one the data sync stamped) is one of theirs. FAIL CLOSED: no governance store or an unreadable department = no.
+    private async Task<bool> SeesAsync(SI.Management.Web.Departments.DepartmentAccess mine, FindingRow f, CancellationToken ct)
+    {
+        if (mine.Unrestricted) return true;
+        if (HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.GovernanceService>() is not { } gov) return false;
+        try
+        {
+            var dept = await gov.Repository.FindingDepartmentAsync(f.CollectionId, f.FindingId, ct);
+            return dept?.DepartmentId is { } d && mine.Sees(d);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "the finding's department could not be read; a department-limited person does not request it");
+            return false;
+        }
     }
 
     private static FindingRef Ref(FindingRow r) => new(r.FindingId, r.AssetKey, r.AssetName, r.ReportName, r.Cve, r.ConfigurationId, r.SecurityDomain, r.Title, r.Category);

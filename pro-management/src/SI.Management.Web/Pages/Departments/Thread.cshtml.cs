@@ -57,7 +57,7 @@ public sealed class ThreadModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "finding thread");
-            Error = "The finding could not be read from the Pro database: " + ex.Message;
+            Error = "The finding could not be read from the Pro database: " + ViewerError.Text(ex);
             return null;
         }
         if (Facts is not null)

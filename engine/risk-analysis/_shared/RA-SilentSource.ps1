@@ -20,6 +20,10 @@
         result and nothing of it closes (the per-report freeze: sidata.RaReportStatus NotComplete, scope 'reports',
         Resolve-SIReportScopedComplete). A WARNING every run says which table, its last non-zero count and date, which
         reports are held, and what an Admin can do when the feature was really retired (switch the reports off);
+      * the report evidence of a table without a counted row (#958): judged only on the table's first count, or while a
+        silence stored on such evidence lasts; and only from a report that has no rows NOW (a report that still has rows
+        while the table counts 0 took them from another source -- it is no evidence the table went silent). A table counted
+        before that never had a row and is not silent is always empty;
       * a table that was always empty is never silent (a feature the customer does not use); a report that goes to 0
         while its tables still have rows closes as usual (everything fixed);
       * the count of a route cannot be had (it failed, it timed out): the FALLBACK holds a report reading a table of that
@@ -235,7 +239,8 @@ function Resolve-RASilentSources {
           rows now               -> not silent; its last non-zero count is now; a silence ends (Back)
           0, had rows before     -> SILENT (its last non-zero count and date said), until it has rows again
           0, no counted row ever, a report reading it had rows at its previous complete run -> SILENT (that report's rows
-                                    said) -- judged again EVERY run, also when a silence is stored (coordinator 2026-10-26)
+                                    said) -- judged again EVERY run while such a silence is stored (coordinator 2026-10-26);
+                                    which tables get -Evidence, and from which reports, is Invoke-RASilentSourceCheck's (#958)
           0, otherwise           -> not silent (it never had rows: a feature not in use); a stored silence ends (Back)
         @{ table -> @{ Table; Silent; Back; Note; Rows; State = @{ T; R; At; NzR; NzAt; Ss; Sn } } }
     #>
@@ -250,7 +255,7 @@ function Resolve-RASilentSources {
         $nzAt = ConvertTo-RASourceTimeText (& $val $p 'LastNonZeroAt') -FromDb
         $ss = ConvertTo-RASourceTimeText (& $val $p 'SilentSince') -FromDb
         $sn = & $val $p 'SilentNote'; if ($sn -is [System.DBNull]) { $sn = $null }
-        $silent = $false; $back = $false; $note = ''
+        $silent = $false; $back = $false; $note = ''; $released = $false
         if ($c -gt 0) {
             $back = ($null -ne $ss)
             $nzR = $c; $nzAt = $now; $ss = $null; $sn = $null
@@ -271,10 +276,11 @@ function Resolve-RASilentSources {
         } else {
             # never had a counted row and no report had rows at its previous run: not silent -- a silence stored without
             # one (the first-count rule before 2026-10-26) is released here
-            $back = ($null -ne $ss)
+            $back = ($null -ne $ss); $released = $back
             $ss = $null; $sn = $null
         }
-        $out[$t] = [pscustomobject]@{ Table = $t; Silent = $silent; Back = $back; Note = $note; Rows = $c
+        # Released: a stored silence ended WITHOUT rows (no evidence holds it any more) -- said as such, never as "rows again"
+        $out[$t] = [pscustomobject]@{ Table = $t; Silent = $silent; Back = $back; Released = $released; Note = $note; Rows = $c
             State = [ordered]@{ T = $t; R = [string]$c; At = (ConvertTo-RASourceTimeText $now); NzR = $(if ($null -ne $nzR) { [string][long]$nzR } else { '' })
                                 NzAt = (ConvertTo-RASourceTimeText $nzAt); Ss = (ConvertTo-RASourceTimeText $ss); Sn = $(if ($sn) { [string]$sn } else { '' }) } }
     }
@@ -349,12 +355,12 @@ function Invoke-RASilentSourceCheck {
         Invoke-RASourceCounts) against what is stored, writes each counted table's state, and answers the reports to hold
         (Get-RASilentSourceHolds) with the warning lines. -Invoke the database seam; -TimeText / -Grain this collection.
         Never throws: a database that cannot be read or written holds nothing and says so.
-        @{ Holds; Warnings; Tables; Back; Error }
+        @{ Holds; Warnings; Tables; Back; Released; Error } -- Released: the tables of Back whose silence ended without rows
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$TimeText, [Parameter(Mandatory)][string]$Grain, [hashtable]$Map = @{}, $Counts,
           [datetime]$NowUtc = [datetime]::UtcNow, [scriptblock]$Log, [hashtable]$Accepted = @{})
     # -Accepted (#902 (5)): report -> the tables an Admin accepted as empty for it (the active acceptances of this run)
-    $out = [pscustomobject]@{ Holds = @(); Warnings = @(); Tables = @{}; Back = @(); Error = '' }
+    $out = [pscustomobject]@{ Holds = @(); Warnings = @(); Tables = @{}; Back = @(); Released = @(); Error = '' }
     try {
         if ($null -eq $Counts -or -not @($Map.Keys).Count) { return $out }
         $rows = { param($sql, $p) @(& $Invoke $sql $p 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) }
@@ -372,12 +378,25 @@ function Invoke-RASilentSourceCheck {
         # the evidence for a table never counted before: a report reading it had rows at its PREVIOUS complete run of this
         # grain (live 2026-10-26: "had rows 11 days ago" held a sign-in report whose table was never exported -- rows long
         # ago are no evidence the table just went silent)
+        # #958 (live 2026-10-30: a break-glass report held for good): evidence is judged ONLY for a table on its FIRST count
+        # (nothing stored) or one whose stored silence rests on evidence (SilentSince set, no counted non-zero value). A table
+        # that was counted before, never had a row and is not silent is ALWAYS EMPTY -- never silent until it has rows. And a
+        # report is evidence only when it has NO rows now: a report that still has rows while the table counts 0 took them
+        # from another source (the break-glass report: the account's own last sign-in in the CI, the sign-in tables empty).
         $evidence = @{}
-        $noRowsEver = { param($t) if (-not $prior.ContainsKey($t)) { return $true }; $n = & $val $prior[$t] 'LastNonZeroRows'; ($null -eq $n -or $n -is [System.DBNull] -or [long]$n -le 0) }
-        foreach ($t in @($counted | Where-Object { [long]$Counts.Counts[$_] -eq 0 -and (& $noRowsEver $_) })) {
+        $judgeByEvidence = {
+            param($t)
+            if (-not $prior.ContainsKey($t)) { return $true }
+            $n = & $val $prior[$t] 'LastNonZeroRows'
+            if (-not ($null -eq $n -or $n -is [System.DBNull] -or [long]$n -le 0)) { return $false }
+            $ssPrior = & $val $prior[$t] 'SilentSince'
+            ($null -ne $ssPrior -and -not ($ssPrior -is [System.DBNull]) -and "$ssPrior" -ne '')
+        }
+        foreach ($t in @($counted | Where-Object { [long]$Counts.Counts[$_] -eq 0 -and (& $judgeByEvidence $_) })) {
             $best = $null
             foreach ($rep in @($Map.Keys | Where-Object { @($Map[$_]) -contains $t } | Sort-Object)) {
                 $s = $status[$rep]; if ($null -eq $s) { continue }
+                $nr = & $val $s 'NowRows'; if ($null -ne $nr -and -not ($nr -is [System.DBNull]) -and [long]$nr -gt 0) { continue }
                 $er = & $val $s 'BeforeRows'; if ($null -eq $er -or $er -is [System.DBNull] -or [long]$er -le 0) { continue }
                 $ea = ConvertTo-RASourceTimeText (& $val $s 'BeforeAt') -FromDb
                 if ($null -eq $best -or ($null -ne $ea -and $ea -gt $best.At)) { $best = [pscustomobject]@{ Report = $rep; Rows = [long]$er; At = $ea } }
@@ -394,6 +413,7 @@ function Invoke-RASilentSourceCheck {
         $out.Holds = @(Get-RASilentSourceHolds -Map $Map -Tables $resolved -Unknown $unknown -Status $status -Accepted $Accepted)
         $out.Warnings = @(Get-RASilentSourceWarnings -Map $Map -Tables $resolved -Holds $out.Holds -Accepted $Accepted)
         $out.Back = @($resolved.Keys | Where-Object { $resolved[$_].Back } | Sort-Object)
+        $out.Released = @($resolved.Keys | Where-Object { $resolved[$_].Back -and $resolved[$_].Released } | Sort-Object)
     } catch {
         $out.Error = [string]$_.Exception.Message
         $out.Holds = @(); $out.Warnings = @()

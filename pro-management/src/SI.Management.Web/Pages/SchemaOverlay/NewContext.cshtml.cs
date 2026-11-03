@@ -91,7 +91,7 @@ public sealed class NewContextModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "new context: the discovery tables could not be read");
-            Error = "The list of what each source offers could not be read: " + ex.Message;
+            Error = "The list of what each source offers could not be read: " + ViewerError.Text(ex);
             return;
         }
         var promoted = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);

@@ -16,6 +16,8 @@ public static class WebFeatureServices
         services.AddSingleton<IReminderOutbox, SqlReminderOutbox>();
         services.AddSingleton<GetStartedReminderService>();
         services.AddHostedService<GetStartedReminderScheduler>();
+        // #1021: the third revoker of the Invardia Support app's just-in-time database grant (the jobs sweep too)
+        services.AddHostedService<SI.Management.Web.Support.SupportGrantSweep>();
         // ENV-REPORT-1: the Azure part through ARM (the web app's Reader on its resource group), else "not configured"
         var jobs = config.GetSection(JobsOptions.Section).Get<JobsOptions>() ?? new JobsOptions();
         if (jobs.IsConfigured) services.AddHttpClient<SI.Management.Web.EnvReport.IAzureFactsReader, SI.Management.Web.EnvReport.ArmAzureFactsReader>();

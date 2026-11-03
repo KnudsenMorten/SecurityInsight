@@ -90,11 +90,11 @@ public sealed class TrendsModel : PageModel
             try { Facets = (await _q.FacetsAsync(ct)).Data; } catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "facets"); }
             Build();
         }
-        catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "trend analytics failed");
-            Error = "The trend could not be read: " + ex.Message;
+            Error = "The trend could not be read: " + ViewerError.Text(ex);
         }
     }
 

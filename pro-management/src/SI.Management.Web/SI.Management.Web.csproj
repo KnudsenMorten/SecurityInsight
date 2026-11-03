@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <!-- the restore is LOCKED (2026-10-31): packages.lock.json is committed; the image build restores with locked-mode -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>SI.Management.Web</RootNamespace>

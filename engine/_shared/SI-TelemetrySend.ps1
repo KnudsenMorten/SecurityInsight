@@ -37,6 +37,8 @@
 if (-not (Get-Command -Name New-SITelemetryRunRecord -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-Telemetry.ps1')) }
 if (-not (Get-Command -Name New-AitUplinkReport -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'AitUplink.ps1')) }
 if (-not (Get-Command -Name Get-SITelemetryHeartbeatCounts -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-TelemetryCounts.ps1')) }
+# the install key goes ONLY to Invardia's own address (Test-SITelemetryEndpointHost)
+if (-not (Get-Command -Name Test-SITelemetryEndpointHost -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-OutboundTrust.ps1')) }
 # CR4 (#654): the guard mode on the identified heartbeat (the stricter period after a release that changed engine code)
 if (-not (Get-Command -Name ConvertTo-SIGuardModeWire -ErrorAction SilentlyContinue) -and [System.IO.File]::Exists([System.IO.Path]::Combine($PSScriptRoot, 'SI-GuardStrict.ps1'))) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-GuardStrict.ps1')) }
 # CR3 (#657): release control -- the wave and release mode on the identified heartbeat, the 30-minute release-mode reports
@@ -53,6 +55,8 @@ if (-not (Get-Command -Name Get-SITelemetryInstallEndpoints -ErrorAction Silentl
 if (-not (Get-Command -Name ConvertTo-SIUplinkReports -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-UplinkCauses.ps1')) }
 # #710 / framework 8.16: Invardia's answer names the install's environment (environmentId) -- kept for the customer mail's portal link
 if (-not (Get-Command -Name Get-SIInvardiaEnvironmentIdFromAnswer -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaPortalLink.ps1')) }
+# Invardia S16: the install's LASTING id (SI-InstallId) as InstallId on every identified record (never the anonymous id)
+if (-not (Get-Command -Name Add-SIUplinkInstallId -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaInstallId.ps1')) }
 
 function Initialize-SIAitUplinkScope {
     <# The framework client (AitUplink.ps1, kept as it is) holds its closed lists and the community endpoint at script scope.
@@ -434,7 +438,7 @@ function ConvertTo-SITelemetryWire {
 # #709 report causes and the capability probe; #718 the hourly heartbeat's collection state and pipeline progress; #719 the
 # hourly heartbeat's eight further fields, SI-HeartbeatFields.ps1)
 function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 'evidence', 'Reports', 'Capabilities', 'CiColumns', 'Licences', 'Collections', 'runProgress',
-                                          'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'supportSqlAccess', 'build') }
+                                          'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build') }
 
 function ConvertTo-SITelemetrySupportSqlAccessWire {
     <# PURE. The heartbeat's supportSqlAccess, exactly { group, dbUser, checkedUtc, healedUtc }: group / dbUser true, false or
@@ -447,7 +451,18 @@ function ConvertTo-SITelemetrySupportSqlAccessWire {
     $c = & $get 'checkedUtc'
     if ($null -eq $c -or -not "$c".Trim()) { return $null }
     try { $iso = ([datetime]$c).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } catch { return $null }
-    [pscustomobject][ordered]@{ group = (& $tri (& $get 'group')); dbUser = (& $tri (& $get 'dbUser')); checkedUtc = $iso; healedUtc = $null }
+    $o = [ordered]@{ group = (& $tri (& $get 'group')); dbUser = (& $tri (& $get 'dbUser')); checkedUtc = $iso; healedUtc = $null }
+    # #1021 (agreed with Invardia 2026-11-01): the support grant's keys are ADDED -- never in place of the four above -- and
+    # only when the heartbeat put them there (its switch SI_Uplink_SendSupportSqlAccessJit): readOnly true / false / null,
+    # jitOpen true / false, jitUntil an ISO UTC time or null
+    $has = { param($k) if ($Value -is [System.Collections.IDictionary]) { $Value.Contains($k) } else { [bool]$Value.PSObject.Properties[$k] } }
+    if ((& $has 'readOnly') -or (& $has 'jitOpen') -or (& $has 'jitUntil')) {
+        $o['readOnly'] = (& $tri (& $get 'readOnly'))
+        $o['jitOpen'] = [bool](& $tri (& $get 'jitOpen'))
+        $ju = & $get 'jitUntil'; $o['jitUntil'] = $null
+        if ($null -ne $ju -and "$ju".Trim()) { try { $o['jitUntil'] = ([datetime]$ju).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } catch { $o['jitUntil'] = $null } }
+    }
+    [pscustomobject]$o
 }
 
 function Get-SITelemetryReleaseFields {
@@ -532,6 +547,11 @@ function Send-SITelemetryRecordWithFallback {
     #>
     param([Parameter(Mandatory)]$Record, [Parameter(Mandatory)][scriptblock]$Transport, [Parameter(Mandatory)]$Context, [int]$TimeoutSec = 5,
           [scriptblock]$Invoke, [datetime]$NowUtc = [datetime]::UtcNow)
+    # Invardia S16: every IDENTIFIED record (heartbeat, run -- not the setup report) carries the install's LASTING id as
+    # InstallId; an anonymous record keeps only its own random id, and no lasting id (none / unreadable) = no field
+    if ($Record -and [string]$Context.Mode -eq 'identified' -and $Context.PSObject.Properties['LastingInstallId']) {
+        $Record = Add-SIUplinkInstallId -Record $Record -InstallId ([string]$Context.LastingInstallId)
+    }
     $r = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     # #902: a record with HOLD items (class held-last-good / held-too-long, or the hold fields) that is NOT taken goes again
     # first WITHOUT those items only -- a validator that does not know the hold contract yet never costs the real failures
@@ -555,7 +575,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'supportSqlAccess', 'build') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the status report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
@@ -696,10 +716,11 @@ function Get-SITelemetryInstallKey {
        identity. '' when there is none or it cannot be read -- the install then reports anonymously. Never throws, never
        prints the value.
        -WithReason: @{ Key; Reason } -- Reason says in plain words why there is no key ('' when there is one); it names
-       the secret and the vault, never a value. #>
-    param([switch]$WithReason)
+       the secret and the vault, never a value.
+       -Name: another secret read the same way (Invardia S16: SI-InstallId, the install's lasting id); default the install key. #>
+    param([switch]$WithReason, [string]$Name)
     if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
-    $name = (Get-SITelemetrySendState).InstallKeyName
+    $name = if ("$Name".Trim()) { "$Name".Trim() } else { (Get-SITelemetrySendState).InstallKeyName }
     $why = ''
     $key = ''
     try {
@@ -836,7 +857,10 @@ function Get-SITelemetryContext {
           # framework §8.4: the install's own links (default: Get-SITelemetryInstallEndpoints) -- identified installs only
           [AllowNull()][object[]]$Endpoints,
           # MAIL-3 (#653): the environment's name (default: Get-SITelemetryEnvironmentName) -- identified installs only
-          [AllowNull()][AllowEmptyString()][string]$EnvironmentName)
+          [AllowNull()][AllowEmptyString()][string]$EnvironmentName,
+          # Invardia S16: the install's LASTING id (SI-InstallId) -- identified installs only. Not given: read (only) from the
+          # Key Vault the install key comes from -- unless the caller gave -InstallKey, then it gives this too ('' = none)
+          [AllowNull()][AllowEmptyString()][string]$LastingInstallId)
     $injected = @($PSBoundParameters.Keys | Where-Object { $_ -ne 'Refresh' }).Count -gt 0
     if (-not $injected -and -not $Refresh -and $global:SI_TelemetryContext) { return $global:SI_TelemetryContext }
     if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }
@@ -878,14 +902,32 @@ function Get-SITelemetryContext {
                      else { ('no SecurityInsight Pro licence is in force (licence: {0}{1})' -f $(if ("$($License.Status)".Trim()) { [string]$License.Status } else { 'unknown' }), $(if ("$($License.Reason)".Trim()) { ' -- ' + [string]$License.Reason } else { '' })) })
     }
     Initialize-SIAitUplinkScope
-    $sender = Resolve-AitUplinkSender -Enabled $true -InstallKey $key -Endpoint (Get-SITelemetryEndpoint)
+    # THE INSTALL KEY GOES ONLY TO INVARDIA (https, invardia.com or a subdomain): a report address set to anything else is
+    # used ANONYMOUSLY -- the key never leaves for it -- and said once per process
+    $ep = Get-SITelemetryEndpoint
+    if ($key -and $ep) {
+        $epWhy = Test-SITelemetryEndpointHost -Endpoint $ep
+        if ($epWhy) {
+            if (-not [bool](Get-Variable -Name SI_TelemetryEndpointWarned -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) {
+                Write-Warning ('[telemetry] the report address is not Invardia''s ({0}) -- this install reports to it anonymously; its install key is sent only to Invardia' -f $epWhy)
+                $global:SI_TelemetryEndpointWarned = $true
+            }
+            $key = ''; $anonWhy = 'the report address is not Invardia''s -- the install key is sent only to Invardia'
+        }
+    }
+    $sender = Resolve-AitUplinkSender -Enabled $true -InstallKey $key -Endpoint $ep
     if ($sender.Mode -ne 'anonymous') { $anonWhy = '' }
     $dir = if ("$StateDirectory".Trim()) { $StateDirectory } else { Get-SITelemetryStateDirectory -GetEnv $GetEnv }
-    $iid = ''; $tid = ''
+    $iid = ''; $tid = ''; $lasting = ''
     if ($sender.Mode -eq 'anonymous') { $iid = Get-SITelemetryInstallId -StateDirectory $dir -GetEnv $GetEnv }
     else {
         $tid = if ($PSBoundParameters.ContainsKey('TenantId')) { $TenantId }
                elseif (Get-Command -Name Get-SIRunTenantId -ErrorAction SilentlyContinue) { try { [string](Get-SIRunTenantId) } catch { '' } } else { '' }
+        # Invardia S16: the install's LASTING id (SI-InstallId, made once by the licence knock) -- never the anonymous id
+        # above; read only, and '' (no field) when there is none, it cannot be read or it is not a GUID
+        $lasting = if ($PSBoundParameters.ContainsKey('LastingInstallId')) { ConvertTo-SIInvardiaInstallId $LastingInstallId }
+                   elseif ($PSBoundParameters.ContainsKey('InstallKey')) { '' }
+                   else { try { ConvertTo-SIInvardiaInstallId ([string](Get-SITelemetryInstallKey -Name 'SI-InstallId')) } catch { '' } }
     }
     # CR2: Version = the RELEASE this install runs (BUILD.json 'release', 3.0.0.<build number>); not known (a dev run) = the build
     # label, as before. The label itself rides as Build (the wire field `build`).
@@ -896,6 +938,8 @@ function Get-SITelemetryContext {
         Mode = $sender.Mode; Endpoint = $sender.Endpoint; AccessCode = $sender.AccessCode
         Edition = $li.Edition; LicenceState = $li.LicenceState; Version = $ver; Build = $build; Hosting = $hosting; RuntimeIdentity = $rt
         InstallId = $iid; TenantId = $tid; StateDirectory = $dir; Ring = $ring.Ring; RingSource = $ring.Source
+        # Invardia S16: the install's LASTING id (identified only; '' = none -> no field). InstallId above stays the anonymous one.
+        LastingInstallId = $lasting
         # why the install reports anonymously ('' when identified) -- said in the run's log by a caller that needs identified
         # (the data health record); never sent
         AnonymousReason = $anonWhy
@@ -912,6 +956,56 @@ function Get-SITelemetryContext {
     }
     if (-not $injected) { $global:SI_TelemetryContext = $ctx }
     $ctx
+}
+
+function Initialize-SITelemetryLastingInstallId {
+    <#
+        Invardia 2026-11-01 (S16, answer 2): THE UPLINK JOB MAKES THE LASTING ID WHEN IT IS MISSING, so every identified install
+        sends one -- also one whose licence never needed a knock. Called by the heartbeat job (Send-SIHeartbeatTick) on a tick
+        it sends. -Context: an IDENTIFIED Get-SITelemetryContext without a LastingInstallId; anything else is returned as it is.
+        The id is made by the licence knock's own code (Resolve-SIInvardiaInstallId: a GUID, written to SI-InstallId, read
+        back -- an existing value is never rewritten; when the knock and this job make it at once, the kept one wins for both).
+        FIRST WRITE WINS: with -ReadVersions { param($Name) } (the versions of SI-InstallId; default: the vault's, over REST)
+        the id is the oldest version that holds a GUID, whichever side wrote it.
+        Seams: -ReadSecret { param($Name) } / -WriteSecret { param($Name, $Value) }; default: the install's Key Vault (the
+        reader the install key comes through; Set-SIAzKeyVaultSecret for the one write) -- never in a test session.
+        A vault that cannot be read or written = no id THIS tick (said once per process), never a failure. Returns the context.
+    #>
+    param($Context, [scriptblock]$ReadSecret, [scriptblock]$WriteSecret, [scriptblock]$ReadVersions)
+    try {
+        if ($null -eq $Context -or [string]$Context.Mode -ne 'identified') { return $Context }
+        # FIRST WRITE WINS: with the vault's versions the id is resolved every tick (the oldest GUID version), so a context
+        # that read the newest value is corrected; without them a context that has an id keeps it
+        if (-not $ReadVersions -and $ReadSecret -and $WriteSecret -and $Context.PSObject.Properties['LastingInstallId'] -and "$($Context.LastingInstallId)".Trim()) { return $Context }
+        if (-not $ReadSecret -or -not $WriteSecret) {
+            if (Get-Module -Name Pester) { return $Context }   # a test session never touches a vault without its seams
+            # ONE vault for the read and the write: the install's own (the one the knock keeps SI-InstallId in). The read
+            # THROWS on anything but "there is none" (Get-SIAzKeyVaultSecret: 404 = $null, 403 / network = an error), so a
+            # vault this job cannot read is never taken for an empty one -- an existing id is never overwritten
+            if (-not (Get-Command -Name Get-SIVaultName -ErrorAction SilentlyContinue)) {
+                $h = [System.IO.Path]::Combine((Get-SITelemetrySendState).SIRoot, 'auth', 'Get-SIVaultName.ps1'); if (Test-Path -LiteralPath $h) { . $h }
+            }
+            $vault = $null
+            if (Get-Command -Name Get-SIVaultName -ErrorAction SilentlyContinue) { try { $vault = Get-SIVaultName -AllowMissing } catch { $vault = $null } }
+            if (-not $vault -and $global:SI_KeyVaultName) { $vault = [string]$global:SI_KeyVaultName }
+            if (-not $vault -or -not (Get-Command -Name Get-SIAzKeyVaultSecret -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Set-SIAzKeyVaultSecret -ErrorAction SilentlyContinue)) { return $Context }
+            $kvGet = ${function:Get-SIAzKeyVaultSecret}; $kvSet = ${function:Set-SIAzKeyVaultSecret}; $kvVers = ${function:Get-SIInvardiaKvInstallIdVersions}
+            if (-not $ReadVersions -and $kvVers) { $ReadVersions = { param($n) & $kvVers -VaultName $vault -Name $n }.GetNewClosure() }
+            if (-not $ReadSecret) {
+                $ReadSecret = { param($n) $s = & $kvGet -VaultName $vault -Name $n -ErrorAction Stop; if (-not $s) { return $null }; [System.Net.NetworkCredential]::new('', $s.SecretValue).Password }.GetNewClosure()
+            }
+            if (-not $WriteSecret) {
+                $WriteSecret = { param($n, $v) $null = & $kvSet -VaultName $vault -Name $n -SecretValue (ConvertTo-SecureString -String $v -AsPlainText -Force) -ErrorAction Stop }.GetNewClosure()
+            }
+        }
+        $id = Resolve-SIInvardiaInstallId -ReadSecret $ReadSecret -WriteSecret $WriteSecret -ReadVersions $ReadVersions
+        if (-not $id -and -not [bool](Get-Variable -Name SI_LastingInstallIdWarned -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) {
+            $global:SI_LastingInstallIdWarned = $true
+            Write-Host '  [telemetry] the install''s lasting id (SI-InstallId) could not be read or kept in the Key Vault -- the status reports go without it this time'
+        }
+        $Context | Add-Member -NotePropertyName LastingInstallId -NotePropertyValue $id -Force
+    } catch { }
+    return $Context
 }
 
 function Get-SITelemetryRing {

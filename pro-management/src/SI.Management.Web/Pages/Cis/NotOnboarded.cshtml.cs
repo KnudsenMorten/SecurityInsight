@@ -64,7 +64,7 @@ public sealed class NotOnboardedModel(INotOnboardedViews views, ILogger<NotOnboa
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogError(ex, "the devices not onboarded could not be read");
-            Error = "The devices could not be read from the Pro database: " + ex.Message;
+            Error = "The devices could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

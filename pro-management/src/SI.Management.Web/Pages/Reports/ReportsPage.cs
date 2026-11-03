@@ -40,7 +40,7 @@ public abstract class ReportsPage : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "the report catalog could not be read");
-            Error = "The report catalog could not be read from the Pro database: " + ex.Message;
+            Error = "The report catalog could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }
@@ -48,16 +48,27 @@ public abstract class ReportsPage : PageModel
     /// Stage one designer change; a pending designer change that writes any of the same items is replaced by it.
     protected async Task<IActionResult?> StageAsync(string kind, string title, IReadOnlyList<ItemWrite> writes, CancellationToken ct)
     {
-        var (change, why) = ReportChanges.New(kind, title, writes, Reason);
+        var (change, why) = await StageDesignerAsync(Changes, User, kind, title, writes, Reason, ct);
         if (change is null) { Messages.AddRange(why.Select(w => "Not staged: " + w)); return null; }
-        var mine = ReportChanges.Targets(change).ToHashSet(StringComparer.Ordinal);
-        var pending = await Changes.PendingAsync(User, ct);
-        var replace = pending.Where(p => ReportChanges.AllKinds.Contains(p.Kind) && ReportChanges.Targets(p).Any(mine.Contains)).Select(p => p.Id).ToList();
-        if (replace.Count > 0) await Changes.DiscardAsync(User, replace, ct);
-        await Changes.StageAsync(User, change, ct);
         TempData["toast"] = "Staged: " + change.Title + ". Nothing is written until you review and commit.";
         TempData["toastKind"] = "ok";
         return RedirectToPage("/Changes/Index");
+    }
+
+    /// THE designer staging, for every page that stages a designer item (the reports pages, and #1055 the ServiceNow
+    /// connector page's CI scope): built and checked (<see cref="ReportChanges.New"/>), a pending designer change of the
+    /// same user that writes any of the same items replaced, staged. (null, why) when it cannot be staged.
+    public static async Task<(SI.Management.Web.Changes.StagedChange? Change, IReadOnlyList<string> Problems)> StageDesignerAsync(ChangeService changes,
+        System.Security.Claims.ClaimsPrincipal user, string kind, string title, IReadOnlyList<ItemWrite> writes, string? reason, CancellationToken ct)
+    {
+        var (change, why) = ReportChanges.New(kind, title, writes, reason);
+        if (change is null) return (null, why);
+        var mine = ReportChanges.Targets(change).ToHashSet(StringComparer.Ordinal);
+        var pending = await changes.PendingAsync(user, ct);
+        var replace = pending.Where(p => ReportChanges.AllKinds.Contains(p.Kind) && ReportChanges.Targets(p).Any(mine.Contains)).Select(p => p.Id).ToList();
+        if (replace.Count > 0) await changes.DiscardAsync(user, replace, ct);
+        await changes.StageAsync(user, change, ct);
+        return (change, Array.Empty<string>());
     }
 
     public static string OriginLabel(ReportOrigin o) => o switch { ReportOrigin.Vendor => "vendor", ReportOrigin.Changed => "changed", _ => "yours" };

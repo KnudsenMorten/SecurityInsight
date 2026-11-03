@@ -56,7 +56,7 @@ public sealed class ReviewModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the exemptions to review failed");
-            Error = "The exemptions could not be read: " + ex.Message;
+            Error = "The exemptions could not be read: " + ViewerError.Text(ex);
         }
     }
 

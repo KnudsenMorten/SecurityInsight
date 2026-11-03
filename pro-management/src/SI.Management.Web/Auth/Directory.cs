@@ -36,6 +36,9 @@ public interface IDirectoryNames
     /// #446: who holds a role on the enterprise application of this web app (its client id) -- the app role assignments
     /// made in Entra (the installer, the named administrators). Null = unknown (lookup off or failed).
     Task<IReadOnlyList<AppRoleHolder>?> AppRoleHoldersAsync(string clientId, CancellationToken ct) => Task.FromResult<IReadOnlyList<AppRoleHolder>?>(null);
+    /// #999: the web hosts the sign-in application (this client id) sends people back to (its redirect URIs, localhost left
+    /// out) -- one per install that shares the application. Null = unknown (lookup off or failed).
+    Task<IReadOnlyList<string>?> SignInHostsAsync(string clientId, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>?>(null);
 }
 
 /// A user or group found in the directory: Type "user" | "group", its object id, name and mail (null when it has none);
@@ -211,6 +214,32 @@ public sealed class GraphDirectory : IGroupMembershipSource, IDirectoryNames
             return null;
         }
     }
+
+    /// #999: GET /applications(appId='...')?$select=web -- the redirect URIs' hosts (localhost left out). Any failure: null.
+    public async Task<IReadOnlyList<string>?> SignInHostsAsync(string clientId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(clientId, out var appId)) return null;
+        try
+        {
+            using var req = await Request(HttpMethod.Get, $"{Graph}/applications(appId='{appId}')?$select=web", ct);
+            using var res = await _http.SendAsync(req, ct);
+            if (!res.IsSuccessStatusCode) { _log.LogWarning("the sign-in application could not be read ({Status})", (int)res.StatusCode); return null; }
+            using var d = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            if (!d.RootElement.TryGetProperty("web", out var web) || web.ValueKind != JsonValueKind.Object || !web.TryGetProperty("redirectUris", out var uris)) return Array.Empty<string>();
+            return Hosts(uris.EnumerateArray().Select(u => u.GetString()));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or KeyNotFoundException or InvalidOperationException or Azure.Identity.AuthenticationFailedException)
+        {
+            _log.LogWarning(ex, "the sign-in application's addresses could not be read from Microsoft Graph");
+            return null;
+        }
+    }
+
+    /// PURE. The distinct hosts of these addresses, localhost / loopback left out.
+    public static IReadOnlyList<string> Hosts(IEnumerable<string?> uris) =>
+        uris.Select(u => Uri.TryCreate(u ?? "", UriKind.Absolute, out var x) ? x.Host.ToLowerInvariant() : null)
+            .Where(h => h is { Length: > 0 } && h != "localhost" && h != "127.0.0.1" && h != "[::1]")
+            .Select(h => h!).Distinct(StringComparer.Ordinal).ToList();
 
     /// An object id: GET /directoryObjects/{id}; a mail address: the user whose mail or sign-in name it is (exactly one).
     public async Task<DirectoryPerson?> FindAsync(string mailOrObjectId, CancellationToken ct)

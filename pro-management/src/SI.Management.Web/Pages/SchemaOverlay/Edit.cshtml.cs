@@ -49,7 +49,7 @@ public sealed class EditModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the schema overlay could not be read");
-            Error = "The schema overlay could not be read from the Pro database: " + ex.Message;
+            Error = "The schema overlay could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }

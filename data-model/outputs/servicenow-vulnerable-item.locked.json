@@ -25,7 +25,8 @@
     },
     {
       "target": "u_vulnerability",
-      "from": "si_finding_key"
+      "from": "si_finding_key",
+      "op": "finding_key"
     },
     {
       "target": "u_severity",

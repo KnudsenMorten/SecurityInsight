@@ -53,7 +53,7 @@ INSERT INTO cfg.JobTriggerRequest (JobName, Action, EnvJson, RequestedBy) OUTPUT
         try { exec = await _inner.StartAsync(job, ct); }
         catch (Exception ex)
         {
-            try { await _sql.QueryAsync(Failed, new Dictionary<string, object?> { ["Id"] = id, ["Detail"] = Short("the start failed: " + ex.Message) }, CancellationToken.None); }
+            try { await _sql.QueryAsync(Failed, new Dictionary<string, object?> { ["Id"] = id, ["Detail"] = Short("the start failed: " + ViewerError.Text(ex)) }, CancellationToken.None); }
             catch (Exception) { /* the row expires on its own; no execution is bound to it */ }
             throw;
         }

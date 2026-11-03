@@ -23,9 +23,12 @@ public sealed class AnyAccessHandler : AuthorizationHandler<AnyAccessRequirement
     public static bool IsAsset(HttpContext? http) =>
         http is not null && http.GetEndpoint() is null && AssetPrefixes.Any(p => (http.Request.Path.Value ?? "").StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
-    /// Holds some access without a database read: a role on the ladder, the wall board, a magic link, a department role.
+    /// Holds some access without a database read: a role on the ladder, the wall board, a department role. #993: a LINK
+    /// session (a one-page magic link, a department sign-in link) is not "some access" by itself -- it opens only what the
+    /// policies that know it allow (the one page, the person's department; a department link's role is re-read from its
+    /// row on every request), never a route that names no policy of its own.
     public static bool HasRole(System.Security.Claims.ClaimsPrincipal user) =>
-        user.IsReader() || user.IsInRole(Roles.Wallboard) || user.IsInRole(Roles.MagicLink) || user.IsDepartmentScoped() || DepartmentSessions.IsSession(user);
+        user.IsReader() || user.IsInRole(Roles.Wallboard) || user.IsDepartmentScoped();
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, AnyAccessRequirement requirement)
     {

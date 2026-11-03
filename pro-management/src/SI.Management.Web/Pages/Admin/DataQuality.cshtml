@@ -113,7 +113,34 @@ else
                 <article class="card" id="w-@DataQualityModel.Anchor(a.MetricKey)" data-dq-warning="@a.MetricKey" data-rule="@a.Rule" data-direction="@a.Direction">
                     <h3>@a.Label <span class="badge warn">@DataQualityText.Change(a, c)</span></h3>
                     <p data-dq-what><strong>What changed.</strong> @DataQualityText.WhatChanged(a, c)</p>
-                    @if (a.IsClassification)
+                    @if (a.IsCorrelation)
+                    {
+                        <div data-dq-correlation="@fields.Count">
+                            @if (fields.Count == 0)
+                            {
+                                <p class="hint" data-dq-correlation-missing>The groups of this warning are not stored in this database.</p>
+                            }
+                            else
+                            {
+                                <div class="table-wrap">
+                                    <table data-dq-correlation-groups data-sortable data-default-sort="off">
+                                        <thead><tr><th>The CIs, why, and the tier impact</th><th class="num">CIs</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var f in fields)
+                                            {
+                                                <tr data-group="@f.FieldKey">
+                                                    <td>@f.Label</td>
+                                                    <td class="num"><strong>@DataQualityText.Number(f.Now, "corr", c)</strong></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                            <p><a class="button secondary" href="/Admin/CorrelationSuspects" data-dq-correlation-link>Correlation suspects: look at them and decide</a></p>
+                        </div>
+                    }
+                    else if (a.IsClassification)
                     {
                         <div data-dq-classification="@fields.Count">
                             @if (fields.Count == 0)

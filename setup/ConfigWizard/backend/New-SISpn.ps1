@@ -27,10 +27,9 @@
     Entra tenant ID (GUID).
 
 .PARAMETER SubscriptionId
-    Azure subscription ID where SI will run. The SPN gets Contributor at this
-    subscription scope so the engine can provision LA workspace + DCE + DCR + storage
-    account + RBAC delegations + run all idempotent infra updates without re-prompting
-    elevated perms on every run.
+    Azure subscription ID where SI will run. The identity gets NO role on the subscription itself:
+    the person running setup creates the resources, and the identity's narrow grants on them are
+    made by Initialize-SIInfra.ps1 / Grant-SIIdentity.ps1.
 
 .PARAMETER RootMgId
     Tenant-root management group ID. SPN gets ONLY Reader at this scope (Tag Contributor
@@ -227,6 +226,11 @@ if ($UseExistingAppId) {
             if ($CredStorage -eq 'LocalCertStore') {
                 throw "CredStorage 'LocalCertStore' is only valid with CredKind 'Cert'."
             }
+            # 2026-11-01: a NEW client secret is kept only in Key Vault -- returned to the caller (Inline) it would end in a
+            # configuration file, or nowhere; refused here, before anything is created
+            if ($CredStorage -eq 'Inline') {
+                throw "CredStorage 'Inline' is refused for a client secret: keep it in Key Vault (-CredStorage KeyVault -KeyVaultName <vault>), or sign in by certificate or managed identity. Nothing was created."
+            }
         }
         'Cert' {
             if ($CredStorage -eq 'Inline') {
@@ -249,6 +253,12 @@ function _Step([string]$msg) { Write-Host "  [STEP] $msg" -ForegroundColor Cyan 
 function _Ok  ([string]$msg) { Write-Host "  [OK]   $msg" -ForegroundColor Green }
 function _Info([string]$msg) { Write-Host "  [INFO] $msg" -ForegroundColor Gray }
 function _Warn([string]$msg) { Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
+function Get-SISpnCertKeyExportPolicy {
+    <# PURE. The key export policy of a certificate this setup makes: Exportable only when a copy goes to Key Vault
+       (-CredStorage KeyVault: the PFX is uploaded there); a key kept only on this host is NonExportable. #>
+    param([AllowEmptyString()][AllowNull()][string]$CredStorage)
+    if ("$CredStorage" -eq 'KeyVault') { 'Exportable' } else { 'NonExportable' }
+}
 
 Write-Host ""
 $bannerLabel = if ($UseExistingAppId) { "USE-EXISTING-SPN appId=$ExistingAppId" } else { $DisplayName }
@@ -307,6 +317,15 @@ if ([string]$ctx.AuthType -eq 'AppOnly' -and $ctx.Scopes -contains 'Application.
     _Info 'Graph: Application.ReadWrite.OwnedBy -- the SI app is created and owned by this principal; an existing app must have it as an owner.'
 }
 _Ok ("Graph context: {0} ({1})" -f $ctx.Account, $ctx.AppName)
+
+# The Key Vault a new credential goes to must exist BEFORE the app registration and its credential are made (2026-11-01):
+# found missing only after, it left an app with a live credential that nobody holds.
+if (-not $UseExistingAppId -and $CredKind -ne 'ManagedIdentity' -and $CredStorage -eq 'KeyVault') {
+    _Step ("check Key Vault {0}" -f $KeyVaultName)
+    $kvEarly = Get-SIKeyVault -VaultName $KeyVaultName -SubscriptionId $SubscriptionId -ErrorAction SilentlyContinue
+    if (-not $kvEarly) { throw ("Key Vault '{0}' not found in subscription {1} -- nothing was created. Create it (or name the right one), then run setup again." -f $KeyVaultName, $SubscriptionId) }
+    _Ok ("Key Vault {0} found" -f $KeyVaultName)
+}
 
 # ----- 2. Find or create the application -----
 if ($UseExistingAppId) {
@@ -418,8 +437,11 @@ elseif ($mintCert) {
     if (-not $isAdmin) {
         throw "Certificate generation requires an ELEVATED PowerShell session so the cert can be installed to Cert:\LocalMachine\My (required for production use). Re-launch PowerShell as Administrator and run the wizard again. If you cannot elevate, switch the wizard to 'Client secret' credentials instead."
     }
+    # The private key is NOT exportable (2026-10-31) unless a copy has to go to Key Vault (-CredStorage KeyVault): a key
+    # kept only on this host (LocalCertStore) never needs to leave it, so it cannot be exported and used elsewhere.
+    $keyExport = Get-SISpnCertKeyExportPolicy -CredStorage $CredStorage
     $cert = New-SelfSignedCertificate -Subject $certSubject -CertStoreLocation $certStorePath `
-        -KeySpec Signature -KeyExportPolicy Exportable -KeyLength 2048 `
+        -KeySpec Signature -KeyExportPolicy $keyExport -KeyLength 2048 `
         -NotAfter (Get-Date).AddYears($SecretValidityYears) -ErrorAction Stop
     _Ok ("cert generated: thumbprint $($cert.Thumbprint), expires $($cert.NotAfter.ToString('u'))")
 
@@ -429,9 +451,12 @@ elseif ($mintCert) {
         -DisplayName ("SI-Wizard-{0:yyyyMMdd-HHmm}" -f (Get-Date)) -StartDateTime $cert.NotBefore -EndDateTime $cert.NotAfter
     _Ok 'cert public key attached to app registration'
 
-    # Export PFX (pwd-protected, returned to caller for KV upload OR keep in local store)
-    $pfxPwd  = [Guid]::NewGuid().Guid
-    $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pfxPwd)
+    # Export PFX (pwd-protected) ONLY for the Key Vault upload; a host-only key is not exportable and is never exported
+    $pfxPwd = $null; $pfxBytes = $null
+    if ($keyExport -eq 'Exportable') {
+        $pfxPwd  = [Guid]::NewGuid().Guid
+        $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pfxPwd)
+    }
     $certInfo = @{
         Thumbprint  = $cert.Thumbprint
         NotAfter    = $cert.NotAfter
@@ -668,31 +693,12 @@ if ($SkipTenantRbac) {
     }
 }
 
-# v2.2.354 -- Contributor at the target subscription (where SI is installed).
-# Customer ask: "set only READ on mgmt root and then contributor on the
-# subscription defined where SI will be installed". Replaces the implicit
-# expectation that downstream Initialize-SIInfra's granular RG/workspace/
-# storage grants would suffice -- subscription-scope Contributor covers all of
-# those + workspace ops + DCR/DCE provisioning + storage account create + RBAC
-# delegation, in one assignment. Granular grants in Initialize-SIInfra stay
-# (they no-op when inherited from sub-scope -- defensive idempotency).
-$existingSubContrib = @(Get-SIAzRoleAssignment -ObjectId $sp.Id -Scope $subScope -RoleDefinitionName 'Contributor' -ErrorAction SilentlyContinue |
-                       Where-Object { $_.Scope -eq $subScope }) | Select-Object -First 1
-if ($existingSubContrib) {
-    _Info ("RBAC Contributor already in place at subscription {0}" -f $SubscriptionId)
-    $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'already'; Error = $null }
-} else {
-    try {
-        $null = New-SIRoleAssignment -ObjectId $sp.Id -RoleDefinitionName 'Contributor' -Scope $subScope -PrincipalType ServicePrincipal
-        _Ok ("RBAC Contributor granted at subscription {0}" -f $SubscriptionId)
-        $rbacScopes += "$subScope|Contributor"
-        $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'granted'; Error = $null }
-    } catch {
-        $errMsg = $_.Exception.Message
-        _Warn ("RBAC Contributor at subscription {0} failed: {1} (operator likely needs Owner OR Contributor + User Access Administrator on that subscription)" -f $SubscriptionId, $errMsg)
-        $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'pending'; Error = $errMsg }
-    }
-}
+# NO Contributor on the subscription (2026-10-31). The engine identity is a reader: the person running setup creates the
+# resources, and the identity gets only the narrow grants a run needs, each on its own resource or resource group --
+# Initialize-SIInfra.ps1 (workspace: Log Analytics Contributor; the rules' resource group: Monitoring Metrics Publisher +
+# Monitoring Contributor; the storage account: Blob / Table / Queue Data Contributor) and setup\Grant-SIIdentity.ps1.
+# An identity that already holds Contributor on the subscription from an earlier setup keeps it: nothing is removed
+# here (a live install must keep running; taking it away from existing installs is a separate, owner-approved step).
 
 # ----- 7. Cred storage -----
 $credValue        = $null

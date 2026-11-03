@@ -3,8 +3,11 @@
 .SYNOPSIS
     THE QUICK GATE of every release (owner 2026-10-13: "yes, build it the pim way"; "default release is quick"; "we even
     agreed on hard limit of max 10 min"). A fixed CORE SET + the few suites the change needs, each in its own PowerShell 7
-    process, all in parallel; the web app's tests only when a web file changed, and then only the matching classes; at 10
-    minutes STOP AND REPORT. -Full = every suite, ONLY on the owner's own words (below).
+    process, all in parallel; the web app's tests only when a web file changed, and then only the matching classes.
+    TEST-FAST (owner 2026-11-02: "the 20/30/40 min gates have been a misunderstanding ... choose the fastest method and not
+    do a full run ... remove these limits"): NO TIME LIMIT ENDS A RUN -- only a suite that prints NOTHING for 5 minutes
+    (-HangSeconds) is ended, red, by name; 10 minutes is a TARGET, said with what to split next, never a stop.
+    -Full = every suite, the SAME way (the same runner, the same hang rule), ONLY on the owner's own words (below).
     v3 gates PowerShell 7 ONLY (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). -Runtime ps51 or
     -Runtime both still runs Windows PowerShell 5.1, as an explicit opt-in; v2.2 on main keeps its own 5.1 gate.
 
@@ -43,18 +46,22 @@
       4. HOW IT RUNS (Invoke-SIQuickGateRun): every suite in its own pwsh 7 process (tests\pester\_Invoke-GateShard.ps1),
          the web app's build + tests in one more (tests\pester\_Invoke-GateDotnet.ps1), up to 12 at once, each with an empty
          standard input. A line the moment each finishes; every 60 s what still runs.
-      5. AT 20 MINUTES: STOP AND REPORT (owner 2026-10-28: "extend to 20 min"). 1200 s per suite AND 1200 s for the whole gate (fast-gate.map.json quick; never
-         above). A suite still running is ENDED -- its whole process tree, by process id (Stop-SIGateProcessTree), never
-         by name -- and reported red BY NAME "TIMED OUT after N min"; a suite the limit left no time to start is "NOT RUN";
-         the others' results stand. A stopped run is 'NOT TESTED' -- never green (exit 1).
-         A suite MEASURED over 1200 s is not stopped at 20 minutes for now (owner 2026-10-13: "accepted, skip 10 min for
-         now"): it gets its measured time x1.5 (Get-SIQuickGateSlowLimit), said in the log; the gate reads OVER THE LIMIT.
+      5. A HANG IS NOT TIME (TEST-FAST, owner 2026-11-02): no clock ends a suite or the gate. A suite (or the web app's
+         part) whose output has not grown for -HangSeconds (fast-gate.map.json quick.hangSeconds, 300 = 5 minutes) is
+         ENDED -- its whole process tree, by process id (Stop-SIGateProcessTree), never by name -- and reported red BY
+         NAME "HUNG -- printed nothing for 5 min"; the others carry on and their results stand. Every suite prints a line
+         per test (_Invoke-GateShard.ps1, Pester Detailed) and the web app's part streams its build and test lines, so
+         silence means stuck, not slow.
+         10 MINUTES IS A TARGET (quick.targetSeconds, 600): over it the gate still finishes, and says its time and the
+         slowest suites to split next (Get-SIFastGateBudget). -Only: a test-VM lane's share of the selection
+         (tests\Invoke-GateOnTestVm.ps1 splits a large selection over SI's 4 lanes and merges the results).
       4b. SQL FIRST (owner 2026-10-25): when a selected suite has real-SQL tests, SQL Server Express is started if stopped
          and SELECT 1 is asked until it answers (up to 180 s); SI_TEST_LOCALSQL is then set for every suite. SQL that never
          answers = NOT TESTED at once.
       6. RESULT: PASS / FAIL / NOT TESTED, every suite by name with its seconds (SuiteResults), every failure, every suite
          that failed to LOAD (0 tests ran from it -- never a pass). A SKIPPED test is NOT a pass: a suite with one is NOT
-         GREEN and the gate FAILS, naming each skipped test and its reason (owner 2026-10-25). The tests tagged Scale are
+         GREEN and the gate FAILS, naming each skipped test and its reason (owner 2026-10-25). A HUNG suite is red by name.
+         The tests tagged Scale are
          left out (on demand only) and said as "not run (Scale, on demand)" -- never counted as passed. Exit 0 = pass, 1 = fail or not tested, 2 = could not
          run, 6 = REFUSED (a full run without the owner's words -- nothing ran). -ResultFile writes it as JSON.
 
@@ -64,7 +71,8 @@
 
     ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13: "full suite is not night either. it can only be triggered when i
     say so. no boddy can trigger full test, newer ! only me can start that"; "default release is quick"; "we even agreed
-    on hard limit of max 10 min"). -Full runs EVERYTHING the same sharded way -- and REFUSES to start (exit 6, nothing
+    on hard limit of max 10 min"). -Full runs EVERYTHING the same way as the quick gate (one process per suite, the same
+    hang rule, no clock) -- and REFUSES to start (exit 6, nothing
     run) unless -OwnerWords carries the owner's own sentence for THIS run. The words have no default and are never read
     from a file, an environment variable or a configuration: the caller types them, and they are printed in the log and
     written to the result file (OwnerWords). No session, builder, release command, schedule or night job passes them on
@@ -104,21 +112,26 @@ param(
     [switch]$NoDotnet,
     [switch]$NoSafety,
     # 2026-10-29 THE SCALE MEASUREMENTS, ON DEMAND ONLY (owner 2026-10-11: "dont run that 100000 test"): the tests tagged Scale of
-    # the suites named with -Suites (nothing else is selected for it), each bounded by -TimeoutMinutes instead of the quick
-    # gate's 20 minutes -- a deliberate measurement the owner asks for by name, never a release gate
+    # the suites named with -Suites (nothing else is selected for it) -- a deliberate measurement the owner asks for by name,
+    # never a release gate; no clock ends it either (TEST-FAST), only the hang rule
     [switch]$Scale,
+    # TEST-FAST: a test-VM LANE's share of the selection (';'-separated suite names): of the suites selected, only these run
+    # here -- tests\Invoke-GateOnTestVm.ps1 splits a large selection over SI's 4 lanes and merges the results into one
+    [string]$Only = '',
     [switch]$ListOnly,
     # the selection as JSON (Full, Base, Changed, Suites, Dotnet, Unmapped, OverBudget, AllSuites, MeasuredSeconds,
     # LongestSeconds) -- setup\Release-SI.ps1 reads it (-ListOnly)
     [string]$SelectionFile,
     [switch]$UpdateDurations,
     [string]$ResultFile,
-    # bounds a FULL run only (only the owner starts one); the quick gate has its own hard 20-minute stop (below)
-    [int]$TimeoutMinutes = 40,
-    # THE HARD 20-MINUTE STOP of the quick gate (owner 2026-10-13: 10 min; owner 2026-10-28: "extend to 20 min"): per suite and
-    # for the whole gate; 0 = fast-gate.map.json quick (1200). Never above 1200 -- a shorter one is for the gate's own tests.
-    [ValidateRange(0, 2400)][int]$SuiteLimitSeconds = 0,
-    [ValidateRange(0, 2400)][int]$GateLimitSeconds = 0,
+    # TEST-FAST (owner 2026-11-02: "remove these limits"): DEPRECATED and INERT -- no clock ends a run any more. Kept so an
+    # older caller does not break; said in the log when given.
+    [Parameter(DontShow)][int]$TimeoutMinutes = 0,
+    [Parameter(DontShow)][int]$SuiteLimitSeconds = 0,
+    [Parameter(DontShow)][int]$GateLimitSeconds = 0,
+    # A HANG IS NOT TIME: a suite whose output has not grown for this long is ended, red, by name; 0 = fast-gate.map.json
+    # quick.hangSeconds (300 = 5 minutes). A shorter one is for the gate's own tests.
+    [ValidateRange(0, 3600)][int]$HangSeconds = 0,
     [ValidateRange(1, 600)][int]$ProgressSeconds = 60,
     # the older COVERING selection (every suite that covers each changed path), as a diagnostic: -ListOnly only
     [switch]$Precise,
@@ -156,9 +169,9 @@ function Get-SIFastGateMap {
             NamedMax  = $(if ($j.quick -and $j.quick.namedMax) { [int]$j.quick.namedMax } else { 3 })
             HubLoads  = $(if ($j.quick -and $j.quick.hubLoads) { [int]$j.quick.hubLoads } else { 20 })
             Throttle  = $(if ($j.quick -and $j.quick.throttle) { [int]$j.quick.throttle } else { 12 })
-            # never above 1200 s, whatever the file says: THE HARD 20-MINUTE STOP (owner 2026-10-28: "extend to 20 min")
-            SuiteLimitSeconds = [Math]::Min(1200, $(if ($j.quick -and $j.quick.suiteLimitSeconds) { [int]$j.quick.suiteLimitSeconds } else { 1200 }))
-            GateLimitSeconds  = [Math]::Min(1200, $(if ($j.quick -and $j.quick.gateLimitSeconds) { [int]$j.quick.gateLimitSeconds } else { 1200 }))
+            # TEST-FAST (owner 2026-11-02): no time limit -- a suite silent this long is HUNG (5 min); the gate's TARGET (10 min)
+            HangSeconds       = $(if ($j.quick -and $j.quick.PSObject.Properties['hangSeconds'] -and [int]$j.quick.hangSeconds -gt 0) { [int]$j.quick.hangSeconds } else { 300 })
+            TargetSeconds     = $(if ($j.quick -and $j.quick.PSObject.Properties['targetSeconds'] -and [int]$j.quick.targetSeconds -gt 0) { [int]$j.quick.targetSeconds } else { 600 })
             DotnetMaxClasses  = $(if ($j.quick -and $j.quick.dotnetMaxClasses) { [int]$j.quick.dotnetMaxClasses } else { 15 })
         }
         Solution = [string]$j.dotnet.solution
@@ -629,31 +642,6 @@ function Get-SIQuickGateSelection {
     [pscustomobject]@{ Suites = $suites; Dotnet = $dotnet; Unmapped = $unmapped.ToArray(); Broad = $broad; Hubs = $hubs.ToArray(); Narrow = $narrow.ToArray(); Notes = $notes.ToArray(); Core = [bool]$needCore; TextReaders = $textReaders }
 }
 
-function New-SIFastGateBatches {
-    <#
-        PURE. The suites in BATCHES of about -TargetSeconds of measured time each (first-fit, heaviest first; a suite heavier
-        than the target is a batch of its own), heaviest batch first. Each batch runs in a FRESH worker process: measured
-        2026-10-06, a Windows PowerShell 5.1 process that runs suite after suite for half an hour slows down (a suite that
-        takes 23 s on its own took 255 s at the end of a long shard) -- short-lived workers pulled from a queue keep every
-        suite at its own speed and balance the runtimes by themselves. -TargetSeconds 0 = the total / (workers x 4), held
-        between 45 and 180 s (TEST-RUN-1, 2026-10-07: a 5.1 batch of 240 measured seconds -- SIv3-ContainerUpdate,
-        SIv3-VulnTargetLoop, SIv3-EngineRunConfigPath -- passed its 1,200 s timeout on the test VM while the dotnet build ran
-        beside it; a shorter batch is a shorter re-run and balances better across 16 workers). Returns the batches as arrays
-        of names.
-    #>
-    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Names, [int]$Workers = 4, [hashtable]$Seconds = @{}, [double]$Default = 20, [double]$TargetSeconds = 0)
-    $w = { param($x) if ($Seconds.ContainsKey($x) -and $Seconds[$x] -gt 0) { [double]$Seconds[$x] } else { $Default } }
-    if (-not $Names.Count) { return }
-    $total = 0.0; foreach ($n in $Names) { $total += (& $w $n) }
-    if ($TargetSeconds -le 0) { $TargetSeconds = [Math]::Min(180, [Math]::Max(45, $total / ([Math]::Max(1, $Workers) * 4))) }
-    $bins = New-Object System.Collections.Generic.List[object]
-    foreach ($s in @($Names | Sort-Object -Property @{ Expression = { & $w $_ }; Descending = $true }, @{ Expression = { $_ } })) {
-        $x = & $w $s; $placed = $false
-        foreach ($b in $bins) { if ($b.Load + $x -le $TargetSeconds) { $b.Names.Add($s); $b.Load += $x; $placed = $true; break } }
-        if (-not $placed) { $nb = [pscustomobject]@{ Names = (New-Object System.Collections.Generic.List[string]); Load = $x }; $nb.Names.Add($s); $bins.Add($nb) }
-    }
-    foreach ($b in @($bins | Sort-Object -Property Load -Descending)) { , $b.Names.ToArray() }
-}
 function Get-SIFastGateExcludeTags {
     <#
         PURE. The Pester tags a run leaves out, comma-separated ('' = none). A public copy: PrivateRepo. The dev FAST gate:
@@ -666,6 +654,9 @@ function Get-SIFastGateExcludeTags {
     if ($Scope -eq 'PublicCopy') { $t += 'PrivateRepo' }
     if (-not $Full -and -not $Hotfix) { $t += 'Nightly' }
     if (-not $Scale) { $t += 'Scale' }
+    # Live: a test that reads the output of a real run on its host (never present on the test VM) -- left out of every gate
+    # and named as not run, never counted as a pass or a skip
+    $t += 'Live'
     $t -join ','
 }
 function Add-SIFastGatePs51Tag {
@@ -678,45 +669,6 @@ function Add-SIFastGatePs51Tag {
     param([AllowEmptyString()][string]$Exclude = '', [string]$Runtime = 'pwsh')
     if ($Runtime -ne 'pwsh') { return $Exclude }
     @(@($Exclude -split ',' | Where-Object { $_ }) + 'Ps51' | Select-Object -Unique) -join ','
-}
-function Get-SIFastGateBatchTimeout {
-    <#
-        PURE. How long ONE batch may run before it is stopped (its own process id) and re-run once in a fresh process: its
-        measured seconds x -Factor, never under -MinSeconds. Nightly 2026-10-07 (a loaded mgmt1: other gates and an upgrade
-        test at 01:00): suites ran 3x their measured time (SIv3-TemplateSplit 1,156 s -> 3,254 s on 5.1), so one fixed
-        deadline for the whole run cut off two thirds of the queue. A hung suite is caught by its own batch timeout instead.
-    #>
-    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Names, [hashtable]$Seconds = @{}, [double]$Default = 20, [double]$Factor = 5, [double]$MinSeconds = 900)
-    $t = 0.0
-    foreach ($n in $Names) { $t += $(if ($Seconds.ContainsKey($n) -and $Seconds[$n] -gt 0) { [double]$Seconds[$n] } else { $Default }) }
-    [int][Math]::Ceiling([Math]::Max($MinSeconds, $t * $Factor))
-}
-function Get-SIFastGateDeadlineMinutes {
-    <#
-        PURE. The whole run's backstop: never shorter than -TimeoutMinutes; for a big run (the full suite, -Full) at least
-        -Factor x the ideal wall time of the slowest runtime (its measured total / its workers) -- so a loaded machine makes
-        the run slower, not red. Batches still queued when even this passes are reported 'never started' (never a pass).
-        The ideal wall time is never shorter than the LONGEST single suite (-LongestSeconds): one suite runs in one process,
-        so no number of workers ends the run before it does (2026-10-10: the hotfix gate runs the tests tagged Nightly, and
-        SIv3-CiBuildSql's 100,000-record case alone outlasted a deadline computed from the total / the workers).
-    #>
-    param([int]$TimeoutMinutes = 40, [double[]]$RuntimeSeconds = @(), [int]$Workers = 1, [double]$Factor = 3, [double]$LongestSeconds = 0)
-    $ideal = [Math]::Max(0.0, $LongestSeconds)
-    foreach ($s in $RuntimeSeconds) { $ideal = [Math]::Max($ideal, [double]$s / [Math]::Max(1, $Workers)) }
-    [int][Math]::Max($TimeoutMinutes, [Math]::Ceiling($ideal * $Factor / 60))
-}
-function Get-SIFastGateWorkers {
-    <#
-        PURE. Workers per runtime: the cores that are FREE now (-LoadPercent = the machine's CPU use before the gate starts),
-        shared by the runtimes, at most cores / runtimes and never under half of that (a busy machine shares its CPU by
-        process: one lone worker would get a sliver of it and take hours). Starting 4+4 PowerShell processes plus dotnet on
-        a machine already at 90% only makes every one of them slower.
-    #>
-    param([Parameter(Mandatory)][int]$Cores, [int]$Runtimes = 2, [double]$LoadPercent = 0)
-    $max = [Math]::Max(1, [int][Math]::Floor($Cores / [Math]::Max(1, $Runtimes)))
-    $min = [Math]::Max(1, [int][Math]::Ceiling($max / 2))
-    $free = [Math]::Max(0.0, [Math]::Min(100.0, 100.0 - $LoadPercent)) / 100.0
-    [int][Math]::Min($max, [Math]::Max($min, [Math]::Ceiling($Cores * $free / [Math]::Max(1, $Runtimes))))
 }
 function Get-SIFastGateDotnetFilter {
     <#
@@ -819,19 +771,25 @@ function Get-SIFastGateDotnetFilter {
 }
 function Get-SIFastGateBudget {
     <#
-        PURE. THE 20-MINUTE LIMIT of every release gate (owner 2026-10-13: 10 min; owner 2026-10-28: "extend to 20 min"):
-        1200 s for the HOTFIX gate (the gate of every release, fix or feature) and for the FAST (dev) gate alike; a full
-        run (only the owner starts one) has none. Over the limit is said PLAINLY -- "OVER THE 20-MINUTE LIMIT" -- and is
-        never a reason to leave a suite out: -OverBudget names the covering suites that made the gate longer.
+        PURE. THE 10-MINUTE TARGET of every release gate (TEST-FAST, owner 2026-11-02: "the purpose was to move things
+        through as fast as possible and not to hard limit a process"): -TargetSeconds (600) for the quick / HOTFIX gate
+        (the gate of every release, fix or feature) and the FAST (dev) gate alike; a full run (only the owner starts one)
+        has none. A TARGET, NOT A LIMIT: over it the gate has still run to its end -- said PLAINLY ("OVER THE 10-MINUTE
+        TARGET -- the run finished"), with WHAT TO SPLIT NEXT (-Slowest: the slowest items, 'name (seconds)'), and never a
+        reason to stop or to leave a suite out: -OverBudget names the covering suites that made the gate longer.
     #>
-    param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][double]$Seconds, [AllowEmptyCollection()][string[]]$OverBudget = @())
-    $b = switch ($Mode) { 'quick' { 1200 } 'hotfix' { 1200 } 'fast' { 1200 } default { 0 } }
+    param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][double]$Seconds, [AllowEmptyCollection()][string[]]$OverBudget = @(),
+          [AllowEmptyCollection()][string[]]$Slowest = @(), [int]$TargetSeconds = 600)
+    $b = if ($Mode -in 'quick', 'hotfix', 'fast') { [Math]::Max(1, $TargetSeconds) } else { 0 }
     if (-not $b) { return $null }
     $met = $Seconds -le $b
     $why = @($OverBudget | Where-Object { $_ })
-    $text = '{0} gate: {1:N0} s of the {2:N0} s limit (20 minutes) -- {3}' -f $Mode, $Seconds, $b, $(if ($met) { 'met' } else { 'OVER THE 20-MINUTE LIMIT' })
+    $next = @($Slowest | Where-Object { $_ } | Select-Object -First 3)
+    $mins = [Math]::Round($b / 60.0, 1)
+    $text = '{0} gate: {1:N0} s -- the target is {2} minutes: {3}' -f $Mode, $Seconds, $mins, $(if ($met) { 'met' } else { ('OVER THE {0}-MINUTE TARGET -- the run finished (a target, not a limit)' -f $mins) })
     if (-not $met -and $why.Count) { $text += (' (it took longer because {0} cover{1} the change)' -f ($why -join ', '), $(if ($why.Count -eq 1) { 's' } else { '' })) }
-    [pscustomobject]@{ Target = $b; Seconds = [int]$Seconds; Met = $met; Text = $text }
+    if (-not $met -and $next.Count) { $text += ('; split next: {0}' -f ($next -join ', ')) }
+    [pscustomobject]@{ Target = $b; Seconds = [int]$Seconds; Met = $met; SplitNext = $next; Text = $text }
 }
 
 function Get-SIGateProcessTree {
@@ -890,16 +848,17 @@ function Invoke-SIQuickGateRun {
         web app's build + tests in one more), all at once up to -Throttle, every one with an EMPTY standard input (a
         prompt fails at once instead of waiting for a key over SSH).
 
-        AT THE LIMIT: STOP AND REPORT. An item running longer than -SuiteLimitSeconds (1200), or still running when the
-        whole run has taken -GateLimitSeconds (1200), is ENDED -- its whole process tree, by process id
-        (Stop-SIGateProcessTree) -- and is State 'TimedOut' ("TIMED OUT after N min", by name); an item the limit left no
-        time to start is State 'NotRun' ("NOT RUN"). The others' results stand. One line the moment an item finishes
-        (-OnFinish turns the finished item into its status text and colour), and every -ProgressSeconds (60) the clock
-        time and what still runs. Returns one result per item: @{ Name; Kind; State (Done | TimedOut | NotRun |
-        StartFailed); Seconds; ExitCode; Note; Ended; Out; Err; Item }.
+        NO CLOCK ENDS AN ITEM (TEST-FAST, owner 2026-11-02: "not to hard limit a process where suddenly we cannot
+        complete"). A HANG IS NOT TIME: an item whose output (its standard output and error files, and -- for the web
+        app's part -- the files named in its Watch list) has not grown for -HangSeconds (300) is ENDED -- its whole process
+        tree, by process id (Stop-SIGateProcessTree) -- and is State 'Hung' ("HUNG -- printed nothing for N min", by
+        name); every other item carries on and its result stands. Every queued item starts; there is no whole-gate limit.
+        One line the moment an item finishes (-OnFinish turns the finished item into its status text and colour), and
+        every -ProgressSeconds (60) the clock time and what still runs. Returns one result per item: @{ Name; Kind; State
+        (Done | Hung | StartFailed); Seconds; ExitCode; Note; Ended; Out; Err; Item }.
     #>
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items, [Parameter(Mandatory)][string]$Work, [int]$Throttle = 12,
-          [double]$SuiteLimitSeconds = 1200, [double]$GateLimitSeconds = 1200, [double]$ProgressSeconds = 60, [scriptblock]$OnFinish)
+          [double]$HangSeconds = 300, [double]$ProgressSeconds = 60, [scriptblock]$OnFinish, [hashtable]$HangOverride = @{})
     $inv = [Globalization.CultureInfo]::InvariantCulture
     $min = { param([double]$s) $m = [Math]::Max(0.1, [Math]::Round($s / 60, 1, [MidpointRounding]::AwayFromZero)); if ($m -eq [Math]::Floor($m)) { ([int]$m).ToString($inv) } else { $m.ToString('0.0', $inv) } }
     $clockText = { (Get-Date).ToString('HH:mm:ss', $inv) }
@@ -917,9 +876,18 @@ function Invoke-SIQuickGateRun {
         if ($r.State -ne 'Done') { $color = 'Red'; $text = $r.Note }
         Write-Host ("  [{0}] {1,7}s  {2}  {3}" -f (& $clockText), $r.Seconds.ToString('0.0', $inv), $r.Name, $text) -ForegroundColor $color
     }
+    # how much the item has printed so far: its output + error files and any file it names in Watch (the web app's log)
+    $printed = {
+        param($r)
+        $n = [long]0
+        foreach ($f in @(@($r.Out, $r.Err) + @(if ($r.Item.PSObject.Properties['Watch']) { $r.Item.Watch }))) {
+            if (-not $f) { continue }
+            try { $fi = New-Object IO.FileInfo ([string]$f); if ($fi.Exists) { $n += $fi.Length } } catch { }
+        }
+        $n
+    }
     while ($queue.Count -or $running.Count) {
-        $gateOver = $clock.Elapsed.TotalSeconds -ge $GateLimitSeconds
-        while (-not $gateOver -and $queue.Count -and $running.Count -lt [Math]::Max(1, $Throttle)) {
+        while ($queue.Count -and $running.Count -lt [Math]::Max(1, $Throttle)) {
             $it = $queue.Dequeue(); $n++
             $safe = ('{0:D3}-{1}' -f $n, ($it.Name -replace '[^A-Za-z0-9_.-]', '_'))
             $out = Join-Path $Work "$safe.out.log"; $err = Join-Path $Work "$safe.err.log"
@@ -929,7 +897,7 @@ function Invoke-SIQuickGateRun {
             try {
                 $p = Start-Process -FilePath $it.Exe -ArgumentList (@($it.Args | ForEach-Object { & $quote ([string]$_) }) -join ' ') -RedirectStandardInput $noInput -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
                 $null = $p.Handle   # keeps the exit code readable and the process id ours
-                $running.Add([pscustomobject]@{ Item = $it; Process = $p; Watch = [Diagnostics.Stopwatch]::StartNew(); Out = $out; Err = $err })
+                $running.Add([pscustomobject]@{ Item = $it; Process = $p; Watch = [Diagnostics.Stopwatch]::StartNew(); Out = $out; Err = $err; Printed = [long]0; Silent = [Diagnostics.Stopwatch]::StartNew() })
             } catch {
                 & $finish ([pscustomobject]@{ Name = $it.Name; Kind = $it.Kind; State = 'StartFailed'; Seconds = 0.0; ExitCode = 1; Note = "could not be started: $($_.Exception.Message)"; Ended = @(); Out = $out; Err = $err; Item = $it })
             } finally { foreach ($k in @($keepEnv.Keys)) { [Environment]::SetEnvironmentVariable($k, $keepEnv[$k]) } }
@@ -942,20 +910,16 @@ function Invoke-SIQuickGateRun {
                 & $finish ([pscustomobject]@{ Name = $r.Item.Name; Kind = $r.Item.Kind; State = 'Done'; Seconds = [Math]::Round($sec, 1); ExitCode = [int]$r.Process.ExitCode; Note = ''; Ended = @(); Out = $r.Out; Err = $r.Err; Item = $r.Item })
                 continue
             }
-            # an item may carry its own limit (LimitSeconds): a suite measured over 20 minutes gets its measured time (owner 2026-10-13: "accepted, skip 10 min for now")
-            $itemLimit = if ($r.Item.PSObject.Properties['LimitSeconds'] -and [double]$r.Item.LimitSeconds -gt 0) { [double]$r.Item.LimitSeconds } else { $SuiteLimitSeconds }
-            $overSuite = $sec -ge $itemLimit
-            if (-not $overSuite -and -not $gateOver) { continue }
-            $note = if ($overSuite) { "TIMED OUT after $(& $min $itemLimit) min" } else { "TIMED OUT after $(& $min $sec) min (the whole gate's limit of $(& $min $GateLimitSeconds) min)" }
+            # A HANG IS NOT TIME: only an item that has printed NOTHING for -HangSeconds is ended -- however long it has run
+            $now = & $printed $r
+            if ($now -ne $r.Printed) { $r.Printed = $now; $r.Silent.Restart(); continue }
+            # a named suite whose single long test waits on SQL Server may stay silent longer (fast-gate.map.json quick.hangSecondsBySuite)
+            $lim = if ($HangOverride.ContainsKey([string]$r.Item.Name)) { [double]$HangOverride[[string]$r.Item.Name] } else { $HangSeconds }
+            if ($lim -le 0 -or $r.Silent.Elapsed.TotalSeconds -lt $lim) { continue }
+            $note = "HUNG -- printed nothing for $(& $min $lim) min (after $(& $min $sec) min of running)"
             $ended = @(Stop-SIGateProcessTree -Process $r.Process)
             [void]$running.Remove($r)
-            & $finish ([pscustomobject]@{ Name = $r.Item.Name; Kind = $r.Item.Kind; State = 'TimedOut'; Seconds = [Math]::Round($sec, 1); ExitCode = 124; Note = "$note -- its process tree was ended ($($ended.Count) process(es))"; Ended = $ended; Out = $r.Out; Err = $r.Err; Item = $r.Item })
-        }
-        if ($gateOver) {
-            while ($queue.Count) {
-                $it = $queue.Dequeue()
-                & $finish ([pscustomobject]@{ Name = $it.Name; Kind = $it.Kind; State = 'NotRun'; Seconds = 0.0; ExitCode = 125; Note = "NOT RUN -- the whole gate's limit of $(& $min $GateLimitSeconds) min passed before it could start"; Ended = @(); Out = ''; Err = ''; Item = $it })
-            }
+            & $finish ([pscustomobject]@{ Name = $r.Item.Name; Kind = $r.Item.Kind; State = 'Hung'; Seconds = [Math]::Round($sec, 1); ExitCode = 124; Note = "$note -- its process tree was ended ($($ended.Count) process(es))"; Ended = $ended; Out = $r.Out; Err = $r.Err; Item = $r.Item })
         }
         if ($running.Count -and $clock.Elapsed.TotalSeconds -ge $nextProgress) {
             $nextProgress = $clock.Elapsed.TotalSeconds + $ProgressSeconds
@@ -1015,48 +979,35 @@ function Wait-SIQuickGateSql {
                        Text = ("SQL Server {0} did not answer SELECT 1 within {1} s ({2} tries; last: {3}{4}) -- the real-SQL tests cannot run; the gate is NOT TESTED" -f $Server, $TimeoutSeconds, $tries, $last, $(if ($startError) { "; starting $ServiceName failed: $startError" } else { '' })) }
 }
 
-function Get-SIQuickGateSlowLimit {
-    <#
-        PURE. A suite MEASURED over the 20-minute limit (-LimitSeconds, 1200) is not stopped at 20 minutes in a release gate
-        for now (owner 2026-10-13: "accepted, skip 10 min for now"): it gets its measured time x -Factor (1.5: a loaded VM;
-        SIv3-CiBuildSql measured 1,800 s took 1,990 s on 2026-10-13). Returns that limit in seconds, or 0 = the normal
-        20-minute limit. The gate says so in the log and its budget line reads "OVER THE 20-MINUTE LIMIT".
-    #>
-    param([double]$MeasuredSeconds = 0, [double]$LimitSeconds = 1200, [double]$Factor = 1.5)
-    if ($MeasuredSeconds -le $LimitSeconds) { return 0 }
-    [int][Math]::Ceiling($MeasuredSeconds * $Factor)
-}
-
 function Get-SIQuickGateStatus {
     <#
-        PURE. The quick gate's verdict from its items' outcomes (-Outcomes: @{ Name; State; Ok }): any item TIMED OUT or
-        NOT RUN = 'NOT TESTED' (a stopped run is never green, whatever else passed) and Stopped names them; else any item
-        not Ok = 'FAIL' -- a suite with a SKIPPED test included (Skipped names it: a skip is not a pass, owner 2026-10-25);
-        else 'PASS'. The Scale tests left out are said (ScaleTests, ScaleOnly), never counted green. Text is the log line.
+        PURE. The gate's verdict from its items' outcomes (-Outcomes: @{ Name; State; Ok }). No clock stops a run any more
+        (TEST-FAST, owner 2026-11-02), so there is no 'NOT TESTED' from time: an item that HUNG (printed nothing for 5
+        minutes, State 'Hung') is RED BY NAME (Hung, and Stopped names it); any other item not Ok = 'FAIL' -- a suite with a
+        SKIPPED test included (Skipped names it: a skip is not a pass, owner 2026-10-25); else 'PASS'. The Scale tests left
+        out are said (ScaleTests, ScaleOnly), never counted green. TimedOut / NotRun stay as empty lists for older readers.
+        Text is the log line.
     #>
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Outcomes)
     $flag = { param($o, [string]$p) [bool]($o.PSObject.Properties[$p] -and $o.$p) }
-    $timed = @($Outcomes | Where-Object { $_.State -eq 'TimedOut' } | ForEach-Object { $_.Name })
-    $notRun = @($Outcomes | Where-Object { $_.State -eq 'NotRun' } | ForEach-Object { $_.Name })
+    $hung = @($Outcomes | Where-Object { $_.State -eq 'Hung' } | ForEach-Object { $_.Name })
     # a SKIPPED test is not a pass (owner 2026-10-25): a suite with skips is named apart from the failed ones, and is red
-    $skipped = @($Outcomes | Where-Object { $_.State -notin 'TimedOut', 'NotRun' -and -not $_.Ok -and (& $flag $_ 'NotGreen') } | ForEach-Object { '{0} ({1} skipped)' -f $_.Name, $_.SkipCount })
-    $red = @($Outcomes | Where-Object { $_.State -notin 'TimedOut', 'NotRun' -and -not $_.Ok -and -not (& $flag $_ 'NotGreen') } | ForEach-Object { $_.Name })
+    $skipped = @($Outcomes | Where-Object { $_.State -ne 'Hung' -and -not $_.Ok -and (& $flag $_ 'NotGreen') } | ForEach-Object { '{0} ({1} skipped)' -f $_.Name, $_.SkipCount })
+    $red = @($Outcomes | Where-Object { $_.State -ne 'Hung' -and -not $_.Ok -and -not (& $flag $_ 'NotGreen') } | ForEach-Object { $_.Name })
     # the Scale benchmarks run on demand only (owner rule): said, never counted as green
     $scale = @($Outcomes | Where-Object { & $flag $_ 'ScaleOnly' } | ForEach-Object { $_.Name })
     $scaleTests = 0; foreach ($o in $Outcomes) { if ($o.PSObject.Properties['ScaleNotRun']) { $scaleTests += [int]$o.ScaleNotRun } }
-    $status = if ($timed.Count -or $notRun.Count) { 'NOT TESTED' } elseif ($red.Count -or $skipped.Count) { 'FAIL' } else { 'PASS' }
+    $status = if ($hung.Count -or $red.Count -or $skipped.Count) { 'FAIL' } else { 'PASS' }
     $parts = @()
-    if ($timed.Count) { $parts += ('TIMED OUT: ' + ($timed -join ', ')) }
-    if ($notRun.Count) { $parts += ('NOT RUN: ' + ($notRun -join ', ')) }
+    if ($hung.Count) { $parts += ('HUNG (printed nothing, ended): ' + ($hung -join ', ')) }
     if ($red.Count) { $parts += ('RED: ' + ($red -join ', ')) }
     if ($skipped.Count) { $parts += ('SKIPPED (a skip is not a pass): ' + ($skipped -join ', ')) }
     $scaleText = if ($scaleTests) { '; {0} test(s) not run (Scale, on demand){1}' -f $scaleTests, $(if ($scale.Count) { ' -- ' + ($scale -join ', ') + ' not run at all' } else { '' }) } else { '' }
     $text = switch ($status) {
-        'NOT TESTED' { 'NOT TESTED -- the gate was STOPPED at its 20-minute limit; a stopped run is never green (' + ($parts -join '; ') + ')' }
         'FAIL' { 'FAIL -- ' + ($parts -join '; ') + $scaleText }
         default { 'PASS -- {0} of {0} green{1}' -f (@($Outcomes).Count - $scale.Count), $scaleText }
     }
-    [pscustomobject]@{ Status = $status; Stopped = @($timed + $notRun); TimedOut = $timed; NotRun = $notRun; Red = $red; Skipped = $skipped; ScaleOnly = $scale; ScaleTests = $scaleTests; Text = $text }
+    [pscustomobject]@{ Status = $status; Stopped = $hung; Hung = $hung; TimedOut = @(); NotRun = @(); Red = $red; Skipped = $skipped; ScaleOnly = $scale; ScaleTests = $scaleTests; Text = $text }
 }
 
 function Get-SIQuickGateItemOutcome {
@@ -1111,7 +1062,7 @@ function Get-SIQuickGateItemOutcome {
         $o.Ok = $clean -and -not $o.SkipCount
         $o.NotGreen = $clean -and [bool]$o.SkipCount
         $o.ScaleOnly = $o.Ok -and $o.ScaleNotRun -gt 0 -and $ran -eq 0
-        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Ps51') { ', the 5.1 opt-in' } else { '' }) })) -join '; '
+        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Ps51') { ', the 5.1 opt-in' } elseif ($_ -eq 'Live') { ', needs a real run on its host' } else { '' }) })) -join '; '
         $skipText = if ($o.SkipCount) {
             $why = @(@($o.Skips | ForEach-Object { [string]$_.Because }) + @($o.NotRunUnexplained | ForEach-Object { 'did not run (no excluded tag)' }) | Group-Object | Sort-Object Count -Descending | ForEach-Object { if ($_.Count -gt 1) { '{0} x {1}' -f $_.Count, $_.Name } else { $_.Name } })
             ' ({0} skipped -- a skip is not a pass: {1})' -f $o.SkipCount, (($why | Select-Object -First 3) -join '; ')
@@ -1120,20 +1071,15 @@ function Get-SIQuickGateItemOutcome {
                   elseif ($o.ScaleOnly) { 'NOT RUN (Scale, on demand)  {0} test(s) left out' -f $o.ScaleNotRun }
                   else { '{0}  {1}/{2}{3}{4}' -f $(if ($o.Ok) { 'PASS' } elseif ($o.NotGreen) { 'NOT GREEN' } else { 'FAIL' }), $o.Passed, $ran, $(if (@($o.LoadFailures).Count) { ' (FAILED TO LOAD: 0 tests ran)' } elseif ($o.Failed) { " ($($o.Failed) failed)" } else { '' }), $skipText + $(if ($tagText) { " ($tagText)" } else { '' }) }
     }
-    if ($Result.State -eq 'TimedOut') { $o.Broken += ('{0} {1}' -f $Result.Name, $Result.Note) }
-    elseif ($Result.State -eq 'NotRun') { $o.Broken += ('{0} {1}' -f $Result.Name, $Result.Note) }
-    elseif ($Result.State -eq 'StartFailed') { $o.Broken += ('{0} {1}' -f $Result.Name, $Result.Note) }
+    if ($Result.State -in 'Hung', 'StartFailed') { $o.Broken += ('{0} {1}' -f $Result.Name, $Result.Note) }
     if ($o.Ok) { $o.Color = $(if ($o.ScaleOnly) { 'DarkYellow' } else { 'Green' }) }
     [pscustomobject]$o
 }
 
 function Get-SIQuickGateItemLabel {
-    <# PURE. One item's word in the gate's lists: PASS | FAIL | NOT GREEN (skipped) | NOT RUN (Scale, on demand) | TIMED OUT | NOT RUN. #>
+    <# PURE. One item's word in the gate's lists: PASS | FAIL | NOT GREEN (skipped) | NOT RUN (Scale, on demand) | HUNG. #>
     param([Parameter(Mandatory)]$Outcome)
-    switch ($Outcome.State) {
-        'TimedOut' { return 'TIMED OUT' }
-        'NotRun' { return 'NOT RUN' }
-    }
+    if ($Outcome.State -eq 'Hung') { return 'HUNG' }
     if ($Outcome.PSObject.Properties['ScaleOnly'] -and $Outcome.ScaleOnly) { return 'NOT RUN (Scale, on demand)' }
     if ($Outcome.Ok) { return 'PASS' }
     if ($Outcome.PSObject.Properties['NotGreen'] -and $Outcome.NotGreen) { return 'NOT GREEN (skipped)' }
@@ -1228,6 +1174,8 @@ if (Test-Path -LiteralPath $durationsFile) {
 $reasons = [ordered]@{}; $dotnetPick = [ordered]@{}; $unmapped = @(); $changed = @(); $overBudget = [ordered]@{}; $quickSel = $null
 $phase = [ordered]@{}; $selectSw = [Diagnostics.Stopwatch]::StartNew()
 if ($Precise -and -not $ListOnly) { Write-Host '  -Precise (the older covering selection) is a diagnostic: -ListOnly only -- the gate is the quick gate' -ForegroundColor Red; exit 2 }
+# every suite's text: the selection reads it, and the run asks which suites need SQL (a full run too)
+$suiteText = @{}; foreach ($s in $allSuites) { $suiteText[$s.Name] = [IO.File]::ReadAllText($s.FullName) }
 if ($Full) {
     foreach ($s in $allSuites) { $reasons[$s.Name] = 'full' }
     foreach ($d in $dotnetAll) { $dotnetPick[$d] = 'full' }
@@ -1241,7 +1189,6 @@ if ($Full) {
     # @( ) around the whole if: NO change must be an empty list, not $null (a gate at its own base failed to bind -Changed)
     # -Suites alone (the quick gate): exactly those + the core set -- what changed is not read at all
     $changed = @(if ($Paths) { @($Paths -split ';' | ForEach-Object { ($_.Trim() -replace '\\', '/').TrimStart('/') } | Where-Object { $_ }) } elseif ("$Suites".Trim() -and -not $Precise) { @() } else { @(Get-SIFastGateChangedPaths -RepoRoot $repoRoot -Base $Base) })
-    $suiteText = @{}; foreach ($s in $allSuites) { $suiteText[$s.Name] = [IO.File]::ReadAllText($s.FullName) }
     $codeText = @{}
     foreach ($f in @(Get-ChildItem -LiteralPath $siRoot -Recurse -File -Include '*.ps1', '*.psm1', '*.psd1' -ErrorAction SilentlyContinue)) {
         $rel = $f.FullName.Substring($siRoot.Length).TrimStart('\', '/') -replace '\\', '/'
@@ -1282,6 +1229,13 @@ if (-not $Full) {
     $fullRun = Test-SIFastGateFullRun -OwnerWords $OwnerWords -Selected $reasons.Count -Total $allSuites.Count
     if (-not $ListOnly -and -not $fullRun.Allowed) { Stop-SIFastGateRefused -Decision $fullRun }
 }
+# TEST-FAST: a test-VM LANE's share (-Only) -- of the selection, only these suites run here; the lane split and the merge
+# are tests\Invoke-GateOnTestVm.ps1's (after the full-run check above: a share never hides a selection of every suite)
+$onlyList = @($Only -split ';' | ForEach-Object { $n = $_.Trim(); if ($n) { if ($n -like '*.Tests.ps1') { $n } else { "$n.Tests.ps1" } } })
+if ($onlyList.Count) {
+    foreach ($k in @($reasons.Keys)) { if ($onlyList -notcontains $k) { $reasons.Remove($k) } }
+    foreach ($n in $onlyList) { if (-not $reasons.Contains($n) -and @($allSuites | Where-Object Name -eq $n).Count) { $reasons[$n] = 'this lane''s share (-Only)' } }
+}
 # the web app's test classes that cover the change (fast-gate.map.json dotnetFilter) -- decided here, so -ListOnly shows it
 $dotnetPlan = @()
 if ($dotnetPick.Count) {
@@ -1308,7 +1262,7 @@ if ($dotnetPick.Count) {
 $selectSw.Stop(); $phase['select'] = [Math]::Round($selectSw.Elapsed.TotalSeconds, 1)
 
 $line = '-' * 78
-$modeName = if ($Full) { 'FULL (sharded)' } elseif ($Precise) { 'PRECISE (covering) selection' } else { 'QUICK' }
+$modeName = if ($Full) { 'FULL (one process per suite)' } elseif ($Precise) { 'PRECISE (covering) selection' } else { 'QUICK' }
 Write-Host $line -ForegroundColor Cyan
 Write-Host ('  SecurityInsight -- {0} gate   ({1})' -f $modeName, $(if ($Full) { 'every suite' } else { "changes since $($Base.Substring(0, [Math]::Min(12, $Base.Length)))" })) -ForegroundColor Cyan
 Write-Host $line -ForegroundColor Cyan
@@ -1330,7 +1284,7 @@ if ($SelectionFile) {
                           OverBudget = @($overBudget.Keys); Dropped = @(); DotnetClasses = [ordered]@{} }
     foreach ($pj in $dotnetPlan) { $selDoc.DotnetClasses[$pj.Name] = $(if ($pj.Whole) { @('*') } else { @($pj.Classes) }) }
     # for the release command's STOP (setup\Release-SI.ps1: a selection of every suite, or one that cannot fit the
-    # 20-minute limit, is a question to the owner): how many suites there are, and the selection's measured seconds
+    # 10-minute target, is said): how many suites there are, and the selection's measured seconds
     $selSec = $durations[$(if ($Runtime -eq 'ps51') { 'ps51' } else { 'pwsh' })]; $selTotal = 0.0; $selLongest = 0.0; $selLongestName = ''
     foreach ($k in $reasons.Keys) { $x = if ($selSec.ContainsKey($k) -and $selSec[$k] -gt 0) { [double]$selSec[$k] } else { 20.0 }; $selTotal += $x; if ($x -gt $selLongest) { $selLongest = $x; $selLongestName = $k } }
     $selDoc.AllSuites = $allSuites.Count; $selDoc.MeasuredSeconds = [Math]::Round($selTotal, 1); $selDoc.LongestSeconds = [Math]::Round($selLongest, 1); $selDoc.LongestSuite = $selLongestName
@@ -1341,391 +1295,158 @@ if ($SelectionFile) {
 }
 if ($ListOnly) { exit 0 }
 
-# ---- 4q. THE QUICK GATE: every selected suite in its own process, in parallel; at 20 minutes STOP AND REPORT ------------
-if (-not $Full) {
-    $qRuntimes = @(switch ($Runtime) { 'both' { 'pwsh', 'ps51' } 'pwsh' { 'pwsh' } 'ps51' { 'ps51' } })
-    $qExe = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
-    foreach ($rt in $qRuntimes) { if (-not (Get-Command $qExe[$rt] -ErrorAction SilentlyContinue)) { Write-Host "  FATAL: $($qExe[$rt]) not found" -ForegroundColor Red; exit 2 } }
-    # owner 2026-10-29 ("just rerun with 40 min" / "approved"): above the hard 20 minutes ONLY on the owner's own words for this
-    # run (-OwnerWords), and never above 40 minutes; without his words the gate stops at 20 minutes as always
-    if (($SuiteLimitSeconds -gt 1200 -or $GateLimitSeconds -gt 1200) -and -not "$OwnerWords".Trim()) {
-        Write-Host '  REFUSED: a gate longer than 20 minutes runs only on the owner''s own words for this run (-OwnerWords). Nothing was run.' -ForegroundColor Red; exit 2
-    }
-    if ($SuiteLimitSeconds -gt 1200 -or $GateLimitSeconds -gt 1200) { Write-Host ("  the owner's words for this run raise the limit to {0:N0} min: '{1}'" -f ([Math]::Max($SuiteLimitSeconds, $GateLimitSeconds) / 60), "$OwnerWords".Trim()) -ForegroundColor Yellow }    $qSuiteLimit = if ($SuiteLimitSeconds -gt 0) { $SuiteLimitSeconds } else { $map.Quick.SuiteLimitSeconds }
-    $qGateLimit = if ($GateLimitSeconds -gt 0) { $GateLimitSeconds } else { $map.Quick.GateLimitSeconds }
-    if ($Scale) {
-        # a scale measurement runs only the suites named by -Suites, each as long as -TimeoutMinutes allows (on demand only)
-        if (-not "$Suites".Trim()) { Write-Host '  FATAL: -Scale runs only the suites named with -Suites (a measurement asked for by name)' -ForegroundColor Red; exit 2 }
-        $qSuiteLimit = [Math]::Max(60, 60 * $TimeoutMinutes); $qGateLimit = $qSuiteLimit
-        Write-Host ("  SCALE: the tests tagged Scale of {0} run, up to {1} minute(s) -- on demand only" -f $Suites, $TimeoutMinutes) -ForegroundColor Yellow
-    }
-    $qThrottle = if ($Workers -gt 0) { $Workers } else { [Math]::Max(1, [Math]::Min($map.Quick.Throttle, [Environment]::ProcessorCount)) }
-    $work = Join-Path ([IO.Path]::GetTempPath()) ('si-gate-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    New-Item -ItemType Directory -Force -Path $work | Out-Null
-    $shardScript = Join-Path $pesterDir '_Invoke-GateShard.ps1'
-    # a public copy leaves the private-repository checks out; EVERY gate leaves out the scale benchmarks (tag Scale); a
-    # suite the quick gate selects runs whole otherwise (its Nightly-tagged tests too: there is no nightly run)
-    $exclude = Get-SIFastGateExcludeTags -Scope $scope -Hotfix -Scale:$Scale
-    $exclude = Add-SIFastGatePs51Tag -Exclude $exclude -Runtime $Runtime
-    # THE GATE WAITS FOR SQL (owner 2026-10-25): a selected suite with real-SQL tests skips them without a local SQL
-    # Server, and a skip is not a pass -- so SQL Express is started and probed first, and SI_TEST_LOCALSQL is set for
-    # every suite. SQL that never answers = NOT TESTED, at once.
-    $sqlEnv = $null
-    $sqlSuites = @(Get-SIQuickGateSqlSuites -Names @($reasons.Keys) -SuiteText $suiteText)
-    if ($sqlSuites.Count) {
-        $sqlSw = [Diagnostics.Stopwatch]::StartNew()
-        $sqlServer = if ("$env:SI_TEST_LOCALSQL".Trim()) { "$env:SI_TEST_LOCALSQL".Trim() } else { '.\SQLEXPRESS' }
-        Write-Host ('  SQL: {0} selected suite(s) run tests on a real SQL Server -- waiting for {1} (SELECT 1, up to 180 s)' -f $sqlSuites.Count, $sqlServer) -ForegroundColor DarkGray
-        $sqlWait = Wait-SIQuickGateSql -Server $sqlServer
-        $phase['sql'] = [Math]::Round($sqlSw.Elapsed.TotalSeconds, 1)
-        if (-not $sqlWait.Ready) {
-            Write-Host ('  ' + $sqlWait.Text) -ForegroundColor Red
-            Write-Host ('  GATE: NOT TESTED   (SQL)') -BackgroundColor DarkRed -ForegroundColor White
-            if ($ResultFile) {
-                $dir = Split-Path -Parent $ResultFile; if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-                $nt = [ordered]@{ Mode = 'quick'; Base = "$Base"; Commit = "$(& git -C $repoRoot rev-parse HEAD 2>$null)".Trim(); Started = $started.ToString('o'); Seconds = [int]((Get-Date) - $started).TotalSeconds
-                                  Status = 'NOT TESTED'; StatusText = $sqlWait.Text; Sql = $sqlWait; SqlSuites = $sqlSuites; Suites = $reasons.Count; Changed = $changed.Count; Phases = $phase; SuiteResults = @(); OwnerWords = '' }
-                [IO.File]::WriteAllText($ResultFile, (ConvertTo-Json -InputObject $nt -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
-            }
-            $global:LASTEXITCODE = 0
-            exit 1
-        }
-        Write-Host ('  SQL: ' + $sqlWait.Text + ' -- SI_TEST_LOCALSQL=' + $sqlServer + ' for every suite') -ForegroundColor DarkGray
-        if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) { Write-Host '  SQL NOTE: sqlcmd is not on this machine -- a suite that calls it skips, and a skip is not a pass' -ForegroundColor Yellow }
-        $sqlEnv = @{ SI_TEST_LOCALSQL = $sqlServer }
-    }
-    $ps51Path = (@((Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'), (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'), (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')) -join ';')
-    $items = New-Object System.Collections.Generic.List[object]
-    # the web app first (its build is the longest item): only when a web app file changed (dotnetPlan), never the whole project
-    if (-not $NoDotnet -and $dotnetPlan.Count -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        $planFile = Join-Path $work 'dotnet-plan.json'
-        [IO.File]::WriteAllText($planFile, (ConvertTo-Json -InputObject @($dotnetPlan | ForEach-Object { [ordered]@{ Name = $_.Name; Path = $_.Path; Filter = $_.Filter } }) -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
-        foreach ($pj in $dotnetPlan) { Write-Host ("  dotnet {0}: {1}" -f $pj.Name, $(if ($pj.Whole) { 'the whole project' } else { 'only ' + (@($pj.Classes) -join ', ') })) -ForegroundColor DarkGray }
-        $dres = Join-Path $work 'dotnet.json'
-        $items.Add([pscustomobject]@{ Name = 'dotnet (' + (@($dotnetPlan | ForEach-Object { $_.Name }) -join ', ') + ')'; Kind = 'dotnet'; Exe = $qExe['pwsh']; ResultFile = $dres; Projects = @($dotnetPlan | ForEach-Object { $_.Name })
-                                      Args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $pesterDir '_Invoke-GateDotnet.ps1'), '-PlanFile', $planFile, '-ResultFile', $dres, '-LogFile', (Join-Path $work 'dotnet.log')); Env = $null })
-    }
-    $slowSuites = [ordered]@{}
-    foreach ($rt in $qRuntimes) {
-        $sec = $durations[$rt]
-        foreach ($s in @($reasons.Keys | Sort-Object -Property @{ Expression = { if ($sec.ContainsKey($_)) { [double]$sec[$_] } else { 20.0 } }; Descending = $true }, @{ Expression = { $_ } })) {
-            $k = $items.Count + 1
-            $list = Join-Path $work ('{0:D3}-{1}.txt' -f $k, $rt); $res = Join-Path $work ('{0:D3}-{1}.json' -f $k, $rt)
-            [IO.File]::WriteAllLines($list, [string[]]@(Join-Path $pesterDir $s))
-            $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $shardScript, '-ListFile', $list, '-ResultFile', $res)
-            if ($exclude) { $a += @('-ExcludeTag', $exclude) }
-            $envFor = if ($rt -eq 'ps51') { @{ PSModulePath = $ps51Path; SI_GATE_PS51 = '1' } } elseif ($qRuntimes -contains 'ps51') { @{ SI_GATE_PS51 = '1' } } else { $null }
-            # SI_TEST_LOCALSQL for EVERY suite (owner 2026-10-25), in the item's own environment -- set and restored around its start
-            if ($sqlEnv) { if (-not $envFor) { $envFor = @{} }; foreach ($ek in $sqlEnv.Keys) { $envFor[$ek] = $sqlEnv[$ek] } }
-            # a suite MEASURED over 20 minutes is not stopped at 20 (owner 2026-10-13: "accepted, skip 10 min for now"): it gets
-            # its measured time (x1.5 for a loaded VM) and the gate says plainly that it runs over the 20-minute limit
-            $slow = Get-SIQuickGateSlowLimit -MeasuredSeconds $(if ($sec.ContainsKey($s)) { [double]$sec[$s] } else { 0 })
-            if ($slow -gt 0) { $slowSuites[$s] = $slow; Write-Host ('  NOTE {0} is measured at {1:N0} s -- OVER THE 20-MINUTE LIMIT; it runs with its measured time (stopped only after {2:N0} s; owner 2026-10-13: "accepted, skip 10 min for now"), so this gate runs over 20 minutes' -f $s, [double]$sec[$s], $slow) -ForegroundColor Yellow }
-            $items.Add([pscustomobject]@{ Name = $(if ($qRuntimes.Count -gt 1) { "$s [$rt]" } else { $s }); Suite = $s; Runtime = $rt; Kind = 'pester'; Exe = $qExe[$rt]; Args = $a; ResultFile = $res; Env = $envFor; LimitSeconds = $slow })
-        }
-    }
-    # the whole gate never stops a named slow suite either: its limit grows to the longest slow suite's
-    if ($slowSuites.Count) { $qGateLimit = [Math]::Max($qGateLimit, [int](@($slowSuites.Values) | Measure-Object -Maximum).Maximum) }
-    Write-Host ('  QUICK GATE: {0} suite(s){1}, each in its own process, {2} at once; limit {3:N0} min per suite and {4:N0} min for the whole gate -- then STOP AND REPORT' -f @($items | Where-Object Kind -eq 'pester').Count, $(if (@($items | Where-Object Kind -eq 'dotnet').Count) { ' + the web app (build + its selected test classes)' } else { '' }), $qThrottle, ($qSuiteLimit / 60.0), ($qGateLimit / 60.0)) -ForegroundColor Cyan
-    $describe = { param($r) $x = Get-SIQuickGateItemOutcome -Result $r; [pscustomobject]@{ Text = $x.Text; Color = $x.Color } }
-    $runSw = [Diagnostics.Stopwatch]::StartNew()
-    $runRes = @(Invoke-SIQuickGateRun -Items $items.ToArray() -Work $work -Throttle $qThrottle -SuiteLimitSeconds $qSuiteLimit -GateLimitSeconds $qGateLimit -ProgressSeconds $ProgressSeconds -OnFinish $describe)
-    $runSw.Stop()
-    $outs = @($runRes | ForEach-Object { Get-SIQuickGateItemOutcome -Result $_ })
-    $verdict = Get-SIQuickGateStatus -Outcomes $outs
-    $summary = [ordered]@{ Mode = 'quick'; Base = "$Base"; Commit = "$(& git -C $repoRoot rev-parse HEAD 2>$null)".Trim(); Started = $started.ToString('o'); Seconds = 0; Status = $verdict.Status
-                           Changed = $changed.Count; Suites = $reasons.Count; Runtimes = [ordered]@{}; Dotnet = @(); Unmapped = $unmapped; OverBudget = @(); Phases = $phase; Budget = $null
-                           Stopped = @($verdict.Stopped); TimedOut = @($verdict.TimedOut); NotRun = @($verdict.NotRun); StatusText = $verdict.Text
-                           Limits = [ordered]@{ SuiteSeconds = $qSuiteLimit; GateSeconds = $qGateLimit; Throttle = $qThrottle; SlowSuites = $slowSuites }
-                           CoreSet = $(if ($quickSel) { [bool]$quickSel.Core } else { $false }); Broad = $(if ($quickSel) { $quickSel.Broad } else { [ordered]@{} }); Hubs = $(if ($quickSel) { @($quickSel.Hubs) } else { @() })
-                           SuiteResults = @(); OwnerWords = '' }
-    $global:LASTEXITCODE = 0
-    $newDurations = @{ pwsh = @{}; ps51 = @{} }
-    foreach ($rt in $qRuntimes) {
-        $agg = [ordered]@{ Passed = 0; Failed = 0; Skipped = 0; Total = 0; Shards = 0; Retried = 0; LongestShardSeconds = 0; WallSeconds = [int]$runSw.Elapsed.TotalSeconds; Failures = @(); LoadFailures = @(); Broken = @(); SlowTests = @() }
-        foreach ($o in @($outs | Where-Object { $_.Kind -eq 'pester' })) {
-            $it = @($runRes | Where-Object { $_.Name -eq $o.Name })[0].Item
-            if ($it.Runtime -ne $rt) { continue }
-            $agg.Shards++; $agg.Passed += $o.Passed; $agg.Failed += $o.Failed; $agg.Skipped += $o.Skipped; $agg.Total += $o.Total
-            if ($o.Seconds -gt $agg.LongestShardSeconds) { $agg.LongestShardSeconds = $o.Seconds }
-            foreach ($f in @($o.Failures)) { $agg.Failures += $f }
-            foreach ($f in @($o.LoadFailures)) { $agg.LoadFailures += $f }
-            foreach ($b in @($o.Broken)) { $agg.Broken += $b }
-            foreach ($c in @($o.Containers)) { if ($c -and $c.File) { $newDurations[$rt][[string]$c.File] = [double]$c.Seconds } }
-        }
-        $summary.Runtimes[$rt] = $agg
-    }
-    foreach ($o in @($outs | Where-Object { $_.Kind -eq 'dotnet' })) {
-        foreach ($d in @($o.Dotnet)) { $summary.Dotnet += $d }
-        if ($o.State -ne 'Done' -or @($o.Broken).Count) { $summary.Dotnet += [pscustomobject]@{ Project = 'dotnet'; Ok = $false; Summary = (@($o.Broken) -join ' | '); Seconds = [int]$o.Seconds } }
-    }
-    # EVERY selected suite by name, with its seconds and its verdict -- the proof of what was counted
-    $summary.SuiteResults = @(foreach ($o in $outs) {
-        [ordered]@{ Suite = $o.Name; Kind = $o.Kind; Status = (Get-SIQuickGateItemLabel -Outcome $o)
-                    Seconds = $o.Seconds; Passed = $o.Passed; Failed = $o.Failed; Skipped = $o.SkipCount; ScaleNotRun = $o.ScaleNotRun; Total = $o.Total
-                    SkipReasons = @($o.Skips | ForEach-Object { '{0}: {1}' -f $_.Test, $_.Because } | Select-Object -First 20)
-                    Reason = $(if ($reasons.Contains([string]$o.Name)) { [string]$reasons[[string]$o.Name] } else { '' }) }
-    })
-    $summary.Skipped = @($verdict.Skipped); $summary.ScaleNotRun = [ordered]@{ Tests = $verdict.ScaleTests; Suites = @($verdict.ScaleOnly); Text = 'not run (Scale, on demand)' }
-    $summary.Seconds = [int]((Get-Date) - $started).TotalSeconds
-    $phase['suites (wall)'] = [int]$runSw.Elapsed.TotalSeconds
-    $dB = @($summary.Dotnet | Where-Object { "$($_.Project)" -like 'build *' }); $dT = @($summary.Dotnet | Where-Object { "$($_.Project)" -notlike 'build *' -and $_.Project -ne 'dotnet' })
-    if ($dB.Count) { $phase['dotnet build'] = [int](($dB | Measure-Object -Property Seconds -Sum).Sum) }
-    if ($dT.Count) { $phase['dotnet tests'] = [int](($dT | Measure-Object -Property Seconds -Sum).Sum) }
-    $phase['total'] = $summary.Seconds
-    $summary.Budget = Get-SIFastGateBudget -Mode 'quick' -Seconds $summary.Seconds -OverBudget @($slowSuites.Keys)
-    $summary.OverBudget = @($slowSuites.Keys)
-
-    Write-Host ''
-    Write-Host ('  QUICK GATE TIMES (wall {0:N0} s; the slowest item sets it):' -f $runSw.Elapsed.TotalSeconds) -ForegroundColor Cyan
-    foreach ($o in @($outs | Sort-Object -Property Seconds -Descending)) {
-        Write-Host ('    {0,7:N1}s  {1,-10} {2}' -f $o.Seconds, (Get-SIQuickGateItemLabel -Outcome $o), $o.Name) -ForegroundColor $(if ($o.ScaleOnly) { 'DarkYellow' } elseif ($o.Ok) { 'Green' } else { 'Red' })
-        foreach ($f in @($o.Failures | Select-Object -First 10)) { Write-Host ('        FAIL {0}' -f $f.Test) -ForegroundColor Red; if ($f.Message) { Write-Host ('             -> ' + $f.Message) -ForegroundColor DarkGray } }
-        foreach ($f in @($o.Skips | Select-Object -First 10)) { Write-Host ('        SKIPPED (not a pass) {0} -- {1}' -f $f.Test, $f.Because) -ForegroundColor Red }
-        foreach ($f in @($o.NotRunUnexplained | Select-Object -First 5)) { Write-Host ('        DID NOT RUN (no excluded tag) {0}' -f $f.Test) -ForegroundColor Red }
-        if ($o.ScaleNotRun) { Write-Host ('        {0} test(s) not run (Scale, on demand)' -f $o.ScaleNotRun) -ForegroundColor DarkYellow }
-        foreach ($f in @($o.LoadFailures)) { Write-Host ('        LOAD FAILED (0 tests ran): {0}' -f $f.Message) -ForegroundColor Red }
-        foreach ($d in @($o.Dotnet)) { Write-Host ('        dotnet {0,-28} {1}  {2} ({3}s)' -f $d.Project, $(if ($d.Ok) { 'ok  ' } else { 'FAIL' }), $d.Summary, $d.Seconds) -ForegroundColor $(if ($d.Ok) { 'DarkGray' } else { 'Red' }) }
-        foreach ($b in @($o.Broken)) { Write-Host ('        ' + $b) -ForegroundColor Red }
-    }
-    Write-Host ''
-    Write-Host '  timing (seconds):' -ForegroundColor Cyan
-    foreach ($k in $phase.Keys) { Write-Host ('    {0,-24} {1,6}' -f $k, $phase[$k]) }
-    Write-Host ('    {0}' -f $summary.Budget.Text) -ForegroundColor $(if ($summary.Budget.Met) { 'Green' } else { 'Yellow' })
-    foreach ($n in @($verdict.TimedOut)) { $tn = @($runRes | Where-Object { $_.Name -eq $n })[0]; Write-Host ('  QUICK GATE TIMED OUT: {0} after {1:N1} min' -f $n, ($tn.Seconds / 60.0)) -ForegroundColor Red }
-    foreach ($n in @($verdict.NotRun)) { Write-Host ('  QUICK GATE NOT RUN: {0}' -f $n) -ForegroundColor Red }
-    foreach ($n in @($verdict.Skipped)) { Write-Host ('  QUICK GATE NOT GREEN (skipped tests are not passes): {0}' -f $n) -ForegroundColor Red }
-    Write-Host ('  QUICK GATE RESULT: {0} of {1} green -- {2}' -f @($outs | Where-Object { $_.Ok -and -not $_.ScaleOnly }).Count, ($outs.Count - @($verdict.ScaleOnly).Count), $verdict.Text)
-    $bad = $verdict.Status -ne 'PASS'
-    Write-Host ('  GATE: {0}   in {1} min' -f $summary.Status, [int][Math]::Ceiling(((Get-Date) - $started).TotalMinutes)) -BackgroundColor $(if ($bad) { 'DarkRed' } else { 'DarkGreen' }) -ForegroundColor White
-    Write-Host ''
-    if ($UpdateDurations) { Write-SIFastGateDurations -Path $durationsFile -New $newDurations -Old $durations }
-    if ($ResultFile) {
-        $dir = Split-Path -Parent $ResultFile; if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        $summary.Durations = $newDurations
-        [IO.File]::WriteAllText($ResultFile, (ConvertTo-Json -InputObject $summary -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
-    }
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    if ($bad) { exit 1 }
-    exit 0
+# ---- 4. THE RUN: every selected suite in its own process, in parallel -- the quick gate AND a full run, the same way ------
+# TEST-FAST (owner 2026-11-02: "redesign the tests so all do it the same way and we remove these limits"): no clock ends a
+# suite or the gate; a suite that prints NOTHING for -HangSeconds (5 min) is ended, red, by name; the others carry on
+$qRuntimes = @(switch ($Runtime) { 'both' { 'pwsh', 'ps51' } 'pwsh' { 'pwsh' } 'ps51' { 'ps51' } })
+$qExe = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
+foreach ($rt in $qRuntimes) { if (-not (Get-Command $qExe[$rt] -ErrorAction SilentlyContinue)) { Write-Host "  FATAL: $($qExe[$rt]) not found" -ForegroundColor Red; exit 2 } }
+# the old time limits are inert (deprecated): said, never applied
+if ($TimeoutMinutes -gt 0 -or $SuiteLimitSeconds -gt 0 -or $GateLimitSeconds -gt 0) { Write-Host '  NOTE -TimeoutMinutes / -SuiteLimitSeconds / -GateLimitSeconds are deprecated and do nothing: no time limit ends a run (TEST-FAST, owner 2026-11-02); only a suite silent for 5 minutes is ended' -ForegroundColor DarkYellow }
+$qHang = if ($HangSeconds -gt 0) { $HangSeconds } else { $map.Quick.HangSeconds }
+if ($Scale) {
+    # a scale measurement runs only the suites named by -Suites (on demand only); no clock, the hang rule only
+    if (-not "$Suites".Trim()) { Write-Host '  FATAL: -Scale runs only the suites named with -Suites (a measurement asked for by name)' -ForegroundColor Red; exit 2 }
+    Write-Host ("  SCALE: the tests tagged Scale of {0} run -- on demand only" -f $Suites) -ForegroundColor Yellow
 }
-
-# ---- 4. run: the runtime(s) asked for (default PowerShell 7 only), each sharded; dotnet alongside ----------------------
-
-$runtimes = switch ($Runtime) { 'both' { @('ps51', 'pwsh') } 'pwsh' { @('pwsh') } 'ps51' { @('ps51') } }
-$cores = [Environment]::ProcessorCount
-$loadPct = 0.0
-if ($Workers -le 0) {
-    # bounded by the cores that are FREE now (other gates, upgrade tests and sessions share mgmt1)
-    try { $loadPct = [double](@(1..3 | ForEach-Object { (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Measure-Object -Property LoadPercentage -Average).Average; Start-Sleep -Milliseconds 300 }) | Measure-Object -Average).Average } catch { $loadPct = 0.0 }
-    $Workers = Get-SIFastGateWorkers -Cores $cores -Runtimes $runtimes.Count -LoadPercent $loadPct
-}
+$qThrottle = if ($Workers -gt 0) { $Workers } else { [Math]::Max(1, [Math]::Min($map.Quick.Throttle, [Environment]::ProcessorCount)) }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('si-gate-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $shardScript = Join-Path $pesterDir '_Invoke-GateShard.ps1'
-# a public copy leaves the private-repository checks out; only the dev FAST gate leaves out the tests tagged Nightly (slow by
-# nature, docs\TESTS.md 5b; the tag keeps its old name) -- a full run (only on the owner's words) runs them, and so does -Hotfix: a suite
-# that covers the change runs WHOLE, there is no nightly run to catch what it would skip -- except the tests tagged Scale
-# (the scale benchmarks, -Full only: a hotfix gate is fast, owner 2026-10-10)
-$exclude = Get-SIFastGateExcludeTags -Scope $scope -Full:$Full -Hotfix:$Hotfix
+# a public copy leaves the private-repository checks out; EVERY gate leaves out the scale benchmarks (tag Scale); a
+# selected suite runs whole otherwise (its Nightly-tagged tests too: there is no nightly run) -- a full run the same
+$exclude = Get-SIFastGateExcludeTags -Scope $scope -Full:$Full -Hotfix:(-not $Full) -Scale:$Scale
 $exclude = Add-SIFastGatePs51Tag -Exclude $exclude -Runtime $Runtime
-$names = @($reasons.Keys)
-$procs = New-Object System.Collections.Generic.List[object]
-$ps51Path = (@((Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'), (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'), (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')) -join ';')
-$keepPath = $env:PSModulePath
-$queue = @{}; $exeOf = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
-foreach ($rt in $runtimes) {
-    if (-not (Get-Command $exeOf[$rt] -ErrorAction SilentlyContinue)) { Write-Host "  FATAL: $($exeOf[$rt]) not found" -ForegroundColor Red; exit 2 }
-    $queue[$rt] = New-Object System.Collections.Generic.Queue[object]
-    foreach ($b in @(New-SIFastGateBatches -Names $names -Workers $Workers -Seconds $durations[$rt])) { if (@($b).Count) { $queue[$rt].Enqueue([pscustomobject]@{ Suites = @($b); Attempt = 1 }) } }
+# THE GATE WAITS FOR SQL (owner 2026-10-25): a selected suite with real-SQL tests skips them without a local SQL
+# Server, and a skip is not a pass -- so SQL Express is started and probed first, and SI_TEST_LOCALSQL is set for
+# every suite. SQL that never answers = NOT TESTED, at once.
+$sqlEnv = $null
+$sqlSuites = @(Get-SIQuickGateSqlSuites -Names @($reasons.Keys) -SuiteText $suiteText)
+if ($sqlSuites.Count) {
+    $sqlSw = [Diagnostics.Stopwatch]::StartNew()
+    $sqlServer = if ("$env:SI_TEST_LOCALSQL".Trim()) { "$env:SI_TEST_LOCALSQL".Trim() } else { '.\SQLEXPRESS' }
+    Write-Host ('  SQL: {0} selected suite(s) run tests on a real SQL Server -- waiting for {1} (SELECT 1, up to 180 s)' -f $sqlSuites.Count, $sqlServer) -ForegroundColor DarkGray
+    $sqlWait = Wait-SIQuickGateSql -Server $sqlServer
+    $phase['sql'] = [Math]::Round($sqlSw.Elapsed.TotalSeconds, 1)
+    if (-not $sqlWait.Ready) {
+        Write-Host ('  ' + $sqlWait.Text) -ForegroundColor Red
+        Write-Host ('  GATE: NOT TESTED   (SQL)') -BackgroundColor DarkRed -ForegroundColor White
+        if ($ResultFile) {
+            $dir = Split-Path -Parent $ResultFile; if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+            $nt = [ordered]@{ Mode = 'quick'; Base = "$Base"; Commit = "$(& git -C $repoRoot rev-parse HEAD 2>$null)".Trim(); Started = $started.ToString('o'); Seconds = [int]((Get-Date) - $started).TotalSeconds
+                              Status = 'NOT TESTED'; StatusText = $sqlWait.Text; Sql = $sqlWait; SqlSuites = $sqlSuites; Suites = $reasons.Count; Changed = $changed.Count; Phases = $phase; SuiteResults = @(); OwnerWords = '' }
+            [IO.File]::WriteAllText($ResultFile, (ConvertTo-Json -InputObject $nt -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+        }
+        $global:LASTEXITCODE = 0
+        exit 1
+    }
+    Write-Host ('  SQL: ' + $sqlWait.Text + ' -- SI_TEST_LOCALSQL=' + $sqlServer + ' for every suite') -ForegroundColor DarkGray
+    if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) { Write-Host '  SQL NOTE: sqlcmd is not on this machine -- a suite that calls it skips, and a skip is not a pass' -ForegroundColor Yellow }
+    $sqlEnv = @{ SI_TEST_LOCALSQL = $sqlServer }
 }
-# the whole run's backstop, scaled to the work (a loaded machine makes the run slower, not red)
-$rtSeconds = @(foreach ($rt in $runtimes) { $t = 0.0; foreach ($n in $names) { $t += $(if ($durations[$rt].ContainsKey($n) -and $durations[$rt][$n] -gt 0) { $durations[$rt][$n] } else { 20 }) }; $t })
-$longestSuite = 0.0; foreach ($rt in $runtimes) { foreach ($n in $names) { if ($durations[$rt].ContainsKey($n) -and $durations[$rt][$n] -gt $longestSuite) { $longestSuite = [double]$durations[$rt][$n] } } }
-$deadlineMinutes = Get-SIFastGateDeadlineMinutes -TimeoutMinutes $TimeoutMinutes -RuntimeSeconds $rtSeconds -Workers $Workers -LongestSeconds $longestSuite
-if ($loadPct -gt 0 -or $deadlineMinutes -gt $TimeoutMinutes) { Write-Host ('  {0} worker(s) per runtime (CPU {1:N0}% busy before the start); deadline {2} min' -f $Workers, $loadPct, $deadlineMinutes) -ForegroundColor DarkGray }
-$batchNo = 0
-$startBatch = {
-    param($rt, $item)
-    $batch = @($item.Suites)
-    $script:batchNo++
-    $list = Join-Path $work ("{0}-{1}.txt" -f $rt, $script:batchNo); $res = Join-Path $work ("{0}-{1}.json" -f $rt, $script:batchNo)
-    [IO.File]::WriteAllLines($list, [string[]]@($batch | ForEach-Object { Join-Path $pesterDir $_ }))
-    # a 5.1 child started from PowerShell 7 must not inherit 7's module path (Get-FileHash, cert auth break)
-    $env:PSModulePath = if ($rt -eq 'ps51') { $ps51Path } else { $keepPath }
-    # the 5.1 opt-in also runs the 5.1-PARITY probes, which v3 skips otherwise (they read SI_GATE_PS51)
-    $keepPs51Flag = $env:SI_GATE_PS51
-    if ($runtimes -contains 'ps51') { $env:SI_GATE_PS51 = '1' }
-    try {
+$ps51Path = (@((Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'), (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'), (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')) -join ';')
+$items = New-Object System.Collections.Generic.List[object]
+# the web app first (its build is the longest item): only when a web app file changed (dotnetPlan), never the whole project
+if (-not $NoDotnet -and $dotnetPlan.Count -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    $planFile = Join-Path $work 'dotnet-plan.json'
+    [IO.File]::WriteAllText($planFile, (ConvertTo-Json -InputObject @($dotnetPlan | ForEach-Object { [ordered]@{ Name = $_.Name; Path = $_.Path; Filter = $_.Filter } }) -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+    foreach ($pj in $dotnetPlan) { Write-Host ("  dotnet {0}: {1}" -f $pj.Name, $(if ($pj.Whole) { 'the whole project' } else { 'only ' + (@($pj.Classes) -join ', ') })) -ForegroundColor DarkGray }
+    $dres = Join-Path $work 'dotnet.json'
+    # Watch: its log counts as printing too (the hang rule reads every file the part writes to)
+    $items.Add([pscustomobject]@{ Name = 'dotnet (' + (@($dotnetPlan | ForEach-Object { $_.Name }) -join ', ') + ')'; Kind = 'dotnet'; Exe = $qExe['pwsh']; ResultFile = $dres; Projects = @($dotnetPlan | ForEach-Object { $_.Name }); Watch = @((Join-Path $work 'dotnet.log'), $dres)
+                                  Args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $pesterDir '_Invoke-GateDotnet.ps1'), '-PlanFile', $planFile, '-ResultFile', $dres, '-LogFile', (Join-Path $work 'dotnet.log')); Env = $null })
+}
+foreach ($rt in $qRuntimes) {
+    $sec = $durations[$rt]
+    foreach ($s in @($reasons.Keys | Sort-Object -Property @{ Expression = { if ($sec.ContainsKey($_)) { [double]$sec[$_] } else { 20.0 } }; Descending = $true }, @{ Expression = { $_ } })) {
+        $k = $items.Count + 1
+        $list = Join-Path $work ('{0:D3}-{1}.txt' -f $k, $rt); $res = Join-Path $work ('{0:D3}-{1}.json' -f $k, $rt)
+        [IO.File]::WriteAllLines($list, [string[]]@(Join-Path $pesterDir $s))
         $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $shardScript, '-ListFile', $list, '-ResultFile', $res)
         if ($exclude) { $a += @('-ExcludeTag', $exclude) }
-        $p = Start-Process -FilePath $exeOf[$rt] -ArgumentList $a -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $work ("{0}-{1}.out" -f $rt, $script:batchNo)) -RedirectStandardError (Join-Path $work ("{0}-{1}.err" -f $rt, $script:batchNo))
-    } finally { $env:PSModulePath = $keepPath; $env:SI_GATE_PS51 = $keepPs51Flag }
-    $procs.Add([pscustomobject]@{ Kind = 'pester'; Runtime = $rt; Shard = $script:batchNo; Process = $p; Result = $res; Suites = @($batch); Err = (Join-Path $work ("{0}-{1}.err" -f $rt, $script:batchNo))
-                                  Attempt = [int]$item.Attempt; StartedAt = (Get-Date); TimeoutSeconds = (Get-SIFastGateBatchTimeout -Names $batch -Seconds $durations[$rt]); Retried = $false; State = '' })
-}
-$dotnetResults = New-Object System.Collections.Generic.List[object]
-$dotnetJob = $null
-# #416: the dotnet BUILD runs in every gate (a change to any file can break the web app's compile), its tests only for the
-# projects and classes that cover the change (decided above)
-if (-not $NoDotnet -and $map.Solution -and (Test-Path -LiteralPath $sln) -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    $dlog = Join-Path $work 'dotnet.log'
-    $projects = @($dotnetPlan | ForEach-Object { [pscustomobject]@{ Path = $_.Path; Filter = $_.Filter } })
-    foreach ($pj in $dotnetPlan) { if (-not $pj.Whole) { Write-Host ("  dotnet {0}: only {1}" -f $pj.Name, (@($pj.Classes) -join ', ')) -ForegroundColor DarkGray } }
-    $dotnetJob = Start-Job -ScriptBlock {
-        param($sln, $projects, $log)
-        $res = @()
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-        # #416: never reuse MSBuild nodes -- the test VM is shared by many sessions under one account, and a reused node that
-        # another build ends takes this one down (MSB4166 'Child node exited prematurely', 2026-10-09); such a crash builds once more
-        $b = @(& dotnet build $sln -c Release --nologo -v q -nodeReuse:false 2>&1); $bc = $LASTEXITCODE
-        if ($bc -and ($b -match 'MSB4166')) { Add-Content -LiteralPath $log -Value ($b | Out-String); $b = @(& dotnet build $sln -c Release --nologo -v q -nodeReuse:false 2>&1); $bc = $LASTEXITCODE }
-        Add-Content -LiteralPath $log -Value ($b | Out-String)
-        # a failed build names its first errors here: dotnet.log stays in the gate's work folder, which a test-VM run does not bring back
-        $buildErrors = @($b | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match ':\s*error\s+[A-Z]+\d+' } | Select-Object -Unique -First 8)
-        $res += [pscustomobject]@{ Project = 'build'; Ok = ($bc -eq 0); Summary = $(if ($bc) { 'dotnet build FAILED' + $(if ($buildErrors.Count) { ': ' + ($buildErrors -join ' | ') } else { '' }) } else { 'built' }); Seconds = [int]$sw.Elapsed.TotalSeconds }
-        if ($bc -eq 0) {
-            # a loaded machine: the test host may take longer than vstest's default 90 s to connect -- the nightly of
-            # 2026-10-07 lost all three projects that way (FAIL with no test result line, tests that pass in 1 s)
-            $env:VSTEST_CONNECTION_TIMEOUT = '600'
-            foreach ($pj in $projects) {
-                $sw.Restart()
-                $ta = @('test', $pj.Path, '-c', 'Release', '--no-build', '--nologo')
-                if ($pj.Filter) { $ta += @('--filter', $pj.Filter) }
-                $sum = ''; $tc = 0; $note = ''
-                foreach ($attempt in 1, 2) {
-                    $o = @(& dotnet @ta 2>&1 | ForEach-Object { "$_" }); $tc = $LASTEXITCODE
-                    Add-Content -LiteralPath $log -Value ($o | Out-String)
-                    $sum = @($o | Where-Object { $_ -match '(Passed|Failed|Skipped)!\s+-' } | ForEach-Object { $_.Trim() }) -join ' '
-                    # each failed test with the first line of its error message (dotnet.log stays on the VM)
-                    $names = @(for ($k = 0; $k -lt $o.Count; $k++) {
-                        if ($o[$k] -notmatch '^\s+Failed\s+\S') { continue }
-                        $why = ''
-                        for ($m = $k + 1; $m -lt [Math]::Min($o.Count, $k + 8); $m++) {
-                            if ($o[$m] -match '^\s*Error Message:') { $why = @($o[($m + 1)..([Math]::Min($o.Count - 1, $m + 2))] | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' '; break }
-                        }
-                        $line = $o[$k].Trim() + $(if ($why) { ' -- ' + $(if ($why.Length -gt 700) { $why.Substring(0, 700) } else { $why }) } else { '' })
-                        $line
-                    }) | Select-Object -First 15
-                    if ($names.Count) { $sum = ($(if ($sum) { $sum } else { '' }) + ' | ' + ($names -join ' | ')).Trim(' ', '|') }
-                    # NO result line = the test run itself never happened (host crash, connection timeout): run it once more;
-                    # a run that reported failed tests is a real result and is never re-run
-                    if ($tc -eq 0 -or ($o -match '(Passed|Failed|Skipped)!\s+-')) { break }
-                    $tail = @($o | Where-Object { $_.Trim() } | Select-Object -Last 4) -join ' / '
-                    $note = "attempt $attempt produced no test result (exit $tc): $tail"
-                    $sum = $note
-                }
-                if ($note -and $tc -eq 0) { $sum = "$sum (passed on the re-run; first: $note)" }
-                $res += [pscustomobject]@{ Project = [IO.Path]::GetFileNameWithoutExtension($pj.Path); Ok = ($tc -eq 0); Summary = $(if ($pj.Filter) { "[filtered] $sum" } else { $sum }); Seconds = [int]$sw.Elapsed.TotalSeconds }
-            }
-        }
-        $res
-    } -ArgumentList $sln, $projects, $dlog
-}
-
-# ---- run the queues; wait (only for the processes THIS gate started) ----------------------------------------------------
-$deadline = (Get-Date).AddMinutes($deadlineMinutes)
-while ($true) {
-    # a batch past ITS OWN timeout (a hang, or a machine slowed far beyond the measured time) is stopped by its own id and
-    # re-run ONCE in a fresh process; a batch whose process ended without a result (it never really started) likewise
-    foreach ($p in @($procs | Where-Object { $_.Process -and -not $_.State })) {
-        $over = (-not $p.Process.HasExited) -and (((Get-Date) - $p.StartedAt).TotalSeconds -gt $p.TimeoutSeconds)
-        $noResult = $p.Process.HasExited -and -not (Test-Path -LiteralPath $p.Result)
-        if (-not $over -and -not $noResult) { continue }
-        if ($over) { try { Stop-Process -Id $p.Process.Id -Force -ErrorAction SilentlyContinue } catch { }; $p.State = 'TimedOut' } else { $p.State = 'NoResult' }
-        if ($p.Attempt -lt 2) {
-            $p.Retried = $true
-            Write-Host ('  [{0}] batch {1} {2} -- re-run once ({3})' -f $p.Runtime, $p.Shard, $(if ($over) { "passed its $($p.TimeoutSeconds)s timeout" } else { 'ended without a result' }), ($p.Suites -join ', ')) -ForegroundColor Yellow
-            $queue[$p.Runtime].Enqueue([pscustomobject]@{ Suites = @($p.Suites); Attempt = $p.Attempt + 1 })
-        }
+        $envFor = if ($rt -eq 'ps51') { @{ PSModulePath = $ps51Path; SI_GATE_PS51 = '1' } } elseif ($qRuntimes -contains 'ps51') { @{ SI_GATE_PS51 = '1' } } else { $null }
+        # SI_TEST_LOCALSQL for EVERY suite (owner 2026-10-25), in the item's own environment -- set and restored around its start
+        if ($sqlEnv) { if (-not $envFor) { $envFor = @{} }; foreach ($ek in $sqlEnv.Keys) { $envFor[$ek] = $sqlEnv[$ek] } }
+        $items.Add([pscustomobject]@{ Name = $(if ($qRuntimes.Count -gt 1) { "$s [$rt]" } else { $s }); Suite = $s; Runtime = $rt; Kind = 'pester'; Exe = $qExe[$rt]; Args = $a; ResultFile = $res; Env = $envFor })
     }
-    foreach ($rt in $runtimes) {
-        while ($queue[$rt].Count -and @($procs | Where-Object { $_.Runtime -eq $rt -and $_.Process -and -not $_.Process.HasExited }).Count -lt $Workers) { & $startBatch $rt $queue[$rt].Dequeue() }
-    }
-    $running = @($procs | Where-Object { $_.Process -and -not $_.Process.HasExited })
-    if (-not $running.Count -and -not @($runtimes | Where-Object { $queue[$_].Count }).Count) { break }
-    if ((Get-Date) -gt $deadline) {
-        foreach ($p in $running) { try { Stop-Process -Id $p.Process.Id -Force -ErrorAction SilentlyContinue } catch { }; $p.State = 'Deadline' }
-        # what is still queued never ran: reported as such, never a pass
-        foreach ($rt in $runtimes) { while ($queue[$rt].Count) { $b = $queue[$rt].Dequeue(); $procs.Add([pscustomobject]@{ Kind = 'pester'; Runtime = $rt; Shard = 0; Process = $null; Result = ''; Suites = @($b.Suites); Err = ''; Attempt = $b.Attempt; Retried = $false; State = 'NeverStarted' }) } }
-        break
-    }
-    if ($running.Count) { $null = $running[0].Process.WaitForExit(1000) }
 }
-if ($dotnetJob) {
-    $left = [int][Math]::Max(1, ($deadline - (Get-Date)).TotalSeconds)
-    if (Wait-Job $dotnetJob -Timeout $left) { foreach ($r in @(Receive-Job $dotnetJob)) { $dotnetResults.Add($r) } }
-    else { Stop-Job $dotnetJob; $dotnetResults.Add([pscustomobject]@{ Project = 'dotnet'; Ok = $false; Summary = 'timed out'; Seconds = 0 }) }
-    Remove-Job $dotnetJob -Force
-}
-
-# ---- 5. result ----------------------------------------------------------------------------------------------------------
-$summary = [ordered]@{ Mode = $(if ($Full) { 'full' } elseif ($Hotfix) { 'hotfix' } else { 'fast' }); Base = "$Base"; Commit = "$(& git -C $repoRoot rev-parse HEAD 2>$null)".Trim()
-                       Started = $started.ToString('o'); Seconds = 0; Status = ''; Changed = $changed.Count; Suites = $names.Count; Runtimes = [ordered]@{}; Dotnet = @(); Unmapped = $unmapped; OverBudget = @($overBudget.Keys); Phases = $phase; Budget = $null }
+$gateName = if ($Full) { 'FULL RUN' } else { 'QUICK GATE' }
+Write-Host ('  {0}: {1} suite(s){2}, each in its own process, {3} at once; no time limit -- a suite that prints nothing for {4:N0} min is ended (HUNG, red); the target is {5:N0} min{6}' -f $gateName, @($items | Where-Object Kind -eq 'pester').Count, $(if (@($items | Where-Object Kind -eq 'dotnet').Count) { ' + the web app (build + its selected test classes)' } else { '' }), $qThrottle, ($qHang / 60.0), ($map.Quick.TargetSeconds / 60.0), $(if ($onlyList.Count) { " (this lane's share: $($onlyList.Count) suite(s))" } else { '' })) -ForegroundColor Cyan
+$describe = { param($r) $x = Get-SIQuickGateItemOutcome -Result $r; [pscustomobject]@{ Text = $x.Text; Color = $x.Color } }
+$runSw = [Diagnostics.Stopwatch]::StartNew()
+$qHangBy = @{}
+try { $mj = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'pester\fast-gate.map.json') | ConvertFrom-Json; if ($mj.quick -and $mj.quick.PSObject.Properties['hangSecondsBySuite']) { foreach ($pp in $mj.quick.hangSecondsBySuite.PSObject.Properties) { if ($pp.Name -notmatch '^_') { $qHangBy[$pp.Name] = [double]$pp.Value } } } } catch { }
+$runRes = @(Invoke-SIQuickGateRun -Items $items.ToArray() -Work $work -Throttle $qThrottle -HangSeconds $qHang -ProgressSeconds $ProgressSeconds -OnFinish $describe -HangOverride $qHangBy)
+$runSw.Stop()
+$outs = @($runRes | ForEach-Object { Get-SIQuickGateItemOutcome -Result $_ })
+$verdict = Get-SIQuickGateStatus -Outcomes $outs
+$summary = [ordered]@{ Mode = $(if ($Full) { 'full' } else { 'quick' }); Base = "$Base"; Commit = "$(& git -C $repoRoot rev-parse HEAD 2>$null)".Trim(); Started = $started.ToString('o'); Seconds = 0; Status = $verdict.Status
+                       Changed = $changed.Count; Suites = $reasons.Count; Runtimes = [ordered]@{}; Dotnet = @(); Unmapped = $unmapped; OverBudget = @($overBudget.Keys); Phases = $phase; Budget = $null
+                       Stopped = @($verdict.Stopped); Hung = @($verdict.Hung); TimedOut = @(); NotRun = @(); StatusText = $verdict.Text
+                       Limits = [ordered]@{ HangSeconds = $qHang; TargetSeconds = $map.Quick.TargetSeconds; Throttle = $qThrottle }
+                       Only = @($onlyList)
+                       CoreSet = $(if ($quickSel) { [bool]$quickSel.Core } else { $false }); Broad = $(if ($quickSel) { $quickSel.Broad } else { [ordered]@{} }); Hubs = $(if ($quickSel) { @($quickSel.Hubs) } else { @() })
+                       SuiteResults = @(); OwnerWords = [string]$fullRun.Words }
 $global:LASTEXITCODE = 0
-# a full run carries the owner's own words for it (the refusal above let nothing else through); any other run carries none
-$summary.OwnerWords = [string]$fullRun.Words
-$bad = $false
 $newDurations = @{ pwsh = @{}; ps51 = @{} }
-foreach ($rt in $runtimes) {
-    $agg = [ordered]@{ Passed = 0; Failed = 0; Skipped = 0; Total = 0; Shards = 0; Retried = 0; LongestShardSeconds = 0; WallSeconds = 0; Failures = @(); LoadFailures = @(); Broken = @(); SlowTests = @() }
-    $mine = @($procs | Where-Object { $_.Runtime -eq $rt -and $_.Process })
-    if ($mine.Count) { try { $agg.WallSeconds = [int](($mine | ForEach-Object { $_.Process.ExitTime } | Measure-Object -Maximum).Maximum - ($mine | ForEach-Object { $_.Process.StartTime } | Measure-Object -Minimum).Minimum).TotalSeconds } catch { } }
-    foreach ($p in @($procs | Where-Object Runtime -eq $rt)) {
-        # a batch that was re-run counts by its re-run alone
-        if ($p.Retried) { $agg.Retried++; continue }
-        $agg.Shards++
-        $retry = if ($p.Attempt -gt 1) { ', already a re-run' } else { '' }
-        switch ($p.State) {
-            'TimedOut'     { $agg.Broken += ("batch {0} passed its own timeout of {1}s{2} -- stopped ({3})" -f $p.Shard, $p.TimeoutSeconds, $retry, ($p.Suites -join ', ')) }
-            'NoResult'     { $agg.Broken += ("batch {0} ended without a result{1} ({2}): {3}" -f $p.Shard, $retry, ($p.Suites -join ', '), ((Get-Content -Raw -LiteralPath $p.Err -ErrorAction SilentlyContinue) -replace '\s+', ' ')) }
-            'Deadline'     { $agg.Broken += ("batch {0} still running at the run's deadline ({1} min) -- stopped ({2})" -f $p.Shard, $deadlineMinutes, ($p.Suites -join ', ')) }
-            'NeverStarted' { $agg.Broken += ("never started: the run's deadline ({0} min) passed with it still queued ({1})" -f $deadlineMinutes, ($p.Suites -join ', ')) }
-        }
-        if ($p.State) { continue }
-        if (-not (Test-Path -LiteralPath $p.Result)) { $agg.Broken += ("batch {0} wrote no result ({1}): {2}" -f $p.Shard, ($p.Suites -join ', '), ((Get-Content -Raw -LiteralPath $p.Err -ErrorAction SilentlyContinue) -replace '\s+', ' ')); continue }
-        $r = [IO.File]::ReadAllText($p.Result) | ConvertFrom-Json
-        if ($r.Error) { $agg.Broken += ("batch {0}: {1}" -f $p.Shard, $r.Error) }
-        $agg.Passed += [int]$r.Passed; $agg.Failed += [int]$r.Failed; $agg.Skipped += [int]$r.Skipped; $agg.Total += [int]$r.Total
-        if ([double]$r.Seconds -gt $agg.LongestShardSeconds) { $agg.LongestShardSeconds = [double]$r.Seconds }
-        foreach ($f in @($r.Failures)) { if ($f) { $agg.Failures += $f } }
-        foreach ($f in @($r.LoadFailures)) { if ($f) { $agg.LoadFailures += $f } }
-        foreach ($c in @($r.Containers)) { if ($c -and $c.File) { $newDurations[$rt][[string]$c.File] = [double]$c.Seconds } }
-        if ($r.PSObject.Properties['SlowTests']) { foreach ($t in @($r.SlowTests)) { if ($t) { $agg.SlowTests += $t } } }
+foreach ($rt in $qRuntimes) {
+    $agg = [ordered]@{ Passed = 0; Failed = 0; Skipped = 0; Total = 0; Shards = 0; Retried = 0; LongestShardSeconds = 0; WallSeconds = [int]$runSw.Elapsed.TotalSeconds; Failures = @(); LoadFailures = @(); Broken = @(); SlowTests = @() }
+    foreach ($o in @($outs | Where-Object { $_.Kind -eq 'pester' })) {
+        $it = @($runRes | Where-Object { $_.Name -eq $o.Name })[0].Item
+        if ($it.Runtime -ne $rt) { continue }
+        $agg.Shards++; $agg.Passed += $o.Passed; $agg.Failed += $o.Failed; $agg.Skipped += $o.Skipped; $agg.Total += $o.Total
+        if ($o.Seconds -gt $agg.LongestShardSeconds) { $agg.LongestShardSeconds = $o.Seconds }
+        foreach ($f in @($o.Failures)) { $agg.Failures += $f }
+        foreach ($f in @($o.LoadFailures)) { $agg.LoadFailures += $f }
+        foreach ($b in @($o.Broken)) { $agg.Broken += $b }
+        foreach ($c in @($o.Containers)) { if ($c -and $c.File) { $newDurations[$rt][[string]$c.File] = [double]$c.Seconds } }
     }
-    $agg.SlowTests = @($agg.SlowTests | Sort-Object -Property @{ Expression = { [double]$_.Seconds } } -Descending | Select-Object -First 15)
-    if ($agg.Failed -or @($agg.LoadFailures).Count -or @($agg.Broken).Count) { $bad = $true }
     $summary.Runtimes[$rt] = $agg
 }
-foreach ($d in $dotnetResults) { $summary.Dotnet += $d; if (-not $d.Ok) { $bad = $true } }
-if ($names.Count -eq 0 -and -not $dotnetPick.Count) { Write-Host '  nothing to run' -ForegroundColor Yellow }
+foreach ($o in @($outs | Where-Object { $_.Kind -eq 'dotnet' })) {
+    foreach ($d in @($o.Dotnet)) { $summary.Dotnet += $d }
+    if ($o.State -ne 'Done' -or @($o.Broken).Count) { $summary.Dotnet += [pscustomobject]@{ Project = 'dotnet'; Ok = $false; Summary = (@($o.Broken) -join ' | '); Seconds = [int]$o.Seconds } }
+}
+# EVERY selected suite by name, with its seconds and its verdict -- the proof of what was counted
+$summary.SuiteResults = @(foreach ($o in $outs) {
+    [ordered]@{ Suite = $o.Name; Kind = $o.Kind; Status = (Get-SIQuickGateItemLabel -Outcome $o)
+                Seconds = $o.Seconds; Passed = $o.Passed; Failed = $o.Failed; Skipped = $o.SkipCount; ScaleNotRun = $o.ScaleNotRun; Total = $o.Total
+                SkipReasons = @($o.Skips | ForEach-Object { '{0}: {1}' -f $_.Test, $_.Because } | Select-Object -First 20)
+                Reason = $(if ($reasons.Contains([string]$o.Name)) { [string]$reasons[[string]$o.Name] } else { '' }) }
+})
+$summary.Skipped = @($verdict.Skipped); $summary.ScaleNotRun = [ordered]@{ Tests = $verdict.ScaleTests; Suites = @($verdict.ScaleOnly); Text = 'not run (Scale, on demand)' }
 $summary.Seconds = [int]((Get-Date) - $started).TotalSeconds
-# #416: every phase's seconds, and the gate's own budget (the hotfix gate: 5 of the 15 minutes)
-foreach ($rt in $runtimes) { $phase["pester $rt (wall)"] = [int]$summary.Runtimes[$rt].WallSeconds }
-$dBuild = @($dotnetResults | Where-Object { $_.Project -eq 'build' }); $dTests = @($dotnetResults | Where-Object { $_.Project -ne 'build' })
-if ($dBuild.Count) { $phase['dotnet build'] = [int]$dBuild[0].Seconds }
-if ($dTests.Count) { $phase['dotnet tests'] = [int](($dTests | Measure-Object -Property Seconds -Sum).Sum) }
+$phase['suites (wall)'] = [int]$runSw.Elapsed.TotalSeconds
+$dB = @($summary.Dotnet | Where-Object { "$($_.Project)" -like 'build *' }); $dT = @($summary.Dotnet | Where-Object { "$($_.Project)" -notlike 'build *' -and $_.Project -ne 'dotnet' })
+if ($dB.Count) { $phase['dotnet build'] = [int](($dB | Measure-Object -Property Seconds -Sum).Sum) }
+if ($dT.Count) { $phase['dotnet tests'] = [int](($dT | Measure-Object -Property Seconds -Sum).Sum) }
 $phase['total'] = $summary.Seconds
-$summary.Budget = Get-SIFastGateBudget -Mode $summary.Mode -Seconds $summary.Seconds -OverBudget @($overBudget.Keys)
-$summary.Status = if ($bad) { 'FAIL' } else { 'PASS' }
+# THE 10-MINUTE TARGET (a target, not a limit): over it, the slowest items are what to split next
+$slowest = @($outs | Sort-Object -Property Seconds -Descending | Select-Object -First 3 | ForEach-Object { '{0} ({1:N0} s)' -f $_.Name, $_.Seconds })
+$summary.Budget = Get-SIFastGateBudget -Mode $summary.Mode -Seconds $summary.Seconds -OverBudget @($overBudget.Keys) -Slowest $slowest -TargetSeconds $map.Quick.TargetSeconds
 
 Write-Host ''
-foreach ($rt in $runtimes) {
-    $a = $summary.Runtimes[$rt]
-    $label = if ($rt -eq 'pwsh') { 'PowerShell 7  ' } else { 'PowerShell 5.1' }
-    Write-Host ('  {0}  {1,5}/{2,-5}  {3} failed, {4} skipped/not run; {5} batch(es) on {6} worker(s){7}, {8}s wall, longest batch {9}s' -f $label, $a.Passed, $a.Total, $a.Failed, ($a.Total - $a.Passed - $a.Failed), $a.Shards, $Workers, $(if ($a.Retried) { " ($($a.Retried) re-run)" } else { '' }), [int]$a.WallSeconds, [int]$a.LongestShardSeconds) -ForegroundColor $(if ($a.Failed -or @($a.LoadFailures).Count -or @($a.Broken).Count) { 'Red' } else { 'Green' })
-    foreach ($f in @($a.Failures | Select-Object -First 25)) { Write-Host ('    FAIL [{0}] {1}' -f $f.File, $f.Test) -ForegroundColor Red; if ($f.Message) { Write-Host ('         -> ' + $f.Message) -ForegroundColor DarkGray } }
-    foreach ($f in @($a.LoadFailures)) { Write-Host ('    LOAD FAILED [{0}] 0 tests ran: {1}' -f $f.File, $f.Message) -ForegroundColor Red }
-    foreach ($b in @($a.Broken)) { Write-Host ('    BROKEN {0}' -f $b) -ForegroundColor Red }
+Write-Host ('  {0} TIMES (wall {1:N0} s; the slowest item sets it):' -f $gateName, $runSw.Elapsed.TotalSeconds) -ForegroundColor Cyan
+foreach ($o in @($outs | Sort-Object -Property Seconds -Descending)) {
+    Write-Host ('    {0,7:N1}s  {1,-10} {2}' -f $o.Seconds, (Get-SIQuickGateItemLabel -Outcome $o), $o.Name) -ForegroundColor $(if ($o.ScaleOnly) { 'DarkYellow' } elseif ($o.Ok) { 'Green' } else { 'Red' })
+    foreach ($f in @($o.Failures | Select-Object -First 10)) { Write-Host ('        FAIL {0}' -f $f.Test) -ForegroundColor Red; if ($f.Message) { Write-Host ('             -> ' + $f.Message) -ForegroundColor DarkGray } }
+    foreach ($f in @($o.Skips | Select-Object -First 10)) { Write-Host ('        SKIPPED (not a pass) {0} -- {1}' -f $f.Test, $f.Because) -ForegroundColor Red }
+    foreach ($f in @($o.NotRunUnexplained | Select-Object -First 5)) { Write-Host ('        DID NOT RUN (no excluded tag) {0}' -f $f.Test) -ForegroundColor Red }
+    if ($o.ScaleNotRun) { Write-Host ('        {0} test(s) not run (Scale, on demand)' -f $o.ScaleNotRun) -ForegroundColor DarkYellow }
+    foreach ($f in @($o.LoadFailures)) { Write-Host ('        LOAD FAILED (0 tests ran): {0}' -f $f.Message) -ForegroundColor Red }
+    foreach ($d in @($o.Dotnet)) { Write-Host ('        dotnet {0,-28} {1}  {2} ({3}s)' -f $d.Project, $(if ($d.Ok) { 'ok  ' } else { 'FAIL' }), $d.Summary, $d.Seconds) -ForegroundColor $(if ($d.Ok) { 'DarkGray' } else { 'Red' }) }
+    foreach ($b in @($o.Broken)) { Write-Host ('        ' + $b) -ForegroundColor Red }
 }
-foreach ($d in $dotnetResults) { Write-Host ('  dotnet {0,-28} {1}  {2} ({3}s)' -f $d.Project, $(if ($d.Ok) { 'ok  ' } else { 'FAIL' }), $d.Summary, $d.Seconds) -ForegroundColor $(if ($d.Ok) { 'Green' } else { 'Red' }) }
 Write-Host ''
 Write-Host '  timing (seconds):' -ForegroundColor Cyan
 foreach ($k in $phase.Keys) { Write-Host ('    {0,-24} {1,6}' -f $k, $phase[$k]) }
 if ($summary.Budget) { Write-Host ('    {0}' -f $summary.Budget.Text) -ForegroundColor $(if ($summary.Budget.Met) { 'Green' } else { 'Yellow' }) }
+foreach ($n in @($verdict.Hung)) { $tn = @($runRes | Where-Object { $_.Name -eq $n })[0]; Write-Host ('  {0} HUNG: {1} -- printed nothing for {2:N0} min (after {3:N1} min), ended; red' -f $gateName, $n, ($qHang / 60.0), ($tn.Seconds / 60.0)) -ForegroundColor Red }
+foreach ($n in @($verdict.Skipped)) { Write-Host ('  {0} NOT GREEN (skipped tests are not passes): {1}' -f $gateName, $n) -ForegroundColor Red }
+Write-Host ('  {0} RESULT: {1} of {2} green -- {3}' -f $gateName, @($outs | Where-Object { $_.Ok -and -not $_.ScaleOnly }).Count, ($outs.Count - @($verdict.ScaleOnly).Count), $verdict.Text)
+$bad = $verdict.Status -ne 'PASS'
 Write-Host ('  GATE: {0}   in {1} min' -f $summary.Status, [int][Math]::Ceiling(((Get-Date) - $started).TotalMinutes)) -BackgroundColor $(if ($bad) { 'DarkRed' } else { 'DarkGreen' }) -ForegroundColor White
 Write-Host ''
-
 if ($UpdateDurations) { Write-SIFastGateDurations -Path $durationsFile -New $newDurations -Old $durations }
 if ($ResultFile) {
     $dir = Split-Path -Parent $ResultFile; if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }

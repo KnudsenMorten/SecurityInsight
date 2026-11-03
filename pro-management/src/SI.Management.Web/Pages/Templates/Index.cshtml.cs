@@ -90,7 +90,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the template conformance view could not be read");
-            Error = "The templates could not be read from the Pro database: " + ex.Message;
+            Error = "The templates could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

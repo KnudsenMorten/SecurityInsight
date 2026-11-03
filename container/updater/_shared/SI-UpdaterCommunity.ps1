@@ -331,7 +331,7 @@ function Invoke-SIUpdaterFromCommunity {
             if (-not $entry) { $view.Action = 'none'; Write-UpdLog ("code: nothing is released to ring {0} yet -- this install stays on {1}" -f $ring.Ring, $(if ($Deployed) { $Deployed } else { 'its version' })) }
             else {
                 $chk = Test-SICommunityChannelEntry -Entry $entry -Ring $ring.Ring -TrustedKeys $keys -AppliedSequence ([long]$state.appliedSequence) `
-                           -RunningVersion "$Deployed" -AcceptManualStepSequence (ConvertFrom-SIUpdaterManualStepAcceptCommunity (& $get 'SI_UPDATER_ACCEPT_MANUAL_STEP')) -DownloadPrefix $prefix -RingOptional
+                           -RunningVersion "$Deployed" -AcceptManualStepSequence (ConvertFrom-SIUpdaterManualStepAcceptCommunity (& $get 'SI_UPDATER_ACCEPT_MANUAL_STEP')) -DownloadPrefix $prefix
                 $view.Version = [string]$chk.Version; $view.Sequence = [long]$chk.Sequence; $view.Action = [string]$chk.Action
                 Write-UpdLog ("code manifest: {0} -- {1}" -f $chk.Action, $chk.Reason)
                 if ($chk.Action -eq 'refused') { $view.Error = [string]$chk.Reason; & $save; return 1 }

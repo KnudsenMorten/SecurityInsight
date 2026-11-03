@@ -429,10 +429,16 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
 
     public static OutputDestination? Find(string key) => Destinations.FirstOrDefault(d => d.Key == key);
     public bool IsAsset => Find(Destination)?.Asset == true;
-    public bool Everything => Templates.Count + Reports.Count + Severities.Count + Tiers.Count + Domains.Count + AssetKinds.Count + Filters.Count == 0;
+    public bool Everything => Templates.Count + Reports.Count + Severities.Count + Tiers.Count + Domains.Count + AssetKinds.Count + Filters.Count + CiInclude.Count + CiExclude.Count == 0;
 
     /// Owner 2026-10-19: the filters on the finding's other SI fields (risk rating, class, component ...), by field name.
     public IReadOnlyList<ScopeFilter> Filters { get; init; } = Array.Empty<ScopeFilter>();
+
+    /// #1055 (owner 2026-11-02): the CI rules of the ServiceNow CI output -- include (any of them, when set) and exclude
+    /// (none of them) on the CI's asset type, OS family and class (<see cref="CiRules"/>).
+    public IReadOnlyList<CiRule> CiInclude { get; init; } = Array.Empty<CiRule>();
+    public IReadOnlyList<CiRule> CiExclude { get; init; } = Array.Empty<CiRule>();
+    public bool HasCiRules => CiInclude.Count + CiExclude.Count > 0;
 
     public static OutputScope Empty(string dest) => new(dest, [], [], [], [], [], []);
 
@@ -449,7 +455,10 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
                 if (vals.Count == 0) continue;
                 filters.Add(new ScopeFilter(field, vals));
             }
-        return new OutputScope(dest, L("templates"), L("reports"), L("severities"), tiers, L("domains"), L("assetKinds")) { Filters = filters };
+        return new OutputScope(dest, L("templates"), L("reports"), L("severities"), tiers, L("domains"), L("assetKinds"))
+        {
+            Filters = filters, CiInclude = CiRules.Read(o["include"]), CiExclude = CiRules.Read(o["exclude"]),
+        };
     }
 
     /// The body stored (ConvertTo-SIProJson form): only the lists that narrow; a CMDB destination takes tiers + kinds.
@@ -460,6 +469,8 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
         {
             if (Tiers.Count > 0) o["tiers"] = new JsonArray(Tiers.OrderBy(t => t).Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
             if (AssetKinds.Count > 0) o["assetKinds"] = ProJson.Array(ReportVocabulary.AssetKinds.Where(k => AssetKinds.Contains(k, StringComparer.OrdinalIgnoreCase)));
+            if (CiInclude.Count > 0) o["include"] = CiRules.Write(CiInclude);
+            if (CiExclude.Count > 0) o["exclude"] = CiRules.Write(CiExclude);
             return ProJson.Write(o);
         }
         if (Templates.Count > 0) o["templates"] = ProJson.Array(Templates);
@@ -491,6 +502,9 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
         foreach (var k in AssetKinds) if (!ReportVocabulary.AssetKinds.Contains(k, StringComparer.OrdinalIgnoreCase)) why.Add($"'{k}' is not an asset kind the CMDB connectors read");
         if (d.Asset && Filters.Count > 0) why.Add($"{d.Label} takes an asset scope only (tiers, asset kinds)");
         foreach (var f in Filters) why.AddRange(ScopeFilters.Validate(f));
+        if (HasCiRules && !CiRules.Supports(Destination)) why.Add($"{d.Label} takes no include / exclude rules (the ServiceNow CI output only)");
+        why.AddRange(CiRules.Validate("include", CiInclude));
+        why.AddRange(CiRules.Validate("exclude", CiExclude));
         foreach (var t in Templates) if (!knownTemplates.Contains(t)) why.Add($"the report template '{t}' does not exist");
         foreach (var r in Reports) if (!knownReports.Contains(r)) why.Add($"the report '{r}' does not exist");
         return why;
@@ -544,6 +558,13 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
         return true;
     }
 
+    /// Test-SIOutputScopeAsset -Fields (#1055): the tier and kind, and the CI rules on the CI's values (field -> value).
+    public bool PassesCi(int? tier, string? kind, IReadOnlyDictionary<string, string?> ci) => PassesAsset(tier, kind) && PassesCiRules(ci);
+
+    /// Test-SIOutputScopeCiRules: any include rule (when set), no exclude rule.
+    public bool PassesCiRules(IReadOnlyDictionary<string, string?> ci) =>
+        (CiInclude.Count == 0 || CiInclude.Any(r => r.Matches(ci))) && !CiExclude.Any(r => r.Matches(ci));
+
     public string Describe()
     {
         if (Everything) return "everything (no scope)";
@@ -555,6 +576,8 @@ public sealed record OutputScope(string Destination, IReadOnlyList<string> Templ
         if (Domains.Count > 0) p.Add("domain " + string.Join(", ", Domains));
         if (AssetKinds.Count > 0) p.Add("asset kind " + string.Join(", ", AssetKinds));
         foreach (var f in Filters) p.Add(ScopeFilters.Label(f.Field).ToLowerInvariant() + " " + string.Join(", ", f.Values));
+        if (CiInclude.Count > 0) p.Add("only " + string.Join(" or ", CiInclude.Select(r => r.Describe())));
+        foreach (var r in CiExclude) p.Add("leave out " + r.Describe());
         return string.Join("; ", p);
     }
 }

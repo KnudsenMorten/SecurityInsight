@@ -267,7 +267,7 @@ Describe 'sign-in: the local setup wizard defaults to a managed identity' {
         $cur3 = [pscustomobject]@{ type = 'UserAssigned'; userAssignedIdentities = [pscustomobject]@{ $id = [pscustomobject]@{} } }
         Get-SIVmIdentityPatchBody -CurrentIdentity $cur3 -IdentityResourceId $id | Should -BeNullOrEmpty
     }
-    It 'the config the wizard writes says the sign-in explicitly: ManagedIdentity (no SPN app id) or Secret (with the secret)' {
+    It 'the config the wizard writes says the sign-in explicitly: ManagedIdentity (no SPN app id) or Secret (read from Key Vault, never the value)' {
         $infra = [pscustomobject]@{ SubscriptionId = 'sub-1'; ResourceGroupName = 'rg'; Location = 'westeurope'; WorkspaceName = 'ws'
                                     WorkspaceResourceId = '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/ws'
                                     DceName = 'dce'; DceIngestionUri = 'https://dce'; DcrResourceGroupName = 'rg'; StorageAccountName = 'st'; StorageResourceGroupName = 'rg' }
@@ -282,11 +282,12 @@ Describe 'sign-in: the local setup wizard defaults to a managed identity' {
             $t | Should -Not -Match 'SI_SPN_AppId'
             $t | Should -Not -Match 'SI_SPN_Secret'
             Remove-Item -Path "$p*" -Force -ErrorAction SilentlyContinue
-            $sec = [pscustomobject]@{ TenantId = 'ten'; AppId = 'app-1'; ObjectId = 'obj-1'; CredKind = 'Secret'; CredValue = 'the-secret'; KvName = $null }
+            $sec = [pscustomobject]@{ TenantId = 'ten'; AppId = 'app-1'; ObjectId = 'obj-1'; CredKind = 'Secret'; CredValue = 'the-secret'; KvName = 'kv-si'; KvSecretName = 'SI-SPN-Secret' }
             $null = & $w -OutputPath $p -Spn $sec -Infra $infra -Force 6>$null
             $t2 = [IO.File]::ReadAllText($p)
             $t2 | Should -Match "\`$global:SI_AuthMethod\s+= 'Secret'"
-            $t2 | Should -Match "SI_SPN_Secret\s+= 'the-secret'"
+            $t2 | Should -Not -Match 'the-secret' -Because 'a client secret is never written into the file (2026-10-31)'
+            $t2 | Should -Match "SI_SPN_KvSecretName\s+= 'SI-SPN-Secret'"
         } finally { Remove-Item -Path "$p*" -Force -ErrorAction SilentlyContinue }
     }
     It 'WIRING: the wizard host decides with Resolve-SIWizardSignIn (no "Secret" fallback), creates the VM identity with the infrastructure and grants it' {

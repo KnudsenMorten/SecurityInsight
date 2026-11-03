@@ -5,6 +5,15 @@
    ============================================================================= */
 'use strict';
 
+// The wizard session's secret: the local listener puts it in the page it serves (meta si-wizard-session) and refuses
+// every /api call that does not carry it -- another program on this machine cannot drive the wizard.
+function wizardApiHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const m = document.querySelector('meta[name="si-wizard-session"]');
+  if (m && m.content) h['X-SI-Wizard-Session'] = m.content;
+  return h;
+}
+
 // ---------------------------------------------------------------------------
 // PAGE REGISTRY -- one entry per left-rail item.
 //   id     : DOM data-page selector
@@ -41,7 +50,7 @@ const state = {
     // have a managed identity: there the wizard switches to a new service principal by certificate (snapSignIn).
     spnMode:     'managedIdentity', // 'managedIdentity' | 'createNew' | 'useExisting'
     credType:    'certThumb',     // 'certThumb' (= cert, recommended for a service principal) | 'kvSecret' (= secret)
-    credStorage: 'LocalCertStore',// 'KeyVault' | 'LocalCertStore' | 'Inline' (auto-snapped to a valid combo for hostType + credType)
+    credStorage: 'LocalCertStore',// 'KeyVault' | 'LocalCertStore' (auto-snapped to a valid combo for hostType + credType)
     hostType:    'azureVMMI',     // 'win' | 'azureVMMI' | 'azureContainerMI' (drives valid auth options)
     // Optional-feature master toggles (each defaults OFF -- explicit opt-in)
     smtpMode:      'off',         // 'off' | 'anon' | 'auth'
@@ -154,7 +163,7 @@ function tenantRequiredKeys() {
   if (state.data.spnMode === 'createNew') {
     const base = ['tenantId', 'spnDisplayName'];
     if (state.data.credStorage === 'KeyVault') return base.concat(['kvName']);
-    // LocalCertStore + Inline don't need an additional input; cred is generated locally / returned inline.
+    // LocalCertStore needs no additional input; the certificate is generated on this server.
     return base;
   }
   // useExisting (legacy / power-user path)
@@ -338,10 +347,10 @@ function buildTenantSnippet() {
     }
     lines.push('#   - Grants Microsoft Graph permissions + admin consent');
     lines.push('#   - Grants RBAC at root MG: Reader (Tag Contributor only when asset tagging is opted in)');
-    lines.push('# After Apply, $global:SI_SPN_AppId / SI_SPN_Secret (or _CertThumbprint)');
-    lines.push('# are written to config\\SecurityInsight.custom.ps1 automatically.');
+    lines.push('# After Apply, $global:SI_SPN_AppId and SI_SPN_CertThumbprint (or the Key Vault name of a client secret --');
+    lines.push('# never the secret itself) are written to config\\SecurityInsight.custom.ps1 automatically.');
     lines.push('# To trigger Apply directly:');
-    lines.push('#   Invoke-RestMethod -Method POST http://localhost:8766/api/apply -ContentType application/json -Body $stateJson');
+    lines.push('#   Invoke-RestMethod -Method POST http://localhost:8766/api/apply -ContentType application/json -Body $stateJson -Headers @{ \'X-SI-Wizard-Session\' = \'(the k= value of the link the wizard printed)\' }');
     return lines.join('\n');
   }
 
@@ -720,7 +729,7 @@ function hydrateForms() {
 // Show/hide the SPN-mode / cred-type / cred-storage blocks on the Tenant page.
 //   data-spn-mode-block      = 'createNew' | 'useExisting'
 //   data-cred-block          = 'kvSecret'  | 'certThumb'   (legacy = useExisting cred block)
-//   data-cred-storage-block  = 'KeyVault'  | 'LocalCertStore' | 'Inline'  (createNew only)
+//   data-cred-storage-block  = 'KeyVault'  | 'LocalCertStore'  (createNew only)
 //
 // Compound visibility: an element is shown only if ALL its data-* filters match the
 // current state. This lets the HTML mark e.g. "createNew + KeyVault" with two attrs
@@ -744,24 +753,30 @@ const VIS_FILTERS = {
 // Valid storage options per (hostType, credType). Drives:
 //   - which storage radio labels are visible (HTML data-host-type-block + data-cred-block)
 //   - auto-snap for state.data.credStorage when current pick becomes invalid
+// A client secret is never written into the configuration file (2026-11-01): it is kept in Key Vault only, and read
+// from there by the host's managed identity. A server outside Azure has no identity that could read Key Vault, so a
+// NEW sign-in there is a certificate kept in its own certificate store.
 const VALID_STORAGE_BY_HOST = {
-  win:              ['LocalCertStore', 'Inline'],                 // no MI = no KV bootstrap
-  azureVMMI:        ['LocalCertStore', 'Inline', 'KeyVault'],
-  azureContainerMI: ['Inline', 'KeyVault'],                       // ephemeral container, no cert store
+  win:              ['LocalCertStore'],                           // no managed identity = nothing could read Key Vault
+  azureVMMI:        ['LocalCertStore', 'KeyVault'],
+  azureContainerMI: ['KeyVault'],                                 // ephemeral container, no cert store
 };
 const VALID_STORAGE_BY_CRED = {
-  kvSecret:  ['Inline', 'KeyVault'],
+  kvSecret:  ['KeyVault'],
   certThumb: ['LocalCertStore', 'KeyVault'],
 };
 
 function snapCredStorage() {
   const ht = state.data.hostType;
-  const ct = state.data.credType;
-  const cs = state.data.credStorage;
-  const allowed = (VALID_STORAGE_BY_HOST[ht] || []).filter(x => (VALID_STORAGE_BY_CRED[ct] || []).includes(x));
-  if (!allowed.includes(cs)) {
+  let allowed = (VALID_STORAGE_BY_HOST[ht] || []).filter(x => (VALID_STORAGE_BY_CRED[state.data.credType] || []).includes(x));
+  if (!allowed.length && state.data.spnMode === 'createNew') {
+    // a client secret has nowhere it may be kept on this host: the new sign-in uses a certificate instead
+    state.data.credType = 'certThumb';
+    allowed = (VALID_STORAGE_BY_HOST[ht] || []).filter(x => (VALID_STORAGE_BY_CRED[state.data.credType] || []).includes(x));
+  }
+  if (!allowed.includes(state.data.credStorage)) {
     // Snap to the first allowed option (preferred order matches the host's valid list).
-    state.data.credStorage = allowed[0] || 'Inline';
+    state.data.credStorage = allowed[0] || 'KeyVault';
   }
 }
 
@@ -883,7 +898,7 @@ async function copyById(id) {
 // wizard is opened from disk (file://) without a listener.
 async function autoFillFromOperatorContext() {
   try {
-    const resp = await fetch('/api/state', { method: 'GET' });
+    const resp = await fetch('/api/state', { method: 'GET', headers: wizardApiHeaders() });
     if (!resp.ok) return;
     const obj = await resp.json();
     const op  = obj && obj.operatorContext;
@@ -1247,7 +1262,7 @@ async function runApply() {
     try {
         var resp = await fetch('/api/apply', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: wizardApiHeaders({ 'Content-Type': 'application/json' }),
             body: payload
         });
         respText = await resp.text();

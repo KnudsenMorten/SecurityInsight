@@ -57,6 +57,19 @@ public sealed class ConfigRevertHandler : IStagedChangeHandler
         var e = entities.Find(c.Get("entity"));
         if (e is null) return AccessDecision.No("this kind of record is not part of the configuration set");
         if (string.Equals(e.MinRole, "SuperAdmin", StringComparison.Ordinal) && !user.IsSuperAdmin()) return AccessDecision.No($"only a SuperAdmin can change {e.Label}");
+        // a secret's Key Vault reference and the hosts a secret is sent to: SuperAdmin, by an undo as by the Settings page
+        if (e.Name == "setting" && !user.IsSuperAdmin() && ConfigEntities.Parse(c.Get("record")) is { } rec
+            && SecretSettingPolicy.NeedsSuperAdminRecord(ConfigEntities.Text(rec["Name"]), ConfigEntities.Text(rec["KeyVaultSecretName"])))
+            return AccessDecision.No($"only a SuperAdmin can change {ConfigEntities.Text(rec["Name"])}");
+        // where a connector's credential is sent and which secrets it reads: SuperAdmin, by an undo as on the Connectors page
+        if (e.Name == "connector" && !user.IsSuperAdmin() && c.Get("op") != "Remove" && ConfigEntities.Parse(c.Get("record")) is { } crec)
+        {
+            var now = c.Get("expectedNone") == "1" ? null : ConfigEntities.Parse(c.Get("expected"));
+            var cur = now is null ? null : SI.Management.Web.Changes.ConnectorRepository.TargetOf(ConfigEntities.Text(now["SettingsJson"]), ConfigEntities.Text(now["SecretRefsJson"]), ConfigEntities.Text(now["MappingJson"]));
+            var next = SI.Management.Web.Changes.ConnectorRepository.TargetOf(ConfigEntities.Text(crec["SettingsJson"]), ConfigEntities.Text(crec["SecretRefsJson"]), ConfigEntities.Text(crec["MappingJson"]));
+            if (SI.Management.Web.Changes.ConnectorRepository.NeedsSuperAdmin(cur, next))
+                return AccessDecision.No(SI.Management.Web.Changes.ConnectorRepository.SuperAdminWhy(ConfigEntities.Text(crec["Name"])));
+        }
         if (c.Get("source") == SourceRestore && !user.IsSuperAdmin()) return AccessDecision.No("only a SuperAdmin can restore from a backup");
         if (c.Get("source") == SourceUndo && !user.IsSuperAdmin() && !string.Equals(c.Get("initiator"), user.ChangeName(), StringComparison.OrdinalIgnoreCase))
             return AccessDecision.No("an Admin can undo only their own commits -- a SuperAdmin can undo any");

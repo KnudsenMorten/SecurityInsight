@@ -119,6 +119,25 @@ public sealed class DepartmentPeopleResolver(IDirectoryNames directory, Departme
 }
 
 /// <summary>
+/// #995: a department person or advisor stored by MAIL ONLY (no object id) is matched by the sign-in name the directory
+/// issued for one of its OWN members -- never a guest's (Entra B2B), whose name its home tenant chooses. The words the
+/// Admin's lists and the no-access page show, so such a guest never loses access without being told why.
+/// </summary>
+public static class MailOnlyMatch
+{
+    /// Next to a mail-only person or advisor on the Admin's lists.
+    public const string AdminNote = "matched by this address only for an account of your own directory -- for a guest (B2B), record this person's object id or use a sign-in link";
+
+    /// On the no-access page, to a guest whose sign-in name is not matched.
+    public const string GuestNote = "You signed in as a guest of this organisation. A department or an advisor entry that names you by e-mail address only does not match a guest account: ask an Admin to record your object id on the department, or to send you a sign-in link.";
+
+    /// Whether this signed-in person is a guest or an external account (a sign-in name the directory did not issue).
+    public static bool IsGuest(ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true && user.DirectoryMemberName() is null
+        && (user.FindFirst("preferred_username")?.Value ?? user.FindFirst(ClaimTypes.Upn)?.Value) is { Length: > 0 };
+}
+
+/// <summary>
 /// WHO APPROVES WHAT for a department (#335). Business approvers decide the exemption requests ("accept the risk") raised
 /// from the department's own findings (its governance log names the request); technical approvers approve planning a fix
 /// into the department's maintenance window. A person matches by object id (their own, or a group in their token) or --
@@ -132,7 +151,9 @@ public sealed class DepartmentApprovers(DepartmentRepository repo, ILogger<Depar
     {
         if (user.Identity?.IsAuthenticated != true) return false;
         if (m.ObjectId is { Length: > 0 } oid) return MembershipDepartmentScope.ObjectIds(user).Contains(oid.ToLowerInvariant());
-        var name = user.ChangeName();
+        // #995: a mail-only entry matches only the sign-in name the directory issued for one of its OWN members -- never a
+        // guest's or an external account's, whose name its home tenant chooses
+        var name = user.DirectoryMemberName() ?? "";
         return m.Mail is { Length: > 0 } && name.Length > 0 && AuthMethods.Detect(user) == AuthMethods.OAuth
                && string.Equals(m.Mail.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase);
     }

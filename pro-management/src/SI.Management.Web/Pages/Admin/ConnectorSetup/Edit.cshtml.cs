@@ -186,6 +186,9 @@ public sealed class EditModel : PageModel
         // a table key in the connector's settings is never read (the table is the setting) -- said
         var s = Obj(Current?.SettingsJson ?? SettingsJson);
         SnowUnreadKeys = SnowInfos.Select(i => i.TableSetting).Where(k => s.Any(p => p.Key.Equals(k, StringComparison.OrdinalIgnoreCase))).ToList();
+        // #1055 which CIs are sent: the CI scope, before the outputs (the CI output's count line is its preview)
+        await LoadCiScopeAsync(_ciPosted, ct);
+        CiOutputOn = on.Contains("servicenow-ci");
         foreach (var info in SnowInfos)
         {
             var o = new SnowOutputView { Info = info, Table = Text(info.TableSetting), On = on.Contains(info.Output), Latest = latest.FirstOrDefault(c => c.Output == info.Output) };
@@ -204,10 +207,10 @@ public sealed class EditModel : PageModel
                     if (o.Latest is { Facts.ColumnsRead: true } l)
                         o.Schema = SI.Management.Web.Outputs.ServiceNowSchemaCompare.Compare(SI.Management.Web.Outputs.ServiceNowSchemaCompare.FromSchema(schema), l.Facts.Columns, l.Facts.Mapping, batchIdSent: StagingStatusTable.Length > 0);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the ServiceNow schema could not be built for the comparison"); o.SchemaProblem = "The columns in force could not be read for the comparison: " + ex.Message; }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the ServiceNow schema could not be built for the comparison"); o.SchemaProblem = "The columns in force could not be read for the comparison: " + ViewerError.Text(ex); }
             }
             try { o.Count = await CountWordsAsync(info, scope, resolved, ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the rows could not be counted"); o.Count = "The rows could not be counted: " + ex.Message; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the rows could not be counted"); o.Count = "The rows could not be counted: " + ViewerError.Text(ex); }
             SnowOutputs.Add(o);
         }
         SnowLatest = SnowOutputs.Select(o => o.Latest).Where(l => l is not null).OrderByDescending(l => l!.CheckedAt).FirstOrDefault();
@@ -220,8 +223,161 @@ public sealed class EditModel : PageModel
         }
     }
 
+    // ---- #1055 WHICH CIs ARE SENT (owner 2026-11-02: "we should NOT be syncing these assets [mobile phones] into snow"; "we
+    //      need to be able to filter on this in the snow connectors"; "add all the filter options on the snow connector").
+    //      ONE home: the output scope item 'cmdb-servicenow' (cfg.ItemOverride kind 'outputscope') -- the scope the engine
+    //      applies to the CI output, and through it to the vulnerable items of a CI it leaves out. Shown and edited here, on
+    //      the data-out connector (only one is ever switched on, #903, so the destination's scope IS this connector's);
+    //      Connectors > Scope shows the same item. Staged for Review & commit (a cfg.ChangeLog row on commit), Admin as
+    //      every change on this page. --------------------------------------------------------------------------------------
+    public const string CiScopeDestination = "cmdb-servicenow";
+    /// The CI scope the section shows: as posted ("Count with these filters"), else in force; null = not readable here.
+    public SI.Management.Core.ProData.OutputScope? CiScope { get; private set; }
+    public SI.Management.Core.ProData.OutputScope? CiScopeInForce { get; private set; }
+    public bool CiScopePosted { get; private set; }
+    public SI.Management.Web.Outputs.CiScopePreview.Result? CiPreview { get; private set; }
+    /// The preview of the scope in force (the CI output's "rows would be sent" line).
+    public SI.Management.Web.Outputs.CiScopePreview.Result? CiPreviewInForce { get; private set; }
+    public string? CiScopeProblem { get; private set; }
+    public List<string> CiScopeMessages { get; } = new();
+    /// How many empty rule slots the form offers below the rules there are.
+    public const int CiRuleSlots = 2;
+    /// The CI output is switched on (SI_DataOut_Outputs): the CI scope also takes the vulnerable items of a CI it leaves out.
+    public bool CiOutputOn { get; private set; }
+    [BindProperty] public List<int> CiTiers { get; set; } = new();
+    [BindProperty] public List<string> CiKinds { get; set; } = new();
+    [BindProperty] public string? CiReason { get; set; }
+
+    /// The form name of one field of one rule: CiI0.si_asset_type (include), CiX1.si_os_family (exclude).
+    public static string CiRuleParam(bool include, int index, string field) => (include ? "CiI" : "CiX") + index.ToString(CultureInfo.InvariantCulture) + "." + field;
+
+    /// The rules the form posted (each field: its ticked values; a rule with nothing ticked is dropped).
+    public IReadOnlyList<SI.Management.Core.ProData.CiRule> PostedCiRules(bool include)
+    {
+        var prefix = include ? "CiI" : "CiX";
+        var byIndex = new SortedDictionary<int, List<SI.Management.Core.ProData.ScopeFilter>>();
+        foreach (var kv in Request.Form.Where(k => k.Key.StartsWith(prefix, StringComparison.Ordinal) && k.Key.Contains('.')))
+        {
+            var dot = kv.Key.IndexOf('.');
+            if (!int.TryParse(kv.Key[prefix.Length..dot], NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) || i is < 0 or > 99) continue;
+            var field = kv.Key[(dot + 1)..];
+            var vals = kv.Value.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (vals.Count == 0) continue;
+            if (!byIndex.TryGetValue(i, out var list)) byIndex[i] = list = new();
+            list.Add(new SI.Management.Core.ProData.ScopeFilter(field, vals));
+        }
+        return byIndex.Values.Select(l => new SI.Management.Core.ProData.CiRule(l.OrderBy(f => f.Field, StringComparer.Ordinal).ToList())).ToList();
+    }
+
+    private SI.Management.Core.ProData.OutputScope PostedCiScope() =>
+        new(CiScopeDestination, [], [], [], CiTiers.Distinct().OrderBy(t => t).ToList(), [], CiKinds.Select(k => k.Trim().ToLowerInvariant()).Distinct().ToList())
+        { CiInclude = PostedCiRules(true), CiExclude = PostedCiRules(false) };
+
+    /// The CI scope (in force, and as posted), its preview over the CIs per category, and the choices with their counts.
+    private async Task LoadCiScopeAsync(SI.Management.Core.ProData.OutputScope? posted, CancellationToken ct)
+    {
+        if (!IsDataOut) return;
+        if (Svc<SI.Management.Web.Reports.IReportStore>() is not { } store) { CiScopeProblem = "The output scope store is not available here."; return; }
+        try
+        {
+            if (!await store.SchemaAsync(ct)) { CiScopeProblem = SI.Management.Web.Reports.SqlReportStore.MissingSchemaMessage; return; }
+            CiScopeInForce = (await store.LoadAsync(ct)).ScopeOf(CiScopeDestination);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the CI scope could not be read"); CiScopeProblem = "The CI scope could not be read: " + ViewerError.Text(ex); return; }
+        CiScopePosted = posted is not null;
+        CiScope = posted ?? CiScopeInForce;
+        if (Svc<SI.Management.Web.Outputs.ServiceNowRowCount>() is not { } counter) return;
+        try
+        {
+            System.Text.Json.Nodes.JsonObject? filter = null;
+            try { if (Svc<SI.Management.Web.Outputs.OutputMapStore>() is { } maps && (await maps.LoadAsync("servicenow-ci", ct))?.FilterJson is { } fj) filter = System.Text.Json.Nodes.JsonNode.Parse(fj) as System.Text.Json.Nodes.JsonObject; }
+            catch (System.Text.Json.JsonException) { filter = null; }
+            var (countable, classesJson) = SI.Management.Web.Outputs.ServiceNowRowCount.Classes(filter);
+            var classes = classesJson is null ? null : System.Text.Json.JsonSerializer.Deserialize<List<string>>(classesJson);
+            var groups = await counter.CiGroupsAsync(ct);
+            var catalog = await CiCatalogAsync(ct);
+            CiPreview = SI.Management.Web.Outputs.CiScopePreview.Of(CiScope, groups, classes, countable, catalog);
+            CiPreviewInForce = CiScopePosted ? SI.Management.Web.Outputs.CiScopePreview.Of(CiScopeInForce, groups, classes, countable, catalog) : CiPreview;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the CIs could not be counted per category"); CiScopeProblem = "The CIs could not be counted per category: " + ViewerError.Text(ex); }
+    }
+
+    /// The values the classification catalog offers for the CI rule fields (the dimensions as in force, customer additions
+    /// included -- ClassificationMapping.TargetValues), so a new category appears by itself. Empty when not readable.
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> CiCatalogAsync(CancellationToken ct)
+    {
+        var d = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        IReadOnlyList<SI.Management.Web.Changes.DataModelRow> rows = Array.Empty<SI.Management.Web.Changes.DataModelRow>();
+        try { if (Svc<SI.Management.Web.Changes.RiskFactorStore>() is { } rf) rows = await rf.ListAsync(ct) ?? Array.Empty<SI.Management.Web.Changes.DataModelRow>(); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the classification catalog could not be read -- the CI rule choices are the values the CIs hold"); }
+        var dims = SI.Management.Web.Changes.Dimensions.Of(rows);
+        var targets = SI.Management.Web.Changes.ClassificationMapping.Targets(rows);
+        var crow = SI.Management.Web.Changes.ClassificationMapping.Of(rows);
+        foreach (var f in new[] { "si_asset_type", "si_os_family" })
+            d[f] = SI.Management.Web.Changes.ClassificationMapping.TargetValues(f, targets, dims, crow).Where(v => !v.StartsWith('$')).ToList();
+        return d;
+    }
+
+    /// "Count with these filters": the CI scope as the form has it, counted -- nothing is staged.
+    [SI.Management.Web.Audit.NotAudited("a read: counts what a CI scope as posted would send; stages and writes nothing")]
+    public async Task<IActionResult> OnPostCiScopeCountAsync(CancellationToken ct)
+    {
+        if (!await LoadAsync(ct)) return Page();
+        if (Current is null) return NotFound("no such connector");
+        var posted = PostedCiScope();
+        CiScopeMessages.AddRange(posted.Validate([], []));
+        await GuideWithCiScopeAsync(posted, ct);
+        return Page();
+    }
+
+    /// Stage the CI scope (the output scope item cmdb-servicenow) for Review &amp; commit.
+    [SI.Management.Web.Audit.Audited("output.scope.change")]
+    public async Task<IActionResult> OnPostCiScopeStageAsync(CancellationToken ct)
+    {
+        if (!User.IsAdmin()) return Forbid();
+        if (!await LoadAsync(ct)) return Page();
+        if (Current is null) return NotFound("no such connector");
+        Kind = Current.Kind; Direction = Current.Direction;
+        var posted = PostedCiScope();
+        if (!IsDataOut) { CiScopeMessages.Add("Not staged: only the ServiceNow data-out connector sets the CI scope."); await GuideWithCiScopeAsync(posted, ct); return Page(); }
+        if (Svc<SI.Management.Web.Reports.IReportStore>() is not { } store || !await store.SchemaAsync(ct)) { CiScopeMessages.Add("Not staged: " + SI.Management.Web.Reports.SqlReportStore.MissingSchemaMessage); await GuideWithCiScopeAsync(posted, ct); return Page(); }
+        var state = await store.LoadAsync(ct);
+        var (w, why) = SI.Management.Web.Pages.Reports.OutputsModel.WriteFor(state, posted);
+        if (why.Count > 0 || w is null)
+        {
+            if (why.Count > 0) CiScopeMessages.AddRange(why.Select(x => "Not staged: " + x));
+            else CiScopeMessages.Add("Not staged: nothing changed -- this is what is in force");
+            await GuideWithCiScopeAsync(posted, ct); return Page();
+        }
+        var title = $"Output scope CMDB connector (ServiceNow) -- the CIs the ServiceNow connector {Current.Name} sends: {posted.Describe()}";
+        var (change, problems) = await SI.Management.Web.Pages.Reports.ReportsPage.StageDesignerAsync(_changes, User, SI.Management.Web.Reports.ReportChanges.Output, title, [w], CiReason, ct);
+        if (change is null) { CiScopeMessages.AddRange(problems.Select(x => "Not staged: " + x)); await GuideWithCiScopeAsync(posted, ct); return Page(); }
+        if (SI.Management.Web.Audit.AuditScope.Current is { } a) { a.Target = "outputscope/" + CiScopeDestination + ", connector=" + Current.Name; a.Reason = posted.Describe(); }
+        TempData["toast"] = "Staged: " + change.Title + ". Nothing is written until you review and commit.";
+        TempData["toastKind"] = "ok";
+        return Redirect("/Changes");
+    }
+
+    private async Task GuideWithCiScopeAsync(SI.Management.Core.ProData.OutputScope posted, CancellationToken ct)
+    {
+        if (Current is { } cur)
+        {
+            Kind = cur.Kind; Direction = cur.Direction; Enabled = cur.Enabled; Mode = cur.Mode; AllowCreate = cur.AllowCreate; AllowClose = cur.AllowClose;
+            SettingsJson = cur.SettingsJson; SecretRefsJson = cur.SecretRefsJson; MappingJson = cur.MappingJson; ReadVersion = cur.Version;
+        }
+        _ciPosted = posted;
+        await LoadServiceNowGuideAsync(ct);
+    }
+    private SI.Management.Core.ProData.OutputScope? _ciPosted;
+
     private async Task<(SI.Management.Core.ProData.OutputScope? Scope, IReadOnlySet<string>? Resolved)> VulnScopeAsync(SI.Management.Web.Outputs.ServiceNowOutputs.Info info, CancellationToken ct)
     {
+        // #1055 the CI output: its scope is the CMDB destination's (tier, asset kind, the CI rules)
+        if (info.Output == "servicenow-ci" && Svc<SI.Management.Web.Reports.IReportStore>() is { } cs)
+        {
+            try { return await cs.SchemaAsync(ct) ? ((await cs.LoadAsync(ct)).ScopeOf(CiScopeDestination), null) : (null, null); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the CI scope could not be read"); return (null, null); }
+        }
         if (info.Output != "servicenow-vulnerable-item" || Svc<SI.Management.Web.Reports.IReportStore>() is not { } store) return (null, null);
         try
         {
@@ -240,6 +396,10 @@ public sealed class EditModel : PageModel
             if (Svc<SI.Management.Web.Outputs.ServiceNowRowCount>() is not { } counter || Svc<SI.Management.Web.Outputs.OutputMapStore>() is not { } maps) return null;
             System.Text.Json.Nodes.JsonObject? filter = null;
             try { if ((await maps.LoadAsync(info.Output, ct))?.FilterJson is { } fj) filter = System.Text.Json.Nodes.JsonNode.Parse(fj) as System.Text.Json.Nodes.JsonObject; } catch (System.Text.Json.JsonException) { filter = null; }
+            // #1055 the CI scope in force counted too (tier, asset kind, the CI rules) -- from the CIs per category
+            if (CiPreviewInForce is { } pv && CiScopeInForce is { Everything: false } sc)
+                return Fmt.Int(pv.Sent) + " of " + Fmt.Int(pv.Total) + " CI row(s) would be sent -- the output's filter: " + SI.Management.Web.Pages.Reports.OutputFieldsModel.FilterWords(filter)
+                    + "; the CI scope in force: " + sc.Describe() + (pv.LeftOutByRules > 0 ? " (" + Fmt.Int(pv.LeftOutByRules) + " left out by its rules)" : "") + ".";
             var (n, total) = await counter.CiAsync(filter, ct);
             return (n is { } x ? Fmt.Int(x) + " of " + Fmt.Int(total) + " CI row(s) would be sent" : "The export counts the rows") + " -- the output's filter: " + SI.Management.Web.Pages.Reports.OutputFieldsModel.FilterWords(filter) + ".";
         }
@@ -421,11 +581,18 @@ public sealed class EditModel : PageModel
             System.Text.Json.Nodes.JsonObject? filter = null;
             try { if (Svc<SI.Management.Web.Outputs.OutputMapStore>() is { } maps && (await maps.LoadAsync(info.Output, ct))?.FilterJson is { } fj) filter = System.Text.Json.Nodes.JsonNode.Parse(fj) as System.Text.Json.Nodes.JsonObject; }
             catch (System.Text.Json.JsonException) { filter = null; }
-            words = "the output's filter: " + SI.Management.Web.Pages.Reports.OutputFieldsModel.FilterWords(filter);
+            words = "the output's filter: " + SI.Management.Web.Pages.Reports.OutputFieldsModel.FilterWords(filter) + "; the CI scope in force: " + (scope?.Describe() ?? "everything (no scope)");
         }
         else words = "the scope in force: " + (scope?.Describe() ?? "everything (no scope)");
+        // #1055 a vulnerable item whose CI the CI scope leaves out is not sent (when the CI output is switched on)
+        SI.Management.Core.ProData.OutputScope? ciScope = null;
+        if (info.Output == "servicenow-vulnerable-item" && IsDataOut)
+        {
+            await LoadServiceNowGuideAsync(ct);
+            if (CiOutputOn && CiScopeInForce is { Everything: false } cs) { ciScope = cs; words += "; the CI scope in force: " + cs.Describe(); }
+        }
         var mode = !Current.Enabled ? "switched off" : IsDataOut || Current.Mode == "apply" ? "sends (apply)" : "whatif -- plans and logs, sends nothing";
-        var file = await HttpContext.RequestServices.GetRequiredService<SI.Management.Web.Outputs.ScopeExport>().WriteServiceNowAsync(entry, scope, resolved, words, Current.Name + ": " + mode, format == "csv", ct);
+        var file = await HttpContext.RequestServices.GetRequiredService<SI.Management.Web.Outputs.ScopeExport>().WriteServiceNowAsync(entry, scope, resolved, words, Current.Name + ": " + mode, format == "csv", ct, ciScope);
         if (SI.Management.Web.Audit.AuditScope.Current is { } a) a.Reason = words + "; " + file.Rows.ToString(CultureInfo.InvariantCulture) + " row(s)";
         return File(file.Stream, file.ContentType, file.Name);
     }

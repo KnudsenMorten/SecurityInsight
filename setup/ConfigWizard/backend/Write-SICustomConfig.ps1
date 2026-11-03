@@ -142,28 +142,35 @@ $null = $sb.AppendLine("`$global:SI_AuthMethod   = $(_Q $authMethodValue)   # Ma
 if ([string]$Spn.CredKind -ne 'ManagedIdentity') { $null = $sb.AppendLine("`$global:SI_SPN_AppId    = $(_Q ($Spn.AppId))") }
 $null = $sb.AppendLine("`$global:SI_SPN_TenantId = $(_Q ($Spn.TenantId))")
 if ([string]$Spn.CredKind -ne 'ManagedIdentity' -or [string]$Spn.ObjectId) { $null = $sb.AppendLine("`$global:SI_SPN_ObjectId = $(_Q ($Spn.ObjectId))") }
-switch ($Spn.CredKind) {
+# A client secret is NEVER written into this file (2026-10-31; v3 signs in by certificate or managed identity): a secret
+# sign-in names its Key Vault secret only, and the file reads it into memory on every load. An existing file that still
+# holds a secret keeps working -- the engines read $global:SI_SPN_Secret as before. -SkipPhase1 on an existing install
+# (KeepExistingSignIn, 2026-11-01): the file's own sign-in lines stay exactly as they are -- the upgrade (-Merge) only
+# adds settings the file does not have, and nothing about the secret is written here.
+$keepSignIn = $false
+if ([string]$Spn.CredKind -eq 'Secret' -and -not $Spn.KvName) {
+    $keepSignIn = [bool]($Spn.PSObject.Properties['KeepExistingSignIn'] -and [bool]$Spn.KeepExistingSignIn -and $Merge -and -not $Force -and (Test-Path -LiteralPath $OutputPath))
+    if (-not $keepSignIn) {
+        throw 'Write-SICustomConfig: a client secret is never written into the configuration file -- keep it in Key Vault (CredStorage KeyVault) or sign in by certificate or managed identity.'
+    }
+}
+switch ($(if ($keepSignIn) { 'KeptSecret' } else { [string]$Spn.CredKind })) {
+    'KeptSecret' {
+        $null = $sb.AppendLine("# The client-secret sign-in already in this file is kept as it is (setup -SkipPhase1).")
+    }
     'Secret' {
-        if ($Spn.CredValue) {
-            $null = $sb.AppendLine("`$global:SI_SPN_Secret   = $(_Q ($Spn.CredValue))")
-        }
-        if ($Spn.KvName) {
-            $null = $sb.AppendLine("`$global:SI_KeyVaultName       = $(_Q ($Spn.KvName))")
-            $null = $sb.AppendLine("`$global:SI_SPN_KvSecretName   = $(_Q ($Spn.KvSecretName))")
-            $null = $sb.AppendLine("`$global:SpnKeyVaultName       = `$global:SI_KeyVaultName   # the name the az CLI sign-in reads")
-            if (-not $Spn.CredValue) {
-                # Names alone were emitted before, and nothing turned them into a secret -- every engine
-                # then ran with no SPN credential. The secret stays in Key Vault; it is read into memory
-                # each time this file loads.
-                $null = $sb.AppendLine("# The SPN secret lives only in Key Vault -- read into memory on every load, never written here.")
-                $null = $sb.AppendLine("if (-not `$global:SI_SPN_Secret) {")
-                $null = $sb.AppendLine("    try {")
-                $null = $sb.AppendLine("        . (Join-Path `$PSScriptRoot '..\auth\Get-SIKvSecret.ps1')")
-                $null = $sb.AppendLine("        `$global:SI_SPN_Secret = Get-SIKvSecret -VaultName `$global:SI_KeyVaultName -SecretName `$global:SI_SPN_KvSecretName")
-                $null = $sb.AppendLine("    } catch { Write-Warning (`"SI custom: the SPN secret could not be read from Key Vault: {0}`" -f `$_.Exception.Message) }")
-                $null = $sb.AppendLine("}")
-            }
-        }
+        $null = $sb.AppendLine("`$global:SI_KeyVaultName       = $(_Q ($Spn.KvName))")
+        $null = $sb.AppendLine("`$global:SI_SPN_KvSecretName   = $(_Q ($Spn.KvSecretName))")
+        $null = $sb.AppendLine("`$global:SpnKeyVaultName       = `$global:SI_KeyVaultName   # the name the az CLI sign-in reads")
+        # Names alone were emitted before, and nothing turned them into a secret -- every engine then ran with no SPN
+        # credential. The secret stays in Key Vault; it is read into memory each time this file loads.
+        $null = $sb.AppendLine("# The SPN secret lives only in Key Vault -- read into memory on every load, never written here.")
+        $null = $sb.AppendLine("if (-not `$global:SI_SPN_Secret) {")
+        $null = $sb.AppendLine("    try {")
+        $null = $sb.AppendLine("        . (Join-Path `$PSScriptRoot '..\auth\Get-SIKvSecret.ps1')")
+        $null = $sb.AppendLine("        `$global:SI_SPN_Secret = Get-SIKvSecret -VaultName `$global:SI_KeyVaultName -SecretName `$global:SI_SPN_KvSecretName")
+        $null = $sb.AppendLine("    } catch { Write-Warning (`"SI custom: the SPN secret could not be read from Key Vault: {0}`" -f `$_.Exception.Message) }")
+        $null = $sb.AppendLine("}")
     }
     'Cert' {
         $null = $sb.AppendLine("`$global:SI_SPN_CertThumbprint = $(_Q ($Spn.CertThumbprint))")

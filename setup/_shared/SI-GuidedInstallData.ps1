@@ -569,7 +569,11 @@ function Get-SIInstallDataStepTable {
                     -ActionText 'If the region does not accept new servers, choose another database region in the wizard; otherwise run the install command again.' -Command $ctx.ResumeCommand)
             }
             # a server that was there after all (its read above failed) is waited for, never created over
-            if (-not [bool](Get-SIInstallProp $r.Value 'SIExisted')) { $created += 'server' }
+            if (-not [bool](Get-SIInstallProp $r.Value 'SIExisted')) {
+                $created += 'server'
+                # recorded (and kept for a resume): the security baseline below touches only a server THIS install created
+                $ctx.Facts['sqlServerCreatedAt'] = (& $ctx.Seams.Now).ToString('o')
+            }
         }
         # Azure services (Cloud Shell, the jobs, the web app) reach it; there is no public rule for anything else.
         Set-SIInstallSqlAzureServicesRule -Ctx $ctx
@@ -638,10 +642,12 @@ function Get-SIInstallDataStepTable {
         if (-not $r.Error) { Set-SIInstallSqlAdminSetAt -Ctx $ctx }
         $msg ='Database server {0} ({1}), Entra sign-in only{2}.' -f $n.SqlServer, $v['sqlLocation'], $(if ($created.Count) { '; created ' + ($created -join ', ') } else { '' })
         if ($sizes.Count) { $msg += (' ' + ($sizes -join '; ') + '.') }
-        # SECURITY BASELINE, only while SI_SECURITY_BASELINE_NEW_INSTALL is on (setup\_shared\SI-SecurityBaseline.ps1, default
-        # OFF until a fresh test install proves it): SQL auditing of the server to the install's workspace, 90 days. Never
-        # fails the step -- a refusal is one line, and setup\Set-SISecurityBaseline.ps1 turns it on later.
-        if (Test-SISecurityBaselineNewInstall) {
+        # SECURITY BASELINE (setup\_shared\SI-SecurityBaseline.ps1; ON by default since 2026-10-31,
+        # SI_SECURITY_BASELINE_NEW_INSTALL=0 turns it off): SQL auditing of the server to the install's workspace, 90 days --
+        # ONLY for a server THIS install created (sqlServerCreatedAt, kept for a resume): running the install command again
+        # over a live install never changes its server (2026-11-01). Never fails the step -- a refusal is one line, and
+        # setup\Set-SISecurityBaseline.ps1 turns it on later (an existing install: one environment at a time).
+        if (Test-SISecurityBaselineAppliesTo -CreatedByThisInstall ([bool][string]$ctx.Facts['sqlServerCreatedAt'])) {
             $wsId = [string]$ctx.Facts['workspaceResourceId']
             if (-not $wsId) { $wsId = [string](Get-SIInstallInfra -Ctx $ctx)['WorkspaceResourceId'] }
             $au = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Set-SISqlServerAuditSetup' -Arguments ([ordered]@{ ServerId = [string]$ctx.Facts['sqlServerId']; WorkspaceResourceId = $wsId })

@@ -9,7 +9,9 @@
         vuln-sql          the vulnerability close-loop's SQL connector(s)          (Invoke-SIVulnLoop.ps1, the plan step)
         vuln-servicenow   the vulnerability close-loop's ServiceNow connector(s)   (Invoke-SIVulnLoop.ps1, the plan step)
         cmdb-sql          the SQL CMDB connector -- an ASSET scope (tiers, asset kinds)
-        cmdb-servicenow   the ServiceNow CMDB connector (Invoke-SICmdb.ps1) -- an ASSET scope (tiers, asset kinds)
+        cmdb-servicenow   the ServiceNow CMDB connector (Invoke-SICmdb.ps1) and the ServiceNow CI output of the data-out
+                          connector -- an ASSET scope (tiers, asset kinds) plus, #1055, the CI rules 'include' / 'exclude'
+                          on the CI's asset type, OS family and class (Test-SIOutputScopeCiRules)
 
     Where it comes from: the Pro settings database (cfg.ItemOverride, kind 'outputscope', one item per destination),
     materialised by Export-SIProConfig into <run>\config\output-scope.json (SI_ProConfigRoot) with every named report
@@ -68,6 +70,119 @@ $script:SIOutputScopeFilterFields = [ordered]@{
     'si_patch_cycle'      = @{ Label = 'Patch cycle'; Columns = @('si_patch_cycle'); Values = @() }
     'si_os_family'        = @{ Label = 'OS family'; Columns = @('si_os_family'); Values = @() }
     'si_servicenow_subci' = @{ Label = 'ServiceNow sub-CI'; Columns = @('si_servicenow_subci'); Values = @() }
+}
+
+# #1055 (owner 2026-11-02: "we should NOT be syncing these assets [mobile phones] into snow"; "we need to be able to filter
+# on this in the snow connectors"): THE CI RULES of the ServiceNow CI output -- 'include' and 'exclude', each a list of
+# entries { "<CI field>": [values], ... }. An entry MATCHES a CI when, for EVERY field it names, the CI's value is one of
+# the entry's values (case does not count); a CI without a value for a field never matches an entry that names it. A CI
+# passes when no include entry is set or it matches ANY include entry, AND it matches NO exclude entry. Only the CI
+# destination of the ServiceNow data-out connector takes them (a vulnerable item whose CI they leave out is out of scope
+# too -- Invoke-SIDataOutContractPage). The web app's twin: CiRules (C#).
+$script:SIOutputScopeCiRuleDestinations = @('cmdb-servicenow')
+$script:SIOutputScopeCiRuleFields = [ordered]@{
+    'si_asset_type' = @{ Label = 'Asset type'; Values = @() }
+    'si_os_family'  = @{ Label = 'OS family'; Values = @() }
+    'si_class'      = @{ Label = 'Class'; Values = @('device', 'identity', 'cloud_resource', 'public_ip') }
+}
+$script:SIOutputScopeCiRuleMax = 25
+
+function Get-SIOutputScopeCiRuleFields { <# PURE. The CI fields a CI rule may name, in order (unrolled: @(Get-SIOutputScopeCiRuleFields) is the list). #> @($script:SIOutputScopeCiRuleFields.Keys) }
+
+function Test-SIOutputScopeCiRuleDestination {
+    <# PURE. Does a destination take CI rules (include / exclude)? #>
+    param([string]$Destination)
+    $script:SIOutputScopeCiRuleDestinations -contains [string]$Destination
+}
+
+function ConvertTo-SIOutputScopeCiRules {
+    <# PURE. An 'include' / 'exclude' list -> one entry per rule: @{ Fields = @( @{ Field; Values (lower) } ) } (a rule naming no value is dropped). #>
+    param($Rules)
+    if ($null -eq $Rules) { return }
+    foreach ($r in @($Rules)) {
+        if ($null -eq $r -or $r -is [string]) { continue }
+        $names = if ($r -is [System.Collections.IDictionary]) { @($r.Keys | ForEach-Object { [string]$_ }) } else { @($r.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $fs = @(foreach ($n in @($names | Sort-Object)) {
+            $vals = @(Get-SIOutputScopeList $r $n | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ })
+            if ($vals.Count) { [pscustomobject]@{ Field = $n; Values = $vals } }
+        })
+        if ($fs.Count) { [pscustomobject]@{ Fields = $fs } }
+    }
+}
+
+function Test-SIOutputScopeCiRuleMatch {
+    <# PURE. Does a CI (-Fields: field -> its value(s)) match ONE rule: every field the rule names holds one of its values? #>
+    param($Rule, [hashtable]$Fields)
+    foreach ($f in @($Rule.Fields)) {
+        $have = @()
+        if ($null -ne $Fields -and $Fields.ContainsKey($f.Field)) { $have = @(Get-SIOutputScopeNames $Fields[$f.Field] | ForEach-Object { $_.ToLowerInvariant() }) }
+        if ($have.Count -eq 0) { return $false }
+        $hit = $false
+        foreach ($h in $have) { if ($f.Values -contains $h) { $hit = $true; break } }
+        if (-not $hit) { return $false }
+    }
+    $true
+}
+
+function Test-SIOutputScopeCiRules {
+    <# PURE. Does a CI pass the scope's CI rules: any include rule (when there is one) and no exclude rule? No rules = it passes. #>
+    param($Scope, [hashtable]$Fields)
+    if ($null -eq $Scope) { return $true }
+    if ($Scope.PSObject.Properties['CiInclude'] -and @($Scope.CiInclude).Count) {
+        $in = $false
+        foreach ($r in @($Scope.CiInclude)) { if ($r -and (Test-SIOutputScopeCiRuleMatch -Rule $r -Fields $Fields)) { $in = $true; break } }
+        if (-not $in) { return $false }
+    }
+    if ($Scope.PSObject.Properties['CiExclude']) {
+        foreach ($r in @($Scope.CiExclude)) { if ($r -and (Test-SIOutputScopeCiRuleMatch -Rule $r -Fields $Fields)) { return $false } }
+    }
+    $true
+}
+
+function Get-SIOutputScopeCiRuleText {
+    <# PURE. One rule in words: "asset type Unknown + OS family ios, android". #>
+    param($Rule)
+    (@($Rule.Fields) | ForEach-Object {
+        $lbl = if ($script:SIOutputScopeCiRuleFields.Contains($_.Field)) { $script:SIOutputScopeCiRuleFields[$_.Field].Label.ToLowerInvariant() } else { $_.Field }
+        '{0} {1}' -f $lbl, (@($_.Values) -join ', ')
+    }) -join ' + '
+}
+
+function Test-SIOutputScopeCiRuleBody {
+    <# PURE. The reasons the 'include' / 'exclude' lists of a scope body are not accepted. #>
+    param([string]$Key, $Body)
+    $why = New-Object System.Collections.Generic.List[string]
+    foreach ($side in 'include', 'exclude') {
+        $list = Get-SIOutputScopeValue $Body $side
+        if ($null -eq $list) { continue }
+        if (-not (Test-SIOutputScopeCiRuleDestination -Destination $Key)) { $why.Add(("'{0}' is a CI rule of the ServiceNow CI output only (cmdb-servicenow), not of {1}" -f $side, $Key)); continue }
+        $rules = @($list)
+        if ($list -is [string] -or $list -is [System.Management.Automation.PSCustomObject] -or $list -is [System.Collections.IDictionary]) { $why.Add(("'{0}' must be a list of rules: [ {{ ""si_asset_type"": [""Mobile""] }} ]" -f $side)); continue }
+        if ($rules.Count -gt $script:SIOutputScopeCiRuleMax) { $why.Add(("{0}: at most {1} rules" -f $side, $script:SIOutputScopeCiRuleMax)) }
+        $i = 0
+        foreach ($r in $rules) {
+            $i++
+            if (-not ($r -is [System.Management.Automation.PSCustomObject] -or $r -is [System.Collections.IDictionary])) { $why.Add(("{0} rule {1}: a rule is an object {{ ""<CI field>"": [values] }}" -f $side, $i)); continue }
+            $names = if ($r -is [System.Collections.IDictionary]) { @($r.Keys | ForEach-Object { [string]$_ }) } else { @($r.PSObject.Properties | ForEach-Object { $_.Name }) }
+            if ($names.Count -eq 0) { $why.Add(("{0} rule {1} names no field" -f $side, $i)); continue }
+            foreach ($n in $names) {
+                if (-not $script:SIOutputScopeCiRuleFields.Contains($n)) { $why.Add(("{0} rule {1}: '{2}' is not a CI field a rule may name ({3})" -f $side, $i, $n, (@($script:SIOutputScopeCiRuleFields.Keys) -join ', '))); continue }
+                $raw = Get-SIOutputScopeValue $r $n
+                if ($null -eq $raw -or $raw -is [System.Management.Automation.PSCustomObject] -or $raw -is [System.Collections.IDictionary]) { $why.Add(("{0} rule {1}: '{2}' must be a list of values" -f $side, $i, $n)); continue }
+                $vals = @(Get-SIOutputScopeList $r $n)
+                if ($vals.Count -eq 0) { $why.Add(("{0} rule {1}: '{2}' names no value" -f $side, $i, $n)) }
+                foreach ($x in $vals) {
+                    $s = [string]$x
+                    if ($s.Length -gt 64 -or $s -match '[\r\n\t;]') { $why.Add(("{0} rule {1}: '{2}' is not a value of {3} (one line, at most 64 characters)" -f $side, $i, $s, $n)) }
+                }
+                $known = $script:SIOutputScopeCiRuleFields[$n]
+                if (@($known.Values).Count) {
+                    foreach ($x in $vals) { if (@($known.Values | Where-Object { $_ -ieq [string]$x }).Count -eq 0) { $why.Add(("{0} rule {1}: '{2}' is not a {3} ({4})" -f $side, $i, $x, $known.Label.ToLowerInvariant(), (@($known.Values) -join ', '))) } }
+                }
+            }
+        }
+    }
+    $why.ToArray()
 }
 
 function Get-SIOutputScopeFilterColumns {
@@ -159,9 +274,17 @@ function Test-SIOutputScopeBody {
     if ($null -eq $Body -or -not ($Body -is [System.Management.Automation.PSCustomObject] -or $Body -is [System.Collections.IDictionary])) { $why.Add('an output scope must be a JSON object'); return $why.ToArray() }
     $names = if ($Body -is [System.Collections.IDictionary]) { @($Body.Keys | ForEach-Object { [string]$_ }) } else { @($Body.PSObject.Properties | ForEach-Object { $_.Name }) }
     $allowed = if ($spec.Asset) { @('tiers', 'assetKinds') } else { @('templates', 'reports', 'severities', 'tiers', 'domains', 'filters') }
-    foreach ($n in $names) { if ($allowed -notcontains $n) { $why.Add(("'{0}' is not a scope of {1} ({2})" -f $n, $Key, ($allowed -join ', '))) } }
+    # #1055 the CI rules: the ServiceNow CI output only
+    if (Test-SIOutputScopeCiRuleDestination -Destination $Key) { $allowed += @('include', 'exclude') }
     foreach ($n in $names) {
-        if ($n -eq 'filters') { continue }
+        if ($allowed -notcontains $n) {
+            if ($n -in 'include', 'exclude') { continue }   # said by Test-SIOutputScopeCiRuleBody, in its own words
+            $why.Add(("'{0}' is not a scope of {1} ({2})" -f $n, $Key, ($allowed -join ', ')))
+        }
+    }
+    foreach ($w in @(Test-SIOutputScopeCiRuleBody -Key $Key -Body $Body)) { $why.Add($w) }
+    foreach ($n in $names) {
+        if ($n -in 'filters', 'include', 'exclude') { continue }
         $v = Get-SIOutputScopeValue $Body $n
         if ($null -ne $v -and -not ($v -is [System.Collections.IEnumerable] -and $v -isnot [string])) { $why.Add(("'{0}' must be a list" -f $n)) }
     }
@@ -232,6 +355,9 @@ function ConvertTo-SIOutputScope {
         Reports      = $reports
         Unresolved   = $unresolved
         Filters      = @(ConvertTo-SIOutputScopeFilterList (Get-SIOutputScopeValue $Body 'filters'))
+        # #1055 the CI rules (the ServiceNow CI output)
+        CiInclude    = @(ConvertTo-SIOutputScopeCiRules (Get-SIOutputScopeValue $Body 'include'))
+        CiExclude    = @(ConvertTo-SIOutputScopeCiRules (Get-SIOutputScopeValue $Body 'exclude'))
     }
 }
 
@@ -281,6 +407,8 @@ function Get-SIOutputScopeText {
     if ($Scope.PSObject.Properties['Filters']) {
         foreach ($f in @($Scope.Filters)) { if ($f) { $parts.Add(('{0} {1}' -f $f.Field, (@($f.Values) -join ', '))) } }
     }
+    if ($Scope.PSObject.Properties['CiInclude'] -and @($Scope.CiInclude).Count) { $parts.Add(('only ' + ((@($Scope.CiInclude) | ForEach-Object { Get-SIOutputScopeCiRuleText $_ }) -join ' or '))) }
+    if ($Scope.PSObject.Properties['CiExclude']) { foreach ($r in @($Scope.CiExclude)) { if ($r) { $parts.Add(('leave out ' + (Get-SIOutputScopeCiRuleText $r))) } } }
     if ($parts.Count -eq 0) { return 'everything' }
     $parts -join '; '
 }
@@ -318,9 +446,14 @@ function Test-SIOutputScopeFinding {
 }
 
 function Test-SIOutputScopeAsset {
-    <# PURE. Does one asset pass a CMDB destination's asset scope (tiers, asset kinds)? Blank values pass. #>
-    param($Scope, [AllowNull()]$Tier, [AllowNull()][AllowEmptyString()][string]$Kind)
+    <#
+        PURE. Does one asset pass a CMDB destination's asset scope (tiers, asset kinds)? Blank values pass. -Fields (#1055):
+        the CI's values for the CI rules (si_asset_type, si_os_family, si_class) -- given, the include / exclude rules are
+        applied too (Test-SIOutputScopeCiRules); not given, they are not (a caller without those values).
+    #>
+    param($Scope, [AllowNull()]$Tier, [AllowNull()][AllowEmptyString()][string]$Kind, [hashtable]$Fields)
     if ($null -eq $Scope) { return $true }
+    if ($PSBoundParameters.ContainsKey('Fields') -and -not (Test-SIOutputScopeCiRules -Scope $Scope -Fields $Fields)) { return $false }
     if (@($Scope.Tiers).Count) {
         $t = ConvertTo-SIOutputScopeTier $Tier
         if ($null -ne $t -and @($Scope.Tiers) -notcontains $t) { return $false }

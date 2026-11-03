@@ -51,6 +51,8 @@
     { "action": "datamodel.item.stage", "source": "web", "what": "a risk factor or provider mapping of the Pro data model changed, turned off or put back (Configuration > Risk factors), staged" },
     { "action": "cioverride.set.stage", "source": "web", "what": "a manual override of one CI field (tier, purpose, category, department or a CMDB field) set or changed, with its reason and expiry, staged" },
     { "action": "cioverride.remove.stage", "source": "web", "what": "the removal (soft) of a manual CI override staged" },
+    { "action": "cisuspect.decide.stage", "source": "web", "what": "a decision about a group of correlation suspects staged -- the same machine (the next CI build merges them) or not the same machine, with its reason" },
+    { "action": "cisuspect.remove.stage", "source": "web", "what": "the removal (soft) of a correlation decision staged -- a \"same machine\" decision is split again by the next CI build" },
     { "action": "riskanalysis.bucket-reset.stage", "source": "web", "what": "a one-time reset of a Risk Analysis report's bucket count (or of every report) staged on Operations > Risk Analysis query splitting: who, why, which report" },
     { "action": "riskanalysis.source-accept.stage", "source": "web", "what": "a source that went silent accepted as empty for good for one Risk Analysis report, staged on Run health > Risk Analysis reports: who, why, which report and source" },
     { "action": "riskanalysis.source-accept-undo.stage", "source": "web", "what": "an acceptance of a report's empty source undone, staged on Run health > Risk Analysis reports: who, why, which acceptance" },

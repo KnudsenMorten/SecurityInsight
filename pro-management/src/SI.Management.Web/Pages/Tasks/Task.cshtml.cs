@@ -46,7 +46,7 @@ public sealed class TaskModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading a task failed");
-            Error = "The task could not be read: " + ex.Message;
+            Error = "The task could not be read: " + ViewerError.Text(ex);
             return false;
         }
     }

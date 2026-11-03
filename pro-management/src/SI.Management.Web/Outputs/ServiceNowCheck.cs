@@ -375,7 +375,7 @@ public sealed class ServiceNowVerifier(IJobsClient jobs, IOptions<JobsOptions> o
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogWarning(ex, "the mail job could not be started for a ServiceNow check");
-            return (false, "The check could not be started: " + ex.Message);
+            return (false, "The check could not be started: " + ViewerError.Text(ex));
         }
     }
 }
@@ -392,8 +392,12 @@ public sealed class ServiceNowRowCount(ISqlExecutor sql)
 IF OBJECT_ID(N'sidata.Ci') IS NULL
     SELECT CAST(0 AS bigint) AS N, CAST(0 AS bigint) AS Total;
 ELSE
-    SELECT COUNT_BIG(CASE WHEN @Classes IS NULL OR c.Class IN (SELECT [value] FROM OPENJSON(@Classes)) THEN 1 END) AS N, COUNT_BIG(*) AS Total
-    FROM sidata.Ci AS c WHERE c.DocJson IS NOT NULL;
+    -- the class test is an APPLY, not a subquery inside COUNT_BIG: SQL Server refuses an aggregate over a subquery (Msg 130;
+    -- live 2026-11-02 at the pilot -- every count of the CI output failed since this was written)
+    SELECT COUNT_BIG(CASE WHEN @Classes IS NULL OR k.Hit = 1 THEN 1 END) AS N, COUNT_BIG(*) AS Total
+    FROM sidata.Ci AS c
+    OUTER APPLY (SELECT TOP (1) 1 AS Hit FROM OPENJSON(@Classes) AS j WHERE j.[value] = c.Class) AS k
+    WHERE c.DocJson IS NOT NULL;
 """;
 
     /// PURE. The classes of the output's filter when it filters on the CI's class only (null = no filter); Countable false =
@@ -404,6 +408,27 @@ ELSE
         if (filter.Count != 1 || !filter.ContainsKey("si_class")) return (false, null);
         var vals = filter["si_class"] is JsonArray a ? a.Select(x => OutputMapper.Text(x)).ToList() : [OutputMapper.Text(filter["si_class"])];
         return (true, JsonSerializer.Serialize(vals));
+    }
+
+    /// #1055 THE CIs PER CATEGORY: one row per (class, asset type, OS family, tier) with how many CIs -- the connector page
+    /// counts each choice of the CI rules and what the scope would send from these (<see cref="CiScopePreview"/>), never
+    /// reading a CI row. Plain columns only in the aggregate (no subquery inside COUNT_BIG -- SQL Server Msg 130).
+    public const string CiGroupsSql = """
+IF OBJECT_ID(N'sidata.Ci') IS NULL
+    SELECT CAST(NULL AS nvarchar(16)) AS Class, CAST(NULL AS nvarchar(128)) AS AssetType, CAST(NULL AS nvarchar(64)) AS OsFamily, CAST(NULL AS tinyint) AS Tier, CAST(0 AS bigint) AS N WHERE 1 = 0;
+ELSE
+    SELECT c.Class, c.AssetType, x.OsFamily, c.Tier, COUNT_BIG(*) AS N
+    FROM sidata.Ci AS c
+    CROSS APPLY (SELECT CASE WHEN ISJSON(c.DocJson) = 1 THEN JSON_VALUE(c.DocJson, '$.si_os_family') END AS OsFamily) AS x
+    WHERE c.DocJson IS NOT NULL
+    GROUP BY c.Class, c.AssetType, x.OsFamily, c.Tier;
+""";
+
+    /// The CIs per (class, asset type, OS family, tier).
+    public async Task<IReadOnlyList<CiGroup>> CiGroupsAsync(CancellationToken ct)
+    {
+        var rows = await sql.QueryAsync(CiGroupsSql, new Dictionary<string, object?>(), ct);
+        return rows.Select(r => new CiGroup(r.Str("Class"), r.Str("AssetType"), r.Str("OsFamily"), r.Long("Tier") is { } t ? (int)t : null, r.Long("N") ?? 0)).ToList();
     }
 
     /// (rows that would be sent, of how many CIs) -- null when the filter cannot be counted here.

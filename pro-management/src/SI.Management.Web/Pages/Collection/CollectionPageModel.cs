@@ -478,14 +478,14 @@ public abstract class CollectionPageModel : PageModel
             await ApplyLayoutAsync(ct);
             GridRequest req;
             try { req = ReadGrid(Plan); GridSql.Normalize(Plan.Spec, req); }
-            catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; return; }
+            catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); return; }
             var g = await Views.GridAsync(new GridQuery(Plan.Spec, Plan.Parameters, Plan.Scope, req), ct);
             // #589: the extra columns of the shown rows, read for the page's rows only
             Grid = g.Data with { Rows = await FillAsync(DisplayColumns, g.Data.Rows, ct) };
             Queries.Insert(0, QueryInfo.From(g, Heading + ": the rows"));
             await BulkAsync(req, ct);
         }
-        catch (ArgumentException ex) { Error = "The request is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The request is not valid: " + ViewerError.Text(ex); }
         catch (ViewTimeoutException ex)
         {
             // #284: shown in the page (never the generic error page), with the reference that finds this line in the log
@@ -498,7 +498,7 @@ public abstract class CollectionPageModel : PageModel
         {
             ErrorRef = Reference();
             Log.LogError(ex, "reading the collection view {Page} grid {Grid} failed: {Type} {SqlNumber} (reference {Reference})", PagePath, Plan?.Spec.Name, ex.GetType().Name, SqlNumber(ex), ErrorRef);
-            Error = "This view could not be read from the Pro database: " + ex.Message + SchemaHint(ex.Message) + " Reference: " + ErrorRef + ".";
+            Error = "This view could not be read from the Pro database: " + ViewerError.Text(ex) + SchemaHint(ex.Message) + " Reference: " + ErrorRef + ".";
         }
     }
 
@@ -671,7 +671,7 @@ public abstract class CollectionPageModel : PageModel
                 values = counts.Select(x => new { value = x.Key, label = ValueLabel(c, x.Key), n = x.N, text = Fmt.Int(x.N) }),
             });
         }
-        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
         catch (ViewTimeoutException) { return new JsonResult(new { ok = false, message = "Counting took too long -- the choices are shown without counts." }); }
     }
 
@@ -684,7 +684,7 @@ public abstract class CollectionPageModel : PageModel
     {
         (GridPlan Plan, GridPage Page)? r;
         try { r = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
         if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var (plan, page) = r.Value;
@@ -713,7 +713,7 @@ public abstract class CollectionPageModel : PageModel
     {
         (GridPlan Plan, GridPage Page)? r;
         try { r = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
         if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var (plan, page) = r.Value;
@@ -738,7 +738,7 @@ public abstract class CollectionPageModel : PageModel
     {
         (GridPlan Plan, GridPage Page)? r;
         try { r = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
         if (r is null || ViewLayout is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var (plan, page) = r.Value;

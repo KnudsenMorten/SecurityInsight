@@ -215,9 +215,11 @@ public sealed class AccessClaimsTransformation : IClaimsTransformation
     private readonly IGroupMembershipSource _groups;
     private readonly ILogger<AccessClaimsTransformation> _log;
     private readonly IDepartmentGrants? _departments;
+    private readonly SignInAppSharing? _sharing;
 
-    public AccessClaimsTransformation(IAccessStore store, IGroupMembershipSource groups, ILogger<AccessClaimsTransformation> log, IDepartmentGrants? departments = null)
-    { _store = store; _groups = groups; _log = log; _departments = departments; }
+    public AccessClaimsTransformation(IAccessStore store, IGroupMembershipSource groups, ILogger<AccessClaimsTransformation> log, IDepartmentGrants? departments = null,
+        SignInAppSharing? sharing = null)
+    { _store = store; _groups = groups; _log = log; _departments = departments; _sharing = sharing; }
 
     private static ClaimsPrincipal None(ClaimsPrincipal p) => AccessClaims.Apply(p, SiRole.None, Array.Empty<AccessScope>(), "", false);
 
@@ -277,8 +279,12 @@ public sealed class AccessClaimsTransformation : IClaimsTransformation
             var matching = all.Where(a => a.Matches(oid, groups)).ToList();
             var carried = await _store.CarriedAsync(CancellationToken.None);
             // #765: an Entra app role not carried over yet is copied into SecurityInsight's table now, once -- the person
-            // keeps exactly the access they had, and from then on the table decides
-            if (app > SiRole.None && oid is not null && !carried.Contains(SqlAccessStore.CarriedKey(oid, app)))
+            // keeps exactly the access they had, and from then on the table decides. #999: the same one-install rule as the
+            // carry-over at start -- while the directory says the sign-in application is shared by several installs (one
+            // tenant, one app registration), an Entra role is not this install's to write into its table (the app role
+            // keeps counting in the web app, as before the carry-over; the MCP server answers only the table)
+            if (app > SiRole.None && oid is not null && !carried.Contains(SqlAccessStore.CarriedKey(oid, app))
+                && !(_sharing is not null && await _sharing.SharedAsync(CancellationToken.None)))
             {
                 try
                 {

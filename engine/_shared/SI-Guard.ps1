@@ -21,7 +21,8 @@
                        support ticket per environment + guard: GuardId, GuardOutcome, Severity, Area, Job, Measured /
                        Thresholds (numbers), HeldCount, TripCount, FirstSeenUtc, Version, Ring. ANONYMOUS adds only the random
                        InstallId -- no tenant, host, subject, detail, action text or link; IDENTIFIED adds ClaimedTenantId,
-                       Host, ActionText (redacted, at most 500 characters) and Link (https). The framework's own record
+                       Host, ActionText (redacted, at most 500 characters), Link (https) and -- Invardia S16 -- InstallId =
+                       the install's LASTING id (SI-InstallId) when it has one. The framework's own record
                        builder (New-AitUplinkReport) knows heartbeat | run | install only; the guard record is built here.
       (e) THE GUARDS VIEW  one row in cfg.GuardEvent (Pro database) -- the web app's Operations > Guards (safety checks) view, and the
                        outbox the mail job reads for events the web app writes (Invoke-SIGuardOutbox).
@@ -933,7 +934,8 @@ function New-SIGuardTelemetryRecord {
                       GuardOutcome, Severity, Area, Measured / Thresholds (camelCase keys, numbers only, at most 10 each),
                       HeldCount, TripCount, FirstSeenUtc, LastSeenUtc
           anonymous   + InstallId. NO tenant, host, subject, detail, action text or link.
-          identified  + ClaimedTenantId, Host, ActionText (at most 500 characters, redacted), Link (https only).
+          identified  + ClaimedTenantId, Host, ActionText (at most 500 characters, redacted), Link (https only), and InstallId =
+                      the install's LASTING id (Context.LastingInstallId, Invardia S16) when there is one.
         A value outside the receiver's lists is refused here (it would reject the whole report).
     #>
     param([Parameter(Mandatory)]$Event, [Parameter(Mandatory)]$Trip, [Parameter(Mandatory)]$Context, [string]$HostName, $Now)
@@ -968,7 +970,11 @@ function New-SIGuardTelemetryRecord {
     } else {
         $r.ClaimedTenantId = [string]$Context.TenantId
         $r.Host = $(if ($HostName) { $HostName } else { [string][System.Environment]::MachineName })
-        $red = if (Get-Command -Name ConvertTo-AitUplinkRedacted -ErrorAction SilentlyContinue) { { param($s) ConvertTo-AitUplinkRedacted -Text $s } } else { { param($s) $s } }
+        # Invardia S16: the install's LASTING id (SI-InstallId) on the identified report -- never the anonymous id; none = no field
+        if ($Context.PSObject.Properties['LastingInstallId'] -and (Get-Command -Name ConvertTo-SIInvardiaInstallId -ErrorAction SilentlyContinue)) {
+            $lid = ConvertTo-SIInvardiaInstallId ([string]$Context.LastingInstallId); if ($lid) { $r.InstallId = $lid }
+        }
+        $red =if (Get-Command -Name ConvertTo-AitUplinkRedacted -ErrorAction SilentlyContinue) { { param($s) ConvertTo-AitUplinkRedacted -Text $s } } else { { param($s) $s } }
         # the three parts WITHOUT the event's detail or subject (what happened, the consequence, what to do) -- the same
         # words as the mail and the Guards page; the caller's own -Action when it gave one
         $atText = [string]$Event.Action

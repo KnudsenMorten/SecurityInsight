@@ -88,7 +88,7 @@ public sealed class ServiceModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the CMDB service could not be read");
-            Error = "The service could not be read from the Pro database: " + ex.Message;
+            Error = "The service could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

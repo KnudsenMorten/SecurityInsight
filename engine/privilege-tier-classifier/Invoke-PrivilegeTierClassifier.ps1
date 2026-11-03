@@ -670,6 +670,15 @@ $itemsJson
             @{ Name = 'OpenAI_Deployment'; Value = $global:OpenAI_Deployment }
         ) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) } | ForEach-Object { $_.Name }
     )
+    # the key goes ONLY to an Azure OpenAI host over https: another endpoint is treated as not configured (said once)
+    if ($missingAI.Count -eq 0) {
+        if (-not (Get-Command -Name Test-SIOpenAIEndpoint -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'asset-profiling', 'shared', 'Test-SIAIEnabled.ps1')) }
+        $epWhy = Test-SIOpenAIEndpoint -Endpoint ([string]$global:OpenAI_Endpoint)
+        if ($epWhy) {
+            if (-not $script:PtcAIEndpointSaid) { $script:PtcAIEndpointSaid = $true; Write-Log ("OpenAI_Endpoint is not used: $epWhy. AI tiering is not used in this run.") "WARN" }
+            $missingAI = @('OpenAI_Endpoint (not an Azure OpenAI host)')
+        }
+    }
     if ($missingAI.Count -gt 0) {
         # SAID ONCE PER RUN, and only as an error-free INFO when nothing is configured: Azure OpenAI is optional
         # (the Community default has none), so "not configured" is a choice, not a fault. Measured on an upgraded

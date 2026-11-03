@@ -1325,6 +1325,76 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiOverride_Ci' AND obj
 CREATE INDEX IX_CiOverride_Ci ON sidata.CiOverride (CiId, Field) INCLUDE (Value, ExpiresAt, Removed);
 
 -- ---------------------------------------------------------------------------------------------
+-- THE CORRELATION GATEKEEPER (ADDED 2026-11-02, #1053 -- owner: "a gatekeeper that could have detected this problem, where
+-- node name is the same so it is probably the same device"; "we need to define rules so things works automatically").
+--   CiSuspect                 the CURRENT set of suspected correlation errors, replaced by each data sync
+--                             (engine\pro-data\_shared\SI-CorrelationSuspects.ps1): one row per (group, CI). Rule hardid =
+--                             one hard id (or one record) on two or more active CIs; name = the same short name / first
+--                             FQDN label on 2-3 active server / VM CIs, at least one without a hard device id; placeholder =
+--                             an active device named by a source's placeholder. A warning only -- never blocks anything.
+--   CiSuspectDecision         what a person decided about a group (Admin, reason required, with its cfg.ChangeLog row):
+--                             not_same = they are different machines (the group is no longer warned about while every CI of
+--                             it is still one the decision names); same = one machine -- the NEXT CI BUILD MERGES their
+--                             records through the grouping's own path (an edge of the decision, Get-SICiGroupingStepSql).
+--                             Removed = soft (who, when, why); removing a "same" decision SPLITS the CIs again: SplitFromCiId
+--                             is the CI they were merged into, and the CI build gives the other side its own id back.
+--   CiSuspectDecisionRecord   the CIs (RecordKey '') and their records a decision names, as they were when it was made: a
+--                             decision sticks to the RECORDS (provider:native id), not to a CI id that a merge can change.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CiSuspect') IS NULL
+CREATE TABLE sidata.CiSuspect (
+    GroupKey          NVARCHAR(80)   NOT NULL,
+    CiId              NVARCHAR(64)   NOT NULL,
+    [Rule]            NVARCHAR(16)   NOT NULL,
+    Severity          NVARCHAR(8)    NOT NULL,
+    GroupLabel        NVARCHAR(450)  NULL,
+    Evidence          NVARCHAR(2000) NULL,
+    Name              NVARCHAR(400)  NULL,
+    Class             NVARCHAR(16)   NULL,
+    AssetType         NVARCHAR(128)  NULL,
+    Tier              TINYINT        NULL,
+    TierSetBy         NVARCHAR(16)   NULL,
+    OpenFindings      INT            NULL,
+    WeightedRiskScore FLOAT          NULL,
+    Anchored          BIT            NOT NULL CONSTRAINT DF_CiSuspect_Anchored DEFAULT 0,
+    ActiveLinks       INT            NOT NULL CONSTRAINT DF_CiSuspect_ActiveLinks DEFAULT 0,
+    [Role]            NVARCHAR(16)   NULL,
+    Dismissed         BIT            NOT NULL CONSTRAINT DF_CiSuspect_Dismissed DEFAULT 0,
+    DecisionId        BIGINT         NULL,
+    ComputedAt        DATETIME2(0)   NOT NULL CONSTRAINT DF_CiSuspect_ComputedAt DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_CiSuspect PRIMARY KEY (GroupKey, CiId)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiSuspect_Ci' AND object_id = OBJECT_ID('sidata.CiSuspect'))
+CREATE INDEX IX_CiSuspect_Ci ON sidata.CiSuspect (CiId) INCLUDE (GroupKey, [Rule], Severity, Dismissed);
+IF OBJECT_ID('sidata.CiSuspectDecision') IS NULL
+CREATE TABLE sidata.CiSuspectDecision (
+    DecisionId        BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_CiSuspectDecision PRIMARY KEY,
+    Verdict           NVARCHAR(16)   NOT NULL,
+    GroupKey          NVARCHAR(80)   NULL,
+    CiIds             NVARCHAR(1000) NOT NULL,
+    Names             NVARCHAR(2000) NULL,
+    Reason            NVARCHAR(1000) NOT NULL,
+    SetBy             NVARCHAR(256)  NOT NULL,
+    SetAt             DATETIME2(0)   NOT NULL CONSTRAINT DF_CiSuspectDecision_SetAt DEFAULT SYSUTCDATETIME(),
+    Removed           BIT            NOT NULL CONSTRAINT DF_CiSuspectDecision_Removed DEFAULT 0,
+    RemovedBy         NVARCHAR(256)  NULL,
+    RemovedAt         DATETIME2(0)   NULL,
+    RemovedReason     NVARCHAR(1000) NULL,
+    SplitFromCiId     NVARCHAR(64)   NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiSuspectDecision_Verdict' AND object_id = OBJECT_ID('sidata.CiSuspectDecision'))
+CREATE INDEX IX_CiSuspectDecision_Verdict ON sidata.CiSuspectDecision (Verdict, Removed) INCLUDE (SplitFromCiId);
+IF OBJECT_ID('sidata.CiSuspectDecisionRecord') IS NULL
+CREATE TABLE sidata.CiSuspectDecisionRecord (
+    DecisionId        BIGINT         NOT NULL,
+    CiId              NVARCHAR(64)   NOT NULL,
+    RecordKey         NVARCHAR(450)  NOT NULL,
+    CONSTRAINT PK_CiSuspectDecisionRecord PRIMARY KEY NONCLUSTERED (DecisionId, CiId, RecordKey)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiSuspectDecisionRecord_Record' AND object_id = OBJECT_ID('sidata.CiSuspectDecisionRecord'))
+CREATE INDEX IX_CiSuspectDecisionRecord_Record ON sidata.CiSuspectDecisionRecord (RecordKey) INCLUDE (DecisionId, CiId);
+
+-- ---------------------------------------------------------------------------------------------
 -- HISTORY PER CI (ADDED 2026-10-10, #464 -- V3-DATA-MODEL 2.8.3). sidata.CiChange: one row per change of a TRACKED field
 -- of a CI (tier, tier set-by, lifecycle, internet exposure, the asset risk factors, the CMDB owner's values), a link added or
 -- removed, a CI created -- with the old value, the new value, the source (provider / rule / override), the reason, the run
@@ -2521,6 +2591,45 @@ CREATE TABLE sidata.RecordCollection (
 );
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RecordCollection_Engine' AND object_id = OBJECT_ID('sidata.RecordCollection'))
 CREATE INDEX IX_RecordCollection_Engine ON sidata.RecordCollection (Engine, CollectionTime) INCLUDE (State, Records);
+-- ---------------------------------------------------------------------------------------------
+-- A CUSTOMER'S CHOICE, COUNTED (ADDED 2026-11-02, REQUIREMENTS #1056). Two per-install switches, off by default
+-- (SI_Identity_SkipNeverSyncedDisabledAd, SI_Identity_SkipDeletedGroups), leave Exposure Graph identities out of the assets.
+--   CollectionLeftOut  one row per switch and identity run while a switch is on: how many objects it left out (LeftOut),
+--                      how many it looked at and kept (Kept), how many it could not decide and left as they were (Held,
+--                      Applied = 0 with the reason in Detail). The Data health page shows them; the asset-drop check adds
+--                      LeftOut back before it judges the feed. Written by the identity collection
+--                      (engine\asset-profiling\shared\SI-IdentityScopeChoice.ps1), kept 400 days. No row while both are off.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CollectionLeftOut') IS NULL
+CREATE TABLE sidata.CollectionLeftOut (
+    Id              BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_CollectionLeftOut PRIMARY KEY,
+    Setting         NVARCHAR(64)   NOT NULL,
+    Feed            NVARCHAR(64)   NOT NULL CONSTRAINT DF_CollectionLeftOut_Feed DEFAULT N'',
+    Engine          NVARCHAR(32)   NOT NULL CONSTRAINT DF_CollectionLeftOut_Engine DEFAULT N'',
+    CollectedAt     DATETIME2(3)   NOT NULL CONSTRAINT DF_CollectionLeftOut_CollectedAt DEFAULT SYSUTCDATETIME(),
+    LeftOut         BIGINT         NOT NULL CONSTRAINT DF_CollectionLeftOut_LeftOut DEFAULT 0,
+    Kept            BIGINT         NULL,
+    Held            BIGINT         NOT NULL CONSTRAINT DF_CollectionLeftOut_Held DEFAULT 0,
+    Applied         BIT            NOT NULL CONSTRAINT DF_CollectionLeftOut_Applied DEFAULT 1,
+    Detail          NVARCHAR(400)  NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CollectionLeftOut_Setting' AND object_id = OBJECT_ID('sidata.CollectionLeftOut'))
+CREATE INDEX IX_CollectionLeftOut_Setting ON sidata.CollectionLeftOut (Setting, CollectedAt) INCLUDE (Feed, LeftOut, Applied);
+-- ---------------------------------------------------------------------------------------------
+-- PROOF OF DELETION (ADDED 2026-11-02, REQUIREMENTS #1057). Per source a per-install switch, off by default
+-- (SI_DeletionProof_Entra / _Azure / _Intune). One row per provider record that is missing from a complete collection AND
+-- that its source proved deleted (Entra ID deleted items, an Azure resource-changes Delete, an Intune audit Delete). The CI
+-- build reads it: such a record is gone, and its CI retires at once ("deleted in <source>"). A record listed again (an Entra
+-- restore) or a source switched off loses its row. Written by engine\data-model\SI-DeletionProof.ps1. No row while all are off.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CiDeletionProof') IS NULL
+CREATE TABLE sidata.CiDeletionProof (
+    RecordKey       NVARCHAR(450)  NOT NULL CONSTRAINT PK_CiDeletionProof PRIMARY KEY,
+    Source          NVARCHAR(16)   NOT NULL,
+    DeletedAt       DATETIME2(3)   NULL,
+    Evidence        NVARCHAR(400)  NULL,
+    ProvedAt        DATETIME2(3)   NOT NULL CONSTRAINT DF_CiDeletionProof_ProvedAt DEFAULT SYSUTCDATETIME()
+);
 IF OBJECT_ID('sidata.SourceState') IS NULL
 CREATE TABLE sidata.SourceState (
     Source          NVARCHAR(32)   NOT NULL CONSTRAINT PK_SourceState PRIMARY KEY,
@@ -4866,3 +4975,37 @@ IF COL_LENGTH('sidata.SummaryRow', 'RiskAssetDerived') IS NULL ALTER TABLE sidat
 IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnBase') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnBase FLOAT NULL;
 IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnFactors') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnFactors NVARCHAR(MAX) NULL;
 IF COL_LENGTH('sidata.SummaryRow', 'RiskVulnDerived') IS NULL ALTER TABLE sidata.SummaryRow ADD RiskVulnDerived BIT NULL;
+
+-- ---------------------------------------------------------------------------------------------
+-- #1038 (1) DATA OUT AS ITS OWN JOB (owner 2026-11-01: "servicenow is most critical"). The data sync MARKS the collection
+-- whose findings per CI it just stored as ready for data out, the moment they are stored (before the key figures, the
+-- summaries, the clean-up and the views); the data-out job (caj-si-data-out, engine/data-out/Invoke-SIDataOutJob.ps1)
+-- sends from the newest mark. One row per collection (marking it again re-arms the same row -- idempotent):
+--   State   ready (waits for the job) | sending | sent | failed (the job's own retries ran out; the next start tries
+--           again) | held (the run was not complete -- nothing is sent from it) | superseded (a newer mark came first)
+-- DataOutLock is ONE row: who works on the findings per CI now -- the data-out job while it sends, or the data sync while it
+-- replaces them -- so a send never reads a set that is being replaced, and a second start of the job does nothing. A lease
+-- (UntilUtc) that is not renewed ends by itself. Both are product state of the engine (schema sidata).
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.DataOutReady') IS NULL
+CREATE TABLE sidata.DataOutReady (
+    ReadyId         BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_DataOutReady PRIMARY KEY,
+    CollectionTime  NVARCHAR(40)   NOT NULL,       -- the collection of the findings per CI (its time, as the data sync read it)
+    FrozenReports   NVARCHAR(MAX)  NULL,           -- JSON array: the reports the run could not complete (kept as last sent)
+    State           NVARCHAR(16)   NOT NULL CONSTRAINT DF_DataOutReady_State DEFAULT N'ready',
+    Why             NVARCHAR(1000) NULL,           -- held: why; failed: the last error
+    MarkedUtc       DATETIME2(3)   NOT NULL CONSTRAINT DF_DataOutReady_Marked DEFAULT SYSUTCDATETIME(),
+    MarkedBy        NVARCHAR(128)  NULL,           -- the data sync's execution
+    Attempts        INT            NOT NULL CONSTRAINT DF_DataOutReady_Attempts DEFAULT 0,
+    SentBy          NVARCHAR(128)  NULL,           -- the execution that sent it (the job's, or the data sync's own)
+    SentUtc         DATETIME2(3)   NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_DataOutReady_Collection' AND object_id = OBJECT_ID('sidata.DataOutReady'))
+    CREATE UNIQUE INDEX UX_DataOutReady_Collection ON sidata.DataOutReady (CollectionTime);
+IF OBJECT_ID('sidata.DataOutLock') IS NULL
+CREATE TABLE sidata.DataOutLock (
+    LockId          TINYINT        NOT NULL CONSTRAINT PK_DataOutLock PRIMARY KEY,   -- always 1
+    Holder          NVARCHAR(128)  NULL,           -- the execution that holds it ('' / NULL = free)
+    Kind            NVARCHAR(16)   NULL,           -- data-out | datasync
+    UntilUtc        DATETIME2(3)   NULL            -- the lease: free once passed
+);

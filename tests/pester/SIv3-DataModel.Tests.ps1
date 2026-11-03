@@ -57,7 +57,10 @@ Describe 'Shipped data-model templates' {
             'u_entra_object_id', 'u_tier', 'u_tier_reason', 'u_criticality', 'u_exposed_internet', 'u_last_seen',
             'u_source_run', 'u_run_time', 'u_discovery_source', 'u_row_hash', 'u_changed_at', 'u_data_sensitivity', 'u_si_state',
             'u_si_asset_type', 'u_si_asset_subtype')
-        @($script:Model.Outputs['servicenow-ci'].columns.target) | Should -Be $contract
+        # append only: the contract's columns first, in order, never removed or moved; columns appended after them are allowed
+        $have = @($script:Model.Outputs['servicenow-ci'].columns.target)
+        $have.Count | Should -BeGreaterOrEqual $contract.Count
+        @($have | Select-Object -First $contract.Count) | Should -Be $contract
     }
 }
 

@@ -19,7 +19,7 @@
 #   cd SOLUTIONS/SecurityInsight
 #   az acr build --registry <acr> --image si-orchestrator:<tag> --file container/Dockerfile .
 
-FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04
+FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04@sha256:663a172849444279d8e7b50e19977b6e42380eae6856bdc8931ca08e2e03e92a
 
 # NO POWERSHELL MODULES. SecurityInsight reaches Azure, Log Analytics, storage, Key
 # Vault, Resource Graph, Microsoft Graph and the Log Ingestion API over plain REST

@@ -100,7 +100,7 @@ public sealed class ReleasesModel : PageModel
                         Diff = d; Selected = p; Pack = SelectedInfo.PackVersion;
                         Queries.Add(QueryInfo.Sql(TemplateReleases.TemplatesSql, "What the release changes"));
                     }
-                    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { PackError = ex.Message; }
+                    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { PackError = ViewerError.Text(ex); }
                 }
             }
             var (versions, _) = await _releases.RevisionsAsync(ct);
@@ -121,12 +121,12 @@ public sealed class ReleasesModel : PageModel
                 Executions = await _releases.ExecutionsAsync(ct);
                 if (Executions.Any(e => e.Status is "Running" or "Processing")) ViewData["RefreshSeconds"] = 15;   // the page polls while the job runs
             }
-            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException) { JobError = ex.Message; }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException) { JobError = ViewerError.Text(ex); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the template releases could not be read");
-            Error = "The template releases could not be read from the Pro database: " + ex.Message;
+            Error = "The template releases could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

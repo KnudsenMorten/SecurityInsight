@@ -135,6 +135,14 @@ if ($siRole) {
             elseif ($engineEnv -eq 'heartbeat') {
                 $dispatchDirect = $true
             }
+            # #1038 (1): the data-out job (caj-si-data-out), started by the data sync once the findings per CI are stored.
+            elseif ($engineEnv -eq 'data-out') {
+                $dispatchDirect = $true
+            }
+            # #1021: the support grant job (caj-si-support-grant), started by the Invardia Support session with a request on its queue.
+            elseif ($engineEnv -eq 'support-grant') {
+                $dispatchDirect = $true
+            }
             # #235: the template publish job (caj-si-templates), started by the web app with the accepted fingerprint.
             elseif ($engineEnv -eq 'templates-publish') {
                 $dispatchDirect = $true

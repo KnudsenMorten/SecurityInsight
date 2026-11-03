@@ -764,6 +764,7 @@ function Invoke-SISentinelLakeQuery {
 . (Join-Path $PSScriptRoot '_shared/RA-SqlStream.ps1')
 . ([System.IO.Path]::Combine($PSScriptRoot, '..', '_shared', 'SI-StepPhase.ps1'))   # #873 A: the [phases] times also go to cfg.StepPhaseTime
 . (Join-Path $PSScriptRoot '_shared/RA-SilentSource.ps1')          # #900 a source that went silent holds the reports reading it
+. (Join-Path $PSScriptRoot '_shared/RA-KpiTally.ps1')             # the key figures' tally: one copy, counted in the AI summary's pass when it reads every row
 foreach ($__raSqlDep in @('../_shared/data-sql/SI-DataModel.ps1', '../_shared/data-sql/SI-DataSql.ps1', '../_shared/data-sql/SI-DataSummary.ps1', '../asset-trend/_shared/SI-TrendRollup.ps1', '_shared/RA-Findings.ps1')) {
     # core in both editions (owner 2026-10-13: "ra is part of core functionality"): engine/_shared/data-sql ships in both
     . ([System.IO.Path]::Combine($PSScriptRoot, $__raSqlDep))
@@ -7036,7 +7037,10 @@ if ($script:RAStreamOn -and $null -ne $script:RASourceCounts -and $null -ne $scr
                 }
             } catch { Write-Warn2 ("source acceptance: the acceptances could not be cleared this run ({0}) -- the next run tries again" -f $_.Exception.Message) }
         }
-        foreach ($__b in @($__ss.Back)) { Write-Info ("source {0} has rows again ({1}) -- the reports reading it are judged as usual" -f $__b, [long]$__ss.Tables[$__b].Rows) }
+        foreach ($__b in @($__ss.Back)) {
+            if (@($__ss.Released) -contains $__b) { Write-Info ("source {0} is no longer held as silent: it never had rows, and no report lost rows with it -- the reports reading it are judged as usual" -f $__b) }
+            else { Write-Info ("source {0} has rows again ({1}) -- the reports reading it are judged as usual" -f $__b, [long]$__ss.Tables[$__b].Rows) }
+        }
         if (@($__ss.Holds).Count) { Write-Warn2 ("{0} report(s) held for a source that went silent: {1}" -f @($__ss.Holds).Count, (@($__ss.Holds | ForEach-Object { $_.Report }) -join ', ')) }
     } catch { Write-Warn2 ("source count: the silent-source check could not be made this run ({0}) -- no report is held for it" -f $_.Exception.Message) }
 }
@@ -7404,6 +7408,21 @@ elseif (-not [string]::IsNullOrWhiteSpace([string]$global:ExportDestination)) {
 # write) and the AI call are skipped -- the rollup runs alone and feeds the executive view (sidata.RiskExecView).
 $script:_RATopListsOnly = -not [bool]$global:BuildSummaryByAI
 $cachedSummaryUsed = $false
+# ONE READ OF THE ROWS (2026-10-31): the key figures' tally the AI summary's pass filled while it read every View row from
+# SQL (RA-KpiTally.ps1). Set ONLY when that pass reached its last page; the key figures' block below reads the rows itself
+# whenever this stays $null (a cached summary, the block not entered, no stream, a pass that threw or stopped early).
+$script:RAKpiFromAiPass = $null
+# The Azure OpenAI key goes ONLY to an Azure OpenAI host over https (Test-SIOpenAIEndpoint): another endpoint is not used --
+# said once, the summary is built without AI (the top lists), the run goes on.
+if (-not $script:_RATopListsOnly) {
+    if (-not (Get-Command -Name Test-SIOpenAIEndpoint -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-profiling/shared/Test-SIAIEnabled.ps1') }
+    $__aiTarget = if (-not [string]::IsNullOrWhiteSpace($global:AI_Uri)) { [string]$global:AI_Uri } else { [string]$global:OpenAI_endpoint }
+    $__aiWhy = if ([string]::IsNullOrWhiteSpace($__aiTarget)) { '' } else { Test-SIOpenAIEndpoint -Endpoint $__aiTarget }
+    if ($__aiWhy) {
+        Write-Warning ("[AI] the AI summary is not built: the configured endpoint is not used ({0}). Set OpenAI_endpoint to your Azure OpenAI resource." -f $__aiWhy)
+        $script:_RATopListsOnly = $true
+    }
+}
 if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
     if (-not $script:_RATopListsOnly) {
 
@@ -8025,6 +8044,15 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         }
 
         $i = 0
+        # ONE READ OF THE ROWS (2026-10-31): from SQL this pass reads every View row -- the same rows, in the same order, the
+        # key figures' pass reads -- so the key figures' tally is counted here as well (RA-KpiTally.ps1, the one copy of
+        # it). The state is handed to the key figures ONLY when this pass reached its last page; a setup or a row that fails
+        # in the tally drops it, and the key figures read the rows themselves. The in-memory path is not merged.
+        $__aiKpi = $null
+        if ($script:RAStreamOn) {
+            try { $__aiKpi = New-RAKpiState }
+            catch { $__aiKpi = $null; Write-Info ("the key figures are counted in their own pass ({0})" -f $_.Exception.Message) }
+        }
         $__aiPager = if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source View } else { New-RARowPager -Rows $topRows }
         $__aiRows = 0L
         $__phAiSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
@@ -8032,6 +8060,10 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         foreach ($r in $__aiPage) {
             $i++
             $__aiRows++
+            if ($null -ne $__aiKpi) {
+                try { Add-RAKpiRow -State $__aiKpi -Row $r }
+                catch { $__aiKpi = $null; Write-Info ("the key figures are counted in their own pass ({0})" -f $_.Exception.Message) }
+            }
 
             $riskScoreText = Get-RowValue -Row $r -Names @($colRiskScore, "RiskScore")
             [double]$riskScore = ConvertTo-RADouble -Value $riskScoreText -Default 0.0   # invariant, da-DK-safe (#121)
@@ -8102,8 +8134,12 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         }
         $__aiPage = $null
         }
+        # the pager returned its last page: every View row is in the key figures' state -- only now may they use it
+        $script:RAKpiFromAiPass = Get-RAKpiAiPassState -State $__aiKpi -PagerDone ([bool]$__aiPager.State.Done) -Rows $__aiRows
+        $__aiKpi = $null
+        $__aiFetch = [double]$__aiPager.State.FetchSec; $__aiDecode = [double]$__aiPager.State.DecodeSec
         $__aiPager = $null
-        if ($script:RAStreamOn) { Write-Info (Format-RAAfterReportsLine -What 'the AI summary''s read of the rows' -Seconds $__phAiSw.Elapsed.TotalSeconds -Rows $__aiRows); Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the AI summary' -Seconds $__phAiSw.Elapsed.TotalSeconds -Rows $__aiRows }   # #873 A
+        if ($script:RAStreamOn) { Write-Info (Format-RAAfterReportsLine -What 'the AI summary''s read of the rows' -Seconds $__phAiSw.Elapsed.TotalSeconds -Rows $__aiRows -FetchSeconds $__aiFetch -DecodeSeconds $__aiDecode -Note $(if ($null -ne $script:RAKpiFromAiPass) { 'the key figures counted in the same pass' } else { '' })); Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the AI summary' -Seconds $__phAiSw.Elapsed.TotalSeconds -Rows $__aiRows }   # #873 A
         if ($isDetailedTemplate -and $null -ne $collapseSeen) { Write-Info ("AI rollup collapse: {0} *_Detailed rows -> {1} (asset x ConfigBucket) buckets (max-weighted; XLSX unaffected)" -f $__aiRows, $collapseSeen.Count) }
 
         # v2.2.224 -- $findingsText replaced by aggregated per-finding rollup
@@ -8630,256 +8666,29 @@ Rules:
 #####################################################################################################
 $global:RA_KPI = $null
 try {
-    # #638: the rows a page at a time (from SQL; or the result in memory as one page) -- the KPI is a running sum
-    $DomainSet = @('Endpoint','Identity','Azure','PublicIP')
-
-    $sevCount    = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
-    $sevByDomain = @{
-        Endpoint = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
-        Identity = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
-        Azure    = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
-        PublicIP = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
-    }
-
-    # Per-domain weighted-avg accumulators (numerator = sum(rowKpi * tierWeight),
-    # denominator = sum(tierWeight)). Plus a per-domain row counter.
-    $domainAcc = @{
-        Endpoint = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
-        Identity = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
-        Azure    = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
-        PublicIP = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
-    }
-
-    function _TierWeight([int]$tier) {
-        switch ($tier) {
-            0       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T0) { [double]$global:SI_RiskReport_TierMultiplier_T0 } else { 4.0 } }
-            1       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T1) { [double]$global:SI_RiskReport_TierMultiplier_T1 } else { 2.0 } }
-            2       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T2) { [double]$global:SI_RiskReport_TierMultiplier_T2 } else { 1.0 } }
-            3       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T3) { [double]$global:SI_RiskReport_TierMultiplier_T3 } else { 0.5 } }
-            default { 1.0 }
-        }
-    }
-
-    # v2.2.404 -- helper: derive SecurityDomain from report name when the per-row
-    # field is empty. Most YAML reports don't declare a top-level SecurityDomain
-    # (it's optional), so the per-row field ends up blank on the majority of
-    # rows and the KPI table's Total cells stop matching the per-domain row
-    # sums (the Total uses unfiltered counts, per-domain uses only canonical
-    # SecurityDomain hits). Matching report-name prefixes back to one of the
-    # 4 canonical domains restores arithmetic invariance.
-    function _DomainFromReportName([string]$reportName) {
-        if ([string]::IsNullOrWhiteSpace($reportName)) { return '' }
-        $rn = $reportName.ToLowerInvariant()
-        # Endpoint-specific Attack_Paths_* patterns FIRST (more specific than the
-        # PublicIP family below). Public_IP_to_VM is a path from internet -> VM:
-        # the VM is the target and classifies as Endpoint, not PublicIP.
-        if ($rn -match 'public_ip_to_vm')                                  { return 'Endpoint' }
-        if ($rn -match 'device_with_high_severity_vulnerabilities')        { return 'Endpoint' }
-        # PublicIP family (anchored to prefix only -- avoids matching Public_IP_to_VM)
-        if ($rn -match '^publicip_')                                       { return 'PublicIP' }
-        # Endpoint family (prefix)
-        if ($rn -match '^(device|endpoint)_')                              { return 'Endpoint' }
-        # Identity family
-        if ($rn -match '^identity_')                                       { return 'Identity' }
-        if ($rn -match 'credential_based_lateral_movement')                { return 'Identity' }
-        if ($rn -match 'identity_group_membership')                        { return 'Identity' }
-        if ($rn -match 'data_sensitivity_to_exposed_credentials')          { return 'Identity' }
-        # Azure family (catch-all for remaining Attack_Paths_* targeting Azure)
-        if ($rn -match '^azure_')                                          { return 'Azure' }
-        if ($rn -match 'github_to_azure')                                  { return 'Azure' }
-        if ($rn -match 'to_azure_resources')                               { return 'Azure' }
-        return ''
-    }
-
-    # #636 (owner 2026-10-19: "include both angles with gaps vs. monthly lifecycle"): the missing patches by PATCH CYCLE -- in the
-    # monthly cycle, catch-up, no single update -- tallied in the same pass (engine\_shared\SI-PatchCycle.ps1); the mail shows
-    # the three groups instead of a raw total
-    if (-not (Get-Command -Name New-SIPatchCycleTally -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-PatchCycle.ps1')) }
-    $__patchDays = 30; if ($global:SI_PatchCycle_CatchUpDays -and [int]$global:SI_PatchCycle_CatchUpDays -gt 0) { $__patchDays = [int]$global:SI_PatchCycle_CatchUpDays }
-    $__patch = New-SIPatchCycleTally -CollectionTime ([datetime]::UtcNow) -CatchUpDays $__patchDays
-    # #636 (owner 2026-10-19): the PROTECTION SCORE replaces the old 0-100 KPI in the mail, the kept view and the pages -- ONE
-    # engine function for both editions (engine\_shared\SI-ProtectionScore.ps1), fed here by the Detailed run's findings and the
-    # run's CI index; Pro also stores it per collection (the data sync, the same rules in SQL). A Summary run has no
-    # per-asset findings: it takes the Detailed run's score from the shared cache, else its mail says (one plain line) that the
-    # score is in the Detailed report. Without a score the mail always says WHY ($script:RAProtectionReason).
-    if (-not (Get-Command -Name New-SIProtectionTally -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-ProtectionScore.ps1')) }
-    $__prot = $null
-    $script:RAProtectionReason = ''
-    # PRO (owner 2026-10-22: "one computation, never two that can differ"): the score of a Detailed run that writes its result
-    # to the Pro database is the STORED one -- the data sync's key figures of this collection, the number the web app shows.
-    # This run does not count it at all (no walk over every CI); its mail waits for the stored figures in sidata.RaMailOutbox
-    # and the data sync sends it with them (engine\_shared\data-sql\SI-RaMailOutbox.ps1). Community counts it here.
-    $script:RAProtectionFromStore = $false
-    try {
-        $script:RAProtectionFromStore = (Get-RAReportGrainLabel -ReportTemplate ([string]$global:ReportTemplate)) -ne 'Summary' -and
-            -not [string]::IsNullOrWhiteSpace([string]$global:SI_ProSettingsVersion) -and [bool]$script:RAStreamOn -and $null -ne $script:RAStream -and
-            $null -ne $script:RAStream.Invoke -and [int]$script:RAStream.CollectionId -gt 0 -and -not [bool]$script:SIWhatIf -and $script:RAScaleRole -ne 'worker'
-    } catch { $script:RAProtectionFromStore = $false }
-    try {
-        if ($script:RAProtectionFromStore) {
-            Write-Info '[SCORE] Protection Score: taken from this run''s stored figures once the data sync has computed them -- the mail waits for them (the numbers the web app shows)'
-        } elseif ((Get-RAReportGrainLabel -ReportTemplate ([string]$global:ReportTemplate)) -eq 'Summary') {
-            $script:RAProtectionReason = Get-SIProtectionReason 'summary'
-        } else {
-            $__ciIdxP = $global:RA_CiIndex
-            if ($null -eq $__ciIdxP -and (Get-Command -Name Get-RACiIndex -ErrorAction SilentlyContinue)) { $__ciIdxP = Get-RACiIndex }
-            if ($global:RA_CiIndexProblem) { $script:RAProtectionReason = 'the CIs could not be read: ' + ([string]$global:RA_CiIndexProblem) }
-            elseif ($null -eq $__ciIdxP -or -not $__ciIdxP.ById -or $__ciIdxP.Count -le 0) { $script:RAProtectionReason = Get-SIProtectionReason 'no-cis' }
-            if ($null -ne $__ciIdxP -and $__ciIdxP.ById -and $__ciIdxP.Count -gt 0) {
-                $__prot = New-SIProtectionTally -CollectionTime ([datetime]::UtcNow)
-                $__seenCi = @{}
-                foreach ($__c in $__ciIdxP.ById.Values) {
-                    $__cid = [string]$__c.si_ci_id
-                    if (-not $__cid -or $__seenCi.ContainsKey($__cid)) { continue }
-                    $__seenCi[$__cid] = $true
-                    $__at = ''; if ($__c.PSObject.Properties['si_asset_type']) { $__at = [string]$__c.si_asset_type }
-                    # the stale flag is TEXT from the database ('true' / 'false', ConvertFrom-RACiSqlRows) and a bool from Log
-                    # Analytics -- read as text: [bool]'false' is $true, and every CI counted as inactive (live 2026-10-20..22:
-                    # "0 assets in scope" on every Detailed run)
-                    $__stale = $false; if ($__c.PSObject.Properties['si_stale_']) { $__stale = ([string]$__c.si_stale_).Trim() -in 'true', '1' }
-                    Add-SIProtectionAsset -Tally $__prot -Id $__cid -Class ([string]$__c.si_class) -AssetType $__at -Tier $__c.si_tier -Active (-not $__stale)
-                }
-                $__seenCi = $null
-            }
-        }
-    } catch { Write-Warn2 ("Protection score: not computed in this run -- {0}" -f $_.Exception.Message); $__prot = $null; $script:RAProtectionReason = ('it could not be computed: ' + $_.Exception.Message) }
-    $__kpiPager = if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source View } else { New-RARowPager -Rows @($global:RA_ReportRows | Where-Object { $null -ne $_ }) }
+    # #638: the rows a page at a time (from SQL; or the result in memory as one page) -- the KPI is a running sum.
+    # The setup, the per-row tally and the result are ONE copy (_shared\RA-KpiTally.ps1: New-RAKpiState, Add-RAKpiRow,
+    # Complete-RAKpiState). ONE READ OF THE ROWS (2026-10-31): when the AI summary's pass read every View row to the end it
+    # counted them already ($script:RAKpiFromAiPass) and no row is read again; otherwise this pass reads every row itself,
+    # as before -- never a half-filled tally.
     $__phKpiSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
-    while ($null -ne ($__kpiPage = $__kpiPager.Next())) {
-    foreach ($r in $__kpiPage) {
-        Add-SIPatchCycleRow -Tally $__patch -Row $r
-        if ($null -ne $__prot) { Add-SIProtectionRow -Tally $__prot -Row $r }
-        $dom = ''
-        if ($r.PSObject.Properties['SecurityDomain']) { $dom = [string]$r.SecurityDomain }
-        if ($dom -eq 'PublicIp') { $dom = 'PublicIP' }
-        # v2.2.404 -- fallback derivation from report name when per-row field is empty.
-        # Without this, rows from YAML reports that don't declare a top-level
-        # SecurityDomain end up uncounted in the per-domain rows of the KPI
-        # table, while the Total row counts them. Customer-reported bug:
-        # Detailed-template Total cells showed 71,278 / 8218 crit while per-domain
-        # rows summed to 1122 / 53 crit -- 98% of rows had blank SecurityDomain.
-        if ([string]::IsNullOrWhiteSpace($dom) -and $r.PSObject.Properties['Report']) {
-            $dom = _DomainFromReportName ([string]$r.Report)
-        }
-
-        # Severity tally (used by the email's Domain x Severity table)
-        $sevText = ''
-        if ($r.PSObject.Properties['SecuritySeverity']) { $sevText = [string]$r.SecuritySeverity }
-        $sevBucket = switch -Regex ($sevText) {
-            '^(?i)(critical|very high)$' { 'Critical'; break }
-            '^(?i)high$'                 { 'High';     break }
-            '^(?i)medium-?high$'         { 'High';     break }
-            '^(?i)medium$'               { 'Medium';   break }
-            '^(?i)low$'                  { 'Low';      break }
-            default                      { 'Other' }
-        }
-        $sevCount[$sevBucket]++
-        if ($sevByDomain.ContainsKey($dom)) {
-            $sevByDomain[$dom][$sevBucket]++
-            $sevByDomain[$dom]['Total']++
-        }
-
-        if (-not ($DomainSet -contains $dom)) { continue }
-
-        # Pull the per-row RiskScoreKPI (already computed upstream)
-        $rowKpi = 100.0
-        if ($r.PSObject.Properties['RiskScoreKPI']) { $rowKpi = ConvertTo-RADouble -Value $r.RiskScoreKPI -Default 100.0 }
-
-        # Tier weight for this row
-        # Unknown stays -1 (the default weight). A failed [int]::TryParse wrote 0 here and weighted an
-        # unclassified asset as Tier 0 -- 4x in the headline KPI (#121).
-        $tierVal = -1
-        if ($r.PSObject.Properties['CriticalityTier']) { $__t = ConvertTo-RATierOrNull $r.CriticalityTier; if ($null -ne $__t) { $tierVal = [int]$__t } }
-        $tw = _TierWeight $tierVal
-
-        # v2.2.314 -- per-row population weight. Summary rows represent N
-        # asset-findings collapsed into one row; Detailed rows are one-finding-per-asset
-        # (weight = 1). Multiplying by population converges Summary KPI to Detailed KPI on the
-        # same underlying data -- pre-v2.2.314 the two reports diverged by 1-9 points purely
-        # from per-row vs per-asset-finding averaging. Customer ask: "my customers cannot
-        # understand why the risk score is not same % between summary and detailed".
-        #
-        # AUDIT #52 -- the population is now ImpactedAssetCount. It was
-        # TotalIssuesImpactedAssets, which has been removed as incorrect: it disagreed with
-        # ImpactedAssetCount on 64 of 311 live rows, with ratios from 0.125 to 2048.5.
-        # 🔴 THAT WAS NOT COSMETIC. This weight feeds the headline risk score, so a row whose
-        # count was inflated 2048x dominated its domain's KPI, and rows whose count was too
-        # low (ratio 0.125) were under-counted. The scores this converged were converging on a
-        # distorted population.
-        # ImpactedAssetCount is the honest population for a Summary row: array_length of the
-        # asset list actually shown beside it, so the weight and the evidence agree. It is also
-        # what the engine already substituted whenever the KQL supplied nothing -- so for the
-        # 247 of 311 rows that were already consistent, the weighting is unchanged.
-        $rowWeight = 1.0
-        if ($r.PSObject.Properties['ImpactedAssetCount']) {
-            $iac = 0
-            if ([int]::TryParse([string]$r.ImpactedAssetCount, [ref]$iac) -and $iac -gt 0) {
-                $rowWeight = [double]$iac
-            }
-        }
-
-        $domainAcc[$dom].Numer += $rowKpi * $tw * $rowWeight
-        $domainAcc[$dom].Denom += $tw * $rowWeight
-        $domainAcc[$dom].Rows++
+    $__kpiPass = Invoke-RAKpiPass -FromAiPass $script:RAKpiFromAiPass -NewPager {
+        if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source View } else { New-RARowPager -Rows @($global:RA_ReportRows | Where-Object { $null -ne $_ }) }
     }
-    }
-    $__kpiPager = $null; $__kpiPage = $null
-    if ($script:RAStreamOn) { Write-Info (Format-RAAfterReportsLine -What 'the key figures'' read of the rows' -Seconds $__phKpiSw.Elapsed.TotalSeconds); Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the key figures' -Seconds $__phKpiSw.Elapsed.TotalSeconds }   # #873 A
-
-    # ----- per-domain weighted average -----
-    $domainScore = @{}
-    foreach ($d in $DomainSet) {
-        if ($domainAcc[$d].Denom -gt 0) {
-            $domainScore[$d] = [int][Math]::Round($domainAcc[$d].Numer / $domainAcc[$d].Denom, 0)
-        } else {
-            $domainScore[$d] = 100   # no findings -> Very Good
-        }
+    $script:RAKpiFromAiPass = $null
+    $__patch = $__kpiPass.State.Patch
+    $__prot  = $__kpiPass.State.Prot
+    if ($script:RAStreamOn) {
+        if ($__kpiPass.FromAiPass) { $__kpiLine = Format-RAAfterReportsLine -What 'the key figures'' read of the rows' -Seconds $__phKpiSw.Elapsed.TotalSeconds -Note 'counted in the AI summary''s pass' }
+        else { $__kpiLine = Format-RAAfterReportsLine -What 'the key figures'' read of the rows' -Seconds $__phKpiSw.Elapsed.TotalSeconds -FetchSeconds $__kpiPass.FetchSec -DecodeSeconds $__kpiPass.DecodeSec }
+        Write-Info $__kpiLine; Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the key figures' -Seconds $__phKpiSw.Elapsed.TotalSeconds   # #873 A
     }
 
-    # ----- global = weighted average of domain scores by domain weight -----
-    $domainWeights = @{
-        Endpoint = if ($null -ne $global:SI_RiskReport_GlobalWeight_Endpoint) { [double]$global:SI_RiskReport_GlobalWeight_Endpoint } else { 0.30 }
-        Identity = if ($null -ne $global:SI_RiskReport_GlobalWeight_Identity) { [double]$global:SI_RiskReport_GlobalWeight_Identity } else { 0.30 }
-        Azure    = if ($null -ne $global:SI_RiskReport_GlobalWeight_Azure)    { [double]$global:SI_RiskReport_GlobalWeight_Azure }    else { 0.20 }
-        PublicIP = if ($null -ne $global:SI_RiskReport_GlobalWeight_PublicIP) { [double]$global:SI_RiskReport_GlobalWeight_PublicIP } else { 0.20 }
-    }
-    $gNumer = 0.0; $gDenom = 0.0
-    foreach ($d in $DomainSet) {
-        $w = $domainWeights[$d]
-        $gNumer += $domainScore[$d] * $w
-        $gDenom += $w
-    }
-    $globalScore = if ($gDenom -gt 0) { [int][Math]::Round($gNumer / $gDenom, 0) } else { 100 }
-
-    # ----- band (mirrors Microsoft Cloud Secure Score bands) -----
-    # the bands are ONE definition (data-model\protection-score-bands.locked.json, also the web app's) -- built-in if it is not loaded
-    $band = if (Get-Command -Name Get-SIProtectionBand -ErrorAction SilentlyContinue) { (Get-SIProtectionBand -Score $globalScore).Name }
-            elseif ($globalScore -ge 90) { 'Very Good' }
-            elseif ($globalScore -ge 75) { 'Good' }
-            elseif ($globalScore -ge 50) { 'Moderate' }
-            else                         { 'At Risk' }
-
-    # Back-compat alias for code that still reads RiskLevel from the old shape.
-    $bcRiskLevel = if     ($band -eq 'Very Good') { 'Low' }
-                   elseif ($band -eq 'Good')      { 'Moderate' }
-                   elseif ($band -eq 'Moderate')  { 'Elevated' }
-                   elseif ($band -eq 'At Risk')   { if ($globalScore -lt 25) { 'Critical' } else { 'High' } }
-                   else                            { 'Unknown' }
-
-    # the rows the KPI counted: every page's rows went into one severity bucket each (Other included). #638 pages the rows,
-    # so the old `$rows` of the in-memory loop no longer exists -- its .Count was 0 and every report mail said "Total: 0".
-    $__kpiRows = [long](@($sevCount.Values) | Measure-Object -Sum).Sum
-    $global:RA_KPI = [pscustomobject]@{
-        GlobalScore  = $globalScore
-        Band         = $band
-        RiskLevel    = $bcRiskLevel
-        DomainScore  = $domainScore
-        SevCount     = $sevCount
-        SevByDomain  = $sevByDomain
-        TotalRows    = $__kpiRows
-        Direction    = 'higher-is-better'
-        PatchCycle   = (Complete-SIPatchCycleTally -Tally $__patch)
-    }
+    $global:RA_KPI = Complete-RAKpiState -State $__kpiPass.State
+    # the figures as the rest of this block reads them (the cache override, the mail)
+    $globalScore = $global:RA_KPI.GlobalScore; $band = $global:RA_KPI.Band; $bcRiskLevel = $global:RA_KPI.RiskLevel
+    $domainScore = $global:RA_KPI.DomainScore; $sevCount = $global:RA_KPI.SevCount; $sevByDomain = $global:RA_KPI.SevByDomain
+    $__kpiRows = [long]$global:RA_KPI.TotalRows
 
     Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10} | Direction: HIGHER = BETTER (Microsoft-inspired)" -f `
         $globalScore, $band, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
@@ -9338,7 +9147,8 @@ if ([bool]$global:Report_SendMail -eq $true) {
         # replaced a <p> per LINE with a 6 px gap, which ran the narrative's paragraphs together.
         if ([string]::IsNullOrWhiteSpace($src)) { return '' }
         if (-not (Get-Command -Name ConvertTo-SIMailParagraphHtml -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-MailLayout.ps1')) }
-        return (ConvertTo-SIMailParagraphHtml -Text $src -Markdown)
+        # the AI text reads collected names: it is shown as TEXT ONLY -- no link in it is made clickable (-NoLinks)
+        return (ConvertTo-SIMailParagraphHtml -Text $src -Markdown -NoLinks)
     }
 
     # ----- AI summary block (if enabled) -----

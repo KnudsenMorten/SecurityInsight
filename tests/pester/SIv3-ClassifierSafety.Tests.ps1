@@ -27,6 +27,8 @@ BeforeAll {
     }
     # the engine calls Azure through the SI wrappers (plain REST, no module); the tests mock those
     . (Join-Path $script:SIRoot 'engine\_shared\SI-AzRest.ps1')
+    # the endpoint check the engine loads next to it (the key goes only to an Azure OpenAI host over https)
+    . (Join-Path $script:SIRoot 'engine\asset-profiling\shared\Test-SIAIEnabled.ps1')
     function script:Write-Log { param($Message, $Level) }
 
     function script:New-Err($Response) {
@@ -45,7 +47,7 @@ Describe 'the fixed functions exist' {
 
 Describe 'AI turned off sends nothing' {
     BeforeEach {
-        $global:OpenAI_ApiKey = 'k'; $global:OpenAI_Endpoint = 'https://x'; $global:OpenAI_Deployment = 'd'; $global:OpenAI_ApiVersion = 'v'
+        $global:OpenAI_ApiKey = 'k'; $global:OpenAI_Endpoint = 'https://x.openai.azure.com'; $global:OpenAI_Deployment = 'd'; $global:OpenAI_ApiVersion = 'v'
         $global:AI_MaxRetries = 2; $global:AI_MaxTokens = 100
         $script:PtcAICallsUsed = 0
     }

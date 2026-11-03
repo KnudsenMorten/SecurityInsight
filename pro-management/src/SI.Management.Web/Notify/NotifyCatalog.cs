@@ -101,7 +101,7 @@ public sealed class NotificationService(ISettingsStoreReader reader, SettingsWri
         IReadOnlyList<SettingRow> rows = Array.Empty<SettingRow>();
         string? error = null;
         try { rows = (await reader.ReadSettingsAsync(ct)).Rows; }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "notifications: settings"); error = "The settings could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "notifications: settings"); error = "The settings could not be read: " + ViewerError.Text(ex); }
         IReadOnlyList<MgmtReport> summaries = Array.Empty<MgmtReport>();
         try { if (await reports.ReadyAsync(ct)) summaries = await reports.ListAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "notifications: management summaries"); }

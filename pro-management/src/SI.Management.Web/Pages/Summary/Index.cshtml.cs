@@ -162,11 +162,11 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
         if (Grouped)
         {
             try { await LoadGroupsAsync(ct); }
-            catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; }
+            catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 log.LogError(ex, "the grouped Summary view could not be read");
-                Error = "The grouped Summary view could not be read from the Pro database: " + ex.Message;
+                Error = "The grouped Summary view could not be read from the Pro database: " + ViewerError.Text(ex);
             }
             return;
         }
@@ -191,11 +191,11 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
             Rows = await store.RowsAsync(at, Filter, skip, Size, false, ct);
             Assets = (await store.AssetsAsync(at, Rows.Select(r => r.RowNo).ToList(), SummaryReport.InlineAssets, State.HasCi, ct)).ToLookup(a => a.RowNo);
         }
-        catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogError(ex, "the Summary report could not be read");
-            Error = "The Summary report could not be read from the Pro database: " + ex.Message;
+            Error = "The Summary report could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 

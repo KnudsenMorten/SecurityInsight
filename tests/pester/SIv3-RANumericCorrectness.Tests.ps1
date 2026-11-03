@@ -38,6 +38,9 @@ BeforeAll {
     $script:CodeNC = (($raw -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
     $rsRaw = [regex]::Replace((Get-Content -LiteralPath (Join-Path $script:RaDir '_shared\RA-RiskScore.ps1') -Raw), '(?s)<#.*?#>', '')
     $script:ScoreNC = (($rsRaw -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    # the key figures' per-row tally lives in RA-KpiTally.ps1 since the one-pass read (#965); the engine + the tally together
+    $ktRaw = [regex]::Replace((Get-Content -LiteralPath (Join-Path $script:RaDir '_shared\RA-KpiTally.ps1') -Raw), '(?s)<#.*?#>', '')
+    $script:KpiNC = $script:CodeNC + "`n" + ((($ktRaw -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
 
     function script:Invoke-InDanish([scriptblock]$Body) {
         $prev = [System.Threading.Thread]::CurrentThread.CurrentCulture
@@ -120,8 +123,9 @@ Describe 'WIRING -- the fixed call sites' {
         $script:CodeNC | Should -Not -Match '\[double\]::TryParse\([^,]+,\s*\[ref\]'
     }
     It 'the KPI tier is read through ConvertTo-RATierOrNull, not TryParse into the -1 sentinel' {
-        $script:CodeNC | Should -Not -Match 'TryParse\(\[string\]\$r\.CriticalityTier'
-        $script:CodeNC | Should -Match 'ConvertTo-RATierOrNull \$r\.CriticalityTier'
+        $script:KpiNC | Should -Not -Match 'TryParse\(\[string\]\$r\.CriticalityTier'
+        $script:KpiNC | Should -Not -Match '\[double\]::TryParse\([^,]+,\s*\[ref\]'
+        $script:KpiNC | Should -Match 'ConvertTo-RATierOrNull \$r\.CriticalityTier'
     }
     It 'RA-RiskScore reads the tier through ConvertTo-RATierOrNull (no tier-derived risk factor any more)' {
         $script:ScoreNC | Should -Not -Match 'TryParse\(\[string\]\$tmp2\[''CriticalityTier''\]'

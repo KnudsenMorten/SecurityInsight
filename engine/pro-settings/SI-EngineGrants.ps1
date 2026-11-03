@@ -42,6 +42,23 @@ $script:SIEngineSchemaGrants = @(
 # install still has it). An Admin's manual CI override is written by the web app only; the engine reads it.
 $script:SIEngineDenies = @(
     @{ Object = 'sidata.CiOverride'; Verbs = 'INSERT, UPDATE, DELETE' }
+    # What the engine must never read or change, DENIED to the role -- a DENY beats db_datareader / db_datawriter, so an
+    # install that still has the broad roles is held to it too (every update applies this list through the signed grant
+    # procedure). The web app's sign-in key ring and the secret hand-over are never read; who may sign in, the settings and
+    # the connectors are never written (the static test proves no engine statement needs any of these).
+    @{ Object = 'cfg.WebKeyRing';        Verbs = 'SELECT, INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.PendingSecret';     Verbs = 'SELECT, INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.SecretHandoverKey'; Verbs = 'SELECT, INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.AccessAssignment';  Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.Setting';           Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.Connector';         Verbs = 'INSERT, UPDATE, DELETE' }
+    # a staged template pack is written by setup and the updater only (the template job installs one, it never stages)
+    @{ Object = 'cfg.TemplatePackStaged'; Verbs = 'INSERT, UPDATE, DELETE' }
+    # #1021: the customer's consent to the Invardia Support app, the support grant journal and its open markers are written
+    # only by the customer's admin and the signed procedures -- never by the engine directly (DENY beats db_datawriter)
+    @{ Object = 'cfg.SupportConsent';    Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.SupportGrant';      Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'cfg.SupportJitMarker';  Verbs = 'INSERT, UPDATE, DELETE' }
 )
 
 # Object-level grants: every cfg table / view / procedure the engine touches, with exactly the verbs its code uses
@@ -63,6 +80,7 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'cfg.FindingTask';             Verbs = 'SELECT' }
     @{ Object = 'cfg.ItemOverride';            Verbs = 'SELECT' }
     @{ Object = 'cfg.JobFlow';                 Verbs = 'SELECT' }
+    @{ Object = 'cfg.IndexBuild';              Verbs = 'SELECT' }   # #1050: the runner's wake-up reads which index waits for an idle window
     @{ Object = 'cfg.RemediationFlow';         Verbs = 'SELECT' }
     @{ Object = 'cfg.ResponsibilityOverride';  Verbs = 'SELECT' }
     @{ Object = 'cfg.ResponsibilityRule';      Verbs = 'SELECT' }
@@ -124,6 +142,12 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'cfg.ServiceNowCheck';         Verbs = 'SELECT, INSERT' }
     # #757: the heartbeat's hourly load samples for Operations > Performance (written and pruned only through cfg.PerfSampleSave)
     @{ Object = 'cfg.PerfSample';              Verbs = 'SELECT' }
+    # #1021: the support grant job and the heartbeat -- ONLY through the four signed procedures (they write their own tables
+    # through the ownership chain; the engine never names a principal or a level -- the customer's consent record does)
+    @{ Object = 'cfg.SupportGrantOpen';        Verbs = 'EXECUTE' }
+    @{ Object = 'cfg.SupportGrantClose';       Verbs = 'EXECUTE' }
+    @{ Object = 'cfg.SupportGrantSweep';       Verbs = 'EXECUTE' }
+    @{ Object = 'cfg.SupportGrantStatus';      Verbs = 'EXECUTE' }
     # ---- caj-si-templates (setup\Publish-SITemplates.ps1 -FromStaged / -RollbackToVersion, started by the web app after an
     #      Admin accepted a template release) runs as the ENGINE identity today: it installs the accepted templates ----
     @{ Object = 'cfg.Template';                Verbs = 'SELECT, INSERT, UPDATE' }
@@ -178,6 +202,13 @@ $script:SIEngineNeverGranted = @(
 # named here and called from an engine job would make the static test's real-rights run fail, not pass quietly.
 $script:SIEngineNotEngine = @(
     @{ File = 'engine/pro-settings/SI-ProSchema.ps1';           Function = '*';  Why = 'the schema + updater access: the updater and setup' }
+    # #1050: the rows of the indexes that wait for an idle window and the measured build rate are written by the updater only
+    # (its schema step and its index-build run); the engine's wake-up only READS cfg.IndexBuild (granted below)
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildSaveSql';       Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Save-SIIndexBuildRow';          Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Add-SIIndexBuildRateSample';    Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Invoke-SIIndexBuildCommand';    Why = 'the updater (caj-si-updater): the index build itself' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Measure-SIIndexReadRate';       Why = 'the updater''s schema step: a timed sample read' }
     @{ File = 'engine/pro-settings/SI-EngineGrants.ps1';        Function = '*';  Why = 'this file: setup, the cut-over script and the updater''s check' }
     @{ File = 'engine/pro-settings/SI-GrantProcedure.ps1';      Function = '*';  Why = 'the signed grant procedure: the admin run (setup, the cut-over) and the updater' }
     @{ File = 'engine/pro-settings/SI-ProOverrideMigration.ps1'; Function = '*'; Why = 'setup\Publish-SITemplates.ps1' }
@@ -196,6 +227,18 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/_shared/SI-InstallNames.ps1';             Function = 'Save-SIInstallNamesRecord';     Why = 'the updater' }
     @{ File = 'engine/_shared/SI-TelemetryEndpoints.ps1';       Function = 'Save-SIInstallEndpointsRow';    Why = 'the updater' }
     @{ File = 'engine/_shared/SI-InstallRing.ps1';              Function = 'Get-SIInstallRingSql';          Why = 'setup\Set-SIInstallRing.ps1 and the updater' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = '';  Why = 'the file''s header and its contract (the names of the procedures and tables, not statements)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantContract'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantSignedCheckSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantProcedureText'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantProcedureSha256'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantSchemaSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantSchemaFileBlock'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'ConvertTo-SISupportGrantSid'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantAdminSteps'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantStateSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'ConvertFrom-SISupportGrantState'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantErrorResult'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/_shared/SI-ReleaseControl.ps1';           Function = 'Get-SIReleaseScopeSaveSql';     Why = 'the updater (Save-SIReleaseScopeRecords: the component fingerprints of the release it installed)' }
 )
 
@@ -563,7 +606,7 @@ function Test-SIEngineLeastPrivilegeSetup {
         install's values (-Values: the guided install's answers / install-parameters.json), else the environment
         (-Env, default the process). OFF BY DEFAULT: only 'true' / '1' / 'yes' / 'on' turns it on.
           OFF  a new install gives the engine today's db_datareader + db_datawriter AND si_engine with its grants (harmless:
-               it prepares the cut-over);
+               it prepares the cut-over; the role's DENYs hold even beside the broad roles);
           ON   si_engine ONLY.
     #>
     param([System.Collections.IDictionary]$Values, [System.Collections.IDictionary]$Env)

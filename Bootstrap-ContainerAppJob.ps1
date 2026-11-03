@@ -312,6 +312,22 @@ if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-Pro
     (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/heartbeat/Invoke-SIHeartbeat.ps1')) -and @($Engines) -notcontains 'heartbeat') {
     $Engines = @($Engines) + @('heartbeat')
 }
+# #1038 (1): the data-out job (caj-si-data-out: the ServiceNow hand-off and the other outputs, started by the data sync the
+# moment it has stored the findings per CI, and by a person to resend) is INFRASTRUCTURE like the template job: every install
+# with the data sync and the data-out job's code gets it whatever the engine list -- MANUAL only, never a timer, never a step.
+# An existing install gets it from the update (setup\_shared\SI-MissingJobs.ps1); until then its data sync sends data out itself.
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-data\Invoke-SIDataSync.ps1')) -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/data-out/Invoke-SIDataOutJob.ps1')) -and @($Engines) -notcontains 'data-out') {
+    $Engines = @($Engines) + @('data-out')
+}
+# #1021: the support grant job (caj-si-support-grant: the Invardia Support app's database access, just in time, on a request the
+# Support session puts on the queue si-support-requests) is INFRASTRUCTURE like the data-out job: every Pro install with its code
+# gets it whatever the engine list -- MANUAL only, never a timer, never a step. An existing install gets it from the update
+# (setup\_shared\SI-MissingJobs.ps1).
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-ProSettings.ps1')) -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/support-grant/Invoke-SISupportGrant.ps1')) -and @($Engines) -notcontains 'support-grant') {
+    $Engines = @($Engines) + @('support-grant')
+}
 # #412: asset-properties is RETIRED as a job -- with SI_AssetProperties = 'full' the endpoint, identity and azure profilers
 # read each source once and publish the full asset metadata themselves. An explicit list that still names it (an older
 # SI_Bootstrap_Engines) does not create it; a job an earlier Bootstrap created is left alone (it ends at once, said) and
@@ -467,6 +483,9 @@ $cfgNames = @($configSetNames | Where-Object { $_ -notlike 'SI_Bootstrap_*' })
 $cfgGlobals = @{}; foreach ($n in $cfgNames) { $cfgGlobals[$n] = Get-Variable -Name $n -ValueOnly -Scope Global -ErrorAction SilentlyContinue }
 # Settings that no longer exist (Get-SIRetiredSettingNames) are skipped without a word: a value left in a config is not used.
 $retiredSettings = @(Get-SIRetiredSettingNames)
+# #986: on a Pro install the pipeline's start time lives in the Pro database only -- never copied into a job's environment
+# (a copy there went stale and misled whoever read the job). The Community edition keeps passing it (no database).
+if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) { $retiredSettings = @($retiredSettings) + @(Get-SIConfigDbOwnedNames) }
 $cfgPass = Get-SIConfigEnvArgs -Names $cfgNames -Globals $cfgGlobals -Ignore $retiredSettings
 $cfgEnvArgs = @($cfgPass.EnvArgs | Where-Object { $_.Length -le 4096 })
 $cfgTooLarge = @($cfgPass.EnvArgs | Where-Object { $_.Length -gt 4096 } | ForEach-Object { ($_ -split '=', 2)[0] })
@@ -633,9 +652,12 @@ foreach ($rp in @('Microsoft.App','Microsoft.OperationalInsights','Microsoft.Con
 # ---- 1. ACR ----
 Write-Host '[1/5] Ensuring Azure Container Registry ...'
 $acr = Get-SIContainerRegistry -ResourceGroupName $ResourceGroupName -Name $AcrName -SubscriptionId $subId
+# the security baseline at the end touches only a registry THIS run created (Test-SISecurityBaselineAppliesTo)
+$acrCreatedNow = $false
 if (-not $acr) {
     Write-Host '       Creating ACR (Basic SKU, ~$5/mo) ...'
     $acr = New-SIContainerRegistry -ResourceGroupName $ResourceGroupName -Name $AcrName -Location $Location -Sku 'Basic' -AdminEnabled $true -SubscriptionId $subId
+    $acrCreatedNow = $true
 }
 if (-not $acr) { throw ("could not create or read the container registry '{0}' in '{1}'." -f $AcrName, $ResourceGroupName) }
 Write-Host ('       loginServer = {0}' -f $acr.loginServer)
@@ -809,7 +831,7 @@ $smtpVault   = $null
 $licenceVault = $null
 # The engines that need the Pro licence (#170; asset tagging #236). #718: the hourly status report reads it to report as
 # the Pro install it is (identified); it never refuses without one -- it then sends nothing.
-$licensedEngines = @('asset-correlation', 'asset-properties', 'asset-cmdb', 'asset-vulnerabilities', 'asset-vulnerabilities-servicenow', 'asset-datasync', 'close-loop-mail', 'asset-tagging', 'asset-cmdb-sql', 'verification', 'heartbeat')
+$licensedEngines = @('asset-correlation', 'asset-properties', 'asset-cmdb', 'asset-vulnerabilities', 'asset-vulnerabilities-servicenow', 'asset-datasync', 'close-loop-mail', 'asset-tagging', 'asset-cmdb-sql', 'verification', 'heartbeat', 'data-out')
 # #218: Risk Analysis mail, decided from the customer's own config.
 $raMail = Get-SIContainerRaMailPlan -Globals $cfgGlobals
 if ($authMode -ne 'Secret') {
@@ -1061,7 +1083,9 @@ foreach ($engine in $Engines) {
     $engAuthMode = if ($isAssetTagging) { 'ManagedIdentity' } else { $authMode }
     $engRegistry = if ($isAssetTagging) { $taggingRegistryArgs } else { $registryAuthArgs }
     # #235: the template publish job is MANUAL only -- the web app starts it with the accepted fingerprint; never KEDA, no cron.
-    $isManualOnly = ($engine -eq 'templates-publish')
+    # #1038 (1): the data-out job too -- started by the data sync on its mark and by a person to resend; never a timer.
+    # #1021: the support grant job too -- started only by the Invardia Support session, with its request on the queue.
+    $isManualOnly = ($engine -eq 'templates-publish') -or ($engine -eq 'data-out') -or ($engine -eq 'support-grant')
 
     # Container App Jobs name max 32 chars. Engine names longer than ~18 chars
     # need a shortened alias for the job-name slot (the SI_ENGINE env var still
@@ -1578,12 +1602,13 @@ if ($orch.Mode -eq 'flow' -and @($Engines) -contains 'flow') {
     } catch { Write-Warning ('the pipeline runner''s schedule was not checked ({0}) -- setup goes on; the next update checks it.' -f $_.Exception.Message) }
 }
 
-# SECURITY BASELINE, new installs only while SI_SECURITY_BASELINE_NEW_INSTALL is on (setup\_shared\SI-SecurityBaseline.ps1,
-# default OFF until a fresh test install proves it): the registry's admin user -- a password that can replace the image
-# every job runs -- is turned off when every job and app pulls as its managed identity, and read back. A job that still
-# pulls with the password keeps it on, named. Never fails setup. An existing install gets it from setup\Set-SISecurityBaseline.ps1.
+# SECURITY BASELINE (setup\_shared\SI-SecurityBaseline.ps1; ON by default since 2026-10-31, SI_SECURITY_BASELINE_NEW_INSTALL=0
+# turns it off): the registry's admin user -- a password that can replace the image every job runs -- is turned off when
+# every job and app pulls as its managed identity, and read back. ONLY for a registry THIS run created: running setup again
+# over a live install never changes its registry (2026-11-01). A job that still pulls with the password keeps it on, named.
+# Never fails setup. An existing install gets it from setup\Set-SISecurityBaseline.ps1, one environment at a time.
 . (Join-Path $PSScriptRoot 'setup\_shared\SI-SecurityBaseline.ps1')
-if ((Test-SISecurityBaselineNewInstall) -and $acr -and [string]$acr.id) {
+if ((Test-SISecurityBaselineAppliesTo -CreatedByThisInstall $acrCreatedNow) -and $acr -and [string]$acr.id) {
     try {
         $blArm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIArm -Path $Path -AllowNotFound } else { Invoke-SIArm -Method $Method -Path $Path -Body $Body } }
         $blRg = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App' -f $subId, $ResourceGroupName

@@ -79,11 +79,11 @@ public sealed class HistoryModel : PageModel
             }
             await LoadPageAsync(vis, ct);
         }
-        catch (ArgumentException ex) { Error = ex.Message; }
+        catch (ArgumentException ex) { Error = ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the audit trail failed");
-            Error = "The audit trail could not be read: " + ex.Message;
+            Error = "The audit trail could not be read: " + ViewerError.Text(ex);
         }
         return Page();
     }
@@ -118,7 +118,7 @@ public sealed class HistoryModel : PageModel
         if (!await _trail.ExistsAsync(ct)) return NotFound("The audit trail is not set up in this database yet.");
         GridState st; (DateTime?, DateTime?) range;
         try { st = GridState(null); range = Range(); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         var path = Path.Combine(Path.GetTempPath(), "si-audit-" + Guid.NewGuid().ToString("N") + ".csv");
         var file = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 64 * 1024, FileOptions.DeleteOnClose);
         long n = 0;
@@ -148,7 +148,7 @@ public sealed class HistoryModel : PageModel
         if (!await _trail.ExistsAsync(ct)) return NotFound("The audit trail is not set up in this database yet.");
         GridState st; (DateTime?, DateTime?) range;
         try { st = GridState(null); range = Range(); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         var filter = FilterText();
         var result = await ExcelExport.FileAsync("audit-trail", null, async (x, info) =>
         {
@@ -190,7 +190,7 @@ public sealed class HistoryModel : PageModel
             var counts = await _trail.ValueCountsAsync(GridState(null), vis, from, to, c.Key, ct);
             return new JsonResult(new { ok = true, column = c.Key, values = counts.Select(x => new { value = x.Value, n = x.N, text = Fmt.Int(x.N) }) });
         }
-        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
     }
 
     public GridState GridState(int? size)

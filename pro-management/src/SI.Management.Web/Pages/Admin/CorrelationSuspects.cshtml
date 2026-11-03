@@ -1,0 +1,132 @@
+@page
+@model SI.Management.Web.Pages.Admin.CorrelationSuspectsModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Admin
+@{
+    ViewData["Title"] = "Correlation suspects";
+    var isAdmin = User.IsAdmin();
+}
+<div class="split"><h1>Correlation suspects</h1></div>
+<p class="lede">CIs that are probably one machine -- or one machine that is probably two. The automatic correlation rules merge what they can decide; these are the ones they could not. A warning only: nothing is blocked.</p>
+<details class="help" data-suspects-help>
+    <summary>How the correlation check works</summary>
+    <p><strong>One hard id on two or more active CIs.</strong> A Defender, Entra or Intune device id, an Azure resource id or an Active Directory id names one machine. Two active CIs that carry the same one are a correlation error -- for example a CI left behind after a merge, or an old Exposure Graph node of a machine another CI has.</p>
+    <p><strong>The same name on 2-3 server / VM CIs.</strong> The same short name -- the name, or the first label of an FQDN (azvm-dc01 and azvm-dc01.contoso.local) -- on two or three active CIs, at least one of them a server or a virtual machine, none a phone, and at least one without a hard device id. A name that four or more CIs carry, or a common name such as "iphone", is never a reason: many different devices share it (the list of common names can be changed in the data model, list generic_device_names).</p>
+    <p><strong>A placeholder name.</strong> A device a source has no name for (Defender's "dummydevicename"): a person cannot tell those devices apart. The CI takes its name from another linked source when one has it; when none does, SecurityInsight names it unnamed-device-&lt;short id&gt; and lists it here.</p>
+    <p><strong>Different tiers in one group</strong> is the most important case: the most critical tier may sit on the empty CI while the machine with the findings has a lower one. Those groups come first.</p>
+    <p><strong>Deciding.</strong> @(isAdmin ? "\"The same machine\" makes the next CI build merge the CIs (the oldest CI id is kept); \"Not the same machine\" stops the warning for these CIs. Both need a reason and go on Review & commit, written in your name and on the audit trail. A decision sticks to the CIs' records: a new CI joining the group raises the warning again. Removing a \"same\" decision splits the CIs again on the next CI build." : "An Admin decides whether the CIs of a group are the same machine.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.TableMissing) { <div class="notice warn" role="status" data-preparing>@CorrelationSuspectStore.MissingTableMessage</div> }
+
+@if (!Model.TableMissing && Model.Error is null)
+{
+    <section class="card" data-suspects-summary data-open="@Model.Open" data-decided="@Model.Decided" data-tier-conflicts="@Model.TierConflicts">
+        <p><strong>@Fmt.Int(Model.Open)</strong> group(s) to look at@(Model.TierConflicts > 0 ? ", " + Fmt.Int(Model.TierConflicts) + " of them with different tiers" : ""); @Fmt.Int(Model.Decided) decided by a person.
+            @if (Model.ComputedAt is not null) { <span class="muted">Checked @Fmt.Time(Model.ComputedAt) by the data sync.</span> }</p>
+        <form method="get" class="filters">
+            @if (Model.ShowDecided) { <a class="button secondary" href="/Admin/CorrelationSuspects" data-suspects-open-only>Only the groups to look at</a> }
+            else { <a class="button secondary" href="/Admin/CorrelationSuspects?decided=true" data-suspects-all>Also the groups decided by a person</a> }
+            <a class="button secondary" href="/Admin/DataQuality">Data quality</a>
+        </form>
+    </section>
+
+    @if (Model.Shown.Count == 0)
+    {
+        <p data-suspects-none>No correlation suspect: every active CI is one machine as far as the check can tell.</p>
+    }
+    @foreach (var g in Model.Shown)
+    {
+        var impact = CorrelationSuspectsModel.Impact(g);
+        <article class="card" data-suspect-group="@g.GroupKey" data-rule="@g.Rule" data-severity="@g.Severity" data-dismissed="@(g.Dismissed ? "1" : "0")">
+            <h2>@CorrelationSuspectsModel.RuleText(g.Rule): @(g.Rule == CorrelationSuspectStore.RulePlaceholder ? g.Label : g.Names)
+                <span class="badge @CorrelationSuspectsModel.SeverityBadge(g.Severity)">@g.Severity</span>
+                @if (g.Dismissed) { <span class="badge info" data-suspect-decided="@g.DecisionId">decided (decision @g.DecisionId)</span> }</h2>
+            @if (!string.IsNullOrEmpty(impact)) { <p class="notice warn" data-suspect-impact>@impact</p> }
+            <p data-suspect-evidence><strong>Evidence.</strong> @g.Evidence</p>
+            <div class="table-wrap">
+                <table class="grid" data-suspect-members data-sortable>
+                    <thead><tr><th>CI</th><th>Class</th><th>Asset type</th><th>Tier</th><th class="num">Open findings</th><th class="num">Weighted risk</th><th>Hard device id</th><th class="num">Links still seen</th><th>Note</th></tr></thead>
+                    <tbody>
+                    @foreach (var m in g.Members)
+                    {
+                        <tr data-suspect-ci="@m.CiId">
+                            <td><a href="/Cis/Detail?id=@Uri.EscapeDataString(m.CiId)">@(string.IsNullOrWhiteSpace(m.Name) ? m.CiId : m.Name)</a><br /><span class="muted mono">@m.CiId</span></td>
+                            <td>@m.Class</td>
+                            <td>@m.AssetType</td>
+                            <td data-value="@(m.Tier?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "9")">@(m.Tier is { } t ? "Tier " + t : "no tier")@if (!string.IsNullOrEmpty(m.TierSetBy)) { <div class="hint">set by @m.TierSetBy</div> }</td>
+                            <td class="num" data-value="@(m.OpenFindings ?? -1)">@(m.OpenFindings is { } f ? Fmt.Int(f) : "–")</td>
+                            <td class="num">@(m.WeightedRiskScore is { } w ? Fmt.Int((long)Math.Round(w)) : "–")</td>
+                            <td>@(m.Anchored ? "yes" : "no")</td>
+                            <td class="num">@Fmt.Int(m.ActiveLinks)</td>
+                            <td>@CorrelationSuspectsModel.RoleText(m.Role)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            @if (isAdmin && g.Decidable && !g.Dismissed)
+            {
+                <div class="actions" data-suspect-decide>
+                    <form method="post" asp-page-handler="Decide" class="inline">
+                        <input type="hidden" name="verdict" value="@CorrelationSuspectStore.VerdictSame" />
+                        <input type="hidden" name="groupKey" value="@g.GroupKey" />
+                        <input type="hidden" name="ciIds" value="@string.Join(",", g.CiIds)" />
+                        <input type="hidden" name="names" value="@g.Names" />
+                        <input name="reason" maxlength="1000" placeholder="Why they are one machine" required />
+                        <button type="submit" data-stage-same>The same machine (merge)</button>
+                    </form>
+                    <form method="post" asp-page-handler="Decide" class="inline">
+                        <input type="hidden" name="verdict" value="@CorrelationSuspectStore.VerdictNotSame" />
+                        <input type="hidden" name="groupKey" value="@g.GroupKey" />
+                        <input type="hidden" name="ciIds" value="@string.Join(",", g.CiIds)" />
+                        <input type="hidden" name="names" value="@g.Names" />
+                        <input name="reason" maxlength="1000" placeholder="Why they are different machines" required />
+                        <button type="submit" class="secondary" data-stage-not-same>Not the same machine</button>
+                    </form>
+                </div>
+            }
+            else if (g.Rule == CorrelationSuspectStore.RulePlaceholder)
+            {
+                <p class="hint">A placeholder name is not a merge question: the name comes from the source. Look the devices up by their id in the source.</p>
+            }
+        </article>
+    }
+
+    <h2>Decisions</h2>
+    @if (Model.Decisions.Count == 0) { <p data-decisions-none>No decision yet.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table class="grid" data-suspect-decisions data-sortable>
+                <thead><tr><th>Decision</th><th>CIs</th><th>Reason</th><th>Decided by</th><th>Decided</th><th>State</th>@if (isAdmin) { <th></th> }</tr></thead>
+                <tbody>
+                @foreach (var d in Model.Decisions)
+                {
+                    <tr data-decision="@d.Id" data-verdict="@d.Verdict" data-state="@d.StateText">
+                        <td>@CorrelationDecisionChanges.VerdictText(d.Verdict)</td>
+                        <td class="wrap">@(d.Names ?? d.CiIds)</td>
+                        <td class="wrap">@d.Reason</td>
+                        <td>@d.SetBy</td>
+                        <td data-value="@LocalTime.Iso(d.SetAt)">@Fmt.Time(d.SetAt)</td>
+                        <td><span class="badge @(d.Removed ? "info" : "good")">@d.StateText</span>@if (d.Removed) { <div class="hint">by @d.RemovedBy, @Fmt.Time(d.RemovedAt): @d.RemovedReason</div> }</td>
+                        @if (isAdmin)
+                        {
+                            <td>
+                                @if (!d.Removed)
+                                {
+                                    <form method="post" asp-page-handler="Remove" class="inline">
+                                        <input type="hidden" name="id" value="@d.Id" />
+                                        <input name="reason" maxlength="1000" placeholder="@(d.Verdict == CorrelationSuspectStore.VerdictSame ? "Why split them again" : "Why remove it")" required />
+                                        <button type="submit" class="secondary" data-stage-remove-decision>@(d.Verdict == CorrelationSuspectStore.VerdictSame ? "Split again" : "Remove")</button>
+                                    </form>
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+}

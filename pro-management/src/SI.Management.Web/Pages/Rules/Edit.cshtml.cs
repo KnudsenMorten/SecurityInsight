@@ -60,7 +60,7 @@ public sealed partial class EditModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the profiling rules could not be read");
-            Error = "The profiling rules could not be read from the Pro database: " + ex.Message;
+            Error = "The profiling rules could not be read from the Pro database: " + ViewerError.Text(ex);
             return false;
         }
     }

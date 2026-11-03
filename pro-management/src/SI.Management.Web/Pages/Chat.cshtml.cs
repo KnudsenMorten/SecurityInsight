@@ -54,7 +54,7 @@ public sealed class ChatModel : PageModel
         try
         {
             ChatAnswer answer;
-            using (SI.Management.Core.ProData.Exempted.Use(await ExemptedScopeAsync(ct))) answer = await _chat.AskAsync(history, q, User.IsAdmin(), ct);
+            using (SI.Management.Core.ProData.Exempted.Use(await ExemptedScopeAsync(ct))) answer = await _chat.AskAsync(history, q, Caller(), null, ct);
             Transcript.Add(new ChatEntry("user", q, Array.Empty<ToolCallTrace>()));
             Transcript.Add(new ChatEntry("assistant", answer.Text, answer.ToolCalls ?? Array.Empty<ToolCallTrace>(), answer.Assets));
             if (Transcript.Count > MaxTurns) Transcript = Transcript.Skip(Transcript.Count - MaxTurns).ToList();
@@ -70,6 +70,10 @@ public sealed class ChatModel : PageModel
         ModelState.Remove(nameof(TranscriptJson));
     }
 
+    /// Who asks (#253 x #254): the role decides the Admin-only tools; a person whose view is limited to some departments
+    /// gets only the tools that apply that limit to every row (never an answer from the whole estate). From the signed-in
+    /// user's own claims -- never from the form.
+    private ToolCaller Caller() => new(User.IsAdmin(), HttpContext?.RequestServices.GetService<IAccessScope>()?.Visibility(User));
     /// #264: the chat's data reads count exempted findings like the management numbers (SI_Exempted_CountInManagement),
     /// so an answer agrees with the dashboards -- only where the database carries the exemption mark (else unchanged).
     private async Task<SI.Management.Core.ProData.ExemptedScope?> ExemptedScopeAsync(CancellationToken ct)
@@ -102,7 +106,7 @@ public sealed class ChatModel : PageModel
         try
         {
             ChatAnswer answer;
-            using (SI.Management.Core.ProData.Exempted.Use(await ExemptedScopeAsync(ct))) answer = await _chat.AskAsync(history, q, User.IsAdmin(), context, ct);
+            using (SI.Management.Core.ProData.Exempted.Use(await ExemptedScopeAsync(ct))) answer = await _chat.AskAsync(history, q, Caller(), context, ct);
             var tools = answer.ToolCalls ?? Array.Empty<ToolCallTrace>();
             var show = await _display.ShowToolCallsAsync(ct);
             return new JsonResult(new

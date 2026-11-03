@@ -94,23 +94,27 @@ function ConvertTo-SIMailParagraphHtml {
         break stays a <br> inside its paragraph, a run of lines starting with "- " / "* " is a <ul>. Every value is
         encoded. -Markdown adds the subset an AI narrative uses: "## " / "### " headings, **bold**, _italic_ and
         [text](https://link).
+        -NoLinks: TEXT ONLY -- no link is made clickable: a [text](link) shows its text alone, a bare address stays plain
+        text. For text SecurityInsight did not write itself (the AI narrative, which reads collected names).
     #>
-    param([AllowNull()]$Text, [switch]$Markdown, [string]$Style)
+    param([AllowNull()]$Text, [switch]$Markdown, [switch]$NoLinks, [string]$Style)
     $L = $script:SIMailLayout
     $pStyle = if ($Style) { $Style } else { $L.PStyle }
     $t = ([string]$Text) -replace "`r`n", "`n" -replace "`r", "`n"
     if (-not $t.Trim()) { return '' }
+    $plain = { param([string]$x) if ($NoLinks) { ConvertTo-SIMailEncoded $x } else { ConvertTo-SIMailLinkified $x } }
     $inline = {
         param([string]$s)
-        if (-not $Markdown) { return (ConvertTo-SIMailLinkified $s) }
+        if (-not $Markdown) { return (& $plain $s) }
         # markdown links first, the rest encoded + linkified
         $out = New-Object System.Text.StringBuilder; $i = 0
-        foreach ($m in [regex]::Matches($s, '\[([^\]\n]+)\]\((https?://[^\s)]+)\)')) {
-            [void]$out.Append((ConvertTo-SIMailLinkified $s.Substring($i, $m.Index - $i)))
-            [void]$out.Append(('<a href="{0}" style="color:{1};text-decoration:underline;">{2}</a>' -f (ConvertTo-SIMailEncoded $m.Groups[2].Value), $L.Blue, (ConvertTo-SIMailEncoded $m.Groups[1].Value)))
+        foreach ($m in [regex]::Matches($s, '\[([^\]\n]+)\]\(([a-zA-Z][a-zA-Z0-9+.-]*:[^\s)]+)\)')) {
+            [void]$out.Append((& $plain $s.Substring($i, $m.Index - $i)))
+            if ($NoLinks -or $m.Groups[2].Value -notmatch '^https://') { [void]$out.Append((ConvertTo-SIMailEncoded $m.Groups[1].Value)) }
+            else { [void]$out.Append(('<a href="{0}" style="color:{1};text-decoration:underline;">{2}</a>' -f (ConvertTo-SIMailEncoded $m.Groups[2].Value), $L.Blue, (ConvertTo-SIMailEncoded $m.Groups[1].Value))) }
             $i = $m.Index + $m.Length
         }
-        if ($i -lt $s.Length) { [void]$out.Append((ConvertTo-SIMailLinkified $s.Substring($i))) }
+        if ($i -lt $s.Length) { [void]$out.Append((& $plain $s.Substring($i))) }
         $h = $out.ToString()
         $h = [regex]::Replace($h, '\*\*([^\*\n]+?)\*\*', '<strong>$1</strong>')
         $h = [regex]::Replace($h, '(^|\s)_([^_\n]+?)_(\s|[\.,;:\)\]]|$)', '$1<em>$2</em>$3')

@@ -767,7 +767,7 @@ public sealed class ExecutiveFigures
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new ExecutiveFigures { Missing = NotBuilt, Error = "The key figures could not be read from the Pro database: " + ex.Message };
+            return new ExecutiveFigures { Missing = NotBuilt, Error = "The key figures could not be read from the Pro database: " + ViewerError.Text(ex) };
         }
     }
 }

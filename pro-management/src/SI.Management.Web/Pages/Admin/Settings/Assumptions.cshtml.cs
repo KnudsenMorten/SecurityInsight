@@ -32,7 +32,7 @@ public sealed class AssumptionsModel(SettingsCatalog catalog, ISettingsStoreRead
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogWarning(ex, "the settings could not be read for the assumptions");
-            Notes.Add("The stored settings could not be read (" + ex.Message + "): the shipped defaults are shown; a value you changed may differ.");
+            Notes.Add("The stored settings could not be read (" + ViewerError.Text(ex) + "): the shipped defaults are shown; a value you changed may differ.");
         }
         var rules = CiLifecycleDefinitions.Defaults;
         try { rules = await lifecycle.ReadAsync(ct); }

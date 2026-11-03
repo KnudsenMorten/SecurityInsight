@@ -143,7 +143,11 @@ public sealed class ScopeExport(OutputRowPreview items, OutputMapStore maps, ILo
     /// rows a sheet, so a larger set goes on to "Would send 2", ... with a last sheet saying the output, the filter, the mode
     /// and the counts. CSV: UTF-8, comma-separated, quoted as RFC 4180 (CRLF line ends), the header = the column names.
     /// </summary>
-    public async Task<ScopeExportFile> WriteServiceNowAsync(DataOutEntry e, OutputScope? scope, IReadOnlySet<string>? resolved, string scopeWords, string mode, bool csv, CancellationToken ct)
+    /// #1055: the CI output with <paramref name="scope"/> = the CI scope (cmdb-servicenow: tier, asset kind, the CI rules);
+    /// the vulnerable items with <paramref name="ciScope"/> = that CI scope too (when the CI output is switched on): an item
+    /// whose CI it leaves out is out of scope, as the engine sends it.
+    public async Task<ScopeExportFile> WriteServiceNowAsync(DataOutEntry e, OutputScope? scope, IReadOnlySet<string>? resolved, string scopeWords, string mode, bool csv, CancellationToken ct,
+        OutputScope? ciScope = null)
     {
         if (ServiceNowOutputs.Of(e.Output) is null) throw new ArgumentException($"'{e.Output}' is not a ServiceNow output");
         OutputMapView? map = null;
@@ -163,7 +167,9 @@ public sealed class ScopeExport(OutputRowPreview items, OutputMapStore maps, ILo
             source = fromRun ? RunSource : CiSource;
             stream = fromRun ? items.RunFindingItemsAsync(ct) : items.FindingItemsAsync(ct);
         }
-        bool Keep(JsonObject it) => !isCi && scope is not null ? Passes(scope, resolved, mapFilter, it) : OutputMapper.Passes(it, mapFilter);
+        bool Keep(JsonObject it) => isCi
+            ? OutputMapper.Passes(it, mapFilter) && (scope is null || CiRules.Passes(scope, it))
+            : (scope is not null ? Passes(scope, resolved, mapFilter, it) : OutputMapper.Passes(it, mapFilter)) && (ciScope is null || CiRules.Passes(ciScope, it));
         var path = Path.Combine(Path.GetTempPath(), "si-snow-export-" + Guid.NewGuid().ToString("N") + (csv ? ".csv" : ".xlsx"));
         var fs = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1 << 16, FileOptions.DeleteOnClose);
         long total = 0, sent = 0;

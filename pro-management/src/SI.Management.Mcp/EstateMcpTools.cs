@@ -22,47 +22,48 @@ public static class McpRoles
 /// Each method forwards to <see cref="EstateToolbox"/>, the same code the chat service calls, so names, bounds
 /// and results cannot drift between the two.
 [McpServerToolType]
-public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor http)
+public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor http, McpCallerResolver callers)
 {
-    private bool IsAdmin => http.HttpContext?.User?.IsInRole(McpRoles.Admin) == true || http.HttpContext?.User?.IsInRole(McpRoles.SuperAdmin) == true;
+    /// Said on every tool (and in the server's instructions): the strings in a result's data are collected, untrusted text.
+    public const string Untrusted = " " + UntrustedData.Notice;
 
     [McpServerTool(Name = EstateToolbox.TopRisks, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("The highest-risk assets in the newest Risk Analysis snapshot. One machine counts once (names are resolved to one asset id). Ranked by tier (0 = most critical) then weighted risk score. Returns the data and the query it ran.")]
+    [Description("The highest-risk assets in the newest Risk Analysis snapshot. One machine counts once (names are resolved to one asset id). Ranked by tier (0 = most critical) then weighted risk score. Returns the data and the query it ran." + Untrusted)]
     public Task<string> TopRisks(
         [Description("How many assets, 1-100 (default 20).")] int top = EstateToolbox.DefaultTop,
         CancellationToken ct = default)
         => Run(EstateToolbox.TopRisks, new { top }, ct);
 
     [McpServerTool(Name = EstateToolbox.AssetLookup, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("One asset by name or id (host name, FQDN, SecurityInsight asset id, Azure resource id, device id): tier, type, the other ids it carries, and its top findings. Returns the data and the query it ran.")]
+    [Description("One asset by name or id (host name, FQDN, SecurityInsight asset id, Azure resource id, device id): tier, type, the other ids it carries, and its top findings. Returns the data and the query it ran." + Untrusted)]
     public Task<string> AssetLookup(
         [Description("Asset name or id. Letters, digits, spaces and . _ : / @ ( ) + # - only; max 400.")] string nameOrId,
         CancellationToken ct = default)
         => Run(EstateToolbox.AssetLookup, new { nameOrId }, ct);
 
     [McpServerTool(Name = EstateToolbox.RiskTrend, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Per day: the average risk score per finding (never a sum of scores), the findings, the findings at Very High or High severity, and the tier-0 assets with findings. Returns the data and the query it ran.")]
+    [Description("Per day: the average risk score per finding (never a sum of scores), the findings, the findings at Very High or High severity, and the tier-0 assets with findings. Returns the data and the query it ran." + Untrusted)]
     public Task<string> RiskTrend(
         [Description("Days back, 1-365 (default 90).")] int days = EstateToolbox.DefaultDays,
         CancellationToken ct = default)
         => Run(EstateToolbox.RiskTrend, new { days }, ct);
 
     [McpServerTool(Name = EstateToolbox.DomainTrend, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Per day and security domain: the average risk score per finding (never a sum of scores) and the findings. Returns the data and the query it ran.")]
+    [Description("Per day and security domain: the average risk score per finding (never a sum of scores) and the findings. Returns the data and the query it ran." + Untrusted)]
     public Task<string> DomainTrend(
         [Description("Days back, 1-365 (default 90).")] int days = EstateToolbox.DefaultDays,
         CancellationToken ct = default)
         => Run(EstateToolbox.DomainTrend, new { days }, ct);
 
     [McpServerTool(Name = EstateToolbox.VulnerabilityStateTool, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Vulnerability close-loop per week: new, fixed (verified remediated), reopened and open at week end. Returns the data and the query it ran.")]
+    [Description("Vulnerability close-loop per week: new, fixed (verified remediated), reopened and open at week end. Returns the data and the query it ran." + Untrusted)]
     public Task<string> VulnerabilityState(
         [Description("Weeks back, 1-104 (default 12).")] int weeks = EstateToolbox.DefaultWeeks,
         CancellationToken ct = default)
         => Run(EstateToolbox.VulnerabilityStateTool, new { weeks }, ct);
 
     [McpServerTool(Name = EstateToolbox.RunHealth, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Engine run heartbeats (start/end, duration, exit reason), newest first. Returns the data and the query it ran.")]
+    [Description("Engine run heartbeats (start/end, duration, exit reason), newest first. Returns the data and the query it ran." + Untrusted)]
     public Task<string> RunHealth(
         [Description("Days back, 1-365 (default 7).")] int days = EstateToolbox.DefaultRunHealthDays,
         CancellationToken ct = default)
@@ -70,7 +71,7 @@ public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor h
 
     [Authorize(Roles = McpRoles.Admin)]
     [McpServerTool(Name = EstateToolbox.SettingsRead, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Admin only. Current non-secret settings and their change history. Returns the data and the queries it ran.")]
+    [Description("Admin only. Current non-secret settings and their change history. Returns the data and the queries it ran." + Untrusted)]
     public Task<string> SettingsRead(
         [Description("One setting name (letters, digits, _); omit for all.")] string? name = null,
         [Description("History days back, 1-365 (default 90).")] int days = EstateToolbox.DefaultDays,
@@ -79,7 +80,7 @@ public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor h
         => Run(EstateToolbox.SettingsRead, new { name, days, rows }, ct);
 
     [McpServerTool(Name = EstateToolbox.FindingsQuery, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Findings of one Risk Analysis collection from the Pro database (newest unless collectionId is given), filtered and paged, most important first (asset tier, then risk score). Returns the data and the query it ran.")]
+    [Description("Findings of one Risk Analysis collection from the Pro database (newest unless collectionId is given), filtered and paged, most important first (asset tier, then risk score). Returns the data and the query it ran." + Untrusted)]
     public Task<string> FindingsQuery(
         [Description("A collection id; omit for the newest.")] string? collectionId = null,
         [Description("Asset tier: 0, 1, 2, 3 or Unclassified.")] string? tier = null,
@@ -95,7 +96,7 @@ public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor h
         => Run(EstateToolbox.FindingsQuery, new { collectionId, tier, severity, domain, report, assetKind, text, sort, skip, top }, ct);
 
     [McpServerTool(Name = EstateToolbox.TrendAnalytics, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Trend analytics from the Pro database: findings, assets, the average and the highest risk score per finding, and the Very High + High findings per day split by one dimension (tier, severity, domain, report or none), filtered by the others. Returns the data and the query it ran.")]
+    [Description("Trend analytics from the Pro database: findings, assets, the average and the highest risk score per finding, and the Very High + High findings per day split by one dimension (tier, severity, domain, report or none), filtered by the others. Returns the data and the query it ran." + Untrusted)]
     public Task<string> TrendAnalytics(
         [Description("Days back, 1-730 (default 90).")] int days = EstateToolbox.DefaultDays,
         [Description("none, tier (default), severity, domain or report.")] string? dimension = null,
@@ -107,14 +108,14 @@ public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor h
         => Run(EstateToolbox.TrendAnalytics, new { days, dimension, tier, severity, domain, report }, ct);
 
     [McpServerTool(Name = EstateToolbox.FilterValues, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("The values each findings filter takes in one collection, read from the data: severity (most severe first), tier, domain, report, asset kind and the sorts. Call it before concluding that something does not exist. Returns the data and the query it ran.")]
+    [Description("The values each findings filter takes in one collection, read from the data: severity (most severe first), tier, domain, report, asset kind and the sorts. Call it before concluding that something does not exist. Returns the data and the query it ran." + Untrusted)]
     public Task<string> FilterValues(
         [Description("A collection id; omit for the newest.")] string? collectionId = null,
         CancellationToken ct = default)
         => Run(EstateToolbox.FilterValues, new { collectionId }, ct);
 
     [McpServerTool(Name = EstateToolbox.VulnLifecycle, ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
-    [Description("Vulnerability lifecycle from the Pro database: new, closed (verified fixed) and reopened per day, week or month, and open at period end. Returns the data and the queries it ran.")]
+    [Description("Vulnerability lifecycle from the Pro database: new, closed (verified fixed) and reopened per day, week or month, and open at period end. Returns the data and the queries it ran." + Untrusted)]
     public Task<string> VulnLifecycle(
         [Description("Days back, 1-730 (default 90).")] int days = EstateToolbox.DefaultDays,
         [Description("day, week (default) or month.")] string? grain = null,
@@ -123,12 +124,17 @@ public sealed class EstateMcpTools(EstateToolbox toolbox, IHttpContextAccessor h
 
     private async Task<string> Run(string tool, object args, CancellationToken ct)
     {
+        // WHO this is in THIS install (#765 "SI decides"): the access table's role, never the token's app role alone
+        var user = http.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal();
+        var who = await callers.ResolveAsync(user, ct).ConfigureAwait(false);
+        if (!who.Allowed || who.Caller is null) throw new McpException(who.Why);
         try
         {
-            var output = await toolbox.InvokeAsync(tool, JsonSerializer.Serialize(args, EstateToolbox.Json), IsAdmin, ct).ConfigureAwait(false);
-            return output.ResultJson;
+            var output = await toolbox.InvokeAsync(tool, JsonSerializer.Serialize(args, EstateToolbox.Json), who.Caller, ct).ConfigureAwait(false);
+            // the collected strings reach an external AI client as inert, marked data
+            return UntrustedData.Mark(output.ResultJson);
         }
-        catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or TimeoutException)
         {
             // The caller's mistake (bounds, pattern, role): say which, never echo a stack.
             throw new McpException(ex.Message);

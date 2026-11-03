@@ -38,7 +38,7 @@ public sealed class DomainsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "domain trend failed");
-            Error = "The domain scores could not be read: " + ex.Message;
+            Error = "The domain scores could not be read: " + ViewerError.Text(ex);
         }
         var days = Points.Select(p => p.Day).Distinct().OrderBy(d => d).ToList();
         // Domain order is fixed by NAME (alphabetical), so a domain keeps its colour whatever the period shows.

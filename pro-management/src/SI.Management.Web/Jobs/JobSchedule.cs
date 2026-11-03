@@ -47,6 +47,8 @@ public static class JobSchedule
             "updater" => "Updates",
             "config-backup" => "Configuration backup",
             "heartbeat" => "Status report to Invardia (hourly)",
+            "data-out" => "Data out (ServiceNow and the other outputs)",
+            "support-grant" => "Invardia support access (just in time)",
             _ => jobName ?? "",
         };
     }
@@ -86,6 +88,8 @@ public static class JobSchedule
         "templates" => new("Publishes an accepted template release. Started by the web app, not on a schedule.", [], "configuration templates"),
         "config-backup" => new("Backs up every configuration you made (settings, departments, access, exemptions, overrides, connectors, the CMDB service model, the pipeline, reports, saved views) once a day, records a day without changes as no change, and removes backups older than the retention (pinned ones stay). Never a step of the pipeline.", [], "configuration backups (" + SI.Management.Web.Navigation.NavModel.PathOf("/Admin/Backups") + ")"),
         "heartbeat" => new("Sends the install's status report to Invardia once an hour, whether or not the pipeline runs -- so a long report or correlation never looks like a stopped install. It only reads; it never changes anything. Never a step of the pipeline.", [], "the hourly status report"),
+        "data-out" => new("Sends the ServiceNow hand-off, the vulnerable items and the other outputs from the newest collection the data sync marked ready. The data sync starts it the moment it has stored the findings per CI, so the push never waits for the summaries, the clean-up or the views; start it to send again. Never a step of the pipeline.", [], "the outputs (" + SI.Management.Web.Navigation.NavModel.PathOf("/Collection/Connectors") + ")"),
+        "support-grant" => new("Opens or closes the Invardia Support app's database access for a support session, at most at the level you consented to and for at most 24 hours, and removes it on its own when the time is up. Started only by the Invardia Support session; never a step of the pipeline.", [], "the Support app's database access"),
         _ => null,
     };
 

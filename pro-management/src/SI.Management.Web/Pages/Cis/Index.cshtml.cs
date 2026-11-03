@@ -108,7 +108,8 @@ public class IndexModel : PageModel
             ("tiersetby", CiColumns.TierSetByKey), ("lifecycle", "Lifecycle") })
         {
             // (#406 "all" is the lifecycle filter cleared: every lifecycle state, the named default off)
-            var joined = string.Join("|", q[param].Where(v => !string.IsNullOrWhiteSpace(v) && !(param == "lifecycle" && string.Equals(v, CiLifecycleDefinitions.ClearedFilter, StringComparison.OrdinalIgnoreCase))));
+            // (#1058 the lifecycle is offered in both filter panels, the same checkboxes: a value sent twice counts once)
+            var joined = string.Join("|", q[param].Where(v => !string.IsNullOrWhiteSpace(v) && !(param == "lifecycle" && string.Equals(v, CiLifecycleDefinitions.ClearedFilter, StringComparison.OrdinalIgnoreCase))).Distinct(StringComparer.OrdinalIgnoreCase));
             if (joined.Length > 0) filters[col] = joined;
         }
         // #406 THE NAMED DEFAULT: an address without a lifecycle filter shows the active CIs -- said on the page
@@ -334,7 +335,7 @@ public class IndexModel : PageModel
             var counts = (await _cis.ValueCountsAsync(spec, ReadGrid(), c.Key, ct)).Data;
             return new JsonResult(new { ok = true, column = c.Key, values = counts.Select(x => new { value = x.Value, label = x.Value, n = x.N, text = Fmt.Int(x.N) }) });
         }
-        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ex.Message }); }
+        catch (ArgumentException ex) { return new JsonResult(new { ok = false, message = ViewerError.Text(ex) }); }
         catch (ViewTimeoutException) { return new JsonResult(new { ok = false, message = "Counting took too long -- the filter is shown without its values." }); }
     }
 
@@ -352,7 +353,7 @@ public class IndexModel : PageModel
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the lifecycle settings could not be read; the defaults are shown"); }
             var req = ReadGrid();
             try { GridSql.Normalize(Spec!, req); }
-            catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; return; }
+            catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); return; }
             // the filter choices are read WHILE the grid is: neither needs the other (each read has its own connection)
             var facets = FacetsOrNoneAsync(ct);
             var g = await _cis.GridAsync(Spec!, req, false, ct);
@@ -364,12 +365,12 @@ public class IndexModel : PageModel
                 Queries.Add(QueryInfo.From(f, "The filter choices"));
             }
         }
-        catch (ArgumentException ex) { Error = "The request is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The request is not valid: " + ViewerError.Text(ex); }
         catch (ViewTimeoutException ex) { Error = CollectionPageModel.TimeoutText(ex.Limit, null); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the CI list could not be read");
-            Error = "The CIs could not be read from the Pro database: " + ex.Message;
+            Error = "The CIs could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -435,7 +436,7 @@ public class IndexModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec!);
         var rows = await FillAsync(cols, page.Rows, ct);
@@ -468,7 +469,7 @@ public class IndexModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? NotLoadedText);
         var views = HttpContext.RequestServices.GetService<ICiFullExportViews>();
         if (views is null) return NotFound("The full export is not available in this installation.");
@@ -500,7 +501,7 @@ public class IndexModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec!);
         var rows = await FillAsync(cols, page.Rows, ct);

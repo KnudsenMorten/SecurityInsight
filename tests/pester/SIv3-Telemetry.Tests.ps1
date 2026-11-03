@@ -142,7 +142,11 @@ Describe 'what this install reports as' {
     }
     It 'Pro with its install key: identified, the key is the credential; Pro without a key (or a malformed one) reports anonymously' {
         $lic = [pscustomobject]@{ Status = 'Valid'; Sku = 'Pro' }
-        $p = Get-SITelemetryContext -License $lic -InstallKey 'inv-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345' -TenantId $script:Tenant -StateDirectory (Join-Path $TestDrive 'p1') -GetEnv { param($n) $null } -Version '3.0.0'
+        # the install key goes only to Invardia's address: the suite's dead local address would make it anonymous, so the
+        # identified context is built on the default (Invardia's) address -- building a context sends nothing
+        $savedEp = $env:SI_TELEMETRY_ENDPOINT; $env:SI_TELEMETRY_ENDPOINT = $null
+        try { $p = Get-SITelemetryContext -License $lic -InstallKey 'inv-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345' -TenantId $script:Tenant -StateDirectory (Join-Path $TestDrive 'p1') -GetEnv { param($n) $null } -Version '3.0.0' }
+        finally { $env:SI_TELEMETRY_ENDPOINT = $savedEp }
         $p.Mode | Should -Be 'identified'; $p.AccessCode | Should -Be 'inv-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'; $p.TenantId | Should -Be $script:Tenant; $p.InstallId | Should -Be ''
         (Get-SITelemetryContext -License $lic -InstallKey '' -StateDirectory (Join-Path $TestDrive 'p2') -GetEnv { param($n) $null }).Mode | Should -Be 'anonymous'
         (Get-SITelemetryContext -License $lic -InstallKey 'not-a-key' -StateDirectory (Join-Path $TestDrive 'p3') -GetEnv { param($n) $null }).Mode | Should -Be 'anonymous'

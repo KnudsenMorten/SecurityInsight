@@ -38,7 +38,7 @@ public sealed class DataOutSwitch(SettingsCatalog catalog, ISettingsStoreReader 
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log.LogWarning(ex, "the ServiceNow outputs could not be switched on");
-            return (false, "the outputs could not be switched on (" + ex.Message + ") -- switch them on on Connectors > Fields sent");
+            return (false, "the outputs could not be switched on (" + ViewerError.Text(ex) + ") -- switch them on on Connectors > Fields sent");
         }
     }
 }

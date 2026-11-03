@@ -46,6 +46,7 @@
                             <span data-person>@kept.DisplayName</span>
                             <span class="hint">@(kept.Mail ?? (kept.PrincipalType + " " + kept.ObjectId))</span>
                             @if (kept.IsExternal) { <span class="badge">outside</span> }
+                            @if (string.IsNullOrWhiteSpace(kept.ObjectId) && !string.IsNullOrWhiteSpace(kept.Mail)) { <span class="hint" data-mail-only>@MailOnlyMatch.AdminNote</span> }
                             @if (!string.IsNullOrEmpty(kept.Company)) { <span class="hint">@kept.Company</span> }
                         }
                         else

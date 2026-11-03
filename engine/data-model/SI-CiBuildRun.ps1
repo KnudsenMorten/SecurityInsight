@@ -51,6 +51,8 @@ if (-not (Get-Command -Name Get-SIObjectLedgerProvider -ErrorAction SilentlyCont
 if (-not (Get-Command -Name Get-SIObjectLedgerSubset -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'identity\SI-ObjectLedgerStore.ps1') }
 if (-not (Get-Command -Name Invoke-SICiGrouping -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CiBuildSql.ps1') }
 if (-not (Get-Command -Name Invoke-SICiClassification -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-Classification.ps1') }
+# #1057 retire at once on proof of deletion (per source, off by default)
+if (-not (Get-Command -Name Invoke-SIDeletionProof -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DeletionProof.ps1') }
 # #533 (b): disabled accounts and devices -- SI_DisabledAssets_Correlate (engine/_shared)
 if (-not (Get-Command -Name Select-SIDisabledForStage -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-DisabledAssets.ps1') }
 
@@ -424,7 +426,9 @@ function Invoke-SICiCore {
           [hashtable]$ScopeChangedAt,
           # #639 the owning CMDB looked up for THIS set: { param($Docs) } -> the index of the items these CIs can use
           # (Get-SICiCmdbBatchIndex), called once the documents are built and before the rules -- instead of -CmdbIndex
-          [scriptblock]$CmdbLookup)
+          [scriptblock]$CmdbLookup,
+          # #1057 record key -> its source's proof of deletion (Invoke-SIDeletionProof); none = no proof
+          [hashtable]$DeletionProof)
     if ($null -eq $Lifecycle) { $Lifecycle = Get-SICiLifecycleSettings }
     Set-SICiWatchPhase -Watch $Watch -Phase 'looking up the ids of its assets'
     $idy = Resolve-SIObjectIdentity -Groups @($Groups) -Ledger $Ledger -Now $Now
@@ -437,6 +441,8 @@ function Invoke-SICiCore {
     # the records each CI is built from (a CI the rules' time limit stops: the build has exactly these built again)
     $recordKeys = @{}
     $fieldPlan = @(Get-SICiFieldPlan -Catalog $Model['field-catalog'])
+    # #1054 the placeholder device names in force (the model's list, the customer's override included), read once per set
+    $placeholderNames = Get-SICiPlaceholderNames -Model $Model
     # #642 SEVERAL GROUPS OF THIS SET RESOLVED TO ONE ID, and the ledger could not prove them different objects (a proven
     # wrong merge was split off in Resolve-SIObjectIdentity already). The id is ONE CI, so it is built ONCE from the records
     # of all of them -- never "the first group kept, the others dropped", which left a CI with only one group's links and the
@@ -468,7 +474,7 @@ function Invoke-SICiCore {
         if ($Watch) { $Watch.Slots['main'] = @((Get-SICiWatchLabel $recs[0] $recs.Count), [datetime]::UtcNow.Ticks, $nDone) }
         $nDone++
         $prevLife = $null; if ($PreviousLifecycle) { $prevLife = $PreviousLifecycle[$cid] }
-        $doc = New-SICiDocument -CiId ([string]$d.CorrelationId) -Records $recs -Catalog $Model['field-catalog'] -FeedLatest $FeedLatest -Now $Now -RunId $RunId -CmdbOwner $owner -FieldPlan $fieldPlan -Lifecycle $Lifecycle -Previous $prevLife -ScopeChangedAt $ScopeChangedAt
+        $doc = New-SICiDocument -CiId ([string]$d.CorrelationId) -Records $recs -Catalog $Model['field-catalog'] -FeedLatest $FeedLatest -Now $Now -RunId $RunId -CmdbOwner $owner -FieldPlan $fieldPlan -Lifecycle $Lifecycle -Previous $prevLife -ScopeChangedAt $ScopeChangedAt -DeletionProof $DeletionProof -PlaceholderNames $placeholderNames
         $doc['si_ci_action'] = [string]$d.Action
         $docs.Add($doc)
     }
@@ -814,6 +820,15 @@ function Invoke-SICiBuild {
             $whole = Read-SIObjectLedger -Provider $prov
             & $Log 'INFO' ("CIs: the identity ledger is a blob -- read whole for this build ({0} anchor(s)); an identity ledger in SQL is read a batch at a time." -f @($whole.Ledger.Keys).Count)
         }
+        # #1053 SPLIT AGAIN: the identifiers of a side of a removed "same machine" decision no longer lead to the CI it was
+        # merged into (Get-SICiSplitDecisionSql) -- taken out of the ledger this build reads, so that side gets its own id
+        $splitKeys = @{}
+        try { $splitKeys = ConvertTo-SICiSplitLedgerKeys -Rows @(& $sql (Get-SICiSplitDecisionSql) @{} 'rows') }
+        catch { & $Log 'WARN' ("CIs: the removed merge decisions could not be read ({0}) -- a CI split again by a person keeps its merged id until the next build." -f $_.Exception.Message); $splitKeys = @{} }
+        if ($splitKeys.Count -gt 0 -and $null -ne $whole) {
+            $nSplit = Remove-SICiSplitLedgerKeys -Ledger $whole.Ledger -Split $splitKeys
+            if ($nSplit -gt 0) { & $Log 'INFO' ("CIs: {0} identifier(s) of CIs a person split again leave the CI they were merged into" -f $nSplit) }
+        }
         if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
         # #462 the manual CI overrides in force (sidata.CiOverride; a database without the table has none)
         if ($null -eq $OverrideRows) { try { $OverrideRows = @(& $sql (Get-SICiOverrideReadSql) @{} 'rows') } catch { & $Log 'WARN' ("CIs: the manual CI overrides could not be read ({0}) -- the rules decide this run." -f $_.Exception.Message); $OverrideRows = @() } }
@@ -897,6 +912,14 @@ function Invoke-SICiBuild {
             if (@($scope.Changed).Count -gt 0) { & $Log 'INFO' ("CIs: the collection scope of {0} changed since the last build -- an asset those sources no longer list because of it keeps its state (it is not moved to not seen or retired)." -f (@($scope.Changed) -join ', ')) }
             if (-not $DryRun) { $null = & $sql (Get-SICiStateSetSql) @{ j = (ConvertTo-SIJsonArray @([ordered]@{ n = 'CollectionScope'; v = (ConvertTo-Json -InputObject $scope.State -Compress -Depth 4) })) } 'rows' }
         } catch { & $Log 'WARN' ("CIs: the collection scope could not be compared with the last build's ({0}) -- no asset is moved to not seen or retired because a source stopped listing it this run." -f $_.Exception.Message); $scope = [pscustomobject]@{ State = @{}; ChangedAt = @{ azure = $now; mdc = $now; entra = $now; mde = $now; intune = $now; ad = $now; eg = $now; mdi = $now; shodan = $now; cmdb = $now; servicenow = $now }; Changed = @() } }
+        # #1057 RETIRE AT ONCE ON PROOF OF DELETION (SI-DeletionProof.ps1): per source switched on, the records missing from a
+        # complete collection are checked against the source's own deletion signal; a proven (or no longer proven) record is
+        # due in this build. All switches off (the default): no source is read and no CI changes.
+        $deletionProof = @{}
+        try {
+            $dp =Invoke-SIDeletionProof -Sql $sql -LookbackDays $LookbackDays -Log $Log -DryRun:$DryRun
+            $deletionProof = $dp.Index
+        } catch { & $Log 'WARN' ("CIs: deletion proof could not be checked ({0}) -- no CI retires on a deletion this build." -f $_.Exception.Message); $deletionProof = @{} }
         # #534 FULL or INCREMENTAL: the fingerprint of what the CIs are built from, compared with the last build's
         $thresholds = @(Get-SICiTimeThresholds -Model $model -Rules @($Rules) -Lifecycle $lifeSettings)
         $fingerprint = ''
@@ -1055,14 +1078,18 @@ function Invoke-SICiBuild {
             $times.read += $bw.Elapsed.TotalSeconds; $bw.Restart()
             $ledger = $null
             & $sayStep 'looking up the ids its assets already have'
-            if ([string]$prov.Kind -eq 'sql') { $ledger = Get-SIObjectLedgerSubset -Connection $prov.Connection -Keys @(Get-SICiGroupLedgerKeys -Groups $bg.Groups) }
+            if ([string]$prov.Kind -eq 'sql') {
+                $ledger = Get-SIObjectLedgerSubset -Connection $prov.Connection -Keys @(Get-SICiGroupLedgerKeys -Groups $bg.Groups)
+                # #1053 a side a person split again: its identifiers leave the CI it was merged into (this batch's copy)
+                if ($splitKeys.Count -gt 0) { $null = Remove-SICiSplitLedgerKeys -Ledger $ledger -Split $splitKeys }
+            }
             else { $ledger = $whole.Ledger }
             $times.ledger += $bw.Elapsed.TotalSeconds; $bw.Restart()
             # always said: this step works in memory only -- no database and no Azure call shows that it is running
             & $Log 'INFO' ("CIs: batch {0} of {1} -- building {2} CI(s) from {3} record(s)" -f $b, $nBatches, @($bg.Groups).Count, [int]$bg.Records); $said.At = [datetime]::UtcNow
             if ($ciWatch) { $ciWatch.What = ('batch {0} of {1} -- ' -f $b, $nBatches) }
             $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -Watch $ciWatch `
-                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup
+                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof
             Set-SICiWatchPhase -Watch $ciWatch -Phase 'linking its CIs to their owners and users, and preparing them for the database'
             # KEEP IT OUT UNTIL FULLY EVALUATED (Get-SICiHeld): a CI whose rules took too long got only part of the rules, so
             # nothing of this run's result of it is written, posted, linked or handed on -- $docs are the complete CIs of the
@@ -1409,6 +1436,25 @@ function Invoke-SICiBuild {
             if ($gt.Cis -gt 0) { & $Log 'INFO' ("CIs: services and relation claims written for {0} CI(s) -- {1} service membership(s), {2} claim(s), {3} membership change(s) recorded" -f $gt.Cis, $gt.Services, $gt.Claims, $gt.ServiceChanges) }
         }
 
+        # #1052 ONE HARD ID, ONE ACTIVE CI: a CI whose records now build ANOTHER CI (a merge left its old row behind) is
+        # retired at once, naming the CI it was merged into (Get-SICiMergedRetireSql) -- before the retire brake below, which
+        # would keep it active (and in the CMDB) for days with the same hard ids as the survivor
+        $mergedRetired = $null
+        if (-not $DryRun) {
+            try {
+                $mergedRetired = @(& $sql (Get-SICiMergedRetireSql) @{ run = [string]$RunId } 'rows') | Select-Object -First 1
+                if ($mergedRetired -and [int](Get-SIItemValue $mergedRetired 'Retired') -gt 0) {
+                    & $Log 'INFO' ("CIs: {0} CI(s) retired at once -- merged into the CI their records build now (one hard id, one active CI){1}; retired, never deleted." -f [int](Get-SIItemValue $mergedRetired 'Retired'), $(if ([int](Get-SIItemValue $mergedRetired 'IntoSeveral') -gt 0) { ('; {0} of them into more than one CI' -f [int](Get-SIItemValue $mergedRetired 'IntoSeveral')) } else { '' }))
+                }
+                if ($mergedRetired -and [int](Get-SIItemValue $mergedRetired 'SharedLive') -gt 0) {
+                    & $Log 'INFO' ("CIs: {0} hard id(s) are linked to two or more active CIs that each still have current records (an operator never-merge or a proven wrong-merge split) -- reported, not merged." -f [int](Get-SIItemValue $mergedRetired 'SharedLive'))
+                }
+            } catch {
+                & $Log 'WARN' ("CIs: the CIs merged into another could not be retired this build ({0}) -- tried again on the next build." -f $_.Exception.Message)
+                $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the CIs merged into another CI were not retired this build ({0}) -- every CI is stored; they are retired by the next build' -f $_.Exception.Message) })
+            }
+        }
+
         # the CIs no current record builds any more (records aged out of the lookback, or none at all) are RETIRED once unseen
         # longer than the retire brake -- never deleted; recorded again, they are rebuilt active (Get-SICiRetireSql)
         $retired = $null
@@ -1563,6 +1609,9 @@ function Invoke-SICiBuild {
             GraphCis = $gt.Cis; ServiceMemberships = $gt.Services; RelationClaims = $gt.Claims; ServiceChanges = $gt.ServiceChanges; GraphMissing = $graphMissing; Relations = $rel
             # the CIs no source records any more, retired this build
             Retired = $(if ($retired) { [int](Get-SIItemValue $retired 'Retired') } else { 0 })
+            # #1052 the CIs merged into another and retired at once this build; hard ids still on two active CIs
+            MergedRetired = $(if ($mergedRetired) { [int](Get-SIItemValue $mergedRetired 'Retired') } else { 0 })
+            SharedLiveHardIds = $(if ($mergedRetired) { [int](Get-SIItemValue $mergedRetired 'SharedLive') } else { 0 })
             # the CI views' stored columns filled at the end of this build ($null: not this edition, or a dry run)
             ViewColumns = $viewColumns
             # #639 what the build caught and went on from (WARNING / FAILED, one plain line each)

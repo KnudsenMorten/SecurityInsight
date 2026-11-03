@@ -61,7 +61,7 @@ public sealed class ChangeService
         if (mode == "release" && !packTable) return (null, new[] { TemplateReleases.MissingSchemaMessage });
         ReleaseDiff diff;
         try { (diff, _) = await _releases.DiffAsync(mode, version, ct, cls); }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { return (null, new[] { ex.Message }); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { return (null, new[] { ViewerError.Text(ex) }); }
         var (sel, why) = TemplateReleases.Select(diff, methods, all);
         if (why.Count > 0) return (null, why);
         var fp = diff.Fingerprint(sel);
@@ -91,7 +91,7 @@ public sealed class ChangeService
         if (!_releases.JobsConfigured) why.Add(NotConfiguredJobsClient.Why + " The template release job cannot be started.");
         ReleaseDiff diff;
         try { (diff, _) = await _releases.DiffAsync(mode, version, ct, c.Get("class")); }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { return new ChangePreview(c, "", "", new[] { ex.Message }, warnings); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or JsonException) { return new ChangePreview(c, "", "", new[] { ViewerError.Text(ex) }, warnings); }
         if (diff.Fingerprint(methods) != fp) why.Add("the pack, the selection or your templates changed since this was staged -- discard it and stage it again");
         var all = methods.Contains(TemplateReleases.AllMethods);
         var affected = diff.Items.Count(i => i.Affected && (all || methods.Contains(i.MethodId)));
@@ -193,6 +193,19 @@ public sealed class ChangeService
         if (_dataOut is null) return r with { Message = r.Message + " -- its outputs were NOT switched on here: switch them on on Connectors > Fields sent" };
         var (ok, message) = await _dataOut.SwitchOnAsync(outs, by, c.Get("reason") ?? c.Title, ct);
         return r with { Message = r.Message + (ok ? "; " : " -- but ") + message };
+    }
+
+    /// Null = this user may commit the connector change as far as its credential goes; else why not. A change of where a
+    /// connector's credential is sent or which Key Vault secrets it reads is a SuperAdmin's (ConnectorRepository.NeedsSuperAdmin),
+    /// judged against the connector as it is now.
+    private async Task<string?> ConnectorSuperAdminWhyAsync(ClaimsPrincipal user, StagedChange c, CancellationToken ct)
+    {
+        if (user.IsSuperAdmin()) return null;
+        var w = ConnectorOf(c);
+        ConnectorRow? cur = null;
+        try { if (await _connectors.TableExistsAsync(ct)) cur = await _connectors.ReadAsync(w.Name, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the connector {Name} could not be read for the SuperAdmin rule", w.Name); return "the connector could not be read -- try again"; }
+        return ConnectorRepository.NeedsSuperAdmin(cur, w) ? ConnectorRepository.SuperAdminWhy(w.Name) : null;
     }
 
     /// #903: the ServiceNow outputs a staged "Switch on" of the data-out connector switches on with it.
@@ -403,6 +416,7 @@ public sealed class ChangeService
             var p = await PreviewAsync(c, ct);
             // access is re-checked on every review: a scope taken away since staging makes the change uncommittable
             var d = ChangeAccess.Check(_access, user, c);
+            if (d.Allowed && c.Kind == ChangeKinds.Connector && await ConnectorSuperAdminWhyAsync(user, c, ct) is { } sw) d = AccessDecision.No(sw);
             list.Add(d.Allowed ? p : p with { Problems = p.Problems.Append("not allowed for you: " + d.Reason).ToList() });
         }
         return await WithDataOutRuleAsync(list, ct);
@@ -503,7 +517,7 @@ public sealed class ChangeService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "previewing change {Id} failed", c.Id);
-            return new ChangePreview(c, "", "", new[] { "the current state could not be read: " + ex.Message }, warnings);
+            return new ChangePreview(c, "", "", new[] { "the current state could not be read: " + ViewerError.Text(ex) }, warnings);
         }
     }
 
@@ -548,6 +562,10 @@ public sealed class ChangeService
             var why = $"{refusedAccess.Count} of the {selected.Count} selected change(s) are outside your access, so nothing was committed. {refusedAccess[0].c.Title}: {refusedAccess[0].d.Reason}";
             return selected.Select(c => new CommitOutcome(c, WriteStatus.Refused, why)).ToList();
         }
+        // where a connector's credential goes and which secrets it reads: SuperAdmin -- checked against the row as it is NOW
+        foreach (var c in selected.Where(x => x.Kind == ChangeKinds.Connector))
+            if (await ConnectorSuperAdminWhyAsync(user, c, ct) is { } sw)
+                return selected.Select(x => new CommitOutcome(x, WriteStatus.Refused, $"nothing was committed. {c.Title}: {sw}")).ToList();
         // #903: a change that switches a ServiceNow data-out connector OFF is written before one that switches one ON, so
         // "Test off, Prod on" in one commit never meets the one-on rule half way (the order is stable otherwise)
         foreach (var c in selected.OrderBy(x => x.Kind == ChangeKinds.Connector ? ServiceNowDataOut.CommitOrder(ConnectorOf(x)) : 0).ToList())
@@ -573,7 +591,7 @@ public sealed class ChangeService
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "committing change {Id} ({Kind}) failed", c.Id, c.Kind);
-                r = new WriteResult(WriteStatus.Refused, "the write failed: " + ex.Message);
+                r = new WriteResult(WriteStatus.Refused, "the write failed: " + ViewerError.Text(ex));
             }
             outcomes.Add(new CommitOutcome(c, r.Status, r.Message));
         }

@@ -138,6 +138,11 @@ param(
     [switch]$Stage,
     [ValidateSet('feed', 'shipped', 'file')][string]$StageOrigin,
     [string]$StageRing,
+    # A pack from Invardia: the SIGNED manifest it came with (manifestB64, signature, keyId), kept with the staged pack --
+    # -FromStaged verifies it again against the keys embedded in this release before anything is installed.
+    [string]$StageManifestB64,
+    [string]$StageSignature,
+    [string]$StageKeyId,
     # A job run: a publish that is blocked FAILS (the web app shows the job as failed) instead of ending as a plan.
     [switch]$StrictJob,
     # Who accepted this release in the web app (recorded in the release's reason; the actor stays the session).
@@ -301,6 +306,16 @@ switch ($source) {
             if (-not $expect) { Write-Host '[WARN] no .sha256 beside the pack and no -PackSha256: only the items'' own hashes are checked' -ForegroundColor Yellow }
         } else {
             $st = Read-SIProStagedPackText -Store $Store -PackVersion $FromStaged
+            # THE PACK'S HASH IS ANCHORED OUTSIDE ITS ROW: a pack from Invardia is installed only when the signed manifest
+            # kept with it verifies against the keys EMBEDDED in this release and names this version and this SHA-256
+            # a pack staged as 'shipped' must be the templates THIS release ships (its own build, compared item by item)
+            $shippedDigest = ''
+            if ([string]$st.Origin -eq 'shipped') {
+                try { $shippedDigest = Get-SIProPackItemsDigest -Rows @((Get-SITemplateRows -SIRoot $siRoot).Rows) } catch { $shippedDigest = '' }
+            }
+            $anchor = Test-SIProStagedPackAnchor -Staged $st -PackVersion $FromStaged -SIRoot $siRoot -ShippedDigest $shippedDigest
+            if (-not $anchor.Ok) { throw ("template pack {0} is not installed: {1}" -f $FromStaged, $anchor.Reason) }
+            if ($anchor.Reason) { Write-Host ('[INFO] {0}' -f $anchor.Reason) }
             $packText = $st.Text; $expect = $st.Sha256
         }
         $parsed = ConvertFrom-SIProTemplatePack -Text $packText -ExpectedSha256 $expect -Context (Get-SIProConfigContext -SIRoot $siRoot)
@@ -406,7 +421,9 @@ if ($Stage -or ($Apply -and $fullShipped -and $Store)) {
             # #416: built once per process for the same rows (Get-SIProPackTextFor)
             Get-SIProPackTextFor -Rows $stageRows -PackVersion $result.Version -CodeVersion (Get-SIProShippedVersion -SIRoot $siRoot) -Kind $(if ($Families) { $Families } else { $null }) -Name $result.PackName -Classification $classification
         }
-        $result.Staged = Save-SIProTemplatePackStaged -Store $Store -Text $text -Origin $origin -Ring $StageRing
+        $stg = @{ Store = $Store; Text = $text; Origin = $origin; Ring = $StageRing }
+        if ($StageManifestB64) { $stg.ManifestB64 = $StageManifestB64; $stg.Signature = $StageSignature; $stg.KeyId = $StageKeyId }
+        $result.Staged = Save-SIProTemplatePackStaged @stg
         if ($result.Staged -eq 'Conflict' -and $splitShipped) {
             Write-Host ("[INFO] {0} is already staged with other content; the templates shipped with SecurityInsight {1} are installed with the code" -f $(if ($result.PackName) { $result.PackName } else { $result.Version }), $codeVersion)
         } elseif ($result.Staged -eq 'Conflict') {

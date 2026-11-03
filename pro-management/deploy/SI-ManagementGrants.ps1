@@ -72,6 +72,7 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.ViewPin';                 Verbs = 'INSERT, UPDATE, DELETE' }   # a named layout pinned to the menu (My views, or by an Admin for everyone); unpin removes one   # a person's last sort / filters and column widths per data view
     # MAIL-1: the guided mail setup records the Exchange administrator's confirmation (one row, never the table)
     @{ Object = 'cfg.MailRestrictionAttestationSet'; Verbs = 'EXECUTE' }
+    @{ Object = 'cfg.SupportGrantSweep';       Verbs = 'EXECUTE' }      # #1021: the web app revokes an EXPIRED Support app grant (the signed procedure; never the tables)
     @{ Object = 'cfg.WebKeyRing';              Verbs = 'INSERT' }
     @{ Object = 'sidata.Collection';           Verbs = 'UPDATE' }
     @{ Object = 'sidata.CiOverride';           Verbs = 'INSERT, UPDATE' }   # #462: an Admin's manual CI override (a removal is soft: an UPDATE)

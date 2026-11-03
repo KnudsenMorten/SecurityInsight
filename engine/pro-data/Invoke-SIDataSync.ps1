@@ -177,11 +177,60 @@ try {
     $relInvoke = if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke }
     $releaseStore = New-SIVulnReleaseStore -Invoke $relInvoke
 } catch { Write-DataWarn ("release   : held collections cannot be offered for release -- {0}" -f $_.Exception.Message) }
+# ---- #1038 (1) DATA OUT AS ITS OWN JOB (owner 2026-11-01: "servicenow is most critical"). Right after the findings per CI
+# are stored (inside the core, before every later phase) the collection is MARKED ready for data out and caj-si-data-out is
+# started on it (engine\data-out\SI-DataOutJob.ps1); while the findings per CI are replaced the sync holds the data-out lock,
+# so a send never reads a set that is being replaced. An install without the job (or without the data-out tables, or where
+# the job could not be started) gets data out from this sync, as before (the fallback below).
+$dataOutHand = @{ Off = $true; DryRun = [bool]$DryRun; Invoke = $invoke; SettingsInvoke = $(if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke }); Log = $log
+                  Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { 'datasync-' + $runContext.RunId })
+                  Target = $null; Store = $null; Mark = $null; Hand = $null }
+try {
+    . (Join-Path $siRoot 'engine\data-out\SI-DataOutJob.ps1')
+    $dataOutHand.Target = Get-SIDataOutJobTarget
+    $dataOutHand.Off = [bool]$DryRun
+} catch { Write-DataWarn ("data out  : the data-out job cannot be used this run ({0}) -- the data sync sends data out itself" -f $_.Exception.Message) }
+$onFindingsStored = {
+    param([string]$Stage, $DataModel)
+    if ($dataOutHand.Off) { return }
+    if ($Stage -eq 'storing') {
+        $dataOutHand.Store = Enter-SIDataOutStore -Invoke $dataOutHand.Invoke -Holder $dataOutHand.Holder -Log $dataOutHand.Log
+        if ($dataOutHand.Store.Tables -and -not $dataOutHand.Store.Held) { & $dataOutHand.Log 'WARN' ('data out  : ' + [string]$dataOutHand.Store.Why) }
+        return
+    }
+    try {
+        $os = Get-SIDataRunOnStored -Invoke $dataOutHand.SettingsInvoke
+        $hold = [bool]$os.OnStored -or -not [bool]$os.Known
+        $holdWhy = if ($os.OnStored) { 'the pipeline started this data sync after a failed step ({0})' -f $os.Why } elseif (-not $os.Known) { 'whether the pipeline''s run is complete could not be read ({0})' -f $os.Why } else { '' }
+        $tables = $(if ($dataOutHand.Store) { [bool]$dataOutHand.Store.Tables } else { Test-SIDataOutJobTables -Invoke $dataOutHand.Invoke })
+        $plan = Get-SIDataOutMarkPlan -DataModel $DataModel -Hold $hold -HoldWhy $holdWhy -Tables $tables
+        $dataOutHand.Mark = Invoke-SIDataOutReadyMark -Invoke $dataOutHand.Invoke -Plan $plan -DataModel $DataModel -MarkedBy $dataOutHand.Holder -Log $dataOutHand.Log
+    } finally {
+        # the findings per CI are stored and marked: the lock is freed BEFORE the job is started (it takes it)
+        if ($dataOutHand.Store -and $dataOutHand.Store.Held) { Exit-SIDataOutStore -Invoke $dataOutHand.Invoke -Holder $dataOutHand.Holder }
+    }
+    $dataOutHand.Hand = Invoke-SIDataOutHandOff -Mark $dataOutHand.Mark -Log $dataOutHand.Log `
+        -Installed { Test-SIDataOutJobInstalled -SubscriptionId $dataOutHand.Target.SubscriptionId -ResourceGroup $dataOutHand.Target.ResourceGroup } `
+        -Start { Start-SIDataOutJobRun -SubscriptionId $dataOutHand.Target.SubscriptionId -ResourceGroup $dataOutHand.Target.ResourceGroup }
+}
+# ---- #1053 THE CORRELATION GATEKEEPER: the CIs the automatic correlation rules could NOT decide -- one hard id on two active
+# CIs, the same short name / FQDN label on 2-3 server / VM CIs, a placeholder name -- every suspect named, stored in
+# sidata.CiSuspect. Here, BEFORE the collection is loaded: the CI build ran (the asset correlation job), and the load's
+# correlation evidence ("Possible duplicate") and the data-quality warnings at the end read this same result. A WARNING
+# only: never blocks anything, and a failure is said and ignored (_shared\SI-CorrelationSuspects.ps1).
+$global:SI_CorrelationSuspectsResult = $null
+try {
+    . (Join-Path $here '_shared\SI-CorrelationSuspects.ps1')
+    $global:SI_CorrelationSuspectsResult = Invoke-SICorrelationSuspects -Invoke $invoke -DryRun:$DryRun -Log $log
+} catch { Write-DataWarn ("correlation suspects: not checked this run -- {0}. Nothing was blocked." -f $_.Exception.Message) }
 try {
     # #834 -SettingsInvoke: the settings database, where the pipeline records its runs (the rows of the collections this
     # sync marks removed are then removed by the pipeline runner while no run is running)
-    $res = Invoke-SIDataSyncCore -Query $query -Invoke $invoke -EditionMajor $edition -Settings $settings -DryRun:$DryRun -Log $log -Responsibility $responsibility -ReleaseStore $releaseStore -SettingsInvoke $(if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke })
+    $res = Invoke-SIDataSyncCore -Query $query -Invoke $invoke -EditionMajor $edition -Settings $settings -DryRun:$DryRun -Log $log -Responsibility $responsibility -ReleaseStore $releaseStore -SettingsInvoke $(if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke }) `
+        -OnFindingsStored $onFindingsStored
 } catch {
+    # #1038 (1): a sync that stopped while it held the data-out lock frees it (only its own hold)
+    if ($dataOutHand.Store -and $dataOutHand.Store.Held -and (Get-Command -Name Exit-SIDataOutStore -ErrorAction SilentlyContinue)) { Exit-SIDataOutStore -Invoke $dataOutHand.Invoke -Holder $dataOutHand.Holder }
     # the run stopped: "a data sync is running" is taken away now, so the web app's pages move to what is stored at once
     # instead of when its limit passes (the error below is the one that is reported)
     if (-not $DryRun -and (Get-Command -Name Clear-SIDataSyncRunning -ErrorAction SilentlyContinue)) { $null = Clear-SIDataSyncRunning -Invoke $invoke -Log $log }
@@ -340,7 +389,14 @@ if ($onStored.OnStored) {
 } elseif (-not $onStored.Known) {
     Write-DataWarn ("data out  : held this run -- whether the pipeline's run is complete could not be read ({0}). The outputs send only what changed, so the next run sends it." -f $onStored.Why)
 }
+# #1038 (1): handed to caj-si-data-out (marked and started right after the findings per CI were stored) -- this sync does not
+# send data out itself. Not handed (no job at this install, no data-out tables, the job could not be started): sent here.
+$dataOutHanded = [bool]($dataOutHand.Hand -and $dataOutHand.Hand.HandedToJob)
+if ($dataOutHanded -and -not $holdOutputs) {
+    Write-DataInfo ("data out  : sent by {0} (execution {1}), started when the findings per CI were stored -- its runs are on Configuration > Connectors > Runs" -f 'caj-si-data-out', $(if ($dataOutHand.Hand.Execution) { $dataOutHand.Hand.Execution } else { '?' }))
+}
 if (-not $DryRun -and -not $holdOutputs) {
+if (-not $dataOutHanded) {
     try {
         . (Join-Path $siRoot 'engine\data-out\SI-DataOut.ps1')
         $doStore = $null
@@ -357,10 +413,16 @@ if (-not $DryRun -and -not $holdOutputs) {
         # #881 an output that was not written whole is a WARNING of this run (it opens a fix request): the outputs send only what
         # changed, so the next run sends it -- the data sync itself completes
         foreach ($dr in @(Get-SIDataOutIssues -Results @($global:SI_DataOutResult))) { if ($dr) { $runIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ([string]$dr.Text + $(if ([string]$dr.Level -eq 'FAILED') { ' -- this output failed; the next run sends what changed' } else { '' })) }) } }
+        # #1038 (1): the mark this sync made is recorded as sent here (the job, when it is installed later, starts from it)
+        if ($dataOutHand.Mark -and $dataOutHand.Mark.ReadyId -and (Get-Command -Name Set-SIDataOutReadyState -ErrorAction SilentlyContinue)) {
+            $doFailed = Test-SIDataOutSendFailed -Results @($global:SI_DataOutResult)
+            $null = Set-SIDataOutReadyState -Invoke $invoke -ReadyId ([long]$dataOutHand.Mark.ReadyId) -State $(if ($doFailed) { 'failed' } else { 'sent' }) -Why $(if ($doFailed) { Format-SIDataOutSendWhy -Results @($global:SI_DataOutResult) } else { '' }) -By $dataOutHand.Holder
+        }
     } catch {
         Write-DataWarn ("data out  : not run this time -- {0}. The data sync is not affected." -f $_.Exception.Message)
         Add-SIRunIssue -Issues $runIssues -Level WARNING -Text ('the data-out outputs were not written this run ({0}) -- this part failed; the next run sends what changed' -f $_.Exception.Message)
     }
+}
 }
 
 # ---- #288: the Risk Analysis executive view (what each report's mail showed) for the web app's Overview -----------
@@ -516,7 +578,7 @@ try {
     # a plain block (no closure): it sees this script's functions and $dqSmtp when Invoke-SIDataQuality calls it
     $dqSend = { param([string[]]$to, [string]$subject, [string]$html) if (-not $dqSmtp) { return $false }; $r = Send-SIMail -Settings $dqSmtp -To $to -Subject $subject -BodyHtml $html; [bool]$r.Sent }
     $global:SI_DataQualityResult = Invoke-SIDataQuality -Query $query -Invoke $invoke -SettingsInvoke $auditInvoke -Send $dqSend -RunId $runContext.RunId `
-        -LookbackDays ([int]$settings.LookbackDays) -DryRun:$DryRun -Log $log
+        -LookbackDays ([int]$settings.LookbackDays) -DryRun:$DryRun -Log $log -CorrelationSuspects $global:SI_CorrelationSuspectsResult
     $dqLines = @($global:SI_DataQualityResult.Lines)
     if ($dqLines.Count) { $rhEnd.Message = (@([string]$rhEnd.Message) + $dqLines | Where-Object { $_ }) -join ' | ' }
     # classification incomplete (owner 2026-10-19): a WARNING of the run -- counts only -- that the telemetry carries to Invardia
@@ -524,9 +586,15 @@ try {
     if ($dqClass) { Add-SIRunIssue -Issues $runIssues -Level WARNING -Text $dqClass }
 } catch {
     Write-DataWarn ("data quality: not measured this run -- {0}. Nothing was blocked." -f $_.Exception.Message)
+    # #1053 the correlation suspects are said on their own (below) -- the data-quality step failing does not hide them
     # #639: a WARNING -- nothing is missing from the data; this run's numbers were not compared with the last runs'
     Add-SIRunIssue -Issues $runIssues -Level WARNING -Text ('data quality was not measured this run ({0}) -- the data itself is not affected' -f $_.Exception.Message)
 }
+
+# #1053 correlation suspects (owner 2026-11-02): a WARNING of the run -- counts only, no name leaves the install -- that the
+# status and the telemetry carry; whatever the data-quality step did. Never a FAILED issue: nothing is blocked.
+$csIssue = ''; if ($global:SI_CorrelationSuspectsResult) { $csIssue = [string]$global:SI_CorrelationSuspectsResult.Issue }
+if ($csIssue) { Add-SIRunIssue -Issues $runIssues -Level WARNING -Text $csIssue }
 
 # ---- #639: THE RUN'S VERDICT -- what every step above caught, on the END record; a FAILED issue fails the job ----------
 $issueOut = Get-SIRunIssueOutcome -Issues $runIssues.ToArray()

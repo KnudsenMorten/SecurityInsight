@@ -165,7 +165,9 @@ $script:newGrant = $false
 # #521: the REST layer (setup's one sign-in, ARM, the registry build) -- no az CLI, no module
 . (Join-Path $PSScriptRoot 'SI-ManagementArm.ps1')
 . (Join-Path $siRoot 'setup\_shared\SI-SecurityBaseline.ps1')
-$jobsStartOnly = [bool]$JobsStartOnly -or (Test-SISecurityBaselineNewInstall)
+# the web app's start-only jobs rights stay an explicit choice (-JobsStartOnly, or SI_SECURITY_BASELINE_NEW_INSTALL=1 said
+# in so many words): the baseline's new default (ON, 2026-10-31) covers the registry and SQL auditing, not this
+$jobsStartOnly = [bool]$JobsStartOnly -or (Test-SISecurityBaselineNewInstall -Default $false)
 $appApi = Get-SIManagementAppApi
 $rgPath = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroup
 
@@ -497,6 +499,30 @@ if ($SigninFront) {
         Write-Host '  (plan) federated credential for the web identity -> the front''s image built in the registry -> the front as the second container, the web app on 127.0.0.1 -> read back -> Easy Auth off -> the old client secrets deleted'
     }
 } else { Write-Host '  -SigninFront not given: the web app signs users in itself (unchanged).' }
+
+# The web app's sign-in keys (cfg.WebKeyRing) ENCRYPTED with its own Key Vault key: the key SI-Web-KeyRing, the web identity's
+# use of THAT key only, then DataProtection__KeyVaultKeyId (setup\_shared\SI-WebKeyRing.ps1). Setup makes the grant (it runs
+# as an Owner); the updater runs the same converge on every run but only CHECKS the grant -- a missing one is reported to the
+# customer as this command, never a failed update. Needs the install's Key Vault name.
+Write-Step '4e. The web app''s sign-in keys, encrypted with its own Key Vault key (with -SigninStoreKeyVaultName)'
+if ("$SigninStoreKeyVaultName".Trim() -and $Apply -and $webApp -and $script:lookups) {
+    . (Join-Path $siRoot 'setup\_shared\SI-WebKeyRing.ps1')
+    $kvName = "$SigninStoreKeyVaultName".Trim()
+    $kvSeam = { param($m, $u, $b)
+        $j = if ($null -ne $b -and -not ($b -is [string])) { $b | ConvertTo-Json -Depth 10 -Compress } else { $b }
+        try { $r = Invoke-SIAzRestRequest -Method $m -Uri $u -Audience KeyVault -Body $j -AllowStatus @(403, 404) -What ('Key Vault {0}' -f $m); [pscustomobject]@{ Status = [int]$r.StatusCode; Json = $(if ("$($r.Content)".Trim()) { $r.Content | ConvertFrom-Json } else { $null }) } }
+        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match 'HTTP (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
+    $armSeam = { param($m, $p, $api, $b)
+        try { $j = Invoke-SIArm -Method $m -Path $p -ApiVersion $api -Body $b; [pscustomobject]@{ Status = 200; Json = $j } }
+        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match '(?i)\b(409|Conflict|RoleAssignmentExists)\b') { 409 } elseif ("$($_.Exception.Message)" -match 'HTTP (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
+    $vault = $null; try { $vault = Get-SIKeyVaultArm -Name $kvName -SubscriptionId $SubscriptionId } catch { $vault = $null }
+    $curKr = ''; foreach ($e in @((Get-SIManagementProp $webApp @('properties', 'template', 'containers')) | Select-Object -First 1 | ForEach-Object { $_.env } | Where-Object { $_ })) { if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $curKr = [string]$e.value } }
+    $kr = Invoke-SIWebKeyRingConverge -Arm $armSeam -KeyVault $kvSeam -SetEnv { param($n, $v) Set-SIContainerAppEnvVar -ResourceGroupName $ResourceGroup -Name $AppName -SetEnv @("$n=$v") -SubscriptionId $SubscriptionId } `
+              -VaultName $kvName -VaultId $(if ($vault) { [string]$vault.id } else { '' }) -PrincipalIds @($webId.PrincipalId) -SubscriptionId $SubscriptionId -CurrentEnv $curKr
+    foreach ($l in @($kr.Lines)) { Write-Host ('  ' + $l) }
+    foreach ($l in @($kr.Report)) { Write-Host ('  ' + $l + ' (the updater converges it on its next run)') -ForegroundColor Yellow }
+    foreach ($l in @($(if ($kr.PSObject.Properties['CustomerAction']) { $kr.CustomerAction }))) { Write-Host ('  ' + $l) -ForegroundColor Yellow }
+} else { Write-Host '  (plan / not given) the web app''s grant on its key is made here with -SigninStoreKeyVaultName -Apply; the updater then makes the key and sets the web app''s setting.' }
 
 # ---------------------------------------------------------------------------------------------------------------
 Write-Step $(if ($jobsStartOnly) { '4b. The Jobs page: START-ONLY (Jobs Reader on the jobs'' resource group, Jobs Operator on each named job)' } else { '4b. The Jobs page (Container Apps Jobs Contributor on the jobs'' resource group)' })

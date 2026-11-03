@@ -27,6 +27,20 @@ function sync(det) {
   det.classList.toggle("is-chosen", ticked.length > 0);
 }
 
+// #1058 the SAME filter in two panels (data-mf-mirror, the CI list's lifecycle in "Filters" and "+ Add filter"): the ticks
+// of the one changed are made in every other filter with the same key, so both send the same values
+function mirror(det, all) {
+  var key = det.getAttribute("data-mf-mirror");
+  if (!key) { return; }
+  var ticked = {};
+  boxes(det).forEach(function (b) { ticked[b.value] = b.checked; });
+  all.forEach(function (o) {
+    if (o === det || o.getAttribute("data-mf-mirror") !== key) { return; }
+    boxes(o).forEach(function (b) { if (Object.prototype.hasOwnProperty.call(ticked, b.value)) { b.checked = ticked[b.value]; } });
+    sync(o);
+  });
+}
+
 export function initMultiFilters(root) {
   var all = Array.prototype.slice.call((root || document).querySelectorAll("details[data-multifilter]"));
   all.forEach(function (det) {
@@ -40,6 +54,7 @@ export function initMultiFilters(root) {
         else if (!boxes(det).some(function (b) { return b.checked; })) { t.checked = true; }
       }
       sync(det);
+      mirror(det, all);
     });
     det.addEventListener("toggle", function () {
       if (!det.open) { return; }

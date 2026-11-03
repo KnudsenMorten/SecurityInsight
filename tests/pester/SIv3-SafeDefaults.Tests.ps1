@@ -199,11 +199,9 @@ Describe 'the AutomateIT framework launcher (launcher.internal-vm.ps1) is report
         $c | Should -Match 'Invoke-SIAssetTaggingReportOnlyNotice -Mode \$tagMode'
         $c | Should -Not -Match "elseif \(\`$null -eq \`$global:WhatIfMode\) \{ \`$global:WhatIfMode = \`$false \}"
     }
-    It 'RELEASENOTES says it plainly in the upgrade section: the framework launcher changes behaviour, and how to write again' {
-        $n = Get-Code 'RELEASENOTES.md'
-        $n | Should -Match '(?s)6b\. \*\*Asset tagging.{0,400}launcher\.internal-vm\.ps1.{0,400}This changes\s+what an existing scheduled task does'
-        $n | Should -Match '(?s)6b\..{0,1200}SI_AssetTagging_Apply = \$true.{0,200}-Apply'
-    }
+    # (The case "RELEASENOTES says it plainly in the upgrade section" was removed 2026-11-01: SecurityInsight 3 has no upgrade
+    # from 2.2 -- it installs side by side (#916, ecf52f259 removed the 2.2 upgrade section from the release notes on purpose),
+    # so there is no upgrade section to say it in. The launcher's report-only default itself is still asserted above.)
 }
 
 # ======================================================================================================================
@@ -256,17 +254,20 @@ Describe 'server setup: the sign-in decision (pure)' {
         foreach ($case in @(
             @{ M = 'ManagedIdentity'; Must = @("SI_AuthMethod\s+= 'ManagedIdentity'", "SI_ManagedIdentityClientId = 'cid-1'", "SI_SPN_ObjectId = 'pid-1'"); MustNot = @('SI_SPN_AppId', 'SI_SPN_Secret') }
             @{ M = 'Certificate'; Must = @("SI_AuthMethod\s+= 'Certificate'", "SI_SPN_AppId\s+= 'app-1'", "SI_SPN_CertThumbprint = 'ABC123'"); MustNot = @('SI_SPN_Secret\s+=') }
-            @{ M = 'Secret'; Must = @("SI_AuthMethod\s+= 'Secret'", "SI_SPN_Secret\s+= 'the-secret'"); MustNot = @('CertThumbprint') }
+            @{ M = 'Secret'; Must = @("SI_AuthMethod\s+= 'Secret'", 'SI_KeyVaultName\s+= \$global:SpnKeyVaultName'); MustNot = @('CertThumbprint', 'the-secret') }
         )) {
-            $t = (Get-SIServerSignInConfigLines -Method $case.M -TenantId 'ten' -AppId 'app-1' -CertificateThumbprint 'ABC123' -Secret 'the-secret' -ManagedIdentityClientId 'cid-1' -PrincipalId 'pid-1') -join "`n"
+            $t = (Get-SIServerSignInConfigLines -Method $case.M -TenantId 'ten' -AppId 'app-1' -CertificateThumbprint 'ABC123' -Secret 'the-secret' -KeyVaultName $(if ($case.M -eq 'Secret') { 'kv-si' } else { '' }) -ManagedIdentityClientId 'cid-1' -PrincipalId 'pid-1') -join "`n"
             $e = $null; $null = [System.Management.Automation.Language.Parser]::ParseInput($t, [ref]$null, [ref]$e); @($e).Count | Should -Be 0
             foreach ($m in $case.Must) { $t | Should -Match $m -Because $case.M }
             foreach ($m in $case.MustNot) { $t | Should -Not -Match $m -Because $case.M }
             $g = @{}; foreach ($l in ($t -split "`n")) { if ($l -match '^\$global:(\w+)\s*=\s*''([^'']*)''') { $g[$Matches[1]] = $Matches[2] } }
+            if ($case.M -eq 'Secret') { $g['SI_SPN_Secret'] = 'read-from-key-vault' }   # the block reads it from Key Vault at load
             (Resolve-SIAuthMethod -Globals $g).Mode | Should -Be $case.M -Because 'every engine reads the block the same way'
         }
         $kv = (Get-SIServerSignInConfigLines -Method Secret -TenantId 't' -AppId 'a' -KeyVaultName 'kv-si') -join "`n"
         $kv | Should -Match "SpnKeyVaultName = 'kv-si'"; $kv | Should -Match "SpnSecretName   = 'SecurityInsight-Secret'"; $kv | Should -Not -Match "SI_SPN_Secret\s+= '"
+        # NEGATIVE (2026-10-31): a client secret is never written into the file -- without a Key Vault the block is refused
+        { Get-SIServerSignInConfigLines -Method Secret -TenantId 't' -AppId 'a' -Secret 'the-secret' } | Should -Throw '*never written into the configuration file*'
     }
     It 'the unattended JSON: no CredKind = the same default; a container install = the jobs'' identity; Cert / Secret stay' {
         (Resolve-SIUnattendedSignIn -HostKind AzureVm).CredKind | Should -Be 'ManagedIdentity'
@@ -275,7 +276,7 @@ Describe 'server setup: the sign-in decision (pure)' {
         $o = Resolve-SIUnattendedSignIn -HostKind Outside
         $o.CredKind | Should -Be 'Cert'; $o.CredStorage | Should -Be 'LocalCertStore'; $o.DefaultUsed | Should -BeTrue
         (Resolve-SIUnattendedSignIn -CredKind Secret -HostKind AzureVm).CredKind | Should -Be 'Secret'
-        (Resolve-SIUnattendedSignIn -CredKind Secret -HostKind AzureVm).CredStorage | Should -Be 'Inline'
+        (Resolve-SIUnattendedSignIn -CredKind Secret -HostKind AzureVm).CredStorage | Should -Be 'KeyVault' -Because 'a client secret is kept in Key Vault, never inline (2026-10-31)'
         (Resolve-SIUnattendedSignIn -CredKind Cert -CredStorage KeyVault -ContainerEnabled $true).CredStorage | Should -Be 'KeyVault'
         { Resolve-SIUnattendedSignIn -CredKind ManagedIdentity -HostKind Outside } | Should -Throw '*cannot have a managed identity*'
     }

@@ -882,3 +882,143 @@ function Invoke-SINightly1900PipelineFiles {
         [pscustomobject]@{ Action = $(if ($changed) { 'changed' } else { 'kept' }); Lines = @($(if ($line) { $line })) }
     } catch { [pscustomobject]@{ Action = 'failed'; Lines = @(('The daily pipeline''s start time was not checked ({0}) -- the next update tries again.' -f $_.Exception.Message)) } }
 }
+
+# ---- #986 (found 2026-10-31): THE PIPELINE'S START TIME IS NOT IN A JOB'S ENVIRONMENT ON A PRO INSTALL -----------------------
+# Bootstrap passed every setting the customer's config sets to every job as SI_CFG_<name>, the pipeline's start time and zone
+# too. On a Pro install the pipeline runner reads them from the database (cfg.JobFlow / cfg.Setting) and the job's copy went
+# stale: one install's job said SI_CFG_SI_Pipeline_StartTime=22:00 / Europe/Paris (21:00Z) while its runs started at
+# 19:00 Europe/Amsterdam (18:00Z) -- a person reading the job expected a run that never came. New installs no longer write
+# them (Get-SIConfigDbOwnedNames); this step brings EXISTING Pro installs to that state (owner rule: existing installs reach
+# the new-install state): the two entries are removed from every job that carries them -- nothing else of the job changes.
+# A start time the customer chose that exists ONLY in a job's environment (no cfg.Setting row at any scope, no start time in
+# the stored pipeline) is written to cfg.Setting first, with its change-log row, so no start time changes. A shipped value
+# (22:00 / 23:30 / 19:00) is never written: the database's own (or the default) is the start time already.
+$script:SINightlyJobEnvNames = @('SI_CFG_SI_Pipeline_StartTime', 'SI_CFG_SI_Pipeline_TimeZone')
+$script:SINightlyShippedStarts = @('22:00', '23:30', '19:00')
+
+function Get-SINightlyArmProp {
+    <# PURE. A property of a parsed ARM object, $null when absent. #>
+    param($Object, [string[]]$Path)
+    $o = $Object
+    foreach ($p in $Path) {
+        if ($null -eq $o) { return $null }
+        if ($o -is [System.Collections.IDictionary]) { if ($o.Contains($p)) { $o = $o[$p] } else { return $null }; continue }
+        $pp = $o.PSObject.Properties[$p]; if (-not $pp) { return $null }; $o = $pp.Value
+    }
+    $o
+}
+
+function Get-SINightlyJobEnvPlan {
+    <#
+        PURE. -Jobs: the resource group's jobs as ARM lists them; -Rows: cfg.Setting rows of SI_Pipeline_StartTime /
+        SI_Pipeline_TimeZone (Name, Scope, ValueJson); -FlowJson: the stored daily pipeline. Returns @{ Jobs = [@{ Name; Body
+        (the PATCH: the job's template with the two entries gone from every container); Removed }]; Settings = [@{ Name; Scope;
+        New }] (a customer's own start time kept in the database first); Lines }. Nothing to do = no jobs, no settings.
+    #>
+    param([object[]]$Jobs = @(), [AllowEmptyCollection()][object[]]$Rows = @(), [AllowEmptyString()][AllowNull()][string]$FlowJson = '')
+    $names = $script:SINightlyJobEnvNames
+    $patches = New-Object System.Collections.Generic.List[object]
+    $seen = [ordered]@{}
+    foreach ($j in @($Jobs | Where-Object { $_ })) {
+        $tpl = Get-SINightlyArmProp $j @('properties', 'template')
+        $cts = @(Get-SINightlyArmProp $tpl @('containers') | Where-Object { $_ })
+        $hit = @()
+        foreach ($ct in $cts) {
+            foreach ($e in @(Get-SINightlyArmProp $ct @('env') | Where-Object { $_ })) {
+                $n = [string](Get-SINightlyArmProp $e @('name'))
+                if ($names -contains $n) { $hit += $n; if (-not $seen.Contains($n)) { $v = Get-SINightlyArmProp $e @('value'); if ($null -ne $v) { $seen[$n] = [string]$v } } }
+            }
+        }
+        if (-not $hit.Count) { continue }
+        $t = [ordered]@{}; foreach ($p in $tpl.PSObject.Properties) { $t[$p.Name] = $p.Value }
+        $t['containers'] = @(foreach ($ct in $cts) {
+            $copy = [ordered]@{}; foreach ($p in $ct.PSObject.Properties) { $copy[$p.Name] = $p.Value }
+            # (not "$env": that name is the environment drive)
+            $kept = @(Get-SINightlyArmProp $ct @('env') | Where-Object { $_ -and $names -notcontains [string](Get-SINightlyArmProp $_ @('name')) })
+            $copy['env'] = $kept
+            $copy
+        })
+        $patches.Add([pscustomobject]@{ Name = [string](Get-SINightlyArmProp $j @('name')); Body = [ordered]@{ properties = [ordered]@{ template = $t } }; Removed = @($hit | Select-Object -Unique) })
+    }
+    $settings = New-Object System.Collections.Generic.List[object]
+    $lines = New-Object System.Collections.Generic.List[string]
+    $start = if ($seen.Contains('SI_CFG_SI_Pipeline_StartTime')) { "$($seen['SI_CFG_SI_Pipeline_StartTime'])".Trim() } else { '' }
+    $zone = if ($seen.Contains('SI_CFG_SI_Pipeline_TimeZone')) { "$($seen['SI_CFG_SI_Pipeline_TimeZone'])".Trim() } else { '' }
+    $dbHasStart = [bool]@($Rows | Where-Object { $_ -and [string]$_.Name -eq 'SI_Pipeline_StartTime' }).Count
+    $flowHasStart = [string]$FlowJson -match '"startTime"\s*:\s*"[^"]+"'
+    if ($patches.Count -and $start -match '^([01]\d|2[0-3]):[0-5]\d$' -and $script:SINightlyShippedStarts -notcontains $start -and -not $dbHasStart -and -not $flowHasStart) {
+        $settings.Add([pscustomobject]@{ Name = 'SI_Pipeline_StartTime'; Scope = 'global'; New = ('"{0}"' -f $start) })
+        if ($zone) { $settings.Add([pscustomobject]@{ Name = 'SI_Pipeline_TimeZone'; Scope = 'global'; New = ('"{0}"' -f $zone) }) }
+        $lines.Add(('The daily pipeline''s start time you chose ({0}{1}) was kept only in the jobs'' settings -- it is now kept in the database, its one place.' -f $start, $(if ($zone) { " $zone" } else { '' })))
+    }
+    if ($patches.Count) {
+        $lines.Add(('The daily pipeline''s start time is read from the database only: the copy in the job settings is removed from {0} ({1}) -- it could differ from the time the runs really start.' -f $(if ($patches.Count -eq 1) { 'one job' } else { "$($patches.Count) jobs" }), (($patches | ForEach-Object { $_.Name }) -join ', ')))
+    }
+    [pscustomobject]@{ Jobs = $patches.ToArray(); Settings = $settings.ToArray(); Lines = $lines.ToArray() }
+}
+
+function Get-SINightlyJobEnvSettingSql {
+    <# The statement that keeps a customer's own start time in the database (-Plan.Settings): ONE transaction, a row only where
+       none exists at that scope, each with its cfg.ChangeLog row (as Set-SIProSetting writes them). Returns @{ Sql; Params }. #>
+    param([Parameter(Mandatory)]$Plan, [string]$By = $script:SINightly.By)
+    $p = [ordered]@{ By = $By; Reason = 'the pipeline''s start time is kept in the database only (it was found only in the jobs'' settings)' }
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.AppendLine('SET XACT_ABORT ON;')
+    $null = $sb.AppendLine('BEGIN TRAN;')
+    $i = 0
+    foreach ($row in @($Plan.Settings)) {
+        $i++
+        $p["N$i"] = [string]$row.Name; $p["S$i"] = [string]$row.Scope; $p["V$i"] = [string]$row.New
+        $null = $sb.AppendLine(("IF NOT EXISTS (SELECT 1 FROM cfg.Setting WITH (UPDLOCK, HOLDLOCK) WHERE Name = @N$i AND Scope = @S$i)"))
+        $null = $sb.AppendLine('BEGIN')
+        $null = $sb.AppendLine(("    INSERT cfg.Setting (Name, Scope, ValueJson, KeyVaultSecretName, UpdatedBy) VALUES (@N$i, @S$i, @V$i, NULL, @By);"))
+        $null = $sb.AppendLine(("    INSERT cfg.ChangeLog (Name, Scope, Action, OldValue, NewValue, ChangedBy, Reason) VALUES (@N$i, @S$i, N'Set', NULL, @V$i, @By, @Reason);"))
+        $null = $sb.AppendLine('END')
+    }
+    $null = $sb.AppendLine('COMMIT;')
+    [pscustomobject]@{ Sql = $sb.ToString(); Params = $p }
+}
+
+function Invoke-SINightlyJobEnvCleanup {
+    <#
+        #986: the pipeline's start time out of every job's environment on a Pro install (Get-SINightlyJobEnvPlan): a customer's
+        own start time found only there is kept in the database first; then one PATCH per job that carries it (its template,
+        the two entries gone), read back. -Rest: the update's REST seam; -Sql { param($Query, $Params, $Mode) }: the Pro
+        database. Never throws. Returns @{ Action = none | plan | changed | failed; Lines }.
+    #>
+    param([Parameter(Mandatory)]$Rest, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
+          [Parameter(Mandatory)][scriptblock]$Sql, [switch]$WhatIf, [string]$ApiVersion = '2025-07-01', [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $lines = New-Object System.Collections.Generic.List[string]
+    $arm = 'https://management.azure.com'
+    $base = 'https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $SubscriptionId, $ResourceGroup
+    $out = { param($a) [pscustomobject]@{ Action = $a; Lines = $lines.ToArray() } }
+    try {
+        $g = & $Rest 'GET' ('{0}?api-version={1}' -f $base, $ApiVersion) $null $arm @{}
+        if (-not $g -or [int]$g.Status -ne 200) { $lines.Add(('The jobs could not be read (HTTP {0}) -- the pipeline''s start time in their settings is checked on the next update.' -f $(if ($g) { $g.Status } else { 0 }))); return (& $out 'failed') }
+        $jobs = @(([string]$g.Body | ConvertFrom-Json).value)
+        $q = Get-SINightly1900PipelineSql -Name Read
+        $rows = @(& $Sql $q.Sql $q.Params 'reader' | ForEach-Object { $_ } | Where-Object { $_ } | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } })
+        $flow = @($rows | Where-Object { [string]$_.Kind -eq 'flow' })[0]
+        $plan = Get-SINightlyJobEnvPlan -Jobs $jobs -Rows @($rows | Where-Object { [string]$_.Kind -eq 'setting' }) -FlowJson $(if ($flow -and -not ($flow.ValueJson -is [DBNull])) { [string]$flow.ValueJson } else { '' })
+        if (-not @($plan.Jobs).Count) { return (& $out 'none') }
+        if ($WhatIf) { foreach ($l in @($plan.Lines)) { $lines.Add(('{0} (re-run with -Apply)' -f $l)) }; return (& $out 'plan') }
+        if (@($plan.Settings).Count) { $a = Get-SINightlyJobEnvSettingSql -Plan $plan; $null = & $Sql $a.Sql $a.Params 'nonquery' }
+        $failed = New-Object System.Collections.Generic.List[string]
+        foreach ($p in @($plan.Jobs)) {
+            $uri = '{0}/{1}?api-version={2}' -f $base, $p.Name, $ApiVersion
+            $r = & $Rest 'PATCH' $uri ($p.Body | ConvertTo-Json -Depth 20 -Compress) $arm @{ 'Content-Type' = 'application/json' }
+            if (-not $r -or [int]$r.Status -lt 200 -or [int]$r.Status -ge 300) { $failed.Add(('{0} (HTTP {1})' -f $p.Name, $(if ($r) { $r.Status } else { 0 }))); continue }
+            # read back: ARM answers the PATCH before the job carries it
+            $ok = $false
+            for ($i = 0; $i -lt 6 -and -not $ok; $i++) {
+                if ($i) { & $Sleep 5 }
+                $b = & $Rest 'GET' $uri $null $arm @{}
+                if ($b -and [int]$b.Status -eq 200) { $ok = -not @((Get-SINightlyJobEnvPlan -Jobs @([string]$b.Body | ConvertFrom-Json)).Jobs).Count }
+            }
+            if (-not $ok) { $failed.Add(('{0} (did not read back as changed)' -f $p.Name)) }
+        }
+        foreach ($l in @($plan.Lines)) { $lines.Add($l) }
+        if ($failed.Count) { $lines.Add(('The start time is still in the settings of {0} -- the next update removes it.' -f ($failed -join ', '))); return (& $out 'failed') }
+        & $out 'changed'
+    } catch { $lines.Add(('The pipeline''s start time in the job settings was not checked ({0}) -- the next update tries again.' -f $_.Exception.Message)); & $out 'failed' }
+}

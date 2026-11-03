@@ -197,6 +197,6 @@ Describe 'a CI asks only for the fields its records carry -- and is the same CI 
         $a = New-SICiDocument -CiId 'ci-1' -Records $recs -Catalog $script:Cat -FeedLatest $feeds -Now $script:Now
         $b = New-SICiDocument -CiId 'ci-1' -Records $recs -Catalog $script:Cat -FeedLatest $feeds -Now $script:Now -FieldPlan $plan
         (ConvertTo-Json -InputObject $b -Compress -Depth 12) | Should -BeExactly (ConvertTo-Json -InputObject $a -Compress -Depth 12)
-        [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\data-model\SI-CiBuildRun.ps1')) | Should -Match '(?s)\$fieldPlan = @\(Get-SICiFieldPlan -Catalog \$Model\[''field-catalog''\]\)\s+(#[^\r\n]*\s+)*\$byCid = \[ordered\]@\{\}\s+foreach \(\$d in @\(\$idy\.Decisions\)\).*foreach \(\$d in \$one\).*-FieldPlan \$fieldPlan' -Because 'the build reads the plan once for a batch, before its CIs'
+        [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\data-model\SI-CiBuildRun.ps1')) | Should -Match '(?s)\$fieldPlan = @\(Get-SICiFieldPlan -Catalog \$Model\[''field-catalog''\]\)\s+(#[^\r\n]*\s+)*(\$placeholderNames = [^\r\n]*\s+(#[^\r\n]*\s+)*)?\$byCid = \[ordered\]@\{\}\s+foreach \(\$d in @\(\$idy\.Decisions\)\).*foreach \(\$d in \$one\).*-FieldPlan \$fieldPlan' -Because 'the build reads the plan once for a batch, before its CIs'
     }
 }

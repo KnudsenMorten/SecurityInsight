@@ -1,3 +1,153 @@
+## v3.0.18 — Cleaner assets: one CI per machine, a choice of what goes to ServiceNow
+
+### Assets and correlation
+
+- A domain-joined computer's Active Directory account is no longer a second device CI beside the machine itself: it is
+  linked to the device it belongs to.
+- A data-quality check finds devices that are probably the same machine (the same name, or a shared hardware id) but
+  were kept apart. They are listed for a person to decide "same machine" or "not the same"; the decision is kept and used
+  by the next build.
+- An organisation can choose to leave out Active Directory accounts that were never synced and are disabled, and groups
+  that no longer exist in Entra. Both choices are off by default; privileged accounts are always kept.
+- A device whose source reports a placeholder name (such as "dummydevicename") takes its name from another source, or a
+  clear generated name ("unnamed-device-" and a short id); a placeholder name never joins two devices. Every CI is
+  rebuilt once with this release so existing CIs take their new names.
+- An asset proven deleted (in Entra ID's deleted items, a delete in Azure's resource changes, or a removed Intune device)
+  can be retired at once instead of after 30 days, with its open findings closed as "asset deleted". Only a proven
+  deletion counts; an asset that is merely missing keeps the usual waiting time. One switch per source, all off by
+  default; a restored object comes back with its findings.
+
+### ServiceNow and the other outputs
+
+- The ServiceNow configuration items can be limited by asset type and operating system in the connector's scope, so,
+  for example, mobile phones stay out while Windows, Linux, IoT, network devices, printers, macOS and Azure resources
+  go.
+- The ServiceNow check counts the configuration items it would send without a database error.
+
+### The web app
+
+- The CI list's lifecycle filter (active, not seen, retired) is in both filter panels.
+- Small fixes: page texts name menu paths the same way everywhere.
+
+### Support
+
+- Invardia support's database access can be opened just in time for a support session, at most at the level the
+  organisation consented to and for at most 24 hours, and is closed again on its own. The access that exists today stays
+  until the new path is proven.
+- Invardia support can read an installation's state (runs, steps, hand-offs, row counts, database users and Key Vault
+  secret names, never their values) from inside the installation's own network, as a one-time job that is removed
+  afterwards. No firewall rule, public access or network setting is ever changed for it.
+
+### Community edition
+
+- The Community release carries the source of the web app's sign-in front, so a Community installation builds it
+  from the release itself.
+
+### Updates
+
+- The updater keeps its timers and its installation id in step with the installation, and reports the hand-off's
+  progress in its status.
+
+## v3.0.17 — A faster, visible hand-off to ServiceNow
+
+### ServiceNow and the other outputs
+
+- The vulnerable items are built about three times faster: each finding is decided before it is shaped into a row,
+  and only the findings that get a row are shaped.
+- The pass over closed findings reads only the ones that were sent before, when the scope leaves the others out --
+  on a large installation hours less, with the same rows sent.
+- Progress while it sends: the phase, the rows sent of the rows planned, the rows held and the time left, in the log and
+  in the database once a minute. A send without progress for 10 minutes says so; it never stops the send.
+- A send that ServiceNow refuses, or that is held, says so at once and stops; nothing is counted as sent that was not.
+
+### Invardia
+
+- The installation names itself to Invardia by its lasting installation id on its status reports, the update check and
+  the licence request, and shows its hand-off progress in its status.
+
+## v3.0.16 — Vulnerable items reach a ServiceNow staging table whose name contains vulnerable_item
+
+- SecurityInsight refuses to send rows straight into ServiceNow's own record tables. That check also refused a customer's
+  own staging table when its name contained "vulnerable_item", so no vulnerable item was sent. Customer staging tables
+  are now accepted whatever their name; ServiceNow's own record tables are still refused.
+- A value longer than its ServiceNow column now holds only its own row: the other rows are sent, and the held rows go
+  once the column is wider. The run names the column, the longest value and up to five held records. Before, one such value
+  held the whole hand-off.
+- A vulnerable item's identifier longer than 100 characters (a long attack path) is shortened the way the ServiceNow
+  staging specification describes -- its first 59 characters, '~' and a hash -- so it fits the 100-character column.
+
+## v3.0.15 — ServiceNow sends without waiting for the data sync
+
+### ServiceNow and the other outputs
+
+- The data out (ServiceNow and the other outputs) runs as its own job. It starts as soon as the newest collection's
+  findings are stored, so the push no longer waits for the rest of the data sync. A resend is a start of that job: it
+  takes minutes, not a full data sync. An installation without the new job keeps sending from the data sync as before.
+- A data sync started on its own no longer clears old collections before it sends.
+
+### Housekeeping
+
+- Old collections are removed in the background only while no run, data sync or data out is going, a little at a
+  time. Progress is shown in the status. The newest two complete collections are always kept.
+
+### Mail
+
+- The technical owners' monthly review mail is sent again. In 3.0.13 and 3.0.14 it stopped while its subject was built.
+
+## v3.0.14 — the ServiceNow push sends its rows
+
+- The CI hand-off and the vulnerable items reach ServiceNow: in 3.0.11 to 3.0.13 the push stopped before it wrote a row,
+  because part of it could not be found when the data sync ran it. The next push sends everything that is due.
+
+## v3.0.13 — the web app updates with the security release
+
+- The web app and the MCP server build and update again: in 3.0.12 their image build stopped on an outdated package list,
+  so an install updated its engine jobs to 3.0.12 and kept the web app on the version before. Everything in 3.0.12 applies.
+
+## v3.0.12 — security hardening
+
+This release tightens access, sign-in and the checks around settings, connectors and updates. Most of it changes nothing
+you see; the points below are the ones you may notice.
+
+### Access
+
+- A person limited to one or more departments sees only their departments' findings on every page, in the chat and through
+  the MCP server. Pages that cannot apply the department limit are not shown to them.
+- The MCP server uses this installation's own access list: a person must be listed on the Access page, with their role
+  there, to use it.
+- Exemption requests: "Approve now" on your own request follows the setting that allows self-approval
+  (SIWeb_ExemptionAllowSelfApproval). It is off by default, so your own request now goes to another approver. Switch the
+  setting on if you want the earlier behaviour.
+- An advisor or department person stored by mail address only who signs in as a guest is asked to have their object id
+  recorded (or to use a sign-in link). The Admin's lists mark these entries.
+- Error messages on pages are shortened to what you can act on; the details go to the log.
+
+### Settings and connectors
+
+- Changing which Key Vault secret a setting or connector uses, or the address a secret is sent to, needs the SuperAdmin
+  role. A secret setting uses only its own Key Vault secret.
+- The Azure OpenAI address must be an Azure OpenAI host (or an Azure API Management gateway in front of one). Another
+  address is not used, and the AI summary says so.
+- Status reports and licence requests go only to invardia.com.
+
+### Sign-in and updates
+
+- The web app's sign-in keys are protected with a Key Vault key once setup has granted it; everyone signs in again once.
+- Container images are built from base images pinned to an exact version, and package restores are locked.
+- Updates and template packs are checked against their signed manifest before they are used.
+
+## v3.0.11 — the ServiceNow push sends its rows, a faster Detailed risk analysis
+
+### ServiceNow
+
+- The CI hand-off and the vulnerable items reach ServiceNow again. In 3.0.10 both outputs stopped before sending anything,
+  with a database error, and their batches stayed open; the next push closes those as failed and sends their rows again.
+
+### Risk Analysis
+
+- The Detailed risk analysis reads its results once after the reports instead of twice: the key figures are counted in the
+  same pass as the AI summary, with the same numbers as before. On the largest installs this saves hours of the step.
+
 ## v3.0.10 — the data sync's counts, the ServiceNow hand-off, management presentations
 
 ### The data sync

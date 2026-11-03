@@ -104,7 +104,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "connectors could not be read");
-            Errors.Add("The connectors could not be read: " + ex.Message);
+            Errors.Add("The connectors could not be read: " + ViewerError.Text(ex));
             return;
         }
         try
@@ -115,7 +115,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "connector runs could not be read");
-            Errors.Add("The last runs could not be read: " + ex.Message);
+            Errors.Add("The last runs could not be read: " + ViewerError.Text(ex));
         }
     }
 

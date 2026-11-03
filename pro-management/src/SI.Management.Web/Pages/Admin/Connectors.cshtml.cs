@@ -123,7 +123,7 @@ public sealed class ConnectorsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "{What} could not be read", what);
-            Errors.Add($"{what}: not available ({ex.Message})");
+            Errors.Add($"{what}: not available ({ViewerError.Text(ex)})");
         }
     }
 }

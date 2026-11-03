@@ -133,7 +133,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the risk factors could not be read");
-            Error = "The risk factors could not be read from the Pro database: " + ex.Message;
+            Error = "The risk factors could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -151,7 +151,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "the collected values for {Field} could not be read", Criteria.Field);
-            CollectedError = "The values SecurityInsight collected could not be read: " + ex.Message;
+            CollectedError = "The values SecurityInsight collected could not be read: " + ViewerError.Text(ex);
         }
     }
 

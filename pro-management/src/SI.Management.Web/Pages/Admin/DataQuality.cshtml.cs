@@ -107,7 +107,7 @@ public sealed class DataQualityModel : DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "data quality: the fingerprint could not be read");
-            Error = "The data-quality runs could not be read: " + ex.Message;
+            Error = "The data-quality runs could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -289,11 +289,11 @@ public sealed class DataQualityModel : DataViewPageModel
             await AuditAsync("re-run the pipeline from a step (from a data-quality warning)", before, message, ct);
             message += ".";
         }
-        catch (UnauthorizedAccessException ex) { return AccessResults.Refused(Request, AccessDecision.No(ex.Message)); }
+        catch (UnauthorizedAccessException ex) { return AccessResults.Refused(Request, AccessDecision.No(ViewerError.Text(ex))); }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or HttpRequestException)
         {
             _log.LogError(ex, "data quality: re-run from a step failed");
-            message = "Re-run from here failed -- " + ex.Message;
+            message = "Re-run from here failed -- " + ViewerError.Text(ex);
             kind = "error";
         }
         if (Request.Headers.Accept.ToString().Contains("application/json", StringComparison.OrdinalIgnoreCase))

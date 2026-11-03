@@ -29,6 +29,74 @@
 . (Join-Path $PSScriptRoot 'SI-FieldResolution.ps1')
 # the asset lifecycle (V3-DATA-MODEL 2.5.5, #406): categories, grace periods, seen window -- one mechanism with the CMDB sync
 . (Join-Path $PSScriptRoot 'SI-CiLifecycle.ps1')
+# #1056 a customer's choice of which Exposure Graph identities become assets: a CI whose record the choice now leaves out
+# retires with a reason naming the switch (Get-SIRecordLink below)
+$script:SIIdentityScopeChoiceFile = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'asset-profiling', 'shared', 'SI-IdentityScopeChoice.ps1')
+if (-not (Get-Command -Name Get-SIRecordLeftOutByIdentityChoice -ErrorAction SilentlyContinue) -and [IO.File]::Exists($script:SIIdentityScopeChoiceFile)) { . $script:SIIdentityScopeChoiceFile }
+$script:SICiIdentityChoiceReady = [bool](Get-Command -Name Get-SIRecordLeftOutByIdentityChoice -ErrorAction SilentlyContinue)
+$script:SICiIdentityChoiceCache = $null
+# #1054 A SOURCE'S PLACEHOLDER NAME IS NEVER A CI'S NAME (owner's data-quality sweep 2026-11-02: 29 active devices named
+# "dummydevicename" -- Defender's placeholder for a device it has no name for). The CI takes the name from another linked
+# source; when none has one, a clear generated name: the shared stand-in of SI-AssetName.ps1 ('unnamed-device-<short id>',
+# deterministic, unique per device, recognisable by its 'unnamed-' prefix). The correlation check (SI-CorrelationSuspects.ps1,
+# rule placeholder) flags it. The list is the data model's placeholder_device_names (the same list the check reads).
+$script:SIAssetNameFile = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'asset-profiling', 'shared', 'SI-AssetName.ps1')
+if (-not (Get-Command -Name Get-SISyntheticAssetName -ErrorAction SilentlyContinue) -and [IO.File]::Exists($script:SIAssetNameFile)) { . $script:SIAssetNameFile }
+$script:SICiPlaceholderListId = 'placeholder_device_names'
+# the shipped list, used when no data model is given (the same values as data-model\lists.locked.json)
+$script:SICiPlaceholderNamesDefault = @('dummydevicename', 'unknown', 'localhost', '(none)', 'n/a')
+
+function Get-SICiPlaceholderNames {
+    <# PURE. The placeholder device names in force (lower case, trimmed): the model's list placeholder_device_names (locked +
+       the customer's override, as the model was merged), else the shipped list. #>
+    param($Model)
+    $vals = $null
+    if ($null -ne $Model) {
+        $lists = $null
+        try { $lists = $Model['lists'] } catch { $lists = $null }
+        if ($null -ne $lists) {
+            foreach ($l in @(Get-SIItemValue $lists 'lists')) {
+                if ($null -ne $l -and [string](Get-SIItemValue $l 'id') -eq $script:SICiPlaceholderListId) { $vals = @(Get-SIItemValue $l 'values'); break }
+            }
+        }
+    }
+    if ($null -eq $vals) { $vals = $script:SICiPlaceholderNamesDefault }
+    , [string[]]@(foreach ($v in @($vals)) { $s = ([string]$v).Trim().ToLowerInvariant(); if ($s) { $s } })
+}
+
+function Test-SICiPlaceholderName {
+    <# PURE. Is this name a source's placeholder (compared whole, trimmed, without case)? #>
+    param([AllowNull()]$Value, [AllowNull()][AllowEmptyCollection()][string[]]$Names)
+    if ($null -eq $Value -or $null -eq $Names -or $Names.Count -eq 0) { return $false }
+    $s = ([string]$Value).Trim().ToLowerInvariant()
+    if (-not $s) { return $false }
+    foreach ($n in $Names) { if ($s -eq $n) { return $true } }
+    $false
+}
+
+function Get-SICiUnnamedDeviceName {
+    <# PURE. #1054 the generated name of a device no linked source has a name for: 'unnamed-device-<short id>' from the native id
+       of its record (record key '<provider>:<id>' -- Defender's device id for a Defender record). $null when there is no id. #>
+    param([AllowEmptyString()][string]$RecordKey)
+    $id = [string]$RecordKey; $i = $id.IndexOf(':'); if ($i -ge 0) { $id = $id.Substring($i + 1) }
+    if (-not $id) { return $null }
+    if (Get-Command -Name Get-SISyntheticAssetName -ErrorAction SilentlyContinue) { return (Get-SISyntheticAssetName -Engine 'device' -Id $id) }
+    $clean = ($id -replace '[^A-Za-z0-9]', ''); if (-not $clean) { return $null }
+    $take = [Math]::Min(8, $clean.Length)
+    'unnamed-device-' + $clean.Substring($clean.Length - $take, $take).ToLowerInvariant()
+}
+
+function Get-SICiIdentityChoice {
+    <# The install's choice (Get-SIIdentityScopeChoice), read once and again only when one of the two settings changes -- the
+       CI build asks for every missing Exposure Graph record. $null when the choice code is not shipped. #>
+    if ($null -eq $script:SICiIdentityChoiceReady) { $script:SICiIdentityChoiceReady = [bool](Get-Command -Name Get-SIRecordLeftOutByIdentityChoice -ErrorAction SilentlyContinue) }
+    if (-not $script:SICiIdentityChoiceReady) { return $null }
+    $key = '{0}|{1}' -f $global:SI_Identity_SkipNeverSyncedDisabledAd, $global:SI_Identity_SkipDeletedGroups
+    if ($null -eq $script:SICiIdentityChoiceCache -or $script:SICiIdentityChoiceCache.Key -ne $key) {
+        $script:SICiIdentityChoiceCache = [pscustomobject]@{ Key = $key; Choice = (Get-SIIdentityScopeChoice) }
+    }
+    $script:SICiIdentityChoiceCache.Choice
+}
 
 function Get-SICiLedgerTypeMap {
     <# The catalog's strong identifier fields -> the identity ledger's identifier types (shared with the correlation engine). #>
@@ -140,10 +208,31 @@ function Get-SIFeedLatest {
     return $latest
 }
 
+function Test-SIRecordAdAccountAsDevice {
+    <#
+        PURE. #1052 Is this an Exposure Graph DEVICE record that is really an Active Directory computer account -- one a
+        build before the fix recorded as a device (provider eg, record type device) with AD ids (ad_object_guid / ad_sid) and
+        NO device identifier at all (no Defender, Entra, Intune or Azure id)? Such a record is not a device and never was:
+        it made a device CI of its own (a domain controller's Tier 0 landed on that empty duplicate).
+    #>
+    param($Record)
+    if ($null -eq $Record) { return $false }
+    if ([string](Get-SIItemValue $Record 'si_provider') -ne 'eg' -or [string](Get-SIItemValue $Record 'si_record_type') -ne 'device') { return $false }
+    $ad = $false
+    foreach ($f in 'ad_object_guid', 'ad_sid') { if (@(Get-SIValueList (Get-SIItemValue $Record $f) | Where-Object { [string]$_ }).Count -gt 0) { $ad = $true; break } }
+    if (-not $ad) { return $false }
+    foreach ($f in 'mde_device_id', 'entra_device_id', 'intune_device_id', 'azure_resource_id', 'azure_vm_id') {
+        if (@(Get-SIValueList (Get-SIItemValue $Record $f) | Where-Object { [string]$_ }).Count -gt 0) { return $false }
+    }
+    $true
+}
+
 function Get-SIRecordLink {
     <#
         PURE. One record's link state with its evidence: @{ State (active | not_seen | frozen | gone); Reason ('' when active) }.
-          gone      positive evidence: the source says offboarded
+          gone      positive evidence: the source says offboarded -- or (#1052) the record is an Active Directory computer
+                    account an earlier build took in as a device (Test-SIRecordAdAccountAsDevice): SecurityInsight itself
+                    knows it is no device, so its CI is retired at once with that reason, never left active
           frozen    missing from its feed's newest collection and that collection was incomplete, or -- 60.5.0d -- the
                     provider's collection scope changed after the record was last listed (-ScopeChangedAt: provider ->
                     the time its scope changed): an asset that leaves because we stopped looking has told us nothing
@@ -152,10 +241,19 @@ function Get-SIRecordLink {
                     machine it has not heard from
           active    otherwise
         Without -SeenWithinDays (0) a listed record is active, as before the lifecycle was kept.
+          gone (#1056) also: missing from a COMPLETE newer collection while the install's choice
+                    (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves it out -- the reason names
+                    the switch (Get-SIRecordLeftOutByIdentityChoice). -IdentityChoice: Get-SIIdentityScopeChoice (not given =
+                    the install's settings; both off = exactly as before).
     #>
-    param($Record, [hashtable]$FeedLatest, [datetime]$Now = [datetime]::UtcNow, [int]$SeenWithinDays = 0, [hashtable]$ScopeChangedAt)
+    param($Record, [hashtable]$FeedLatest, [datetime]$Now = [datetime]::UtcNow, [int]$SeenWithinDays = 0, [hashtable]$ScopeChangedAt, $IdentityChoice,
+          # #1057 record key -> its source's PROOF of deletion (SI-DeletionProof.ps1, ConvertTo-SIDeletionProofIndex): a record
+          # missing from a COMPLETE newer collection with a proof is gone, "deleted in <source>" -- the proof wins over the
+          # not-seen window; a record still listed, or one whose newer collection was not complete, is never decided by it
+          [hashtable]$DeletionProof)
     $p = [string](Get-SIItemValue $Record 'si_provider')
     if ([string](Get-SIItemValue $Record 'si_onboarding_status') -eq 'offboarded') { return [pscustomobject]@{ State = 'gone'; Reason = ('{0} says it is offboarded' -f $p) } }
+    if (Test-SIRecordAdAccountAsDevice $Record) { return [pscustomobject]@{ State = 'gone'; Reason = 'an Active Directory computer account, not a device of its own (#1052) -- its facts go to its Defender device when the match is safe' } }
     $t = ConvertTo-SIUtcOrNull (Get-SIItemValue $Record 'si_collection_time')
     $fl = $null; if ($FeedLatest) { $fl = $FeedLatest[(Get-SIRecordFeed $Record)] }
     $fmt = { param($d) ([datetime]$d).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) }
@@ -175,6 +273,14 @@ function Get-SIRecordLink {
     if ($ScopeChangedAt -and $ScopeChangedAt.ContainsKey($p) -and $ScopeChangedAt[$p] -is [datetime] -and $t -lt $ScopeChangedAt[$p]) {
         return [pscustomobject]@{ State = 'frozen'; Reason = ('the {0} collection scope changed on {1}; it was last listed before that' -f $p, (& $fmt $ScopeChangedAt[$p])) }
     }
+    if ($DeletionProof -and $DeletionProof.Count -gt 0 -and $fl.Complete) {
+        $pk = [string](Get-SIItemValue $Record 'si_record_key')
+        if ($pk -and $DeletionProof.ContainsKey($pk)) {
+            $pr = $DeletionProof[$pk]
+            $on = ''; if ($pr.DeletedAt -is [datetime]) { $on = ' on ' + (& $fmt $pr.DeletedAt) }
+            return [pscustomobject]@{ State = 'gone'; Reason = ('deleted in {0}{1} ({2})' -f $pr.Label, $on, $pr.Evidence); Deleted = [string]$pr.Label }
+        }
+    }
     # a device whose source -- when it last listed it -- had not seen it within the seen window is not seen, whatever the
     # newer collection was: that is the source's own evidence, not an absence
     $win = Get-SIRecordSeenWindowDays -Record $Record -SeenWithinDays $SeenWithinDays
@@ -185,7 +291,18 @@ function Get-SIRecordLink {
             return [pscustomobject]@{ State = 'not_seen'; Reason = ('{0} last saw it on {1} (more than {2} days before it last listed it)' -f $p, (& $fmt $sls), $win) }
         }
     }
-    if ($fl.Complete) { return [pscustomobject]@{ State = 'not_seen'; Reason = ('{0} no longer lists it (last listed {1})' -f $p, (& $fmt $t)) } }
+    if ($fl.Complete) {
+        # #1056 a customer's choice leaves this Exposure Graph record out now: gone, with the switch named -- never a silent
+        # vanish and never a grace-period wait for an object the install chose not to keep
+        if ($p -eq 'eg') {
+            if ($null -eq $IdentityChoice) { $IdentityChoice = Get-SICiIdentityChoice }
+            if ($null -ne $IdentityChoice -and $IdentityChoice.Any) {
+                $lo = Get-SIRecordLeftOutByIdentityChoice -Record $Record -Choice $IdentityChoice
+                if ($lo.Gone) { return [pscustomobject]@{ State = 'gone'; Reason = ('{0} (last listed {1})' -f $lo.Reason, (& $fmt $t)) } }
+            }
+        }
+        return [pscustomobject]@{ State = 'not_seen'; Reason = ('{0} no longer lists it (last listed {1})' -f $p, (& $fmt $t)) }
+    }
     return [pscustomobject]@{ State = 'frozen'; Reason = ('the newest {0} collection was incomplete' -f $p) }
 }
 
@@ -397,9 +514,15 @@ function New-SICiDocument {
         # what this CI was after the last build: @{ Lifecycle; Since; Reason } (Get-SICiBatchStored) -- none = a first build
         $Previous,
         # 60.5.0d provider -> the time its collection scope changed (Update-SICiScopeChanges)
-        [hashtable]$ScopeChangedAt
+        [hashtable]$ScopeChangedAt,
+        # #1057 record key -> its source's proof of deletion (Get-SIRecordLink -DeletionProof)
+        [hashtable]$DeletionProof,
+        # #1054 the placeholder device names in force (Get-SICiPlaceholderNames -Model, read once per set); not given = the
+        # shipped list
+        [AllowNull()][AllowEmptyCollection()][string[]]$PlaceholderNames
     )
     if ($null -eq $Lifecycle) { $Lifecycle = Get-SICiLifecycleSettings }
+    if ($null -eq $PlaceholderNames) { $PlaceholderNames = Get-SICiPlaceholderNames }
     $ci = [ordered]@{ si_ci_id = $CiId }
     $class = 'identity'; $bestRank = 99
     $cands = New-Object System.Collections.Generic.List[object]
@@ -408,7 +531,7 @@ function New-SICiDocument {
         $rc = [string](Get-SIItemValue $r 'si_class')
         $rk = Get-SICiClassRank $rc
         if ($rk -lt $bestRank) { $bestRank = $rk; $class = $rc }
-        $ls = Get-SIRecordLink -Record $r -FeedLatest $FeedLatest -Now $Now -SeenWithinDays ([int]$Lifecycle.SeenWithinDays) -ScopeChangedAt $ScopeChangedAt
+        $ls = Get-SIRecordLink -Record $r -FeedLatest $FeedLatest -Now $Now -SeenWithinDays ([int]$Lifecycle.SeenWithinDays) -ScopeChangedAt $ScopeChangedAt -DeletionProof $DeletionProof
         $state = [string]$ls.State
         $p = [string](Get-SIItemValue $r 'si_provider')
         $key = [string](Get-SIItemValue $r 'si_record_key')
@@ -419,12 +542,15 @@ function New-SICiDocument {
             }
         # the evidence of a link that is not active (dates only: it changes with the state, never by itself)
         if ($ls.Reason) { $lo | Add-Member -NotePropertyName 'reason' -NotePropertyValue ([string]$ls.Reason) }
+        # #1057 the source the object was proven deleted in (Get-SICiLifecycle: retired at once)
+        if ($ls.PSObject.Properties['Deleted'] -and $ls.Deleted) { $lo | Add-Member -NotePropertyName 'deleted' -NotePropertyValue ([string]$ls.Deleted) }
         $links.Add($lo)
         $cands.Add([pscustomobject]@{ Record = $r; Provider = $p; Key = $key; State = $state })
     }
-    # primary link per provider: active first, then the newest
+    # primary link per provider: active first, then the newest -- #1052 an AD computer account's link is never the primary
+    # one while the provider has another (si_link_eg names the device's own graph node, which the reports join by)
     foreach ($grp in ($links | Group-Object provider)) {
-        $pick = @($grp.Group | Sort-Object @{ Expression = { if ($_.state -in 'active', 'frozen') { 0 } else { 1 } } }, @{ Expression = { if ($_.last_seen) { $_.last_seen } else { [datetime]::MinValue } }; Descending = $true })[0]
+        $pick = @($grp.Group | Sort-Object @{ Expression = { if ($_.type -eq 'computer_account') { 1 } else { 0 } } }, @{ Expression = { if ($_.state -in 'active', 'frozen') { 0 } else { 1 } } }, @{ Expression = { if ($_.last_seen) { $_.last_seen } else { [datetime]::MinValue } }; Descending = $true })[0]
         $pick.primary = $true
     }
     $ci['si_class'] = $class
@@ -463,16 +589,47 @@ function New-SICiDocument {
         $has = $carried.Contains($fp.Name)
         if (-not $has) { foreach ($d in $dictRecords) { if ($d.Contains($fp.Name)) { $has = $true; break } } }
         if (-not $has) { continue }
-        $res = Resolve-SICiField -Field $f -Candidates $candArr -Now $Now -CmdbOwner $CmdbOwner -Origin $fOrigin
+        $fCands = $candArr
+        $placeholder = $null
+        if ($fp.Name -eq 'si_asset_name' -and $class -in 'device', 'cloud_resource') {
+            # #1054 a source's placeholder name never names a machine CI: the records that carry one are left out of the
+            # resolution, so the next source in the authority order gives the name; when only placeholders are left, a
+            # generated name (Get-SICiUnnamedDeviceName) from the record the authority order picks among them
+            $kept = New-Object System.Collections.Generic.List[object]
+            $phs = New-Object System.Collections.Generic.List[object]
+            foreach ($c in $candArr) {
+                if (Test-SICiPlaceholderName -Value (Get-SIItemValue $c.Record 'si_asset_name') -Names $PlaceholderNames) { $phs.Add($c) } else { $kept.Add($c) }
+            }
+            if ($phs.Count -gt 0) {
+                $placeholder = Resolve-SICiField -Field $f -Candidates $phs.ToArray() -Now $Now -CmdbOwner $CmdbOwner -Origin $fOrigin
+                $fCands = $kept.ToArray()
+            }
+        }
+        $res = $null
+        if ($fCands.Count -gt 0) { $res = Resolve-SICiField -Field $f -Candidates $fCands -Now $Now -CmdbOwner $CmdbOwner -Origin $fOrigin }
+        if ($null -eq $res -and $null -ne $placeholder) {
+            $gen = Get-SICiUnnamedDeviceName -RecordKey ([string]$placeholder.Record)
+            if ($gen) {
+                $ci[[string]$f.name] = $gen
+                $resolvedSources[[string]$f.name] = [ordered]@{ provider = $placeholder.Provider; record = $placeholder.Record; observed_at = $placeholder.ObservedAt; stale = [bool]$placeholder.Stale
+                    from = 'generated'; placeholder = ([string]$placeholder.Value).Trim().ToLowerInvariant() }
+                continue
+            }
+            # no id to build a name from: the placeholder stays (never a blank name) -- the check still flags it by its name
+            $res = $placeholder; $fCands = $candArr; $placeholder = $null
+        }
         if ($null -eq $res) { continue }
         $ci[[string]$f.name] = $res.Value
         $resolvedSources[[string]$f.name] = [ordered]@{ provider = $res.Provider; record = $res.Record; observed_at = $res.ObservedAt; stale = [bool]$res.Stale }
+        # the name came from another source: which placeholder it replaced, and from which record
+        if ($null -ne $placeholder) { $resolvedSources[[string]$f.name]['placeholder'] = ([string]$placeholder.Value).Trim().ToLowerInvariant(); $resolvedSources[[string]$f.name]['placeholder_record'] = [string]$placeholder.Record }
         if ($fOrigin -and $fp.ByOrigin -and $null -ne (Get-SIFieldOriginRule -Field $f -Origin $fOrigin)) { $resolvedSources[[string]$f.name]['origin'] = $fOrigin }
         if ($unknownFields.Contains([string]$f.name)) { $resolvedSources[[string]$f.name]['unknown'] = $true }
         if ($res.Providers -and @($res.Providers).Count -gt 1) { $resolvedSources[[string]$f.name]['providers'] = @($res.Providers) }
         # a CI of ONE record has nothing to disagree with (Get-SICiFieldConflicts compares the other records only)
-        if ($candArr.Count -ne 1 -or [string]$candArr[0].Key -ne [string]$res.Record) {
-            $conf = Get-SICiFieldConflicts -Field $f -Candidates $candArr -Resolved $res -Now $Now
+        # (#1054 a placeholder name the resolution left out is no conflict: the candidates are the ones it resolved from)
+        if ($fCands.Count -ne 1 -or [string]$fCands[0].Key -ne [string]$res.Record) {
+            $conf = Get-SICiFieldConflicts -Field $f -Candidates $fCands -Resolved $res -Now $Now
             if ($conf.Count -gt 0) { $resolvedSources[[string]$f.name]['conflicts'] = $conf }
         }
     }

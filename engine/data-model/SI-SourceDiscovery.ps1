@@ -92,6 +92,7 @@ $script:SISourceDiscoveryColumnSources = @{
     'azure|azure_resource|resource'   = 'arm'
     'azure|public_ip|resource'        = 'arm'
     'eg|device|node'                  = 'exposure-graph'
+    'eg|computer_account|node'        = 'exposure-graph'
     'eg|user|node'                    = 'exposure-graph'
     'eg|service_principal|node'       = 'exposure-graph'
     'eg|azure_resource|node'          = 'exposure-graph'

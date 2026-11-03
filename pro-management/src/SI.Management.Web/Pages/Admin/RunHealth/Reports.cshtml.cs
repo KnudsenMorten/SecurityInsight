@@ -48,7 +48,7 @@ public sealed class ReportsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the report verdicts could not be read");
-            Error = "The report verdicts could not be read from the database: " + ex.Message;
+            Error = "The report verdicts could not be read from the database: " + ViewerError.Text(ex);
         }
         try { Accepts = await _accepts.ActiveAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the source acceptances could not be read"); }

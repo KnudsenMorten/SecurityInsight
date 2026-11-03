@@ -168,11 +168,11 @@ SELECT N'Saved' AS Outcome;
                     Log = await _logs.ReadAsync(Job, Execution ?? Executions[0].Name, 24 * 7, 500, Contains, ct);
             }
         }
-        catch (ArgumentException ex) { Error = ex.Message; }
+        catch (ArgumentException ex) { Error = ViewerError.Text(ex); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the jobs failed");
-            Error = "The jobs could not be read: " + ex.Message;
+            Error = "The jobs could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -192,7 +192,7 @@ SELECT N'Saved' AS Outcome;
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "reading the job executions failed");
-                Error = "The executions could not be read: " + ex.Message;
+                Error = "The executions could not be read: " + ViewerError.Text(ex);
             }
         }
         return await ExcelExport.FileAsync("jobs", null, (x, info) =>
@@ -330,7 +330,7 @@ SELECT N'Saved' AS Outcome;
         {
             // the run IS cancelled (never resumed, the lock is free); only the stop of its executions did not start
             _log.LogError(ex, "starting the runner to stop the cancelled run's jobs failed");
-            stopped = $"; its running jobs could NOT be asked to stop ({ex.Message}) -- cancel again to retry";
+            stopped = $"; its running jobs could NOT be asked to stop ({ViewerError.Text(ex)}) -- cancel again to retry";
         }
         return (null, $"the pipeline run was cancelled and will not be resumed; the next run can start now{stopped}");
     }, ct, needsFlowJob: true);
@@ -411,7 +411,7 @@ SELECT N'Saved' AS Outcome;
                 else await _jobs.ScheduleAsync(p.Job, p.Cron!, ct);
                 done++;
             }
-            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or ArgumentException) { failed.Add($"{p.Job}: {ex.Message}"); }
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or ArgumentException) { failed.Add($"{p.Job}: {ViewerError.Text(ex)}"); }
         }
         if (failed.Count > 0) throw new InvalidOperationException($"{done} job(s) switched, {failed.Count} not: {string.Join("; ", failed)} -- switch again (it only changes what is left)");
         return (Flow with { Mode = to }, to == "flow" ? $"the jobs run as one pipeline ({JobFlow.CadenceText(Flow).ToLowerInvariant()}); {done} job(s) changed" : $"every job runs on its own timer again; {done} job(s) changed");
@@ -443,11 +443,11 @@ SELECT N'Saved' AS Outcome;
             TempData["toast"] = message + RequestedTriggerJobsClient.Note(_jobs.RequestedTriggerChanges) + "." + saved;
             TempData["toastKind"] = saved.Length > 0 ? "warn" : "ok";
         }
-        catch (UnauthorizedAccessException ex) { return AccessResults.Refused(Request, AccessDecision.No(ex.Message)); }
+        catch (UnauthorizedAccessException ex) { return AccessResults.Refused(Request, AccessDecision.No(ViewerError.Text(ex))); }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or HttpRequestException)
         {
             _log.LogError(ex, "flow action {What} failed", what);
-            TempData["toast"] = $"The pipeline: {what} failed -- {ex.Message}";
+            TempData["toast"] = $"The pipeline: {what} failed -- {ViewerError.Text(ex)}";
             TempData["toastKind"] = "error";
         }
         return RedirectToPage(new { job = (string?)null });
@@ -480,7 +480,7 @@ SELECT N'Saved' AS Outcome;
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or HttpRequestException)
         {
             _log.LogError(ex, "job action {What} on {Job} failed", what, job);
-            TempData["toast"] = $"{job}: {what} failed -- {ex.Message}";
+            TempData["toast"] = $"{job}: {what} failed -- {ViewerError.Text(ex)}";
             TempData["toastKind"] = "error";
         }
         return RedirectToPage(new { job });

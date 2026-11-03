@@ -322,9 +322,10 @@ if ($CreateKeyVault) {
         _Step "create Key Vault"
         # Azure RBAC authorization (not access policies): the SI role grants below apply to it.
         # Purge protection (a deleted vault and its secrets cannot be purged before their retention ends; ONE-WAY) only
-        # while the security baseline switch is on for new installs (setup\_shared\SI-SecurityBaseline.ps1, default OFF).
+        # only with its own switch (setup\_shared\SI-SecurityBaseline.ps1 Test-SISecurityBaselinePurgeProtection, default
+        # OFF: one-way, the owner's decision).
         . (Join-Path $siRootForTags 'setup\_shared\SI-SecurityBaseline.ps1')
-        $kvPurgeProtect = Test-SISecurityBaselineNewInstall
+        $kvPurgeProtect = Test-SISecurityBaselinePurgeProtection
         $kv = New-SIKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName -Location $Location -SubscriptionId $SubscriptionId -TenantId $TenantId -EnableRbacAuthorization $true -EnablePurgeProtection:$kvPurgeProtect -PublicNetworkAccess $(if ($PrivateNetwork) { 'Disabled' } else { '' })
         if ($kvPurgeProtect) { _Info ("KV purge protection: {0}" -f $(if ($kv.EnablePurgeProtection) { 'on' } else { 'NOT on -- set it with setup\Set-SISecurityBaseline.ps1' })) }
         if (-not $kv.EnableRbacAuthorization) { throw ("Key Vault {0} was created WITHOUT RBAC authorization -- the SI role grants below would not apply." -f $KeyVaultName) }

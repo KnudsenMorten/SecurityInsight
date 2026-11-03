@@ -60,7 +60,7 @@ public sealed class VerificationModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the verification results could not be read");
-            Error = "The verification results could not be read from the Pro database: " + ex.Message;
+            Error = "The verification results could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -81,7 +81,7 @@ public sealed class VerificationModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "a verification decision failed");
-            r = new VerificationDecideResult(false, "Not saved: " + ex.Message);
+            r = new VerificationDecideResult(false, "Not saved: " + ViewerError.Text(ex));
         }
         if (!r.Saved) audit?.Refused(r.Message);
         return Toast(r.Saved, r.Message);
@@ -99,7 +99,7 @@ public sealed class VerificationModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "withdrawing a verification decision failed");
-            r = new VerificationDecideResult(false, "Not withdrawn: " + ex.Message);
+            r = new VerificationDecideResult(false, "Not withdrawn: " + ViewerError.Text(ex));
         }
         if (!r.Saved) audit?.Refused(r.Message);
         return Toast(r.Saved, r.Message);

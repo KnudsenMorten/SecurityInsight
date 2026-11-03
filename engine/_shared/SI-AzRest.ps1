@@ -1811,7 +1811,7 @@ function Get-SIAzRoleAssignment {
     return (Get-SIAzRoleAssignmentRest @PSBoundParameters)
 }
 function New-SIAzRoleAssignment {
-    [CmdletBinding()] param($ObjectId, $Scope, $RoleDefinitionName)
+    [CmdletBinding()] param($ObjectId, $Scope, $RoleDefinitionName, $Description)
     return (New-SIAzRoleAssignmentRest @PSBoundParameters)
 }
 function Get-SIAzRoleDefinition {
@@ -2287,18 +2287,21 @@ function Get-SIAzRoleAssignmentRest {
             RoleAssignmentId = [string]$a.id; RoleAssignmentName = [string]$a.name; Scope = [string]$a.properties.scope
             DisplayName = $(if ($names.ContainsKey($oid)) { $names[$oid] } else { $null }); SignInName = $null
             RoleDefinitionName = $rdName; RoleDefinitionId = $rdId; ObjectId = $oid; ObjectType = [string]$a.properties.principalType
-            CanDelegate = $false; Condition = $a.properties.condition
+            CanDelegate = $false; Condition = $a.properties.condition; Description = [string]$a.properties.description
         }
     }
 }
 
 function New-SIAzRoleAssignmentRest {
-    [CmdletBinding()] param([string]$ObjectId, [string]$Scope, [string]$RoleDefinitionName)
+    # -Description (optional): stored on the assignment itself -- who gave it and why survives on Azure's side, so a later
+    # run can find an assignment it gave even when its own record of that is gone
+    [CmdletBinding()] param([string]$ObjectId, [string]$Scope, [string]$RoleDefinitionName, [string]$Description)
     $subScope = if ($Scope -match '^(/subscriptions/[^/]+)') { $Matches[1] } else { $Scope }
     $def = @(Get-SIAzRestRoleDefinitions -Scope $subScope | Where-Object { [string]$_.properties.roleName -eq $RoleDefinitionName }) | Select-Object -First 1
     if (-not $def) { throw ("The role definition '{0}' was not found at scope '{1}'." -f $RoleDefinitionName, $subScope) }
     $name = [guid]::NewGuid().ToString()
     $body = @{ properties = @{ roleDefinitionId = [string]$def.id; principalId = $ObjectId } }
+    if ("$Description".Trim()) { $body.properties['description'] = "$Description".Trim() }
     $a = Invoke-SIArm -Method PUT -Path ($Scope.TrimEnd('/') + '/providers/Microsoft.Authorization/roleAssignments/' + $name) -ApiVersion '2022-04-01' -Body $body
     return [pscustomobject]@{ RoleAssignmentId = [string]$a.id; RoleAssignmentName = [string]$a.name; Scope = $Scope; RoleDefinitionName = $RoleDefinitionName; RoleDefinitionId = [string]$def.name; ObjectId = $ObjectId; ObjectType = [string]$a.properties.principalType }
 }

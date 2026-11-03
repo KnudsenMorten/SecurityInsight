@@ -50,7 +50,7 @@ public sealed class DecideModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading request {Id} failed", Id);
-            Error = "The request could not be read: " + ex.Message;
+            Error = "The request could not be read: " + ViewerError.Text(ex);
         }
     }
 

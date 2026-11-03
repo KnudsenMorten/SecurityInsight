@@ -39,6 +39,16 @@ function New-SIDataSqlInvoke {
         [scriptblock]$TokenSeam, [scriptblock]$Connect, [scriptblock]$Sleep, [int[]]$StatementWaits
     )
     $srv = $Server; $db = $Database; $app = $AppId; $ten = $TenantId; $timeout = $CommandTimeoutSec
+    # the engine's Azure SQL access token goes ONLY to an Azure SQL server (a test's own token seam is never a real token)
+    if (-not (Get-Command -Name New-SISqlConnectionString -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'SI-OutboundTrust.ps1')) }
+    if (-not $TokenSeam) {
+        $hostWhy = Test-SIAzureSqlHost -Server $Server
+        if ($hostWhy) { throw ("New-SIDataSqlInvoke: the database is not opened -- {0}" -f $hostWhy) }
+    }
+    # the database is a NAME, and the connection string is BUILT: a ';' in a setting never adds a keyword (another server)
+    $dbWhy = Test-SISqlDatabaseName -Database $Database
+    if ($dbWhy) { throw ("New-SIDataSqlInvoke: the database is not opened -- {0}" -f $dbWhy) }
+    $csText = New-SISqlConnectionString -Server $Server -Database $Database
     # A GetNewClosure() block cannot see functions the caller dot-sourced, so the token function travels INTO the
     # closure as a value (as in SI-VulnTarget.ps1).
     if ($TokenSeam) {
@@ -77,7 +87,7 @@ function New-SIDataSqlInvoke {
             $tokenCache.Token = & $getToken
             $tokenCache.Until = [datetime]::UtcNow.AddMinutes(45)
         }
-        @{ ConnectionString = ('Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $srv, $db); AccessToken = $tokenCache.Token; CommandTimeout = $timeout }
+        @{ ConnectionString = $csText; AccessToken = $tokenCache.Token; CommandTimeout = $timeout }
     }.GetNewClosure()
     $invoke = {
         # mode 'stream' (#639): each row is handed to -OnRow ({ param($Row) }, a hashtable) as it is read, never collected;
@@ -2056,10 +2066,12 @@ function Invoke-SIDataBatchedDelete {
         calm, never past -DeadlineUtc (Invoke-SISqlPacingHousekeeping). -LockBound (> 0): no batch is ever larger -- the
         lock-escalation bound of the table (Get-SIDataRetireBatchBound), the rule of the key ranges; 0 = none (as before).
         -Stopped: set to $true when the housekeeping wait reached the deadline with rows possibly left.
+        -ShouldStop (the clean-up as housekeeping): asked before EVERY batch; a non-empty answer (why) stops the removal there
+        -- -Stopped is set and -StopWhy gets the answer; the next wake-up goes on. None given = as before.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params = @{},
           [ref]$BatchSize, [long]$TargetMs = 5000, [datetime]$DeadlineUtc = [datetime]::MaxValue,
-          [switch]$Housekeeping, [long]$LockBound = 0, [ref]$Stopped)
+          [switch]$Housekeeping, [long]$LockBound = 0, [ref]$Stopped, [scriptblock]$ShouldStop, [ref]$StopWhy)
     $total = 0L
     $size = [long]5000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
     if ($LockBound -gt 0 -and $size -gt $LockBound) { $size = $LockBound }
@@ -2074,6 +2086,11 @@ function Invoke-SIDataBatchedDelete {
         }
         # housekeeping: no new batch once the wait reached the deadline
         if ($Housekeeping -and [datetime]::UtcNow -ge $DeadlineUtc) { break }
+        # housekeeping: no new batch once a run, a data sync or a data out has started (asked right before the statement)
+        if ($ShouldStop) {
+            $w = ''; try { $w = [string](& $ShouldStop) } catch { $w = ('whether a job started could not be read ({0})' -f $_.Exception.Message) }
+            if ($w) { if ($Stopped) { $Stopped.Value = $true }; if ($StopWhy) { $StopWhy.Value = $w }; break }
+        }
         $p = @{}; foreach ($k in $Params.Keys) { $p[$k] = $Params[$k] }; $p['Batch'] = $size
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $n = [long](& $Invoke $Sql $p 'scalar')
@@ -2693,16 +2710,18 @@ function Invoke-SIDataRetireRangeDelete {
         database's own cap (below lock escalation), and the database's load paces them (Invoke-SISqlPacing -Housekeeping: the
         removal waits until the database is calm -- below the LOW mark once it reached the HIGH one -- never past
         -DeadlineUtc, and the first range of a wake-up always runs). A measurement, never a limit on the work.
-        Returns @{ Rows; Done ($true = nothing left); Refused ($true = the database refused) }.
+        -ShouldStop (the clean-up as housekeeping): asked before EVERY range; a non-empty answer (why) stops the removal there
+        (Stopped, StopWhy) -- the next wake-up goes on from the collection's first row left.
+        Returns @{ Rows; Done ($true = nothing left); Refused ($true = the database refused); Stopped; StopWhy }.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('Finding', 'Recommendation')][string]$Table,
           [Parameter(Mandatory)][string]$CollectionId, [ref]$BatchSize, [long]$TargetMs = 5000, [datetime]$DeadlineUtc = [datetime]::MaxValue,
-          $MarkedBeforeUtc = $null)
+          $MarkedBeforeUtc = $null, [scriptblock]$ShouldStop)
     $sql = Get-SIDataRetireRangeSql -Table $Table
     $mbText = if ($null -ne $MarkedBeforeUtc) { Format-SIDataSqlTime -Time ([datetime]$MarkedBeforeUtc).ToUniversalTime() } else { '' }
     $size = [long]5000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
     $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
-    $after = '0'; $total = 0L; $done = $false; $refused = $false
+    $after = '0'; $total = 0L; $done = $false; $refused = $false; $stopWhy = ''
     $g = { param($r, [string]$n) $v = $null
            if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } }
            elseif ($r -is [System.Data.DataRow]) { $v = $r[$n] }
@@ -2716,6 +2735,11 @@ function Invoke-SIDataRetireRangeDelete {
             if ($pace.PSObject.Properties['Deadline'] -and $pace.Deadline) { break }
         }
         if ([datetime]::UtcNow -ge $DeadlineUtc) { break }
+        # housekeeping: no new range once a run, a data sync or a data out has started (asked right before the statement)
+        if ($ShouldStop) {
+            $w = ''; try { $w = [string](& $ShouldStop) } catch { $w = ('whether a job started could not be read ({0})' -f $_.Exception.Message) }
+            if ($w) { $stopWhy = $w; break }
+        }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $row = @(@(& $Invoke $sql @{ CollectionId = $CollectionId; After = $after; Batch = $size; MarkedBefore = $mbText } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
         $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
@@ -2729,7 +2753,66 @@ function Invoke-SIDataRetireRangeDelete {
         if ($null -ne $cap -and [long]$cap -gt 0 -and $size -gt [long]$cap) { $size = [long]$cap }
     }
     if ($BatchSize) { $BatchSize.Value = $size }
-    [pscustomobject]@{ Rows = $total; Done = $done; Refused = $refused }
+    [pscustomobject]@{ Rows = $total; Done = $done; Refused = $refused; Stopped = [bool]$stopWhy; StopWhy = $stopWhy }
+}
+
+function Remove-SIDataCollectionRows {
+    <#
+        THE ONE REMOVAL of a MARKED collection's rows (#1038 part 3: every caller that removes collection rows goes through
+        here -- the housekeeping wake-up, and the retention step behind it). One plan item's grain and collection: its tables
+        in the retire order ($script:SIDataRetireTables -- the finding rows LAST, so a removal that stops part way still shows
+        as rows left), the two large tables in key ranges (Invoke-SIDataRetireRangeDelete), the others in batches below lock
+        escalation (Invoke-SIDataBatchedDelete -Housekeeping -LockBound), all paced by the database's load. Today a row delete;
+        the seam where a partition truncate takes its place (#1038 part 2) -- the callers do not change.
+          -State: what is carried from one collection to the next (the batch size, each large table's range size, each batched
+           table's lock bound); the caller keeps it. -DeadlineUtc: no new range / batch after it. -MarkedBeforeUtc: only a
+           mark made before it (review B1; '' = any mark). -ShouldStop: asked before EVERY range and batch -- a non-empty answer
+           (why) stops here; the collection stays marked with its rows left and the next wake-up goes on.
+        Every statement removes rows only of a MARKED collection, never the published run's (the statements refuse it).
+        Returns @{ Rows (per table: the rows removed); Done ($true = nothing left); Refused (the database refused);
+        Stopped (not done, not refused: the deadline or -ShouldStop); Paused (-ShouldStop stopped it); StopWhy }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain,
+          [string]$CollectionId = '', [Parameter(Mandatory)][string]$CollectionTime, [hashtable]$State,
+          [long]$BatchSize = 5000, [datetime]$DeadlineUtc = [datetime]::MaxValue, $MarkedBeforeUtc = $null, [scriptblock]$ShouldStop)
+    if ($null -eq $State) { $State = @{} }
+    if (-not $State.ContainsKey('Batch')) { $State['Batch'] = [long][Math]::Max(1L, $BatchSize) }
+    if (-not $State.ContainsKey('Range')) { $State['Range'] = @{} }
+    if (-not $State.ContainsKey('Bound')) { $State['Bound'] = @{} }
+    $deadline = $DeadlineUtc; $lockBound = $State['Bound']; $markedBefore = $MarkedBeforeUtc
+    $prm = @{ CollectionId = $CollectionId; CollectionTime = $CollectionTime; RunKey = ('{0}|{1}' -f $Grain, $CollectionTime) }
+    $rows = [ordered]@{}; $done = $true; $refused = $false; $why = ''
+    foreach ($t in $script:SIDataRetireTables[$Grain]) {
+        if ([datetime]::UtcNow -ge $deadline) { $done = $false; break }
+        if (-not $rows.Contains($t)) { $rows[$t] = 0L }
+        if ($Grain -eq 'Detailed' -and $script:SIDataRetireRangeKeys.Contains($t) -and $CollectionId) {
+            # #892 the large tables in key ranges; a range cut short leaves the collection unfinished
+            $rb = if ($State['Range'].ContainsKey($t)) { [long]$State['Range'][$t] } else { [long][Math]::Max(1L, $BatchSize) }
+            $rr = Invoke-SIDataRetireRangeDelete -Invoke $Invoke -Table $t -CollectionId $CollectionId -BatchSize ([ref]$rb) -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore -ShouldStop $ShouldStop
+            $State['Range'][$t] = $rb
+            $rows[$t] += [long]$rr.Rows
+            # review M3: a range the database refused is never counted as removed
+            if ($rr.Refused) { $refused = $true; $done = $false; break }
+            if ($rr.PSObject.Properties['StopWhy'] -and $rr.StopWhy) { $why = [string]$rr.StopWhy; $done = $false; break }
+            if (-not $rr.Done) { $done = $false; break }
+            continue
+        }
+        $bp = $prm; $bsql = Get-SIDataRetireBatchSql -Grain $Grain -Table $t
+        if ($null -ne $markedBefore -and $Grain -eq 'Detailed') { $bsql = Get-SIDataRetireBatchSql -Grain $Grain -Table $t -DataSyncMarkedBefore; $bp = @{} + $prm; $bp['MarkedBefore'] = (Format-SIDataSqlTime -Time ([datetime]$markedBefore).ToUniversalTime()) }
+        # the batches stay below lock escalation (the key ranges' rule, worked out once per table) and wait for the
+        # database to be calm (housekeeping)
+        if (-not $lockBound.ContainsKey($t)) { $lockBound[$t] = Get-SIDataRetireBatchBound -Invoke $Invoke -Table $t }
+        $hkStop = [ref]$false; $hkWhy = [ref]''
+        $batch = [long]$State['Batch']
+        $n = Invoke-SIDataBatchedDelete -Invoke $Invoke -Sql $bsql -Params $bp -BatchSize ([ref]$batch) -DeadlineUtc $deadline -Housekeeping -LockBound ([long]$lockBound[$t]) -Stopped $hkStop -ShouldStop $ShouldStop -StopWhy $hkWhy
+        $State['Batch'] = $batch
+        $rows[$t] += [long]$n
+        # the wait reached the deadline, or a job started: this table may still hold rows -- the next tables (the finding rows
+        # last) wait for the next call, so a collection with rows left always shows as one (HasRows)
+        if ($hkWhy.Value) { $why = [string]$hkWhy.Value; $done = $false; break }
+        if ($hkStop.Value) { $done = $false; break }
+    }
+    [pscustomobject]@{ Rows = $rows; Done = $done; Refused = $refused; Stopped = (-not $done -and -not $refused); Paused = [bool]$why; StopWhy = $why }
 }
 
 function Format-SIDataRetentionText {
@@ -2751,7 +2834,10 @@ function Format-SIDataRetentionText {
     if (@($Result.Refused).Count) { $refusedText = (' {0} collection(s) were not removed: the database did not confirm newer complete collections.' -f @($Result.Refused).Count) }
     # #816: a removal cut short by its time budget -- the collection is marked (never shown again) and the next call finishes it
     $stopped = $Result.PSObject.Properties['Stopped'] -and $Result.Stopped
-    if ($stopped) { $refusedText += [string]::Format($inv, ' The time budget of this step ended part way ({0:N0} finding row(s) removed so far) -- the rest is removed next time.', [long]$Result.Rows['findings']) }
+    # #1038 part 3: a job started -- the removal gives way between two ranges
+    $paused = if ($Result.PSObject.Properties['Paused'] -and $Result.Paused) { [string]$Result.Paused } else { '' }
+    if ($paused) { $refusedText += [string]::Format($inv, ' Paused part way ({0:N0} finding row(s) removed so far): {1} -- the rest is removed when nothing runs.', [long]$Result.Rows['findings'], $paused) }
+    elseif ($stopped) { $refusedText += [string]::Format($inv, ' The time budget of this step ended part way ({0:N0} finding row(s) removed so far) -- the rest is removed next time.', [long]$Result.Rows['findings']) }
     if (-not $done.Count) { return ('{0}; {1}{2}' -f $keptText, $(if ($stopped) { 'removal in progress.' } else { 'nothing older to remove.' }), $refusedText) }
     $ab = @($done | Where-Object { $_.Why -in 'abandoned', 'stopped run' }).Count
     $r = $Result.Rows
@@ -2800,12 +2886,16 @@ function Invoke-SIDataCollectionRetention {
           # loading: its rows wait for the next run or a wake-up with no run going. The database checks the same on every
           # statement. FAIL SAFE: none given = nothing removed;
           # no time budget = nothing removed (review M5).
-          [switch]$FinishOnly, $FinishFloorUtc = $null, $FinishMarkedBeforeUtc = $null)
+          [switch]$FinishOnly, $FinishFloorUtc = $null, $FinishMarkedBeforeUtc = $null,
+          # #1038 part 3 -ShouldStop: asked before EVERY range and batch of the removal (Remove-SIDataCollectionRows); a
+          # non-empty answer (why: a pipeline run, a data sync or a data out started) stops the removal there -- Stopped, and
+          # Paused carries the why. The collection stays marked with its rows left; the next wake-up goes on.
+          [scriptblock]$ShouldStop)
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $staleText = if ($StaleDays -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddDays(-$StaleDays)) } else { '' }
     $idleText = if ($null -ne $IdleBeforeUtc) { Format-SIDataSqlTime -Time (([datetime]$IdleBeforeUtc).ToUniversalTime()) } elseif ($IdleStaleHours -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddHours(-$IdleStaleHours)) } else { '' }
     $deadline = if ($TimeBudgetSeconds -gt 0) { [datetime]::UtcNow.AddSeconds($TimeBudgetSeconds) } else { [datetime]::MaxValue }
-    $out = [ordered]@{ Status = 'ok'; Plan = @(); Removed = @(); Refused = @(); Stopped = $false; Text = ''; Error = ''
+    $out = [ordered]@{ Status = 'ok'; Plan = @(); Removed = @(); Refused = @(); Stopped = $false; Paused = ''; Text = ''; Error = ''
                        Rows = [ordered]@{ findings = 0L; recommendations = 0L; issueRows = 0L; stagedRows = 0L; defenderKeys = 0L; summaryRows = 0L; summaryAssets = 0L } }
     $key = @{ Finding = 'findings'; Recommendation = 'recommendations'; IssueContext = 'issueRows'; RaStage = 'stagedRows'; RaDefenderKey = 'defenderKeys'; SummaryRow = 'summaryRows'; SummaryAsset = 'summaryAssets' }
     try {
@@ -2852,9 +2942,9 @@ function Invoke-SIDataCollectionRetention {
             & $Log 'INFO' ('collections : ' + $out.Text)
             return [pscustomobject]$out
         }
-        $batch = [long][Math]::Max(1L, $BatchSize)
-        $rangeBatch = @{}   # #892 each large table keeps its own range size (each starts at -BatchSize)
-        $lockBound = @{}    # each batched table's lock-escalation bound (Get-SIDataRetireBatchBound)
+        # what the removal carries from one collection to the next: the batch size, each large table's range size (#892,
+        # each starts at -BatchSize) and each batched table's lock-escalation bound (Get-SIDataRetireBatchBound)
+        $rmState = @{ Batch = [long][Math]::Max(1L, $BatchSize); Range = @{}; Bound = @{} }
         $marked = New-Object System.Collections.Generic.List[object]
         foreach ($p in @($plan | Where-Object { $_.Action -in 'Retire', 'Finish' } | Sort-Object CollectionTime)) {
             # #834 -MarkOnly: a collection marked already (Finish) is left as it is; a new one is only marked
@@ -2871,37 +2961,17 @@ function Invoke-SIDataCollectionRetention {
                 if ($m -ne 1) { $out.Refused += $p; continue }
                 if ($MarkOnly) { $marked.Add($p); continue }
             }
-            $whole = $true; $refusedHere = $false
-            foreach ($t in $script:SIDataRetireTables[$p.Grain]) {
-                if ([datetime]::UtcNow -ge $deadline) { $whole = $false; break }
-                if ($p.Grain -eq 'Detailed' -and $script:SIDataRetireRangeKeys.Contains($t) -and $prm.CollectionId) {
-                    # #892 the large tables in key ranges; a range cut short by the budget leaves the collection unfinished
-                    $rb = if ($rangeBatch.ContainsKey($t)) { [long]$rangeBatch[$t] } else { [long][Math]::Max(1L, $BatchSize) }
-                    $rr = Invoke-SIDataRetireRangeDelete -Invoke $Invoke -Table $t -CollectionId $prm.CollectionId -BatchSize ([ref]$rb) -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore
-                    $rangeBatch[$t] = $rb
-                    $out.Rows[$key[$t]] += [long]$rr.Rows
-                    # review M3: a range the database refused is never counted as removed
-                    if ($rr.Refused) { $refusedHere = $true; $whole = $false; break }
-                    if (-not $rr.Done) { $whole = $false; break }
-                    continue
-                }
-                $bp = $prm; $bsql = Get-SIDataRetireBatchSql -Grain $p.Grain -Table $t
-                if ($null -ne $markedBefore -and $p.Grain -eq 'Detailed') { $bsql = Get-SIDataRetireBatchSql -Grain $p.Grain -Table $t -DataSyncMarkedBefore; $bp = @{} + $prm; $bp['MarkedBefore'] = (Format-SIDataSqlTime -Time $markedBefore) }
-                # the batches stay below lock escalation (the key ranges' rule, worked out once per table) and wait for the
-                # database to be calm (housekeeping)
-                if (-not $lockBound.ContainsKey($t)) { $lockBound[$t] = Get-SIDataRetireBatchBound -Invoke $Invoke -Table $t }
-                $hkStop = [ref]$false
-                $n = Invoke-SIDataBatchedDelete -Invoke $Invoke -Sql $bsql -Params $bp -BatchSize ([ref]$batch) -DeadlineUtc $deadline -Housekeeping -LockBound ([long]$lockBound[$t]) -Stopped $hkStop
-                $out.Rows[$key[$t]] += [long]$n
-                # the wait reached the deadline: this table may still hold rows -- the next tables (the finding rows last)
-                # wait for the next call, so a collection with rows left always shows as one (HasRows)
-                if ($hkStop.Value) { $whole = $false; break }
-            }
+            # #1038 part 3: THE ONE REMOVAL (Remove-SIDataCollectionRows) -- the seam a partition truncate takes over (part 2)
+            $rm = Remove-SIDataCollectionRows -Invoke $Invoke -Grain $p.Grain -CollectionId $prm.CollectionId -CollectionTime $tText -State $rmState -BatchSize $BatchSize -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore -ShouldStop $ShouldStop
+            foreach ($t in @($rm.Rows.Keys)) { $out.Rows[$key[$t]] += [long]$rm.Rows[$t] }
             # review M3: the database refused this collection's rows (not marked as asked, or the published run) -- said as refused,
             # never as removed; the next collection is looked at
-            if ($refusedHere) { $out.Refused += $p; continue }
+            if ($rm.Refused) { $out.Refused += $p; continue }
+            # a run, a data sync or a data out started: the removal stops between two ranges; the collection stays marked with
+            # its rows left and the next wake-up with nothing running goes on (Finish)
+            if ($rm.Paused) { $out.Stopped = $true; $out.Paused = [string]$rm.StopWhy; break }
             # a removal its time budget cut short is marked (RetiredAt) and finished by the next call (Finish) -- never shown again
-            if (-not $whole -or [datetime]::UtcNow -ge $deadline) { $out.Stopped = $true; break }
+            if (-not $rm.Done -or [datetime]::UtcNow -ge $deadline) { $out.Stopped = $true; break }
             $out.Removed += $p
         }
         $out['Marked'] = $marked.ToArray()
@@ -2945,7 +3015,8 @@ function Test-SIDataRunByPipeline {
     <#
         #834 Did the pipeline start this data sync? Then the pipeline runner's wake-ups remove the rows of the collections it
         marks, once the run has ended (Invoke-SIDataStoppedRunCleanup). Not shown -- no seam, no record, a database that
-        cannot be read -- is $false: the data sync removes the rows itself, as before. Never throws.
+        cannot be read -- is $false. #1037: either way the data sync only marks (its data out never waits on a removal);
+        the answer now only words its log line. Never throws.
     #>
     param([scriptblock]$Invoke, [string]$Job = 'asset-datasync')
     if (-not $Invoke) { return $false }
@@ -3032,6 +3103,169 @@ function Get-SIDataLoadingOwnerFloor {
     & $o $min.AddMinutes(-5) ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'the Risk Analysis going now started {0:yyyy-MM-dd HH:mm} UTC', $min))
 }
 
+# ------------------------------------------------------------------------------------------------------------------
+#  THE CLEAN-UP AS HOUSEKEEPING (#1038 part 3, owner 2026-11-01: "servicenow is most critical" / "cleanup is low prio").
+#  No job removes collection rows in its own path any more: a sync only MARKS. ONE path removes the marked rows -- the
+#  pipeline runner's wake-up (Invoke-SIDataStoppedRunCleanup) -- and only while NOTHING that reads or loads the data is
+#  going: no pipeline run (cfg.FlowRun), no open step (cfg.FlowStepRun), no run holding the install's lock
+#  (cfg.PipelineLock), no data sync and no data out started on its own (the jobs' running executions). The same state the
+#  updater's run gate reads. Asked again before EVERY range: the moment one of them starts the removal stops between two
+#  ranges and the next wake-up goes on. What is left (collections, rows) is recorded in cfg.InstallState 'Housekeeping'.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataHousekeepingOpenWorkSql {
+    <# The settings database, ONE number: the steps still Starting / Running (of any run -- the run gate's rule) plus a
+       pipeline run holding the install's lock (cfg.PipelineLock with a run and a heartbeat under 15 minutes old). 0 = no
+       pipeline work is going. -1 = the run records are not there. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.FlowStepRun') IS NULL BEGIN SELECT CAST(-1 AS int); RETURN; END
+DECLARE @n int = (SELECT COUNT(*) FROM cfg.FlowStepRun WHERE State IN (N'Starting', N'Running'));
+IF OBJECT_ID(N'cfg.PipelineLock') IS NOT NULL
+    SET @n += (SELECT COUNT(*) FROM cfg.PipelineLock WHERE LockId = N'install' AND FlowRunId IS NOT NULL AND Holder IS NOT NULL
+                  AND HeartbeatUtc >= DATEADD(minute, -15, SYSUTCDATETIME()));
+SELECT @n;
+'@
+}
+
+function Get-SIDataHousekeepingBusy {
+    <#
+        Is anything going that the clean-up must give way to? -SettingsInvoke: the settings database (run records).
+        -JobRunning { param($Job) } -> @{ Execution; StartedUtc } or $null (the job's running execution; a 404 = the job is not
+        installed = not running); -Jobs: the job keys asked (asset-datasync, data-out). Returns @{ Busy; Known; Run (a pipeline
+        run is going); Why }. NEVER throws. FAIL SAFE: anything that cannot be read = Known $false, Busy $true -- nothing is
+        removed. No -JobRunning (a host that cannot list executions): the jobs are not asked, said in Why.
+    #>
+    param([scriptblock]$SettingsInvoke, [scriptblock]$JobRunning, [string[]]$Jobs = @())
+    $o = { param([bool]$busy, [bool]$known, [bool]$run, [string]$why) [pscustomobject]@{ Busy = $busy; Known = $known; Run = $run; Why = $why } }
+    if (-not $SettingsInvoke) { return (& $o $true $false $false 'the run records cannot be read here') }
+    $runs = $null
+    try { $runs = [int](& $SettingsInvoke "IF OBJECT_ID('cfg.FlowRun') IS NULL SELECT CAST(-1 AS int) ELSE SELECT COUNT(*) FROM cfg.FlowRun WHERE State = N'Running'" @{} 'scalar') } catch { $runs = $null }
+    if ($null -eq $runs -or $runs -lt 0) { return (& $o $true $false $false 'the run records could not be read') }
+    if ($runs -gt 0) { return (& $o $true $true $true 'a pipeline run is running') }
+    $open = $null
+    try { $open = [int](& $SettingsInvoke (Get-SIDataHousekeepingOpenWorkSql) @{} 'scalar') } catch { $open = $null }
+    if ($null -eq $open -or $open -lt 0) { return (& $o $true $false $false 'the run records could not be read') }
+    if ($open -gt 0) { return (& $o $true $true $true 'a pipeline step is still running') }
+    $notAsked = ''
+    if (-not $JobRunning) { if (@($Jobs).Count) { $notAsked = ' (the jobs'' executions cannot be read on this host -- not asked)' } }
+    else {
+        foreach ($j in @($Jobs | Where-Object { $_ })) {
+            $x = $null
+            try { $x = & $JobRunning $j }
+            catch {
+                if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { continue }
+                return (& $o $true $false $false ('whether caj-si-{0} runs could not be read ({1})' -f $j, $_.Exception.Message))
+            }
+            if ($x) {
+                $what = switch ($j) { 'asset-datasync' { 'a data sync' } 'data-out' { 'a data out' } default { 'caj-si-' + $j } }
+                $ex = if ($x.PSObject.Properties['Execution'] -and $x.Execution) { ' ({0})' -f $x.Execution } else { '' }
+                return (& $o $true $true $false ('{0} is running{1}' -f $what, $ex))
+            }
+        }
+    }
+    & $o $false $true $false ('no pipeline run, data sync or data out is going' + $notAsked)
+}
+
+function Get-SIDataHousekeepingLeftSql {
+    <#
+        The DATA database, ONE row: what the clean-up still has to remove -- Collections (marked collections of both grains
+        with rows left) and Rows (NULL = the database has no retention mark yet). Index reads only, never a COUNT over
+        sidata.Finding: per marked Detailed collection the first and the last FindingId (the key span, never too low; the
+        removal goes from the lowest key up), per marked Summary load its loaded Rows while a row is left (an upper bound).
+    #>
+    @'
+SET NOCOUNT ON;
+DECLARE @c int = 0, @sc int = 0, @d bigint = NULL, @s bigint = NULL;
+IF OBJECT_ID(N'sidata.Collection') IS NOT NULL AND OBJECT_ID(N'sidata.Finding') IS NOT NULL AND COL_LENGTH(N'sidata.Collection', N'RetiredAt') IS NOT NULL
+    EXEC sp_executesql N'SELECT @c = COUNT(*), @d = ISNULL(SUM(x.F), 0)
+FROM sidata.Collection AS c
+CROSS APPLY (SELECT (SELECT TOP (1) f.FindingId FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId ORDER BY f.FindingId DESC) - (SELECT TOP (1) f.FindingId FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId ORDER BY f.FindingId ASC) + 1 AS F) AS x
+WHERE c.Kind = N''Detailed'' AND c.RetiredAt IS NOT NULL AND x.F IS NOT NULL;', N'@c int OUTPUT, @d bigint OUTPUT', @c = @c OUTPUT, @d = @d OUTPUT;
+IF OBJECT_ID(N'sidata.SummaryLoad') IS NOT NULL AND OBJECT_ID(N'sidata.SummaryRow') IS NOT NULL AND COL_LENGTH(N'sidata.SummaryLoad', N'RetiredAt') IS NOT NULL
+    EXEC sp_executesql N'SELECT @sc = COUNT(*), @s = ISNULL(SUM(CASE WHEN l.[Rows] > 0 THEN CAST(l.[Rows] AS bigint) ELSE CAST(1 AS bigint) END), 0)
+FROM sidata.SummaryLoad AS l
+WHERE l.RetiredAt IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.SummaryRow AS r WHERE r.CollectionTime = l.CollectionTime);', N'@sc int OUTPUT, @s bigint OUTPUT', @sc = @sc OUTPUT, @s = @s OUTPUT;
+SELECT @c + @sc AS Collections, CASE WHEN @d IS NULL AND @s IS NULL THEN CAST(NULL AS bigint) ELSE ISNULL(@d, 0) + ISNULL(@s, 0) END AS [Rows];
+'@
+}
+
+function Get-SIDataHousekeepingRecordSql {
+    <# The ONE statement that records the clean-up's progress in cfg.InstallState 'Housekeeping' (settings database). #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID('cfg.InstallState') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'Housekeeping')
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'Housekeeping';
+    ELSE
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'Housekeeping', @Value, NULL, @By);
+END
+'@
+}
+
+function Get-SIDataHousekeepingValue {
+    <#
+        PURE. The recorded progress: compact JSON under 400 characters -- { state (removing | paused | done | failed),
+        collectionsLeft, rowsLeft (null = not known), removedRows (this wake-up), lastRemovedAt (the last wake-up that removed
+        rows; kept from the record before), why (at most 160 characters), at }.
+    #>
+    param([ValidateSet('removing', 'paused', 'done', 'failed')][string]$State = 'done', $CollectionsLeft = $null, $RowsLeft = $null, [long]$RemovedRows = 0,
+          $LastRemovedAtUtc = $null, [string]$Why = '', [datetime]$AtUtc = [datetime]::UtcNow)
+    $iso = { param($t) if ($null -eq $t) { $null } else { ([datetime]$t).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } }
+    $w = if ($Why.Length -gt 160) { $Why.Substring(0, 157) + '...' } else { $Why }
+    ([ordered]@{ state = $State; collectionsLeft = $(if ($null -ne $CollectionsLeft) { [int]$CollectionsLeft } else { $null }); rowsLeft = $(if ($null -ne $RowsLeft) { [long]$RowsLeft } else { $null })
+                 removedRows = $RemovedRows; lastRemovedAt = (& $iso $LastRemovedAtUtc); why = $w; at = (& $iso $AtUtc) } | ConvertTo-Json -Compress)
+}
+
+function Read-SIDataHousekeepingRecord {
+    <# The record before (cfg.InstallState 'Housekeeping') as an object, or $null. Never throws. #>
+    param([scriptblock]$SettingsInvoke)
+    if (-not $SettingsInvoke) { return $null }
+    try {
+        $v = & $SettingsInvoke "IF OBJECT_ID('cfg.InstallState') IS NULL SELECT CAST(NULL AS nvarchar(400)) ELSE SELECT Value FROM cfg.InstallState WHERE Name = N'Housekeeping'" @{} 'scalar'
+        $v = @(@($v) | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+        if ($v -is [System.Collections.IDictionary]) { $v = $v['Value'] }
+        if ($v -isnot [string] -or -not $v.Trim().StartsWith('{')) { return $null }
+        return ($v | ConvertFrom-Json)
+    } catch { return $null }
+}
+
+function Write-SIDataHousekeepingProgress {
+    <#
+        Records (cfg.InstallState 'Housekeeping') and says the clean-up's progress. -Left: Get-SIDataHousekeepingLeftSql's
+        row ($null = not read now: the record before keeps its counts -- a paused wake-up never reads the data database).
+        Says one line through -Log when rows were removed, and on the first wake-up of each hour while rows wait. Never
+        throws. Returns the value recorded.
+    #>
+    param([scriptblock]$SettingsInvoke, [string]$State, $Left = $null, [long]$RemovedRows = 0, [string]$Why = '', [scriptblock]$Log,
+          [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow')
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $prev = Read-SIDataHousekeepingRecord -SettingsInvoke $SettingsInvoke
+    $pv = { param($n) if ($prev -and $prev.PSObject.Properties[$n]) { $prev.$n } else { $null } }
+    $cl = & $pv 'collectionsLeft'; $rl = & $pv 'rowsLeft'
+    if ($null -ne $Left) {
+        $g = { param($n) $x = if ($Left -is [System.Collections.IDictionary]) { $Left[$n] } elseif ($Left.PSObject.Properties[$n]) { $Left.$n } else { $null }; if ($x -is [System.DBNull]) { $null } else { $x } }
+        $cl = & $g 'Collections'; $rl = & $g 'Rows'
+    }
+    $last = & $pv 'lastRemovedAt'
+    if ($RemovedRows -gt 0) { $last = $NowUtc }
+    elseif ($last -is [datetime]) { $last = ([datetime]$last).ToUniversalTime() }
+    elseif ($last) { try { $last = [datetime]::Parse([string]$last, $inv, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) } catch { $last = $null } }
+    # nothing left at all = done, whatever the wake-up did
+    if ($State -ne 'failed' -and $null -ne $cl -and [int]$cl -eq 0) { $State = 'done' }
+    # rows left after a wake-up that ended without a stop (a refused collection): still being removed
+    if ($State -eq 'done' -and $null -ne $cl -and [int]$cl -gt 0) { $State = 'removing' }
+    $v = Get-SIDataHousekeepingValue -State $State -CollectionsLeft $cl -RowsLeft $rl -RemovedRows $RemovedRows -LastRemovedAtUtc $last -Why $Why -AtUtc $NowUtc
+    if ($SettingsInvoke) { try { $null = & $SettingsInvoke (Get-SIDataHousekeepingRecordSql) @{ Value = $v; By = $By } 'nonquery' } catch { if ($Log) { & $Log 'INFO' ('housekeeping: its progress could not be recorded ({0})' -f $_.Exception.Message) } } }
+    if ($Log -and ($RemovedRows -gt 0 -or ($NowUtc.ToUniversalTime().Minute -lt 5 -and $null -ne $cl -and [int]$cl -gt 0))) {
+        $leftText = if ($null -ne $cl) { [string]::Format($inv, '{0} collection(s){1} left', [int]$cl, $(if ($null -ne $rl) { [string]::Format($inv, ', about {0:N0} row(s)', [long]$rl) } else { '' })) } else { 'what is left is not known yet' }
+        $stateText = switch ($State) { 'paused' { 'paused -- ' + $Why } 'removing' { 'removing' } 'done' { 'done' } default { 'not finished -- ' + $Why } }
+        & $Log 'OK' ([string]::Format($inv, 'housekeeping: old collections {0}; {1:N0} row(s) removed by this wake-up; {2}', $stateText, $RemovedRows, $leftText))
+    }
+    $v
+}
+
 function Invoke-SIDataStoppedRunCleanup {
     <#
         THE PIPELINE RUNNER'S CALL (#816). -Invoke: the data database (sql, params, mode 'reader' | 'nonquery' | 'scalar');
@@ -3043,18 +3277,32 @@ function Invoke-SIDataStoppedRunCleanup {
         (Get-SIDataLoadingOwnerFloor) is MARKED retired at once -- never derived, prepared or shown again -- and its rows are
         removed by a later wake-up with no run running (Finish). Only those ('stopped run'); never a complete collection,
         never the published one, never a result waiting for the data sync, never the collection the live run writes -- the
-        plan AND the database's mark refuse them. Without the seam a running run means nothing is touched, as before.
+        plan AND the database's mark refuses them. Without the seam a running run means nothing is touched, as before.
+        #1038 part 3 -- THE ONE HOUSEKEEPING PATH. Rows are removed ONLY while nothing is going (Get-SIDataHousekeepingBusy: no
+        pipeline run, no open step, no run holding the install's lock, no data sync and no data out -- -JobRunning / -Jobs,
+        the jobs' running executions, also one started by hand). That is asked again before EVERY range and batch: the moment
+        one starts, the removal stops between two ranges and the next wake-up goes on (it never removes while a run goes --
+        #892's removal during a run is gone; a run only gets the #882 marks). It never removes the newest complete collection
+        or the one before it (#717 -- the plan and the database's mark), never the published one. Progress -- collections and
+        rows left, paused and why -- is recorded in cfg.InstallState 'Housekeeping' (Write-SIDataHousekeepingProgress); the
+        hourly heartbeat sends the rows left (Pipeline.housekeepingRowsLeft). Never blocks or fails anything else.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$SettingsInvoke, [double]$IdleStaleHours = 24,
           [int]$TimeBudgetSeconds = 120, [scriptblock]$Log, [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow',
-          [scriptblock]$RaRunning, [string]$RaJob = 'risk-analysis-detailed')
+          [scriptblock]$RaRunning, [string]$RaJob = 'risk-analysis-detailed',
+          [scriptblock]$JobRunning, [string[]]$Jobs = @('asset-datasync', 'data-out'))
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
-    $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null }
+    $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = '' }
     try {
-        if (-not $SettingsInvoke) { $out.Why = 'the run records cannot be read here -- stopped runs are removed by the data sync'; return [pscustomobject]$out }
-        $running = $null
-        try { $running = [int](& $SettingsInvoke "IF OBJECT_ID('cfg.FlowRun') IS NULL SELECT CAST(-1 AS int) ELSE SELECT COUNT(*) FROM cfg.FlowRun WHERE State = N'Running'" @{} 'scalar') } catch { $running = $null }
-        if ($null -eq $running -or $running -lt 0) { $out.Why = 'the run records could not be read -- nothing removed'; return [pscustomobject]$out }
+        if (-not $SettingsInvoke) { $out.Why = 'the run records cannot be read here -- nothing is removed'; return [pscustomobject]$out }
+        $busy = Get-SIDataHousekeepingBusy -SettingsInvoke $SettingsInvoke -JobRunning $JobRunning -Jobs $Jobs
+        $out['Busy'] = $busy
+        if (-not $busy.Known) {
+            $out.Why = ('{0} -- nothing removed' -f $busy.Why)
+            $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
+            return [pscustomobject]$out
+        }
+        $running = if ($busy.Run) { 1 } else { 0 }
         if ($running -gt 0 -and $RaRunning -and $IdleStaleHours -gt 0) {
             # #882: a run is going -- only the 'Loading' collections no live run owns are marked (no row is removed now)
             $own = $null
@@ -3070,42 +3318,42 @@ function Invoke-SIDataStoppedRunCleanup {
             } catch { $own = [pscustomobject]@{ Before = $null; Why = $_.Exception.Message } }
             if ($null -eq $own -or $null -eq $own.Before) {
                 $out.Why = 'a pipeline run is running and which collection it owns could not be shown ({0}) -- nothing is touched' -f $(if ($own) { $own.Why } else { 'no answer' })
+                $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
                 return [pscustomobject]$out
             }
             $why = [string]::Format([Globalization.CultureInfo]::InvariantCulture, 'its run stopped before it was complete: no live run owns it ({0}; it started before that)', $own.Why)
-            $started = [datetime]::UtcNow
             $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleBeforeUtc $own.Before -IdleReason $why -OnlyWhy @('stopped run') -MarkOnly `
-                       -RowsRemovedBy 'by this and the next wake-ups of the pipeline runner, in key ranges' -TimeBudgetSeconds $TimeBudgetSeconds
+                       -RowsRemovedBy 'by a later wake-up of the pipeline runner when no run, data sync or data out is going, in key ranges' -TimeBudgetSeconds $TimeBudgetSeconds
             $out.Retention = $ret
-            # #892 (large install 2026-10-23: 3.75 M of 7.69 M finding rows, about 75 GB, belonged to collections marked days
-            # before -- a run is nearly always going there, so the removal never came): the rows of collections that are
-            # marked ALREADY are removed now, in key ranges, paced by the database's load, inside what is left of this
-            # wake-up's time budget -- the next wake-up goes on. Never one a live run may own (the same floor), never the
-            # published one, never a kept one (they are not marked: the database refuses those marks).
-            # Review B1: ONLY marks made BEFORE the running pipeline run started (the data sync's superseded / abandoned and,
-            # since 2026-10-23, the 'stopped run' marks of earlier wake-ups) -- a 'stopped run' mark made while THIS run goes
-            # (above) can hit a collection the data sync is still loading from Log Analytics; its rows wait for the next run.
-            # Review M5: no budget = nothing removed.
-            $runStart = $null
-            try {
-                $rs = & $SettingsInvoke "IF OBJECT_ID('cfg.FlowRun') IS NULL SELECT CAST(NULL AS datetime2(0)) ELSE SELECT MIN(StartedUtc) FROM cfg.FlowRun WHERE State = N'Running'" @{} 'scalar'
-                if ($rs -is [datetime]) { $runStart = [datetime]::SpecifyKind([datetime]$rs, [DateTimeKind]::Utc) }
-            } catch { $runStart = $null }
-            $left = if ($TimeBudgetSeconds -gt 0) { [int][Math]::Floor($TimeBudgetSeconds - ([datetime]::UtcNow - $started).TotalSeconds) } else { 0 }
-            $fin = $null
-            if ($left -gt 0 -and $null -ne $runStart) {
-                $fin = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -FinishOnly -FinishFloorUtc $own.Before -FinishMarkedBeforeUtc $runStart -TimeBudgetSeconds $left
-            }
-            $out['Finished'] = $fin
-            $out.Status = if ($ret.Status -eq 'failed' -or ($fin -and $fin.Status -eq 'failed')) { 'failed' } else { 'ok' }
-            $out.Why = 'a pipeline run is running -- collections no live run owns were marked; the rows of collections the data sync marked before this run began are removed in key ranges inside this wake-up''s time budget'
+            # #1038 part 3 (owner 2026-11-01: the clean-up is low priority): while a run is going NO row is removed -- #892's
+            # removal during a run is gone. The marks above only keep those collections out of every view; their rows, and
+            # every other marked collection's, are removed by a wake-up when nothing is going (below).
+            $out.Status = if ($ret.Status -eq 'failed') { 'failed' } else { 'ok' }
+            $out.Why = 'a pipeline run is running -- collections no live run owns were marked; no row is removed until no run, data sync or data out is going'
+            $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
             return [pscustomobject]$out
         }
-        if ($running -gt 0) { $out.Why = 'a pipeline run is running -- stopped runs are removed when none is'; return [pscustomobject]$out }
-        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds
+        if ($busy.Busy) {
+            $out.Why = ('housekeeping paused: {0} -- the old collections'' rows are removed when nothing is going' -f $busy.Why)
+            $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
+            return [pscustomobject]$out
+        }
+        # nothing is going: plan, mark and remove -- asked again before EVERY range and batch whether something started
+        # (no GetNewClosure: a closure's own module scope cannot see functions dot-sourced into a script; the names are this
+        # function's own, so the ranges' callers never shadow them)
+        $hkSettings = $SettingsInvoke; $hkJobRunning = $JobRunning; $hkJobs = @($Jobs)
+        $stop = { $hkB = Get-SIDataHousekeepingBusy -SettingsInvoke $hkSettings -JobRunning $hkJobRunning -Jobs $hkJobs; if ($hkB.Busy) { [string]$hkB.Why } else { '' } }
+        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds -ShouldStop $stop
         $out.Retention = $ret
         $out.Status = if ($ret.Status -eq 'failed') { 'failed' } else { 'ok' }
         $removed = @($ret.Removed).Count; $removedRows = if ($ret.Rows) { [long]$ret.Rows['findings'] } else { 0L }
+        # the progress: what is left (index reads only), paused / removing / done, recorded and said
+        $hkLeft = $null
+        try { $hkLeft = @(@(& $Invoke (Get-SIDataHousekeepingLeftSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1 } catch { $hkLeft = $null }
+        $allRows = 0L; if ($ret.Rows) { foreach ($k in @($ret.Rows.Keys)) { $allRows += [long]$ret.Rows[$k] } }
+        $hkState = if ($ret.Status -eq 'failed') { 'failed' } elseif ($ret.PSObject.Properties['Paused'] -and $ret.Paused) { 'paused' } elseif ($ret.Stopped) { 'removing' } else { 'done' }
+        $hkWhy = if ($hkState -eq 'failed') { [string]$ret.Error } elseif ($hkState -eq 'paused') { [string]$ret.Paused } elseif ($hkState -eq 'removing') { 'this wake-up''s time budget ended -- the next one goes on' } else { '' }
+        $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State $hkState -Left $hkLeft -RemovedRows $allRows -Why $hkWhy -Log $Log -NowUtc $NowUtc -By $By
         # the rows of what is still loading are counted on the first wake-up of each hour, or when something was removed --
         # never every five minutes on a database that may be at its limit
         $withRows = ($NowUtc.ToUniversalTime().Minute -lt 5 -or $removed -gt 0 -or $removedRows -gt 0)

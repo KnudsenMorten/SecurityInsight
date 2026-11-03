@@ -40,7 +40,7 @@ public sealed class IndexModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "risk score trend failed");
-            Error = "The risk score could not be read: " + ex.Message;
+            Error = "The risk score could not be read: " + ViewerError.Text(ex);
         }
         Chart = new ChartSpec("risk-trend", "line", Points.Select(p => Fmt.Day(p.Day)).ToList(),
             new[] { new ChartSeries("Average risk score per finding", Points.Select(p => ScoreFormat.Round(p.AverageRiskScore)).ToList(), 1) }, "Average risk score per finding",

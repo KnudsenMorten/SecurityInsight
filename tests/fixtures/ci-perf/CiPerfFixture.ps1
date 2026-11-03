@@ -438,7 +438,9 @@ function New-CiPerfBeforeWorld {
         $text = $fd.Extent.Text
         # #406 (CI build version 10): the current callers pass the lifecycle's inputs; the old function takes them and ignores
         # them (it decides the lifecycle as it did -- the comparison runs with a seen window no record's age reaches)
-        $extra = @{ 'New-SICiDocument' = @('$Lifecycle', '$Previous', '[hashtable]$ScopeChangedAt'); 'Invoke-SICiCore' = @('$Lifecycle', '[hashtable]$PreviousLifecycle', '[hashtable]$ScopeChangedAt') }[$fd.Name]
+        # #1054 (CI build version 12): the placeholder device names -- the old function takes them and ignores them (the fixture's
+        # devices all have real names, so both builds name every CI the same)
+        $extra = @{ 'New-SICiDocument' = @('$Lifecycle', '$Previous', '[hashtable]$ScopeChangedAt', '[string[]]$PlaceholderNames', '[hashtable]$DeletionProof'); 'Invoke-SICiCore' = @('$Lifecycle', '[hashtable]$PreviousLifecycle', '[hashtable]$ScopeChangedAt') }[$fd.Name]
         if ($extra -and $fd.Body.ParamBlock) {
             $have = @($fd.Body.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
             $add = @($extra | Where-Object { $have -notcontains (($_ -replace '^\[[^\]]+\]', '').TrimStart('$')) })

@@ -81,7 +81,7 @@ public sealed class PerformanceModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the performance figures could not be read");
-            Error = "The performance figures could not be read from the Pro database: " + ex.Message;
+            Error = "The performance figures could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         try { Health = await _health.ReadAsync(null, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "data health could not be read for the performance page"); }
@@ -195,7 +195,7 @@ public sealed class PerformanceModel : PageModel
         {
             _log.LogError(ex, "a size request failed");
             audit?.Refused(ex.Message);
-            return Toast(false, "Not saved: " + ex.Message);
+            return Toast(false, "Not saved: " + ViewerError.Text(ex));
         }
     }
 
@@ -219,7 +219,7 @@ public sealed class PerformanceModel : PageModel
         {
             _log.LogError(ex, "the updater could not be started from the performance page");
             audit?.Refused(ex.Message);
-            return Toast(false, "The updater could not be started: " + ex.Message + ". The size asked for is applied at the next update.");
+            return Toast(false, "The updater could not be started: " + ViewerError.Text(ex) + ". The size asked for is applied at the next update.");
         }
     }
 

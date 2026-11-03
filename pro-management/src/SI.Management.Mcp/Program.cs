@@ -21,12 +21,24 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSecurityInsightEstate(builder.Configuration);
 // THE LICENCE GATE (owner 2026-10-27, SI #750 (3)): deployed in every install, answering only with a Pro licence on record
 builder.Services.AddSingleton<McpLicenceGate>(sp => new McpLicenceGate(sp.GetRequiredService<ISqlReader>()));
+// WHO the caller is in THIS install: the access table decides (McpCaller.cs), as in the web app
+builder.Services.AddSingleton<McpCallerResolver>(sp => new McpCallerResolver(sp.GetRequiredService<ISqlReader>()));
+// PER-CALLER LIMITS: a caller (object id, else the calling application) gets at most McpLimits:Concurrent calls at once and
+// McpLimits:PerMinute calls a minute; past either the answer is 429 -- one caller can never hold the shared Pro database
+var perMinute = builder.Configuration.GetValue("McpLimits:PerMinute", CallerLimits.DefaultMcpPerMinute);
+var concurrent = builder.Configuration.GetValue("McpLimits:Concurrent", CallerLimits.DefaultMcpConcurrent);
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.GlobalLimiter = CallerLimits.Create<HttpContext>(ctx => ctx.Request.Path.StartsWithSegments("/mcp") ? McpCallerRule.PartitionKey(ctx.User) : null, perMinute, concurrent);
+    // /mcp only (the health probe is never limited), keyed on the signed-in caller
+});
 
 builder.Services
     .AddMcpServer(o =>
     {
         o.ServerInfo = new() { Name = "securityinsight-estate", Version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0" };
-        o.ServerInstructions = "Read-only SecurityInsight estate data. Every tool result carries the query that produced it; cite it.";
+        o.ServerInstructions = "Read-only SecurityInsight estate data. Every tool result carries the query that produced it; cite it. " + UntrustedData.Notice;
     })
     .WithHttpTransport(o => o.Stateless = true)
     .AddAuthorizationFilters()
@@ -36,6 +48,7 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 // THE LICENCE GATE (owner 2026-10-27, SI #750 (3)): the MCP server is Pro. It is deployed in every install (Community edition
 // and Pro) and answers /mcp only while the installed licence (cfg.InstallState 'Licence', the updater's verified record)

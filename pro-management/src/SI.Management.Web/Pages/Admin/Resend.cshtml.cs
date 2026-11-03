@@ -58,7 +58,7 @@ public sealed class ResendModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "reading the resend page failed");
-            Error = "The connectors and collections could not be read: " + ex.Message;
+            Error = "The connectors and collections could not be read: " + ViewerError.Text(ex);
         }
     }
 
@@ -91,8 +91,8 @@ public sealed class ResendModel : PageModel
         try { return await _jobs!.StartWithEnvAsync(c.Job, env, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.SetStateAsync(id, "failed", "the job could not be started: " + ex.Message, ct);
-            throw new InvalidOperationException("the connector's job could not be started: " + ex.Message);
+            await _store.SetStateAsync(id, "failed", "the job could not be started: " + ViewerError.Text(ex), ct);
+            throw new InvalidOperationException("the connector's job could not be started: " + ViewerError.Text(ex));
         }
     }
 
@@ -116,7 +116,7 @@ public sealed class ResendModel : PageModel
             if (AuditScope.Current is { } a) a.AfterJson = JsonSerializer.Serialize(new { request = id, connector = c.Name, kind = c.Kind, collection = SqlCollectionSendStore.Iso(col.CollectionTime), rows = col.Rows, partial = col.Partial, job = c.Job, execution = exec, mode = c.Mode });
             return Back($"Sent: {c.Job} runs {c.Name} once with the collection of {Fmt.When(col.CollectionTime)} ({exec}). Its guards still apply{(c.Mode == "apply" ? "" : " -- the connector is in whatif, so it only plans and reports")}. The outcome appears below.", true);
         }
-        catch (InvalidOperationException ex) { return Refused(ex.Message); }
+        catch (InvalidOperationException ex) { return Refused(ViewerError.Text(ex)); }
     }
 
     /// "Undo the last run into &lt;connector&gt;" -- only where the connector can reverse it (the SQL vulnerability connector).
@@ -137,6 +137,6 @@ public sealed class ResendModel : PageModel
             if (AuditScope.Current is { } a) a.AfterJson = JsonSerializer.Serialize(new { request = id, connector = c.Name, run = c.LastRunId, opened = c.Opened, reopened = c.Reopened, closed = c.Closed, job = c.Job, execution = exec });
             return Back($"Undo started: {c.Job} puts back what run {c.LastRunId} changed in {c.Name} ({exec}). Items changed again since that run are left as they are and listed in the outcome.", true);
         }
-        catch (InvalidOperationException ex) { return Refused(ex.Message); }
+        catch (InvalidOperationException ex) { return Refused(ViewerError.Text(ex)); }
     }
 }

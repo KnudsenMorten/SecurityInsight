@@ -44,7 +44,7 @@ public sealed class ExclusionsModel : ReportsPage
             All = await _documents.ListAsync("exclusions", ct);
             Document = All.FirstOrDefault(d => d.Key == Key);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Log.LogError(ex, "exclusions documents"); Error = "The exclusion documents could not be read: " + ex.Message; return false; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Log.LogError(ex, "exclusions documents"); Error = "The exclusion documents could not be read: " + ViewerError.Text(ex); return false; }
         return true;
     }
 

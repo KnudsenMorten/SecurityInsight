@@ -252,7 +252,7 @@ public sealed class MailSetupFlow
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            steps.Add(new MailSetupStep(5, SharedSteps[4], MailSetupStep.Failed, "Verified, but the attestation could not be recorded: " + ex.Message));
+            steps.Add(new MailSetupStep(5, SharedSteps[4], MailSetupStep.Failed, "Verified, but the attestation could not be recorded: " + ViewerError.Text(ex)));
             for (var n = 6; n <= SharedSteps.Count; n++) steps.Add(new MailSetupStep(n, SharedSteps[n - 1], MailSetupStep.NotRun, "not run -- an earlier step failed"));
             return new MailSetupResult(steps, false, false, Array.Empty<string>());
         }
@@ -355,6 +355,6 @@ public sealed class MailSetupFlow
     public async Task<string?> QueueTestAsync(string to, MailModeResolution mode, string? from, string by, CancellationToken ct)
     {
         try { await _mailer.SendAsync(MailTestMail.Build(to, mode, from), by, ct); return null; }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return "The test mail could not be queued: " + ex.Message; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return "The test mail could not be queued: " + ViewerError.Text(ex); }
     }
 }

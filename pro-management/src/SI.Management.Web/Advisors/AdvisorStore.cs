@@ -109,7 +109,7 @@ IF OBJECT_ID(N'cfg.DepartmentAdvisor') IS NOT NULL
     INSERT @p SELECT a.DepartmentId, N'advisor', a.AdvisorId, N'advisor', a.DisplayName, a.Mail
     FROM cfg.DepartmentAdvisor AS a JOIN cfg.Department AS d ON d.DepartmentId = a.DepartmentId AND d.RetiredAt IS NULL
     WHERE a.RevokedAt IS NULL
-      AND (a.ObjectId IN (SELECT j.[value] FROM OPENJSON(@ObjectIds) AS j) OR (@Upn IS NOT NULL AND a.Mail = @Upn));
+      AND (a.ObjectId IN (SELECT j.[value] FROM OPENJSON(@ObjectIds) AS j) OR (a.ObjectId IS NULL AND @Upn IS NOT NULL AND a.Mail = @Upn));
 SELECT DepartmentId, Kind, PersonId, Role, DisplayName, Mail FROM @p;
 """;
 

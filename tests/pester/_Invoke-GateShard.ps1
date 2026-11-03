@@ -31,7 +31,9 @@ try {
     $cfg = New-PesterConfiguration
     $cfg.Run.Path = [string[]]$files
     $cfg.Run.PassThru = $true
-    $cfg.Output.Verbosity = 'None'
+    # TEST-FAST (owner 2026-11-02): a line per test -- the gate ends a suite only when it prints NOTHING for 5 minutes
+    # (a hang), never on a clock; a silent runner would look hung while it works
+    $cfg.Output.Verbosity = 'Detailed'
     $cfg.TestResult.Enabled = $false
     if ($ExcludeTag) { $cfg.Filter.ExcludeTag = @($ExcludeTag -split ',' | Where-Object { $_ }) }
     $r = Invoke-Pester -Configuration $cfg

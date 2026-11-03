@@ -37,7 +37,9 @@
     { "key": "schema", "defaultCron": "0 3 * * 0", "engine": "schema-discovery", "needs": [], "neverInFlow": true },
     { "key": "flow", "defaultCron": "*/5 * * * *", "engine": "flow", "needs": [], "neverInFlow": true },
     { "key": "config-backup", "defaultCron": "0 18 * * *", "engine": "config-backup", "needs": [], "neverInFlow": true },
-    { "key": "heartbeat", "defaultCron": "7,22,37,52 * * * *", "engine": "heartbeat", "needs": [], "neverInFlow": true }
+    { "key": "heartbeat", "defaultCron": "7,22,37,52 * * * *", "engine": "heartbeat", "needs": [], "neverInFlow": true },
+    { "key": "data-out", "engine": "data-out", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the ServiceNow hand-off and the other outputs, sent from the newest collection the data sync marked ready" },
+    { "key": "support-grant", "engine": "support-grant", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the Invardia Support app's database access, opened and closed just in time on a support request" }
   ],
   "defaultPipeline": {
     "id": "daily",

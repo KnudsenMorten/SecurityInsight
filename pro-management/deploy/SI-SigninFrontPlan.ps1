@@ -100,15 +100,22 @@ function Resolve-SISigninFrontSource {
         PURE (reads the disk). Where the component's source is, for -SIRoot:
           a release      <SIRoot>\pro-management\signin-front\   (Publish-SIRelease.ps1 packs the pinned tree there)
           the repository <SIRoot>\..\..\FRAMEWORK\signin-front\  (SOLUTIONS\SecurityInsight -> the repo root)
-        It is usable only when its VERSION is the pinned version and it has its Dockerfile. Returns @{ Ok; Path; Version; Why }.
+          the vendored   <SIRoot>\vendor\signin-front\           (#1061, framework PUB-FRONT: the Community release carries
+                         copy                                     FRAMEWORK/signin-front/{src,VERSION} at the pin) -- used ONLY
+                                                                  when FRAMEWORK/signin-front is not there
+        It is usable only when its VERSION is the pinned version and it has its Dockerfile.
+        Returns @{ Ok; Path; BuildPath; Version; Why; Source ('release' / 'framework' / 'vendor' / '') }.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Pin)
+    $fw = [IO.Path]::GetFullPath([IO.Path]::Combine($SIRoot, '..', '..', ($Pin.component -replace '/', [IO.Path]::DirectorySeparatorChar)))
     $cands = @(
-        [IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front'),
-        [IO.Path]::GetFullPath([IO.Path]::Combine($SIRoot, '..', '..', ($Pin.component -replace '/', [IO.Path]::DirectorySeparatorChar)))
+        @{ P = [IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front'); S = 'release' },
+        @{ P = $fw; S = 'framework' }
     )
+    if (-not (Test-Path -LiteralPath $fw -PathType Container)) { $cands += @{ P = [IO.Path]::Combine($SIRoot, 'vendor', 'signin-front'); S = 'vendor' } }
     $why = New-Object System.Collections.Generic.List[string]
-    foreach ($c in $cands) {
+    foreach ($cand in $cands) {
+        $c = $cand.P
         if (-not (Test-Path -LiteralPath $c -PathType Container)) { continue }
         $vf = [IO.Path]::Combine($c, 'VERSION')
         $v = if (Test-Path -LiteralPath $vf) { ([IO.File]::ReadAllText($vf)).Trim() } else { '' }
@@ -116,10 +123,10 @@ function Resolve-SISigninFrontSource {
         # the image's build context (README: FRAMEWORK/signin-front/src) and its Dockerfile inside it
         $ctx = $(if ($Pin.PSObject.Properties['context'] -and "$($Pin.context)".Trim()) { [IO.Path]::Combine($c, "$($Pin.context)".Trim()) } else { $c })
         if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($ctx, [string]$Pin.dockerfile)))) { $why.Add(('{0} has no {1}' -f $ctx, $Pin.dockerfile)); continue }
-        return [pscustomobject]@{ Ok = $true; Path = $c; BuildPath = $ctx; Version = $v; Why = '' }
+        return [pscustomobject]@{ Ok = $true; Path = $c; BuildPath = $ctx; Version = $v; Why = ''; Source = $cand.S }
     }
     if (-not $why.Count) { $why.Add(('the component {0} {1} is not in this release or tree (pin state: {2})' -f $Pin.component, $Pin.version, $Pin.state)) }
-    [pscustomobject]@{ Ok = $false; Path = ''; BuildPath = ''; Version = ''; Why = ($why -join '; ') }
+    [pscustomobject]@{ Ok = $false; Path = ''; BuildPath = ''; Version = ''; Why = ($why -join '; '); Source = '' }
 }
 
 function Get-SISigninFrontImageTag {

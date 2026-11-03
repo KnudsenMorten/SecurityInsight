@@ -92,7 +92,11 @@ function Invoke-SIDataSyncCore {
         [AllowNull()]$ReportCopy = $global:SendToLogAnalytics,
         # #834 the settings database (cfg.FlowRun / FlowStepRun): when the pipeline started this data sync, the rows of the
         # collections it marks removed are left to the pipeline runner's wake-ups (they run while no run is running)
-        [scriptblock]$SettingsInvoke
+        [scriptblock]$SettingsInvoke,
+        # #1038 (1) data out as its own job: { param([string]$Stage, $DataModel) } -- called with 'storing' right before the
+        # findings per CI are replaced and with 'stored' (+ their result) right after, before every later phase; the data
+        # sync marks the collection ready for data out there (engine\data-out\SI-DataOutJob.ps1). Never fails the sync.
+        [scriptblock]$OnFindingsStored
     )
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     if ($null -eq $Responsibility -and (Get-Command -Name Resolve-SIDataResponsibilitySettings -ErrorAction SilentlyContinue)) { $Responsibility = Resolve-SIDataResponsibilitySettings -Globals @{} }
@@ -330,7 +334,7 @@ function Invoke-SIDataSyncCore {
     # pivots ... of a collection its own retention removed at the end: one collection in three). The same plan and the
     # same guards as the removal (Invoke-SIDataCollectionRetention: the newest complete collection and the one before it,
     # the published run's and a result waiting for the data sync are never marked); only the rows wait. Never fails the run.
-    if (-not $DryRun -and $retiredReady) { $result['CollectionMarks'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy 'at the end of this data sync' -Log $Log }
+    if (-not $DryRun -and $retiredReady) { $result['CollectionMarks'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy 'by the pipeline runner''s next wake-ups, in key ranges' -Log $Log }
 
     & $phase 'retention marks'
     # ---- 4e. what earlier loads stored wrong (#296, #297/#298): report names, duplicate and phantom assets ---------
@@ -606,7 +610,11 @@ function Invoke-SIDataSyncCore {
     if (Get-Command -Name Invoke-SIDataCiSync -ErrorAction SilentlyContinue) {
         # -LaQuery: the raw reader for its pages (#639) -- $readOrSkip reads a variable named $Query, which inside the page reader
         # would be the page reader's own
+        if ($OnFindingsStored) { try { & $OnFindingsStored 'storing' $null } catch { & $warn ("data out    : the data-out lock was not taken ({0}) -- the findings per CI are stored as usual" -f $_.Exception.Message) } }
         $result['DataModel'] = Invoke-SIDataCiSync -Invoke $Invoke -ReadOrSkip $readOrSkip -LaQuery $Query -LookbackDays ($lookback + 1) -DryRun:$DryRun -Log $Log -Phase $phase
+        # #1038 (1): the collection is marked ready for data out NOW -- before the CI summary, the column choices, the
+        # clean-up, the views and everything after the core -- and the data-out job is started on it
+        if ($OnFindingsStored) { try { & $OnFindingsStored 'stored' $result['DataModel'] } catch { & $warn ("data out    : the collection was not marked ready for data out ({0}) -- the data sync sends data out itself" -f $_.Exception.Message) } }
     }
     & $phase 'findings per CI (v3 model)' ([long]$(if ($result['DataModel'] -and $result['DataModel'].PSObject.Properties['Findings']) { $result['DataModel'].Findings } else { -1 }))
     # ---- 4g (2). #812: the CI findings' summary (sidata.CiFindingSummary) under the collection sidata.CiFinding holds -- after
@@ -653,12 +661,18 @@ function Invoke-SIDataSyncCore {
         # kept; the rows of older ones, and of collections a stopped run left 'Loading', are removed. Never fails the run.
         # #834 (measured at internal 2026-10-20, a small database: 26.3 min, most of it the pacing waiting on the database
         # this very sync had saturated): started by the pipeline, the sync only marks; the pipeline runner's wake-ups remove
-        # the rows once the run has ended, while no run is running (Invoke-SIDataStoppedRunCleanup). By hand or on its own
-        # schedule: removed here, as before.
+        # the rows once the run has ended, while no run is running (Invoke-SIDataStoppedRunCleanup).
+        # #1037 (owner 2026-11-01: "servicenow is most critical" / "cleanup is low prio"; a sync started by hand to resend to
+        # ServiceNow spent ~4 h removing old collections here, before its data out): started by hand or on its own schedule
+        # too, the sync ONLY MARKS -- the data out never waits on a removal, however the sync is started. The rows go the
+        # same way as a pipeline-started sync's: the pipeline runner's wake-ups finish the marked collections in key ranges
+        # inside their time budget, ONLY while no run, data sync or data out is going (#1038 part 3: housekeeping), in both
+        # pipeline and schedules mode. A marked collection is never derived, prepared or shown again, so no reader is left on it.
         if ($retiredReady) {
             $byPipeline = Test-SIDataRunByPipeline -Invoke $SettingsInvoke
-            if ($byPipeline) { $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy 'by the pipeline runner''s next wake-ups, in key ranges -- also while a run is going' -Log $Log }
-            else { $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log }
+            $rowsBy = if ($byPipeline) { 'by the pipeline runner''s wake-ups, in key ranges -- once no run, data sync or data out is going' }
+                      else { 'by the pipeline runner''s next wake-ups, in key ranges -- after this data sync has sent its data out' }
+            $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy $rowsBy -Log $Log
         }
     }
     & $phase 'collection retention'

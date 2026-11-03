@@ -108,7 +108,7 @@ public abstract class CiDataGridModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null || ViewLayout is null) return NotFound(Error ?? IndexModel.NotLoadedText);
         var cols = SI.Management.Web.Columns.GridLayout.All(Spec, ViewLayout);
         var rows = await FillAsync(cols, page.Rows, ct);
@@ -218,17 +218,17 @@ public abstract class CiDataGridModel : PageModel
             await LayoutAsync(ct);
             var req = ReadGrid();
             try { GridSql.Normalize(Spec, req); }
-            catch (ArgumentException ex) { Error = "The filter is not valid: " + ex.Message; return; }
+            catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); return; }
             var g = await Cis.GridAsync(Applied, req, false, ct);
             Grid = g.Data with { Rows = await FillAsync(DisplayColumns, g.Data.Rows, ct) };
             Queries.Add(QueryInfo.From(g, "The " + Noun));
         }
-        catch (ArgumentException ex) { Error = "The request is not valid: " + ex.Message; }
+        catch (ArgumentException ex) { Error = "The request is not valid: " + ViewerError.Text(ex); }
         catch (ViewTimeoutException ex) { Error = CollectionPageModel.TimeoutText(ex.Limit, null); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.LogError(ex, "the CI grid {Grid} could not be read", Spec.Name);
-            Error = "The " + Noun + " could not be read from the Pro database: " + ex.Message;
+            Error = "The " + Noun + " could not be read from the Pro database: " + ViewerError.Text(ex);
         }
     }
 
@@ -241,7 +241,7 @@ public abstract class CiDataGridModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? IndexModel.NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec);
         var rows = await FillAsync(cols, page.Rows, ct);
@@ -262,7 +262,7 @@ public abstract class CiDataGridModel : PageModel
     {
         GridPage? page;
         try { page = await ExportRowsAsync(ct); }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? IndexModel.NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec);
         var rows = await FillAsync(cols, page.Rows, ct);

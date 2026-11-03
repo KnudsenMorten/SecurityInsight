@@ -37,6 +37,8 @@
 if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-AzRest.ps1') }
 # #517: the re-issued licence marker the engine records (Read-SILicenceSupersededMark -- the updater's SupersededBy seam)
 if (-not (Get-Command -Name Read-SILicenceSupersededMark -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-LicenceSuperseded.ps1') }
+# Invardia S16: the install's lasting id (SI-InstallId) as X-Invardia-Install-Id on the knock
+if (-not (Get-Command -Name ConvertTo-SIInvardiaInstallId -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-InvardiaInstallId.ps1') }
 
 # NO Set-StrictMode HERE -- a dot-sourced file that sets it leaks into the caller's scope.
 
@@ -67,9 +69,17 @@ function Get-SILicenceRequestBaseUrl {
     <#
         Where Invardia is: -BaseUrl, else $global:SI_LicenseRequest_BaseUrl, else $env:SI_LICENSE_REQUEST_BASE_URL, else
         https://invardia.com. HTTPS only (the pull token travels in a header). No trailing slash.
+        The install key and the pull token go to Invardia's own address only: a SETTING (the global, which a settings row can
+        set) that is not https://...invardia.com is left out and said -- the job's own value or the default applies.
     #>
     param([string]$BaseUrl)
-    $u = @($BaseUrl, [string]$global:SI_LicenseRequest_BaseUrl, [string]$env:SI_LICENSE_REQUEST_BASE_URL) | Where-Object { "$_".Trim() } | Select-Object -First 1
+    $fromSetting = "$(Get-Variable -Name SI_LicenseRequest_BaseUrl -Scope Global -ValueOnly -ErrorAction SilentlyContinue)".Trim()
+    if ($fromSetting) {
+        if (-not (Get-Command -Name Test-SITelemetryEndpointHost -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-OutboundTrust.ps1') }
+        $hw = Test-SITelemetryEndpointHost -Endpoint $fromSetting
+        if ($hw) { Write-Warning ("[licence-request] SI_LicenseRequest_BaseUrl is not used: {0} -- the licence request goes to Invardia's own address" -f $hw); $fromSetting = '' }
+    }
+    $u = @($BaseUrl, $fromSetting, [string]$env:SI_LICENSE_REQUEST_BASE_URL) | Where-Object { "$_".Trim() } | Select-Object -First 1
     if (-not $u) { $u = $script:SILicenceRequestDefaultBase }
     $u = "$u".Trim().TrimEnd('/')
     if ($u -notmatch '^https://[^/\s]+') { throw ("the licence request address must be an https:// URL, not '{0}'" -f $u) }
@@ -340,10 +350,13 @@ function Invoke-SILicenceRequestHttp {
     #>
     param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Body, [AllowNull()][string]$Token, [int]$TimeoutSec = 30,
           # the install key proves the knock comes from this tenant's install (a header only; never in a message)
-          [AllowNull()][string]$InstallKey)
+          [AllowNull()][string]$InstallKey,
+          # Invardia S16: the install's lasting id (SI-InstallId) -> X-Invardia-Install-Id, only when it is a GUID; '' = no header
+          [AllowNull()][AllowEmptyString()][string]$InstallId = '')
     $h = @{ Accept = 'application/json' }
     if ($Token) { $h[$script:SILicenceRequestTokenHeader] = $Token }
     if ($InstallKey) { $h['X-Invardia-Install-Key'] = $InstallKey }
+    $h = Add-SIInvardiaInstallIdHeader -Headers $h -InstallId $InstallId
     try {
         $r = Invoke-WebRequest -Method Post -Uri $Uri -Headers $h -Body $Body -ContentType 'application/json' -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
         $content = $r.Content; if ($content -is [byte[]]) { $content = [System.Text.Encoding]::UTF8.GetString($content) }
@@ -375,7 +388,8 @@ function Invoke-SILicenceRequest {
         and a result with Action 'error' / 'network', so an update run that calls this is never failed by it.
 
         -Seams (hashtable of scriptblocks):
-          Http          { param($Uri, $Body, $Token) }  -> @{ Status; Body; RetryAfter; Error }   (default Invoke-SILicenceRequestHttp)
+          Http          { param($Uri, $Body, $Token, $InstallKey, $InstallId) }  -> @{ Status; Body; RetryAfter; Error }   (default Invoke-SILicenceRequestHttp)
+                        (the knock passes the install key and -- Invardia S16 -- the lasting install id, '' when it is not a GUID)
           ReadSecret    { param($Name) }  -> text or $null                                         (required)
           WriteSecret   { param($Name, $Value) }                                                   (required)
           TenantId      { }  -> the tenant id from the identity's TOKEN                            (required)
@@ -415,7 +429,7 @@ function Invoke-SILicenceRequest {
     try {
         foreach ($req in 'ReadSecret', 'WriteSecret', 'TenantId', 'Install') { if (-not $Seams[$req]) { throw "the licence request client needs the '$req' seam" } }
         # (no GetNewClosure anywhere a file function is called: a closure cannot see functions dot-sourced into a caller's scope)
-        $http = if ($Seams['Http']) { $Seams['Http'] } else { { param($u, $b, $t, $k) Invoke-SILicenceRequestHttp -Uri $u -Body $b -Token $t -TimeoutSec $TimeoutSec -InstallKey $k } }
+        $http = if ($Seams['Http']) { $Seams['Http'] } else { { param($u, $b, $t, $k, $iid) Invoke-SILicenceRequestHttp -Uri $u -Body $b -Token $t -TimeoutSec $TimeoutSec -InstallKey $k -InstallId $iid } }
         $base = Get-SILicenceRequestBaseUrl -BaseUrl $BaseUrl
         $now = ([datetime](& $nowF)).ToUniversalTime()
         $state = ConvertFrom-SILicenceRequestState -Json (& $Seams.ReadSecret $script:SILicenceRequestSecretState)
@@ -467,10 +481,14 @@ function Invoke-SILicenceRequest {
         # ---- KNOCK (a local block, so a 401 on pull can knock in the same run) ----
         $knock = {
             param([string]$Why)
-            $iid = "$(& $Seams.ReadSecret $script:SILicenceRequestSecretId)".Trim()
+            # Invardia S16: with the vault's versions (ReadVersions) the id is the FIRST one written, whichever side wrote it
+            $iid = if ($Seams['ReadVersions']) { Resolve-SIInvardiaInstallId -ReadSecret $Seams.ReadSecret -WriteSecret $Seams.WriteSecret -ReadVersions $Seams['ReadVersions'] -ReplaceNotGuid }
+                   else { "$(& $Seams.ReadSecret $script:SILicenceRequestSecretId)".Trim() }
             if ($iid -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
-                $iid = [guid]::NewGuid().ToString()
-                & $Seams.WriteSecret $script:SILicenceRequestSecretId $iid      # kept for good: every later knock reuses it
+                # kept for good: every later knock reuses it. Made by the SAME code as the uplink job's (Invardia S16): a GUID,
+                # written, read back -- when both make it at once, the one the vault kept is sent by both
+                $iid = Resolve-SIInvardiaInstallId -ReadSecret $Seams.ReadSecret -WriteSecret $Seams.WriteSecret -ReadVersions $Seams['ReadVersions'] -ReplaceNotGuid
+                if (-not $iid) { throw 'the install id (SI-InstallId) could not be kept in the Key Vault' }
             }
             $cv = $null; $cid = ''
             if ($current -and "$($current.Status)" -notin @('Missing', 'Invalid')) { $cid = "$($current.LicenseId)"; $cv = $need.ValidTo }
@@ -482,7 +500,8 @@ function Invoke-SILicenceRequest {
             try { $ikey = "$(& $Seams.ReadSecret 'SI-Invardia-InstallKey')".Trim(); if ($ikey -notmatch '^inv-[^\s]{8,}$') { $ikey = '' } } catch { $ikey = '' }
             $body = New-SILicenceRequestBody -Version $Version -TenantId $tenant -InstallId $iid -Edition $Edition -ContactEmail $ContactEmail -CurrentLicenceId $cid -CurrentValidTo $cv -CurrentLicenceSha256 $csha
             & $log 'info' ("asking Invardia for a licence ({0}) for tenant {1}" -f $Why, $tenant)
-            $r = & $http ($base + '/api/licence-requests') $body $null $ikey
+            # Invardia S16: the same lasting id as X-Invardia-Install-Id (the knock only -- the pull carries its token, no id)
+            $r = & $http ($base + '/api/licence-requests') $body $null $ikey (ConvertTo-SIInvardiaInstallId $iid)
             $code = [int]$r.Status
             if ($code -in @(200, 201, 202)) {
                 $j = $null; try { $j = "$($r.Body)" | ConvertFrom-Json -ErrorAction Stop } catch { }
@@ -659,6 +678,7 @@ function New-SILicenceRequestSeams {
     $kvGet = ${function:Get-SIAzKeyVaultSecret}; $kvSet = ${function:Set-SIAzKeyVaultSecret}
     $atGet = ${function:Get-SIAzAccessToken}; $tidOf = ${function:Get-SILicenceRequestTenantFromToken}
     $miTok = ${function:Get-SIManagedIdentityToken}
+    $kvVers = ${function:Get-SIInvardiaKvInstallIdVersions}
     # A function the closures need and this job did not load is named in a plain error at the call -- never an opaque
     # "& $null" and never a different sign-in path taken silently.
     $need = { param([string]$Fn, $Value) if (-not $Value) { throw ("the licence request cannot run: {0} is not loaded in this job (engine\_shared\SI-AzRest.ps1)" -f $Fn) } }
@@ -674,6 +694,13 @@ function New-SILicenceRequestSeams {
         & $need 'Set-SIAzKeyVaultSecret' $kvSet
         $null = & $kvSet -VaultName $vault -Name $Name -SecretValue (ConvertTo-SecureString -String $Value -AsPlainText -Force) -ErrorAction Stop
     }.GetNewClosure()
+    # Invardia S16: the versions of SI-InstallId (first write wins) -- the same vault, over the same REST sign-in
+    if ($kvVers) {
+        $s.ReadVersions = {
+            param([string]$Name)
+            & $kvVers -VaultName $vault -Name $Name
+        }.GetNewClosure()
+    }
     $s.TenantId = {
         if ([bool]$global:SI_UseManagedIdentity) {
             # the install signs in as its managed identity: the tenant is that token's (auth\SI-ManagedIdentity.ps1)

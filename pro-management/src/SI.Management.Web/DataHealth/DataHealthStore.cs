@@ -29,11 +29,33 @@ public sealed record DataHealthResult(string Kind, string Name, string Label, lo
 /// <summary>A record a cycle did not find, or found different.</summary>
 public sealed record DataHealthMissing(string Kind, string Name, string? RecordKey, string? RecordName, string? Problem);
 
+/// <summary>
+/// #1056 one identity run's count for a customer's choice (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups,
+/// sidata.CollectionLeftOut): how many Exposure Graph objects got no asset, how many it looked at and kept, how many it could
+/// not decide and left as they were (Applied = false, with the reason).
+/// </summary>
+public sealed record DataHealthLeftOut(string Setting, string Feed, DateTime CollectedAt, long LeftOut, long? Kept, long Held, bool Applied, string? Detail);
+
 /// <summary>Everything the Data health page shows.</summary>
 public sealed record DataHealthView(bool HasTables, DataHealthState State, IReadOnlyList<DataHealthOverride> Overrides, IReadOnlyList<DataHealthCycle> Cycles,
     IReadOnlyList<DataHealthResult> Results, IReadOnlyList<DataHealthMissing> Missing, IReadOnlyList<string> Channels)
 {
     public static readonly DataHealthView Missing0 = new(false, DataHealthState.None, [], [], [], [], []);
+
+    /// #1056 the newest identity runs' counts of the customer's choices (newest first); empty while both switches are off.
+    public IReadOnlyList<DataHealthLeftOut> LeftOut { get; init; } = [];
+}
+
+/// <summary>#1056 the words of the customer's choices on the Data health page.</summary>
+public static class DataHealthLeftOutText
+{
+    /// PURE. What a switch leaves out, in words.
+    public static string Label(string setting) => setting switch
+    {
+        "SI_Identity_SkipNeverSyncedDisabledAd" => "On-premises AD accounts never synced to Entra ID, disabled and not privileged",
+        "SI_Identity_SkipDeletedGroups" => "Groups Entra ID no longer has (neither active nor in its deleted items)",
+        _ => setting,
+    };
 }
 
 /// <summary>
@@ -123,6 +145,11 @@ FROM cfg.DataHealthResult WHERE CycleId = @Cycle ORDER BY CASE Kind WHEN N'sourc
     public const string MissingSql = "SELECT TOP (2000) Kind, Name, RecordKey, RecordName, Problem FROM cfg.DataHealthMissing WHERE CycleId = @Cycle ORDER BY Kind, Name, RecordName;";
     public const string ChannelsSql = "IF OBJECT_ID(N'cfg.Connector') IS NOT NULL SELECT Name FROM cfg.Connector WHERE Direction = N'vulnerability' ORDER BY Name;";
     public const string OverrideSql = "EXEC cfg.DataHealthOverrideSet @Channel = @Channel, @Reason = @Reason, @By = @By, @Role = @Role, @Clear = @Clear;";
+    /// #1056 the customer's choices, counted per identity run (an older database has no table: nothing).
+    public const string LeftOutSql = """
+IF OBJECT_ID(N'sidata.CollectionLeftOut') IS NOT NULL
+SELECT TOP (60) Setting, Feed, CollectedAt, LeftOut, Kept, Held, Applied, Detail FROM sidata.CollectionLeftOut ORDER BY CollectedAt DESC, Id DESC;
+""";
 
     public async Task<DataHealthState> StateAsync(CancellationToken ct)
     {
@@ -146,10 +173,24 @@ FROM cfg.DataHealthResult WHERE CycleId = @Cycle ORDER BY CASE Kind WHEN N'sourc
     private static bool? Bit(SqlRow r, string c) => r.TryGetValue(c, out var v) && v is not null ? Convert.ToBoolean(v, CultureInfo.InvariantCulture) : null;
     private static double? Dbl(SqlRow r, string c) => r.TryGetValue(c, out var v) && v is not null ? Convert.ToDouble(v, CultureInfo.InvariantCulture) : null;
 
+    /// #1056 the newest counts of the customer's choices; a read that fails shows none (the page itself is not affected).
+    public async Task<IReadOnlyList<DataHealthLeftOut>> LeftOutAsync(CancellationToken ct)
+    {
+        try
+        {
+            return (await _sql.QueryAsync(LeftOutSql, new Dictionary<string, object?>(), ct))
+                .Select(r => new DataHealthLeftOut(r.Str("Setting") ?? "", r.Str("Feed") ?? "", r.Date("CollectedAt") ?? DateTime.MinValue, r.Long("LeftOut") ?? 0,
+                    r.Long("Kept"), r.Long("Held") ?? 0, Bit(r, "Applied") ?? true, r.Str("Detail")))
+                .Where(x => x.Setting.Length > 0).ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return []; }
+    }
+
     public async Task<DataHealthView> ReadAsync(long? cycleId, CancellationToken ct)
     {
+        var leftOut = await LeftOutAsync(ct);
         var probe = await _sql.QueryAsync(ProbeSql, new Dictionary<string, object?>(), ct);
-        if ((probe.FirstOrDefault()?.Long("HasTables") ?? 0) != 1) return DataHealthView.Missing0;
+        if ((probe.FirstOrDefault()?.Long("HasTables") ?? 0) != 1) return DataHealthView.Missing0 with { LeftOut = leftOut };
         _cache?.Remove(Key);
         var state = await StateAsync(ct);
         var ovr = (await _sql.QueryAsync(OverridesSql, new Dictionary<string, object?>(), ct))
@@ -171,7 +212,7 @@ FROM cfg.DataHealthResult WHERE CycleId = @Cycle ORDER BY CASE Kind WHEN N'sourc
         var channels = new List<string>(DataHealthRules.FixedChannels);
         try { channels.AddRange((await _sql.QueryAsync(ChannelsSql, new Dictionary<string, object?>(), ct)).Select(r => r.Str("Name")).OfType<string>()); }
         catch (Exception ex) when (ex is not OperationCanceledException) { /* the vulnerability connectors could not be listed: the fixed channels stay */ }
-        return new DataHealthView(true, state, ovr, cycles, results, missing, channels.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        return new DataHealthView(true, state, ovr, cycles, results, missing, channels.Distinct(StringComparer.OrdinalIgnoreCase).ToList()) { LeftOut = leftOut };
     }
 
     public async Task<(bool Saved, string Message)> OverrideAsync(string channel, string reason, string by, string role, CancellationToken ct)

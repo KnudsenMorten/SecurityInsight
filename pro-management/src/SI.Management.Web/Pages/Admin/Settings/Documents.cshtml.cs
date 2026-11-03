@@ -30,9 +30,9 @@ public sealed class DocumentsModel : PageModel
     public async Task OnGetAsync(CancellationToken ct)
     {
         try { Documents = await _docs.ListAsync(null, ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Document"); Errors.Add("The documents could not be read: " + ex.Message); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Document"); Errors.Add("The documents could not be read: " + ViewerError.Text(ex)); }
         try { Exemptions = (await _exemptions.ActiveAsync(null, 1000, ct)).Rows; }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Exemption"); Errors.Add("The exemptions could not be read: " + ex.Message); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "cfg.Exemption"); Errors.Add("The exemptions could not be read: " + ViewerError.Text(ex)); }
     }
 
     [SI.Management.Web.Audit.Audited("exemption.revoke.stage")]

@@ -12,8 +12,9 @@ namespace SI.Management.Web.Auth;
 /// signed in and its forms still save, and "a new version is available" can say "reload when you are ready".
 /// Never fails the app: when the database cannot be read or written, the keys of THIS process are kept in memory (exactly
 /// the behaviour before) and the next read tries the database again.
-/// Who can read the table: the web app (db_datareader) and the jobs, which already change every setting; the MCP server's
-/// identity is DENIED SELECT on it by Deploy-SIManagement.ps1.
+/// Who can read the table: the web app only. The engine's role and the MCP server's role are DENIED it (SI-EngineGrants.ps1,
+/// SI-ManagementGrants.ps1), and with DataProtection:KeyVaultKeyId the keys are stored ENCRYPTED with a Key Vault key only
+/// the web app's identity may use (KeyRingProtection.cs) -- a reader of the table holds nothing it can use.
 /// </summary>
 public sealed class SqlKeyRing : IXmlRepository
 {

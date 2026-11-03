@@ -521,7 +521,10 @@ function New-SIDataHealthWire {
     $r = [ordered]@{
         schema = 2; kind = 'health'; product = $w.Product; version = [string]$Context.Version
     }
-    if ("$($Context.InstallId)".Trim()) { $r.installId = [string]$Context.InstallId }
+    # Invardia S16: the install's LASTING id (SI-InstallId; Context.LastingInstallId) -- this record is identified only, so
+    # never the anonymous id; none = no field
+    $lid = if ($Context.PSObject.Properties['LastingInstallId'] -and (Get-Command -Name ConvertTo-SIInvardiaInstallId -ErrorAction SilentlyContinue)) { ConvertTo-SIInvardiaInstallId ([string]$Context.LastingInstallId) } else { '' }
+    if ($lid) { $r.installId = $lid }
     if ("$($Context.TenantId)".Trim()) { $r.tenantId = [string]$Context.TenantId }
     $r.sentUtc = ConvertTo-SIDataHealthIso $NowUtc
     $r.state = [string]$State.State

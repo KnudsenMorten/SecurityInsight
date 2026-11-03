@@ -280,13 +280,20 @@ Describe 'New-SISpn end to end on a fake Graph: the same objects, the same permi
         function Get-SIAzRoleAssignment { $null }
         function New-SIRoleAssignment { $Fake.RbacGranted = $true }
         function Set-SIAzContext { }
+        # 2026-11-01: a new client secret goes only to Key Vault (the vault is checked before anything is created)
+        $Fake.KvPut = $null
+        function Get-SIKeyVault { param($VaultName, $SubscriptionId) if ($VaultName -eq 'kv-test') { [pscustomobject]@{ VaultName = 'kv-test' } } }
+        function Invoke-SIAzRestRequest { param($Method, $Uri, $Audience, $Body, $What) $Fake.KvPut = @{ Method = $Method; Uri = $Uri; Body = $Body }; $null }
 
-        $out = & $script:Spn -DisplayName 'SecurityInsight (test)' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage Inline -SkipTenantRbac 6>$null
+        $out = & $script:Spn -DisplayName 'SecurityInsight (test)' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage KeyVault -KeyVaultName 'kv-test' -SkipTenantRbac 6>$null
         $out = @($out)[-1]
 
         $out.AppId | Should -Be 'app-id'
         $out.ObjectId | Should -Be 'sp-obj'
-        $out.CredValue | Should -BeExactly 'new-secret'
+        $out.CredValue | Should -BeNullOrEmpty -Because 'the secret is never handed back'
+        $out.KvName | Should -Be 'kv-test'; $out.KvSecretName | Should -Be 'SI-SPN-Secret'
+        $Fake.KvPut.Method | Should -Be 'PUT'; $Fake.KvPut.Uri | Should -Match '^https://kv-test\.vault\.azure\.net/secrets/SI-SPN-Secret'
+        ($Fake.KvPut.Body | ConvertFrom-Json).value | Should -BeExactly 'new-secret'
         $out.ExpiresUtc | Should -Be ([datetime]::new(2028, 10, 3, 10, 0, 0, [DateTimeKind]::Utc))
         $out.ConsentStatus | Should -Be 'granted'
 
@@ -302,15 +309,25 @@ Describe 'New-SISpn end to end on a fake Graph: the same objects, the same permi
         $app.displayName | Should -Be 'SecurityInsight (test)'; $app.signInAudience | Should -Be 'AzureADMyOrg'
         (BodyOf ($Fake.Requests | Where-Object { $_.Method -eq 'POST' -and $_.Url -like '*/v1.0/servicePrincipals' })).appId | Should -Be 'app-id'
         (BodyOf ($Fake.Requests | Where-Object { $_.Url -like '*/addPassword' })).passwordCredential.displayName | Should -BeLike 'SI-Wizard-*'
-        $Fake.RbacGranted | Should -BeTrue
+        $Fake.RbacGranted | Should -BeFalse -Because 'no role on the subscription any more (2026-10-31); -SkipTenantRbac skips the management-group Reader'
     }
     It 'refuses a Graph sign-in to another tenant, and a service principal without the permissions, before writing anything' {
         $Fake.Router = { param($r) throw "no request expected: $($r.Method) $($r.Url)" }
         $SIGraphRestTokenSource = { New-FakeJwt @{ tid = 'other-tenant'; upn = 'admin@contoso.example'; scp = 'Directory.AccessAsUser.All' } }
-        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage Inline 6>$null } | Should -Throw '*tenant mismatch*Start-SetupWizard.ps1 -TenantId tenant-1*'
+        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage KeyVault -KeyVaultName 'kv-test' 6>$null } | Should -Throw '*tenant mismatch*Start-SetupWizard.ps1 -TenantId tenant-1*'
         $SIGraphRestTokenSource = { New-FakeJwt @{ tid = 'tenant-1'; appid = 'invardia'; roles = @('Application.ReadWrite.OwnedBy') } }
-        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage Inline 6>$null } | Should -Throw '*missing required permissions: AppRoleAssignment.ReadWrite.All,Directory.Read.All*'
+        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage KeyVault -KeyVaultName 'kv-test' 6>$null } | Should -Throw '*missing required permissions: AppRoleAssignment.ReadWrite.All,Directory.Read.All*'
         $Fake.Requests.Count | Should -Be 0
+    }
+    It 'NEGATIVE (2026-11-01): a client secret handed back to the caller (Inline), or a Key Vault that is not there, is refused BEFORE the app or its secret is created' {
+        $SIGraphRestTokenSource = { New-FakeJwt @{ tid = 'tenant-1'; upn = 'admin@contoso.example'; scp = 'Directory.AccessAsUser.All'; app_displayname = 'Azure PowerShell' } }
+        $Fake.Router = { param($r) throw "no request expected: $($r.Method) $($r.Url)" }
+        function Get-SISetupAzureContext { [pscustomobject]@{ Tenant = [pscustomobject]@{ Id = 'tenant-1' }; Subscription = [pscustomobject]@{ Id = 'sub-1'; Name = 'sub' }; Account = [pscustomobject]@{ Id = 'admin@contoso.example'; Type = 'User' } } }
+        function Get-SIKeyVault { param($VaultName, $SubscriptionId) $null }
+        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage Inline 6>$null } | Should -Throw "*CredStorage 'Inline' is refused for a client secret*Nothing was created*"
+        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage KeyVault 6>$null } | Should -Throw '*-KeyVaultName is required*'
+        { & $script:Spn -DisplayName 'x' -TenantId 'tenant-1' -SubscriptionId 'sub-1' -CredKind Secret -CredStorage KeyVault -KeyVaultName 'kv-gone' 6>$null } | Should -Throw "*Key Vault 'kv-gone' not found*nothing was created*"
+        @($Fake.Requests | Where-Object { $_.Method -ne 'GET' }).Count | Should -Be 0 -Because 'no app, no service principal, no secret'
     }
 }
 

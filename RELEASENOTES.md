@@ -1,3 +1,24 @@
+## v3.0.27 — Install in two lines, everywhere
+
+### Install
+
+- The Community edition installs in two lines: line 1 downloads the installer from the latest GitHub release, line 2
+  runs it with your tenant and subscription. No git clone and no config file.
+- The README, the script help and the docs show the same two lines, with only the parameters an install uses.
+
+## v3.0.26 — Pro installs from Invardia, and the install fixes of 3.0.22-3.0.25
+
+### Install
+
+- The Pro install line from invardia.com now gets the Pro package from Invardia (signed and checked), not from GitHub;
+  you sign in once. The Community line keeps GitHub.
+- Includes the install fixes of 3.0.22-3.0.25: a Pro install without a licence starts, a new subscription's quota is
+  not a stop, a second run in one window signs in again, and the person installing gets their data roles.
+
+### Releases
+
+- A release and its tests do only what the change needs -- no fixed test set and far less fixed waiting.
+
 ## v3.0.25 — The install gives the person installing their data access
 
 ### Install

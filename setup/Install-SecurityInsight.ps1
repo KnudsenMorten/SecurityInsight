@@ -169,13 +169,19 @@
     Exit code: 0 installed (warnings included), 1 a step failed, 2 a check failed, 3 the settings are not valid.
 
 .EXAMPLE
-    ./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
-    # the quickest install: every other setting has its default
+    Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+    ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+    # the install as a person runs it, in two lines: line 1 downloads the small launcher (SecurityInsight Pro and the trial:
+    # from https://invardia.com/support/si/Install-SecurityInsight.ps1), line 2 runs it; it downloads the release, checks it
+    # and runs THIS installer from it with the same parameters. Every other setting has its default.
 .EXAMPLE
-    ./setup/Install-SecurityInsight.ps1 -TenantId '00000000-0000-0000-0000-000000000001' -SubscriptionId '00000000-0000-0000-0000-000000000002' -Location 'westeurope' -ResourceGroup 'rg-si-prod-pro-ca' -Owner 'secops@contoso.com' -UpdateRing 2 -MailMode sharedMailbox -MailFrom 'securityinsight@contoso.com' -MailTo 'secops@contoso.com' -SqlLocation 'swedencentral' -SqlAdminGroupId '00000000-0000-0000-0000-000000000003' -WebAppAccess internal -WebAppAdmins 'admin1@contoso.com','admin2@contoso.com' -PrivateNetwork -VnetId '/subscriptions/00000000-0000-0000-0000-000000000004/resourceGroups/rg-network-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke-security' -AppsSubnetName 'snet-si-apps' -AppsSubnetPrefix '10.0.24.0/27' -EndpointsSubnetName 'snet-si-endpoints' -EndpointsSubnetPrefix '10.0.24.32/28' -PrivateDnsZonesResourceGroupId '/subscriptions/00000000-0000-0000-0000-000000000005/resourceGroups/rg-private-dns' -HubVnetId '/subscriptions/00000000-0000-0000-0000-000000000005/resourceGroups/rg-network-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub' -SupportAppId '00000000-0000-0000-0000-000000000006' -SupportAccess troubleshoot
-    # a private-network install for SecurityInsight Pro as ONE command: in your existing virtual network, web app from your
-    # network only, ring 2. No licence on the line: it deploys everything and runs nothing until the licence is assigned to
-    # the installation; then it takes its licence, install key and the Pro release of ring 2 and starts by itself.
+    ./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+    # the same quickest install, run from an unpacked release: every other setting has its default
+.EXAMPLE
+    ./setup/Install-SecurityInsight.ps1 -TenantId '00000000-0000-0000-0000-000000000001' -SubscriptionId '00000000-0000-0000-0000-000000000002' -Location 'westeurope' -MailTo 'secops@contoso.com' -PrivateNetwork -VnetId '/subscriptions/00000000-0000-0000-0000-000000000004/resourceGroups/rg-network-spoke/providers/Microsoft.Network/virtualNetworks/vnet-spoke-security' -AppsSubnetName 'snet-si-apps' -AppsSubnetPrefix '10.0.24.0/27' -EndpointsSubnetName 'snet-si-endpoints' -EndpointsSubnetPrefix '10.0.24.32/28' -HubVnetId '/subscriptions/00000000-0000-0000-0000-000000000005/resourceGroups/rg-network-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub' -WebAppAccess internal
+    # a private-network install as ONE command: in your existing virtual network, the web app reachable from your network
+    # only. No licence on the line: SecurityInsight Pro deploys everything and runs nothing until the licence is assigned
+    # to the installation; then it takes its licence and install key and starts by itself.
 .EXAMPLE
     ./setup/Install-SecurityInsight.ps1 -Resume
     # continue an install that stopped, with the answers of its first run

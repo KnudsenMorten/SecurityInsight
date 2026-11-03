@@ -178,7 +178,7 @@ columns.
 `u_owner_mail`, `u_department`, `u_batch_id` or `u_batch_time`, and it sends devices, Azure resources and identities
 (no public IP addresses).
 
-**The push also sends the asset's tags**, after the contract's columns -- as text, never as JSON:
+**The push also sends the asset's tags**, after the contract's columns - as text, never as JSON:
 
 | Column | Type | Sent | What it holds | Example |
 |---|---|---|---|---|

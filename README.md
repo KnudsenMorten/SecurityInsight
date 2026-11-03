@@ -18,7 +18,7 @@ in your own Azure, reads read-only, and installs no agent.
 > **[Download the latest release](https://github.com/KnudsenMorten/SecurityInsight/releases/latest)** &nbsp;·&nbsp;
 > [Community vs Pro](#community-vs-pro)
 >
-> One command into your own Azure subscription. No PowerShell modules, no Azure CLI, no client secret.
+> Two lines into your own Azure subscription. No PowerShell modules, no Azure CLI, no client secret.
 
 <p align="center">
   <img src="docs/images/screenshots/risk-score.png" alt="The estate's risk score per day, with findings and Tier-0 assets exposed" width="900">
@@ -277,26 +277,27 @@ Screenshots use synthetic demo data. More on [invardia.com/products/securityinsi
 <!-- install samples: final text from SI -->
 ## Install SecurityInsight: five samples
 
-Open [Azure Cloud Shell](https://shell.azure.com) in **PowerShell**, signed in to the tenant you want to assess, and get the code once:
+Open [Azure Cloud Shell](https://shell.azure.com) in **PowerShell**, signed in to the tenant you want to assess. The
+install is two lines: line 1 downloads one small file from the latest public release, line 2 runs it with your tenant
+and subscription. It downloads the release, checks it and runs its installer.
 
 ```powershell
-git clone https://github.com/KnudsenMorten/SecurityInsight.git
-cd SecurityInsight
+Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
 ```
 
-Every sample is the same install command; you only add what you want to change. You sign in as yourself: in Cloud
-Shell there is no prompt; on your own PC (PowerShell 7 or Windows PowerShell 5.1) a browser window asks you to sign
-in. No PowerShell modules, no Azure CLI and no client secret are needed. Everything you leave out has a sensible
-default.
+Every sample below is the same line 2; you only add what you want to change. You sign in as yourself: in Cloud Shell
+there is no prompt; on your own PC (PowerShell 7 or Windows PowerShell 5.1) a browser window asks you to sign in. No
+PowerShell modules, no Azure CLI and no client secret are needed. Everything you leave out has a sensible default.
 
 ### 1. The quickest install (most people start here)
 
 Use this when you want SecurityInsight running in one subscription with all the defaults: a new resource group in
 West Europe, a new Log Analytics workspace, the web app, and the reports mailed to you from a shared mailbox
-SecurityInsight@&lt;your domain&gt; that the install creates.
+SecurityInsight@&lt;your domain&gt; that the install creates. It is the two lines above, with nothing added:
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>'
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
 ```
 
 The checks run first and nothing is created until they pass. The first results arrive after the first run.
@@ -306,7 +307,7 @@ The checks run first and nothing is created until they pass. The first results a
 Use this when your company has naming rules, wants the data in a given region, or the reports should go to a team.
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' `
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -Location 'northeurope' -ResourceGroup 'rg-securityinsight' -MailTo 'secops@contoso.com'
 ```
 
@@ -316,11 +317,11 @@ Use this when SecurityInsight should see Azure resources in every subscription, 
 
 ```powershell
 # a management group
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' `
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -CollectionScope 'managementGroup' -ManagementGroupId '<management group id>'
 
 # or the whole tenant
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' `
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -CollectionScope 'tenantRoot'
 ```
 
@@ -333,7 +334,7 @@ Use this when SecurityInsight must have no public endpoints: it runs in your vir
 and storage get private endpoints, and the web app is reachable from your network only.
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' `
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
     -PrivateNetwork -VnetId '<resource id of your virtual network>' `
     -AppsSubnetName 'snet-si-apps' -EndpointsSubnetName 'snet-si-endpoints' `
     -HubVnetId '<resource id of your hub virtual network>' -WebAppAccess internal
@@ -350,20 +351,27 @@ Use this before a change window, or when an install stopped half-way (for exampl
 switch to the command you used.
 
 ```powershell
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' -PreflightOnly   # checks only, changes nothing
-./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' -Resume          # continues from the step that stopped
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -PreflightOnly   # checks only, changes nothing
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Resume          # continues from the step that stopped
 ```
 
 ### Pro trial
 
-Take the trial at [invardia.com/trial](https://invardia.com/trial/), then run the same lines as SecurityInsight Pro.
-Pro and the trial install the same way, with the same parameters as the samples above; only the licence differs.
+Take the trial at [invardia.com/trial](https://invardia.com/trial/), then run the same two lines as SecurityInsight
+Pro. Line 1 downloads the Pro copy from invardia.com instead of GitHub; line 2 is the same, with the same parameters
+as the samples above. No licence or key goes on the line: Pro and the trial install the same way, and only the licence
+differs.
+
+```powershell
+Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+```
 
 ### Every setting
 
-Every setting is a parameter of the same command, so any install is one command line with your values. The list,
-with defaults and what each one does: `Get-Help ./setup/Install-SecurityInsight.ps1 -Full`, `setup/install-parameters.json`
-and [Community edition: the scripts you run](https://invardia.com/docs/securityinsight/community-scripts/#install).
+Every setting is a parameter of the same line 2, so any install is two lines with your values. The list, with
+defaults and what each one does: `Get-Help ./Install-SecurityInsight.ps1 -Full` (after line 1) and
+[Community edition: the scripts you run](https://invardia.com/docs/securityinsight/community-scripts/#install).
 <!-- /install samples -->
 ## Updates, status reports and 2.2
 

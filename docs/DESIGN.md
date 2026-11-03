@@ -8377,22 +8377,70 @@ Every setup, install, bootstrap, wizard, validation and grant script runs on pla
 
 ### 11. Guided install
 
-`setup/Install-SecurityInsight.ps1 -ConfigPath <config.json> [-LicencePath <file>] -Reporter <scriptblock> [-PreflightOnly] [-Resume] [-StatePath <dir>]` installs SecurityInsight unattended from the guided-install wizard's answers, as the signed-in person, in Azure Cloud Shell or locally. It checks first and changes nothing (sign-in, tenant and subscription, permissions, providers, free names); it then runs stable, repeatable steps built on the product's own setup scripts and reports each step's start and end, with nothing secret in it. Grants the person installing cannot make end as a warning with the exact command for the right person, and the install still completes; only a problem nothing can work around stops it, and `-Resume` continues from there. Keys for optional features are asked for in the shell and stored straight in the install's Key Vault. Exit codes: 0 installed, 1 a step failed, 2 a check failed, 3 invalid answers. Version 1 hosts on Container Apps with a managed identity.
+`setup/Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> [<every other setting as a parameter>] [-Reporter <scriptblock>] [-PreflightOnly] [-Resume] [-StatePath <dir>]` installs SecurityInsight unattended with every answer of the guided install as a parameter (a person runs it through the two-line launcher, section 11a; `-ConfigPath` is kept for compatibility only), as the signed-in person, in Azure Cloud Shell or locally. It checks first and changes nothing (sign-in, tenant and subscription, permissions, providers, free names); it then runs stable, repeatable steps built on the product's own setup scripts and reports each step's start and end, with nothing secret in it. Grants the person installing cannot make end as a warning with the exact command for the right person, and the install still completes; only a problem nothing can work around stops it, and `-Resume` continues from there. Keys for optional features are asked for in the shell and stored straight in the install's Key Vault. Exit codes: 0 installed, 1 a step failed, 2 a check failed, 3 invalid answers. Version 1 hosts on Container Apps with a managed identity.
 
 **The checks before anything is created.** The install asks Azure first and creates nothing until every check passes: the sign-in (a person in Azure Cloud Shell or the browser, the Invardia Support session, or a sign-in the installation page hands over -- then nothing is signed in again, and an application installing is treated as the service principal it is: its own Azure roles and directory roles are read, Contributor with User Access Administrator is enough, and the people who administer the web app must be named and exist in the directory), the tenant and subscription, the permissions, the resource providers, the names, the region and the quota. The region check reads Azure's own metadata for every resource type SecurityInsight creates -- Log Analytics, the data collection endpoint, storage, Key Vault, the container registry, the Container Apps environment and jobs, the managed identity and, for Pro, the database server, the database and the web app -- together with the storage SKUs' restrictions for the subscription and the regions the subscription may use. A refusal stops the install with one line: which resource, which region, and which regions accept everything (the same geography first); the default region itself is never changed. The quota check makes sure the region has room for one more Container Apps environment and, when the install's environment already exists, that it allows the cores SecurityInsight's own job sizing can use at once. A tenant without Exchange Online is told that mail is not set up and can be set up later in Get Started -- information, not a warning. Long waits (registering resource providers, building the image, creating the database) say what they are waiting for about once a minute, so the progress on the installation page never goes quiet. A sign-in handed over by the installation page cannot be renewed by the install: when it is about to run out, the next step does not start and the install says to restart it with a fresh code -- it resumes where it stopped.
 
 ### 11a. The install launcher: two lines (framework INSTALL-1)
 
-An install is two lines. Line 1 downloads ONE small file; line 2 runs it with every setting written out as a parameter:
+An install is two lines. Line 1 downloads ONE small file; line 2 runs it with the tenant and the subscription, plus only
+the settings that change (every other setting has its default). SecurityInsight Community, from the latest public
+release on GitHub:
+
+```powershell
+Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+```
+
+SecurityInsight Pro and the Pro trial, from invardia.com (the same line 2; no licence or key on it):
 
 ```powershell
 Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
-./Install-SecurityInsight.ps1 -TenantId <tenant id> -SubscriptionId <subscription id> <every other parameter>
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
 ```
+
+The README, the docs pages, the script's documentation page and both scripts' help show exactly these lines;
+`SIv3-CommunityInstaller` keeps them in step.
 
 The full installer (`setup/Install-SecurityInsight.ps1`) is not one file: it loads `setup/_shared/*`, builds images from
 the package and needs the whole SecurityInsight package next to it. The downloaded file is therefore a LAUNCHER
-(`setup/Install-SecurityInsight.Launcher.ps1`, PowerShell 7 or Windows PowerShell 5.1, no module, one file):
+(`setup/Install-SecurityInsight.Launcher.ps1`, PowerShell 7 or Windows PowerShell 5.1, no module, one file).
+
+**Pro installs from Invardia, Community from GitHub** (owner 2026-11-02 "github should be for community only" / "pro
+installs from invardia"; Invardia DESIGN ch 8 BINDING SPEC, framework section 0.1). The Pro copy (channel `pro`):
+
+1. Signs the admin in for `-TenantId` with SecurityInsight's OWN setup sign-in (`Connect-SISetupAzure`,
+   `setup/_shared/SI-SetupAzure.ps1`): Cloud Shell's token endpoint with no prompt, else the browser (authorization code +
+   PKCE on localhost; never device code), or the Support session's tokens with `-ViaSupportApp`.
+2. `GET https://invardia.com/api/install/securityinsight/package?tenantId=<tid>[&ring=<-UpdateRing>]` with
+   `Authorization: Bearer <the admin's ARM token>` (no `ring` without `-UpdateRing`: Invardia's default, ring 3). Any
+   refusal (`401 notSignedIn`, `403 wrongTenant`, `404 noEnvironment / nothingReleased / notFound`, `422`, `503`, no
+   answer) stops with Invardia's message in plain words and exit 3 -- **no GitHub fallback**. The route has no version
+   parameter, so `-Version` is not used by Pro (said in one line): Pro installs what the ring serves.
+3. Checks the answer with the UPDATER'S verifier (`engine/_shared/SI-InvardiaUpdate.ps1`, no second implementation):
+   `Test-SIInvardiaManifestSignature` against the trusted keys that ship with it (`SI-InvardiaUpdateKeys.json` -- Invardia's
+   `/api/updates/keys`, embedded; a key fetched at run time is never trusted alone), `Test-SIInvardiaManifestContent`
+   (product, kind `code`, the ring asked for -- 3 without `-UpdateRing` --, version, SHA-256, size); the answer's unsigned
+   `version` / `sha256` / `size` / `sequence` must equal the signed ones; then `Save-SIInvardiaUpdateFile` downloads
+   `downloadUrl` into a NEW empty temp folder and refuses a size or SHA-256 that is not the signed manifest's.
+4. Checks the zip (`securityinsight-src-<version>/SOLUTIONS/SecurityInsight/...`: the installer is there, `VERSION` is the
+   release's, or its base for a `<VERSION>.<build>` release), unpacks it, writes `'pro'` into the installer's edition line.
+5. Runs the installer IN THE SAME PROCESS with exactly the given parameters. **One sign-in:** the sign-in of step 1 lives
+   in this process (`$global:SI_SetupSignInState` + the REST layer's connection, memory only, refresh token included); the
+   installer's preflight reuses a sign-in of the same tenant (`Get-SISetupAzureContext`), so the admin is not asked again
+   and its tokens renew as usual. (`SI_HANDOFF_TOKENS` was not used: handed-over tokens cannot be renewed and an install
+   outlives an access token.) A `-Resume` that finds its folder signs nothing in (the installer signs in itself).
+
+The code steps 1 and 3 need is EMBEDDED by `release/Build-SISupportScripts.ps1` into the Pro copy with the mechanism every
+standalone script uses (`New-SISupportEmbeddedFilesText`: readable, each line prefixed `|`, SHA-256 per file) into
+`$__siLauncherFiles`: the dot-source closure of `setup/_shared/SI-SetupAzure.ps1`, plus `SI-InvardiaUpdate.ps1`,
+`SI-InvardiaInstallId.ps1` and the keys (the verifier's own closure would pull the licence and settings code it loads only
+inside functions the launcher never calls). At run time the launcher writes them to `securityinsight-launcher-code-<random>`
+in the temp folder, checks each SHA-256 (a damaged copy stops before anything is asked), loads the two entry files (its
+only dot-source, `. $__siLauncherLoad`) and removes the folder when it ends. The repository copy embeds nothing and, as Pro,
+uses the files of the package it stands in. About 0.7 MB.
+
+The Community copy (channel `community`):
 
 1. It reads the public release on GitHub, anonymously: `api.github.com/repos/KnudsenMorten/SecurityInsight/releases/latest`,
    or `releases/tags/v<version>` with `-Version`.
@@ -8416,19 +8464,36 @@ the package and needs the whole SecurityInsight package next to it. The download
 
 **Pro or Community is ONE line of the launcher**: `$script:SIInstallChannel = 'community'` in the repository and the
 GitHub copy; the copy handed to Invardia for `invardia.com/support/si/` says `'pro'` (`release/Build-SISupportScripts.ps1`
-`Set-SIInstallLauncherStamp`, which also writes the release version into `$__siLauncherVersion`). The Pro copy installs
-the SAME public release and, before it runs it, writes `'pro'` into the unpacked installer's one edition line
+`Set-SIInstallLauncherStamp`, which also writes the release version into `$__siLauncherVersion`). The channel decides the
+source (Invardia for Pro, GitHub for Community); the Pro copy writes `'pro'` into the unpacked installer's one edition line
 (`$siEditionStamp`) -- the same one-line change the full installer's own contract defines; the edition is never a
-parameter. Nothing Pro or licensed is downloaded before a licence exists: the install claims its key, and the updater
-pulls the licensed Pro code through Invardia later.
+parameter. No licence is needed to install Pro: the install deploys with every job parked, claims its key, and the owner
+assigns the licence in the back office afterwards.
 
-**The hand-over.** The support-script build writes the pro-stamped launcher into the set handed to Invardia AS
-`Install-SecurityInsight.ps1`, with its `Install-SecurityInsight.doc.json` (the two lines, every parameter, the network
-hosts: GitHub's four first, then the installer's), its SHA256SUMS line and a manifest entry (`kind: launcher`,
-`channel: pro`). It embeds nothing. The full installer's own package doc is not handed over beside it: that page is the
-launcher's. Unsigned, as every SecurityInsight script.
+**The hand-over.** The support-script build writes the pro-stamped launcher, with its embedded code, into the set handed
+to Invardia AS `Install-SecurityInsight.ps1`, with its `Install-SecurityInsight.doc.json` (the two lines, every parameter,
+the network hosts: `invardia.com`, `login.microsoftonline.com`, `management.azure.com` first, then the installer's -- never
+GitHub's), its SHA256SUMS line and a manifest entry (`kind: launcher`, `channel: pro`, `embedded: [...]`). The full
+installer's own package doc is not handed over beside it: that page is the launcher's. Unsigned, as every SecurityInsight
+script.
 
-**Hosts a customer must allow** for the launcher: `github.com`, `api.github.com`, `objects.githubusercontent.com`,
+**The Community copy on every public release.** Line 1 of the Community install reads the release asset
+`Install-SecurityInsight.ps1` of the latest public release. The shared publish workflow creates the public release
+(`v<version>`) when the `SecurityInsight-v<version>` tag is pushed and attaches only `SecurityInsight-v<version>.zip`, so
+SecurityInsight's own release tool `release/Publish-SICommunityInstaller.ps1` attaches the launcher after it: it waits
+for the release and its zip, reads `setup/Install-SecurityInsight.Launcher.ps1` from THAT zip (the code the release
+ships), checks the zip's `VERSION`, stamps the channel line `'community'` and the version line (the same
+`Set-SIInstallLauncherStamp` as the Pro copy) and checks the result stands alone (`Test-SICommunityInstallerText`: it
+parses, names no module, embeds nothing, and its one dot-source is inside `if ($isPro)`). `-Apply` uploads it with
+`gh release upload v<version> Install-SecurityInsight.ps1 --clobber` (not when the same file is there) and downloads
+`releases/download/v<version>/Install-SecurityInsight.ps1` (and `releases/latest/download/...` when it is the latest)
+anonymously to check the SHA-256; the plan uploads nothing. `setup/Publish-SICommunityRelease.ps1 -Apply` runs it before a
+Community version is registered with Invardia; a failure there is a warning with the command to run, and the ring
+release goes on (installs update from the zip, never from the launcher). The Community copy embeds nothing because its
+path loads no other file: it is the repository file with two lines stamped, published as UTF-8 with a BOM.
+
+**Hosts a customer must allow** for the Pro launcher: `invardia.com`, `login.microsoftonline.com`, `management.azure.com`;
+for the Community launcher `github.com`, `api.github.com`, `objects.githubusercontent.com`,
 `release-assets.githubusercontent.com`; then the installer's own.
 
 ### 12. Licence bound to your tenant

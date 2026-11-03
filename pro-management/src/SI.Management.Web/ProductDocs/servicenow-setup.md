@@ -82,7 +82,7 @@ sync or makes SecurityInsight warn on every run.
 | `personalize_dictionary` | Reading the staging table (`sys_db_object`) and its columns (`sys_dictionary`) | ServiceNow answers 403 `unauthorized to access table: sys_db_object`. The check before each sync fails, and **nothing is sent** |
 | `import_admin` | Reading the REST Insert Multiple column mapping (`sys_rest_insert_multiple`, `sys_rest_insert_multiple_column_mapping`) | A warning on every check: the mapping is not checked |
 | Read on `sys_import_set_row` (`import_admin` gives it on a standard instance) | Reading your import's result per batch | A warning on every run; the import result is not shown |
-| Read and create on the three staging tables -- for a **scoped application**'s tables (`x_<scope>_...`), the application's own role its access controls use | Writing the rows, and reading one row back after each page and each staging status row after it is written | The send or the read-back is refused (403) |
+| Read and create on the three staging tables; for a **scoped application**'s tables (`x_<scope>_...`), the application's own role its access controls use | Writing the rows, and reading one row back after each page and each staging status row after it is written | The send or the read-back is refused (403) |
 
 **Each of the three staging tables** (System Definition > Tables > the table > *Application Access*): *Accessible from* =
 All application scopes; *Can read* and *Can create* on; *Allow access to this table via web services* on.

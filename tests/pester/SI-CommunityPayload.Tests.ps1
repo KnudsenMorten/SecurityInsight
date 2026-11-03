@@ -226,6 +226,10 @@ Describe 'no free file loads a Pro file' {
             'tests\pester\SIv3-SocAttackPaths.Tests.ps1|report-certification'   # the spec case runs only after Test-Path finds the folder (skipped without it)
             # the staged template pack's signed manifest is verified with the Pro update verifier, loaded only after Test-Path finds it
             'engine\pro-settings\SI-TemplatePacks.ps1|SI-InvardiaUpdate.ps1'
+            # the install launcher's PRO channel (the copy Invardia hands out, which carries the verifier embedded) checks the Pro
+            # package with the Pro update verifier; the Community copy never loads it (its channel is GitHub), and a repository
+            # copy loads it only after it finds the file next to it
+            'setup\Install-SecurityInsight.Launcher.ps1|SI-InvardiaUpdate.ps1'
             'tests\pester\SIv3-SqlTier.Tests.ps1|SI-UpdaterInvardia.ps1'        # #756: the Invardia update path is read only after Test-Path finds it (skipped without it)
             'tests\pester\SIv3-StepFailureCause.Tests.ps1|asset-correlation'     # a job NAME in fixture log lines -- a label, never loaded
             'tests\pester\SIv3-NoScriptSigningClaims.Tests.ps1|release\'         # the published product pages are read only after Test-Path finds the folder

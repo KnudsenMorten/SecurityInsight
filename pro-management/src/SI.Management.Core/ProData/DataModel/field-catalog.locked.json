@@ -6028,6 +6028,51 @@
       "description": "Tags from every source: source, name, value."
     },
     {
+      "name": "si_tags_inherited",
+      "classes": [
+        "device",
+        "cloud_resource",
+        "public_ip"
+      ],
+      "type": "dynamic",
+      "group": "ownership",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "azure"
+        ],
+        "staleDays": 90
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Azure tags the asset inherits from its resource group or subscription, for tag names the asset does not set itself. Each tag says where it comes from: name, value, scope (resource group or subscription) and the name of that resource group or subscription. When both set the same tag, the resource group's value is used."
+    },
+    {
+      "name": "si_tags_all",
+      "classes": [
+        "device",
+        "identity",
+        "cloud_resource",
+        "public_ip"
+      ],
+      "type": "dynamic",
+      "group": "ownership",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "azure"
+        ],
+        "staleDays": 90
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "All tags of the asset in one list: its own tags first, then the Azure tags it inherits from its resource group or subscription. Shown and sent as 'name = value', an inherited tag with '(resource group)' or '(subscription)' after it. Use this field when a system such as ServiceNow should receive every tag in one column."
+    },
+    {
       "name": "si_identity_type",
       "classes": "identity",
       "type": "string",

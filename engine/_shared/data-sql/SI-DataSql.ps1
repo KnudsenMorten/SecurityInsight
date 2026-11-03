@@ -3278,11 +3278,12 @@ function Invoke-SIDataStoppedRunCleanup {
         removed by a later wake-up with no run running (Finish). Only those ('stopped run'); never a complete collection,
         never the published one, never a result waiting for the data sync, never the collection the live run writes -- the
         plan AND the database's mark refuses them. Without the seam a running run means nothing is touched, as before.
-        #1038 part 3 -- THE ONE HOUSEKEEPING PATH. Rows are removed ONLY while nothing is going (Get-SIDataHousekeepingBusy: no
-        pipeline run, no open step, no run holding the install's lock, no data sync and no data out -- -JobRunning / -Jobs,
-        the jobs' running executions, also one started by hand). That is asked again before EVERY range and batch: the moment
-        one starts, the removal stops between two ranges and the next wake-up goes on (it never removes while a run goes --
-        #892's removal during a run is gone; a run only gets the #882 marks). It never removes the newest complete collection
+        #1038 part 3 -- THE ONE HOUSEKEEPING PATH. With nothing going (Get-SIDataHousekeepingBusy: no pipeline run, no open
+        step, no run holding the install's lock, no data sync and no data out -- -JobRunning / -Jobs, the jobs' running
+        executions, also one started by hand) every marked collection is removed; that is asked again before EVERY range and
+        batch, and the moment one starts the removal stops between two ranges. #1063 (owner 2026-11-03: "Both"): WHILE a
+        pipeline run goes (with -RaRunning), the #882 marks are made AND the rows of collections marked BEFORE the run began
+        are removed (#892's -FinishOnly guards), paced by the database's load, giving way to a data out. It never removes the newest complete collection
         or the one before it (#717 -- the plan and the database's mark), never the published one. Progress -- collections and
         rows left, paused and why -- is recorded in cfg.InstallState 'Housekeeping' (Write-SIDataHousekeepingProgress); the
         hourly heartbeat sends the rows left (Pipeline.housekeepingRowsLeft). Never blocks or fails anything else.
@@ -3293,6 +3294,7 @@ function Invoke-SIDataStoppedRunCleanup {
           [scriptblock]$JobRunning, [string[]]$Jobs = @('asset-datasync', 'data-out'))
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = '' }
+    $hkStarted = [datetime]::UtcNow
     try {
         if (-not $SettingsInvoke) { $out.Why = 'the run records cannot be read here -- nothing is removed'; return [pscustomobject]$out }
         $busy = Get-SIDataHousekeepingBusy -SettingsInvoke $SettingsInvoke -JobRunning $JobRunning -Jobs $Jobs
@@ -3325,12 +3327,48 @@ function Invoke-SIDataStoppedRunCleanup {
             $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleBeforeUtc $own.Before -IdleReason $why -OnlyWhy @('stopped run') -MarkOnly `
                        -RowsRemovedBy 'by a later wake-up of the pipeline runner when no run, data sync or data out is going, in key ranges' -TimeBudgetSeconds $TimeBudgetSeconds
             $out.Retention = $ret
-            # #1038 part 3 (owner 2026-11-01: the clean-up is low priority): while a run is going NO row is removed -- #892's
-            # removal during a run is gone. The marks above only keep those collections out of every view; their rows, and
-            # every other marked collection's, are removed by a wake-up when nothing is going (below).
-            $out.Status = if ($ret.Status -eq 'failed') { 'failed' } else { 'ok' }
-            $out.Why = 'a pipeline run is running -- collections no live run owns were marked; no row is removed until no run, data sync or data out is going'
-            $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
+            # #1063 (owner 2026-11-03: "Both" -- clean retired rows during runs, throttled when the database is busy, now; the
+            # per-collection partitions next): at an install whose runs go back to back (the large ring 1 install: 7.9 M retired
+            # rows, the findings table at 217 GB) a wake-up with nothing going never comes. So, while a run goes, the rows of
+            # collections that were marked BEFORE this run started are removed (#892's -FinishOnly, its guards unchanged: the
+            # owner floor, marks made before the run start, the database's own check on every statement, never the published
+            # one), in key ranges, paced by the database's load (the housekeeping rule: it WAITS while the load is high), inside
+            # what is left of this wake-up's time budget. It gives way to a data out (the ServiceNow send) the moment one runs:
+            # asked before every range and batch. The next wake-up goes on.
+            $runStart = $null
+            try {
+                $rs = & $SettingsInvoke "IF OBJECT_ID('cfg.FlowRun') IS NULL SELECT CAST(NULL AS datetime2(0)) ELSE SELECT MIN(StartedUtc) FROM cfg.FlowRun WHERE State = N'Running'" @{} 'scalar'
+                if ($rs -is [datetime]) { $runStart = [datetime]::SpecifyKind([datetime]$rs, [DateTimeKind]::Utc) }
+            } catch { $runStart = $null }
+            $left = if ($TimeBudgetSeconds -gt 0) { [int][Math]::Floor($TimeBudgetSeconds - ([datetime]::UtcNow - $hkStarted).TotalSeconds) } else { 0 }
+            $fin = $null
+            if ($left -gt 0 -and $null -ne $runStart) {
+                $hkJobRunning = $JobRunning
+                $doStop = {
+                    if (-not $hkJobRunning) { return '' }
+                    $x = $null
+                    try { $x = & $hkJobRunning 'data-out' }
+                    catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { return '' }; return ('whether the data out runs could not be read ({0})' -f $_.Exception.Message) }
+                    if ($x) { 'a data out is running' } else { '' }
+                }
+                $fin = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -FinishOnly -FinishFloorUtc $own.Before -FinishMarkedBeforeUtc $runStart -TimeBudgetSeconds $left -ShouldStop $doStop
+            }
+            $out['Finished'] = $fin
+            $out.Status = if ($ret.Status -eq 'failed' -or ($fin -and $fin.Status -eq 'failed')) { 'failed' } else { 'ok' }
+            $finRows = 0L; if ($fin -and $fin.Rows) { foreach ($k in @($fin.Rows.Keys)) { $finRows += [long]$fin.Rows[$k] } }
+            $hkLeft = $null
+            if ($finRows -gt 0 -or $NowUtc.ToUniversalTime().Minute -lt 5) {
+                try { $hkLeft = @(@(& $Invoke (Get-SIDataHousekeepingLeftSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1 } catch { $hkLeft = $null }
+            }
+            if ($null -eq $fin) {
+                $out.Why = 'a pipeline run is running -- collections no live run owns were marked; ' + $(if ($null -eq $runStart) { 'when the run started could not be read, so no row is removed this time' } else { 'no time is left in this wake-up for removing rows' })
+                $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Left $hkLeft -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
+            } else {
+                $fState = if ($fin.Status -eq 'failed') { 'failed' } elseif ($fin.Paused) { 'paused' } else { 'removing' }
+                $fWhy = if ($fState -eq 'failed') { [string]$fin.Error } elseif ($fState -eq 'paused') { [string]$fin.Paused } else { 'a pipeline run is going: the rows of collections marked before it began are removed, paced by the database''s load' }
+                $out.Why = 'a pipeline run is running -- collections no live run owns were marked; the rows of collections marked before this run began are removed in key ranges, paced by the database''s load, inside this wake-up''s time budget'
+                $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State $fState -Left $hkLeft -RemovedRows $finRows -Why $fWhy -Log $Log -NowUtc $NowUtc -By $By
+            }
             return [pscustomobject]$out
         }
         if ($busy.Busy) {

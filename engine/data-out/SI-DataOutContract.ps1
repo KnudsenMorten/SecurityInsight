@@ -22,6 +22,8 @@
 #  THE CONTRACT'S VERSION. Rule: ADD ONLY. Renaming or removing a column, or changing what a value means, needs a new
 #  version (and the old one is kept for the targets that read it).
 # =====================================================================================================================
+# the tag text a ServiceNow column gets (ConvertTo-SITagListText) -- the condition helpers, loaded once
+if (-not (Get-Command -Name ConvertTo-SITagListText -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'data-model', 'SI-Conditions.ps1')) }
 $script:SIDataOutContractVersion = '1'
 $script:SIDataOutContractActions = @('new', 'update', 'close', 'reopen', 'held', 'out_of_scope')
 $script:SIDataOutContractModes = @('live', 'resync', 'test')
@@ -526,13 +528,39 @@ function Read-SISnowImportFeedback {
     } catch { [pscustomobject]@{ Ok = $false; Counts = $null; Note = $_.Exception.Message } }
 }
 
+function ConvertTo-SIDataOutTagText {
+    <# PURE. A value that is a list of tag entries -- or that list kept as JSON text by the CI document -- as its ONE tag
+       text (ConvertTo-SITagListText: 'name = value; ...', an inherited tag with ' (resource group)' / ' (subscription)');
+       $null for every other value. #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [ValueType]) { return $null }
+    if ($Value -is [string]) {
+        $s = $Value.TrimStart()
+        if (-not $s.StartsWith('[') -or $s.IndexOf('"name"', [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $null }
+        $parsed = $null
+        try { $parsed = ConvertFrom-Json -InputObject $s } catch { return $null }
+        if ($null -eq $parsed) { return $null }
+        return (ConvertTo-SITagListText @($parsed))
+    }
+    # ONE tag: a list of one entry reaches here as the entry itself (a PowerShell function hands a one-item list back
+    # unrolled) -- it is a tag list of one
+    if ($Value -is [System.Collections.IDictionary] -or $Value -is [System.Management.Automation.PSCustomObject]) { return (ConvertTo-SITagEntryText $Value) }
+    if (-not ($Value -is [System.Collections.IEnumerable])) { return $null }
+    return (ConvertTo-SITagListText $Value)
+}
+
 function ConvertTo-SIDataOutWireValue {
     <#
         PURE. ONE DATE FORMAT for every column of every row (#914 decision 9): a date and time -- a [datetime], or text in ISO
         8601 -- is sent as UTC 'yyyy-MM-dd HH:mm:ss' (the format ServiceNow's import reads into a glide_date_time, the same as
-        the staging status rows). Every other value is returned as it is.
+        the staging status rows). ONE TAG TEXT (owner 2026-11-03: the tags go to a ServiceNow CI column): a list of tag
+        entries ({ name, value }, an inherited one with its scope -- si_tags, si_tags_all, si_tags_inherited) is sent as the
+        text 'name = value; ...' with ' (resource group)' / ' (subscription)' on an inherited tag (ConvertTo-SITagListText),
+        never as JSON -- also when the CI document kept the list as JSON text. Every other value is returned as it is.
     #>
     param($Value)
+    $tt = ConvertTo-SIDataOutTagText $Value
+    if ($null -ne $tt) { return $tt }
     if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) }
     if ($Value -is [string] -and $Value -match '^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)?$') {
         $d = [datetime]::MinValue

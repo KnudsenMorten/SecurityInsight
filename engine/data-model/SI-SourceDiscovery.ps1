@@ -109,7 +109,7 @@ $script:SISourceDiscoveryUnwrap = @{
 }
 
 # Parts SecurityInsight builds itself -- not what a source offers.
-$script:SISourceDiscoverySkipParts = @('derived', 'children', 'egQueryRules', 'mg')
+$script:SISourceDiscoverySkipParts = @('derived', 'children', 'egQueryRules', 'mg', 'parentTagScopes')
 
 # Properties whose children are the tenant's own keys (one "property" per tag would be noise): listed once, never opened.
 $script:SISourceDiscoveryOpaque = @('tags', 'extensionAttributes', 'customSecurityAttributes', 'onPremisesExtensionAttributes')

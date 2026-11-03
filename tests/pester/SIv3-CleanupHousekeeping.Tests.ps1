@@ -151,14 +151,40 @@ Describe 'a removal does not start while a run, a data sync or a data out is goi
         (Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke (New-Settings -Open 1).Invoke -JobRunning { param($j) $null } -NowUtc (T 7 8) -Log $script:Quiet).Status | Should -Be 'skipped'
         $d.Sent.Count | Should -Be 0
     }
-    It 'a pipeline run is going: marks only -- the rows of collections marked BEFORE the run started are no longer removed during it' {
+    It '#1063: a pipeline run is going -- the rows of collections marked BEFORE the run started ARE removed during it (paced), the newest two stay' {
+        $d = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5; 3 = 4; 4 = 4 }
+        $s = New-Settings -Runs 1 -RunStart (T 25)
+        # a data sync running does not stop it (the data out does, below)
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning (New-Job -Job 'asset-datasync').Fn -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        $r.Status | Should -Be 'ok'
+        $r.Finished | Should -Not -BeNullOrEmpty
+        $d.Left['1'].Count | Should -Be 0; $d.Left['2'].Count | Should -Be 0
+        $d.Left['3'].Count | Should -Be 4; $d.Left['4'].Count | Should -Be 4
+        @($d.Sent | Where-Object { $_.Sql -match 'AS Refused|DELETE TOP' -and @('3', '4') -contains [string]$_.P['CollectionId'] }).Count | Should -Be 0
+        $rec = $s.Recorded[$s.Recorded.Count - 1] | ConvertFrom-Json
+        $rec.state | Should -Be 'done' -Because 'nothing is left after this wake-up'
+        $rec.removedRows | Should -BeGreaterThan 0; $rec.rowsLeft | Should -Be 0
+    }
+    It '#1063: a collection marked AFTER the running run started keeps its rows until that run is over' {
+        $state = @((Row 1 (T 1) Complete -Retired -RetiredAt (T 26)), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete))
+        $d = New-HkData -State $state -Rows @{ 1 = 5 }
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke (New-Settings -Runs 1 -RunStart (T 25)).Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        $r.Status | Should -Be 'ok'
+        $d.Left['1'].Count | Should -Be 5
+        @(Removals $d.Sent).Count | Should -Be 0
+    }
+    It '#1063: during a run it gives way to a data out at once, and removes nothing when the run start cannot be read' {
         $d = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5 }
         $s = New-Settings -Runs 1 -RunStart (T 25)
-        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 30 -Log $script:Quiet
-        $r.Status | Should -Be 'ok'
-        @(Removals $d.Sent).Count | Should -Be 0 -Because 'the clean-up is housekeeping: no range, no batch while a run goes'
-        $d.Left['1'].Count | Should -Be 5; $d.Left['2'].Count | Should -Be 5
-        ($s.Recorded[$s.Recorded.Count - 1] | ConvertFrom-Json).state | Should -Be 'paused'
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning (New-Job -Job 'data-out').Fn -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        @(Removals $d.Sent).Count | Should -Be 0 -Because 'the ServiceNow send comes first'
+        $rec = $s.Recorded[$s.Recorded.Count - 1] | ConvertFrom-Json
+        $rec.state | Should -Be 'paused'; $rec.why | Should -Match 'a data out is running'
+        $d2 = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5 }
+        $r2 = Invoke-SIDataStoppedRunCleanup -Invoke $d2.Invoke -SettingsInvoke (New-Settings -Runs 1).Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        $r2.Status | Should -Be 'ok'
+        @(Removals $d2.Sent).Count | Should -Be 0 -Because 'FAIL SAFE: no run start = nothing removed'
+        $r2.Why | Should -Match 'when the run started could not be read'
     }
     It 'the executions of a job that cannot be read: nothing removed (fail safe)' {
         $d = New-HkData -State $script:State -Rows @{ 1 = 5 }
@@ -293,11 +319,14 @@ Describe 'the wiring: the pipeline runner''s wake-up' {
         $script:Runner | Should -Match ([regex]::Escape("`$cleanJob = { param(`$j) `$seams.Running(`$j) }"))
         $script:Runner | Should -Match 'Invoke-SIDataStoppedRunCleanup -Invoke \$cleanSql -SettingsInvoke \$proStore\.Invoke -IdleStaleHours \$idleHours -Log \$cleanLog -RaRunning \$cleanRa -JobRunning \$cleanJob -Jobs \$cleanJobs'
     }
-    It 'the wake-up no longer removes rows while a run goes (no -FinishOnly call left in the engine)' {
+    It '#1063: the wake-up removes rows while a run goes through exactly ONE -FinishOnly call, in Invoke-SIDataStoppedRunCleanup, with the floor, the run start, a budget and the data-out stop' {
         $f = Get-Content -Raw -LiteralPath (Join-Path $script:Root 'engine\_shared\data-sql\SI-DataSql.ps1')
         $ast = [System.Management.Automation.Language.Parser]::ParseInput($f, [ref]$null, [ref]$null)
         $fin = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-SIDataCollectionRetention' -and @($n.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'FinishOnly' }).Count }, $true))
-        $fin.Count | Should -Be 0
+        $fin.Count | Should -Be 1
+        $fn = $fin[0].Parent; while ($fn -and -not ($fn -is [System.Management.Automation.Language.FunctionDefinitionAst])) { $fn = $fn.Parent }
+        $fn.Name | Should -Be 'Invoke-SIDataStoppedRunCleanup'
+        $fin[0].Extent.Text | Should -Match '-FinishFloorUtc \$own\.Before -FinishMarkedBeforeUtc \$runStart -TimeBudgetSeconds \$left -ShouldStop \$doStop'
     }
 }
 

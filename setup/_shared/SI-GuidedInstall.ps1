@@ -49,6 +49,8 @@
 # #681 / #683: private networking and customer-managed keys -- OPTIONS (default off: the default install is unchanged)
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-PrivateNetwork.ps1'))
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-CustomerKeys.ps1'))
+# framework INSTALL-1: a Pro install without a licence parks its jobs until the licence is assigned (engine/_shared, free)
+. ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', '_shared', 'SI-AssignedLicence.ps1'))
 # #427: a failed step reaches Invardia's uplink (engine/_shared/SI-TelemetrySend.ps1). A missing or broken file only means no report.
 try {
     $siInstallTelemetryLib = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', '_shared', 'SI-TelemetrySend.ps1')
@@ -1200,6 +1202,36 @@ function Invoke-SIInstallScript {
     $r
 }
 
+function Set-SIInstallJobsAwaitLicence {
+    <#
+        Framework INSTALL-1: a Pro install without a licence runs NOTHING. Every scheduled job of the install's resource group
+        is parked through ARM PATCH (ConvertTo-SIAwaitLicenceJobPatch: Manual, its schedule remembered, marked
+        si-awaits-licence) -- the updater switches them back on once the licence is assigned (Resume-SIAwaitingLicenceJobs).
+        The updater job is created later and keeps its schedule (it is what picks the licence up). Returns the parked names;
+        a refused PATCH fails the step (a job that would run without a licence is not left behind).
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    $rg = $Ctx.Names.ResourceGroup
+    $r = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SIContainerAppJobList' -Arguments ([ordered]@{ ResourceGroupName = $rg })
+    $updater = Get-SISetupComponentName -Names $Ctx.Names -Key UpdaterJob
+    $parked = New-Object System.Collections.Generic.List[string]
+    foreach ($j in @(@($r.Value) | Where-Object { $_ })) {
+        $name = [string](Get-SIInstallProp $j 'name')
+        if (-not $name -or $name -eq $updater) { continue }
+        $body = ConvertTo-SIAwaitLicenceJobPatch -Job $j
+        if ($null -eq $body) { continue }
+        $id = [string](Get-SIInstallProp $j 'id')
+        if (-not $id) { $id = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f [string]$Ctx.Values['subscriptionId'], $rg, $name }
+        $resp = Invoke-SIInstallAz -Ctx $Ctx -Command 'Invoke-SIAzRestMethod' -Arguments ([ordered]@{ Method = 'PATCH'; Path = ($id + '?api-version=' + $script:SIAppArmApi); Payload = (ConvertTo-Json -InputObject $body -Depth 8 -Compress) })
+        $code = [int](Get-SIInstallProp $resp 'StatusCode')
+        if ($code -ge 300) {
+            throw (New-SIInstallFailure -Message ('The job {0} could not be paused until the licence (HTTP {1}).' -f $name, $code) -ActionText 'Run the install command again: it pauses the jobs again before anything runs.' -Command $Ctx.ResumeCommand)
+        }
+        $parked.Add($name)
+    }
+    , $parked.ToArray()
+}
+
 function Write-SIInstallConsole {
     param([Parameter(Mandatory)]$Ctx, [string]$Text, [string]$Color)
     try { & $Ctx.Seams.Print $Text $Color } catch { }
@@ -1216,53 +1248,90 @@ function Get-SIInstallStateDirectory {
     [IO.Path]::Combine($home_, 'clouddrive', 'invardia', $InstallId)
 }
 
+function Get-SIInstallParameterMap {
+    <#
+        PURE apart from reading the parameter file. The install's answers as PARAMETERS (owner 2026-11-02: "i only support one
+        method where i get cmdlets with all parameters"): every key of setup\install-parameters.json is a parameter of
+        Install-SecurityInsight, named as the key in PascalCase (tenantId -> TenantId). The secret keys (type 'secret':
+        installKey) are left out -- a secret never belongs on a command line. Returns [ordered] ParameterName -> @{ Key; Type }.
+    #>
+    param([string]$SpecPath)
+    if (-not $SpecPath) { $SpecPath = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'install-parameters.json') }
+    $spec = [IO.File]::ReadAllText($SpecPath) | ConvertFrom-Json
+    $map = [ordered]@{}
+    foreach ($p in @($spec.parameters)) {
+        $key = [string]$p.key; $type = [string]$p.type
+        if (-not $key -or $type -eq 'secret') { continue }
+        $map[($key.Substring(0, 1).ToUpperInvariant() + $key.Substring(1))] = @{ Key = $key; Type = $type }
+    }
+    $map
+}
+
 function Resolve-SIInstallDirectConfig {
     <#
-        The install started with its answers as PARAMETERS instead of -ConfigPath (owner 2026-10-29: "make 4-5 samples,
-        most common is interactive login"): -TenantId and -SubscriptionId, plus the optional -Location, -ResourceGroup,
-        -MailTo, -CollectionScope, -ManagementGroupId, -PrivateNetwork and -VnetAddressPrefix; everything else keeps its
-        default from install-parameters.json, as in a config.json that leaves it out.
+        The install's answers as PARAMETERS (owner 2026-11-02: every setting is a parameter, no answer file). Every key of
+        install-parameters.json has one (Get-SIInstallParameterMap); what is not given keeps its default, as in a config.json
+        that leaves it out.
         The answers are written as config.json in the install's state folder, so the same install continues with -Resume
-        alone; a check-only run (-PreflightOnly) writes it to a temporary file, never to the state folder. No answers and
-        -Resume: the state folder's config.json from the first run. -Bound: the script's $PSBoundParameters.
-        @{ Ok; ConfigPath; Message }.
+        alone; a check-only run (-PreflightOnly) writes it to a temporary file, never to the state folder.
+        Base the parameters are laid over: -ConfigPath (back-compat; a given parameter WINS over it), else on -Resume the state
+        folder's config.json from the first run (so a resume can change one answer), else nothing.
+        No parameter given: -ConfigPath as it is, or with -Resume the state folder's config.json.
+        The one secret a -ConfigPath file may carry (installKey, from Invardia's bundle) is NEVER written into the state
+        folder's copy: it is returned as InstallKey, for Invoke-SIGuidedInstall -InstallKey (in memory only).
+        -Bound: the script's $PSBoundParameters. @{ Ok; ConfigPath; Message; InstallKey }.
     #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Bound, [Parameter(Mandatory)][string]$InstallId, [string]$StatePath,
-          [switch]$PreflightOnly, [switch]$Resume)
-    $map = [ordered]@{ TenantId = 'tenantId'; SubscriptionId = 'subscriptionId'; Location = 'location'; ResourceGroup = 'resourceGroup'
-                       MailTo = 'mailTo'; CollectionScope = 'collectionScope'; ManagementGroupId = 'managementGroupId'
-                       PrivateNetwork = 'privateNetwork'; VnetAddressPrefix = 'vnetAddressPrefix' }
+          [switch]$PreflightOnly, [switch]$Resume, [string]$ConfigPath, [string]$SpecPath)
+    $map = Get-SIInstallParameterMap -SpecPath $SpecPath
     $boundKeys = @($Bound.Keys)   # $PSBoundParameters has no public Contains(); its Keys work for it and a hashtable alike
     $given = @($map.Keys | Where-Object { $boundKeys -contains $_ })
-    $dir = Get-SIInstallStateDirectory -StatePath $StatePath -InstallId $InstallId
-    $stored = [IO.Path]::Combine($dir, 'config.json')
+    $fail = { param($m) @{ Ok = $false; ConfigPath = $null; Message = $m; InstallKey = '' } }
+    $hasFile = [bool]"$ConfigPath".Trim()
+    $stored = [IO.Path]::Combine((Get-SIInstallStateDirectory -StatePath $StatePath -InstallId $InstallId), 'config.json')
     if (-not $given.Count) {
-        if ($Resume -and (Test-Path -LiteralPath $stored)) { return @{ Ok = $true; ConfigPath = $stored; Message = ('Continuing the install with its answers from {0}' -f $stored) } }
-        return @{ Ok = $false; ConfigPath = $null
-                  Message = 'Tell the install where to go: -TenantId ''<tenant id>'' -SubscriptionId ''<subscription id>'' (or -ConfigPath <config.json> for every setting).' }
+        if ($hasFile) { return @{ Ok = $true; ConfigPath = $ConfigPath; Message = ''; InstallKey = '' } }
+        if ($Resume -and (Test-Path -LiteralPath $stored)) { return @{ Ok = $true; ConfigPath = $stored; Message = ('Continuing the install with its answers from {0}' -f $stored); InstallKey = '' } }
+        return (& $fail 'Tell the install where to go: -TenantId ''<tenant id>'' -SubscriptionId ''<subscription id>'' -- every other setting is a parameter too (Get-Help ./setup/Install-SecurityInsight.ps1 -Full).')
     }
-    $missing = @('TenantId', 'SubscriptionId' | Where-Object { -not "$($Bound[$_])".Trim() })
-    if ($missing.Count) { return @{ Ok = $false; ConfigPath = $null; Message = ('Also needed: {0}' -f ((@($missing) | ForEach-Object { '-' + $_ }) -join ' ')) } }
-    if ("$($Bound['CollectionScope'])" -eq 'managementGroup' -and -not "$($Bound['ManagementGroupId'])".Trim()) {
-        return @{ Ok = $false; ConfigPath = $null; Message = 'Also needed with -CollectionScope managementGroup: -ManagementGroupId ''<management group id>''' }
+    # the base the given parameters are laid over
+    $cfg = [ordered]@{}
+    $basePath = if ($hasFile) { $ConfigPath } elseif ($Resume -and (Test-Path -LiteralPath $stored)) { $stored } else { '' }
+    if ($basePath) {
+        if (-not (Test-Path -LiteralPath $basePath)) { return (& $fail ('config.json not found: {0}' -f $basePath)) }
+        try { $raw = [IO.File]::ReadAllText($basePath) | ConvertFrom-Json } catch { return (& $fail ('config.json is not valid JSON: {0}' -f $_.Exception.Message)) }
+        $h = ConvertTo-SIInstallHashtable $raw
+        if ($h -is [System.Collections.IDictionary]) { foreach ($k in @($h.Keys)) { $cfg[[string]$k] = $h[$k] } }
     }
-    $cfg = [ordered]@{ installId = $InstallId }
+    $installKey = ''
+    if ($cfg.Contains('installKey')) { $installKey = [string]$cfg['installKey']; $cfg.Remove('installKey') }
+    if ($boundKeys -contains 'InstallId' -or -not "$($cfg['installId'])".Trim()) { $cfg['installId'] = $InstallId }
     foreach ($k in $given) {
-        $v = $Bound[$k]
+        $v = $Bound[$k]; $type = [string]$map[$k].Type
         if ($v -is [System.Management.Automation.SwitchParameter]) { $v = [bool]$v }
-        elseif ($k -eq 'MailTo') { $v = @($v | ForEach-Object { "$_" -split '[,;\s]+' } | Where-Object { $_ }) }   # "a,b" from a command line too
+        elseif ($v -is [bool]) { }
+        elseif ($type -eq 'int') { $v = [int]$v }
+        elseif ($type -eq 'upnList') { $v = @(@($v) | ForEach-Object { "$_" -split '[,;\s]+' } | Where-Object { $_ }) }   # "a,b" from a command line too
         else { $v = "$v".Trim() }
-        $cfg[$map[$k]] = $v
+        $cfg[[string]$map[$k].Key] = $v
     }
-    $json = ConvertTo-Json -InputObject $cfg -Depth 4
+    $missing = @('tenantId', 'subscriptionId' | Where-Object { -not "$($cfg[$_])".Trim() } | ForEach-Object { '-' + $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) })
+    if ($missing.Count) { return (& $fail ('Also needed: {0}' -f ($missing -join ' '))) }
+    if ("$($cfg['collectionScope'])" -eq 'managementGroup' -and -not "$($cfg['managementGroupId'])".Trim()) {
+        return (& $fail 'Also needed with -CollectionScope managementGroup: -ManagementGroupId ''<management group id>''')
+    }
+    $id = [string]$cfg['installId']
+    $dir = Get-SIInstallStateDirectory -StatePath $StatePath -InstallId $id
+    $json = ConvertTo-Json -InputObject $cfg -Depth 6
     if ($PreflightOnly) {
-        $path = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('si-install-{0}-{1}.json' -f $InstallId, [guid]::NewGuid().ToString('N')))
+        $path = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('si-install-{0}-{1}.json' -f $id, [guid]::NewGuid().ToString('N')))
     } else {
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        $path = $stored
+        $path = [IO.Path]::Combine($dir, 'config.json')
     }
     [IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding $false))
-    @{ Ok = $true; ConfigPath = $path; Message = $(if ($PreflightOnly) { '' } else { ('Your answers are kept in {0} (run the same install again with -Resume)' -f $path) }) }
+    $msg = if ($PreflightOnly) { '' } else { ('Your answers are kept in {0} (run the same install again with -Resume)' -f $path) }
+    @{ Ok = $true; ConfigPath = $path; Message = $msg; InstallKey = $installKey }
 }
 
 function Read-SIInstallState {
@@ -2525,6 +2594,13 @@ function Get-SIInstallStepTable {
             throw (New-SIInstallFailure -Message ('These engine jobs were not created: {0}.' -f ($missing -join ', ')) -ActionText 'Run the install command again: it re-runs the container setup for the missing jobs.' -Command $ctx.ResumeCommand)
         }
         $ctx.Facts['jobs'] = $want
+        if ($ctx.AwaitLicence) {
+            # framework INSTALL-1: Pro without a licence runs NOTHING -- every scheduled job is parked (Manual, its schedule
+            # remembered, marked si-awaits-licence); the updater switches them back on once the licence is assigned
+            $parked = Set-SIInstallJobsAwaitLicence -Ctx $ctx
+            $ctx.Facts['awaitingLicence'] = $true
+            return (New-SIInstallResult -Message ('{0} engine jobs are ready and wait for the licence ({1} schedules paused until it is assigned).' -f $want.Count, $parked.Count) -Detail ([ordered]@{ jobs = $want; parked = @($parked) }))
+        }
         $sched = Get-SIInstallSchedules -RunHourUtc ([int]$ctx.Values['runHourUtc'])
         New-SIInstallResult -Message ('{0} engine jobs, daily from {1:00}:00 UTC.' -f $want.Count, [int]$ctx.Values['runHourUtc']) -Detail ([ordered]@{ jobs = $want; firstSchedule = $sched['ScheduleEndpoint'] })
     }
@@ -2746,6 +2822,7 @@ function Get-SIInstallStepTable {
     }
 
     $t['first-run'] = {        param($ctx)
+        if ($ctx.AwaitLicence) { return (New-SIInstallResult -State 'skipped' -Message $script:SIAwaitLicenceText) }
         $waiting = @($ctx.State['pending'].Keys | Where-Object { $_ -in 'grants-outside-rg', 'api-permissions' })
         $hour = [int]$ctx.Values['runHourUtc']
         if ($waiting.Count) {
@@ -2916,7 +2993,11 @@ function Invoke-SIGuidedInstall {
         [switch]$Resume,
         [string]$StatePath,
         [System.Collections.IDictionary]$Seams,
-        [string]$SIConfigPath
+        [string]$SIConfigPath,
+        # the install key of a bundle file merged with parameters (Resolve-SIInstallDirectConfig): in memory only, never on disk
+        [AllowEmptyString()][string]$InstallKey,
+        # framework INSTALL-1: the installer file's edition stamp ('pro' = the copy from invardia.com)
+        [AllowEmptyString()][string]$Edition
     )
     $prevEnv = [Environment]::GetEnvironmentVariable('SI_PLATFORM_CONFIG')
     $saved = @{}
@@ -3308,7 +3389,11 @@ function Invoke-SIGuidedInstallRun {
         [switch]$Resume,
         [string]$StatePath,
         [System.Collections.IDictionary]$Seams,
-        [string]$SIConfigPath
+        [string]$SIConfigPath,
+        # the install key of a bundle file merged with parameters (Resolve-SIInstallDirectConfig): in memory only, never on disk
+        [AllowEmptyString()][string]$InstallKey,
+        # framework INSTALL-1: the installer file's edition stamp ('pro' = the copy from invardia.com)
+        [AllowEmptyString()][string]$Edition
     )
     $seamSet = Get-SIInstallDefaultSeams
     if ($Seams) { foreach ($k in $Seams.Keys) { if ($Seams[$k] -is [scriptblock]) { $seamSet[$k] = $Seams[$k] } } }
@@ -3320,7 +3405,13 @@ function Invoke-SIGuidedInstallRun {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { & $say ('config.json not found: {0}' -f $ConfigPath) 'Red'; return 3 }
     try { $cfg = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json } catch { & $say ('config.json is not valid JSON: {0}' -f $_.Exception.Message) 'Red'; return 3 }
     if ($LicencePath -and -not (Test-Path -LiteralPath $LicencePath)) { & $say ('Licence file not found: {0}' -f $LicencePath) 'Red'; return 3 }
+    # (read FIRST: PowerShell names are case-insensitive, so the next line overwrites the -Edition parameter)
+    $stampEdition = "$Edition".Trim().ToLowerInvariant()
     $edition = Resolve-SISetupEdition -LicencePath $LicencePath
+    # framework INSTALL-1 (owner 2026-11-02, "pro installs from invardia, option 1"): the installer copy from invardia.com is
+    # stamped 'pro' -- a Pro install WITHOUT a licence file: the whole environment, nothing runs until the licence is assigned
+    if ($edition -ne 'pro' -and $stampEdition -eq 'pro') { $edition = 'pro' }
+    $awaitLicence = ($edition -eq 'pro' -and -not "$LicencePath".Trim())
     $check = Test-SIInstallConfig -Config $cfg -Spec $spec -Edition $edition
     if (-not $check.Ok) {
         & $say 'config.json does not match this version''s parameters:' 'Red'
@@ -3356,7 +3447,7 @@ function Invoke-SIGuidedInstallRun {
         SIRoot = $SIRoot; ConfigPath = $(if ($SIConfigPath) { $SIConfigPath } else { Get-SIInstallOwnConfigPath -SIRoot $SIRoot -InstallId $check.InstallId })
         LicencePath = $LicencePath; Version = $version; ImageTag = ('v{0}{1}' -f $version, $(if ($commit) { '-' + $commit.Substring(0, [Math]::Min(12, $commit.Length)) } else { '' }))
         Seams = $seamSet; Reporter = $Reporter; PreflightOnly = [bool]$PreflightOnly; Pro = ($pro -and $edition -eq 'pro'); Data = $data; ProSteps = $proSteps
-        StateDirectory = $stateDir; ResumeCommand = $resumeCmd
+        StateDirectory = $stateDir; ResumeCommand = $resumeCmd; AwaitLicence = [bool]$awaitLicence
         Cache = [ordered]@{}; Events = New-Object System.Collections.Generic.List[object]; ScriptLog = New-Object System.Collections.Generic.List[object]
     }
     # #240: the install key (a secret from Invardia's bundle) leaves the answers at once: it is kept only on the context, stored
@@ -3366,6 +3457,11 @@ function Invoke-SIGuidedInstallRun {
         $sk = [string](Get-SIInstallProp $p 'key')
         if ($ctx.Values.Contains($sk)) { if ($sk -eq 'installKey') { $ctx.InstallKey = [string]$ctx.Values[$sk] }; $ctx.Values.Remove($sk) }
         $ctx.Explicit = @($ctx.Explicit | Where-Object { $_ -ne $sk })
+    }
+    if ("$InstallKey".Trim()) {
+        # never echoed: the message names the form, not the value
+        if ($InstallKey -notmatch '^inv-[^\s]{8,}$') { & $say 'installKey: does not have the expected form of an Invardia install key (inv-...).' 'Red'; return 3 }
+        $ctx.InstallKey = $InstallKey.Trim()
     }
     # #564: the context that runs (sub-step and sign-in events, the whole-run failure event) and the sign-in's
     # "waiting: sign-in required for <resource> in tenant <t>" line, posted BEFORE a browser window opens. Both SI_*
@@ -3384,7 +3480,10 @@ function Invoke-SIGuidedInstallRun {
     # classification therefore never expects that job (live 2026-10-06, Community rehearsal: "These engine jobs were not
     # created: caj-si-ptc").
     if (-not [bool]$ctx.Values['aiClassification']) { $ctx.Engines = @($ctx.Engines | Where-Object { $_ -ne 'privilege-tier-classifier' }) }
-    if ($ctx.Pro) { $ctx.Engines += @(Get-SIInstallProEngines -Values $ctx.Values) }
+    # owner 2026-11-02 ("license will come automatically when env is deployed. then i login and add"): the FULL package
+    # creates the Pro engine jobs also without a licence -- each one checks the licence when it runs and skips until
+    # SI-License is in the vault, so adding the licence later needs no second install (a later update re-creates only some).
+    if ($pro) { $ctx.Engines += @(Get-SIInstallProEngines -Values $ctx.Values) }
     $ctx.Engines = @($ctx.Engines | Select-Object -Unique)
     foreach ($k in $proSteps.Keys) { if (($script:SIInstallProStepIds + $script:SIInstallDataStepIds) -contains $k) { $steps[$k] = $proSteps[$k] } }
 

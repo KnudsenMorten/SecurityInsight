@@ -81,7 +81,11 @@ if (-not (Get-Command -Name Get-SICiLifecycleSettings -ErrorAction SilentlyConti
 # "dummydevicename") never names a machine CI -- the name comes from another linked source, else a generated
 # 'unnamed-device-<short id>' (si_field_sources.si_asset_name.from = generated) that the correlation check flags. CI names
 # change, so every CI is rebuilt once.
-$script:SICiBuildVersion = 12
+# Version 13 (2026-11-03): an Azure CI carries the tags it inherits from its resource group / subscription, each with where
+# it came from (si_tags_inherited; the resource group's tag wins over the subscription's, the resource's own tag over both),
+# and every CI with tags carries them all in one list (si_tags_all: own first, then inherited) -- CIs change, so every CI is
+# rebuilt once on the first build after the update.
+$script:SICiBuildVersion = 13
 # The three context lanes merged on si-v3 (2026-10-11): the logic hash is set once for the combined code.
 # 2026-10-12: the build's last write fills the columns the CI views read (Pro) -- no CI comes out different, so the hash is
 # re-baselined and the version stays 7. (Same day: a failure of that step is said at INFO, never as a warning of the build.)
@@ -135,7 +139,9 @@ $script:SICiBuildVersion = 12
 # re-baselined together when all three were merged for the next release.
 # 2026-11-02 (#1057: retire at once on a source's PROOF of deletion, three switches all OFF by default; #1054, version 12:
 # the placeholder name resolution of the CI's name) -- re-baselined together when both were merged for the next release.
-$script:SICiBuildLogicHash = 'ac7c2777d814c500b78ea4c711532aef29870c7226632ce3b83bec300675536b'
+# 2026-11-03 (version 13): the inherited Azure tags and every tag in one list (si_tags_inherited / si_tags_all), and a tag
+# list read as 'name = value' text (SI-Conditions.ps1) -- re-baselined with the version bump.
+$script:SICiBuildLogicHash = '157fac6dfad44911a36ebe3717d1947fc59590c45218d302a25d564b388e1ccc'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -215,6 +221,9 @@ $script:SICiPostFields = @('si_ci_id', 'si_class', 'si_asset_name', 'si_tier', '
     'si_first_seen', 'si_lifecycle', 'si_category', 'si_purpose', 'si_coverage_gaps', 'si_link_count', 'si_is_customer_facing', 'si_cmdb_match_rule',
     'si_cmdb_match_confidence', 'si_cmdb_source', 'si_cmdb_service', 'si_cmdb_criticality_level', 'si_device_value', 'si_internet_exposed_reason',
     'si_on_public_network', 'si_alerts_30d', 'si_last_alert_title', 'si_last_admin_logon',
+    # the Azure tags a resource inherits from its resource group / subscription (each with where it came from), and every
+    # tag in one list (own first, then inherited) -- beside si_tags / si_azure_parent_tags, so a Kusto reader has them too
+    'si_tags_inherited', 'si_tags_all',
     # rc12 (#497 / #499 / #500): a multicloud resource's type, region, account and connector (Defender for Cloud), the AD
     # account's OU placement, and a device's software inventory counts (the end-of-support LIST itself is database only)
     'si_cloud_resource_type', 'si_cloud_region', 'si_cloud_account_id', 'si_cloud_connector', 'si_ad_distinguished_name',

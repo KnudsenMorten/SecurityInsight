@@ -185,6 +185,24 @@ Describe 'the tenant comes from the identity TOKEN, never from config' {
 Describe 'when to knock: none, 30 days or less, more than 30 days' {
     BeforeEach { Reset-World }
     It 'no licence -> knock' { (Run).Action | Should -Be 'knocked'; @(Knocks).Count | Should -Be 1 }
+    It 'framework INSTALL-1: a FRESH install -- no licence file AND no install key -- knocks, and an "Approved" answer is pulled in the same run' {
+        $script:Secrets.Remove('SI-License'); $script:Secrets.Remove('SI-Invardia-InstallKey')
+        $r = Run
+        @(Knocks).Count | Should -Be 1 -Because 'nothing in the knock depends on a licence or a key the install already holds'
+        (Knocks)[0].Key | Should -BeNullOrEmpty
+        $r.Action | Should -BeIn @('knocked', 'installed', 'pending')
+    }
+    It 'framework INSTALL-1: the knock never says Trial -- the edition is sent only when configured, and a trial is the same knock' {
+        $null = Run
+        $o = (Knocks)[0].Body | ConvertFrom-Json
+        $o.PSObject.Properties.Name | Should -Not -Contain 'edition'
+        (Knocks)[0].Body | Should -Not -Match '(?i)trial'
+    }
+    It 'framework INSTALL-1: the Community updater never knocks (it returns before the licence request)' {
+        $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
+        $c = $u.IndexOf('return (Invoke-SIUpdaterFromCommunity'); $k = $u.IndexOf('$lr = Invoke-SIUpdaterLicenceRequest')
+        $c | Should -BeGreaterThan 0; $k | Should -BeGreaterThan $c
+    }
     It 'a licence ending in exactly 30 days -> knock' {
         $script:Secrets['SI-License'] = New-LicText -ToDays 30
         (Run).Action | Should -Be 'knocked'

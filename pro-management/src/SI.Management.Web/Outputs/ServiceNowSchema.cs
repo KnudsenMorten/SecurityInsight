@@ -41,7 +41,17 @@ public static class ServiceNowSchema
         ["si_ci_id"] = 400, ["si_asset_id"] = 400, ["si_finding_key"] = 100, ["$row_hash"] = 64, ["$run_id"] = 100,
         // #914 the contract envelope: the action, the batch id (<run id>:<output>), the clear marker (column names), the reason, the replaced key
         ["finding.item_key"] = 400, ["$action"] = 40, ["$batch_id"] = 100, ["$cleared"] = 1000, ["$reason"] = 1000, ["$replaces"] = 400,
+        // the tags (owner 2026-11-03: the customer sends them to the ServiceNow CI): a machine can carry many tags with long
+        // values, so the field is created at ServiceNow's large-string size and a row is never cut
+        ["si_tags_all"] = 65000, ["si_tags"] = 65000, ["si_tags_inherited"] = 65000,
     };
+
+    /// The tag lists ({ name, value } entries, an inherited one with its scope): sent as ONE text, never JSON -- the engine's
+    /// ConvertTo-SITagListText (engine\data-model\SI-Conditions.ps1) and the CI page (CiDoc.Text) write the same words.
+    public static readonly IReadOnlySet<string> TagListFields = new HashSet<string>(StringComparer.Ordinal) { "si_tags", "si_tags_all", "si_tags_inherited", "si_azure_parent_tags" };
+
+    /// How a tag list arrives in ServiceNow.
+    public const string TagListFormat = "text: 'name = value' per tag, '; ' between tags; an inherited tag ends with ' (resource group)' or ' (subscription)'";
 
     /// The type of a property the item carries outside the field catalog (finding.x / summary.x / record.x), by its name.
     public static readonly IReadOnlyDictionary<string, string> PathTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -96,6 +106,7 @@ public static class ServiceNowSchema
             _ => "string",   // enum, join, join_ids, render, mask, domain_part, lower, upper: text
         };
         if (name == "format_date") return Of("datetime", "yyyy-MM-dd HH:mm in UTC");
+        if (type == "list" && name == "" && TagListFields.Contains(c.From.Trim())) return Of("string", TagListFormat);
         if (type == "list") return Of("string", "a list, sent as JSON text");
         return Of(type);
     }

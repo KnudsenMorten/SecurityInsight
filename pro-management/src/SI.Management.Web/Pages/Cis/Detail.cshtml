@@ -280,12 +280,12 @@ else
             <p class="hint">Which provider each value came from. A stale value had no fresh source: the newest value is kept and marked. <em>Other sources say</em>: fresh providers that hold a different value -- shown, never deciding.</p>
             <div class="table-wrap">
                 <table data-sortable>
-                    <thead><tr><th>Field</th><th>Provider</th><th>Record</th><th>Observed</th><th>Stale</th><th>Other sources say</th></tr></thead>
+                    <thead><tr><th>Field</th><th>Value</th><th>Provider</th><th>Record</th><th>Observed</th><th>Stale</th><th>Other sources say</th></tr></thead>
                     <tbody>
                         @foreach (var s in doc.Sources)
                         {
                             var observed = DateTime.TryParse(s.ObservedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : (DateTime?)null;
-                            <tr data-source="@s.Field"><td class="mono">@s.Field</td><td>@s.Provider</td><td class="wrap mono">@s.Record</td><td data-value="@(s.ObservedAt ?? "")">@if (observed is not null) { @Fmt.Time(observed) } else { @s.ObservedAt }</td><td>@if (s.Stale) { <span class="badge warn">stale</span> } else { <text>no</text> }</td><td class="wrap" data-conflicts="@(s.Conflicts?.Count ?? 0)">@if (s.Conflicts is { Count: > 0 }) { @string.Join("; ", s.Conflicts) }</td></tr>
+                            <tr data-source="@s.Field"><td class="mono fieldname" title="@s.Field">@s.Field</td><td class="wrap">@DetailModel.Value(doc.Fields.FirstOrDefault(f => f.Field == s.Field)?.Text)</td><td>@s.Provider</td><td class="wrap mono">@s.Record</td><td data-value="@(s.ObservedAt ?? "")">@if (observed is not null) { @Fmt.Time(observed) } else { @s.ObservedAt }</td><td>@if (s.Stale) { <span class="badge warn">stale</span> } else { <text>no</text> }</td><td class="wrap" data-conflicts="@(s.Conflicts?.Count ?? 0)">@if (s.Conflicts is { Count: > 0 }) { @string.Join("; ", s.Conflicts) }</td></tr>
                         }
                     </tbody>
                 </table>
@@ -418,7 +418,7 @@ else
                     @foreach (var f in doc.Fields)
                     {
                         var src = doc.Sources.FirstOrDefault(s => s.Field == f.Field);
-                        <tr><td class="mono">@f.Field</td><td class="wrap">@DetailModel.Value(f.Text)</td><td>@(src?.Provider ?? "")</td></tr>
+                        <tr><td class="mono fieldname" title="@f.Field">@f.Field</td><td class="wrap">@DetailModel.Value(f.Text)</td><td>@(src?.Provider ?? "")</td></tr>
                     }
                 </tbody>
             </table>

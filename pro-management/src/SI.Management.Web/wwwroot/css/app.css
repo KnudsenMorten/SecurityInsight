@@ -46,6 +46,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .muted { color: var(--text-muted); }
 .nowrap { white-space: nowrap; }
 .mono { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: .82rem; overflow-wrap: anywhere; }
+/* a field name (si_...) stays on one line: the column is as wide as its longest name and is never squeezed to a few
+   letters by a long value next to it (owner 2026-11-03); a column made narrower by hand still cuts it */
+td.fieldname { white-space: nowrap; overflow-wrap: normal; }
+td.fieldname[style*="max-width"] { overflow: hidden; text-overflow: ellipsis; }
 .row-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .split { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .5rem; }
 .split h2 { margin: 0; }

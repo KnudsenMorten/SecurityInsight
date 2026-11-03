@@ -2396,7 +2396,7 @@
           "required": "always",
           "meaning": "A fingerprint of the record's content (not of the batch, the run or the action). It changes only when the content changes.",
           "servicenow": "Keep it on the record (for example in u_si_row_hash) and skip a row whose hash equals it.",
-          "example": "5dabb068119d4d01455df9ca4d2f9c94208760112d603bfb8f6b5000f8df237e"
+          "example": "93a60b4c7ba0db005bd89218f76852598aa17a08cf513d4bec4e4378d10f40ca"
         },
         {
           "name": "u_changed_at",
@@ -2477,6 +2477,30 @@
           "meaning": "The key this record replaces (a device re-onboarded or merged). The old key gets no row of its own.",
           "servicenow": "Transform: find the record by this key and move it to the row's key, instead of creating a new one.",
           "example": ""
+        },
+        {
+          "name": "u_tags_all",
+          "type": "string",
+          "required": "when known (an empty value is left out)",
+          "meaning": "Every tag of the asset in one text: its own tags first, then the Azure tags it inherits from its resource group or subscription. Each tag as name = value, separated by \"; \"; an inherited tag ends with (resource group) or (subscription). Up to 65,000 characters.",
+          "servicenow": "Optional. A string field of 65,000 (for example u_si_tags) on the CI, or parse it in the transform into cmdb_key_value rows.",
+          "example": "env = prod; Used for = Demo workload (resource group); Business Application = Demo portal (subscription)"
+        },
+        {
+          "name": "u_tags",
+          "type": "string",
+          "required": "when known (an empty value is left out)",
+          "meaning": "The asset's own tags only (from every source: Azure, Defender, Entra, SecurityInsight rules), as name = value, separated by \"; \". Up to 65,000 characters.",
+          "servicenow": "Optional. A string field of 65,000 on the CI.",
+          "example": "env = prod"
+        },
+        {
+          "name": "u_tags_inherited",
+          "type": "string",
+          "required": "when known (an empty value is left out)",
+          "meaning": "Only the Azure tags the asset inherits from its resource group or subscription and does not set itself, as name = value (resource group) / (subscription), separated by \"; \". When both set a tag, the resource group's value is used. Up to 65,000 characters.",
+          "servicenow": "Optional. A string field of 65,000 on the CI.",
+          "example": "Used for = Demo workload (resource group); Business Application = Demo portal (subscription)"
         }
       ],
       "rows": [
@@ -2505,7 +2529,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "5dabb068119d4d01455df9ca4d2f9c94208760112d603bfb8f6b5000f8df237e",
+            "u_row_hash": "93a60b4c7ba0db005bd89218f76852598aa17a08cf513d4bec4e4378d10f40ca",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "active",
@@ -2515,7 +2539,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_serial_number,u_mac_address,u_object_id,u_azure_resource_id,u_aad_device_id,u_entra_object_id,u_criticality,u_data_sensitivity",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": null,
+            "u_tags": null,
+            "u_tags_inherited": null
           }
         },
         {
@@ -2543,7 +2570,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "84e47d3676fd9889c1867545a3370cf9730cba6d5258980fb4d180c89f68ab15",
+            "u_row_hash": "7b39e1f169f805f6924a3f3207646c3b74e51e6dd2db2c70ae3d19da5d55903d",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "active",
@@ -2553,7 +2580,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_fqdn,u_dns_domain,u_serial_number,u_mac_address,u_aad_device_id,u_mde_device_id,u_entra_object_id,u_criticality,u_data_sensitivity",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": "env = prod; Used for = Demo workload (resource group); Business Application = Demo portal (subscription)",
+            "u_tags": "env = prod",
+            "u_tags_inherited": "Used for = Demo workload (resource group); Business Application = Demo portal (subscription)"
           }
         },
         {
@@ -2581,7 +2611,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "a5998582ddefd1b6bf36f213bc4d9320c089ecc0fefb2151fd8509161053c55e",
+            "u_row_hash": "411e4fa1d0dbfa242f7619444aefeaa0f42e335ca3377b4c3c5d9c6b161e7da9",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "not-seen",
@@ -2591,7 +2621,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_mac_address,u_object_id,u_azure_resource_id,u_entra_object_id,u_criticality,u_data_sensitivity",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": null,
+            "u_tags": null,
+            "u_tags_inherited": null
           }
         },
         {
@@ -2619,7 +2652,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "83b7ee3497b2b19ba805b03f210ec32a713cd66718dd37d9bc9c3dd9b3c99d47",
+            "u_row_hash": "3757e374314025c5eb75118d0568620015e6a62b45420cbe0e706baeefb1c749",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "Internal",
             "u_si_state": "active",
@@ -2629,7 +2662,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_object_id,u_azure_resource_id,u_entra_object_id",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": "Finance",
+            "u_tags": "Finance",
+            "u_tags_inherited": null
           }
         },
         {
@@ -2657,7 +2693,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "05e3185907d595894a8fb37bc7f659df63dad2b290d6af52180527ba33fed9a2",
+            "u_row_hash": "5e32d996d12aa19772905ccd0470b4fd881522533ced1b6125728923f9e6da50",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "active",
@@ -2667,7 +2703,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_fqdn,u_dns_domain,u_serial_number,u_mac_address,u_object_id,u_azure_resource_id,u_aad_device_id,u_mde_device_id,u_criticality,u_data_sensitivity",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": null,
+            "u_tags": null,
+            "u_tags_inherited": null
           }
         },
         {
@@ -2695,7 +2734,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "ba811a096a388164a2afd4aac79530b2277cc0661da8e1d03c5542ef254889de",
+            "u_row_hash": "e6bd96c4002abaf2b69299ac31e623e3d52aafffaf831672c0043347d48477ba",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "Confidential",
             "u_si_state": "active",
@@ -2705,7 +2744,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_object_id,u_azure_resource_id,u_entra_object_id",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": "Payroll",
+            "u_tags": "Payroll",
+            "u_tags_inherited": null
           }
         },
         {
@@ -2733,7 +2775,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "de21aaac02836c8b35ff7f061939e108f9756d55ad1214a627f7420063dc0dc8",
+            "u_row_hash": "201b9066a1426dd83ec084554335ff3061940d448a3956f69d5d15fde0aaa855",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "retired",
@@ -2743,7 +2785,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_mac_address,u_object_id,u_azure_resource_id,u_aad_device_id,u_entra_object_id,u_criticality,u_data_sensitivity",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": null,
+            "u_tags": null,
+            "u_tags_inherited": null
           }
         },
         {
@@ -2771,7 +2816,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "12d6eff50ba13cd0d0882a8b24b32ed4763cb5cbf8c12bd2cd274068eb8889a2",
+            "u_row_hash": "ef12aee75183d2bdf7cc6bc1e1306aa56d8fe4f799a1fea21c3ecfa07d4c694f",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "Confidential",
             "u_si_state": "active",
@@ -2781,7 +2826,10 @@
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_fqdn,u_dns_domain,u_serial_number,u_mac_address,u_aad_device_id,u_mde_device_id,u_entra_object_id",
             "u_si_reason": "",
-            "u_si_replaces": ""
+            "u_si_replaces": "",
+            "u_tags_all": "env = prod; owner = app-team; Used for = Demo workload (resource group); Business Application = Demo portal (subscription)",
+            "u_tags": "env = prod; owner = app-team",
+            "u_tags_inherited": "Used for = Demo workload (resource group); Business Application = Demo portal (subscription)"
           }
         }
       ]

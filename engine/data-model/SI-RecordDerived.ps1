@@ -133,6 +133,10 @@ function Get-SIAzureDerived {
 #                                                        read through the customer's TAG-KEY MAP: the lists tag_keys_* of
 #                                                        data-model/lists name which tag keys mean environment, cost
 #                                                        center, application and owner (customer-editable like every list)
+#      tagsInherited / tagsAll                           the resource group's and subscription's tags the resource does not
+#                                                        set itself, each with the container it came from (part
+#                                                        'parentTagScopes'), and own + inherited in one list
+#                                                        (Get-SIAzureInheritedTagDerived)
 #      mdeExtension / amaExtension                       a machine's extensions (its child resources) include the Defender
 #                                                        for Endpoint / Azure Monitor agent extension
 #      diskEncryption                                    how a virtual machine's disks are encrypted, from the machine and
@@ -246,6 +250,53 @@ function Get-SIAzureTagDerived {
     return $out
 }
 
+function Get-SIAzureInheritedTagDerived {
+    <#
+        PURE. The tags an Azure resource INHERITS, next to the ones it sets itself:
+          tagsInherited  each tag of its resource group / subscription (part 'parentTagScopes', nearest container already
+                         chosen) whose name the resource does NOT set itself -- Azure tag names compare case-insensitively --
+                         as { source = 'azure'; name; value; scope = 'resourceGroup' | 'subscription'; from = <container name> }
+                         (-> si_tags_inherited)
+          tagsAll        the resource's own tags first ({ source = 'azure'; name; value }, as si_tags holds them), then every
+                         inherited one (-> si_tags_all: the one field a connector column takes)
+        A subscription entry without a name takes the subscription's name (part 'mg'), else its id. A tag without a value is
+        left out of both lists (as si_tags leaves it out); an own tag without a value still counts as SET (the resource
+        overrides the container). Neither list is written when it would be empty.
+    #>
+    param($Tags, $Scopes, [string]$SubscriptionName, [string]$SubscriptionId)
+    $out = [ordered]@{}
+    $t = $Tags
+    if ($t -is [string]) { $s = $t.Trim(); if ($s.StartsWith('{')) { try { $t = $s | ConvertFrom-Json } catch { $t = $null } } else { $t = $null } }
+    $ownNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $all = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $t) {
+        $pairs = New-Object System.Collections.Generic.List[object]
+        if ($t -is [System.Collections.IDictionary]) { foreach ($k in @($t.Keys)) { $pairs.Add(@([string]$k, $t[$k])) } }
+        else { foreach ($p in @($t.PSObject.Properties)) { $pairs.Add(@([string]$p.Name, $p.Value)) } }
+        foreach ($kv in $pairs) {
+            $n = ([string]$kv[0]).Trim(); if (-not $n) { continue }
+            [void]$ownNames.Add($n)
+            $v = [string]$kv[1]
+            if (-not [string]::IsNullOrWhiteSpace($v)) { $all.Add([ordered]@{ source = 'azure'; name = $n; value = $v }) }
+        }
+    }
+    $inh = New-Object System.Collections.Generic.List[object]
+    foreach ($e in @($Scopes)) {
+        if ($null -eq $e) { continue }
+        $n = ([string](Get-SIDerivedValue $e 'name')).Trim()
+        $v = [string](Get-SIDerivedValue $e 'value')
+        if (-not $n -or [string]::IsNullOrWhiteSpace($v) -or $ownNames.Contains($n)) { continue }
+        $scope = [string](Get-SIDerivedValue $e 'scope')
+        $from = ([string](Get-SIDerivedValue $e 'from')).Trim()
+        if (-not $from -and $scope -eq 'subscription') { if ($SubscriptionName) { $from = $SubscriptionName } else { $from = $SubscriptionId } }
+        $inh.Add([ordered]@{ source = 'azure'; name = $n; value = $v; scope = $scope; from = $from })
+    }
+    foreach ($x in $inh) { $all.Add($x) }
+    if ($inh.Count -gt 0) { $out['tagsInherited'] = $inh.ToArray() }
+    if ($all.Count -gt 0) { $out['tagsAll'] = $all.ToArray() }
+    return $out
+}
+
 function Get-SIAzureRichDerived {
     <# PURE. The rich-context derived values of an Azure record (see the block header). #>
     param($Object, [hashtable]$TagKeyMap)
@@ -262,8 +313,12 @@ function Get-SIAzureRichDerived {
     if ($null -eq $TagKeyMap) { $TagKeyMap = Get-SITagKeyMap }
     $tags = Get-SIAzureTagDerived -Tags (Get-SIDerivedValue $res 'tags') -ParentTags (Get-SIDerivedValue $Object 'parentTags') -Map $TagKeyMap
     foreach ($k in @($tags.Keys)) { $out[$k] = $tags[$k] }
+    # ---- the inherited tags, each with the container it came from, and own + inherited in one list ------------------
+    $inh = Get-SIAzureInheritedTagDerived -Tags (Get-SIDerivedValue $res 'tags') -Scopes (Get-SIDerivedValue $Object 'parentTagScopes') `
+        -SubscriptionName ([string](Get-SIDerivedValue $mg 'subscriptionName')) -SubscriptionId ([string](Get-SIDerivedValue $res 'subscriptionId'))
+    foreach ($k in @($inh.Keys)) { $out[$k] = $inh[$k] }
 
-    $type = ([string](Get-SIDerivedValue $res 'type')).ToLowerInvariant()
+    $type =([string](Get-SIDerivedValue $res 'type')).ToLowerInvariant()
     $p = Get-SIDerivedValue $res 'properties'
     if ($p -is [string]) { try { $p = $p | ConvertFrom-Json } catch { $p = $null } }
     # ---- private endpoints: counted only when the resource lists them (a type without the list stays unknown) ----------

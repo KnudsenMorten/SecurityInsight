@@ -93,6 +93,56 @@ function Get-SIValueList {
     return , $out
 }
 
+function ConvertTo-SITagScopeText {
+    <# PURE. Where an inherited tag came from, in plain words: resourceGroup -> 'resource group', subscription ->
+       'subscription', managementGroup -> 'management group'; '' when the tag is the asset's own (no scope). #>
+    param([AllowNull()][AllowEmptyString()][string]$Scope)
+    $s = ([string]$Scope).Trim()
+    if (-not $s) { return '' }
+    switch ($s.ToLowerInvariant()) { 'resourcegroup' { return 'resource group' } 'subscription' { return 'subscription' } 'managementgroup' { return 'management group' } }
+    return ($s -creplace '([a-z])([A-Z])', '$1 $2').ToLowerInvariant()
+}
+
+function ConvertTo-SITagEntryText {
+    <#
+        PURE. ONE tag entry as text a person (and ServiceNow) reads: { name; value } -> 'name = value', a name without a value
+        -> 'name', an inherited tag (it has a scope) -> 'name = value (resource group)' / '(subscription)'. The same words the
+        web app's CI page shows (CiDocument.Item). $null when the item is not a tag entry: a name AND a value key, and no id
+        (an object with an id is a linked object, never a tag).
+    #>
+    param($Item)
+    if ($null -eq $Item -or $Item -is [string] -or $Item -is [ValueType]) { return $null }
+    $has = {
+        param($o, [string]$k)
+        if ($o -is [System.Collections.IDictionary]) { foreach ($x in $o.Keys) { if ([string]::Equals([string]$x, $k, [StringComparison]::OrdinalIgnoreCase)) { return $true } }; return $false }
+        return ($null -ne $o.PSObject.Properties[$k])
+    }
+    if (-not (& $has $Item 'name') -or -not (& $has $Item 'value') -or (& $has $Item 'id')) { return $null }
+    $n = ([string](Get-SIItemValue $Item 'name')).Trim()
+    if (-not $n) { return $null }
+    $v = ([string](Get-SIItemValue $Item 'value')).Trim()
+    $t = $n; if ($v) { $t = '{0} = {1}' -f $n, $v }
+    $sc = ConvertTo-SITagScopeText ([string](Get-SIItemValue $Item 'scope'))
+    if ($sc) { $t = '{0} ({1})' -f $t, $sc }
+    return $t
+}
+
+function ConvertTo-SITagListText {
+    <# PURE. A list of tag entries as ONE text, '; '-joined (ConvertTo-SITagEntryText each); $null when the value is not a
+       non-empty list made only of tag entries (every other value keeps its own form). #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.Collections.IDictionary] -or -not ($Value -is [System.Collections.IEnumerable])) { return $null }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($x in $Value) {
+        if ($null -eq $x) { continue }
+        $t = ConvertTo-SITagEntryText $x
+        if ($null -eq $t) { return $null }
+        $parts.Add($t)
+    }
+    if ($parts.Count -eq 0) { return $null }
+    return ($parts -join '; ')
+}
+
 function Test-SIScalarEqual {
     param($A, $B)
     if ($null -eq $A -or $null -eq $B) { return ($null -eq $A -and $null -eq $B) }

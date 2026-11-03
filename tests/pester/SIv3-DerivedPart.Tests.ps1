@@ -24,6 +24,8 @@ BeforeAll {
         # map, what the child resources say about the machine, private endpoints, and the cached internet scan answer
         'derived.subscriptionName', 'derived.tenantId', 'derived.tenantName', 'derived.managementGroupId', 'derived.managementGroupName', 'derived.managementGroupIdPath',
         'derived.tagEnvironment', 'derived.tagCostCenter', 'derived.tagAppName', 'derived.tagOwner', 'derived.privateEndpointCount',
+        # the inherited tags with their container, and own + inherited in one list (filled in SIv3-ParentTags.Tests.ps1)
+        'derived.tagsInherited', 'derived.tagsAll',
         'derived.mdeExtension', 'derived.amaExtension', 'derived.diskEncryption',
         'derived.exposedServices', 'derived.httpTitles', 'derived.httpServers', 'derived.tlsCertificates', 'derived.tlsCertExpired', 'derived.tlsSelfSigned',
         'derived.tlsEarliestExpiry', 'derived.tlsLegacyVersions', 'derived.shodanTags', 'derived.exposedOs', 'derived.domains', 'derived.cloudProvider',

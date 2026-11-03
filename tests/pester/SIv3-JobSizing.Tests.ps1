@@ -75,6 +75,23 @@ BeforeAll {
     }
 }
 
+Describe 'the updater image carries what the size rule loads (#1064)' {
+    It 'every file SI-JobSizing.ps1 (and the container settings it loads) reads from outside setup/ is COPYed into the updater image under /si' {
+        $df = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Dockerfile'))
+        $refs = foreach ($f in 'setup\_shared\SI-JobSizing.ps1', 'container\_shared\SI-ContainerConfig.ps1') {
+            $lib = [IO.File]::ReadAllText((Join-Path $script:SIRoot $f))
+            [regex]::Matches($lib, "\[IO\.Path\]::Combine\(\`$PSScriptRoot, '\.\.', '\.\.', '([^']+)', '([^']+)'") | ForEach-Object { '{0}/{1}' -f $_.Groups[1].Value, $_.Groups[2].Value }
+        }
+        $refs | Should -Contain 'container/_shared'
+        $refs | Should -Contain 'config/job-flow.locked.json'
+        foreach ($r in ($refs | Select-Object -Unique)) {
+            $dir = $r -replace '/[^/]+\.[a-z]+$', ''
+            $copied = $df -match ('(?m)^COPY {0}/ /si/{0}/\s*$' -f [regex]::Escape($dir)) -or $df -match ('(?m)^COPY {0} /si/{1}/\s*$' -f [regex]::Escape($r), [regex]::Escape($dir))
+            $copied | Should -BeTrue -Because "the size rule reads $r -- without it every update says 'job size: not checked'"
+        }
+    }
+}
+
 Describe 'which jobs are sized, and as what' {
     It 'identity / endpoint / the Azure collection (scheduled or KEDA), the CI build and every Risk Analysis job; nothing else' {
         (Get-SIJobSizingEngine 'caj-si-identity').Engine | Should -Be 'identity'

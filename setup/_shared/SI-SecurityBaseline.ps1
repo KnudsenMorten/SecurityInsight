@@ -40,9 +40,10 @@ $script:SIBaselineAuditDays     = 90
 # install is not changed by this (owner decision: it gets the baseline from setup\Set-SISecurityBaseline.ps1, one
 # environment at a time). NOT YET PROVEN on a fresh test install -- the release that carries this needs that proof.
 $script:SIBaselineNewInstallDefault = $true
-# Key Vault purge protection is ONE-WAY (Azure never turns it off again), so it is NOT part of the default: OFF unless
-# SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=1 -- turning it on by default for every new install is the owner's decision.
-$script:SIBaselinePurgeProtectionDefault = $false
+# Key Vault purge protection is ONE-WAY (Azure never turns it off again). Owner decision 2026-11-03 (by mail): "On
+# everywhere" -- ON by default for every new install (SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=0 opts a test install out);
+# every existing install was switched on through the Invardia Support app the same day, read back per install.
+$script:SIBaselinePurgeProtectionDefault = $true
 
 function ConvertFrom-SIBaselineSwitch {
     <# PURE. 1 / true / on / yes = $true; 0 / false / off / no = $false; anything else (unset included) = -Default. #>
@@ -74,7 +75,8 @@ function Test-SISecurityBaselineAppliesTo {
 
 function Test-SISecurityBaselinePurgeProtection {
     <# PURE over the switch. True when a new install's Key Vault is created with purge protection (ONE-WAY):
-       SI_SECURITY_BASELINE_KV_PURGE_PROTECTION = 1 / true / on / yes; anything else = the built-in default (OFF). #>
+       SI_SECURITY_BASELINE_KV_PURGE_PROTECTION = 0 / false / off / no turns it off; anything else = the built-in default
+       (ON, owner 2026-11-03). #>
     param([AllowNull()][string]$Value = $env:SI_SECURITY_BASELINE_KV_PURGE_PROTECTION, [bool]$Default = $script:SIBaselinePurgeProtectionDefault)
     ConvertFrom-SIBaselineSwitch -Value $Value -Default $Default
 }

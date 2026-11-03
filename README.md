@@ -329,15 +329,20 @@ who can.
 
 ### 4. Private network only
 
-Use this when SecurityInsight must have no public endpoints: it runs in its own virtual network, the database, Key Vault
+Use this when SecurityInsight must have no public endpoints: it runs in your virtual network, the database, Key Vault
 and storage get private endpoints, and the web app is reachable from your network only.
 
 ```powershell
 ./setup/Install-SecurityInsight.ps1 -TenantId '<your tenant id>' -SubscriptionId '<your subscription id>' `
-    -PrivateNetwork -VnetAddressPrefix '10.212.24.0/24'   # a free range for SecurityInsight's own network (a /24 is the usual size)
+    -PrivateNetwork -VnetId '<resource id of your virtual network>' `
+    -AppsSubnetName 'snet-si-apps' -EndpointsSubnetName 'snet-si-endpoints' `
+    -HubVnetId '<resource id of your hub virtual network>' -WebAppAccess internal
 ```
 
-At the end you get the hand-off list for your network team (peering to your hub, DNS).
+The subnets are created when they are not there (add `-AppsSubnetPrefix` and `-EndpointsSubnetPrefix` with their
+address ranges). No network of your own yet? Use `-PrivateNetwork -VnetAddressPrefix '10.0.24.0/24'` instead of
+`-VnetId`, and SecurityInsight makes its own. At the end you get the hand-off list for your network team (peering to
+your hub, DNS).
 
 ### 5. Check first, or continue an install that stopped
 
@@ -351,14 +356,14 @@ switch to the command you used.
 
 ### Pro trial
 
-Start it at [invardia.com/trial](https://invardia.com/trial/). Your installation page there gives you the one-line command
-for the Pro edition, with the same choices as the samples above.
+Take the trial at [invardia.com/trial](https://invardia.com/trial/), then run the same lines as SecurityInsight Pro.
+Pro and the trial install the same way, with the same parameters as the samples above; only the licence differs.
 
 ### Every setting
 
-All settings, with their defaults and what they do, are in `setup/install-parameters.json` and on
-[Community edition: the scripts you run](https://invardia.com/docs/securityinsight/community-scripts/#install).
-For advanced installs, put them in a `config.json` and pass `-ConfigPath ./config.json`.
+Every setting is a parameter of the same command, so any install is one command line with your values. The list,
+with defaults and what each one does: `Get-Help ./setup/Install-SecurityInsight.ps1 -Full`, `setup/install-parameters.json`
+and [Community edition: the scripts you run](https://invardia.com/docs/securityinsight/community-scripts/#install).
 <!-- /install samples -->
 ## Updates, status reports and 2.2
 

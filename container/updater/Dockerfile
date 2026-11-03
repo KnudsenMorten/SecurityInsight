@@ -32,6 +32,12 @@ COPY engine/SI-FeatureCatalog.ps1 /si/engine/
 COPY engine/_shared/ /si/engine/_shared/
 COPY auth/ /si/auth/
 COPY setup/ /si/setup/
+# The size rule (setup/_shared/SI-JobSizing.ps1 loads container/_shared/SI-ContainerConfig.ps1): without this folder every
+# update said "job size: not checked" (2026-10-09 .. 3.0.18) and no job or web app was ever sized by an update.
+COPY container/_shared/ /si/container/_shared/
+# ... and the pipeline's job map, which the size rule and the run limit read (without it a job's own run limit setting was
+# looked for under its own name only)
+COPY config/job-flow.locked.json /si/config/
 # After an automatic licence request the updater mails the result with the transports the guard mails use.
 COPY engine/risk-analysis/_shared/RA-Mail.ps1 /si/engine/risk-analysis/_shared/
 

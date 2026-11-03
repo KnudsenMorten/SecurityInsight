@@ -213,6 +213,28 @@
       ]
     },
     {
+      "field": "si_tags_inherited",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagsInherited"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_tags_all",
+      "recordTypes": [
+        "azure_resource",
+        "public_ip"
+      ],
+      "sources": [
+        "derived.tagsAll"
+      ],
+      "normalize": []
+    },
+    {
       "field": "azure_vm_id",
       "recordTypes": [
         "azure_resource"

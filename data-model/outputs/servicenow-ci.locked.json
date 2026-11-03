@@ -2,7 +2,7 @@
   "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
   "kind": "output-map",
   "id": "servicenow-ci",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "ServiceNow CMDB hand-off: the import-set view snowstage.vImportCi and the data-out push (#914 one contract: u_action, u_row_hash, u_si_batch_id on every row). The column NAMES are a contract with the customer's transform map; a new column is only ever appended.",
   "grain": "ci",
   "columns": [
@@ -144,6 +144,18 @@
     {
       "target": "u_si_replaces",
       "from": "$replaces"
+    },
+    {
+      "target": "u_tags_all",
+      "from": "si_tags_all"
+    },
+    {
+      "target": "u_tags",
+      "from": "si_tags"
+    },
+    {
+      "target": "u_tags_inherited",
+      "from": "si_tags_inherited"
     }
   ],
   "filter": {

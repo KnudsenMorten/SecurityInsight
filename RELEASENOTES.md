@@ -1,3 +1,52 @@
+## v3.0.21 — One install command, every setting a parameter
+
+### Install
+
+- SecurityInsight installs with ONE command line: every setting of the guided install is a parameter (what you leave out
+  keeps its default), so the install runs unattended and reports each step as it goes. Only the tenant and the
+  subscription are required.
+- An install needs no licence: it deploys the whole environment -- engine jobs, database, web app and updater -- and runs
+  nothing paid until the licence is assigned to the installation; then it takes its licence and install key by itself.
+- A stopped install continues with the same command and -Resume.
+
+## v3.0.20 — Tags your Azure resources inherit, tags in ServiceNow, and an easier CI page
+
+### Tags
+
+- An Azure resource now also carries the tags of its resource group and subscription that it does not set itself, each
+  marked with where it came from. The resource's own tag wins over a parent's, and the resource group's over the
+  subscription's. Many resources have no tags of their own, so this fills in owner, application and purpose for them.
+- Every tag of a CI -- its own first, then the inherited ones -- is also available as one field, for rules, reports and
+  connectors.
+- The ServiceNow CI hand-off offers three new columns at the end: all tags, own tags and inherited tags, each sent as
+  "name = value; ..." text (an inherited tag with "(resource group)" or "(subscription)"). Your ServiceNow team adds the
+  columns (long text) to the import table and the transform map; until then ServiceNow ignores them.
+- Every CI is rebuilt once on the first build after this update, so the new tag fields reach all of them.
+
+### The CI page
+
+- Tags show their values ("name = value"), not only their names.
+- Field names stay on one line, every small table's columns can be made wider or narrower (drag the edge, or the arrow
+  keys; double-click resets), and the field sources table shows each field's value.
+
+### Security
+
+- A new install creates its Key Vault with purge protection on.
+
+## v3.0.19 — Old collections are cleaned up while runs go, and every update sizes the jobs again
+
+### Database housekeeping
+
+- At an install whose runs go back to back, the rows of older collections are now removed while a run is going too,
+  instead of only when nothing runs. The removal waits while the database is busy and gives way at once to a ServiceNow
+  send, so a run and the send are never slowed by it. The newest two complete collections and the published one are
+  never touched.
+
+### Updates
+
+- Every update checks the CPU and memory of the jobs and the web app again, and raises one that is too small for your
+  tenant. Updates since 3.0.0 had skipped this check.
+
 ## v3.0.18 — Cleaner assets: one CI per machine, a choice of what goes to ServiceNow
 
 ### Assets and correlation

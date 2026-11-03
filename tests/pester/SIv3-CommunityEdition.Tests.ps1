@@ -173,8 +173,10 @@ Describe '2026-10-28: the public copy has no BUILD.json -- the web app image sti
 Describe '(b) a Community edition install records its update ring on the Community channel, ring 2 or 3' {
     It 'the settings step records channel community and clamps any other ring to 3' {
         $src = Read-SI 'setup\_shared\SI-GuidedInstallData.ps1'
-        $src | Should -Match "if \(-not \`$ctx\.Pro -and \`$a\.Ring -notin '2', '3'\) \{ \`$a\.Ring = '3' \}"
-        $src | Should -Match "\`$a\.Channel = \`$\(if \(\`$ctx\.Pro\) \{ 'invardia' \} else \{ 'community' \}\)"
+        # by the package's update source, not the licence: a full package installed without a licence keeps its ring
+        $src | Should -Match "\`$viaInvardia = \(\(Get-SIInstallUpdateSource -SIRoot \`$ctx\.SIRoot\) -eq 'invardia'\)"
+        $src | Should -Match "if \(-not \`$viaInvardia -and \`$a\.Ring -notin '2', '3'\) \{ \`$a\.Ring = '3' \}"
+        $src | Should -Match "\`$a\.Channel = \`$\(if \(\`$viaInvardia\) \{ 'invardia' \} else \{ 'community' \}\)"
     }
 }
 
@@ -184,7 +186,7 @@ Describe '(7) the guided install verifies and records the licence itself' {
         $step = [regex]::Match($src, "(?s)\`$t\['pro-settings'\] = \{.*?\n    \}\r?\n").Value
         $step | Should -Not -BeNullOrEmpty
         $step.IndexOf('Save-SIInstallLicenceRecord') | Should -BeGreaterThan $step.IndexOf('setup/Import-SIProSettings.ps1')
-        $step | Should -Match 'if \(\$ctx\.Pro -and \(Get-Command -Name Save-SIInstallLicenceRecord'
+        $step | Should -Match 'if \(\$ctx\.Pro -and -not \$ctx\.AwaitLicence -and \(Get-Command -Name Save-SIInstallLicenceRecord'
     }
     It 'writes the SAME row the updater writes (cfg.InstallState Licence), the value as a safe literal, within 400 characters' -Skip:(-not $script:HasProInstall) {
         $q = Get-SIInstallLicenceRecordSql -Json '{"status":"Valid","customer":"O''Brien Ltd","sku":"Pro"}'

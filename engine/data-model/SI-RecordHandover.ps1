@@ -294,7 +294,7 @@ function Merge-SIRecordHandover {
 # Parts a process ATTACHES to a record another process captured (the profile's look-ups, the logon tier, the rule-index hits,
 # the scope mark). A part of a run collected in parts keeps them without the record (Add-SIRecordPartsFromProfileRows
 # -InParts); a merged record that has ONLY such parts was never captured from its provider and is not published.
-$script:SIRecordAttachedParts = @('profile', 'logon', 'software', 'parentTags', 'egQueryRules', 'si_scope', 'diag')
+$script:SIRecordAttachedParts = @('profile', 'logon', 'software', 'parentTags', 'parentTagScopes', 'egQueryRules', 'si_scope', 'diag')
 
 function Remove-SIRecordHandoverOrphans {
     <# PURE. Drops from a merged capture state every record made only of attached parts (an Azure child resource's part,

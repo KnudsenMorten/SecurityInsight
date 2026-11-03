@@ -255,7 +255,33 @@ public static class CiDoc
         var id = S(e, "id");
         var provider = S(e, "provider");
         if (provider is not null && id is not null) return provider + ":" + id;
-        return id ?? S(e, "name") ?? S(e, "value") ?? e.GetRawText();
+        if (id is not null) return id;
+        // a tag ({ source, name, value }) or any name / value pair: BOTH, "name = value" (owner 2026-11-03: "here i see the
+        // key but not the values") -- a name without a value as the name alone; an INHERITED tag (it has a scope:
+        // si_tags_inherited / si_tags_all) says where it came from: "name = value (resource group)" / "(subscription)"
+        var name = S(e, "name"); var value = S(e, "value");
+        if (name is not null)
+        {
+            var t = value is { Length: > 0 } ? name + " = " + value : name;
+            var scope = TagScopeText(S(e, "scope"));
+            return scope.Length > 0 ? t + " (" + scope + ")" : t;
+        }
+        return value ?? e.GetRawText();
+    }
+
+    /// PURE. Where an inherited tag came from, in plain words (resourceGroup -> "resource group"); "" for an own tag. The
+    /// engine's ConvertTo-SITagScopeText (engine\data-model\SI-Conditions.ps1) says the same.
+    public static string TagScopeText(string? scope)
+    {
+        var s = (scope ?? "").Trim();
+        if (s.Length == 0) return "";
+        switch (s.ToLowerInvariant())
+        {
+            case "resourcegroup": return "resource group";
+            case "subscription": return "subscription";
+            case "managementgroup": return "management group";
+        }
+        return System.Text.RegularExpressions.Regex.Replace(s, "([a-z])([A-Z])", "$1 $2").ToLowerInvariant();
     }
 
     private static IReadOnlyList<string> List(JsonElement? e) => e switch

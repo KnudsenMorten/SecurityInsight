@@ -38,7 +38,7 @@ You do not need anything from your 2.2 install to start.
 ## Set up SecurityInsight 3
 
 1. **Answer the install wizard on invardia.com.** It gives you one command for Azure Cloud Shell. For Community you
-   can also run `setup/Install-SecurityInsight.ps1 -ConfigPath ./config.json` yourself, from the Community package.
+   can also run `setup/Install-SecurityInsight.ps1` yourself, with every setting as a parameter, from the Community package.
 2. **Keep the default resource group,** or choose another one that 2.2 does not use. The defaults are
    `rg-si-prod-community-ca` for Community and `rg-si-prod-pro-ca` for Pro. The names inside it follow the same
    pattern, for example `log-si-prod-community-ca` for the workspace and `sql-si-prod-community-ca-<suffix>` for the

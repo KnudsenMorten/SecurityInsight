@@ -267,7 +267,8 @@ function Build-SIParentResourceChainIndex {
     <#
         ARG bulk-fetch: every Azure subscription + RG + RESOURCE + their tags.
         Build map:
-            <resource-id-lower> -> @( @{ tag='<key>'; value='<val>'; level='<sub|rg|resource>' }, ... )
+            <resource-id-lower> -> @( @{ tag='<key>'; value='<val>'; level='<subscription|resourceGroup|resource>'; from='<container name>' }, ... )
+            (from: the subscription's / resource group's name; a resource's own tags carry none)
 
         Used by: hasAzureTagDirectOrParent handler.
 
@@ -303,7 +304,8 @@ ResourceContainers
             if ($null -eq $s) { continue }
             $tagsArr = New-Object System.Collections.ArrayList
             foreach ($p in (ConvertTo-SITagPairs $s.tags)) {
-                [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'subscription' })
+                # 'from' = the container's name, so a CI can say which subscription a tag it inherits comes from
+                [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'subscription'; from = [string]$s.name })
             }
             $subId = [string]$s.subscriptionId
             if (-not [string]::IsNullOrWhiteSpace($subId)) {
@@ -316,7 +318,7 @@ ResourceContainers
         $rgKql = @"
 ResourceContainers
 | where type =~ 'microsoft.resources/subscriptions/resourcegroups'
-| project id, tags, subscriptionId
+| project id, name, tags, subscriptionId
 | order by id asc
 "@
         $rgs = @(Get-SIArgPaged -Query $rgKql)
@@ -324,7 +326,7 @@ ResourceContainers
             if ($null -eq $r) { continue }
             $tagsArr = New-Object System.Collections.ArrayList
             foreach ($p in (ConvertTo-SITagPairs $r.tags)) {
-                [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'resourceGroup' })
+                [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'resourceGroup'; from = [string]$r.name })
             }
             $subId = [string]$r.subscriptionId
             if (-not [string]::IsNullOrWhiteSpace($subId)) {

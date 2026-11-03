@@ -158,8 +158,11 @@ function Export-SIOutputWorkbookSheet {
         $cells = foreach ($h in $header) {
             $v = $r.$h
             if ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { $v }
-            elseif ($v -is [System.Collections.IEnumerable]) { (@($v | ForEach-Object { if ($_ -is [string] -or $_ -is [ValueType]) { [string]$_ } else { $_ | ConvertTo-Json -Compress -Depth 4 } }) -join '; ') }
-            else { $v | ConvertTo-Json -Compress -Depth 4 }
+            elseif ($v -is [System.Collections.IEnumerable] -and -not ($v -is [System.Collections.IDictionary])) {
+                # a tag entry as 'name = value' / 'name = value (resource group)' (ConvertTo-SITagEntryText), as the CI page shows it
+                (@($v | ForEach-Object { if ($_ -is [string] -or $_ -is [ValueType]) { [string]$_ } else { $tg = ConvertTo-SITagEntryText $_; if ($null -ne $tg) { $tg } else { $_ | ConvertTo-Json -Compress -Depth 4 } } }) -join '; ')
+            }
+            else { $tg = ConvertTo-SITagEntryText $v; if ($null -ne $tg) { $tg } else { $v | ConvertTo-Json -Compress -Depth 4 } }
         }
         $rows.Add([object[]]@($cells))
     }

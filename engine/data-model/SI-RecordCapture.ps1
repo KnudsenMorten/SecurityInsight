@@ -446,12 +446,56 @@ function Set-SIRecordPullFromSource {
     if ($p) { Set-SIRecordPull -Provider $p -Complete $Complete -ErrorText $ErrorText }
 }
 
+function Get-SIParentTagScopes {
+    <#
+        PURE. The tags an Azure resource inherits from its containers, each WITH the container it came from:
+        @( [ordered]@{ name; value; scope = 'resourceGroup' | 'subscription'; from = <the container's name> } ... ).
+        One entry per tag name (Azure tag names are case-insensitive); the NEAREST container wins -- the resource group over
+        the subscription -- and the resource group's tags come first. Read from the profiler's parentChain index, whose
+        resource-group entry also carries the subscription's tags (each entry says its level): the level decides, never the
+        order of the list. A resource's own tags (level 'resource') are never inherited. 'from' is the container's name when
+        the index has it (else the resource group's name from the id; a subscription's is left empty for the derived part
+        to fill from the subscription's name).
+    #>
+    param([string]$Key, $ParentChain)
+    $list = New-Object System.Collections.Generic.List[object]
+    if (-not $Key -or $null -eq $ParentChain) { return , $list.ToArray() }
+    $subKey = ''; $rgKey = ''; $rgName = ''
+    if ($Key -match '^(/subscriptions/[^/]+)') { $subKey = $matches[1].ToLowerInvariant() }
+    if ($Key -match '^(/subscriptions/[^/]+/resourcegroups/([^/]+))') { $rgKey = $matches[1].ToLowerInvariant(); $rgName = $matches[2] }
+    $byLevel = @{ subscription = [ordered]@{}; resourceGroup = [ordered]@{} }     # level -> lower-case tag name -> entry
+    foreach ($pair in @(@($subKey, 'subscription'), @($rgKey, 'resourceGroup'))) {
+        $k = [string]$pair[0]
+        if (-not $k -or -not $ParentChain.ContainsKey($k)) { continue }
+        foreach ($t in @($ParentChain[$k])) {
+            if ($null -eq $t) { continue }
+            $name = ([string]$t.tag).Trim()
+            if (-not $name) { continue }
+            $lvl = [string]$t.level
+            if (-not $lvl) { $lvl = [string]$pair[1] }
+            if ($lvl -eq 'rg') { $lvl = 'resourceGroup' } elseif ($lvl -eq 'sub') { $lvl = 'subscription' }
+            if (-not $byLevel.ContainsKey($lvl)) { continue }
+            $from = ([string]$t.from).Trim()
+            if (-not $from -and $lvl -eq 'resourceGroup') { $from = $rgName }
+            $byLevel[$lvl][$name.ToLowerInvariant()] = [ordered]@{ name = $name; value = [string]$t.value; scope = $lvl; from = $from }
+        }
+    }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($lvl in 'resourceGroup', 'subscription') {       # the nearer container first: its tag wins
+        foreach ($lk in @($byLevel[$lvl].Keys)) { if ($seen.Add([string]$lk)) { $list.Add($byLevel[$lvl][$lk]) } }
+    }
+    return , $list.ToArray()
+}
+
 function Add-SIRecordPartsFromRuleIndexes {
     <#
         The profiler's rule indexes (Build-SIRuleIndexes) as record parts, for the records this run captured:
-          software     -> mde device records      ('vendor/product' list, the Defender software inventory)
-          parentTags   -> azure records           (the resource group's and subscription's tags, the nearest wins)
-          egQueryRules -> eg / mde / entra records (ids of the detection rules whose Exposure Graph query matched)
+          software        -> mde device records      ('vendor/product' list, the Defender software inventory)
+          parentTags      -> azure records           (the resource group's and subscription's tags, the nearest wins:
+                                                      tag -> value, the shape the derived tag fields read)
+          parentTagScopes -> azure records           (the same tags, each with the container it came from:
+                                                      Get-SIParentTagScopes -- si_tags_inherited / si_tags_all)
+          egQueryRules    -> eg / mde / entra records (ids of the detection rules whose Exposure Graph query matched)
     #>
     param($Indexes = $global:SIRuleIndexesForRecords)
     if ($null -eq $Indexes -or $null -eq $global:SIRecordCaptureState) { return }
@@ -460,14 +504,13 @@ function Add-SIRecordPartsFromRuleIndexes {
         try {
             if ($r.Provider -eq 'mde' -and $sw -and $sw.ContainsKey($r.Key)) { $r.Parts['software'] = @($sw[$r.Key]) }
             if ($r.Provider -eq 'azure' -and $pc -and $pc.Count -gt 0) {
-                $tags = [ordered]@{}
-                $chain = New-Object System.Collections.Generic.List[string]
-                if ($r.Key -match '^(/subscriptions/[^/]+)') { $chain.Add($matches[1]) }
-                if ($r.Key -match '^(/subscriptions/[^/]+/resourcegroups/[^/]+)') { $chain.Add($matches[1]) }
-                foreach ($k in $chain) {          # subscription first, then the resource group: the nearer container wins
-                    if ($pc.ContainsKey($k)) { foreach ($t in @($pc[$k])) { if ($t -and $t.tag) { $tags[[string]$t.tag] = [string]$t.value } } }
+                $scoped = Get-SIParentTagScopes -Key ([string]$r.Key) -ParentChain $pc
+                if ($scoped.Count -gt 0) {
+                    $tags = [ordered]@{}
+                    foreach ($e in $scoped) { $tags[[string]$e.name] = [string]$e.value }
+                    $r.Parts['parentTags'] = $tags
+                    $r.Parts['parentTagScopes'] = $scoped
                 }
-                if ($tags.Count -gt 0) { $r.Parts['parentTags'] = $tags }
             }
             if ($r.Provider -in 'eg', 'mde', 'entra' -and $ks -and $ks.Count -gt 0) {
                 $hits = New-Object System.Collections.Generic.List[string]

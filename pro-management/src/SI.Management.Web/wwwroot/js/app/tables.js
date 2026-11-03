@@ -353,8 +353,84 @@ function measureHeads() {
   });
 }
 
+// Every column of a small table can be made wider or narrower (owner 2026-11-03: "why is this width so small and i cannot
+// make it bigger"): a grip on each header's right edge -- drag it, or focus it and use the left / right arrow keys;
+// double-click or Enter sets the column back. The width is remembered in this browser for this page (a viewer's own
+// convenience, never shared). The collection views' grids have their own grips (view-tools.js) and are left alone.
+var GRIP_MIN = 48, GRIP_MAX = 1200, GRIP_STEP = 24;
+function widthKey(table, i) {
+  var all = Array.prototype.indexOf.call(document.querySelectorAll("table[data-sortable]"), table);
+  return "si.colw:" + location.pathname + ":" + all + ":" + i;
+}
+function setColWidth(table, i, px) {
+  var w = px === null ? "" : px + "px";
+  Array.prototype.forEach.call(table.rows, function (r) {
+    var c = r.cells[i];
+    if (!c || c.colSpan > 1) { return; }
+    c.style.width = w; c.style.minWidth = w; c.style.maxWidth = w;
+  });
+}
+export function addResizeGrips(table) {
+  if (table.closest(".dataview[data-view]") || table.getAttribute("data-resize-ready") === "1") { return; }
+  var head = headerRow(table);
+  if (!head) { return; }
+  table.setAttribute("data-resize-ready", "1");
+  Array.prototype.forEach.call(head.cells, function (th, i) {
+    if (th.colSpan > 1) { return; }
+    var key = widthKey(table, i);
+    try { var saved = window.localStorage.getItem(key); if (saved) { setColWidth(table, i, Math.max(GRIP_MIN, Math.min(GRIP_MAX, parseInt(saved, 10) || 0))); } } catch (x) { /* no storage: the default width */ }
+    if (window.getComputedStyle(th).position === "static") { th.style.position = "relative"; }
+    var name = th.textContent.replace(/\s+/g, " ").trim();
+    var grip = el("span", "th-grip");
+    grip.setAttribute("role", "separator");
+    grip.setAttribute("aria-orientation", "vertical");
+    grip.setAttribute("tabindex", "0");
+    grip.setAttribute("data-th-grip", "");
+    var words = "Width of the column " + name + ": drag, or use the left and right arrow keys; double-click or Enter sets it back";
+    grip.setAttribute("aria-label", words);
+    grip.title = words;
+    function commit(px) {
+      setColWidth(table, i, px);
+      try { if (px === null) { window.localStorage.removeItem(key); } else { window.localStorage.setItem(key, String(px)); } } catch (x) { /* not remembered */ }
+    }
+    function clampW(px) { return Math.max(GRIP_MIN, Math.min(GRIP_MAX, Math.round(px))); }
+    grip.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) { return; }
+      e.preventDefault(); e.stopPropagation();
+      var startX = e.clientX, startW = th.getBoundingClientRect().width, now = clampW(startW), frame = 0;
+      try { grip.setPointerCapture(e.pointerId); } catch (x) { /* the drag still works while the pointer stays on the edge */ }
+      grip.classList.add("th-grip-on");
+      function onMove(ev) {
+        now = clampW(startW + ev.clientX - startX);
+        if (frame) { return; }
+        frame = window.requestAnimationFrame(function () { frame = 0; setColWidth(table, i, now); });
+      }
+      function onUp() {
+        grip.removeEventListener("pointermove", onMove);
+        grip.removeEventListener("pointerup", onUp);
+        grip.removeEventListener("pointercancel", onUp);
+        grip.classList.remove("th-grip-on");
+        if (Math.abs(now - clampW(startW)) >= 2) { commit(now); }
+      }
+      grip.addEventListener("pointermove", onMove);
+      grip.addEventListener("pointerup", onUp);
+      grip.addEventListener("pointercancel", onUp);
+    });
+    // the grip never sorts the column it sits on
+    grip.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); });
+    grip.addEventListener("dblclick", function (e) { e.preventDefault(); e.stopPropagation(); commit(null); });
+    grip.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault(); e.stopPropagation();
+        commit(clampW(th.getBoundingClientRect().width + (e.key === "ArrowLeft" ? -GRIP_STEP : GRIP_STEP)));
+      } else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); commit(null); }
+    });
+    th.appendChild(grip);
+  });
+}
+
 export function initTables(root) {
-  (root || document).querySelectorAll("table[data-sortable]").forEach(enhanceTable);
+  (root || document).querySelectorAll("table[data-sortable]").forEach(function (t) { enhanceTable(t); addResizeGrips(t); });
   measureHeads();
   window.addEventListener("resize", measureHeads);
   // a toolbar that wraps (a longer hint, a narrower window) re-measures itself

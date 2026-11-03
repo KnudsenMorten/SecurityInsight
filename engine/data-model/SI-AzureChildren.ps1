@@ -277,7 +277,7 @@ function Get-SIAzurePipVia {
 # ---------------------------------------------------------------------------------------------------------------------
 #  The capture state: the children as parts of their parent's record
 # ---------------------------------------------------------------------------------------------------------------------
-$script:SIRecordOwnlessParts = @('parentTags', 'egQueryRules', 'si_scope', 'diag')
+$script:SIRecordOwnlessParts = @('parentTags', 'parentTagScopes', 'egQueryRules', 'si_scope', 'diag')
 
 function Test-SIRecordChildOnly {
     <# PURE. A captured record that holds child parts and no provider object of its own (its parent was not captured here). #>

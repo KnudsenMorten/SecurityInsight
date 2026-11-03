@@ -78,7 +78,9 @@ list for your network team at the end.
 
 ```powershell
 ./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
-    -PrivateNetwork -VnetAddressPrefix 10.212.24.0/24
+    -PrivateNetwork -VnetId '<resource id of your virtual network>' `
+    -AppsSubnetName 'snet-si-apps' -EndpointsSubnetName 'snet-si-endpoints' `
+    -HubVnetId '<resource id of your hub virtual network>' -WebAppAccess internal
 ```
 
 **5. Check first, or continue an install that stopped:**
@@ -91,14 +93,14 @@ list for your network team at the end.
 **Pro trial:** start it at [invardia.com/trial](https://invardia.com/trial/). Your installation page there gives you
 the one-line command for the Pro edition, with the same choices as the samples above.
 
-**Every other setting** (your own workspace, SMTP mail, Azure OpenAI, customer-managed keys ...) goes in a
-`config.json` keyed as in `setup/install-parameters.json`: `./setup/Install-SecurityInsight.ps1 -ConfigPath ./config.json`.
+**Every other setting** (your own workspace, SMTP mail, Azure OpenAI, customer-managed keys ...) is a parameter of the
+same command, so any install is one command line: `Get-Help ./setup/Install-SecurityInsight.ps1 -Full` lists them all.
 
 ### The install and configuration scripts
 
 | File | Purpose | How to run it | Produces |
 |---|---|---|---|
-| `setup\Install-SecurityInsight.ps1` | Guided install as Container Apps jobs. Checks your sign-in, rights, resource providers and names first and changes nothing until they pass; then creates every resource step by step and reports each step. A grant it cannot make ends as a warning with the exact command. Without a licence file it installs Community. | In Azure Cloud Shell: `./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'` (the samples above), or `-ConfigPath ./config.json` for every setting. `-PreflightOnly` runs only the checks; `-Resume` continues after a stop. | Resource group, workspace, data collection endpoint and rules, storage, Key Vault, managed identity and its grants, the container registry and image, the Container Apps jobs, a first run and a health check |
+| `setup\Install-SecurityInsight.ps1` | Guided install as Container Apps jobs. Checks your sign-in, rights, resource providers and names first and changes nothing until they pass; then creates every resource step by step and reports each step. A grant it cannot make ends as a warning with the exact command. Without a licence file it installs Community. | In Azure Cloud Shell: `./setup/Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'` (the samples above); every setting is a parameter. `-PreflightOnly` runs only the checks; `-Resume` continues after a stop. | Resource group, workspace, data collection endpoint and rules, storage, Key Vault, managed identity and its grants, the container registry and image, the Container Apps jobs, a first run and a health check |
 | `Setup-SecurityInsight-Unattended.ps1` | A Windows server install without prompts, driven by a JSON file. | `.\Setup-SecurityInsight-Unattended.ps1 -ConfigPath .\setup.json` | Azure resources and `config\SecurityInsight.custom.ps1` |
 | `setup\ConfigWizard\Start-SetupWizard.ps1` | A local setup wizard: serves a page on `localhost` only while the script runs and opens it in your browser. You answer tenant, workspace, mail, CMDB, Azure OpenAI and Shodan questions; it sets up the sign-in, creates the Log Analytics resources and writes your configuration file. The sign-in is a **user-assigned managed identity** by default: created, granted and attached to the VM you name (for Container Apps, the jobs' own identity). A service principal with a certificate or a client secret is there when you choose it; on a server outside Azure, where no managed identity can exist, the wizard says so and offers a certificate first, then a secret. It configures the install and nothing else. | `.\setup\ConfigWizard\Start-SetupWizard.ps1`, stop it with Ctrl+C | Managed identity (or a service principal), workspace, data collection endpoint, storage, configuration file |
 | `Bootstrap-ContainerAppJob.ps1` | Creates or updates the Container Apps hosting: registry, image built in your registry, Container Apps environment, one job per engine with its schedule, and the pipeline job. The jobs sign in as a user-assigned managed identity by default; a service principal by client secret (`-UseClientSecret`) or by certificate (`-CertificateKeyVaultName` with `-CertificateSecretName`) when you choose it. An install whose configuration already carries a client secret keeps it until you run it with `-UseManagedIdentity`. | `.\Bootstrap-ContainerAppJob.ps1 -ResourceGroupName <rg> -Location <region> -UseManagedIdentity -GrantIdentityRoles` | Container Apps jobs (endpoint, identity, azure, publicip, privilege tier classifier, Risk Analysis Summary and Detailed, trend) |

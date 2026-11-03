@@ -199,16 +199,61 @@ public static class OutputMapper
     {
         null => "",
         JsonValue jv when jv.TryGetValue<bool>(out var b) => b ? "true" : "false",
+        JsonValue sv when sv.TryGetValue<string>(out var st) && TagListText(st) is { } st2 => st2,
+        JsonArray a when TagListText(a) is { } tags => tags,
+        JsonObject o when TagEntryText(o) is { } one => one,
         JsonArray or JsonObject => v.ToJsonString(),
         _ => Text(v),
     };
+
+    /// PURE. A tag list the CI document kept as JSON TEXT, as its tag text; null when the text is not a tag list.
+    public static string? TagListText(string? jsonText)
+    {
+        var t = (jsonText ?? "").TrimStart();
+        if (!t.StartsWith('[')) return null;
+        try { return JsonNode.Parse(t) is JsonArray a ? TagListText(a) : null; }
+        catch (JsonException) { return null; }
+    }
 
     /// A cell as the preview shows it: a list or an object flattened like the workbook does ("a; b").
     public static string Cell(JsonNode? v) => v switch
     {
         null => "",
+        JsonValue sv when sv.TryGetValue<string>(out var st) && TagListText(st) is { } st2 => st2,
+        JsonArray a when TagListText(a) is { } tags => tags,
         JsonArray a => string.Join("; ", a.Select(x => x is JsonValue ? Text(x) : x?.ToJsonString() ?? "")),
+        JsonObject o when TagEntryText(o) is { } one => one,
         JsonObject o => o.ToJsonString(),
         _ => Text(v),
     };
+
+    /// PURE. A list of tag entries ({ name, value }, an inherited one with its scope) as the ONE text the engine sends to
+    /// ServiceNow and writes to Excel (engine\data-model\SI-Conditions.ps1 ConvertTo-SITagListText): "name = value" per tag,
+    /// "; " between, an inherited tag with " (resource group)" / " (subscription)". Null when the list is empty or holds
+    /// anything but tag entries (an object with an id is a linked object, never a tag) -- that list keeps its own form.
+    public static string? TagListText(JsonArray a)
+    {
+        var parts = new List<string>();
+        foreach (var x in a)
+        {
+            if (x is null) continue;
+            if (x is not JsonObject o || TagEntryText(o) is not { } t) return null;
+            parts.Add(t);
+        }
+        return parts.Count == 0 ? null : string.Join("; ", parts);
+    }
+
+    /// PURE. One tag entry as text ("name = value", "name", "name = value (resource group)"); null when it is not one.
+    public static string? TagEntryText(JsonObject o)
+    {
+        JsonNode? Key(string k) => o.FirstOrDefault(kv => string.Equals(kv.Key, k, StringComparison.OrdinalIgnoreCase)).Value;
+        bool Has(string k) => o.Any(kv => string.Equals(kv.Key, k, StringComparison.OrdinalIgnoreCase));
+        if (!Has("name") || !Has("value") || Has("id")) return null;
+        var name = Text(Key("name")).Trim();
+        if (name.Length == 0) return null;
+        var value = Text(Key("value")).Trim();
+        var t = value.Length > 0 ? name + " = " + value : name;
+        var scope = CiDoc.TagScopeText(Text(Key("scope")));
+        return scope.Length > 0 ? t + " (" + scope + ")" : t;
+    }
 }

@@ -23,7 +23,7 @@ ends as a warning with the exact command for the person who can.
 | Edition | Licence |
 |---|---|
 | Community | None. The install says it installs the Community edition. |
-| Pro | Have your SecurityInsight Pro licence ready, or let the install fetch it: a Pro install requests its licence from Invardia, bound to your tenant, and renews it before it ends. |
+| Pro | None at install. The install deploys the whole environment and runs nothing until its licence is approved; the updater requests it from Invardia, bound to your tenant, and SecurityInsight starts by itself. |
 
 **Cost (estimate, list prices).** The two databases run on the Standard tier (S3 for the SecurityInsight database, S1
 for the identity ledger) whatever the tenant's size, plus the web app (it scales to zero), the Container Apps jobs and
@@ -47,6 +47,34 @@ The wizard asks seven short pages of questions. It never asks for a password or 
 application.
 
 ## 2. Run the command in Cloud Shell
+
+Every setting is a parameter of one command. Only `-TenantId` and `-SubscriptionId` are needed; every other setting has a
+default (`Get-Help ./Install-SecurityInsight.ps1 -Full` lists them all).
+
+**Community** (from the public SecurityInsight release on GitHub):
+
+```powershell
+Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+```
+
+**Pro and the 60-day trial** (from invardia.com: the same command, no licence or key on the line; take the trial first at [invardia.com/trial](https://invardia.com/trial/)):
+
+```powershell
+Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+```
+
+A Pro install in your own network only adds its network:
+
+```powershell
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
+    -PrivateNetwork -VnetId '<resource id of your virtual network>' -HubVnetId '<resource id of your hub virtual network>' -WebAppAccess internal
+```
+
+The Pro install deploys the whole environment and runs nothing yet. Its updater asks Invardia for the licence at once; once it
+is approved, the installation takes its licence and install key, installs the Pro release of its update ring and starts,
+by itself.
 
 The wizard gives you one command. Open Azure Cloud Shell (PowerShell), signed in as the person who installs, and paste
 it. The install signs in with your browser session, needs no PowerShell module, and reports each step to the

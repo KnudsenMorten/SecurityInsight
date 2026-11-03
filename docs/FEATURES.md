@@ -300,7 +300,7 @@ feature here working normally.
 - **One daily pipeline: Collect, Correlate, Deliver.** ✅ 2026-10-27 -- Every night one pipeline runs the three stages at the time you choose. Each step starts as soon as the steps it needs have finished, and you can run a single stage or step on its own.
 - **The updater runs on its own schedule.** ✅ 2026-10-27 -- Updates are never a step of the pipeline, so an update never waits for the night's run and never holds it up.
 - **Risk Analysis mail works in containers.** ✅ 2026-10-27 -- The mail password reaches the container jobs as a Key Vault reference, so a container install runs Risk Analysis and mails its result.
-- **Every job gets the size it needs.** ✅ 2026-10-28 -- Each update checks the CPU and memory of every job and raises one that is too small for your tenant, never below 2 CPU and 4 GiB. A size you set yourself is kept.
+- **Every job gets the size it needs.** ✅ 2026-10-28 -- A new install gives every job the CPU and memory it needs, never below 2 CPU and 4 GiB. A size you set yourself is kept. (Checking and raising the sizes on every update arrives with the next update; until then an update leaves the sizes as they are.)
 
 ## 12. Performance & scale
 

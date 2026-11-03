@@ -801,8 +801,11 @@ function Get-SIInstallDataStepTable {
             $a = Get-SIInstallSqlArgs -Ctx $ctx; $a.Ring = [string](Get-SIInstallUpdateRing -Values $ctx.Values)
             # SI #750 (b): a Community edition install updates on the Community channel, rings 2 / 3 only (3 = broad, the
             # default; rings 0 / 1 are internal) -- any other answer is recorded as 3
-            if (-not $ctx.Pro -and $a.Ring -notin '2', '3') { $a.Ring = '3' }
-            $a.ResourceGroupName = [string]$ctx.Names.ResourceGroup; $a.Channel = $(if ($ctx.Pro) { 'invardia' } else { 'community' }); $a.SetBy = 'guided install'; $a.PassThru = $true
+            # -- by the package's UPDATE SOURCE, not the licence (owner 2026-11-02): the full package installed without a
+            # licence updates through Invardia once the licence is added, on the ring given at install (ring 1 included)
+            $viaInvardia = ((Get-SIInstallUpdateSource -SIRoot $ctx.SIRoot) -eq 'invardia')
+            if (-not $viaInvardia -and $a.Ring -notin '2', '3') { $a.Ring = '3' }
+            $a.ResourceGroupName = [string]$ctx.Names.ResourceGroup; $a.Channel = $(if ($viaInvardia) { 'invardia' } else { 'community' }); $a.SetBy = 'guided install'; $a.PassThru = $true
             $r = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'setup/Set-SIInstallRing.ps1' -Arguments $a
             $script:SIInstallRingResult = @($r.Objects | Where-Object { $_ -and $_.PSObject.Properties['Ring'] }) | Select-Object -Last 1
         }
@@ -819,7 +822,7 @@ function Get-SIInstallDataStepTable {
         # #750 (7), owner 2026-10-27: a Pro install VERIFIES AND RECORDS ITS LICENCE ITSELF (cfg.InstallState 'Licence', the
         # record the web app's licence gate and the MCP server read), so its paid pages are on at once -- not only after the
         # updater's first run. Pro package only (SI-GuidedInstallPro.ps1); never fails the install.
-        if ($ctx.Pro -and (Get-Command -Name Save-SIInstallLicenceRecord -ErrorAction SilentlyContinue)) {
+        if ($ctx.Pro -and -not $ctx.AwaitLicence -and (Get-Command -Name Save-SIInstallLicenceRecord -ErrorAction SilentlyContinue)) {
             $lr = Save-SIInstallLicenceRecord -Ctx $ctx
             Write-SIInstallConsole -Ctx $ctx -Text $lr.Text -Color $(if ($lr.Ok) { 'Gray' } else { 'Yellow' })
         }

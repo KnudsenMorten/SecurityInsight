@@ -8432,6 +8432,29 @@ vault and switches the step on. The updater image is built with the SecurityInsi
 carries the client, the verifier and the setter under `/si`; its service principal needs Key Vault Secrets
 Officer on that vault (`Install-SIUpdaterJob.ps1 -GrantSpnRoles` grants it).
 
+### 12c-0. Permission changes reach every install (owner decision, 2026-11-03)
+
+A decision about a permission -- a role, a grant, a scope, a consent, or a right taken away -- is applied at **every**
+SecurityInsight install, never only at the install where it came up:
+
+1. **by the updater**, on its next run, wherever its own identity may make the change;
+2. otherwise **through vendor support** (the Invardia Support app), install by install, each one read back;
+3. otherwise as a **customer step**: the update result names the step and the exact command, and it stays open until a
+   later update reads it as done.
+
+Decisions taken under this rule (owner, 2026-11-03):
+
+- **Key Vault purge protection is on at every install.** A deleted vault and its secrets cannot be purged before their
+  retention ends (90 days). It is one-way: Azure never switches it off again. Every existing install was switched on and
+  read back; a new install creates its vault with it (a test install can opt out with
+  `SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=0`).
+- **The engine identities keep their subscription-level Contributor role.** Existing installs are not changed; the
+  least-privilege move stays available as an opt-in step and is not rolled out.
+
+A release that brings a new permission brings its check and its step with it. Today the update result names a step that
+is missing; a coming release adds one state per step (done, missing, not needed, or not readable), checked for real on
+every update, so the vendor sees every install's state in one place.
+
 ### 12c. Updates from Invardia (Pro)
 
 SecurityInsight Pro takes its new releases -- the code and the template packs -- from Invardia, the Pro update
@@ -9753,6 +9776,33 @@ ServiceNow team guide).
   (System Import Sets > Import Set Tables > Scheduled Cleanup; default: import sets and rows older than seven days --
   verified in ServiceNow's public docs, to be checked on the customer's release), keep the two newest complete batches of
   each output, how the per-import-set cleanup meets a batch of several import sets, and the sizing formula.
+
+### Tags a resource inherits, and every tag as one text for ServiceNow (#1068)
+
+Many Azure resources carry no tags of their own; their resource group or subscription does. SecurityInsight already read
+those container tags for the asset-profile rules, but only as "tag -> value", so the CI could not say where a tag came
+from, and none of them reached the CI.
+
+- **Capture.** The profiler's container index (one Resource Graph read of subscriptions and resource groups per run) now
+  keeps each container's name. Every Azure record gets two parts from it: `parentTags` (tag -> value, unchanged, which
+  the tag-key fields such as owner and environment read) and `parentTagScopes` -- per tag its value, its scope
+  (`resourceGroup` or `subscription`) and the container's name. One entry per tag name (Azure tag names are
+  case-insensitive); the nearest container wins: the resource group over the subscription.
+- **Fields.** `si_tags` stays the asset's own tags. `si_tags_inherited` holds only the inherited tags whose name the
+  asset does not set itself: `{ source, name, value, scope, from }`. `si_tags_all` is every tag in one list: the CI's own
+  tags first (every source's and the SI rules' tags), then the inherited ones. Both are in the field catalog, posted to
+  the CI table, and usable in rules like `si_tags`.
+- **Text.** A tag is shown and sent as `name = value` (a tag without a value: its name); an inherited tag ends with
+  `(resource group)` or `(subscription)`; tags are separated by `; `. The CI page, the Excel exports and the ServiceNow
+  push all write that text -- a tag list never reaches ServiceNow as JSON. Other object lists keep their form.
+- **ServiceNow.** The shipped CI map appends `u_tags_all`, `u_tags` and `u_tags_inherited` after every existing column
+  (the column names are a contract: append only). The schema the web app gives the ServiceNow team creates them as strings
+  of 65,000 characters.
+- **Existing installs.** The update brings it: the CI build version moves to 13, so the first build after the update
+  rebuilds every CI once with the new fields, and the next push sends the three columns. No manual step.
+- **Not yet.** The SQL hand-off view (`snowstage.vImportCi`) does not carry the tag columns (it is written from the
+  profile rows, which have no CI tags; the tags there are the key-value view). The three columns are not clearable: a
+  CI that loses its last tag sends the column empty, which ServiceNow reads as unknown.
 
 ### One trusted contract for every data-out target: ServiceNow and the SQL connectors (#914)
 

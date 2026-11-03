@@ -178,6 +178,17 @@ columns.
 `u_owner_mail`, `u_department`, `u_batch_id` or `u_batch_time`, and it sends devices, Azure resources and identities
 (no public IP addresses).
 
+**The push also sends the asset's tags**, after the contract's columns -- as text, never as JSON:
+
+| Column | Type | Sent | What it holds | Example |
+|---|---|---|---|---|
+| `u_tags_all` | string (65,000) | when known | Every tag: the asset's own first, then the Azure tags it inherits from its resource group or subscription | `env = prod; Used for = Demo workload (resource group)` |
+| `u_tags` | string (65,000) | when known | The asset's own tags only (Azure, Defender, Entra, SecurityInsight rules) | `env = prod` |
+| `u_tags_inherited` | string (65,000) | when known | Only the inherited Azure tags the asset does not set itself; the resource group's value wins over the subscription's | `Business Application = Demo portal (subscription)` |
+
+Each tag is `name = value` (a tag without a value: its name), tags are separated by `; `, and an inherited tag ends with
+`(resource group)` or `(subscription)`. Create the three fields as strings of 65,000 characters.
+
 ### Tags (vImportCiKeyValue)
 
 Hand-off database only.

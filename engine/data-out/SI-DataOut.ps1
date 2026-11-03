@@ -2752,13 +2752,21 @@ function Invoke-SIDataOutWriter {
 }
 
 function ConvertTo-SIDataOutCells {
-    <# PURE. One mapped row -> its cells in header order, arrays / objects flattened to text (as the workbook shows them). #>
+    <# PURE. One mapped row -> its cells in header order, arrays / objects flattened to text (as the workbook shows them).
+       A tag entry ({ name, value }, an inherited one with its scope) is 'name = value' / 'name = value (resource group)'
+       (ConvertTo-SITagEntryText) -- the words the CI page and the ServiceNow column carry; any other object stays JSON. #>
     param($Row, [string[]]$Header)
     , @(foreach ($h in $Header) {
             $v = $Row.$h
-            if ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { $v }
-            elseif ($v -is [System.Collections.IEnumerable]) { (@($v | ForEach-Object { if ($_ -is [string] -or $_ -is [ValueType]) { [string]$_ } else { $_ | ConvertTo-Json -Compress -Depth 4 } }) -join '; ') }
-            else { $v | ConvertTo-Json -Compress -Depth 4 }
+            if ($v -is [string] -and $v.StartsWith('[')) { $tg = ConvertTo-SIDataOutTagText $v; if ($null -ne $tg) { $tg } else { $v } }   # a tag list kept as JSON text
+            elseif ($null -eq $v -or $v -is [string] -or $v -is [ValueType]) { $v }
+            elseif ($v -is [System.Collections.IEnumerable] -and -not ($v -is [System.Collections.IDictionary])) {
+                (@($v | ForEach-Object {
+                            if ($_ -is [string] -or $_ -is [ValueType]) { [string]$_ }
+                            else { $tg = ConvertTo-SITagEntryText $_; if ($null -ne $tg) { $tg } else { $_ | ConvertTo-Json -Compress -Depth 4 } }
+                        }) -join '; ')
+            }
+            else { $tg = ConvertTo-SITagEntryText $v; if ($null -ne $tg) { $tg } else { $v | ConvertTo-Json -Compress -Depth 4 } }   # one tag (a list of one, unrolled)
         })
 }
 

@@ -336,11 +336,14 @@ function ConvertTo-SICiEvidenceText {
     <# PURE. One matched value of an SI field in the customer's words ("Defender tag PAWDevices--tier0--SI", "installed software
        microsoft/sql_server", "name dc1"). #>
     param([string]$Field, $Value)
-    if (@('si_tags', 'si_azure_parent_tags', 'si_machine_groups') -contains $Field -and $null -ne $Value -and $Value -isnot [string] -and $null -ne (Get-SIItemValue $Value 'name')) {
+    if (@('si_tags', 'si_azure_parent_tags', 'si_tags_inherited', 'si_tags_all', 'si_machine_groups') -contains $Field -and $null -ne $Value -and $Value -isnot [string] -and $null -ne (Get-SIItemValue $Value 'name')) {
         $n = [string](Get-SIItemValue $Value 'name'); $v = [string](Get-SIItemValue $Value 'value')
         $t = $n; if ($v) { $t = '{0}={1}' -f $n, $v }
         $who = switch ([string](Get-SIItemValue $Value 'source')) { 'mde' { 'Defender tag' } 'entra' { 'Entra attribute' } 'azure' { 'Azure tag' } 'eg' { 'Exposure Management tag' } 'rule' { 'SI tag' } default { 'tag' } }
         if ($Field -eq 'si_azure_parent_tags') { $who = 'Azure tag (inherited)' }
+        # an inherited tag (si_tags_inherited / si_tags_all) says which container it came from
+        $sc = ConvertTo-SITagScopeText ([string](Get-SIItemValue $Value 'scope'))
+        if ($sc) { $who = 'Azure tag (inherited from the {0})' -f $sc }
         return ('{0} {1}' -f $who, $t)
     }
     $s = ''
@@ -472,6 +475,27 @@ function Get-SICiTierExplanation {
     return $s
 }
 
+function Set-SICiTagsAll {
+    <#
+        PURE (on the CI). si_tags_all = every tag of the CI in ONE list: si_tags first (each source's own tags and the SI rules'
+        tags), then the Azure tags the asset inherits from its resource group / subscription (si_tags_inherited, each with
+        its scope). The one field a connector column takes (a ServiceNow column gets 'name = value; ...', an inherited tag
+        with '(resource group)' / '(subscription)'). A CI with no tag at all is left as it is.
+    #>
+    param($Ci)
+    if ($null -eq $Ci) { return }
+    $own = Get-SIValueList $Ci['si_tags']
+    $inh = Get-SIValueList $Ci['si_tags_inherited']
+    if ($own.Count -eq 0 -and $inh.Count -eq 0) {
+        if ($Ci.Contains('si_tags_all')) { $Ci.Remove('si_tags_all') }
+        return
+    }
+    $all = [System.Collections.Generic.List[object]]::new()
+    foreach ($x in $own) { $all.Add($x) }
+    foreach ($x in $inh) { $all.Add($x) }
+    $Ci['si_tags_all'] = $all.ToArray()
+}
+
 function Invoke-SICiRules {
     <#
     .SYNOPSIS  Evaluates the CI rules on one CI and applies the result (tier + trace, purpose, category, CMDB values, tags).
@@ -486,6 +510,8 @@ function Invoke-SICiRules {
         # names it in its log and builds it again in the next run (SI-CiBuildRun.ps1, Get-SICiHeld). 0 = no limit.
         [double]$BudgetSeconds = 0)
     $class = [string]$Ci['si_class']
+    # every tag of the CI in one list before the rules run, so a rule can match si_tags_all like si_tags
+    Set-SICiTagsAll -Ci $Ci
     $budgetWatch = $null; if ($BudgetSeconds -gt 0) { $budgetWatch = [System.Diagnostics.Stopwatch]::StartNew() }
     $rulesCut = $false
     $platform = [string]$Ci['si_os_platform']
@@ -595,6 +621,8 @@ function Invoke-SICiRules {
     }
     foreach ($c in $deciding) { if ($c.set.Contains('si_tags')) { foreach ($tg in @($c.set['si_tags'])) { $tags.Add([ordered]@{ source = 'rule'; name = [string]$tg; value = '' }) } } }
     if ($tags.Count -gt 0 -or $stripped -gt 0) { $Ci['si_tags'] = $tags.ToArray() }
+    # and again with the tags the rules added (and without the ones taken off): what the CI page and a connector show
+    Set-SICiTagsAll -Ci $Ci
     # #462 the trace: every claim with its priority, pack and the VALUES of its evidence with the provider that supplied
     # them (si_field_sources); a claim that did not decide carries what it WOULD have set
     $srcMap = Get-SIItemValue $Ci 'si_field_sources'

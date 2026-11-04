@@ -12,7 +12,7 @@
     where Defender has no row, from the edge's risk level. A third hand-off key -- (resource, assessment key) --
     keeps a recommendation Defender already reports from being counted twice.
 
-    Live, read-only, ring 1 (Detailed 426 -> 588 rows, Summary 296 -> 430; the 2linkit-sql and vnet rows came back;
+    Live, read-only, ring 1 (Detailed 426 -> 588 rows, Summary 296 -> 430; the SQL server and vnet rows came back;
     two rows that Defender already carried under another spelling left). Offline here: the query shape, the
     engine's let pre-fetch over the new lookup, the hand-off substitution and the catalog's KQL rules.
 #>
@@ -138,10 +138,10 @@ Describe 'a recommendation Defender already reports is not counted twice -- by (
     }
     It 'the two sides hash the same text -- resource id lower-cased, then the assessment key' {
         # An edge names <resource>/providers/Microsoft.Security/assessments/<key>; Defender's row has ResourceIdLower + AssessmentKey.
-        $edge = '/subscriptions/S/resourcegroups/rg/providers/Microsoft.Sql/servers/2linkit-sql/providers/Microsoft.Security/assessments/22E93E92-4A31-B4CD-D640-3EF908430AA6'.ToLowerInvariant()
+        $edge = '/subscriptions/S/resourcegroups/rg/providers/Microsoft.Sql/servers/contoso-sql/providers/Microsoft.Security/assessments/22E93E92-4A31-B4CD-D640-3EF908430AA6'.ToLowerInvariant()
         $m = [regex]::Match($edge, '^(.*)/providers/microsoft\.security/assessments/([^/]+)$')
         $m.Success | Should -BeTrue
-        ($m.Groups[1].Value + '|' + $m.Groups[2].Value) | Should -Be ('/subscriptions/s/resourcegroups/rg/providers/microsoft.sql/servers/2linkit-sql' + '|' + '22e93e92-4a31-b4cd-d640-3ef908430aa6')
+        ($m.Groups[1].Value + '|' + $m.Groups[2].Value) | Should -Be ('/subscriptions/s/resourcegroups/rg/providers/microsoft.sql/servers/contoso-sql' + '|' + '22e93e92-4a31-b4cd-d640-3ef908430aa6')
     }
 }
 

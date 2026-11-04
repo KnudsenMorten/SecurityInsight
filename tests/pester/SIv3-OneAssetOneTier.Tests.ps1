@@ -4,10 +4,10 @@
 
     Measured 2026-10-02 (operator: "i dont like correlation is not working", "this is same device", "it must also work
     with classification so it gets same tier"):
-      * the Top 50 listed one server twice -- MGMT1 (153 findings) and mgmt1.2linkit.local (35). The device reports
+      * the Top 50 listed one server twice -- HOST1 (153 findings) and host1.contoso.local (35). The device reports
         carried the right asset id under ExposureGraph's name; the Azure reports carried the VM's ARM id, which the
         endpoint profile records on that same device since #204. Every later step grouped by NAME.
-      * mgmt1, dc1 and dc3 were tier 0 as devices and tier 3 as VMs.
+      * host1, dc-a and dc-b were tier 0 as devices and tier 3 as VMs.
 #>
 
 BeforeAll {
@@ -15,13 +15,13 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-AssetIdentityMap.ps1')
     . (Join-Path $script:SIRoot 'engine\asset-profiling\shared\EndpointAzureCorrelationCache.ps1')
     function script:Set-TestIdentityMap {
-        $dev = [pscustomobject]@{ Id = 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'; Name = 'MGMT1'; Type = 'Server'; Table = 'SI_Endpoint_Profile_CL' }
+        $dev = [pscustomobject]@{ Id = 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'; Name = 'HOST1'; Type = 'Server'; Table = 'SI_Endpoint_Profile_CL' }
         $shell = [pscustomobject]@{ Id = 'eg:az:9d4f6d2ec54b426ea8e4e95f8e3578a5'; Name = '9d4f6d2ec54b426ea8e4e95f8e3578a5'; Type = 'AzureResource'; Table = 'SI_Azure_Profile_CL' }
-        $kv = [pscustomobject]@{ Id = 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1'; Name = 'kv1'; Type = 'KeyVault'; Table = 'SI_Azure_Profile_CL' }
+        $kv = [pscustomobject]@{ Id = 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7'; Name = 'kv7'; Type = 'KeyVault'; Table = 'SI_Azure_Profile_CL' }
         $script:_SIIdentityById = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
         $script:_SIIdentityById[$dev.Id] = $dev; $script:_SIIdentityById[$shell.Id] = $shell; $script:_SIIdentityById[$kv.Id] = $kv
         $script:_SIIdentityByArm = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
-        $script:_SIIdentityByArm['/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/mgmt1'] = $dev
+        $script:_SIIdentityByArm['/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/host1'] = $dev
         $script:_SIIdentityByEg = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
         $script:_SIIdentityByEg['7d4f6d2ec54b426ea8e4e95f8e3578a5'] = $dev
     }
@@ -30,38 +30,38 @@ BeforeAll {
 Describe 'the reports: a resolved identity names its asset' {
     BeforeEach { Set-TestIdentityMap }
     It 'a device id named by ExposureGraph takes the profile''s name' {
-        $c = Resolve-SICanonicalAsset -Name 'mgmt1.2linkit.local' -Id 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'
-        $c.Name | Should -Be 'MGMT1'; $c.Changed | Should -BeTrue
+        $c = Resolve-SICanonicalAsset -Name 'host1.contoso.local' -Id 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'
+        $c.Name | Should -Be 'HOST1'; $c.Changed | Should -BeTrue
     }
     It 'an Azure VM id (any case, with or without az:) becomes the device that IS that VM' {
-        $c = Resolve-SICanonicalAsset -Name 'mgmt1' -Id 'az:/subscriptions/S/resourceGroups/RG/providers/Microsoft.Compute/virtualMachines/MGMT1'
-        $c.Id | Should -Be 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'; $c.Name | Should -Be 'MGMT1'
+        $c = Resolve-SICanonicalAsset -Name 'host1' -Id 'az:/subscriptions/S/resourceGroups/RG/providers/Microsoft.Compute/virtualMachines/HOST1'
+        $c.Id | Should -Be 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'; $c.Name | Should -Be 'HOST1'
     }
     It 'an ExposureGraph shell for the VM becomes the device with the same graph node' {
-        (Resolve-SICanonicalAsset -Name '7d4f6d2ec54b426ea8e4e95f8e3578a5' -Id 'eg:az:7D4F6D2EC54B426EA8E4E95F8E3578A5').Name | Should -Be 'MGMT1'
-        # the attack-path reports carry the BARE node id (dc1 / dc3 showed twice in the Top 50 because of it)
-        (Resolve-SICanonicalAsset -Name 'mgmt1.2linkit.local' -Id '7d4f6d2ec54b426ea8e4e95f8e3578a5').Id | Should -Be 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'
+        (Resolve-SICanonicalAsset -Name '7d4f6d2ec54b426ea8e4e95f8e3578a5' -Id 'eg:az:7D4F6D2EC54B426EA8E4E95F8E3578A5').Name | Should -Be 'HOST1'
+        # the attack-path reports carry the BARE node id (dc-a / dc-b showed twice in the Top 50 because of it)
+        (Resolve-SICanonicalAsset -Name 'host1.contoso.local' -Id '7d4f6d2ec54b426ea8e4e95f8e3578a5').Id | Should -Be 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'
         (Resolve-SICanonicalAsset -Name 'x' -Id 'fd73f1d478c5140aa1b9244bcc8286bce88d18e7').Changed | Should -BeFalse -Because 'a 40-hex MDE id is not a graph node'
     }
     It '🔴 a profile "name" that is only an id never replaces a real name' {
         $c = Resolve-SICanonicalAsset -Name 'storage-vm-disk' -Id 'eg:az:9d4f6d2ec54b426ea8e4e95f8e3578a5'
         $c.Name | Should -Be 'storage-vm-disk'
         Test-SIAssetNameIsId 'fd73f1d478c5140aa1b9244bcc8286bce88d18e7' | Should -BeTrue
-        Test-SIAssetNameIsId 'MGMT1' | Should -BeFalse
+        Test-SIAssetNameIsId 'HOST1' | Should -BeFalse
     }
     It 'an id the map does not know, and an empty id, are left exactly as they were' {
         (Resolve-SICanonicalAsset -Name 'x' -Id 'unknown-id').Changed | Should -BeFalse
         (Resolve-SICanonicalAsset -Name 'x' -Id '').Changed | Should -BeFalse
     }
     It 'a row''s list: one machine named three ways is ONE entry; another asset stays; the ids stay aligned' {
-        $r = ConvertTo-SICanonicalAssetPairs -Names @('mgmt1.2linkit.local', 'kv1', 'mgmt1', 'MGMT1') `
-                -Ids @('fa6a7a3b-246e-40e6-be2d-ac527133da0e', 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1', 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/mgmt1', 'fa6a7a3b-246e-40e6-be2d-ac527133da0e')
+        $r = ConvertTo-SICanonicalAssetPairs -Names @('host1.contoso.local', 'kv7', 'host1', 'HOST1') `
+                -Ids @('fa6a7a3b-246e-40e6-be2d-ac527133da0e', 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7', 'az:/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/host1', 'fa6a7a3b-246e-40e6-be2d-ac527133da0e')
         $r.Changed | Should -BeTrue
-        @($r.Names) | Should -Be @('MGMT1', 'kv1')
+        @($r.Names) | Should -Be @('HOST1', 'kv7')
         @($r.Ids)[0] | Should -Be 'fa6a7a3b-246e-40e6-be2d-ac527133da0e'
     }
     It '🔴 two machines that only share a NAME stay two (the key is the id)' {
-        $r = ConvertTo-SICanonicalAssetPairs -Names @('dc1', 'dc1') -Ids @('id-a', 'id-b')
+        $r = ConvertTo-SICanonicalAssetPairs -Names @('dc7', 'dc7') -Ids @('id-a', 'id-b')
         @($r.Names).Count | Should -Be 2
     }
     It 'the identity map reads each device''s Azure id and graph node, and a VM claimed by two devices links to nothing' {
@@ -78,10 +78,10 @@ Describe 'the reports: a resolved identity names its asset' {
         $col = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         $node = '0b92ed443c544007bfd3c555c1b87775'
         $twin = [pscustomobject]@{ Id = $node; Name = 'unnamed-endpoint-c1b87775'; Seen = (ConvertTo-SIIdentitySeen '2026-10-02T05:20:00Z') }
-        $dev  = [pscustomobject]@{ Id = '336d75ff'; Name = 'pimhybridwrk.2linkit.local'; Seen = (ConvertTo-SIIdentitySeen '2026-10-02T06:07:00Z') }
+        $dev  = [pscustomobject]@{ Id = '336d75ff'; Name = 'pimhybridwrk.contoso.local'; Seen = (ConvertTo-SIIdentitySeen '2026-10-02T06:07:00Z') }
         Add-SIIdentityClaim -Map $map -Collisions $col -Key $node -Entry $dev
         Add-SIIdentityClaim -Map $map -Collisions $col -Key $node -Entry $twin
-        $map[$node].Name | Should -Be 'pimhybridwrk.2linkit.local'; $col.Count | Should -Be 0
+        $map[$node].Name | Should -Be 'pimhybridwrk.contoso.local'; $col.Count | Should -Be 0
         $map2 = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
         $col2 = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         Add-SIIdentityClaim -Map $map2 -Collisions $col2 -Key $node -Entry $twin
@@ -101,11 +101,11 @@ Describe 'the Top 50: one entry per asset id' {
         . ([scriptblock]::Create($fn.Extent.Text))
     }
     It 'a Summary row''s names key on their aligned ids' {
-        $row = [pscustomobject]@{ ImpactedAssetsList = @('MGMT1', 'kv1'); ImpactedAssetIds = @('ID-1', 'id-2') }
-        @(Get-RARowAssetKeys -Row $row -Names @('MGMT1', 'kv1')) | Should -Be @('id:id-1', 'id:id-2')
+        $row = [pscustomobject]@{ ImpactedAssetsList = @('HOST1', 'kv7'); ImpactedAssetIds = @('ID-1', 'id-2') }
+        @(Get-RARowAssetKeys -Row $row -Names @('HOST1', 'kv7')) | Should -Be @('id:id-1', 'id:id-2')
     }
     It 'a Detailed row keys on its AssetId; a list that does not line up falls back to names, never a guess' {
-        @(Get-RARowAssetKeys -Row ([pscustomobject]@{ AssetId = 'ID-9' }) -Names @('dc3')) | Should -Be @('id:id-9')
+        @(Get-RARowAssetKeys -Row ([pscustomobject]@{ AssetId = 'ID-9' }) -Names @('dc8')) | Should -Be @('id:id-9')
         @(Get-RARowAssetKeys -Row ([pscustomobject]@{ ImpactedAssetIds = @('a') }) -Names @('x', 'y')) | Should -Be @('name:x', 'name:y')
     }
     It 'WIRING -- Add-AssetAgg aggregates on the key, the rollup and the Detailed collapse pass it, and the helper exists before its first use' {
@@ -126,14 +126,14 @@ Describe 'the Top 50: one entry per asset id' {
 
 Describe 'classification: an Azure VM takes the tier of the device it is' {
     It 'the same-machine match carries the device''s tier and says why' {
-        $m = Get-SISameMachineTierMatch -Device ([pscustomobject]@{ MdeDeviceId = 'fd73'; Tier = 0; Name = 'MGMT1' })
-        $m.RuleId | Should -Be 'SameMachineAsDevice'; $m.Tier | Should -Be 0; $m.Purpose | Should -Be 'Same machine as device MGMT1'
+        $m = Get-SISameMachineTierMatch -Device ([pscustomobject]@{ MdeDeviceId = 'fd73'; Tier = 0; Name = 'HOST1' })
+        $m.RuleId | Should -Be 'SameMachineAsDevice'; $m.Tier | Should -Be 0; $m.Purpose | Should -Be 'Same machine as device HOST1'
         Get-SISameMachineTierMatch -Device $null | Should -BeNullOrEmpty
         Get-SISameMachineTierMatch -Device ([pscustomobject]@{ MdeDeviceId = 'x'; Tier = $null; Name = 'n' }) | Should -BeNullOrEmpty
     }
     It 'the device lookup is case-insensitive on the VM id and empty for an unknown one' {
-        $script:_SIEndpointAzureCorrelation = @{ Initialized = $true; Map = @{}; Devices = @{ '/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/mgmt1' = [pscustomobject]@{ MdeDeviceId = 'fd73'; Tier = 0; Name = 'MGMT1' } }; Source = 'la'; Count = 1 }
-        (Get-SIEndpointDeviceForAzureResource -AzureResourceId '/subscriptions/S/resourceGroups/RG/providers/Microsoft.Compute/virtualMachines/MGMT1').Tier | Should -Be 0
+        $script:_SIEndpointAzureCorrelation = @{ Initialized = $true; Map = @{}; Devices = @{ '/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/host1' = [pscustomobject]@{ MdeDeviceId = 'fd73'; Tier = 0; Name = 'HOST1' } }; Source = 'la'; Count = 1 }
+        (Get-SIEndpointDeviceForAzureResource -AzureResourceId '/subscriptions/S/resourceGroups/RG/providers/Microsoft.Compute/virtualMachines/HOST1').Tier | Should -Be 0
         Get-SIEndpointDeviceForAzureResource -AzureResourceId '/subscriptions/s/x' | Should -BeNullOrEmpty
     }
     It '🔴 the bridge reads only recent snapshots and drops a VM id that two devices claim' {
@@ -172,8 +172,8 @@ Describe 'discovery: the Defender and ExposureGraph records of one device merge 
     }
     It 'the MDE record (short name) and the graph record (FQDN) of one device become ONE record with both sources' {
         $by = @{
-            'pimhybridwrk'               = (Rec 'pimhybridwrk' 'MDEDevice' 'pimhybridwrk.2linkit.local' @{ MDE_DeviceId = '336D75FF' })
-            'pimhybridwrk.2linkit.local' = (Rec 'pimhybridwrk.2linkit.local' 'EndpointExposureGraph' 'pimhybridwrk.2linkit.local' @{ EG_MdeDeviceId = '336d75ff'; EG_NodeId = '0b92ed44' })
+            'pimhybridwrk'               = (Rec 'pimhybridwrk' 'MDEDevice' 'pimhybridwrk.contoso.local' @{ MDE_DeviceId = '336D75FF' })
+            'pimhybridwrk.contoso.local' = (Rec 'pimhybridwrk.contoso.local' 'EndpointExposureGraph' 'pimhybridwrk.contoso.local' @{ EG_MdeDeviceId = '336d75ff'; EG_NodeId = '0b92ed44' })
         }
         $r = Merge-SIDiscoverRecordsByMdeId -ByKey $by -ReservedKeys $script:Res -SourcePriority $script:Pri
         $r.Merged | Should -Be 1

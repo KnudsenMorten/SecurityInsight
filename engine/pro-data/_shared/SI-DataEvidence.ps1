@@ -23,7 +23,7 @@
       Confidence  exact | strong | weak. A CI's confidence is its weakest discovery row; the CMDB / ServiceNow match is
                   evidence on the page and its own figure in the report (CmdbState), never part of the CI's confidence --
                   and never a discovery source in the CI's source count.
-      History     alias  a record's SI id moved while its durable id stayed (the #279 shape: MGMT1's id moved from its
+      History     alias  a record's SI id moved while its durable id stayed (the #279 shape: HOST1's id moved from its
                          Entra device id to its Defender device id, both still on the record)
                   rekey  the CI's key changed (an asset id became a ledger id, or the ledger re-minted it)
                   merge  a CI's durable ids now belong to another CI that already existed

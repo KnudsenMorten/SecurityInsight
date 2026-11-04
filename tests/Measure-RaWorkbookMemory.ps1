@@ -9,7 +9,7 @@
       -Mode Streamed   the export since the hotfix (RA-WorkbookExport.ps1 Write-RAXlsxStreamed): one page held at a time.
       -Mode Gathered   the export before it: every row gathered in a list, then the workbook written (Export-Worksheet).
     Prints one JSON line: rows, columns, mode, seconds, the process's peak working set, the managed heap after the last page,
-    the file size and the sheets. Run each mode in its own process (a peak is per process). Test VM only, never mgmt1.
+    the file size and the sheets. Run each mode in its own process (a peak is per process). Test VM only, never the development machine.
 .EXAMPLE
     pwsh -NoProfile -File tests\Measure-RaWorkbookMemory.ps1 -Rows 1200000 -Columns 94 -Mode Streamed -Path C:\work\m\s.xlsx
 #>

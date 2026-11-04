@@ -903,8 +903,8 @@ function Get-SILogonsByDeviceName {
     if ($cleanNames.Count -eq 0) { return @{} }
 
     # pass BOTH the FQDN AND the short-name -- MDE_DeviceName
-    # returns FQDN ('dc1.contoso.local') while DeviceLogonEvents.DeviceName
-    # uses short name ('dc1'). Without both forms the IN-clause never matches
+    # returns FQDN ('dc-a.contoso.local') while DeviceLogonEvents.DeviceName
+    # uses short name ('dc-a'). Without both forms the IN-clause never matches
     # and the logon-tier promotion ("primary user") signal stays empty for
     # every device. Build a set of variants per input.
     $variants = New-Object System.Collections.Generic.HashSet[string]

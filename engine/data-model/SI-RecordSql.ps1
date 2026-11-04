@@ -764,7 +764,7 @@ function Read-SISqlRows {
             # 🔒 the rows are read HERE, never by handing the reader to a function: a data reader is enumerable, and binding it to
             # a function's parameter let PowerShell 7.4 (the container image) enumerate it -- every row consumed before the
             # function's own Read(). Ring 1 2026-10-09 (#513): "1 result set(s), columns 1, rows reported y, 0 row(s) read";
-            # pwsh 7.6 (mgmt1, the test VM) does not, so no offline run ever showed it. Guarded by SIv3-CiBuildSql.
+            # pwsh 7.6 (the development machine, the test VM) does not, so no offline run ever showed it. Guarded by SIv3-CiBuildSql.
             if ($rd.FieldCount -gt 0) {
                 $names = @(for ($i = 0; $i -lt $rd.FieldCount; $i++) { $rd.GetName($i) })
                 while ($rd.Read()) {

@@ -621,7 +621,12 @@ function Test-SIPublicAccessClosed {
     if (-not $Resource) { return $false }
     # #866 (owner 2026-10-21: "we will not allow fw option or exceptions"): a Key Vault counts as closed only with its public
     # access DISABLED, like the others -- a firewall that denies by default is not the end state any more
-    [string](Get-SIPnProp $Resource @('properties', 'publicNetworkAccess')) -eq 'Disabled'
+    if ([string](Get-SIPnProp $Resource @('properties', 'publicNetworkAccess')) -ne 'Disabled') { return $false }
+    # Framework installer rule 11: a vault ALSO needs trusted Microsoft services allowed (bypass AzureServices) -- under
+    # bypass None (what a RECOVERED vault comes back with) ARM key / secret calls fail with ForbiddenByConnection. Such a
+    # vault is not closed "the way this option closes it": Set-SIPublicAccess PATCHes it to the close body, which has it.
+    if ($Kind -eq 'vault' -and [string](Get-SIPnProp $Resource @('properties', 'networkAcls', 'bypass')) -ne 'AzureServices') { return $false }
+    $true
 }
 
 function Get-SIPublicAccessBefore {

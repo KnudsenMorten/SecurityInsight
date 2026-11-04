@@ -129,14 +129,14 @@ Describe 'every profiler records its tier source (built rows)' {
         $rec = @'
 [pscustomobject]@{
     AssetId = 'ip:203.0.113.9'; SI_RunId = 'r1'; TimeGenerated = '2026-01-01T00:00:00Z'
-    Metadata = @{ IP_Address = '203.0.113.9'; AssetTier = '0'; AssetEngine = 'endpoint'; IP_AssetName = 'dc1' }
+    Metadata = @{ IP_Address = '203.0.113.9'; AssetTier = '0'; AssetEngine = 'endpoint'; IP_AssetName = 'dc7' }
     Verdict = [pscustomobject]@{ SI_Tier = 3 }
 }
 '@
         $a = script:BuildAttribution -Builder 'Build-PublicIpProfileRow.ps1' -Function 'Build-SIPublicIpProfileRow' -RecordScript $rec -Engine 'publicip'
         $a.Tier | Should -Be '0'
         $a.SetBy | Should -Be 'owner'
-        $a.Reason | Should -Match 'endpoint dc1'
+        $a.Reason | Should -Match 'endpoint dc7'
     }
 
     It 'publicip without an owner: nothing matched -> default' {
@@ -164,9 +164,20 @@ Describe 'the three columns are declared ADDITIVELY in every profile schema' {
         @{ s = 'identity.schema.locked.json' }, @{ s = 'azure.schema.locked.json' }, @{ s = 'public-ip.schema.locked.json' }
     ) {
         $rel = 'SOLUTIONS/SecurityInsight/asset-profiling-schema/' + $s
+        # the committed schema to compare with: origin/si-v3 when the clone has it, else the version BEFORE the last commit
+        # that changed the file (the test VM's clone carries the history but not that ref), else HEAD's -- never a skip
+        # (owner 2026-10-25: a skip is not a pass)
         $base = $null
-        try { $base = (& git -C $script:SIRootDir show ("origin/si-v3:" + $rel) 2>$null) -join "`n" } catch { $base = $null }
-        if (-not $base) { Set-ItResult -Skipped -Because 'origin/si-v3 is not available in this clone'; return }
+        $refs = New-Object System.Collections.Generic.List[string]
+        $refs.Add('origin/si-v3')
+        $hist = @(& git -c safe.directory=* -C $script:SIRootDir log -n 2 --format=%H -- (':/' + $rel) 2>$null)
+        if ($hist.Count -ge 2) { $refs.Add([string]$hist[1]) }
+        $refs.Add('HEAD')
+        foreach ($r in $refs) {
+            try { $base = (& git -c safe.directory=* -C $script:SIRootDir show ($r + ':' + $rel) 2>$null) -join "`n" } catch { $base = $null }
+            if ($base) { break }
+        }
+        $base | Should -Not -BeNullOrEmpty -Because "the committed $s must be readable from git (origin/si-v3, its previous version or HEAD)"
         $old = ConvertFrom-Json -InputObject $base
         $new = Get-Content -Raw -LiteralPath (Join-Path (Join-Path $script:SIRootDir 'asset-profiling-schema') $s) | ConvertFrom-Json
         foreach ($f in @($old.fields)) {

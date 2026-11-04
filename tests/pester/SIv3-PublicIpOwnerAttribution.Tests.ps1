@@ -18,7 +18,7 @@
                   of identifiers. Fixed 2026-08-28; guarded in SIv3-AssetNameContract.Tests.ps1.
       the tier    collected correctly, then OVERWRITTEN one line later with the IP's own tier.
                   THIS FILE. Measured 2026-08-27: metadata carried AssetTier=0 for the three
-                  endpoint-owned IPs (MGMT1, dc1.2linkit.local, dc3.2linkit.local) while every row
+                  endpoint-owned IPs (HOST1, dc-a.contoso.local, dc-b.contoso.local) while every row
                   in Log Analytics read 3.
       AssetEngine reads $meta correctly. It is the CONTROL: the siblings were handled inconsistently
                   one line apart, which is the whole tell.

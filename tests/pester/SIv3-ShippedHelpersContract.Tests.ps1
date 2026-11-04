@@ -49,8 +49,12 @@ Describe 'no internal names in published files' {
     It 'the diagnostics example and the wizard help text use placeholders' {
         # The CMDB diagnostic is a Pro file: absent from the Community edition, checked where it exists.
         $cmdbDiag = Join-Path $script:SIRoot 'diagnostics\Measure-SICmdbMatchRate.ps1'
-        if (Test-Path -LiteralPath $cmdbDiag) { (Get-Content -LiteralPath $cmdbDiag -Raw) | Should -Not -Match '(?i)2linkit' }
-        (Get-Content -LiteralPath (Join-Path $script:SIRoot 'setup\ConfigWizard\Setup-SecurityInsight.html') -Raw) | Should -Not -Match '(?i)2linkit'
+        # the author's company, from the licensor line of LICENSE-PRO (never a literal in a shipped test, PACKAGE-CLEAN)
+        $co = ([regex]::Match([IO.File]::ReadAllText((Join-Path $script:SIRoot 'LICENSE-PRO')), '(?m)^Invardia is a brand owned and operated by ([^,\s]+),')).Groups[1].Value
+        $co | Should -Not -BeNullOrEmpty -Because 'LICENSE-PRO names the licensor'
+        $rx = '(?i)' + [regex]::Escape($co)
+        if (Test-Path -LiteralPath $cmdbDiag) { (Get-Content -LiteralPath $cmdbDiag -Raw) | Should -Not -Match $rx }
+        (Get-Content -LiteralPath (Join-Path $script:SIRoot 'setup\ConfigWizard\Setup-SecurityInsight.html') -Raw) | Should -Not -Match $rx
     }
 }
 

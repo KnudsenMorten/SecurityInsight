@@ -64,7 +64,7 @@ public static class DataViews
         D("/Remediations/Index", "one row per fix"),
         D("/Remediations/TopFixes", "the 10 fixes with the most reach"),
         D("/Remediations/TopAssets", "the 10 most important assets and their fixes"),
-        D("/Collection/Asset", "one CI's findings (a detail page)", "/Collection/Asset?key=ci-dc1"),
+        D("/Collection/Asset", "one CI's findings (a detail page)", "/Collection/Asset?key=ci-dc7"),
         D("/Departments/Detail", "a department's findings (a detail page)", "/Departments/Detail?id=1"),
         D("/Departments/Unassigned", "findings of no department"),
         // ---- the CI data model: the CI grid, the CI data grids, the records ----

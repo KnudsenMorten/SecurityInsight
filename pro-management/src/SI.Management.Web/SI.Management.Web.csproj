@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>SI.Management.Web</RootNamespace>
-    <!-- mgmt1 blocks native executables (ASR): dll-only, run with `dotnet SI.Management.Web.dll`. -->
+    <!-- the development machine blocks native executables (ASR): dll-only, run with `dotnet SI.Management.Web.dll`. -->
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
 

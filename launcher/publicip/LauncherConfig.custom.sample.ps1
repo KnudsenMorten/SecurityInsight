@@ -121,7 +121,7 @@
 # $global:SI_PublicIP_ExtraTargets = @(
 #     @{ IpAddress = '203.0.113.10'; AssetName = 'HQ CheckPoint FW';      Tier = 0; cmdbId = 'CMDB-FW-001'; cmdbName = 'HQ Perimeter Firewall'; cmdbCriticality = 'Critical'; cmdbDataSensitivity = 'Restricted' }
 #     @{ IpAddress = '203.0.113.11'; AssetName = 'HQ CheckPoint FW (HA)'; Tier = 0; cmdbId = 'CMDB-FW-002'; cmdbName = 'HQ Perimeter Firewall'; cmdbCriticality = 'Critical'; cmdbDataSensitivity = 'Restricted' }
-#     @{ IpAddress = '198.51.100.5'; AssetName = 'Branch-Aarhus FortiGate'; Tier = 1; cmdbId = 'CMDB-FW-010'; cmdbName = 'Branch FW';            cmdbCriticality = 'High';     cmdbDataSensitivity = 'Confidential' }
+#     @{ IpAddress = '198.51.100.5'; AssetName = 'Branch-B FortiGate'; Tier = 1; cmdbId = 'CMDB-FW-010'; cmdbName = 'Branch FW';            cmdbCriticality = 'High';     cmdbDataSensitivity = 'Confidential' }
 # )
 
 

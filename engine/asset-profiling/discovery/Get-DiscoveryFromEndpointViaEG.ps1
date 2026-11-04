@@ -99,7 +99,7 @@ ExposureGraphNodes
             EG_NodeId             = $r.NodeId
             EG_NodeLabel          = $r.NodeLabel
             EG_MdeDeviceId        = $egMde
-            # one ARM id or none: a node listing two (an old VM of the same name in another subscription, measured on mgmt1)
+            # one ARM id or none: a node listing two (an old VM of the same name in another subscription, measured on one server)
             # cannot say which one this machine is -- the MDE record's own ARM id is used instead
             EG_AzureResourceId    = $(if ($egArm.Count -eq 1) { [string]$egArm[0] } else { $null })
             EG_DeviceCategory     = if ($rawData -and $rawData.PSObject.Properties['deviceCategory']) { [string]$rawData.deviceCategory } else { $null }

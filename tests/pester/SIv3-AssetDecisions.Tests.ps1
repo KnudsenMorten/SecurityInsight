@@ -17,7 +17,7 @@ BeforeAll {
     . (Join-Path $root '..\engine\asset-profiling\shared\Resolve-SIAssetDecisions.ps1')
 
     function D {
-        param($asset,$kind,$tier,$by='mok@2linkit.net',$at='2026-08-01',$expires,$reason='because')
+        param($asset,$kind,$tier,$by='admin@contoso.net',$at='2026-08-01',$expires,$reason='because')
         $h = @{ asset=$asset; kind=$kind; by=$by; at=$at; reason=$reason }
         if ($PSBoundParameters.ContainsKey('tier'))    { $h['tier']    = $tier }
         if ($PSBoundParameters.ContainsKey('expires')) { $h['expires'] = $expires }

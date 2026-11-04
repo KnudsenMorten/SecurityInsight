@@ -78,7 +78,7 @@ if (`$null -eq `$v -or '' -eq [string]`$v) { '<NULL>' } else { [string]`$v }
         # 🪤 -EncodedCommand, NOT -Command, AND THAT IS THE POINT OF THIS COMMENT.
         # The fixture is JSON, so it contains DOUBLE QUOTES -- and Windows PowerShell strips embedded
         # double quotes when it hands a string to a native process. The child then received
-        # `{MDE_DeviceName:dc1.contoso.local}`, ConvertFrom-Json threw `Invalid JSON primitive`, and the
+        # `{MDE_DeviceName:dc-a.contoso.local}`, ConvertFrom-Json threw `Invalid JSON primitive`, and the
         # harness returned the last line of an ERROR RECORD. Every assertion went red for a reason that
         # had nothing to do with the code under test -- and the one assertion phrased as `Should -Not`
         # went GREEN on that same garbage, which is the part worth remembering: a negative assertion
@@ -129,8 +129,8 @@ Describe '🔴 DisplayName never publishes the identifier -- <shape> metadata' -
     }
 
     It 'a real MDE name is unaffected, and is still shortened at the first dot' {
-        script:AskDisplayName -Meta @{ MDE_DeviceName = 'dc1.contoso.local' } -PrimaryEntityId $script:Hex40 -Shape $shape |
-            Should -Be 'dc1'
+        script:AskDisplayName -Meta @{ MDE_DeviceName = 'dc7.contoso.local' } -PrimaryEntityId $script:Hex40 -Shape $shape |
+            Should -Be 'dc7'
     }
 
     It 'Entra still outranks MDE' {

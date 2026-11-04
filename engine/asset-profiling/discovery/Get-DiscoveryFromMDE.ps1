@@ -114,7 +114,7 @@ function Get-DiscoveryFromMDE {
             # 🔴 THE ONLY BRIDGE FROM A DEVICE TO ITS AZURE VM (#204). Defender reports an Azure VM's ARM id in
             # `vmMetadata.resourceId`; the endpoint row builder has always read MDE_AzureResourceId into the
             # AzureResourceId column and the correlation identifiers, and nothing ever produced it. Measured
-            # 2026-10-02: 9 of 206 machines carry it (mgmt1, dc1, dc3 among them), and 0 of 4 Azure VMs were
+            # 2026-10-02: 9 of 206 machines carry it (host1, dc-a, dc-b among them), and 0 of 4 Azure VMs were
             # correlated with their device. The Exposure Graph carries no ARM id, so it cannot be the bridge.
             MDE_AzureResourceId = $(if ($m.vmMetadata -and $m.vmMetadata.resourceId) { [string]$m.vmMetadata.resourceId } else { $null })
             # 🔴 THESE FOUR ARE NOT RETURNED BY /api/machines AND NEVER HAVE BEEN -- measured

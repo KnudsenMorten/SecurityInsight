@@ -125,7 +125,7 @@ Describe 'unknown and unpositioned sources lose safely' {
     }
 
     It '🔴 ties break ORDINALLY, so the list does not depend on the host locale' {
-        # This is not hypothetical. mgmt1 runs da-DK, where "aa" collates as "å" -- the LAST letter of
+        # This is not hypothetical. the development machine runs da-DK, where "aa" collates as "å" -- the LAST letter of
         # the Danish alphabet -- so `@("zzz","aaa") | Sort-Object` correctly returns zzz,aaa here and
         # aaa,zzz on an en-US host. The list decides which source wins a contradiction, so a
         # culture-sensitive tie-break would mean a locale-dependent TIER. These exact values are chosen

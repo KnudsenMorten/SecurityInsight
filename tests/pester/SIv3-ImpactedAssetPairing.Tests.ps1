@@ -206,7 +206,7 @@ Describe 'the KQL-side helper column ImpactedAssetPairs -- used, then never ship
 
     It 'accepts a BARE STRING -- a one-element make_set arrives with no brackets at all' {
         # 🔴 Measured on a live advanced-hunting run 2026-08-29: a group holding exactly ONE asset
-        # produced `mgmt1.2linkit.local|fa6a7a3b-...` -- not JSON, not an array. ConvertFrom-Json threw,
+        # produced `host1.contoso.local|fa6a7a3b-...` -- not JSON, not an array. ConvertFrom-Json threw,
         # the catch emptied the list, and that row silently lost its id while multi-asset rows kept
         # theirs. Data-dependent and invisible to any fixture that only tests a multi-element set.
         $p = script:Get-PairsProbe (script:Invoke-CalcPairs -PairsLiteral "'srv-solo|id-solo'")

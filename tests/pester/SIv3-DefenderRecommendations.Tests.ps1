@@ -19,7 +19,7 @@ BeforeAll {
     . (Join-Path $d 'Get-SIDefenderRecommendations.ps1')
     $script:Sub = '/subscriptions/11111111-1111-1111-1111-111111111111'
     $reg = "$script:Sub/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acr1"
-    function script:New-RawAssessment($id, $rid, $rec, $sev, $type = 'microsoft.keyvault/vaults', $img = '', $name = 'kv1', $cvss = '') {
+    function script:New-RawAssessment($id, $rid, $rec, $sev, $type = 'microsoft.keyvault/vaults', $img = '', $name = 'kv7', $cvss = '') {
         [pscustomobject]@{ AssessmentId = $id; AssessmentKey = ($id -split '/')[-1]; ResourceId = $rid; ResourceName = $name; ResourceType = $type
             ResourceSource = 'Azure'; SubscriptionId = '11111111-1111-1111-1111-111111111111'; ResourceGroup = 'rg'; Recommendation = $rec; Severity = $sev
             RecommendationCategory = 'x'; SecurityIssue = 'y'; Categories = ''; Tactics = ''; Threats = ''; Description = ''; Remediation = ''
@@ -27,7 +27,7 @@ BeforeAll {
             StatusChanged = ''; MaxCvssScore = $cvss; ImageUri = $img }
     }
     $script:Raw = @(
-        (New-RawAssessment 'a1' "$script:Sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv1" 'Enable purge protection' 'Medium'),
+        (New-RawAssessment 'a1' "$script:Sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv7" 'Enable purge protection' 'Medium'),
         (New-RawAssessment 'a2' $script:Sub 'Enable Defender plans' 'High' '' '' 'sub'),
         (New-RawAssessment 'a3' "$reg/securityentitydata/img-a" 'Update gpgv' 'Medium' '.containerimage' 'acr1.azurecr.io/app@sha256:a' 'app' '6.7'),
         (New-RawAssessment 'a4' "$reg/securityentitydata/img-b" 'Update gpgv' 'High'   '.containerimage' 'acr1.azurecr.io/app@sha256:b' 'app' '8.1'),
@@ -77,7 +77,7 @@ Describe 'the roll-up keeps every recommendation and doubles none' {
 
 Describe 'findings behind a recommendation (sub-assessments) are listed on it -- none lost, none doubled' {
     BeforeAll {
-        $kv = "$script:Sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv1"
+        $kv = "$script:Sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv7"
         $script:VmId = "$script:Sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"
         $script:Base = @(
             (New-RawAssessment "$kv/providers/Microsoft.Security/assessments/a1" $kv 'Enable purge protection' 'Medium'),
@@ -194,10 +194,10 @@ Describe 'the graph report''s Defender lookup is pre-fetched as ONE key column, 
     }
     BeforeEach { $script:_HybridRowsCache = @{}; $script:_HybridSnapshotCache = @{}; $script:_HybridBucketGroupsCache = @{}; $script:_CrossDomainBucketCoalesce = @() }
     It 'the lookup is replaced by its RESULT; the table name is gone, so the shadow never fetches it' {
-        Mock Invoke-LogAnalyticsKqlQuery { @([pscustomobject]@{ _dfcKey = 'kv1|enable purge protection' }) }
+        Mock Invoke-LogAnalyticsKqlQuery { @([pscustomobject]@{ _dfcKey = 'kv7|enable purge protection' }) }
         $r = Resolve-ProfileCLLetBlocks -Query $script:Q -WorkspaceResourceId '/subscriptions/x/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/w'
         $r | Should -Match 'let _dfcPairs = datatable\(_dfcKey:string\)'
-        $r | Should -Match 'kv1\|enable purge protection'
+        $r | Should -Match 'kv7\|enable purge protection'
         $r | Should -Not -Match 'SI_AzureRecommendation_CL'
     }
     It 'an empty table gives an empty, correctly-shaped lookup (removes nothing, fails nothing)' {
@@ -273,7 +273,7 @@ Describe 'Defender''s HTML remediation text is stored as plain text (#189)' {
 }
 
 Describe 'a VM''s recommendation is reported once, not twice (#200)' {
-    # Measured 2026-10-01: the graph names a VM by the machine (mgmt1.2linkit.local), Defender by its Azure name (MGMT1).
+    # Measured 2026-10-01: the graph names a VM by the machine (host1.contoso.local), Defender by its Azure name (HOST1).
     # The (name, recommendation) drop never matched a VM, so the Top 50 listed each server twice.
     BeforeAll {
         $script:Y = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'))
@@ -303,8 +303,8 @@ Describe 'a VM''s recommendation is reported once, not twice (#200)' {
 }
 
 Describe 'a VM in the Defender report carries the machine''s name (#200)' {
-    # Measured 2026-10-01 after the de-duplication: the Top 50 still listed MGMT1 (Defender report, Azure name) and
-    # mgmt1.2linkit.local (every other report) as two assets.
+    # Measured 2026-10-01 after the de-duplication: the Top 50 still listed HOST1 (Defender report, Azure name) and
+    # host1.contoso.local (every other report) as two assets.
     # #505 -- the short-name bridge to the endpoint profile (_devNames / Name_ByDev) is gone by design: the CI links the
     # VM's ARM id AND its Defender device id, so the Defender row joined on the ARM id gets the ONE CI's name -- the same
     # name every other report shows for that machine. Azure's own name is only the fallback where no CI links it.
@@ -346,10 +346,10 @@ Describe 'a subscription and a Defender plan are named, not shown as an id (#202
     }
     It 'the lookup is case-insensitive on the id, and any other resource keeps its own name' {
         Get-SIDefenderAssetLabel -ResourceId '/subscriptions/ABCD' -ResourceName 'abcd' -SubscriptionId 'ABCD' -SubscriptionNames @{ 'abcd' = 'Dev' } | Should -Be 'Dev'
-        Get-SIDefenderAssetLabel -ResourceId '/subscriptions/abcd/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv1' -ResourceName 'kv1' -SubscriptionId 'abcd' -SubscriptionNames @{ 'abcd' = 'Dev' } | Should -Be 'kv1'
+        Get-SIDefenderAssetLabel -ResourceId '/subscriptions/abcd/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv7' -ResourceName 'kv7' -SubscriptionId 'abcd' -SubscriptionNames @{ 'abcd' = 'Dev' } | Should -Be 'kv7'
     }
     It 'without names nothing changes for an ordinary resource, and nothing invents a name' {
-        @($script:Rows | Where-Object { $_.ResourceId -like '*/vaults/kv1' })[0].ResourceName | Should -Be 'kv1'
+        @($script:Rows | Where-Object { $_.ResourceId -like '*/vaults/kv7' })[0].ResourceName | Should -Be 'kv7'
     }
     It 'the collector reads the names from Resource Graph, and a failed read still publishes (ids kept)' {
         Mock Start-Sleep { }

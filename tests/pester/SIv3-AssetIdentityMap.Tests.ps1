@@ -31,8 +31,8 @@ Describe 'the asset-identity resolver -- key derivation' {
     It 'derives the short key by stripping the DNS suffix' {
         # EG names a device by FQDN, the endpoint profile stores the MDE short name. Measured: a
         # full-name key resolved 3 of 4 device probes and missed exactly the FQDN one.
-        Get-SIIdentityShortKey -Name 'mgmt1.2linkit.local' | Should -BeExactly 'mgmt1'
-        Get-SIIdentityShortKey -Name 'MGMT1'               | Should -BeExactly 'mgmt1'
+        Get-SIIdentityShortKey -Name 'host1.contoso.local' | Should -BeExactly 'host1'
+        Get-SIIdentityShortKey -Name 'HOST1'               | Should -BeExactly 'host1'
         Get-SIIdentityShortKey -Name 'STRV-MOK-LT-06'      | Should -BeExactly 'strv-mok-lt-06'
     }
 

@@ -1,3 +1,22 @@
+## v3.0.29 — A clean package, a complete hand-over, the Key Vault always in the right shape
+
+### Install
+
+- The Key Vault always has the network settings it must have before any key or secret is written. That holds whether
+  the install creates it, takes back one deleted earlier (with its keys and secrets) or finds it already there, and the
+  install reads the settings back. On a private install this keeps Azure's trusted services able to manage the vault's
+  keys.
+- Re-installing over a deleted SecurityInsight Key Vault now takes it back, instead of stopping on the deleted vault.
+- The region check tests with the same settings the real resources get, so a policy in your subscription that requires
+  those settings no longer refuses the check.
+
+### Releases
+
+- Every release is checked for customer and host names in everything it ships, and a release that has one does not go
+  out. Code comments, test data and release notes now use example names only.
+- The support scripts come as one complete set: a checksum for every file, and the documentation with the same
+  version.
+
 ## v3.0.28 — The install checks the region first
 
 ### Install
@@ -8950,9 +8969,9 @@ The JSON file (`risk-analysis-detection/riskscore_weighted.schema.custom.json`) 
 
 ## v2.2.227 — Risk Analysis: Detailed AI rollup collapses per-(asset, ConfigBucket) so Summary + Detailed converge on the same top assets
 
-Operator: "look at the weighted risk score for mgmt1 in the detailed report (does it calculate everything together?)"
+Operator: "look at the weighted risk score for host1 in the detailed report (does it calculate everything together?)"
 
-Observed: Summary's #1 risky asset was `dc1` (1,975 weighted) and `mgmt1` was #3 with 994 weighted across 25 findings. The Detailed report on the same data put `mgmt1` at #1 with **24,024 weighted** across **562 findings** — a 24x sum delta over Summary on the same host.
+Observed: Summary's #1 risky asset was `dc-a` (1,975 weighted) and `host1` was #3 with 994 weighted across 25 findings. The Detailed report on the same data put `host1` at #1 with **24,024 weighted** across **562 findings** — a 24x sum delta over Summary on the same host.
 
 ### Why the two reports disagreed
 
@@ -8962,13 +8981,13 @@ The Summary YAML for vulnerabilities hard-codes the finding identifier:
 | extend ConfigurationId = "CVE"
 ```
 
-So every CVE on `mgmt1` collapses into ONE row called *"Update vulnerable software [CVE]"*. The Detailed YAML keeps each CVE separate:
+So every CVE on `host1` collapses into ONE row called *"Update vulnerable software [CVE]"*. The Detailed YAML keeps each CVE separate:
 
 ```kql
 | extend ConfigurationId = FindingName     // e.g. "CVE-2024-12345"
 ```
 
-Per-row WeightedRisk on each report is comparable (Summary ~22, Detailed ~43), but the **row count** differs by ~22x on hot assets — and `Add-AssetAgg` SUMS WeightedRisk across rows belonging to the asset. Result: the same `mgmt1` shows up tame in Summary and dominant in Detailed.
+Per-row WeightedRisk on each report is comparable (Summary ~22, Detailed ~43), but the **row count** differs by ~22x on hot assets — and `Add-AssetAgg` SUMS WeightedRisk across rows belonging to the asset. Result: the same `host1` shows up tame in Summary and dominant in Detailed.
 
 ### Fix (path B — engine-side collapse for AI rollup only)
 
@@ -9372,7 +9391,7 @@ The `IsExcluded` MDE-side flag check (immediately preceding the AssetTags filter
 
 ## v2.2.218 — Risk Analysis: CVE Detailed -- asset tier filter (default [0, 1, 2])
 
-Operator-driven volume cut on top of v2.2.217's memory fix. CVE Detailed at FVF still emits ~115K (Asset x CVE) pairs after EpJoinKey-fixes the memory crash; that's a lot of rows for a deliverable when most operators only act on CVEs that affect the more critical assets.
+Operator-driven volume cut on top of v2.2.217's memory fix. CVE Detailed at a large tenant still emits ~115K (Asset x CVE) pairs after EpJoinKey-fixes the memory crash; that's a lot of rows for a deliverable when most operators only act on CVEs that affect the more critical assets.
 
 ### What landed
 
@@ -9400,7 +9419,7 @@ Default `[0, 1, 2]` keeps Critical / High / Medium tiers and drops Tier 3 (Low) 
 | Include Tier 3 too | `dynamic([0, 1, 2, 3])` |
 | No filter (full backlog) | `dynamic([])` |
 
-### Volume estimate (FVF)
+### Volume estimate (a large tenant)
 
 - v2.2.217 baseline: ~115K (Asset x CVE) pairs
 - v2.2.218 default `[0, 1, 2]`: ~5-15K rows (90%+ cut for tenants with typical Tier-3-heavy workstation populations)
@@ -9419,11 +9438,11 @@ Per-report `exclude.custom.json` substitution for `AssetTierFilter` would let op
 
 ## v2.2.217 — Risk Analysis: _ep EpJoinKey dedup (memory-exceeded fix + server/IoT support) + Summary cleanup parity + Tier null-flow
 
-Operator hit `Memory consumption exceeded` running CVE Summary on FVF after v2.2.216 ship. Two contributing bugs and three follow-up items from the second code-review round, plus an explicit operator requirement to keep server / Linux / IoT devices joinable to their CL profile.
+Operator hit `Memory consumption exceeded` running CVE Summary on a large tenant after v2.2.216 ship. Two contributing bugs and three follow-up items from the second code-review round, plus an explicit operator requirement to keep server / Linux / IoT devices joinable to their CL profile.
 
 ### Critical: `_ep` AadDeviceId multi-match -> memory blow-up + lost server/IoT enrichment
 
-`_ep` deduplicates by `PrimaryEntityId`, not `AadDeviceId`. For tenants with renamed hosts, dual-onboard, or stale + fresh CL records, multiple PrimaryEntityIds can share the same AadDeviceId. The `leftouter _ep on AadDeviceId` join then multi-matches: every result row with empty AadDeviceId cartesians against every `_ep` row with empty AadDeviceId. The FVF inline `_ep` datatable has ~200 rows with empty AadDeviceId (servers, Linux hosts, IoT, hashed identifiers), which combined with ~50K result rows that also have empty AadDeviceId yields ~10M join rows -> memory exceeded.
+`_ep` deduplicates by `PrimaryEntityId`, not `AadDeviceId`. For tenants with renamed hosts, dual-onboard, or stale + fresh CL records, multiple PrimaryEntityIds can share the same AadDeviceId. The `leftouter _ep on AadDeviceId` join then multi-matches: every result row with empty AadDeviceId cartesians against every `_ep` row with empty AadDeviceId. The large tenant's inline `_ep` datatable has ~200 rows with empty AadDeviceId (servers, Linux hosts, IoT, hashed identifiers), which combined with ~50K result rows that also have empty AadDeviceId yields ~10M join rows -> memory exceeded.
 
 Two design choices for the fix:
 
@@ -9512,7 +9531,7 @@ Operator-run portal verification of v2.2.215's architecture (the new `_DeviceMap
 
 ## v2.2.215 — Risk Analysis: CVE Detailed -- pre-collapse multi-NodeId at the EDGE layer
 
-v2.2.214's by-clause collapse fired POST-bucket-filter, so each bucket query still saw the full multi-NodeId fanout pre-summarize (~552K rows on FVF when the 434-NodeId outlier device was in the bucket). Engine still preempted at bucket=1..8.
+v2.2.214's by-clause collapse fired POST-bucket-filter, so each bucket query still saw the full multi-NodeId fanout pre-summarize (~552K rows on a large tenant when the 434-NodeId outlier device was in the bucket). Engine still preempted at bucket=1..8.
 
 Portal bisect (Test 1, run by operator) confirmed the bare join + DeviceKey-keyed summarize returns **115,825 rows** cleanly in seconds. So the cost lives **between the join and the summarize**, in the bucket-partitioned pre-summarize work.
 
@@ -9562,7 +9581,7 @@ For any future EG-primary report that needs per-row detail across (asset, findin
 
 ## v2.2.214 — Risk Analysis: CVE Detailed -- collapse by DeviceKey, not by AssetName
 
-The v2.2.213 snapshot-dedup theory was wrong. ExposureGraphNodes/Edges aren't hourly-snapshot tables; they hold the latest state of each entity. The `arg_max(TimeGenerated, *)` adds cost without benefit, and v2.2.213 made no observable improvement on FVF -- still preempting at bucket=1..8.
+The v2.2.213 snapshot-dedup theory was wrong. ExposureGraphNodes/Edges aren't hourly-snapshot tables; they hold the latest state of each entity. The `arg_max(TimeGenerated, *)` adds cost without benefit, and v2.2.213 made no observable improvement on a large tenant -- still preempting at bucket=1..8.
 
 Two portal diagnostics located the real fanout:
 
@@ -9586,7 +9605,7 @@ ExposureGraphEdges
 
 ### Root cause: multi-NodeId fanout
 
-ExposureGraph assigns the same physical device multiple `NodeId`s (different telemetry sources / different views: host name + IP + domain + workgroup + ...). One aggregator/virtual device at FVF has **434 NodeIds** under a single `AadDeviceId`. Each NodeId has its own `affecting` edges to the same CVE.
+ExposureGraph assigns the same physical device multiple `NodeId`s (different telemetry sources / different views: host name + IP + domain + workgroup + ...). One aggregator/virtual device at a large tenant has **434 NodeIds** under a single `AadDeviceId`. Each NodeId has its own `affecting` edges to the same CVE.
 
 The deployed summarize keyed on `(AssetName, AssetLabel, FindingName, AadDeviceId)`. AssetName/AssetLabel **differ across the 434 NodeIds** (each carries its NodeName/NodeLabel), so the summarize keeps them as 434 separate groups. For a device with N CVEs that's 434xN output rows. Across the few outlier devices the total balloons to ~42M post-summarize rows.
 
@@ -9623,11 +9642,11 @@ When emitting per-row detail from `ExposureGraphEdges`-driven queries, **always 
 
 ## v2.2.213 — Risk Analysis: snapshot-dedup on ExposureGraphNodes/Edges (the real CVE Detailed fix)
 
-The root cause of the CVE Detailed report **never running end-to-end at FVF scale** -- six previous releases of bucket-tuning, materialize/in-subquery rewrites, and scalar extraction were chasing a symptom. The actual bug:
+The root cause of the CVE Detailed report **never running end-to-end at large-tenant scale** -- six previous releases of bucket-tuning, materialize/in-subquery rewrites, and scalar extraction were chasing a symptom. The actual bug:
 
 **`ExposureGraphNodes` and `ExposureGraphEdges` are snapshot tables.** Each refresh writes a new row per node/edge (Defender retains ~7 days at hourly cadence -> ~7 snapshots per entity). The deployed query had **no `arg_max(TimeGenerated, *)` dedup** on `_Assets`, `_OurAffectingEdges`, or `_Findings`.
 
-The two inner joins then multiplied snapshots together. At FVF the actual numbers were:
+The two inner joins then multiplied snapshots together. At a large tenant the actual numbers were:
 
 | Stage | Real entities | With S=7 snapshots |
 |---|---:|---:|
@@ -9688,7 +9707,7 @@ This is the right baseline for **every** EG-primary RA report. Any new report th
 
 v2.2.210 collapsed the 3-let architecture (`_OurAffectingEdges` materialised + `_RelevantFindingIds` narrowing via `in (subquery)` + separate `_Findings`) into a single chained join. Hypothesis at the time was that `materialize()` might be a no-op in Defender XDR Advanced Hunting and `in (subquery)` might be planned poorly -- so simpler structure should win.
 
-The hypothesis was wrong on FVF. v2.2.209 (3-let with materialize + in-subquery) converged AutoBucket at 8 buckets. v2.2.210/211 (single chained join) preempts at all bucket counts 1 -> 1024. The materialize was load-bearing.
+The hypothesis was wrong on a large tenant. v2.2.209 (3-let with materialize + in-subquery) converged AutoBucket at 8 buckets. v2.2.210/211 (single chained join) preempts at all bucket counts 1 -> 1024. The materialize was load-bearing.
 
 v2.2.212 restores the v2.2.209 architecture: `_AssetNodeIdSet`, `materialize(_OurAffectingEdges)`, `_RelevantFindingIds`, `_Findings | where NodeId in (_RelevantFindingIds)`, separate `_Edges`, final `_AssetFindingEdges` joins all three. **Keeps** the scalar extraction from v2.2.210 (`FindingSeverity`, `FindingCvssScore`, `FindingHasExploit`, etc.) -- that's an independent per-row win that doesn't depend on the join shape.
 
@@ -9708,7 +9727,7 @@ Fix: applied the same Properties-bag → scalar-columns rewrite to the Detailed 
 
 ## v2.2.210 — Risk Analysis: eliminate `Properties` bag, extract CVE scalars up-front
 
-Diagnostic finding from a stripped-down portal run of the CVE join chain at FVF:
+Diagnostic finding from a stripped-down portal run of the CVE join chain at a large tenant:
 
 | Metric | Value |
 |---|---:|
@@ -9757,9 +9776,9 @@ Expected effect: AutoBucket should now converge in single digits for the CVE Det
 
 The smoking gun for AutoBucket still preempting at 128 buckets on v2.2.208 — `AssetProps` was being carried through the entire pipeline for nothing.
 
-`AssetProps = NodeProperties` was projected in `_Assets` (full EG endpoint node bag — typically 5-20 KB of dynamic JSON per row), carried through `_AssetFindingEdges` (141K joined rows × ~10 KB = **1.4 GB of intermediate** dynamic data on FVF), preserved via `any(AssetProps)` in the summarize... and then **never read by any downstream `extend` / `coalesce` / `project`**. Pure dead weight, but the EG backend's query engine still had to materialise and shuffle it through every join + summarize stage.
+`AssetProps = NodeProperties` was projected in `_Assets` (full EG endpoint node bag — typically 5-20 KB of dynamic JSON per row), carried through `_AssetFindingEdges` (141K joined rows × ~10 KB = **1.4 GB of intermediate** dynamic data on a large tenant), preserved via `any(AssetProps)` in the summarize... and then **never read by any downstream `extend` / `coalesce` / `project`**. Pure dead weight, but the EG backend's query engine still had to materialise and shuffle it through every join + summarize stage.
 
-Fix: dropped `AssetProps` from the `_Assets` projection, the `_AssetFindingEdges` projection, and the summarize aggregate. Three lines deleted total. Identical output rows. The intermediate join + summarize should drop ~1.4 GB on FVF.
+Fix: dropped `AssetProps` from the `_Assets` projection, the `_AssetFindingEdges` projection, and the summarize aggregate. Three lines deleted total. Identical output rows. The intermediate join + summarize should drop ~1.4 GB on a large tenant.
 
 Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` still have `AssetProps` -- they currently work in 1 bucket so the cleanup isn't urgent there.
 
@@ -9801,7 +9820,7 @@ Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`
 
 ## v2.2.206 — Risk Analysis: drop dead `_AssetFindingEdges_oneway` join branch
 
-Tenant diagnostic (FVF, 1712 endpoints, 175,235 affecting edges) proved the `oneway` join branch always returns zero rows:
+Tenant diagnostic (a large tenant, 1712 endpoints, 175,235 affecting edges) proved the `oneway` join branch always returns zero rows:
 
 | edges_total | asset_is_source | asset_is_target | asset_on_both |
 |---:|---:|---:|---:|
@@ -9832,15 +9851,15 @@ Combined with v2.2.204:
 
 Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` reports unchanged (they currently work fine in 1 bucket and have a different edge profile).
 
-Expected on FVF tenant: AutoBucket should converge under 8 buckets, each finishing in ~30s. Total CVE Detailed runtime: minutes vs hours.
+Expected on large tenant: AutoBucket should converge under 8 buckets, each finishing in ~30s. Total CVE Detailed runtime: minutes vs hours.
 
 ---
 
 ## v2.2.204 — Risk Analysis: pre-filter `_Findings` to CVEs connected to anything (no output change)
 
-ExposureGraph's `ExposureGraphNodes` table holds the **full NVD-ish CVE catalog** (~350K entries on FVF), not just CVEs that match your tenant's assets. The previous `_Findings` let pulled all 350K catalog entries into the pipeline, then relied on the downstream inner-join with `_Assets` to drop CVEs that didn't connect to any of the tenant's devices. The drop happened, but only AFTER the giant catalog had been carried through the join expansion.
+ExposureGraph's `ExposureGraphNodes` table holds the **full NVD-ish CVE catalog** (~350K entries on a large tenant), not just CVEs that match your tenant's assets. The previous `_Findings` let pulled all 350K catalog entries into the pipeline, then relied on the downstream inner-join with `_Assets` to drop CVEs that didn't connect to any of the tenant's devices. The drop happened, but only AFTER the giant catalog had been carried through the join expansion.
 
-Fix: pre-compute `_AffectingNodeIds` as a set of NodeIds that appear on either end of an `EdgeLabel contains "affecting"` edge, then narrow `_Findings` to CVEs in that set BEFORE the asset/edge join. On FVF: catalog 350K -> ~10K relevant CVEs (33x reduction at source).
+Fix: pre-compute `_AffectingNodeIds` as a set of NodeIds that appear on either end of an `EdgeLabel contains "affecting"` edge, then narrow `_Findings` to CVEs in that set BEFORE the asset/edge join. On a large tenant: catalog 350K -> ~10K relevant CVEs (33x reduction at source).
 
 **Output is identical.** CVEs without an affecting edge to anything produced zero rows under the old query because the inner join with `_Assets` required a matching edge anyway. The only thing that changes is the intermediate row count and the join cost.
 
@@ -9852,7 +9871,7 @@ Expected effect on a 1700-device tenant: AutoBucket converges at 4-16 (vs 448-89
 
 ## v2.2.203 — Risk Analysis: CVE source-side filter knobs + drop mv-expand redundancy
 
-Two compounding fixes to the `Device_Missing_CVEs_*` `_Findings` let block, targeting the join blow-up on large tenants (FVF: 350K CVE catalog entries × edges × asset union).
+Two compounding fixes to the `Device_Missing_CVEs_*` `_Findings` let block, targeting the join blow-up on large tenants (a large tenant: 350K CVE catalog entries × edges × asset union).
 
 **1. Dropped `mv-expand Categories` redundancy.** The old block had:
 ```kql
@@ -10495,7 +10514,7 @@ Removed:
 
 Bonus: Community flavour now actually has working auth (the previous code path assumed Internal everywhere).
 
-Operator workflow (FVF-style internal):
+Operator workflow (v1-platform internal):
 
 ```powershell
 . .\Legacy-Connect.ps1                              # one-time, setup-only
@@ -10526,7 +10545,7 @@ if ($global:Context) {
 }
 ```
 
-Means SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey actually populate on FVF-style internal customers using the v1 Connect_Azure.ps1 chain (where `$global:Context` is null but `$global:KV_HighPriv_KeyVaultName` is set by v1's ConnectDetails). No more "Shodan/OpenAI engines fail at runtime because the keys never loaded" surprise.
+Means SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey actually populate on internal customers on the v1 platform using the v1 Connect_Azure.ps1 chain (where `$global:Context` is null but `$global:KV_HighPriv_KeyVaultName` is set by v1's ConnectDetails). No more "Shodan/OpenAI engines fail at runtime because the keys never loaded" surprise.
 
 ---
 
@@ -10578,7 +10597,7 @@ New switch lets the operator pre-load v1 platform globals (via their own `connec
 .\Setup-SecurityInsight-Unattended.ps1 -SkipPlatformDefaults
 ```
 
-Cleanest path for FVF-style customers who already have a working v1 connect chain and don't want Port-V1Platform.ps1 to re-derive everything.
+Cleanest path for customers on the v1 platform who already have a working v1 connect chain and don't want Port-V1Platform.ps1 to re-derive everything.
 
 ---
 
@@ -10618,7 +10637,7 @@ Internal-only change (engine lives under `INTERNAL/` and is scrubbed from public
 
 ## v2.2.154 — Internal migration tooling: `Port-V1Platform.ps1` + `Test-PlatformConnect.ps1`
 
-Two new internal-only helpers under `SOLUTIONS\PlatformConfiguration\INTERNAL\` (scrubbed from public mirrors by the publish workflow). They cut the FVF-style v1→v2 customer onboarding from ~30 min of manual file copies + ad-hoc smoke tests down to two commands.
+Two new internal-only helpers under `SOLUTIONS\PlatformConfiguration\INTERNAL\` (scrubbed from public mirrors by the publish workflow). They cut the v1→v2 customer onboarding from ~30 min of manual file copies + ad-hoc smoke tests down to two commands.
 
 **`Port-V1Platform.ps1`** — one-shot v1→v2 platform port. Reads `<V1ROOT>\FUNCTIONS\Automation-DefaultVariables.psm1`, strips the `function Default_Variables() { ... }` wrapper, writes the body verbatim to `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1`, copies `Connect_Azure.ps1` alongside it, and appends the dot-source line so `$global:HighPriv_Modern_*` + `$global:Context` + `Get-PlatformSecret` load with one `. platform-defaults.ps1`. Also drops the `setup-unattended.json` template into the SI config folder when missing. Idempotent, backs up existing files to `.bak.<timestamp>`, supports `-DryRun` and `-Force`.
 
@@ -10686,7 +10705,7 @@ The HTML wizard (`setup\ConfigWizard\Start-SetupWizard.ps1`) is great for first-
 
 **Two flavours, one script.**
 
-- **Internal** (FVF-style migration): re-uses the existing v1 cert-based SPN, dot-sources `platform-defaults.ps1`, calls `New-SISpn -UseExistingAppId` to top up Graph perms only (no new app reg, no new cred), renders `Write-SICustomConfig -Mode Bridged` (no secrets in the file — references `$global:HighPriv_Modern_*` + `$global:AutomationFramework=$true`). Connects to all 3 surfaces (Az PS / Mg / az CLI) using the v1 cert in `LocalMachine\My`. No operator interaction.
+- **Internal** (v1-platform migration): re-uses the existing v1 cert-based SPN, dot-sources `platform-defaults.ps1`, calls `New-SISpn -UseExistingAppId` to top up Graph perms only (no new app reg, no new cred), renders `Write-SICustomConfig -Mode Bridged` (no secrets in the file — references `$global:HighPriv_Modern_*` + `$global:AutomationFramework=$true`). Connects to all 3 surfaces (Az PS / Mg / az CLI) using the v1 cert in `LocalMachine\My`. No operator interaction.
 - **Community**: standalone install, no v1 platform layer. Creates a new SI SPN, renders the existing inline `SecurityInsight.custom.ps1`. Operator must `Connect-AzAccount` + `Connect-MgGraph` first (same as the GUI wizard's contract).
 
 **JSON-driven config** lives at `config\setup-unattended.json` (gitignored — the customer-owned working copy) with a sample at `config\setup-unattended.sample.json`. Six functional sections: `Flavour` / `Sub` / `Resources` / `Auth_Internal` / `Auth_Community` / `EntraDiag` / `Container`. `null` everywhere = "use script default or platform-defaults global". Every JSON value has a matching CLI switch for one-off overrides:
@@ -11987,7 +12006,7 @@ Replaced both with the two real totals, summed per asset across that asset's fin
 New per-asset line in the AI rollup:
 
 ```
-1. dc1.Contoso.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
+1. dc-a.Contoso.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
 ```
 
 Sort key updated to `WeightedRiskScore` (descending), then `TotalRiskScore`, then `Findings`.
@@ -13686,7 +13705,7 @@ Engine load order = both supported, baseline updates always flow:
 
 ## v2.2.24 — Run-AllEngines.ps1: -Flavour internal|community switch
 
-`tools/Run-AllEngines.ps1` was hardcoded to fire `launcher.community-vm.ps1` files. Internal customers (FVF-style, AutomationFramework + cert+KV auth) had no parallel-windows orchestrator.
+`tools/Run-AllEngines.ps1` was hardcoded to fire `launcher.community-vm.ps1` files. Internal customers (v1 platform, AutomationFramework + cert+KV auth) had no parallel-windows orchestrator.
 
 Added `-Flavour internal|community` switch (default `community`, so existing demo callers don't break). Launcher path now resolves to `launcher.$Flavour-vm.ps1`.
 
@@ -13694,7 +13713,7 @@ Added `-Flavour internal|community` switch (default `community`, so existing dem
 # Default (community demo VMs)
 .\tools\Run-AllEngines.ps1
 
-# Internal env (FVF, Contoso, etc. -- requires Initialize-PlatformAutomationFramework upstream)
+# Internal env (Contoso, etc. -- requires Initialize-PlatformAutomationFramework upstream)
 .\tools\Run-AllEngines.ps1 -Flavour internal
 
 # Internal + standalone PTC

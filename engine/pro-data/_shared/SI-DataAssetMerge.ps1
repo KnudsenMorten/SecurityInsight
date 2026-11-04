@@ -2,8 +2,8 @@
 <#
     SecurityInsight Pro -- ONE ASSET PER DEVICE in the Pro database (#297, #298): the data sync merges the duplicate and
     phantom assets earlier loads stored into the asset that carries their id. Found 2026-10-05 on ring 1:
-      #297  attack-path rows keyed on the Entra device id became phantom assets beside the real one (dc1 -> 367e007c,
-            dc3 -> a85ab003, mgmt1 -> fa6a7a3b): the same path counted twice;
+      #297  attack-path rows keyed on the Entra device id became phantom assets beside the real one (dc-a -> 367e007c,
+            dc-b -> a85ab003, host1 -> fa6a7a3b): the same path counted twice;
       #298  two assets for one Defender device (SonosZP keyed on its MDE device id beside the ledger asset that carries it;
             an asset keyed on an SI_AssetId stored before the ledger gave it its durable id).
     New loads resolve such ids at load (SI-DataModel.ps1, Resolve-SIDataFindingAssetId); this repairs what is stored.

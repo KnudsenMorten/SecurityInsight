@@ -22,7 +22,7 @@
 BeforeDiscovery {
     # These tests persist real certificates WITH their keys in CurrentUser\My. A session without a loaded user profile (the
     # test VM's SSH session, #447) cannot ("Access denied"): the suite is skipped there, saying why -- never a red gate
-    # for the host, never a silent pass. mgmt1 and any desktop session run it.
+    # for the host, never a silent pass. the development machine and any desktop session run it.
     $script:CertStoreUsable = $false
     try {
         $rsa = [System.Security.Cryptography.RSA]::Create(2048)
@@ -126,7 +126,7 @@ BeforeAll {
 
 AfterAll { Remove-TestCertificates }
 
-Describe 'SIv3-PlatformCertificate -- the check reads the certificate, never the wrapper (#395)' -Skip:(-not $script:CertStoreUsable) {
+Describe 'SIv3-PlatformCertificate -- the check reads the certificate, never the wrapper (#395)' -Tag 'CertStore' -Skip:(-not $script:CertStoreUsable) {
     It 'the test certificates are really in CurrentUser\My (valid / expired / not yet valid with keys; one without its key)' {
         foreach ($c in $script:Valid, $script:Expired, $script:NotYet, $script:NoKey) { Test-InStore $c.Thumbprint | Should -BeTrue }
         $script:Valid.HasPrivateKey | Should -BeTrue
@@ -195,7 +195,7 @@ Describe 'SIv3-PlatformCertificate -- the check reads the certificate, never the
     }
 }
 
-Describe 'SIv3-PlatformCertificate -- the internal sign-in with a real installed certificate (#395)' -Skip:(-not $script:CertStoreUsable) {
+Describe 'SIv3-PlatformCertificate -- the internal sign-in with a real installed certificate (#395)' -Tag 'CertStore' -Skip:(-not $script:CertStoreUsable) {
     BeforeAll {
         $script:GlobalNames = 'Context', 'AzureTenantId', 'HighPriv_Modern_ApplicationID_Azure', 'HighPriv_Modern_Secret_Azure', 'HighPriv_Modern_AuthMethod',
                               'HighPriv_Modern_CertificateThumbprint_Azure', 'KV_HighPriv_KeyVaultName', 'KV_HighPriv_SubscriptionId', 'AutomationFramework',

@@ -15,7 +15,7 @@ namespace SI.Management.Web.ChatView;
 /// The post-pass highlights, even where the model did not mark anything:
 ///   - the asset names the tool results carried (a link to the asset page when the result had the asset key);
 ///   - numbers -- re-written in the viewer's number format (BRAND-2.6: "2293" -> "2.293" for da-DK); never numbers inside
-///     a CVE id, a date, a time, a version, an IP address or an identifier (MGMT1, KB5012345);
+///     a CVE id, a date, a time, a version, an IP address or an identifier (HOST1, KB5012345);
 ///   - severities (the badge colours) and "Tier N" (the tier colour).
 /// Years (1900-2099 written without separators) are highlighted but not regrouped: "2026" must not read "2.026".
 /// </summary>

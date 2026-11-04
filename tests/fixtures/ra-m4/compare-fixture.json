@@ -16,7 +16,7 @@
     { "si_ci_id": "ci-testing", "si_asset_name": "u-leak", "si_class": "identity", "si_tier": 2, "si_link_entra": "e-leak",
       "si_risk_factors": [ { "id": "leaked_credentials", "axis": "probability", "impact": 0, "stage": "testing" } ],
       "si_criticality_factor": 1.0 },
-    { "si_ci_id": "ci-t0", "si_asset_name": "dc1", "si_class": "device", "si_tier": 0, "si_link_mde": "m-dc1",
+    { "si_ci_id": "ci-t0", "si_asset_name": "dc7", "si_class": "device", "si_tier": 0, "si_link_mde": "m-dc7",
       "si_risk_factors": [], "si_criticality_factor": 1.0 }
   ],
   "findings": [
@@ -46,7 +46,7 @@
       "RiskFactor_Probability_Detailed": "", "RiskFactor_Consequence_Detailed": "RemoteCodeExecutionRisk" },
     { "case": "tier0-no-tier-factor", "expect": "same", "why": "tier is never a factor: a tier-0 asset gets no Tier0BlastRadius / tier0 factor in either data model -- tier counts through the risk index only",
       "SecurityDomain": "Endpoint", "Category": "Vulnerabilities", "Subcategory": "CVEs", "ConfigurationId": "CVE", "SecuritySeverity": "High",
-      "CriticalityTierLevel": "Critical - tier 0", "AssetName": "dc1", "MdeDeviceId": "m-dc1",
+      "CriticalityTierLevel": "Critical - tier 0", "AssetName": "dc7", "MdeDeviceId": "m-dc7",
       "RiskFactor_Probability_Detailed": "", "RiskFactor_Consequence_Detailed": "" },
     { "case": "no-ci", "expect": "same", "why": "",
       "SecurityDomain": "Endpoint", "Category": "Vulnerabilities", "Subcategory": "CVEs", "ConfigurationId": "CVE", "SecuritySeverity": "High",

@@ -1698,7 +1698,7 @@ function Get-SIInstallInfra {
     $v = $Ctx.Values; $n = $Ctx.Names
     $r = Invoke-SIInstallScript -Ctx $Ctx -RelativePath 'setup/ConfigWizard/backend/Initialize-SIInfra.ps1' -Arguments ([ordered]@{
         SpnObjectId = [string]$Ctx.Facts['userObjectId']; TenantId = [string]$v['tenantId']; SubscriptionId = [string]$v['subscriptionId']
-        # 2026-11-03 (FVF): the signed-in PERSON is a User -- labelled ServicePrincipal, Azure refused every grant
+        # 2026-11-03 (a customer install): the signed-in PERSON is a User -- labelled ServicePrincipal, Azure refused every grant
         SpnPrincipalType = $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'ServicePrincipal' })
         ResourceGroupName = $n.ResourceGroup; Location = [string]$v['location']; WorkspaceName = $n.Workspace; DceName = $n.Dce
         StorageAccountName = $n.StorageAccount; CreateKeyVault = $true; KeyVaultName = $n.KeyVault
@@ -1726,6 +1726,21 @@ function Get-SIInstallInfra {
     $keep
 }
 
+function Invoke-SIInstallVaultShape {
+    <#
+        FRAMEWORK INSTALLER RULE 11 on a resume past the Key Vault step: the install's vault set to its network shape and
+        READ BACK (Set-SIKeyVaultRule11 -- private: public access Disabled, firewall Deny, bypass AzureServices, no IP or
+        network rules; public: bypass AzureServices) before a later step writes a key or secret to it. Returns
+        @{ Ok; Message }; never throws.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    $v = $Ctx.Values; $n = $Ctx.Names
+    $r = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Set-SIKeyVaultRule11' -Arguments ([ordered]@{ VaultName = $n.KeyVault; ResourceGroupName = $n.ResourceGroup; Private = [bool]$v['privateNetwork'] })
+    if (-not $r.Ok) { return @{ Ok = $false; Message = ('Key Vault {0}: its network could not be set and read back before the next steps write to it: {1}' -f $n.KeyVault, $r.Error) } }
+    $shape = [string](Get-SIInstallProp $r.Value 'Shape')
+    @{ Ok = $true; Message = $(if ($shape) { 'Key Vault {0}: network {1} and read back ({2}).' -f $n.KeyVault, $(if ([bool](Get-SIInstallProp $r.Value 'Changed')) { 'set' } else { 'already right' }), $shape } else { '' }) }
+}
+
 function Invoke-SIInstallBootstrap {
     <#
         Bootstrap-ContainerAppJob -UseManagedIdentity -GrantIdentityRoles -- ONE proven script makes the registry, builds
@@ -1738,7 +1753,7 @@ function Invoke-SIInstallBootstrap {
         Engines = @($Ctx.Engines); ResourceGroupName = $n.ResourceGroup; Location = [string]$v['location']; AcrName = $n.Acr; EnvName = $n.ContainerEnv
         ImageTag = $Ctx.ImageTag; UseManagedIdentity = $true; ManagedIdentityName = $n.ManagedIdentity; GrantIdentityRoles = $true
         # the install's OWN answers and config file, explicitly: never a subscription from a global left in the session or
-        # from a config file that is not this install's (live 2026-10-06 on mgmt1: ring 1's subscription was used)
+        # from a config file that is not this install's (live 2026-10-06 on the development machine: ring 1's subscription was used)
         SubscriptionId = [string]$v['subscriptionId']; ConfigPath = $Ctx.ConfigPath
         IdentityReaderScopes = @(Get-SIInstallReaderScopes -Values $v)
         # #830: no RiskAnalysisSendToLogAnalytics -- the copy of the report rows to Log Analytics is an optional output, off by
@@ -2278,7 +2293,12 @@ function Get-SIInstallStepTable {
             $chk = Invoke-SIInstallAz -Ctx $ctx -Command 'Test-SIKeyVaultNameAvailability' -Arguments ([ordered]@{ Name = $n.KeyVault; SubscriptionId = $sub; ErrorAction = 'SilentlyContinue' })
             if ($chk -and -not [bool](Get-SIInstallProp $chk 'NameAvailable')) {
                 $deleted = Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIKeyVault' -Arguments ([ordered]@{ VaultName = $n.KeyVault; Location = [string]$v['location']; InRemovedState = $true; ErrorAction = 'SilentlyContinue' })
-                if ($deleted) { $problems += ('a deleted Key Vault still holds the name {0}' -f $n.KeyVault); $cmds += $n.KeyVault }
+                # framework installer rule 11: a re-install RECOVERS the install's own soft-deleted vault (the infrastructure
+                # step; with purge protection it cannot be purged at all) -- only another resource group's deleted vault
+                # still holds the name
+                $delRg = if ([string](Get-SIInstallProp $deleted 'ResourceId') -match '(?i)/resourceGroups/([^/]+)/') { $Matches[1] } else { '' }
+                if ($deleted -and $delRg -and $delRg -eq $n.ResourceGroup) { $keptNames += ('{0} (soft-deleted: it is recovered, with its keys and secrets)' -f $n.KeyVault) }
+                elseif ($deleted) { $problems += ('a deleted Key Vault still holds the name {0}' -f $n.KeyVault); $cmds += $n.KeyVault }
                 else { $problems += (Get-SIInstallNameTakenText -Ctx $ctx -What 'Key Vault' -Name $n.KeyVault -Type $script:SIInstallGlobalNameTypes.KeyVault) }
             }
         }
@@ -2971,7 +2991,7 @@ function Get-SIInstallOwnConfigPath {
     <#
         The config file THIS install writes and every script it runs reads: config\SecurityInsight.custom.ps1 when that is
         absent or already this install's own; otherwise (a file another install or the internal AutomateIT platform wrote --
-        live 2026-10-06 on mgmt1 it carried ring 1's subscription) config\SecurityInsight.custom.<installId>.ps1, and the
+        live 2026-10-06 on the development machine it carried ring 1's subscription) config\SecurityInsight.custom.<installId>.ps1, and the
         other file is left exactly as it is.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$InstallId)
@@ -2985,7 +3005,7 @@ function Get-SIInstallOwnConfigPath {
 }
 
 # The machine- and session-level state a guided install must never take a value from: the internal AutomateIT platform's
-# public globals, and SecurityInsight settings left in the session by an earlier run (live 2026-10-06 on mgmt1). The
+# public globals, and SecurityInsight settings left in the session by an earlier run (live 2026-10-06 on the development machine). The
 # setup sign-in's own state (SI_AzRestState, SI_TokenProvider, ...) is kept: the install reuses its own sign-in.
 $script:SIInstallIsolatedGlobalPatterns = @('SI_*', 'AutomationFramework', 'Context', 'AzureTenantId', 'HighPriv_*', 'KV_HighPriv_*', 'Spn*', 'OpenAI_*', 'SHODAN_*')
 $script:SIInstallKeptGlobals = @('SI_AzRestState', 'SI_TokenProvider', 'SI_LogIngestRunCache', 'SI_AzureAccess_Engine', 'SI_LogIngest_Engine', 'SI_PlatformConnectFile',
@@ -3004,7 +3024,7 @@ function Invoke-SIGuidedInstall {
     <#
         Returns the exit code: 0 ok (warnings included), 1 a step failed, 2 preflight failed, 3 bad config.
 
-        ISOLATED from the machine (live 2026-10-06, run on mgmt1): the install uses ONLY its own answers and its own config
+        ISOLATED from the machine (live 2026-10-06, run on the development machine): the install uses ONLY its own answers and its own config
         file. For its run the internal AutomateIT platform configuration (bootstrap\platform-config.json) is not discovered
         (SI_PLATFORM_CONFIG=off), and the session's platform globals and SecurityInsight settings are set aside; both are
         put back when the install ends.
@@ -3248,27 +3268,40 @@ function Get-SIInstallRegionProbeResources {
         Returns @{ Resources = @(<template resource>); Covered = @(<label>); Left = @(<label>) }.
     #>
     param([Parameter(Mandatory)][object[]]$Needs, [Parameter(Mandatory)]$Names, [Parameter(Mandatory)][string]$Region, [string]$TenantId = '',
-          [string]$AdminObjectId = '', [string]$AdminType = 'User')
+          [string]$AdminObjectId = '', [string]$AdminType = 'User', [bool]$PrivateNetwork = $false)
+    # The probe resources carry the REAL resources' settings (installer rule 9, 2026-11-03: a customer's Azure Policy
+    # refused another product's BARE storage probe for TLS -- a policy refusal for nothing). Each body below matches
+    # what the install creates: storage = Get-SIStorageAccountCreateProperties, the vault = New-SIKeyVault, the database
+    # server = the install's, the registry = no admin user; a private install closes the public endpoints as it will.
+    $off = $(if ($PrivateNetwork) { 'Disabled' } else { 'Enabled' })
+    $stProps = [ordered]@{ supportsHttpsTrafficOnly = $true; allowBlobPublicAccess = $false; allowSharedKeyAccess = $false
+        defaultToOAuthAuthentication = $true; minimumTlsVersion = 'TLS1_2' }
+    if (Get-Command Get-SIStorageAccountCreateProperties -ErrorAction SilentlyContinue) {
+        $stProps = [ordered]@{}; $sp = Get-SIStorageAccountCreateProperties; foreach ($k in @($sp.Keys | Sort-Object)) { $stProps[$k] = $sp[$k] }
+    }
+    if ($PrivateNetwork) { $stProps['publicNetworkAccess'] = 'Disabled' }
     $res = @(); $covered = @(); $left = @()
     foreach ($nd in $Needs) {
         $t = '{0}/{1}' -f $nd.Namespace, $nd.Type
         $r = switch ($t) {
             'Microsoft.OperationalInsights/workspaces' { [ordered]@{ type = $t; apiVersion = '2022-10-01'; name = [string]$Names.Workspace; location = $Region; properties = [ordered]@{ sku = [ordered]@{ name = 'PerGB2018' } } } }
             'Microsoft.Insights/dataCollectionEndpoints' { [ordered]@{ type = $t; apiVersion = '2022-06-01'; name = [string]$Names.Dce; location = $Region; properties = [ordered]@{} } }
-            'Microsoft.Storage/storageAccounts' { [ordered]@{ type = $t; apiVersion = '2023-01-01'; name = [string]$Names.StorageAccount; location = $Region; kind = 'StorageV2'; sku = [ordered]@{ name = 'Standard_LRS' } } }
+            'Microsoft.Storage/storageAccounts' { [ordered]@{ type = $t; apiVersion = '2023-01-01'; name = [string]$Names.StorageAccount; location = $Region; kind = 'StorageV2'; sku = [ordered]@{ name = 'Standard_LRS' }; properties = $stProps } }
             'Microsoft.KeyVault/vaults' {
                 if (-not $TenantId) { $null } else {
-                    [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.KeyVault; location = $Region
-                        properties = [ordered]@{ tenantId = $TenantId; sku = [ordered]@{ family = 'A'; name = 'standard' }; enableRbacAuthorization = $true; accessPolicies = @() } }
+                    $kvProps = [ordered]@{ tenantId = $TenantId; sku = [ordered]@{ family = 'A'; name = 'standard' }; enableRbacAuthorization = $true; accessPolicies = @()
+                        enableSoftDelete = $true; softDeleteRetentionInDays = 90; enablePurgeProtection = $true }
+                    if ($PrivateNetwork) { $kvProps['publicNetworkAccess'] = 'Disabled'; $kvProps['networkAcls'] = [ordered]@{ defaultAction = 'Deny'; bypass = 'AzureServices'; ipRules = @(); virtualNetworkRules = @() } }
+                    [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.KeyVault; location = $Region; properties = $kvProps }
                 }
             }
-            'Microsoft.ContainerRegistry/registries' { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Basic' }; properties = [ordered]@{} } }
+            'Microsoft.ContainerRegistry/registries' { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Basic' }; properties = [ordered]@{ adminUserEnabled = $false } } }
             'Microsoft.App/managedEnvironments' { [ordered]@{ type = $t; apiVersion = '2024-03-01'; name = [string]$Names.ContainerEnv; location = $Region; properties = [ordered]@{} } }
             'Microsoft.ManagedIdentity/userAssignedIdentities' { [ordered]@{ type = $t; apiVersion = '2023-01-31'; name = [string]$Names.ManagedIdentity; location = $Region } }
             'Microsoft.Sql/servers' {
                 if (-not $AdminObjectId -or -not $TenantId) { $null } else {
                     [ordered]@{ type = $t; apiVersion = '2021-11-01'; name = [string]$Names.SqlServer; location = $Region
-                        properties = [ordered]@{ minimalTlsVersion = '1.2'; administrators = [ordered]@{ administratorType = 'ActiveDirectory'; azureADOnlyAuthentication = $true
+                        properties = [ordered]@{ version = '12.0'; minimalTlsVersion = '1.2'; publicNetworkAccess = $off; administrators = [ordered]@{ administratorType = 'ActiveDirectory'; azureADOnlyAuthentication = $true
                             login = 'SecurityInsight installer'; sid = $AdminObjectId; tenantId = $TenantId; principalType = $(if ($AdminType -eq 'User') { 'User' } else { 'Application' }) } } }
                 }
             }
@@ -3383,7 +3416,8 @@ function Invoke-SIInstallRegionValidate {
     param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][object[]]$Needs, [Parameter(Mandatory)][string]$Region, [bool]$ResourceGroupExists)
     $v = $Ctx.Values
     $p = Get-SIInstallRegionProbeResources -Needs $Needs -Names $Ctx.Names -Region $Region -TenantId ([string]$v['tenantId']) `
-        -AdminObjectId ([string]$Ctx.Facts['userObjectId']) -AdminType $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'Application' })
+        -AdminObjectId ([string]$Ctx.Facts['userObjectId']) -AdminType $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'Application' }) `
+        -PrivateNetwork ([bool]$v['privateNetwork'])
     if (-not @($p.Resources).Count) { return @{ State = 'other'; Text = 'nothing to check'; Left = @($p.Left) } }
     $q = Get-SIInstallRegionProbeRequest -SubscriptionId ([string]$v['subscriptionId']) -ResourceGroup ([string]$Ctx.Names.ResourceGroup) -Region $Region -Resources $p.Resources -ResourceGroupExists $ResourceGroupExists
     $r = $null
@@ -3797,6 +3831,20 @@ function Invoke-SIGuidedInstallRun {
     # ---- the install (exit 1) ----
     if ($Resume) {
         Resolve-SIInstallResumeFacts -Ctx $ctx
+        # FRAMEWORK INSTALLER RULE 11 on a resume: when the Key Vault step is done, the steps after it write keys and secrets
+        # without passing the infrastructure step again (where the vault is set to its shape and read back) -- so the vault is
+        # set and read back HERE, before any of them. (A resume that has not passed the Key Vault step reaches the
+        # infrastructure step first: the storage / private-network-data / key-vault steps each run it.)
+        if (@($ctx.State['completed']) -contains 'key-vault') {
+            $vs = Invoke-SIInstallVaultShape -Ctx $ctx
+            if (-not $vs.Ok) {
+                $null = Send-SIInstallEvent -Ctx $ctx -StepId 'key-vault' -State 'failed' -Message $vs.Message `
+                    -Action ([ordered]@{ text = 'Run the install command again: it sets the Key Vault''s network again and reads it back before anything is written to it.'; command = $resumeCmd })
+                Save-SIInstallState -Ctx $ctx
+                return 1
+            }
+            if ($vs.Message) { & $say $vs.Message 'Gray' }
+        }
         # THE SETTINGS FILE IS WRITTEN AGAIN FROM THE SAVED STATE at the start of every resume: a resume that runs from a
         # newer package folder has none (the steps that write it are done and skipped), and the container setup and the
         # grants read it. Only once the infrastructure step recorded its values; a failure is said, the steps go on.

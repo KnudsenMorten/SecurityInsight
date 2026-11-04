@@ -105,8 +105,8 @@ Describe '#348 discovery: the same input in any order gives the same assets' {
     }
     It 'NEGATIVE: a device node and a VM node of ONE machine under one name are still one asset' {
         $rows = @(
-            @{ AssetId = 'eg:dev:dev1'; Source = 'EndpointExposureGraph'; Hint = 'endpoint'; Name = 'dc1'; NormalizedKey = 'dc1'; EG_NodeId = 'dev1'; EG_MdeDeviceId = 'mdc1' },
-            @{ AssetId = 'eg:dev:vm1';  Source = 'EndpointExposureGraph'; Hint = 'endpoint'; Name = 'dc1'; NormalizedKey = 'dc1'; EG_NodeId = 'vm1' }
+            @{ AssetId = 'eg:dev:dev1'; Source = 'EndpointExposureGraph'; Hint = 'endpoint'; Name = 'dc7'; NormalizedKey = 'dc7'; EG_NodeId = 'dev1'; EG_MdeDeviceId = 'mdc1' },
+            @{ AssetId = 'eg:dev:vm1';  Source = 'EndpointExposureGraph'; Hint = 'endpoint'; Name = 'dc7'; NormalizedKey = 'dc7'; EG_NodeId = 'vm1' }
         )
         $r = Merge-SIDiscoverRecordsByName -RawAssets $rows -SourcePriority $script:Pri -ReservedKeys $script:Res
         $r.ByKey.Count | Should -Be 1

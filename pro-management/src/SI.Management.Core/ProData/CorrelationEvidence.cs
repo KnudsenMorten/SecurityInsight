@@ -358,7 +358,7 @@ public static class EvidenceText
     public static string Short(string keyType, string value) =>
         IsName(keyType) || value.Length <= 12 ? value : value[..8] + "…";
 
-    /// An ARM id reads best by its last segment: "/subscriptions/.../virtualMachines/MGMT1" -> "MGMT1 (Azure resource)".
+    /// An ARM id reads best by its last segment: "/subscriptions/.../virtualMachines/HOST1" -> "HOST1 (Azure resource)".
     private static string ValueText(string keyType, string value)
     {
         if (keyType == "AzureResourceId" && value.Contains('/'))

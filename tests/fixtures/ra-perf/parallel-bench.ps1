@@ -8,7 +8,7 @@
       pwsh -NoProfile -File parallel-bench.ps1 -N 16000 -Threads 1 -Cores 4
       pwsh -NoProfile -File parallel-bench.ps1 -N 16000 -Threads 4 -Cores 4
 
-    Test VM only (never mgmt1). Synthetic data only.
+    Test VM only (never the development machine). Synthetic data only.
 #>
 param([string]$SIRoot = (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))), [int]$N = 16000, [int]$Threads = 4, [int]$Cores = 4, [long]$Mask = 0,
       [string]$Culture = '', [int]$Repeat = 2)

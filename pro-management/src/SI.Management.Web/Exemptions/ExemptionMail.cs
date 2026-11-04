@@ -101,7 +101,7 @@ public static class ExemptionMailComposer
 
     private static string Para(string html) => $"<p style=\"{SI.Management.Core.Mail.MailLayout.ParagraphStyle}\">{html}</p>";
 
-    /// #728: ONE line per finding (no table): "CVE-2024-0001: OpenSSL · asset dc1 · report Summary".
+    /// #728: ONE line per finding (no table): "CVE-2024-0001: OpenSSL · asset dc-a · report Summary".
     private static string Items(IReadOnlyList<RequestItem> items)
     {
         var sb = new StringBuilder();

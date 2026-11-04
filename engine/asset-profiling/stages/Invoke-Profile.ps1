@@ -166,7 +166,7 @@ function Invoke-SIProfile {
         }
 
         # ONE MACHINE, ONE TIER (operator, 2026-10-02: "it must also work with classification so it gets same tier").
-        # An Azure VM / Arc machine that IS a Defender device takes that device's tier: measured, mgmt1 / dc1 / dc3 were
+        # An Azure VM / Arc machine that IS a Defender device takes that device's tier: measured, host1 / dc-a / dc-b were
         # tier 0 as devices and tier 3 as VMs. The device's classification is the complete one -- endpoint rules already
         # read the VM's Azure tags -- so only the VM side looks across; the device never reads the VM back, so a merged
         # tier can never hold itself in place. Recorded as a rule match, so SIRules says why.

@@ -1180,7 +1180,7 @@ function Calculate-RiskScore {
                         # "two shapes" -- handle both or one route silently yields a single element.
                         # 🔴 AND THERE IS A THIRD SHAPE: a BARE STRING. Measured 2026-08-29 on a real
                         # advanced-hunting run -- a `make_set` that produced exactly ONE element arrived
-                        # as `mgmt1.2linkit.local|fa6a7a3b-...`, with no brackets and no quotes. That is
+                        # as `server1.contoso.local|fa6a7a3b-...`, with no brackets and no quotes. That is
                         # not JSON, so ConvertFrom-Json threw, the catch emptied the list, and the row
                         # fell back to the engine aggregate -- i.e. the id went missing again, but ONLY
                         # for groups holding a single asset. Silent, data-dependent, and invisible to any

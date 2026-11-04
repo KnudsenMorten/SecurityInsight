@@ -13,7 +13,7 @@
     -- with compact rows (SI_LaCompactRows, as Get-SIHybridLetRows asks). Each process reports its peak working set, the
     managed heap with the rows still held, the rows, the seconds and a SHA-256 over every row's values (the two must be
     equal). Output: one JSON line per mode, and -OutFile.
-    Never on mgmt1. Not a gate: the gate runs SIv3-RaStreamRead.Tests.ps1, which is small.
+    Never on the development machine. Not a gate: the gate runs SIv3-RaStreamRead.Tests.ps1, which is small.
 
 .EXAMPLE
     pwsh -NoProfile -File tests\scale\Measure-RaLaStreamRead.ps1 -Rows 300000 -OutFile C:\work\si\rasize\stream.json

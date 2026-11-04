@@ -320,22 +320,30 @@ foreach ($g in $rbacGrants) { _GrantRbac -RoleName $g.Name -Scope $g.Scope }
 # ----- 7. (Optional) Key Vault -----
 $kvUri = $null
 if ($CreateKeyVault) {
-    $kv = Get-SIKeyVault -VaultName $KeyVaultName -SubscriptionId $SubscriptionId -ErrorAction SilentlyContinue
-    if (-not $kv) {
-        _Step "create Key Vault"
-        # Azure RBAC authorization (not access policies): the SI role grants below apply to it.
-        # Purge protection (a deleted vault and its secrets cannot be purged before their retention ends; ONE-WAY): ON by
-        # default (owner 2026-11-03 "On everywhere"; setup\_shared\SI-SecurityBaseline.ps1 Test-SISecurityBaselinePurgeProtection,
-        # SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=0 opts a test install out).
-        . (Join-Path $siRootForTags 'setup\_shared\SI-SecurityBaseline.ps1')
-        $kvPurgeProtect = Test-SISecurityBaselinePurgeProtection
-        $kv = New-SIKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName -Location $Location -SubscriptionId $SubscriptionId -TenantId $TenantId -EnableRbacAuthorization $true -EnablePurgeProtection:$kvPurgeProtect -PublicNetworkAccess $(if ($PrivateNetwork) { 'Disabled' } else { '' })
-        if ($kvPurgeProtect) { _Info ("KV purge protection: {0}" -f $(if ($kv.EnablePurgeProtection) { 'on' } else { 'NOT on -- set it with setup\Set-SISecurityBaseline.ps1' })) }
-        if (-not $kv.EnableRbacAuthorization) { throw ("Key Vault {0} was created WITHOUT RBAC authorization -- the SI role grants below would not apply." -f $KeyVaultName) }
-        _Ok ("KV created: {0}" -f $kv.VaultUri)
-    } else {
-        _Info ("KV already exists: {0}" -f $kv.VaultUri)
+    _Step "Key Vault"
+    # Azure RBAC authorization (not access policies): the SI role grants below apply to it.
+    # Purge protection (a deleted vault and its secrets cannot be purged before their retention ends; ONE-WAY): ON by
+    # default (owner 2026-11-03 "On everywhere"; setup\_shared\SI-SecurityBaseline.ps1 Test-SISecurityBaselinePurgeProtection,
+    # SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=0 opts a test install out) -- used only when the vault is created.
+    . (Join-Path $siRootForTags 'setup\_shared\SI-SecurityBaseline.ps1')
+    $kvPurgeProtect = Test-SISecurityBaselinePurgeProtection
+    # FRAMEWORK INSTALLER RULE 11: the vault is FOUND, RECOVERED (a re-install: the old vault is soft-deleted -- with purge
+    # protection it can neither be purged nor made again under its name) or CREATED, and in every case set to its network
+    # shape and READ BACK here, before any key or secret step (a recover IGNORES networkAcls: it comes back with bypass None,
+    # and ARM key / secret calls then fail with ForbiddenByConnection). Private: public access Disabled, firewall Deny,
+    # trusted Microsoft services allowed, no IP or network rules. Public: trusted Microsoft services allowed, nothing else.
+    $kvr = Initialize-SIKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName -Location $Location -SubscriptionId $SubscriptionId -TenantId $TenantId -EnablePurgeProtection:$kvPurgeProtect -PublicNetworkAccess $(if ($PrivateNetwork) { 'Disabled' } else { '' })
+    $kv = $kvr.Vault
+    switch ($kvr.Action) {
+        'created' {
+            if ($kvPurgeProtect) { _Info ("KV purge protection: {0}" -f $(if ($kv.EnablePurgeProtection) { 'on' } else { 'NOT on -- set it with setup\Set-SISecurityBaseline.ps1' })) }
+            if (-not $kv.EnableRbacAuthorization) { throw ("Key Vault {0} was created WITHOUT RBAC authorization -- the SI role grants below would not apply." -f $KeyVaultName) }
+            _Ok ("KV created: {0}" -f $kv.VaultUri)
+        }
+        'recovered' { _Warn ("KV RECOVERED: {0} was soft-deleted (deleted {1}) and is taken back with its keys and secrets, not made again" -f $kv.VaultUri, [string]$kvr.Deleted.DeletionDate) }
+        default { _Info ("KV already exists: {0}" -f $kv.VaultUri) }
     }
+    _Ok ("KV network {0} and read back: {1}" -f $(if ($kvr.Changed) { 'set' } else { 'already right' }), $kvr.Shape)
     # Grant SPN: Key Vault Secrets User (read), Key Vault Certificate User (read cert)
     _GrantRbac -RoleName 'Key Vault Secrets User' -Scope $kv.ResourceId
     _GrantRbac -RoleName 'Key Vault Certificate User' -Scope $kv.ResourceId

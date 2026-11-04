@@ -4,8 +4,8 @@
 
     Operator (2026-10-05), asked "should the rule's override win?": "yes". Found live on ring 1: a custom
     ADDomainController rule (cmdbId 1, cmdbDataSensitivity 'Restricted') and a custom VisualCron rule (cmdbId 6,
-    cmdbDataSensitivity 'Confidential') matched dc1 / dc3 / mgmt1, yet the profile rows carried the CMDB record's values
-    (Confidential for the DCs, Restricted for mgmt1): Stage Profile copied only cmdbId and cmdbName from a rule.
+    cmdbDataSensitivity 'Confidential') matched dc-a / dc-b / host1, yet the profile rows carried the CMDB record's values
+    (Confidential for the DCs, Restricted for host1): Stage Profile copied only cmdbId and cmdbName from a rule.
 
     What these tests keep true:
       * PRECEDENCE: rule override > CMDB record > nothing, for cmdbName / cmdbCriticality / cmdbDataSensitivity; the
@@ -13,10 +13,10 @@
         | 'cmdb' | '');
       * THE LIVE CASE, end to end through the REAL Stage Profile (Invoke-Profile.ps1, run from a scratch tree whose rule
         loader and evaluator are stand-ins), the REAL Stage Reconcile over a CMDB.csv cache built by the REAL refresh, and
-        the REAL endpoint row builder: dc1 / dc3 Restricted (rule) over Confidential (CMDB), mgmt1 Confidential (rule)
+        the REAL endpoint row builder: dc-a / dc-b Restricted (rule) over Confidential (CMDB), host1 Confidential (rule)
         over Restricted (CMDB), and an asset with no override keeps the CMDB value, sourced 'cmdb';
       * WEIGHTING follows the effective values (the case() Build-WeightedFactorsKql generates from the shipped sample
-        weights): dc 180 -> 195, mgmt1 143 -> 132;
+        weights): dc 180 -> 195, host1 143 -> 132;
       * the SQL CMDB connector writes the same precedence into cmdbsync.ConfigurationItem (Criticality, DataSensitivity),
         so the ServiceNow hand-off's criticality is the effective one;
       * the schemas declare the source columns and the CI table gains DataSensitivity in place.
@@ -59,8 +59,8 @@ BeforeAll {
     ) -join "`r`n"
     # THE LIVE RULES: what the two custom rules set (ADDomainController.custom.yaml / VisualCron.custom.yaml)
     $script:Rules = @(
-        [pscustomobject]@{ Id = 'ADDomainController'; Hits = @('dc1', 'dc3'); Set = @{ Tier = 0; Purpose = 'Domain Controller'; Category = 'Server Roles'; cmdbId = 1; cmdbDataSensitivity = 'Restricted' } }
-        [pscustomobject]@{ Id = 'VisualCron'; Hits = @('mgmt1'); Set = @{ Tier = 1; Purpose = 'Automation'; Category = 'Application Service'; cmdbId = 6; cmdbDataSensitivity = 'Confidential' } }
+        [pscustomobject]@{ Id = 'ADDomainController'; Hits = @('dc7', 'dc8'); Set = @{ Tier = 0; Purpose = 'Domain Controller'; Category = 'Server Roles'; cmdbId = 1; cmdbDataSensitivity = 'Restricted' } }
+        [pscustomobject]@{ Id = 'VisualCron'; Hits = @('host1'); Set = @{ Tier = 1; Purpose = 'Automation'; Category = 'Application Service'; cmdbId = 6; cmdbDataSensitivity = 'Confidential' } }
         [pscustomobject]@{ Id = 'AdNoOverride'; Hits = @('dc9'); Set = @{ Tier = 0; cmdbId = 1 } }
     )
 
@@ -176,9 +176,9 @@ Describe 'PRECEDENCE -- which rule answers, field by field' {
 }
 
 Describe 'THE LIVE CASE -- real Profile -> Reconcile -> row (ring 1, 2026-10-05)' {
-    BeforeAll { $script:Out = Invoke-LiveCase -Assets @('dc1', 'dc3', 'mgmt1', 'dc9', 'pc1') }
-    It 'dc1 / dc3: the DC rule''s Restricted wins over the CMDB record''s Confidential; criticality stays the CMDB''s Critical' {
-        foreach ($n in 'dc1', 'dc3') {
+    BeforeAll { $script:Out = Invoke-LiveCase -Assets @('dc7', 'dc8', 'host1', 'dc9', 'pc1') }
+    It 'dc7 / dc8: the DC rule''s Restricted wins over the CMDB record''s Confidential; criticality stays the CMDB''s Critical' {
+        foreach ($n in 'dc7', 'dc8') {
             $r = $script:Out[$n]
             $r.cmdbId | Should -Be '1'
             $r.cmdbDataSensitivity | Should -Be 'Restricted'; $r.CmdbDataSensitivitySource | Should -Be 'rule:ADDomainController'
@@ -186,8 +186,8 @@ Describe 'THE LIVE CASE -- real Profile -> Reconcile -> row (ring 1, 2026-10-05)
             $r.cmdbName | Should -Be 'Active Directory'; $r.CmdbNameSource | Should -Be 'cmdb'
         }
     }
-    It 'mgmt1: the VisualCron rule''s Confidential wins over the CMDB record''s Restricted' {
-        $r = $script:Out['mgmt1']
+    It 'host1: the VisualCron rule''s Confidential wins over the CMDB record''s Restricted' {
+        $r = $script:Out['host1']
         $r.cmdbId | Should -Be '6'
         $r.cmdbDataSensitivity | Should -Be 'Confidential'; $r.CmdbDataSensitivitySource | Should -Be 'rule:VisualCron'
         $r.cmdbCriticality | Should -Be 'Medium'; $r.CmdbCriticalitySource | Should -Be 'cmdb'
@@ -199,31 +199,31 @@ Describe 'THE LIVE CASE -- real Profile -> Reconcile -> row (ring 1, 2026-10-05)
         [string]$p.cmdbDataSensitivity | Should -Be ''; [string]$p.CmdbDataSensitivitySource | Should -Be ''
     }
     It 'the rule match records the override, so the SIRules evidence shows why' {
-        $m = @($script:Out['dc1'].Verdict.SI_RuleMatches)[0]
+        $m = @($script:Out['dc7'].Verdict.SI_RuleMatches)[0]
         $m.RuleId | Should -Be 'ADDomainController'; $m.cmdbDataSensitivity | Should -Be 'Restricted'
         @($script:Out['dc9'].Verdict.SI_RuleMatches)[0].PSObject.Properties['cmdbDataSensitivity'] | Should -BeNullOrEmpty -Because 'a rule that sets no override leaves SIRules as it was'
     }
     It 'the endpoint profile row carries the effective values and their sources' {
         . (Join-Path $script:Root 'engine\asset-profiling\shared\Build-EndpointProfileRow.ps1')
         $rc = [pscustomobject]@{ Engine = 'endpoint'; RunId = 't'; CollectionTime = '2026-10-05T00:00:00Z' }
-        $row = Build-SIEndpointProfileRow -Record $script:Out['dc1'] -RunContext $rc
+        $row = Build-SIEndpointProfileRow -Record $script:Out['dc7'] -RunContext $rc
         [string]$row.cmdbDataSensitivity | Should -Be 'Restricted'
         [string]$row.CmdbDataSensitivitySource | Should -Be 'rule:ADDomainController'
         [string]$row.cmdbCriticality | Should -Be 'Critical'
         [string]$row.CmdbCriticalitySource | Should -Be 'cmdb'
     }
-    It 'WEIGHTING follows the effective values: dc 180 -> 195, mgmt1 143 -> 132 (shipped sample weights, product)' {
+    It 'WEIGHTING follows the effective values: dc 180 -> 195, host1 143 -> 132 (shipped sample weights, product)' {
         Get-WeightFactor 'Critical' 'Confidential' | Should -Be 180     # before: the CMDB record's value
-        Get-WeightFactor $script:Out['dc1'].cmdbCriticality $script:Out['dc1'].cmdbDataSensitivity | Should -Be 195
-        Get-WeightFactor $script:Out['dc3'].cmdbCriticality $script:Out['dc3'].cmdbDataSensitivity | Should -Be 195
+        Get-WeightFactor $script:Out['dc7'].cmdbCriticality $script:Out['dc7'].cmdbDataSensitivity | Should -Be 195
+        Get-WeightFactor $script:Out['dc8'].cmdbCriticality $script:Out['dc8'].cmdbDataSensitivity | Should -Be 195
         Get-WeightFactor 'Medium' 'Restricted' | Should -Be 143
-        Get-WeightFactor $script:Out['mgmt1'].cmdbCriticality $script:Out['mgmt1'].cmdbDataSensitivity | Should -Be 132
+        Get-WeightFactor $script:Out['host1'].cmdbCriticality $script:Out['host1'].cmdbDataSensitivity | Should -Be 132
     }
     It 'with CMDB off, a rule''s override is ignored exactly like its cmdbId' {
         $global:SI_EnableCmdbProvider = $false
-        try { $o = Invoke-LiveCase -Assets @('dc1') } finally { $global:SI_EnableCmdbProvider = $true }
-        [string]$o['dc1'].cmdbDataSensitivity | Should -Not -Be 'Restricted'
-        [string]$o['dc1'].CmdbDataSensitivitySource | Should -Not -Match '^rule:'
+        try { $o = Invoke-LiveCase -Assets @('dc7') } finally { $global:SI_EnableCmdbProvider = $true }
+        [string]$o['dc7'].cmdbDataSensitivity | Should -Not -Be 'Restricted'
+        [string]$o['dc7'].CmdbDataSensitivitySource | Should -Not -Match '^rule:'
     }
 }
 
@@ -254,24 +254,24 @@ Describe 'THE SQL CMDB CONNECTOR -- the same precedence in cmdbsync.Configuratio
         $script:Now = [datetime]::SpecifyKind([datetime]'2026-10-05T06:00:00', [DateTimeKind]::Utc)
         $t = $script:Now.ToString('o')
         $script:Profiles = @(
-            [pscustomobject]@{ Kind = 'endpoint'; SI_AssetId = 'dc1'; SI_AssetName = 'dc1'; Tier = 0; CollectionTime = $t }
-            [pscustomobject]@{ Kind = 'endpoint'; SI_AssetId = 'mgmt1'; SI_AssetName = 'mgmt1'; Tier = 1; CollectionTime = $t }
+            [pscustomobject]@{ Kind = 'endpoint'; SI_AssetId = 'dc7'; SI_AssetName = 'dc7'; Tier = 0; CollectionTime = $t }
+            [pscustomobject]@{ Kind = 'endpoint'; SI_AssetId = 'host1'; SI_AssetName = 'host1'; Tier = 1; CollectionTime = $t }
             [pscustomobject]@{ Kind = 'endpoint'; SI_AssetId = 'dc9'; SI_AssetName = 'dc9'; Tier = 0; CollectionTime = $t }
-            [pscustomobject]@{ Kind = 'azure'; SI_AssetId = 'vm-dc1'; SI_AssetName = 'dc1-vm'; Tier = 0; CollectionTime = $t }
+            [pscustomobject]@{ Kind = 'azure'; SI_AssetId = 'vm-dc7'; SI_AssetName = 'dc7-vm'; Tier = 0; CollectionTime = $t }
         )
         $script:MapRows = @(
-            [pscustomobject]@{ SI_AssetId = 'dc1'; SI_CorrelationId = 'corr-dc1'; SI_IdSource = 'ledger'; SI_MemberEngine = 'endpoint'; SI_IdentifierType = 'MdeDeviceId'; SI_IdentifierValue = 'mde-dc1' }
-            [pscustomobject]@{ SI_AssetId = 'vm-dc1'; SI_CorrelationId = 'corr-dc1'; SI_IdSource = 'ledger'; SI_MemberEngine = 'azure'; SI_IdentifierType = 'AzureResourceId'; SI_IdentifierValue = '/subscriptions/s/vm-dc1' }
+            [pscustomobject]@{ SI_AssetId = 'dc7'; SI_CorrelationId = 'corr-dc7'; SI_IdSource = 'ledger'; SI_MemberEngine = 'endpoint'; SI_IdentifierType = 'MdeDeviceId'; SI_IdentifierValue = 'mde-dc7' }
+            [pscustomobject]@{ SI_AssetId = 'vm-dc7'; SI_CorrelationId = 'corr-dc7'; SI_IdSource = 'ledger'; SI_MemberEngine = 'azure'; SI_IdentifierType = 'AzureResourceId'; SI_IdentifierValue = '/subscriptions/s/vm-dc7' }
         )
-        # the Pro database's services: AD (Critical / Confidential) for dc1 + dc9, Automation (Medium / Restricted) for mgmt1
+        # the Pro database's services: AD (Critical / Confidential) for dc-a + dc9, Automation (Medium / Restricted) for host1
         $script:Enrichment = Merge-SICmdbSqlEnrichment -ServiceRows @(
-            @{ AssetKey = 'corr-dc1'; ServiceKey = 'SVC-0001'; ServiceName = 'Active Directory'; Criticality = 'Critical'; CriticalityRank = 1; DataSensitivity = 'Confidential'; Source = 'cmdb-si' }
+            @{ AssetKey = 'corr-dc7'; ServiceKey = 'SVC-0001'; ServiceName = 'Active Directory'; Criticality = 'Critical'; CriticalityRank = 1; DataSensitivity = 'Confidential'; Source = 'cmdb-si' }
             @{ AssetKey = 'dc9'; ServiceKey = 'SVC-0001'; ServiceName = 'Active Directory'; Criticality = 'Critical'; CriticalityRank = 1; DataSensitivity = 'Confidential'; Source = 'cmdb-si' }
-            @{ AssetKey = 'mgmt1'; ServiceKey = 'SVC-0006'; ServiceName = 'Automation'; Criticality = 'Medium'; CriticalityRank = 3; DataSensitivity = 'Restricted'; Source = 'cmdb-si' })
+            @{ AssetKey = 'host1'; ServiceKey = 'SVC-0006'; ServiceName = 'Automation'; Criticality = 'Medium'; CriticalityRank = 3; DataSensitivity = 'Restricted'; Source = 'cmdb-si' })
         # what Log Analytics answers for the rule-override read: the profile rows' effective values and sources
         $script:OverrideRows = @(
-            [pscustomobject]@{ SI_AssetId = 'dc1'; cmdbCriticality = 'Critical'; CmdbCriticalitySource = 'cmdb'; cmdbDataSensitivity = 'Restricted'; CmdbDataSensitivitySource = 'rule:ADDomainController' }
-            [pscustomobject]@{ SI_AssetId = 'mgmt1'; cmdbCriticality = 'Medium'; CmdbCriticalitySource = 'cmdb'; cmdbDataSensitivity = 'Confidential'; CmdbDataSensitivitySource = 'rule:VisualCron' }
+            [pscustomobject]@{ SI_AssetId = 'dc7'; cmdbCriticality = 'Critical'; CmdbCriticalitySource = 'cmdb'; cmdbDataSensitivity = 'Restricted'; CmdbDataSensitivitySource = 'rule:ADDomainController' }
+            [pscustomobject]@{ SI_AssetId = 'host1'; cmdbCriticality = 'Medium'; CmdbCriticalitySource = 'cmdb'; cmdbDataSensitivity = 'Confidential'; CmdbDataSensitivitySource = 'rule:VisualCron' }
         )
     }
     It 'reads the overrides with its own query: newest row per asset, only rule-sourced values' {
@@ -280,34 +280,34 @@ Describe 'THE SQL CMDB CONNECTOR -- the same precedence in cmdbsync.Configuratio
         $k | Should -Match 'where CmdbCriticalitySource startswith "rule:" or CmdbDataSensitivitySource startswith "rule:"'
         $k | Should -Match 'column_ifexists\("CmdbDataSensitivitySource", ""\)'
         $o = ConvertTo-SICmdbSqlRuleOverrides -Rows $script:OverrideRows
-        $o['dc1'].DataSensitivity | Should -Be 'Restricted'; $o['dc1'].DataSensitivityRule | Should -Be 'ADDomainController'
-        $o['dc1'].Criticality | Should -Be '' -Because 'a CMDB-sourced value is not an override'
+        $o['dc7'].DataSensitivity | Should -Be 'Restricted'; $o['dc7'].DataSensitivityRule | Should -Be 'ADDomainController'
+        $o['dc7'].Criticality | Should -Be '' -Because 'a CMDB-sourced value is not an override'
     }
     It 'rule override > the Pro database''s service record, field by field; no override falls back to the record' {
         $d = ConvertTo-SICmdbSqlDesired -Profiles $script:Profiles -MapRows $script:MapRows -Enrichment $script:Enrichment -Kinds @('endpoint', 'azure') -SeenAt $script:Now `
                 -RuleOverrides (ConvertTo-SICmdbSqlRuleOverrides -Rows $script:OverrideRows)
-        $dc = $d.Items['corr-dc1']
+        $dc = $d.Items['corr-dc7']
         $dc.DataSensitivity | Should -Be 'Restricted'; $dc.DataSensitivitySource | Should -Be 'rule:ADDomainController'
         $dc.Criticality | Should -Be 'Critical'; $dc.CriticalitySource | Should -Be 'cmdb'
-        $d.Items['mgmt1'].DataSensitivity | Should -Be 'Confidential'
+        $d.Items['host1'].DataSensitivity | Should -Be 'Confidential'
         $d.Items['dc9'].DataSensitivity | Should -Be 'Confidential'; $d.Items['dc9'].DataSensitivitySource | Should -Be 'cmdb'
     }
     It 'members of one CI with different overrides: the most critical / most sensitive wins' {
         $ov = ConvertTo-SICmdbSqlRuleOverrides -Rows @(
-            [pscustomobject]@{ SI_AssetId = 'dc1'; cmdbCriticality = 'Low'; CmdbCriticalitySource = 'rule:A'; cmdbDataSensitivity = 'Internal'; CmdbDataSensitivitySource = 'rule:A' }
-            [pscustomobject]@{ SI_AssetId = 'vm-dc1'; cmdbCriticality = 'High'; CmdbCriticalitySource = 'rule:B'; cmdbDataSensitivity = 'Restricted'; CmdbDataSensitivitySource = 'rule:B' })
+            [pscustomobject]@{ SI_AssetId = 'dc7'; cmdbCriticality = 'Low'; CmdbCriticalitySource = 'rule:A'; cmdbDataSensitivity = 'Internal'; CmdbDataSensitivitySource = 'rule:A' }
+            [pscustomobject]@{ SI_AssetId = 'vm-dc7'; cmdbCriticality = 'High'; CmdbCriticalitySource = 'rule:B'; cmdbDataSensitivity = 'Restricted'; CmdbDataSensitivitySource = 'rule:B' })
         $d = ConvertTo-SICmdbSqlDesired -Profiles $script:Profiles -MapRows $script:MapRows -Enrichment $script:Enrichment -Kinds @('endpoint', 'azure') -SeenAt $script:Now -RuleOverrides $ov
-        $d.Items['corr-dc1'].Criticality | Should -Be 'High'; $d.Items['corr-dc1'].DataSensitivity | Should -Be 'Restricted'
+        $d.Items['corr-dc7'].Criticality | Should -Be 'High'; $d.Items['corr-dc7'].DataSensitivity | Should -Be 'Restricted'
     }
     It 'the plan updates DataSensitivity with a history row; the apply writes it only where the column exists' {
         $d = ConvertTo-SICmdbSqlDesired -Profiles $script:Profiles -MapRows $script:MapRows -Enrichment $script:Enrichment -Kinds @('endpoint', 'azure') -SeenAt $script:Now `
                 -RuleOverrides (ConvertTo-SICmdbSqlRuleOverrides -Rows $script:OverrideRows)
-        $actual = ConvertTo-SICmdbSqlActual -Rows @(@{ CiKey = 'corr-dc1'; KeySource = 'ledger'; Name = 'dc1'; Kind = 'endpoint'; Tier = 0; Criticality = 'Critical'; Services = 'Active Directory'; Sources = 'azure; endpoint'; State = 'active'; AbsentRuns = 0 }) `
-                     -DataSensitivityRows @(@{ CiKey = 'corr-dc1'; DataSensitivity = 'Confidential' })
-        $ch = Get-SICmdbSqlFieldChanges -Actual $actual['corr-dc1'] -Desired $d.Items['corr-dc1']
+        $actual = ConvertTo-SICmdbSqlActual -Rows @(@{ CiKey = 'corr-dc7'; KeySource = 'ledger'; Name = 'dc7'; Kind = 'endpoint'; Tier = 0; Criticality = 'Critical'; Services = 'Active Directory'; Sources = 'azure; endpoint'; State = 'active'; AbsentRuns = 0 }) `
+                     -DataSensitivityRows @(@{ CiKey = 'corr-dc7'; DataSensitivity = 'Confidential' })
+        $ch = Get-SICmdbSqlFieldChanges -Actual $actual['corr-dc7'] -Desired $d.Items['corr-dc7']
         $s = @($ch | Where-Object Field -eq 'DataSensitivity')
         $s.Count | Should -Be 1; $s[0].Old | Should -Be 'Confidential'; $s[0].New | Should -Be 'Restricted'
-        $j = ConvertTo-SICmdbSqlOpJson -Op ([pscustomobject]@{ Op = 'update'; CiKey = 'corr-dc1'; Desired = $d.Items['corr-dc1']; AbsentRuns = 0; Changes = $ch }) | ConvertFrom-Json
+        $j = ConvertTo-SICmdbSqlOpJson -Op ([pscustomobject]@{ Op = 'update'; CiKey = 'corr-dc7'; Desired = $d.Items['corr-dc7']; AbsentRuns = 0; Changes = $ch }) | ConvertFrom-Json
         $j.dataSensitivity | Should -Be 'Restricted'
         $apply = Get-SICmdbSqlApplySql
         $apply | Should -Match "DataSensitivity nvarchar\(32\) '\`$\.dataSensitivity'"
@@ -333,14 +333,14 @@ Describe 'THE SQL CMDB CONNECTOR -- the same precedence in cmdbsync.Configuratio
                 [void]$calls.Add($sql)
                 if ($sql -match "OBJECT_ID\('cmdbsync\.ConfigurationItem'\) IS NOT NULL") { return 1 }
                 if ($sql -match "COL_LENGTH\('cmdbsync\.ConfigurationItem', 'DataSensitivity'\) IS NULL THEN 0") { return $hc }
-                if ($sql -match 'DECLARE @useCmdb') { return , @(@{ AssetKey = 'corr-dc1'; ServiceKey = 'SVC-0001'; ServiceName = 'Active Directory'; Criticality = 'Critical'; CriticalityRank = 1; DataSensitivity = 'Confidential'; Source = 'cmdb-si' }) }
+                if ($sql -match 'DECLARE @useCmdb') { return , @(@{ AssetKey = 'corr-dc7'; ServiceKey = 'SVC-0001'; ServiceName = 'Active Directory'; Criticality = 'Critical'; CriticalityRank = 1; DataSensitivity = 'Confidential'; Source = 'cmdb-si' }) }
                 if ($mode -eq 'reader') { return , @() }
                 $null
             }.GetNewClosure()
             $settings = Resolve-SICmdbSqlSettings -Globals @{ SI_ProSqlServer = 's'; SI_ProSqlDatabase = 'd'; SI_Pro_CmdbSql_Kinds = 'endpoint' }
             $res = Invoke-SICmdbSqlSyncCore -Query $query -Invoke $inv -Settings $settings -WhatIf -Now $script:Now -Log { param($l, $m) }
             $res.Outcome | Should -Be 'planned' -Because $res.Reason
-            $ci = @($res.Plan.Ops | Where-Object CiKey -eq 'corr-dc1')[0].Desired
+            $ci = @($res.Plan.Ops | Where-Object CiKey -eq 'corr-dc7')[0].Desired
             if ($hasCol) { $ci.DataSensitivity | Should -Be 'Restricted' } else { $ci.DataSensitivity | Should -Be '' }
             @($calls | Where-Object { $_ -match "COL_LENGTH\('cmdbsync\.ConfigurationItem', 'DataSensitivity'\) IS NULL THEN 0" }).Count | Should -Be 1
         }

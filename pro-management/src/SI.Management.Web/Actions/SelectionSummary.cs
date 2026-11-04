@@ -6,7 +6,7 @@ namespace SI.Management.Web.Actions;
 
 /// <summary>
 /// #330: WHAT a selection is, in the words the action dialog opens with -- "CVE-2026-33824 on 3 assets", "1 finding:
-/// CVE-2026-33824 on dc1", "12 selected findings". Built from the findings the server read back (the same resolver Apply
+/// CVE-2026-33824 on dc-a", "12 selected findings". Built from the findings the server read back (the same resolver Apply
 /// uses), so the dialog names exactly what the action will act on. PURE.
 /// </summary>
 public sealed record SelectionSummary(int Findings, int Assets, int Issues, string? Issue, string? Asset, long? Rows, string? RowNoun)

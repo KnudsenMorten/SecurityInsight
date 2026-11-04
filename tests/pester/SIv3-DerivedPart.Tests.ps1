@@ -72,9 +72,9 @@ Describe 'Azure records' {
     }
     AfterEach { Remove-Variable -Scope Global -Name AzureTenantID -ErrorAction SilentlyContinue }
     It 'derived.isPubliclyExposed -> si_internet_exposed (publicNetworkAccess Enabled; Disabled is not exposed)' {
-        Add-SIRecordPart -Provider azure -RecordType azure_resource -Key '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1' -Part resource -Object ([pscustomobject]@{ id = '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1'; name = 'kv1'; type = 'microsoft.keyvault/vaults'; properties = [pscustomobject]@{ publicNetworkAccess = 'Enabled' } })
+        Add-SIRecordPart -Provider azure -RecordType azure_resource -Key '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7' -Part resource -Object ([pscustomobject]@{ id = '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7'; name = 'kv7'; type = 'microsoft.keyvault/vaults'; properties = [pscustomobject]@{ publicNetworkAccess = 'Enabled' } })
         Add-SIRecordPart -Provider azure -RecordType azure_resource -Key '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv2' -Part resource -Object ([pscustomobject]@{ id = '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv2'; name = 'kv2'; type = 'microsoft.keyvault/vaults'; properties = [pscustomobject]@{ publicNetworkAccess = 'Disabled'; networkAcls = [pscustomobject]@{ defaultAction = 'Allow' } } })
-        (Row azure 'kv1').si_internet_exposed | Should -BeTrue
+        (Row azure 'kv7').si_internet_exposed | Should -BeTrue
         (Row azure 'kv2').si_internet_exposed | Should -BeFalse
     }
     It 'a storage account allowing blob public access, and a network ACL that allows by default, are exposed' {

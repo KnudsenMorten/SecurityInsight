@@ -341,10 +341,10 @@ Describe 'WIRING: the gate runs each suite in its own process, and only ever sto
     It 'only the dev fast gate leaves out tests tagged Nightly; a full run (only on the owner''s words) and the quick gate (a selected suite runs whole) run them; every suite is a fresh process from a queue' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
         $g | Should -Match '\$exclude = Get-SIFastGateExcludeTags -Scope \$scope -Full:\$Full -Hotfix:\(-not \$Full\) -Scale:\$Scale'
-        Get-SIFastGateExcludeTags | Should -Be 'Nightly,Scale,Live'
-        Get-SIFastGateExcludeTags -Full | Should -Be 'Scale,Live'
-        Get-SIFastGateExcludeTags -Hotfix | Should -Be 'Scale,Live'
-        Get-SIFastGateExcludeTags -Scope PublicCopy | Should -Be 'PrivateRepo,Nightly,Scale,Live'
+        Get-SIFastGateExcludeTags | Should -Be 'Nightly,Scale,Live,CertStore'
+        Get-SIFastGateExcludeTags -Full | Should -Be 'Scale,Live,CertStore'
+        Get-SIFastGateExcludeTags -Hotfix | Should -Be 'Scale,Live,CertStore'
+        Get-SIFastGateExcludeTags -Scope PublicCopy | Should -Be 'PrivateRepo,Nightly,Scale,Live,CertStore'
         $g | Should -Match 'Enqueue'
         (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1')) | Should -Match 'Filter\.ExcludeTag'
     }

@@ -174,7 +174,7 @@ Describe 'THE RULE ENGINE IS A CLAIM SOURCE -- it decides most tiers and was inv
     }
 
     It 'names BOTH when a rule and a logon independently claim the winning tier' {
-        # Measured on MGMT1: "logon+rule ... 2 independent source(s) agreed on this tier".
+        # Measured on HOST1: "logon+rule ... 2 independent source(s) agreed on this tier".
         $a = Get-SITierAttribution -FinalTier 0 -Sources @{
             SIRules             = V 0 'AssetProfileByLogonUser/LogonByT0User' 2
             MostFrequentUserTier = 0

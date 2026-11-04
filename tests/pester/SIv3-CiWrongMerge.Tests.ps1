@@ -307,7 +307,7 @@ Describe '#642 the repair in a real database: an install''s wrong merge is split
                 $recs.Add((Rec entra service_principal identity "o$i" @{ entra_object_id = "o$i"; entra_app_id = "a$i"; si_asset_name = 'SqlVmAndArcSqlServersProtection' } $now))
                 $recs.Add((Rec eg service_principal identity "n$i" @{ eg_node_id = "n$i"; entra_object_id = "o$i"; si_asset_name = 'SqlVmAndArcSqlServersProtection' } $now))
             }
-            $recs.Add((Rec azure azure_resource cloud_resource 'kv1' @{ azure_resource_id = '/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1' } $now))
+            $recs.Add((Rec azure azure_resource cloud_resource 'kv7' @{ azure_resource_id = '/subscriptions/s/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7' } $now))
             $w = Write-SIRecordsToSql -Rows $recs.ToArray() -Invoke $script:Seam -Now $now
             if ($w.Failed) { throw "records could not be written ($($w.Failed))" }
             # THE INSTALL'S LEDGER: every anchor of the three under one id, minted from the first one's node, one run

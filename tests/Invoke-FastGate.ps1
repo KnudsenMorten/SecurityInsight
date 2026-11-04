@@ -662,6 +662,9 @@ function Get-SIFastGateExcludeTags {
     # Live: a test that reads the output of a real run on its host (never present on the test VM) -- left out of every gate
     # and named as not run, never counted as a pass or a skip
     $t += 'Live'
+    # CertStore: a test that needs the Windows certificate store, which the test VM refuses over its remote session (#447)
+    # and every gate runs there -- left out by tag and named as not run (owner 2026-11-03: "Leave out by tag"), never a skip
+    $t += 'CertStore'
     $t -join ','
 }
 function Add-SIFastGatePs51Tag {
@@ -1067,7 +1070,7 @@ function Get-SIQuickGateItemOutcome {
         $o.Ok = $clean -and -not $o.SkipCount
         $o.NotGreen = $clean -and [bool]$o.SkipCount
         $o.ScaleOnly = $o.Ok -and $o.ScaleNotRun -gt 0 -and $ran -eq 0
-        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Ps51') { ', the 5.1 opt-in' } elseif ($_ -eq 'Live') { ', needs a real run on its host' } else { '' }) })) -join '; '
+        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Ps51') { ', the 5.1 opt-in' } elseif ($_ -eq 'Live') { ', needs a real run on its host' } elseif ($_ -eq 'CertStore') { ', needs the Windows certificate store' } else { '' }) })) -join '; '
         $skipText = if ($o.SkipCount) {
             $why = @(@($o.Skips | ForEach-Object { [string]$_.Because }) + @($o.NotRunUnexplained | ForEach-Object { 'did not run (no excluded tag)' }) | Group-Object | Sort-Object Count -Descending | ForEach-Object { if ($_.Count -gt 1) { '{0} x {1}' -f $_.Count, $_.Name } else { $_.Name } })
             ' ({0} skipped -- a skip is not a pass: {1})' -f $o.SkipCount, (($why | Select-Object -First 3) -join '; ')

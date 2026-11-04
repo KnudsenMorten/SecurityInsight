@@ -277,7 +277,7 @@ Describe 'Defender for Cloud: one row per parent, the children listed' {
             (Raw 'a3' "$script:Rg/Microsoft.Sql/servers/sql1/databases/db1" 'Vulnerabilities on your SQL databases should be remediated' 'db1'),
             (Raw 'a4' "$script:Rg/Microsoft.Sql/servers/sql1/databases/db2" 'Vulnerabilities on your SQL databases should be remediated' 'db2'),
             (Raw 'a5' "$script:Rg/Microsoft.Compute/disks/VM1_OsDisk" 'Disks should be encrypted' 'VM1_OsDisk'),
-            (Raw 'a6' "$script:Rg/Microsoft.KeyVault/vaults/kv1" 'Enable purge protection' 'kv1')
+            (Raw 'a6' "$script:Rg/Microsoft.KeyVault/vaults/kv7" 'Enable purge protection' 'kv7')
         )
     }
     It 'extensions -> one VM row; SQL databases -> one server row; the disk by the VM the capture knows; a CI type stays its own row' {

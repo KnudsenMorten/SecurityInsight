@@ -171,8 +171,8 @@ Describe 'the Azure context reaches every resource: the records exist before the
         $q = { param($k) @([pscustomobject]@{ SubscriptionId = 's1'; SubscriptionName = 'Example Production'; TenantId = 't1'; Chain = @([pscustomobject]@{ name = 'prod'; displayName = 'Production' }) }) }
         $null = Reset-SIRecordCapture -Engine 'azure' -Clear
         Invoke-SIManagementGroupCapture -Query $q -TenantNames @{} | Should -Be 0 -Because 'no Azure record is captured yet'
-        Add-SIRecordPart -Provider 'azure' -RecordType 'azure_resource' -Key '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv1' -Part 'resource' `
-            -Object ([pscustomobject]@{ id = '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv1'; name = 'kv1'; type = 'microsoft.keyvault/vaults' }) -ResourceType 'microsoft.keyvault/vaults'
+        Add-SIRecordPart -Provider 'azure' -RecordType 'azure_resource' -Key '/subscriptions/s1/resourcegroups/rg/providers/microsoft.keyvault/vaults/kv7' -Part 'resource' `
+            -Object ([pscustomobject]@{ id = '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv7'; name = 'kv7'; type = 'microsoft.keyvault/vaults' }) -ResourceType 'microsoft.keyvault/vaults'
         Invoke-SIManagementGroupCapture -Query $q -TenantNames @{} | Should -Be 1
         $rec = @($global:SIRecordCaptureState.Records.Values)[0]
         $rec.Parts.Contains('mg') | Should -BeTrue

@@ -259,7 +259,7 @@ BeforeDiscovery {
         #     have swallowed a genuine reappearance at those paths.
         #   * The Shodan literal (#1) and analyzer-web/CLAUDE.md (#20), removed 2026-08-05.
         #   * All 13 'customer/company name' hits -- 🔒 OPERATOR DECISION 2026-08-06, "i accept
-        #     to keep my name". 2LINKIT authoring its own MIT-licensed project is authorship,
+        #     to keep my name". The author's company authoring its own MIT-licensed project is authorship,
         #     not a leak. Encoded as an Allow entry in INTERNAL/SI-PublishDenylist.ps1 rather
         #     than as baseline exceptions, so the 'customer/company name' rule KEEPS CATCHING
         #     every OTHER organisation's name. Do not re-propose stripping it.
@@ -291,7 +291,10 @@ BeforeDiscovery {
     # 'customer/company name' Allow entry in INTERNAL/SI-PublishDenylist.ps1). So the customer rules are run again here
     # over EVERY payload file, public docs and code alike, with no baseline and only the author's own name allowed, and
     # every Allow entry is checked: one that a customer rule matches (other than the author's) would swallow a customer.
-    $script:AuthorCompany = '2linkit'
+    # the author's company, read from the licensor line of LICENSE-PRO (PACKAGE-CLEAN: the name stands only in the
+    # licensor lines of the package, never as a literal in a shipped test)
+    $script:AuthorCompany = ([regex]::Match([IO.File]::ReadAllText((Join-Path $script:SIRoot 'LICENSE-PRO')), '(?m)^Invardia is a brand owned and operated by ([^,\s]+),')).Groups[1].Value.ToLowerInvariant()
+    if (-not $script:AuthorCompany) { throw 'LICENSE-PRO carries no licensor line (Invardia is a brand owned and operated by <company>, ...)' }
     $script:CustomerRules = @($script:Deny | Where-Object { "$($_.name)" -eq 'customer/company name' })
     $script:CustomerAllowLeaks = @($script:Allow | Where-Object { $a = "$_"; $a -ne $script:AuthorCompany -and @($script:CustomerRules | Where-Object { $a -match $_.rx }).Count })
     $script:CustomerFindings = @()

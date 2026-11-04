@@ -2,7 +2,7 @@
 <#
     AN AZURE VM AND ITS DEFENDER DEVICE CARRY ONE SHARED IDENTIFIER (#204).
 
-    Measured 2026-10-02 on the object map: 4 Azure VMs, 0 correlated with their device -- mgmt1 was two
+    Measured 2026-10-02 on the object map: 4 Azure VMs, 0 correlated with their device -- host1 was two
     objects (the device + an Exposure Graph shell, and the ARM VM on its own). The Exposure Graph carries no
     ARM id, so the bridge is Defender's own record: /api/machines returns the VM's ARM id in
     vmMetadata.resourceId (9 of 206 machines here). The endpoint row builder always read MDE_AzureResourceId
@@ -18,7 +18,7 @@ BeforeAll {
         Build-SIEndpointProfileRow -Record $rec -RunContext $rc
     }
     function script:Ids($row, [string]$type) { @($row.EntityIds | Where-Object { $_.type -eq $type } | ForEach-Object { [string]$_.id }) }
-    $script:Arm = '/subscriptions/S/resourceGroups/RG-MGMT/providers/Microsoft.Compute/virtualMachines/MGMT1'
+    $script:Arm = '/subscriptions/S/resourceGroups/RG-MGMT/providers/Microsoft.Compute/virtualMachines/HOST1'
 }
 
 Describe 'Defender discovery hands over the VM''s ARM id (#204)' {
@@ -30,7 +30,7 @@ Describe 'Defender discovery hands over the VM''s ARM id (#204)' {
 
 Describe 'the endpoint row carries it as a correlation identifier (#204)' {
     It 'a VM device: the ARM id is in the AzureResourceId column and in EntityIds' {
-        $row = Row @{ MDE_DeviceId = 'mde-1'; MDE_DeviceName = 'mgmt1.contoso.local'; MDE_AzureResourceId = $script:Arm }
+        $row = Row @{ MDE_DeviceId = 'mde-1'; MDE_DeviceName = 'host1.contoso.local'; MDE_AzureResourceId = $script:Arm }
         [string]$row.AzureResourceId | Should -Be $script:Arm
         Ids $row 'AzureResourceId' | Should -Be @($script:Arm)
     }

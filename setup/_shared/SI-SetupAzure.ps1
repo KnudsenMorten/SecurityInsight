@@ -126,7 +126,7 @@ function Connect-SISetupAzure {
     $existing = $st.Connection
     $reuse = (-not $Force) -and ($existing -is [hashtable]) -and (-not $app) -and (-not $Identity) -and
              ((-not $TenantId) -or ([string]$existing.TenantId -eq $TenantId) -or ($existing.Mode -eq 'ManagedIdentity'))
-    # 2026-11-03 (FVF, a second run in one window): a person's connection left by an earlier run whose sign-in this run does
+    # 2026-11-03 (a customer install, a second run in one window): a person's connection left by an earlier run whose sign-in this run does
     # not hold is NEVER reused -- the person is signed in again (else Get-SISetupAzureContext answers $null and the install
     # stops "not signed in")
     if ($reuse -and [string]$existing.Mode -eq 'User' -and -not $existing['IsApp'] -and -not (Test-SISetupUserSignedIn)) { $reuse = $false; $st.Connection = $null }
@@ -371,6 +371,168 @@ function New-SIKeyVault {
     }
     if (-not $v) { throw ("The Key Vault '{0}' was requested but did not appear." -f $VaultName) }
     return (ConvertTo-SIKeyVaultObject $v)
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+#  FRAMEWORK INSTALLER RULE 11 -- the install's Key Vault network shape, set and READ BACK every run.
+#  Rule 11 (framework REQUIREMENTS, installer rules, 3 Nov): "a PRIVATE install's Key Vault: publicNetworkAccess Disabled +
+#  networkAcls { defaultAction Deny, bypass AzureServices, no ipRules, no virtualNetworkRules } ... bypass AzureServices is
+#  REQUIRED: ARM key / secret operations ... are refused with ForbiddenByConnection under bypass None ... ENFORCE IT EVERY
+#  RUN: a re-install RECOVERS a soft-deleted vault (purge protection), and a recover IGNORES networkAcls (it comes back with
+#  bypass None) - so set the vault to this shape and READ IT BACK before any key / secret step, whether the vault was made,
+#  recovered or found." Rule 11 names only the private shape; a PUBLIC install takes the one part that is not about being
+#  private -- bypass AzureServices -- and nothing else is changed (its public access and firewall stay the customer's).
+# ---------------------------------------------------------------------------------------------------------------------
+
+function Get-SIKeyVaultNetworkShape {
+    <# PURE. The network settings of a vault as ARM returns it (PSCustomObject or hashtable): PublicNetworkAccess,
+       DefaultAction, Bypass, IpRules, VirtualNetworkRules (the rule lists, empty when there are none). #>
+    param($Vault)
+    $get = { param($o, [string]$n) if ($null -eq $o) { return $null }; if ($o -is [System.Collections.IDictionary]) { if ($o.Contains($n)) { return $o[$n] }; return $null }; $p = $o.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } }
+    $props = & $get $Vault 'properties'
+    $acl = & $get $props 'networkAcls'
+    [pscustomobject]@{
+        PublicNetworkAccess = [string](& $get $props 'publicNetworkAccess')
+        DefaultAction       = [string](& $get $acl 'defaultAction')
+        Bypass              = [string](& $get $acl 'bypass')
+        IpRules             = @(@(& $get $acl 'ipRules') | Where-Object { $null -ne $_ })
+        VirtualNetworkRules = @(@(& $get $acl 'virtualNetworkRules') | Where-Object { $null -ne $_ })
+    }
+}
+
+function Get-SIKeyVaultRule11Patch {
+    <# PURE. The PATCH body that brings -Vault to the rule-11 shape -- ONLY what differs -- or $null when it has it.
+         -Private  publicNetworkAccess Disabled + networkAcls { Deny, AzureServices, no IP rules, no network rules }
+         public    networkAcls bypass AzureServices; its default action and rules are kept as they are (Allow when unset),
+                   publicNetworkAccess is not touched -- a public install never opens or closes a vault here. #>
+    param($Vault, [switch]$Private)
+    $s = Get-SIKeyVaultNetworkShape -Vault $Vault
+    $p = [ordered]@{}
+    if ($Private) {
+        if ($s.PublicNetworkAccess -ne 'Disabled') { $p['publicNetworkAccess'] = 'Disabled' }
+        if ($s.DefaultAction -ne 'Deny' -or $s.Bypass -ne 'AzureServices' -or $s.IpRules.Count -or $s.VirtualNetworkRules.Count) {
+            $p['networkAcls'] = [ordered]@{ defaultAction = 'Deny'; bypass = 'AzureServices'; ipRules = @(); virtualNetworkRules = @() }
+        }
+    } elseif ($s.Bypass -ne 'AzureServices') {
+        $p['networkAcls'] = [ordered]@{ defaultAction = $(if ($s.DefaultAction) { $s.DefaultAction } else { 'Allow' }); bypass = 'AzureServices'
+                                        ipRules = @($s.IpRules); virtualNetworkRules = @($s.VirtualNetworkRules) }
+    }
+    if (-not $p.Count) { return $null }
+    [ordered]@{ properties = $p }
+}
+
+function Test-SIKeyVaultRule11Shape {
+    <# PURE. Does -Vault read back in the rule-11 shape (private or public, as above)? #>
+    param($Vault, [switch]$Private)
+    [bool]($Vault -and $null -eq (Get-SIKeyVaultRule11Patch -Vault $Vault -Private:$Private))
+}
+
+function Get-SIKeyVaultShapeText {
+    <# PURE. One line for the log: public access, default action, bypass, rule counts. #>
+    param($Vault)
+    $s = Get-SIKeyVaultNetworkShape -Vault $Vault
+    'publicNetworkAccess {0}, defaultAction {1}, bypass {2}, ipRules {3}, virtualNetworkRules {4}' -f $(if ($s.PublicNetworkAccess) { $s.PublicNetworkAccess } else { '(not set)' }),
+        $(if ($s.DefaultAction) { $s.DefaultAction } else { '(not set)' }), $(if ($s.Bypass) { $s.Bypass } else { '(not set)' }), $s.IpRules.Count, $s.VirtualNetworkRules.Count
+}
+
+function Set-SIKeyVaultRule11 {
+    <# Sets the vault to the rule-11 shape (PATCH, only what differs) and READS IT BACK. Throws plainly when it does not read
+       back in that shape -- nothing writes a key or secret to it before it does. Returns Changed, Shape (the read-back line),
+       Vault (the read-back vault as Get-SIKeyVault returns it). #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VaultName, [Parameter(Mandatory)][string]$ResourceGroupName, [string]$SubscriptionId,
+          [switch]$Private, [int]$Tries = 12, [int]$PauseSeconds = 5)
+    $sub = Get-SISetupSubscriptionId -SubscriptionId $SubscriptionId
+    $path = "/subscriptions/$sub/resourceGroups/$ResourceGroupName/providers/Microsoft.KeyVault/vaults/$VaultName"
+    $have = Invoke-SIArm -Path $path -ApiVersion '2023-07-01' -AllowNotFound
+    if (-not $have) { throw ("The Key Vault '{0}' was not found in resource group '{1}' -- its network shape (framework installer rule 11) cannot be set." -f $VaultName, $ResourceGroupName) }
+    $patch = Get-SIKeyVaultRule11Patch -Vault $have -Private:$Private
+    $back = $have
+    if ($patch) {
+        $null = Invoke-SIArm -Method PATCH -Path $path -ApiVersion '2023-07-01' -Body $patch
+        for ($i = 1; $i -le $Tries; $i++) {
+            $back = Invoke-SIArm -Path $path -ApiVersion '2023-07-01' -AllowNotFound
+            if (Test-SIKeyVaultRule11Shape -Vault $back -Private:$Private) { break }
+            if ($i -lt $Tries) { Start-Sleep -Seconds $PauseSeconds }
+        }
+    }
+    if (-not (Test-SIKeyVaultRule11Shape -Vault $back -Private:$Private)) {
+        throw ("The Key Vault '{0}' does not read back in the shape it must have ({1}); it reads: {2}. Nothing writes a key or secret to it until it does -- run the same command again; if it stays like this, set it in the Azure portal (Key vaults > {0} > Networking) and run again." -f $VaultName,
+            $(if ($Private) { 'public access Disabled, firewall Deny, trusted Microsoft services allowed (bypass AzureServices), no IP or network rules' } else { 'trusted Microsoft services allowed (bypass AzureServices)' }), (Get-SIKeyVaultShapeText -Vault $back))
+    }
+    [pscustomobject]@{ Changed = [bool]$patch; Shape = (Get-SIKeyVaultShapeText -Vault $back); Vault = (ConvertTo-SIKeyVaultObject $back) }
+}
+
+function Get-SIKeyVaultEnsureAction {
+    <# PURE. What the install does with its vault: 'found' (it is there), 'recover' (absent, but soft-deleted in the install's
+       location FROM THE INSTALL'S OWN resource group -- a re-install; with purge protection it can neither be purged nor
+       made again under that name), 'create' (also when the deleted vault was another resource group's: the create then
+       fails with Azure's own "exists in deleted state", as before -- another install's vault is never taken over). #>
+    param($Found, $Deleted, [string]$ResourceGroupName)
+    if ($Found) { return 'found' }
+    if ($Deleted) {
+        $rg = if ([string]$Deleted.ResourceId -match '(?i)/resourceGroups/([^/]+)/') { $Matches[1] } else { '' }
+        if (-not $rg -or -not $ResourceGroupName -or $rg -eq $ResourceGroupName) { return 'recover' }
+    }
+    'create'
+}
+
+function Get-SIKeyVaultRecoverBody {
+    <# PURE. The PUT body that RECOVERS a soft-deleted vault (properties.createMode 'recover'; Azure restores its settings --
+       but NOT its networkAcls, hence Set-SIKeyVaultRule11 right after). tenantId and sku are required by the schema. #>
+    param([Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$TenantId, [string]$Sku = 'standard')
+    [ordered]@{ location = $Location; properties = [ordered]@{ tenantId = $TenantId; sku = [ordered]@{ family = 'A'; name = $Sku.ToLowerInvariant() }; createMode = 'recover' } }
+}
+
+function Restore-SIKeyVault {
+    <# RECOVERS the soft-deleted vault -Deleted (Get-SIKeyVault -InRemovedState) into the resource group it was deleted from
+       (or -ResourceGroupName when that is not known), and waits until it is ready. Returns it as Get-SIKeyVault does. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Deleted, [Parameter(Mandatory)][string]$ResourceGroupName, [Parameter(Mandatory)][string]$Location,
+          [string]$SubscriptionId, [string]$TenantId)
+    $sub = Get-SISetupSubscriptionId -SubscriptionId $SubscriptionId
+    if (-not $TenantId) { $TenantId = Get-SIAzRestTenantId }
+    $rg = Get-SIArmResourceGroupFromId ([string]$Deleted.ResourceId)
+    if (-not $rg) { $rg = $ResourceGroupName }
+    $name = [string]$Deleted.VaultName
+    $path = "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.KeyVault/vaults/$name"
+    $v = Invoke-SIArm -Method PUT -Path $path -ApiVersion '2023-07-01' -Body (Get-SIKeyVaultRecoverBody -Location $Location -TenantId $TenantId)
+    for ($i = 0; $i -lt 30 -and (-not $v -or ([string]$v.properties.provisioningState -and [string]$v.properties.provisioningState -notin 'Succeeded', 'Failed')); $i++) {
+        Start-Sleep -Seconds 5
+        $v = Invoke-SIArm -Path $path -ApiVersion '2023-07-01' -AllowNotFound
+    }
+    if (-not $v) { throw ("The soft-deleted Key Vault '{0}' was recovered but did not appear." -f $name) }
+    return (ConvertTo-SIKeyVaultObject $v)
+}
+
+function Initialize-SIKeyVault {
+    <# The install's vault, FOUND, RECOVERED or CREATED -- and in every case set to the rule-11 shape and READ BACK before
+       anything writes a key or secret to it. -PublicNetworkAccess 'Disabled' = a private install (created private from
+       birth, converged to the private shape); '' = a public one. Returns Action (found | recovered | created), Vault,
+       Changed (the shape had to be set), Shape (the read-back line), Deleted (what was recovered). #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VaultName, [Parameter(Mandatory)][string]$ResourceGroupName, [Parameter(Mandatory)][string]$Location,
+          [string]$SubscriptionId, [string]$TenantId, [switch]$EnablePurgeProtection,
+          [ValidateSet('', 'Disabled')][string]$PublicNetworkAccess = '', [int]$PauseSeconds = 5)
+    $isPrivate = ($PublicNetworkAccess -eq 'Disabled')
+    $kv = Get-SIKeyVault -VaultName $VaultName -SubscriptionId $SubscriptionId -ErrorAction SilentlyContinue
+    $deleted = $null
+    if (-not $kv) { $deleted = Get-SIKeyVault -VaultName $VaultName -InRemovedState -Location $Location -SubscriptionId $SubscriptionId -ErrorAction SilentlyContinue }
+    $action = Get-SIKeyVaultEnsureAction -Found $kv -Deleted $deleted -ResourceGroupName $ResourceGroupName
+    switch ($action) {
+        'create' {
+            # Azure RBAC authorization (not access policies); a private install is private from birth (no public moment)
+            $kv = New-SIKeyVault -VaultName $VaultName -ResourceGroupName $ResourceGroupName -Location $Location -SubscriptionId $SubscriptionId -TenantId $TenantId -EnableRbacAuthorization $true -EnablePurgeProtection:$EnablePurgeProtection -PublicNetworkAccess $PublicNetworkAccess
+            $action = 'created'
+        }
+        'recover' { $kv = Restore-SIKeyVault -Deleted $deleted -ResourceGroupName $ResourceGroupName -Location $Location -SubscriptionId $SubscriptionId -TenantId $TenantId; $action = 'recovered' }
+    }
+    $rg = if ([string]$kv.ResourceGroupName) { [string]$kv.ResourceGroupName } else { $ResourceGroupName }
+    $c = Set-SIKeyVaultRule11 -VaultName $VaultName -ResourceGroupName $rg -SubscriptionId $SubscriptionId -Private:$isPrivate -PauseSeconds $PauseSeconds
+    # the vault's own facts (RBAC, purge protection) from the create / recover answer; its network from the read-back
+    $out = $c.Vault
+    if (-not [string]$out.VaultUri -and $kv) { $out = $kv }
+    [pscustomobject]@{ Action = $action; Vault = $out; Changed = $c.Changed; Shape = $c.Shape; Deleted = $deleted }
 }
 
 function Test-SIKeyVaultNameAvailability {

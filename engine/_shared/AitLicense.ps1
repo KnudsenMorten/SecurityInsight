@@ -26,7 +26,7 @@
 
     🔒 OFFLINE. No activation, no call-home, no endpoint. Customers on locked-down automation
     servers need nothing but the file. Only the PUBLIC certificate is embedded; the private key
-    never leaves mgmt1.
+    never leaves the development machine.
 
     🪤 SIGNED != FOUND (LIC-1 first issuance, 2026-09-05). The crypto half of a migration can
     land while the DISCOVERY half does not, and the symptom -- Status=Missing -- is EXACTLY the

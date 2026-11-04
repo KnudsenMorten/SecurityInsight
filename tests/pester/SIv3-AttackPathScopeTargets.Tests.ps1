@@ -104,24 +104,24 @@ Describe '#809 the expansion semantics (model of the KQL steps)' {
         $script:Contains = @(
             [pscustomobject]@{ Source = 'sub1'; SourceLabel = 'subscriptions'; Child = 'rg1'; ChildLabel = 'resourcegroups' }
             [pscustomobject]@{ Source = 'sub1'; SourceLabel = 'subscriptions'; Child = 'rgEmpty'; ChildLabel = 'resourcegroups' }
-            [pscustomobject]@{ Source = 'rg1'; SourceLabel = 'resourcegroups'; Child = 'kv1'; ChildLabel = 'microsoft.keyvault/vaults' }
+            [pscustomobject]@{ Source = 'rg1'; SourceLabel = 'resourcegroups'; Child = 'kv7'; ChildLabel = 'microsoft.keyvault/vaults' }
             [pscustomobject]@{ Source = 'rg1'; SourceLabel = 'resourcegroups'; Child = 'st1'; ChildLabel = 'microsoft.storage/storageaccounts' }
             [pscustomobject]@{ Source = 'rg1'; SourceLabel = 'resourcegroups'; Child = 'lock1'; ChildLabel = 'microsoft.authorization/locks' }
         )
     }
     It 'object + resource group + subscription is ONE path per resource -- no duplicates' {
         $edges = @(
-            [pscustomobject]@{ Source = 'mi1'; Target = 'kv1'; TargetLabel = 'microsoft.keyvault/vaults' }
+            [pscustomobject]@{ Source = 'mi1'; Target = 'kv7'; TargetLabel = 'microsoft.keyvault/vaults' }
             [pscustomobject]@{ Source = 'mi1'; Target = 'rg1'; TargetLabel = 'resourcegroups' }
             [pscustomobject]@{ Source = 'mi1'; Target = 'sub1'; TargetLabel = 'subscriptions' }
         )
         $r = Expand $edges $script:Contains
-        @($r | ForEach-Object { $_.Target } | Sort-Object) | Should -Be @('kv1', 'st1')
+        @($r | ForEach-Object { $_.Target } | Sort-Object) | Should -Be @('kv7', 'st1')
         @($r | Group-Object Source, Target | Where-Object Count -gt 1).Count | Should -Be 0
     }
     It 'a role on a subscription reaches the resources two levels down; no scope node is ever a target' {
         $r = Expand @([pscustomobject]@{ Source = 'mi2'; Target = 'sub1'; TargetLabel = 'subscriptions' }) $script:Contains
-        @($r | ForEach-Object { $_.Target } | Sort-Object) | Should -Be @('kv1', 'st1')
+        @($r | ForEach-Object { $_.Target } | Sort-Object) | Should -Be @('kv7', 'st1')
         @($r | Where-Object { $script:ScopeLabels -contains $_.Label }).Count | Should -Be 0
         @($r | Where-Object { $_.Label -like 'microsoft.authorization/*' }).Count | Should -Be 0
     }

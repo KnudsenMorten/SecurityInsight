@@ -73,7 +73,7 @@ BeforeAll {
                 'AllIdentities@odata.type' = '#Collection(String)'
                 TenantId = '00000000-0000-0000-0000-00000000000a'
             }
-            if ($i -eq $Count - 1) { $o['AttackPath'] = 'dc1 -> svc -> tier0'; $o['SourceCriticalityTier'] = 0; $o['FinalTarget'] = 'Domain Admins' }
+            if ($i -eq $Count - 1) { $o['AttackPath'] = 'dc7 -> svc -> tier0'; $o['SourceCriticalityTier'] = 0; $o['FinalTarget'] = 'Domain Admins' }
             $o['CollectionTime'] = $ct; $o['SolutionVersion'] = '3.0.0+v3'; $o['TraceName'] = 'RA'; $o['TraceID'] = 'abc'
             $rows.Add([pscustomobject]$o)
         }
@@ -265,7 +265,7 @@ Describe 'Risk Analysis refuses to post a snapshot whose key columns are empty o
         @(Get-RAIngestKeyColumnGaps -Rows $rows) -join ',' | Should -Be 'SolutionVersion,ConfigurationId'
     }
     It 'the ring 1 snapshot (only AssetName, AssetId and the report name) is refused on every key column' {
-        $rows = 1..3 | ForEach-Object { [pscustomobject]@{ AssetName = 'dc1'; AssetId = 'x'; AssetDetectedInReportName = 'Device_Recommendations_Detailed'; CollectionTime = $null; ConfigurationId = $null } }
+        $rows = 1..3 | ForEach-Object { [pscustomobject]@{ AssetName = 'dc7'; AssetId = 'x'; AssetDetectedInReportName = 'Device_Recommendations_Detailed'; CollectionTime = $null; ConfigurationId = $null } }
         @(Get-RAIngestKeyColumnGaps -Rows $rows) -join ',' | Should -Be ($script:Key -join ',')
         Get-RAIngestKeyColumnMessage -Columns @('CollectionTime') -Rows 3 -TableName 'SI_RiskAnalysis_Detailed' | Should -Match 'Every one of the 3 row\(s\) for SI_RiskAnalysis_Detailed_CL has CollectionTime empty'
     }

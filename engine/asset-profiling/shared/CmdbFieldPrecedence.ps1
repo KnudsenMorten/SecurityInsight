@@ -4,8 +4,8 @@
 
     Operator decision (2026-10-05), asked "should the rule's override win?": "yes". Found live on ring 1: a custom
     ADDomainController rule (cmdbId 1, cmdbDataSensitivity 'Restricted') and a custom VisualCron rule (cmdbId 6,
-    cmdbDataSensitivity 'Confidential') matched dc1 / dc3 / mgmt1, yet the profile rows carried the CMDB record's values
-    (Confidential for the DCs, Restricted for mgmt1): Stage Profile copied only cmdbId and cmdbName from a rule, so
+    cmdbDataSensitivity 'Confidential') matched dc-a / dc-b / host1, yet the profile rows carried the CMDB record's values
+    (Confidential for the DCs, Restricted for host1): Stage Profile copied only cmdbId and cmdbName from a rule, so
     Stage Reconcile filled the other two from the CMDB.
 
     THE PRECEDENCE, per field:   rule override  >  CMDB record  >  nothing

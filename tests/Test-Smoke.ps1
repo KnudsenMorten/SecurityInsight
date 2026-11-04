@@ -58,7 +58,7 @@ param(
     [switch]  $FailOnWarn,
     # the OFFLINE half only (operator 2026-10-07: it runs on Invardia's test VM as part of the gate): every check that
     # signs in or touches the network (CACHE-KQL, KQL-PARSE, POST-RUN-LA) is skipped, whatever $global:SI_SPN_* holds --
-    # no credential, no token request, ever. The live KQL parse stays on mgmt1.
+    # no credential, no token request, ever. The live KQL parse stays on the development machine.
     [switch]  $Offline
 )
 

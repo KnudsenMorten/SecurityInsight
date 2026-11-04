@@ -62,7 +62,7 @@ BeforeAll {
 
 Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
     It 'the pilot''s domain controller: one Defender device with its name, onboarded, domain-joined, in its SID''s proven domain -> matched' {
-        $row = & $script:Node 'n-dc1' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -raw (& $script:DcRaw 1001)
+        $row = & $script:Node 'n-dc7' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -raw (& $script:DcRaw 1001)
         $m = Resolve-SIEgAdComputerMatch -Row $row -DomainMap $script:Map
         ($m.State, $m.DeviceId) | Should -Be @('matched', $script:Dc1Dev)
         $m.Reason | Should -Match 'hngmn\.local'
@@ -117,7 +117,7 @@ Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
         Get-SIEgAdComputerDomainSid 'S-1-5-32-544' | Should -BeNullOrEmpty -Because 'a builtin SID names no domain'
     }
     It 'candidates read back as JSON text (the hunting API''s dynamic column) decide the same' {
-        $row = & $script:Node 'n-dc1' 'azvm-dc01' @() 1 -raw (& $script:DcRaw 1001)
+        $row = & $script:Node 'n-dc7' 'azvm-dc01' @() 1 -raw (& $script:DcRaw 1001)
         $row.SIDeviceCandidates = (ConvertTo-Json -InputObject @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -Compress)
         (Resolve-SIEgAdComputerMatch -Row $row -DomainMap $script:Map).State | Should -Be 'matched'
     }
@@ -316,7 +316,7 @@ Describe '#1052 real SQL: the merged twin is retired, the survivor and an unrela
         $c = $script:Cn.CreateCommand(); $c.CommandText = "CREATE USER si_engine WITHOUT LOGIN; ALTER ROLE db_datareader ADD MEMBER si_engine; ALTER ROLE db_datawriter ADD MEMBER si_engine; EXECUTE AS USER = N'si_engine';"; [void]$c.ExecuteNonQuery()
         $script:Sql = {
             param($Sql, $Params, $Mode)
-            $c = $script:Cn.CreateCommand(); $c.CommandText = $Sql; $c.CommandTimeout = 90
+            $c = $script:Cn.CreateCommand(); $c.CommandText = $Sql; $c.CommandTimeout = 300  # test data of thousands of rows on a SQL Express that 4 gate lanes share: 90 s timed out under load (2026-11-04); the setup commands above use 300 too
             if ($Params) { foreach ($k in $Params.Keys) { $pp = $c.Parameters.Add('@' + $k, [System.Data.SqlDbType]::NVarChar, -1); $pp.Value = [string]$Params[$k] } }
             if ($Mode -eq 'rows') { return @(Read-SISqlRows -Command $c) }
             $c.ExecuteNonQuery()

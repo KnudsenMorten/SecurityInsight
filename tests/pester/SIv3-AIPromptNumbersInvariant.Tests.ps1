@@ -4,7 +4,7 @@
 
     Measured 2026-09-29 on the internal tenant (da-DK host): the prompt formatted scores with '{0:N0}' in the
     host's culture, so 4366 reached the model as "4.366". The model read it as a decimal below 289 and moved
-    three workstations (289 / 281 / 224) above dc1 (4366), mgmt1 (3754) and dc3 (2189) in the Top-50 list it
+    three workstations (289 / 281 / 224) above dc-a (4366), host1 (3754) and dc-b (2189) in the Top-50 list it
     was told to copy in the engine's order. The engine's own ranking was correct.
 #>
 

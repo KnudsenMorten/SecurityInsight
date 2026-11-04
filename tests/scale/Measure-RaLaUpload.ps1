@@ -21,7 +21,7 @@
     the order they arrived per row key, so two trees can be compared (the same rows, the same JSON per row).
 
     -EngineRoot runs ANOTHER tree's engine with this harness (the base, for the before / after).
-    Never on mgmt1. Not a gate: the gate runs SIv3-RaLaUploadSpeed.Tests.ps1, which is small.
+    Never on the development machine. Not a gate: the gate runs SIv3-RaLaUploadSpeed.Tests.ps1, which is small.
 
 .EXAMPLE
     pwsh -NoProfile -File tests\scale\Measure-RaLaUpload.ps1 -Rows 100000 -OutFile C:\work\si\laupload\after.json -Capture

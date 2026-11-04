@@ -36,7 +36,7 @@ BeforeAll {
             }
         }
     }
-    function script:Bag { @{ ComputerDnsName='dc1'; OsPlatform='WindowsServer'; MachineTags=@('a'); RiskScore=5; SecretExtra='x'; AnotherExtra='y' } }
+    function script:Bag { @{ ComputerDnsName='dc7'; OsPlatform='WindowsServer'; MachineTags=@('a'); RiskScore=5; SecretExtra='x'; AnotherExtra='y' } }
 }
 
 Describe 'the profile selector -- the default must not move' {
@@ -320,7 +320,7 @@ Describe '🪤 THE COMPARER MUST SURVIVE THE RETURN -- the bug the first draft s
 
     It '🔴 the consumer survives a CASE-SENSITIVE plain array anyway -- belt and braces' {
         # Simulates the exact regression: an allow-list that arrives already unrolled.
-        $r = Select-SIPayloadBucket -Bucket @{ ComputerDnsName = 'dc1' } `
+        $r = Select-SIPayloadBucket -Bucket @{ ComputerDnsName = 'dc7' } `
                                     -AllowedKeys ([string[]]@('computerDnsName')) -SourceName 'mde'
         $r.Bucket.Keys      | Should -Contain 'ComputerDnsName'
         @($r.Dropped).Count | Should -Be 0

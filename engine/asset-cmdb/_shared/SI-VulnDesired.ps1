@@ -852,7 +852,7 @@ function Get-SIVulnAssetAliasKql {
         #279 -- every durable identifier each asset carries, with the time the profile last saw it. The close-loop keys a
         finding on SI_AssetId, and SI_AssetId is NOT permanent by design: the NAME source drives the id (operator,
         2026-08-28, "id can change"), so when the top naming source stops naming a device the id moves to the next
-        source's. Measured on ring 1, 2026-10-04: Entra returned 52 devices instead of 53, MGMT1 lost its Entra name,
+        source's. Measured on ring 1, 2026-10-04: Entra returned 52 devices instead of 53, HOST1 lost its Entra name,
         and its SI_AssetId moved from the Entra device id to the MDE machine id -- while EntityIds still listed BOTH.
         This read is what lets the loop recognise the old id as the same asset.
     #>

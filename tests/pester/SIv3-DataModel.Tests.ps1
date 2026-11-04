@@ -165,7 +165,7 @@ Describe 'Field mapper' {
         $r.si_anonymous_access | Should -BeFalse
         $r.si_min_tls_version | Should -Be '1.2'
         $r.si_asset_type | Should -Be 'storageaccounts'
-        $kv = [pscustomobject]@{ resource = [pscustomobject]@{ id = '/x/kv1'; name = 'kv1'; type = 'microsoft.keyvault/vaults'; properties = [pscustomobject]@{ allowSharedKeyAccess = $true; publicNetworkAccess = 'Enabled' } } }
+        $kv = [pscustomobject]@{ resource = [pscustomobject]@{ id = '/x/kv7'; name = 'kv7'; type = 'microsoft.keyvault/vaults'; properties = [pscustomobject]@{ allowSharedKeyAccess = $true; publicNetworkAccess = 'Enabled' } } }
         $k = (Map 'azure' $kv 'azure_resource' 'microsoft.keyvault/vaults').Record
         $k.Contains('si_local_auth_enabled') | Should -BeFalse
         $k.si_public_network_access | Should -BeTrue

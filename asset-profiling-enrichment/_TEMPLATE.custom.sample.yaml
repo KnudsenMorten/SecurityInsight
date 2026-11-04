@@ -215,7 +215,7 @@ detections:
         # matches any pattern fires the kind.
         - kind: nameMatches
           namePatterns:
-            - '(?i)^dc\d'                     # 'DC1', 'dc-prod-04'
+            - '(?i)^dc\d'                     # 'DC01', 'dc-prod-04'
             - '(?i)domain.controller'         # 'My Domain Controller'
 
         # ----- osPlatform (endpoint) --------------------------------------

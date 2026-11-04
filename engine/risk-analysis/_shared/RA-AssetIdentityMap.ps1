@@ -350,7 +350,7 @@ function Resolve-SICanonicalAsset {
         $raw = $Id.Trim()
         $arm = ($raw -replace '^az:', '').ToLowerInvariant()
         # an ExposureGraph node, prefixed by the azure engine (eg:az:<node>) or bare as the attack-path reports carry it --
-        # measured 2026-10-02: dc1 / dc3 appeared a second time in the Top 50 under their bare node id. 32 hex only: an MDE
+        # measured 2026-10-02: dc-a / dc-b appeared a second time in the Top 50 under their bare node id. 32 hex only: an MDE
         # device id is 40, an SI id is a GUID, and the lookup holds only devices' own graph nodes.
         $egn = if ($raw -match '^(eg:az:)?([0-9a-fA-F]{32})$') { $Matches[2].ToLowerInvariant() } else { '' }
         if ($script:_SIIdentityByArm -and $arm -like '/subscriptions/*' -and $script:_SIIdentityByArm.TryGetValue($arm, [ref]$hit)) { }
@@ -381,7 +381,7 @@ function ConvertTo-SICanonicalAssetPairs {
         $pairs.Add($c)
     }
     if (-not $changed) { return [pscustomobject]@{ Names = $n; Ids = $i; Changed = $false } }
-    # ORDINAL, like every other asset list in the engine (Sort-SIOrdinal) -- a culture sort puts kv1 before MGMT1.
+    # ORDINAL, like every other asset list in the engine (Sort-SIOrdinal) -- a culture sort puts app1 before HOST1.
     $arr = $pairs.ToArray(); $keys = [string[]]@($arr | ForEach-Object { [string]$_.Name })
     [Array]::Sort($keys, $arr, [System.StringComparer]::Ordinal)
     $sorted = $arr

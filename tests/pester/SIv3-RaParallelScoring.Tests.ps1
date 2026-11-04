@@ -16,7 +16,7 @@
          1 / off (setting or environment SI_RA_SCORINGTHREADS) = one core, and the line says why; Summary = one core.
       3. A worker gets no script block / delegate from the run's globals (bound to the MAIN runspace: called in a worker it
          runs against the main runspace's variables from another thread) and works in the main thread's culture.
-    Offline; PowerShell 7. Test VM only (never mgmt1).
+    Offline; PowerShell 7. Test VM only (never the development machine).
 #>
 
 BeforeAll {

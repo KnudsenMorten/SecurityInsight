@@ -19,7 +19,7 @@
     A probe samples the process (working set, private bytes, managed heap) every 200 ms; each stage is named when the code
     makes its first call of that stage, so a peak is booked to the stage that caused it.
 
-    Tag Scale: never part of any gate (scale measurements run on demand only). Never on mgmt1.
+    Tag Scale: never part of any gate (scale measurements run on demand only). Never on the development machine.
 
     #727 -Engine azure: a generated Azure estate (-Scale 1 = 1,200,000 Resource Graph resources -- "tenants can have
     millions of azure obj"), read through the real Get-DiscoveryFromAzureViaEG + Get-DiscoveryFromAzureResources and every

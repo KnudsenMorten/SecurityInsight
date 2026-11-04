@@ -1774,7 +1774,7 @@ per CI, in this order: rules → manual overrides → the owning CMDB's record �
   `priority`, `pack`, `evidence_detail` (field, value, provider from `si_field_sources`) and, for a claim that did not
   decide, `would_set`. Since #579 also `label` (the purpose it sets, else the rule name's first line), `kind`
   (rule | tag | default) and `matched` (the VALUES that made the claim true, in words: "Defender tag PAWDevices--tier0--SI",
-  "installed software microsoft/sql_server", "name dc1" -- `Get-SICiConditionMatches` + `ConvertTo-SICiEvidenceText`).
+  "installed software microsoft/sql_server", "name dc-a" -- `Get-SICiConditionMatches` + `ConvertTo-SICiEvidenceText`).
 - **Who decided the tier (#579).** `si_tier_set_by`: `rule` (an observed SI rule), `tag` (the operator's tier tag -- an
   asserted claim, it decides only when no observed rule claims a tier and always beats the default), `default` (nothing
   claims), `override` (a manual override, precedence 1). A claim's **mechanism is the evidence that matched**: for an
@@ -6985,7 +6985,7 @@ SecurityInsight adds over a single-source discovery. It is shown with its eviden
   their keys. The CMDB / ServiceNow reconcile verdict on the record is evidence too (pinned exact, by an id or a rule
   strong, by name weak), but is never a discovery source and never part of the CI's confidence.
 - **Id history** (`sidata.AssetIdHistory`), found by the database from what moved between two loads, on durable keys only:
-  **alias** (a record's SI id moved while its durable id stayed -- the MGMT1 shape), **rekey** (the CI's key changed),
+  **alias** (a record's SI id moved while its durable id stayed -- the HOST1 shape), **rekey** (the CI's key changed),
   **merge** (a CI's durable ids now belong to another CI that already existed). The identifier ledger's older rows count
   too, so history from before the evidence existed shows from the first load.
 - **Conflicts shown, not hidden** (`sidata.AssetConflict`): name (first DNS label; an id standing in for a name is no
@@ -9245,7 +9245,7 @@ images in its own registry; what changed is how fast that build and roll are.
 |---|---|---|
 | 0 | `git fetch origin`; `-Ref` (default `origin/si-v3`) must BE the checked-out HEAD and the SecurityInsight tree clean -- the gate tests the tree, the release ships the commit. Never a pull or a rebase inside a release (PIM's lesson the same day: a `git pull --rebase` mid-release built the archive from the wrong HEAD). | seconds |
 | 1 | *(retired 2026-10-09: there is no nightly run -- owner: "we will drop nightly full run and the screenshot every night". Nothing reads or waits on a night's result.)* | -- |
-| 2 | A FEATURE release: THE FULL SUITE (`tests/Invoke-GateOnTestVm.ps1 -Full -Lane release`: every Pester suite and every dotnet test project, sharded; a 3 h lease). A HOTFIX: `tests/Invoke-FastGate.ps1 -Hotfix -Base <commit released last to this ring>` (state: `C:\SI-ENVS\_build\release-state.json`, lane `hotfix`). Both ON INVARDIA'S TEST VM (the exact commit as a git bundle, the result JSON back, plus the offline `Test-Smoke.ps1 -Offline`); on mgmt1 ONLY with `-GateOnMgmt1` (the operator's word); an UNAVAILABLE VM stops the release -- nothing gated, nothing released, said plainly (2026-10-09: offline tests never run on mgmt1). docs/TESTS.md 5b. | hotfix 2-5 min, full suite longer, + VM start |
+| 2 | A FEATURE release: THE FULL SUITE (`tests/Invoke-GateOnTestVm.ps1 -Full -Lane release`: every Pester suite and every dotnet test project, sharded; a 3 h lease). A HOTFIX: `tests/Invoke-FastGate.ps1 -Hotfix -Base <commit released last to this ring>` (state: `C:\SI-ENVS\_build\release-state.json`, lane `hotfix`). Both ON INVARDIA'S TEST VM (the exact commit as a git bundle, the result JSON back, plus the offline `Test-Smoke.ps1 -Offline`); on the development machine ONLY with `-GateOnMgmt1` (the operator's word); an UNAVAILABLE VM stops the release -- nothing gated, nothing released, said plainly (2026-10-09: offline tests never run on the development machine). docs/TESTS.md 5b. | hotfix 2-5 min, full suite longer, + VM start |
 | 3 | `setup/Publish-SIRelease.ps1 -Ref <commit> -Build -Ring <n> -Apply` -- the signed source package to Invardia, released to the ring (UPDATE-1.7). Ring 2 / 3 need `-OperatorApproval`. | ~10 s |
 | 4 | Ring 1 (its environment is known on this machine, `C:\SI-ENVS\_build\release-rings.json`): `az containerapp job start` of the updater at once -- no waiting for 03:00 -- followed to the end; the job's `si-installed` tag must name the released version. | 4-5 min |
 
@@ -9422,7 +9422,7 @@ Every grid that lists findings -- *Findings*, the collection views of finding ro
 - `Pages/Shared/_FindingActions.cshtml` -- the bar (rendered inside the page's selection form), `js/app/finding-actions.js` -- the dialogs, `Pages/Actions/Apply` -- the one endpoint (JSON for the dialog, a page for a form post, a file for an export), `Pages/Actions/Prepare` -- the form without script (writes nothing).
 - A grid shows the bar when its page says where its selection comes from (`ActionSource` on the collection page model: finding rows or a department grid); the findings browser builds its bar itself.
 
-**A dialog starts from what was selected (#330).** When a dialog opens on a selection, the script asks `/Actions/Prepare?handler=Count` (the same resolver Apply uses; it writes nothing) and the answer names the selection: the dialog's title is the action's `Title(what)` over `SelectionSummary.What` -- *Exempt CVE-2026-33824 on 3 assets* (a CVE row = that CVE on the assets it is on in this collection), *Exempt 1 finding: CVE-... on dc1*, *Exempt 12 selected findings*, *Comment on ...*. An action whose form depends on the selection implements `IFindingActionPreview` and its preview rides along: *Request exemption* returns the approvers' names per request, whether the user may approve all of it (only then *Approve now*), the real alternative approvers (people who decide EVERY part; none = no *Change approver*) and the one wider scope that fits (one issue: that issue on every asset, now and later; one asset with several issues: every finding on it; nothing for a mixed selection); *Assign to department* returns the scope to open on. The default is always exactly the selection; the server refuses a wider exemption scope the selection does not fit. A count that fails answers `ok = false` with the reason, and the script stops waiting after 30 s -- it never stays at "counting". An aggregated row is resolved by an EXACT read of its issue (`CollectionViewSql.RowsOfIssue`) or asset, never by the grid's free-text search. The no-script page renders the same title, names and approve-now from the server (`ActionFormModel.Targets`). The reason *"all matching"* is not offered sits behind *Why not?*.
+**A dialog starts from what was selected (#330).** When a dialog opens on a selection, the script asks `/Actions/Prepare?handler=Count` (the same resolver Apply uses; it writes nothing) and the answer names the selection: the dialog's title is the action's `Title(what)` over `SelectionSummary.What` -- *Exempt CVE-2026-33824 on 3 assets* (a CVE row = that CVE on the assets it is on in this collection), *Exempt 1 finding: CVE-... on dc-a*, *Exempt 12 selected findings*, *Comment on ...*. An action whose form depends on the selection implements `IFindingActionPreview` and its preview rides along: *Request exemption* returns the approvers' names per request, whether the user may approve all of it (only then *Approve now*), the real alternative approvers (people who decide EVERY part; none = no *Change approver*) and the one wider scope that fits (one issue: that issue on every asset, now and later; one asset with several issues: every finding on it; nothing for a mixed selection); *Assign to department* returns the scope to open on. The default is always exactly the selection; the server refuses a wider exemption scope the selection does not fit. A count that fails answers `ok = false` with the reason, and the script stops waiting after 30 s -- it never stays at "counting". An aggregated row is resolved by an EXACT read of its issue (`CollectionViewSql.RowsOfIssue`) or asset, never by the grid's free-text search. The no-script page renders the same title, names and approve-now from the server (`ActionFormModel.Targets`). The reason *"all matching"* is not offered sits behind *Why not?*.
 
 **On a department's page, its business approvers decide (#391).** When *Request exemption* is used on a department's own page (the selection's source is that department's findings grid -- `FindingSelection.DepartmentContext`; never the Unassigned queue, never a posted field) and every finding the server read back belongs to that department (`RequestExemptionAction.DepartmentOf`), the endpoint hands the department to the workflow (`ActionForm.Department` -> `RequestForm.DepartmentId`, and the count's preview the same). The workflow asks `IDepartmentDeciders.BusinessApproversAsync` (the department's `business-approver` people -- the old `approver` rows count): with any, each request is asked of them (names in the dialog, mailed to those with an address when exemption mail is on, *Change approver* = them + the security owners who decide every part, *Approve now* for one of them) and stored as `cfg.ExemptionRequest.DepartmentId` + `Routing = 'department-business-approver'`; with none, the security domain / category owners are asked as everywhere else, the request records `Routing = 'department-no-business-approver'` and the dialog and the result say so. A business approver (on the role ladder) decides exactly the requests the record says were routed to their department -- checked in `ExemptionWorkflow.DecideAsync`, not only on the page; the owners / approvers of the domain and Admins still decide. The request's change-log row ends *"; asked of ..."*, the action's audit row carries the same sentence, the request page shows *Routed to*, and *Waiting for my decision* lists routed requests for their business approvers. A database without the two columns yet writes the request without them, the owners decide, and the result says to run the Pro settings setup. Requests made anywhere else, and the governance log's *accept the risk* (#335), are unchanged.
 
@@ -11426,12 +11426,12 @@ The build stamp stays in BUILD.json, the release notes and the support bundle. T
 missing part 0, so 3.0.1 > 3.0.0.202610272235 everywhere; a code manifest of another MAJOR than the running version is refused
 (`Test-SIInvardiaSameMajor`, the major only -- 2.2 is never an upgrade path to 3.0.x). The web app's pill shows the short
 version (`InstalledRelease.Short`), the full release and the build date in its tooltip.
-## L2 support worker on mgmt1 (#684) — vendor operations, in no customer payload
+## L2 support worker on the development machine (#684) — vendor operations, in no customer payload
 
 Invardia's support team (Invardia DESIGN §7 "SUPPORT TEAM"): **L1** = Invardia's support agent (owns the ticket, the only
 one who talks to the customer), **L2** = SecurityInsight, **L3** = the owner. Invardia files a *support fix request* for
-`securityinsight`; SI's worker fixes it and reports back. It runs **on mgmt1** (owner 2026-10-15: "they run here in
-mgmt1 machine as now"), from `ops/support-worker/`.
+`securityinsight`; SI's worker fixes it and reports back. It runs **on the development machine** (owner 2026-10-15: "they run here in
+[the development] machine as now"), from `ops/support-worker/`.
 
 **The release rule (owner 2026-10-15, replaces the earlier fix classes):** the solution team may fix and release to
 **ring 0 + 1** and monitor as part of the release model, then **propose** whether the update is a candidate for ring 2;
@@ -11444,7 +11444,7 @@ Anything unclear = major. Until Invardia's `fixClass` is on the request: priorit
 starts (b) in the background, then returns; (b) the **fix run** — `Start-SISupportWorker.ps1 -RequestId <id>`: one
 headless `claude -p` in its OWN git worktree (`<worktreeRoot>\si-support-<id8>`, branch `si-v3-support/<id8>`, from
 `origin/si-v3`), so the interactive session's tree is never touched. Without `-Once` it loops by itself
-(`pollSeconds`, default 300 — mgmt1 is shared by ~3 sessions).
+(`pollSeconds`, default 300 — the development machine is shared by ~3 sessions).
 
 **One request, end to end:**
 
@@ -11454,7 +11454,7 @@ headless `claude -p` in its OWN git worktree (`<worktreeRoot>\si-support-<id8>`,
 | 2 | `supportfix_list` (open) -> the ONE most urgent request that is not another identity's, not waiting for the owner, not reported, not given up | `Select-SIWorkerNextWork` |
 | 3 | `supportfix_claim`, `supportfix_update investigating` (a plain start note), `supportfix_get` -> `runs\<id8>-<time>\request.json` (customer text marked as untrusted DATA) | `Invoke-SIWorkerRequest` |
 | 4 | the worktree; the session: hotfix = `Bash` limited to SI's git rules + the quick gate on SI's fixed lane (`gateLane`, default `gate4`) + `Invoke-SIWorkerRelease.ps1 -Ring 0` / `-Ring 1`; major = `Read, Grep, Glob` + writing its report only | `New-SIWorkerClaudeArguments` |
-| 5 | the wrapper: the class re-read from Invardia, ring 1 only after ring 0 of the same request, the work committed, `origin/si-v3` in HEAD, push (never forced), fast-forward `si-v3`, then the route that works on mgmt1 today (as `fast-deploy-r1.ps1`): the bootstrap sign-in, ring 0 = `setup\Publish-SIRelease.ps1 -Ref <HEAD> -Build -Ring 0 -Apply` with ring 1's signing config from `release-rings.json` and `-EngineSinceRef <the previous ring 0 commit>` (unknown = `-EngineChanged true -ChangedScopes *`), ring 1 = `-ReleaseOnly -Version <that version> -Ring 1` (the same build moves on); the version recorded in `releases\<id>.json` | `Invoke-SIWorkerRelease.ps1` |
+| 5 | the wrapper: the class re-read from Invardia, ring 1 only after ring 0 of the same request, the work committed, `origin/si-v3` in HEAD, push (never forced), fast-forward `si-v3`, then the route that works on the development machine today (as `fast-deploy-r1.ps1`): the bootstrap sign-in, ring 0 = `setup\Publish-SIRelease.ps1 -Ref <HEAD> -Build -Ring 0 -Apply` with ring 1's signing config from `release-rings.json` and `-EngineSinceRef <the previous ring 0 commit>` (unknown = `-EngineChanged true -ChangedScopes *`), ring 1 = `-ReleaseOnly -Version <that version> -Ring 1` (the same build moves on); the version recorded in `releases\<id>.json` | `Invoke-SIWorkerRelease.ps1` |
 | 6 | `report.json` checked: `released` refused; `fixed` needs ring 1 in the worker's records + the proposal (`candidate { ring2, why }`, it leads the note); `needs-owner` needs 2-4 options; secret-shaped text refuses it -> `supportfix_update` (+ `ticket_finding`) | `Test-SIWorkerReport` |
 | 7 | a failed / timed-out run counts a try; after `maxTries` (2) -> `needs-owner` "try again / a person takes it"; the owner's `retry` resets it | `Invoke-SIWorkerRequest`, `Update-SIWorkerStateFromEvents` |
 
@@ -11466,16 +11466,16 @@ read, push or release; `Test-SIWorkerRingAllowed`; the session's command lines (
 **Safety:** `worker.lock` held open (the OS frees it on a crash) = one request at a time; `heartbeat.json` every 30 s;
 the hard time limit `timeoutMinutes` (default 120: the process tree is killed); the STOP file; a log line per step in
 `<dataFolder>\logs` with secret-shaped text withheld; a major's session that changed its worktree sets the STOP file.
-**No secret on disk:** the publisher token stays in memory (`Get-SIWorkerPublisherToken`: mgmt1's bootstrap certificate
+**No secret on disk:** the publisher token stays in memory (`Get-SIWorkerPublisherToken`: the development machine's bootstrap certificate
 -> the Key Vault named in `release-rings.json` -> the publisher's ids by NAME -> its certificate signs the assertion,
 exactly as `Publish-SIRelease.ps1`); the session has no MCP server and no token; every file goes through
 `Write-SIWorkerFile` (secret-shaped text withheld). The telemetry causes (`GET /api/fixrequests/securityinsight`) are read
 and logged only — L1 routes a cause to SI as a support fix request.
 
-**On mgmt1** (machine-local, no secret): `C:\SI-ENVS\_build\support-worker\` = `worker.json` (optional: the defaults of
+**On the development machine** (machine-local, no secret): `C:\SI-ENVS\_build\support-worker\` = `worker.json` (optional: the defaults of
 `ConvertTo-SIWorkerSettings`), `state.json`, `releases\`, `runs\`, `logs\`, `heartbeat.json`, `worker.lock`, `STOP`.
 Uses what is already there: SI's publisher certificate + `release-rings.json` + the bootstrap config, git's
-credentials, the signed-in Claude Code. **Tests never run on mgmt1** — the session's quick gate runs on the test VM.
+credentials, the signed-in Claude Code. **Tests never run on the development machine** — the session's quick gate runs on the test VM.
 
 **Invardia's MCP, as read in its source (2026-10-15):** `POST https://invardia.com/api/mcp/v1`, JSON-RPC `tools/call`,
 the publisher's bearer token (role `Invardia.Publisher.securityinsight`). The SUPPORT fix requests are

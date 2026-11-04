@@ -334,7 +334,7 @@ function Get-SICiConditionMatches {
 
 function ConvertTo-SICiEvidenceText {
     <# PURE. One matched value of an SI field in the customer's words ("Defender tag PAWDevices--tier0--SI", "installed software
-       microsoft/sql_server", "name dc1"). #>
+       microsoft/sql_server", "name dc-a"). #>
     param([string]$Field, $Value)
     if (@('si_tags', 'si_azure_parent_tags', 'si_tags_inherited', 'si_tags_all', 'si_machine_groups') -contains $Field -and $null -ne $Value -and $Value -isnot [string] -and $null -ne (Get-SIItemValue $Value 'name')) {
         $n = [string](Get-SIItemValue $Value 'name'); $v = [string](Get-SIItemValue $Value 'value')

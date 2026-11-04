@@ -7850,7 +7850,7 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         # contributes 562 rows. Summary YAMLs hard-code `extend ConfigurationId = "CVE"`
         # which collapses those 562 per-CVE rows into one "Update vulnerable
         # software [CVE]" row. Without engine-side parity the Detailed AI
-        # over-weights hot assets (observed 24x sum on mgmt1: 562 rows ->
+        # over-weights hot assets (observed 24x sum on host1: 562 rows ->
         # 24'024 weighted vs Summary's 25 rows -> 994), causing Summary and
         # Detailed to rank different top assets.
         #

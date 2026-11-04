@@ -187,7 +187,7 @@ function Get-SISameMachineTierMatch {
     <#
         PURE. The rule-match record that gives an Azure VM / Arc machine the tier of the Defender device it is. Same
         shape as a YAML rule match, so the tier MIN and the SIRules audit trail treat it like any other rule:
-        "Same machine as device MGMT1" says why the VM has the device's tier. $null when there is no such device or the
+        "Same machine as device HOST1" says why the VM has the device's tier. $null when there is no such device or the
         device has no tier yet.
     #>
     param([AllowNull()]$Device)

@@ -206,7 +206,7 @@ Describe '5. data out: tags as text, never JSON' {
         $row['u_tags'] | Should -BeExactly 'ASRv2 = AzStackHCI; PAW'
         $row['u_tags_inherited'] | Should -BeExactly 'Used for = Ukendt (resource group); Business Application = Azure Local (subscription)'
         # ONE tag (the map's read hands a one-item list back as the item): text, never a JSON object
-        $one = [pscustomobject]@{ si_ci_id = 'c2'; si_class = 'cloud_resource'; si_asset_name = 'kv1'; si_tags = @($script:Tags[0]); si_tags_all = @($script:Tags[0]) }
+        $one = [pscustomobject]@{ si_ci_id = 'c2'; si_class = 'cloud_resource'; si_asset_name = 'kv7'; si_tags = @($script:Tags[0]); si_tags_all = @($script:Tags[0]) }
         $row1 = ConvertTo-SIDataOutContractRow -Output 'servicenow-ci' -Map $script:Model.Outputs['servicenow-ci'] -Item $one -ValueMaps $script:Model['value-maps'].maps -Context @{ RunId = 'r'; RunTime = [datetime]'2026-11-03T04:00:00Z' } -Action new -BatchId 'r:servicenow-ci'
         $row1['u_tags'] | Should -BeExactly 'ASRv2 = AzStackHCI'
         $row1['u_tags_all'] | Should -BeExactly 'ASRv2 = AzStackHCI'

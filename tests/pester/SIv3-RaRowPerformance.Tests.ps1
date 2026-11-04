@@ -20,7 +20,7 @@
          instead of using hash tables or similar"): a static scan (tests\fixtures\ra-perf\ArrayAppendScan.ps1); the few
          that stay are bounded lists, each named below with its reason.
       4. The parts of the parallel step: the split, the setting, the plan key of the finding factors.
-    Offline; PowerShell 7 (the v3 gate). Runs on the test VM only (never on mgmt1).
+    Offline; PowerShell 7 (the v3 gate). Runs on the test VM only (never on the development machine).
 #>
 
 BeforeAll {

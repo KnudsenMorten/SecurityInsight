@@ -5,7 +5,7 @@
     WHY. Az.OperationalInsights throws ErrorResponseException whose MESSAGE is only
     "Operation returned an invalid status code 'BadRequest'". The reason -- e.g. SEM0100 "Failed to resolve table or
     column expression named 'SI_PublicIP_Profile_CL'" -- is in the response body (Exception.Response.Content /
-    Exception.Body). Measured 2026-10-03 on 3.4.0 (container) and 3.4.1 (mgmt1), PS 5.1 and pwsh 7 alike.
+    Exception.Body). Measured 2026-10-03 on 3.4.0 (container) and 3.4.1 (the development machine), PS 5.1 and pwsh 7 alike.
     Readers that classified on the message therefore never recognised a MISSING table: on a fresh install, where a
     profile or Risk Analysis table does not exist yet, correlation, trend and the close-loop failed outright.
 

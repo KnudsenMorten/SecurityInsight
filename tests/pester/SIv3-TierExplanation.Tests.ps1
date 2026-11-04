@@ -3,7 +3,7 @@
     EVERY CI EXPLAINS ITS TIER (owner 2026-10-11: "i would love a column with this") -- and the wrong reasons seen on
     internal ring 1 the same day, fixed at the root:
 
-      1. THE DEFECT. paw-pxj70zk58z (a PAW) was Tier 0 "Domain Controller"; mgmt1, dc1 and dc3 were Tier 0 "AD CS Server".
+      1. THE DEFECT. paw-pxj70zk58z (a PAW) was Tier 0 "Domain Controller"; host1, dc-a and dc-b were Tier 0 "AD CS Server".
          183 shipped rule detections carried a bare machine-tag pattern '(?i)tier.?N' -- it matches EVERY operator tier tag
          (PAWDevices--tier0--SI, AutomationServer--tier0--SI, DomainControllerDNS--tier0--SI), so each tier-0 tag made the
          device a Domain Controller AND an AD CS server, as OBSERVED rules (the tag's own low priority was bypassed). And a
@@ -65,15 +65,15 @@ Describe '1. THE DEFECT (internal 2026-10-11): an operator tier tag no longer ma
             $t3.Count | Should -Be 1; $t3[0].winner | Should -BeFalse; @($t3[0].matched) | Should -Be @('EmployeeWorkstations--tier3--SI')
         }
     }
-    It 'dc3 (tag DomainControllerDNS--tier0--SI, no CA evidence) is a Domain Controller and no AD CS server' {
-        $ci = & $script:Run ([ordered]@{ si_class = 'device'; si_os_platform = 'windows_server'; si_asset_name = 'dc3.2linkit.local'; si_hostname = 'dc3'
+    It 'dc8 (tag DomainControllerDNS--tier0--SI, no CA evidence) is a Domain Controller and no AD CS server' {
+        $ci = & $script:Run ([ordered]@{ si_class = 'device'; si_os_platform = 'windows_server'; si_asset_name = 'dc8.contoso.local'; si_hostname = 'dc8'
                 si_tags = @((& $script:Tag 'DomainControllerDNS--tier0--SI'), (& $script:Tag 'MDE-Management'), (& $script:Tag 'ServerBusinessServices--tier2--SI'), [ordered]@{ source = 'azure'; name = 'AssetTier--SI'; value = 'AzHubPlatformManagementResources--tier0--SI' }) })
         $ci.si_tier | Should -Be 0
         $ci.si_tier_reason | Should -Match '^Domain Controller'
         @($ci.si_tier_claims | Where-Object { $_.rule -match '^ADCertificateServices' }).Count | Should -Be 0
     }
-    It 'mgmt1 (tag AutomationServer--tier0--SI, an Azure AssetTier tag) is no AD CS server' {
-        $ci = & $script:Run ([ordered]@{ si_class = 'device'; si_os_platform = 'windows_server'; si_asset_name = 'mgmt1.2linkit.local'; si_hostname = 'mgmt1'
+    It 'host1 (tag AutomationServer--tier0--SI, an Azure AssetTier tag) is no AD CS server' {
+        $ci = & $script:Run ([ordered]@{ si_class = 'device'; si_os_platform = 'windows_server'; si_asset_name = 'host1.contoso.local'; si_hostname = 'host1'
                 si_tags = @((& $script:Tag 'AutomationServer--tier0--SI'), (& $script:Tag 'MDE-Management'), (& $script:Tag 'ServerBusinessServices--tier2--SI'), [ordered]@{ source = 'azure'; name = 'AssetTier--SI'; value = 'AzHubPlatformManagementResources--tier0--SI' }) })
         $ci.si_tier_reason | Should -Not -Match 'AD CS|Domain Controller'
         # no SI rule claims a tier here: the tags decide, written as they are (an Azure tag with its value)

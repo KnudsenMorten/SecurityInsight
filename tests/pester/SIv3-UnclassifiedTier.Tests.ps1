@@ -225,7 +225,7 @@ Describe 'Risk Analysis: a finding on an asset no profiler has seen gets its tie
             $global:SI_EnrichmentDataRoot = $ov
             Clear-SIDefaultTierCache
             $st = @{}
-            $out = @(Set-RAUnprofiledTiers -Rows @(Row @{ AssetName = 'kv1'; AssetType = 'microsoft.keyvault/vaults'; SecurityDomain = 'Azure'; CriticalityTier = $null }) -ReportName 'Azure_Recommendations_Detailed' -Stats $st)
+            $out = @(Set-RAUnprofiledTiers -Rows @(Row @{ AssetName = 'kv7'; AssetType = 'microsoft.keyvault/vaults'; SecurityDomain = 'Azure'; CriticalityTier = $null }) -ReportName 'Azure_Recommendations_Detailed' -Stats $st)
             $out[0].CriticalityTier | Should -BeNullOrEmpty
             $st.Left | Should -Be 1
         } finally { Remove-Item -Recurse -Force $ov -ErrorAction SilentlyContinue }

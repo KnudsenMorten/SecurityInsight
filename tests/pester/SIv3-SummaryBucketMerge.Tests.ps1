@@ -132,7 +132,7 @@ Describe 'columns derived AFTER the summarize (attack-path Summary shape)' {
                 RiskScore_Weight_Detailed = ''; RiskScore_Weight_Factor = 100; RiskFactor_Weight = 100
                 cmdbId = ''; cmdbName = ''; cmdbCriticality = ''; cmdbDataSensitivity = ''
                 ImpactedAssetCount = 1; UniqueIssues = 1
-                ImpactedAssetsList = [object[]]@($asset); ImpactedAssetPairs = [object[]]@("$asset|id-$asset"); IssueList = [object[]]@('kv1')
+                ImpactedAssetsList = [object[]]@($asset); ImpactedAssetPairs = [object[]]@("$asset|id-$asset"); IssueList = [object[]]@('kv7')
             }
         }
     }

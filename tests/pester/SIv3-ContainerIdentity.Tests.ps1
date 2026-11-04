@@ -146,16 +146,16 @@ Describe 'the identity endpoint request' {
 Describe 'the Shodan key reaches the publicip job as a Key Vault reference (#185, live 2026-10-02)' {
     BeforeAll { . (Join-Path $script:SIRoot 'container\_shared\SI-ContainerConfig.ps1') }
     It 'a vault + the job''s identity -> a Key Vault reference (the value never passes through setup); else the value; else nothing' {
-        Get-SIShodanSecretArg -VaultUri 'https://kv1.vault.azure.net/' -SecretName 'SI-Shodan-ApiKey' -IdentityResourceId '/sub/x/uami' -Value 'v' |
-            Should -Be 'shodan-key=keyvaultref:https://kv1.vault.azure.net/secrets/SI-Shodan-ApiKey,identityref:/sub/x/uami'
-        Get-SIShodanSecretArg -VaultUri 'https://kv1.vault.azure.net' -IdentityResourceId '/sub/x/uami' | Should -Match '^shodan-key=keyvaultref:https://kv1\.vault\.azure\.net/secrets/SI-Shodan-ApiKey,'
+        Get-SIShodanSecretArg -VaultUri 'https://kv7.vault.azure.net/' -SecretName 'SI-Shodan-ApiKey' -IdentityResourceId '/sub/x/uami' -Value 'v' |
+            Should -Be 'shodan-key=keyvaultref:https://kv7.vault.azure.net/secrets/SI-Shodan-ApiKey,identityref:/sub/x/uami'
+        Get-SIShodanSecretArg -VaultUri 'https://kv7.vault.azure.net' -IdentityResourceId '/sub/x/uami' | Should -Match '^shodan-key=keyvaultref:https://kv7\.vault\.azure\.net/secrets/SI-Shodan-ApiKey,'
         Get-SIShodanSecretArg -VaultUri '' -IdentityResourceId '/sub/x/uami' -Value 'v' | Should -Be 'shodan-key=v'
-        Get-SIShodanSecretArg -VaultUri 'https://kv1.vault.azure.net/' -IdentityResourceId '' -Value '' | Should -BeNullOrEmpty
+        Get-SIShodanSecretArg -VaultUri 'https://kv7.vault.azure.net/' -IdentityResourceId '' -Value '' | Should -BeNullOrEmpty
     }
     It 'the identity gets Key Vault Secrets User on the Shodan vault -- once when it is also the certificate vault' {
         $p = @(Get-SIContainerIdentityGrantPlan -Mode ManagedIdentity -ShodanKeyVaultId '/sub/s/kv-shodan')
         @($p | Where-Object { $_.Role -eq 'Key Vault Secrets User' -and $_.Scope -eq '/sub/s/kv-shodan' }).Count | Should -Be 1
-        $c = @(Get-SIContainerIdentityGrantPlan -Mode Certificate -KeyVaultId '/sub/s/kv1' -ShodanKeyVaultId '/sub/s/kv1')
+        $c = @(Get-SIContainerIdentityGrantPlan -Mode Certificate -KeyVaultId '/sub/s/kv7' -ShodanKeyVaultId '/sub/s/kv7')
         @($c | Where-Object { $_.Role -eq 'Key Vault Secrets User' }).Count | Should -Be 1
     }
     It 'WIRING -- setup resolves the vault for publicip, passes it to the grant plan, and builds the secret with the helper' {
@@ -244,8 +244,8 @@ Describe 'a job references a Key Vault secret only when the vault holds it (live
 Describe 'the Azure OpenAI key reaches the jobs as a Key Vault reference (#215, live 2026-10-02)' {
     BeforeAll { . (Join-Path $script:SIRoot 'container\_shared\SI-ContainerConfig.ps1') }
     It 'the generic helper: a reference with vault + identity, else the value, else nothing' {
-        Get-SIKeyVaultSecretArg -Alias 'openai-apikey' -VaultUri 'https://kv1.vault.azure.net/' -SecretName 'OpenAI-ApiKey' -IdentityResourceId '/sub/x/uami' |
-            Should -Be 'openai-apikey=keyvaultref:https://kv1.vault.azure.net/secrets/OpenAI-ApiKey,identityref:/sub/x/uami'
+        Get-SIKeyVaultSecretArg -Alias 'openai-apikey' -VaultUri 'https://kv7.vault.azure.net/' -SecretName 'OpenAI-ApiKey' -IdentityResourceId '/sub/x/uami' |
+            Should -Be 'openai-apikey=keyvaultref:https://kv7.vault.azure.net/secrets/OpenAI-ApiKey,identityref:/sub/x/uami'
         Get-SIKeyVaultSecretArg -Alias 'openai-apikey' -Value 'v' | Should -Be 'openai-apikey=v'
         Get-SIKeyVaultSecretArg -Alias 'openai-apikey' | Should -BeNullOrEmpty
     }

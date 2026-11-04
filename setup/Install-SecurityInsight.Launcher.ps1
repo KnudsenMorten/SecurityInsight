@@ -469,6 +469,28 @@ function Set-SILauncherEditionStamp {
     ''
 }
 
+function Get-SILauncherResumeDecision {
+    <#
+        PURE. Framework INSTALL-1 / installer rule 12 (owner 2026-11-04: "-Resume never reuses a different package"): on
+        -Resume the release downloaded before (-Note: the launcher's note { path; folder; version; channel }, -TreePath: its
+        installer folder when it is still there) is used again ONLY when it is the SAME edition (-Edition: 'pro' |
+        'community', the note's channel) AND the same version this launcher installs now (-Version). Anything else -- another
+        edition, an older or a newer release, the folder gone -- is downloaded afresh, said in ONE line; the install itself
+        continues from its OWN saved progress (its state folder). Returns @{ Reuse; Line }.
+    #>
+    param($Note, [string]$TreePath = '', [Parameter(Mandatory)][string]$Edition, [AllowEmptyString()][string]$Version = '')
+    $label = { param($e) if ("$e" -eq 'pro') { 'Pro' } elseif ("$e" -eq 'community') { 'Community' } elseif ("$e") { "$e" } else { 'of an unknown edition' } }
+    $nowV = "$Version".Trim().TrimStart('v', 'V')
+    if (-not $Note -or -not "$($Note.path)".Trim() -or -not "$TreePath".Trim()) {
+        return @{ Reuse = $false; Line = ('Resume: the release folder of the first run is not there any more, so the release ({0} {1}) is downloaded again. The install keeps its own progress, so it still continues where it stopped.' -f $nowV, (& $label $Edition)) }
+    }
+    $prevV = "$($Note.version)".Trim().TrimStart('v', 'V'); $prevE = "$($Note.channel)".Trim()
+    if ($prevE -eq $Edition -and $prevV -and $prevV -eq $nowV) {
+        return @{ Reuse = $true; Line = ('Resume: using the release {0} {1} downloaded before, in {2} -- it is the release this launcher installs, so nothing is downloaded.' -f $prevV, (& $label $prevE), $TreePath) }
+    }
+    @{ Reuse = $false; Line = ('Resume: the release downloaded before is {0} {1}; this launcher installs {2} {3} -- downloading it. The install continues from its own saved progress.' -f $(if ($prevV) { $prevV } else { '(unknown version)' }), (& $label $prevE), $nowV, (& $label $Edition)) }
+}
+
 function Get-SILauncherPassThrough {
     <# PURE. The parameters for the full installer: every one given, unchanged, except the launcher's own. #>
     param([System.Collections.IDictionary]$Bound, [string[]]$Own = @('Version', 'KeepDownload', 'LauncherSeams'))
@@ -647,20 +669,25 @@ do {
     $noteKey = if ("$InstallId".Trim()) { "$InstallId".Trim().ToLowerInvariant() } else { 'securityinsight' }
     $steps = if ($isPro) { 5 } else { 4 }
 
-    # ---- 1. -Resume: the folder of the first run, when it is still there ----
-    $tree = ''; $treeVersion = ''
+    # ---- 1. -Resume: the folder of the first run -- used again ONLY when it is the release this launcher installs now ----
+    # framework INSTALL-1 / installer rule 12 ("-Resume never reuses a different package", owner 2026-11-04): the release
+    # downloaded before is reused only when it is the SAME edition AND the same version this launcher would install now
+    # (Get-SILauncherResumeDecision, decided once the version is known below); otherwise it is downloaded afresh, said in
+    # ONE line, and the install continues from its OWN saved progress (its state folder).
+    $tree = ''; $treeVersion = ''; $resumeNote = $null; $resumeTree = ''; $reused = $false
     if ($Resume) {
         $note = Read-SILauncherNote -Path $notePath
-        $n = $note[$noteKey]
-        if ($n -and "$($n.path)".Trim()) {
-            $t = Find-SILauncherTree -Dir "$($n.path)"
-            $want = if ($isPro) { '' } else { "$Version".Trim().TrimStart('v', 'V') }
-            if ($t -and (-not $want -or $want -eq "$($n.version)") -and "$($n.channel)" -eq "$script:SIInstallChannel") {
-                $tree = $t; $treeVersion = "$($n.version)"; $dir = "$($n.folder)"
-                Write-Host ('Resume: using the release {0} downloaded before, in {1} -- nothing is downloaded.' -f $treeVersion, $tree)
-            }
-        }
-        if (-not $tree) { Write-Host 'Resume: the release folder of the first run is not there any more, so the release is downloaded again. The install keeps its own progress, so it still continues where it stopped.' -ForegroundColor Yellow }
+        $resumeNote = $note[$noteKey]
+        if ($resumeNote -and "$($resumeNote.path)".Trim()) { $resumeTree = [string](Find-SILauncherTree -Dir "$($resumeNote.path)") }
+    }
+    $useEarlier = {
+        # the version this launcher installs now is known: reuse the earlier folder, or say why it is downloaded afresh
+        param([string]$NowVersion)
+        if (-not $Resume) { return $false }
+        $d = Get-SILauncherResumeDecision -Note $resumeNote -TreePath $resumeTree -Edition "$script:SIInstallChannel" -Version $NowVersion
+        Write-Host $d.Line -ForegroundColor $(if ($d.Reuse) { 'Gray' } else { 'Yellow' })
+        if ($d.Reuse) { $script:SILauncherReuse = @{ Tree = $resumeTree; Version = "$($resumeNote.version)"; Folder = "$($resumeNote.folder)" } }
+        [bool]$d.Reuse
     }
 
     if (-not $tree) {
@@ -728,6 +755,8 @@ do {
             if (-not $chk.Ok) { Write-Host ('Invardia''s answer cannot be used: {0}. Nothing was downloaded or installed.' -f $chk.Reason) -ForegroundColor Red; $code = 3; break }
             $relVersion = $chk.Version
             Write-Host ('  SecurityInsight {0} (ring {1}, sequence {2}): the manifest''s signature verifies with Invardia''s update-signing key' -f $relVersion, $ringSigned, $chk.Sequence)
+            $reused = & $useEarlier $relVersion
+          if (-not $reused) {
 
             # ---- 4. download into a NEW, empty folder: size and SHA-256 of the signed manifest ----
             $dir = [IO.Path]::Combine($tempRoot, ('securityinsight-release-{0}-{1}' -f $relVersion, [guid]::NewGuid().ToString('N').Substring(0, 8)))
@@ -748,6 +777,7 @@ do {
             $zipPath = $saved.Path
             $stated = "$($chk.Manifest.sha256)".Trim().ToLowerInvariant(); try { $statedSize = [long]$chk.Manifest.size } catch { $statedSize = 0L }
             Write-Host ('  {0}: size and SHA-256 as the signed manifest states' -f $assetName)
+          }
         } else {
             # ======== SecurityInsight Community: the public release on GitHub ========
             $relUrl = Get-SILauncherReleaseUrl -Repo $siRepo -Version $Version
@@ -756,6 +786,8 @@ do {
             try { $rel = & $getRelease $relUrl } catch { Write-Verbose "$($_.Exception.Message)"; $rel = $null }
             if (-not $rel -or -not "$($rel.tag_name)".Trim()) { Write-Host ('The SecurityInsight release could not be read from GitHub ({0}). Check the network (github.com, api.github.com) and -Version, then run the command again. Nothing was installed.' -f $relUrl) -ForegroundColor Red; $code = 3; break }
             $relVersion = "$($rel.tag_name)".Trim().TrimStart('v', 'V')
+            $reused = & $useEarlier $relVersion
+          if (-not $reused) {
             $assetName = 'SecurityInsight-v{0}.zip' -f $relVersion
             $asset = @(@($rel.assets) | Where-Object { "$($_.name)" -eq $assetName }) | Select-Object -First 1
             if (-not $asset -or -not "$($asset.browser_download_url)".Trim()) { Write-Host ('The release {0} has no {1} to download. Nothing was installed.' -f $relVersion, $assetName) -ForegroundColor Red; $code = 3; break }
@@ -768,8 +800,13 @@ do {
             $zipPath = [IO.Path]::Combine($dir, $assetName)
             Write-Host ('Step 2 of {0}: downloading {1} into {2}' -f $steps, $assetName, $dir)
             try { & $download "$($asset.browser_download_url)" $zipPath } catch { Write-Verbose "$($_.Exception.Message)" }
+          }
         }
 
+        if ($reused) {
+            # the release downloaded before IS the one this launcher installs now (same edition, same version): used again
+            $tree = [string]$script:SILauncherReuse.Tree; $treeVersion = [string]$script:SILauncherReuse.Version; $dir = [string]$script:SILauncherReuse.Folder
+        } else {
         # ---- check it, unpack it ----
         Write-Host ('Step {0} of {1}: checking the download' -f ($steps - 1), $steps)
         $why = Test-SILauncherZip -Path $zipPath -Version $relVersion -Size $statedSize -Sha256 $stated -AllowBuildNumber:$isPro
@@ -800,6 +837,7 @@ do {
                 $note[$noteKey] = [ordered]@{ path = $tree; folder = $dir; version = $relVersion; channel = "$script:SIInstallChannel"; savedUtc = [datetime]::UtcNow.ToString('o') }
                 Write-SILauncherNote -Path $notePath -Note $note
             } catch { Write-Host ('(the note for -Resume could not be written: {0})' -f $_.Exception.Message) -ForegroundColor DarkGray }
+        }
         }
     }
 

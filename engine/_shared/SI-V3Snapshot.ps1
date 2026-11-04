@@ -155,6 +155,31 @@ function Get-SIV3CorrelationRecentKql {
     ) -join "`n"
 }
 
+function Get-SIV3MapLedgerShortfall {
+    <#
+        PURE. #1082 THE FIRST-SYNC LEDGER RULE: per kind in -Kinds, how many of the kind's assets (-Profiles: Kind, SI_AssetId)
+        the correlation map (-Rows: SI_AssetId, SI_CorrelationId, SI_IdSource) carries a LEDGER id for (Resolve-SICiKey's
+        rule: an id only counts when SI_IdSource is 'ledger'). Returns the kinds BELOW -MinShare (default: half) --
+        @{ Kind; Ledger; Total } -- empty when every kind is ready. A kind with no asset is never short.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [AllowEmptyCollection()][object[]]$Profiles = @(), [string[]]$Kinds = @(), [double]$MinShare = 0.5)
+    $ledger = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $aid = ([string]$r.SI_AssetId).Trim(); $cid = ([string]$r.SI_CorrelationId).Trim(); $src = ([string]$r.SI_IdSource).Trim()
+        if ($aid -and $cid -and $src -ieq 'ledger') { [void]$ledger.Add($aid) }
+    }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($k in @($Kinds | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() } | Select-Object -Unique)) {
+        $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($p in @($Profiles)) { if ($p -and ([string]$p.Kind).ToLowerInvariant() -eq $k -and ([string]$p.SI_AssetId).Trim()) { [void]$ids.Add(([string]$p.SI_AssetId).Trim()) } }
+        if ($ids.Count -eq 0) { continue }
+        $have = 0; foreach ($i in $ids) { if ($ledger.Contains($i)) { $have++ } }
+        if ($have -lt $MinShare * $ids.Count) { $out.Add([pscustomobject]@{ Kind = $k; Ledger = $have; Total = $ids.Count }) }
+    }
+    , $out.ToArray()
+}
+
 function Resolve-SIV3CorrelationMap {
     <#
         The correlation map for a connector, with the first-run rule above. Returns @{ State = ready | pending | missing;
@@ -164,20 +189,56 @@ function Resolve-SIV3CorrelationMap {
           -WaitSeconds / -PollSeconds   how long to wait for a map that correlation has just written (default 15 / 1 min)
           -Sleep  { param($Seconds) } (tests)   -Log { param($Level, $Message) }
         A count that cannot be read is NOT taken as "never had a row": the safe direction is 'missing' (the refusal).
+        #1082 THE FIRST SYNC WAITS FOR THE LEDGER (found live, read-only, at an install: its first CMDB sync read a map that
+        did not yet carry ledger ids for most Azure assets, keyed 1,388 CIs by their asset id, and run 2 created them all
+        again under the ledger key). -FirstRunKinds: the kinds the caller has never written a CI of; -Profiles (Kind,
+        SI_AssetId): the assets it is about to key. A map that EXISTS but carries a ledger id for fewer than -MinLedgerShare
+        (half) of a first-run kind's assets is NOT ready: waited for like an empty map when correlation has just run, else
+        'pending' (nothing written, a warning; the next run uses the ledger ids). Rule followed: V3-DATA-MODEL 2.3 (4) "No
+        mixed CI key ... An unreachable ledger stops the run at P2 instead of publishing moving keys." Without -FirstRunKinds
+        the rule above is unchanged (the vulnerability close-loop calls it so).
     #>
     param([Parameter(Mandatory)][scriptblock]$Read, [Parameter(Mandatory)][scriptblock]$Count,
-          [int]$WaitSeconds = 900, [int]$PollSeconds = 60, [scriptblock]$Sleep, [scriptblock]$Log)
+          [int]$WaitSeconds = 900, [int]$PollSeconds = 60, [scriptblock]$Sleep, [scriptblock]$Log,
+          [AllowEmptyCollection()][object[]]$Profiles = @(), [AllowEmptyCollection()][string[]]$FirstRunKinds = @(), [double]$MinLedgerShare = 0.5)
     if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
     if (-not $Log) { $Log = { param($l, $m) } }
     $n = { param($kql, $table) try { $r = @(& $Count $kql $table | ForEach-Object { $_ } | Where-Object { $_ })[0]; if ($r) { [long]$r.n } else { 0L } } catch { -1L } }
+    $short = { param($r) if (-not @($FirstRunKinds | Where-Object { $_ }).Count) { return , @() }; Get-SIV3MapLedgerShortfall -Rows @($r) -Profiles @($Profiles) -Kinds @($FirstRunKinds) -MinShare $MinLedgerShare }
+    $shortText = {
+        param($s, [int]$waited)
+        $what = (@($s | ForEach-Object { '{0} ({1} of {2} assets)' -f $_.Kind, $_.Ledger, $_.Total })) -join ', '
+        ('the correlation map (SI_ObjectMap_CL) does not carry a ledger id yet for most assets of {0} -- a first sync would key them by their asset id and create them again under the ledger key on the next run{1}; nothing was written, the next run uses the ledger ids' -f $what, $(if ($waited -gt 0) { (' (waited {0} min)' -f [Math]::Ceiling($waited / 60)) } else { '' }))
+    }
     $rows = @(& $Read | ForEach-Object { $_ } | Where-Object { $_ })
-    if ($rows.Count) { return [pscustomobject]@{ State = 'ready'; Rows = $rows; Reason = ''; WaitedSeconds = 0 } }
+    if ($rows.Count) {
+        $s = & $short $rows
+        if (-not @($s).Count) { return [pscustomobject]@{ State = 'ready'; Rows = $rows; Reason = ''; WaitedSeconds = 0 } }
+        # #1082: a map without the ledger ids yet -- waited for when correlation has just written it, never keyed by asset id
+        $waited = 0
+        $recent = & $n (Get-SIV3CorrelationRecentKql) 'SI_RunHealth_CL'
+        if ($recent -gt 0 -and $WaitSeconds -gt 0) {
+            & $Log 'INFO' ('the correlation map does not carry ledger ids yet for most assets of {0}, and asset correlation has just written -- waiting up to {1} min for them' -f ((@($s | ForEach-Object { $_.Kind })) -join ', '), [Math]::Ceiling($WaitSeconds / 60))
+            while ($waited -lt $WaitSeconds) {
+                $step = [Math]::Max(1, [Math]::Min($PollSeconds, $WaitSeconds - $waited))
+                & $Sleep $step; $waited += $step
+                $r2 = @(& $Read | ForEach-Object { $_ } | Where-Object { $_ })
+                if (-not $r2.Count) { continue }
+                $s = & $short $r2
+                if (-not @($s).Count) {
+                    & $Log 'OK' ('the correlation map carries the ledger ids after {0} s' -f $waited)
+                    return [pscustomobject]@{ State = 'ready'; Rows = $r2; Reason = ''; WaitedSeconds = $waited }
+                }
+            }
+        }
+        return [pscustomobject]@{ State = 'pending'; Rows = @(); WaitedSeconds = $waited; Reason = (& $shortText $s $waited) }
+    }
     $ever = & $n (Get-SIV3ObjectMapEverKql) 'SI_ObjectMap_CL'
     if ($ever -ne 0) {
         return [pscustomobject]@{ State = 'missing'; Rows = @(); WaitedSeconds = 0
             Reason = $(if ($ever -lt 0) { 'the correlation map (SI_ObjectMap_CL) is empty, and whether it ever had results could not be read' } else { 'the correlation map (SI_ObjectMap_CL) is empty, although it had results before' }) }
     }
-    $waited = 0
+    $waited = 0; $lastShort = @()
     $recent = & $n (Get-SIV3CorrelationRecentKql) 'SI_RunHealth_CL'
     if ($recent -gt 0 -and $WaitSeconds -gt 0) {
         & $Log 'INFO' ('the correlation map (SI_ObjectMap_CL) has no rows yet, and asset correlation has just written its first results -- waiting up to {0} min for Log Analytics to answer them' -f [Math]::Ceiling($WaitSeconds / 60))
@@ -186,11 +247,15 @@ function Resolve-SIV3CorrelationMap {
             & $Sleep $step; $waited += $step
             $rows = @(& $Read | ForEach-Object { $_ } | Where-Object { $_ })
             if ($rows.Count) {
+                # #1082: answered, but a first-run kind still lacks its ledger ids -- keep waiting for them
+                $lastShort = & $short $rows
+                if (@($lastShort).Count) { continue }
                 & $Log 'OK' ('the correlation map answered after {0} s ({1} asset(s))' -f $waited, $rows.Count)
                 return [pscustomobject]@{ State = 'ready'; Rows = $rows; Reason = ''; WaitedSeconds = $waited }
             }
         }
     }
+    if ($rows.Count -and @($lastShort).Count) { return [pscustomobject]@{ State = 'pending'; Rows = @(); WaitedSeconds = $waited; Reason = (& $shortText $lastShort $waited) } }
     [pscustomobject]@{ State = 'pending'; Rows = @(); WaitedSeconds = $waited
         Reason = $(if ($recent -gt 0) { ('the correlation map (SI_ObjectMap_CL) has no results yet: asset correlation wrote its first ones, and Log Analytics did not answer them within {0} min (a new install) -- nothing was written; the next run uses them' -f [Math]::Ceiling($waited / 60)) }
                    else { 'the correlation map (SI_ObjectMap_CL) has no results yet (asset correlation has not run on this install) -- nothing was written; the next run after asset correlation uses them' }) }

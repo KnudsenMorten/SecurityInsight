@@ -770,6 +770,281 @@ function Get-SIRegistryCloseProblem {
     $why -join '; '
 }
 
+# ============================================================================================================== THE REGISTRY, PRIVATE FROM BIRTH
+
+# Framework installer rule 11b (Invardia 2026-11-04): "The container registry of a private install is private from birth
+# too ... On a private install: Premium + private endpoint + the azurecr zone in the preflight from the first create, images
+# built inside the network, admin user OFF, pulls by managed identity." Rule 11 (made general the same day): made, recovered
+# OR FOUND, every resource of a private install ends private, read back. A registry an earlier release made Basic, public,
+# admin user on (a customer's private install stopped before its image build, 2026-11-04) is CONVERGED to this shape.
+
+function Get-SIPrivateRegistryBody {
+    <# PURE. A private install's container registry as it is CREATED: Premium (a private endpoint needs it), public network
+       access Disabled, trusted Azure services allowed (networkRuleBypassOptions AzureServices), the admin user OFF. #>
+    param([Parameter(Mandatory)][string]$Location)
+    [ordered]@{ location = $Location; sku = [ordered]@{ name = 'Premium' }; properties = [ordered]@{
+        adminUserEnabled = $false; publicNetworkAccess = 'Disabled'; networkRuleBypassOptions = 'AzureServices' } }
+}
+
+function Get-SIRegistryPrivateGap {
+    <# PURE. What keeps -Registry (as ARM returns it) from the private shape: a subset of 'sku', 'public', 'bypass', 'admin'
+       (none = private). A registry that is not there has every gap. #>
+    param($Registry)
+    $gap = @()
+    if ([string](Get-SIPnProp $Registry @('sku', 'name')) -ne 'Premium') { $gap += 'sku' }
+    if ([string](Get-SIPnProp $Registry @('properties', 'publicNetworkAccess')) -ne 'Disabled') { $gap += 'public' }
+    if ([string](Get-SIPnProp $Registry @('properties', 'networkRuleBypassOptions')) -ne 'AzureServices') { $gap += 'bypass' }
+    if (-not $Registry -or [bool](Get-SIPnProp $Registry @('properties', 'adminUserEnabled'))) { $gap += 'admin' }
+    $gap
+}
+
+function Get-SIRegistryPasswordUsers {
+    <# PURE. The jobs / container apps (as ARM returns them) that sign in to the registry -LoginServer with its admin
+       password (configuration.registries[].passwordSecretRef). Turning the admin user off would stop their pulls. #>
+    param([object[]]$Apps = @(), [string]$LoginServer = '')
+    $server = "$LoginServer".Trim().ToLowerInvariant()
+    @(foreach ($a in @($Apps | Where-Object { $null -ne $_ })) {
+        foreach ($r in @(Get-SIPnProp $a @('properties', 'configuration', 'registries') | Where-Object { $_ })) {
+            $rs = ([string](Get-SIPnProp $r @('server'))).Trim().ToLowerInvariant()
+            if ([string](Get-SIPnProp $r @('passwordSecretRef')) -and (-not $server -or -not $rs -or $rs -eq $server)) { [string](Get-SIPnProp $a @('name')); break }
+        }
+    })
+}
+
+function Set-SIPrivateRegistry {
+    <#
+        The container registry -RegistryId in its PRIVATE shape (Get-SIPrivateRegistryBody), idempotent, READ BACK:
+          not there   created private (Premium, public access Disabled, trusted services allowed, admin user off)
+          found       converged: the tier to Premium first (Azure takes publicNetworkAccess Disabled on Premium only), then
+                      public access Disabled + trusted services allowed + the admin user off -- nothing in it changes
+        -PasswordUsers: jobs / apps that still pull with the admin password -- the admin user then STAYS on (said, Ok false):
+        it is never pulled out from under a running pull. Returns @{ Ok; Created; Changed; Gap; Line; Registry }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$RegistryId, [Parameter(Mandatory)][string]$Location,
+          [string[]]$PasswordUsers = @(), [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $path = '{0}?api-version={1}' -f $RegistryId.TrimEnd('/'), $script:SIPnAcrApi
+    $name = ($RegistryId.TrimEnd('/') -split '/')[-1]
+    $users = @($PasswordUsers | Where-Object { $_ })
+    $have = & $Arm 'GET' $path $null
+    $created = $false; $changed = @()
+    if (-not $have) {
+        $null = & $Arm 'PUT' $path (Get-SIPrivateRegistryBody -Location $Location)
+        $created = $true
+    } else {
+        $gap = @(Get-SIRegistryPrivateGap $have)
+        if ($gap -contains 'sku') {
+            $null = & $Arm 'PATCH' $path ([ordered]@{ sku = [ordered]@{ name = 'Premium' } })
+            $null = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Tries 12 -Test { param($o) [string](Get-SIPnProp $o @('sku', 'name')) -eq 'Premium' }
+            $changed += 'Premium'
+        }
+        $props = [ordered]@{}
+        if ($gap -contains 'public') { $props['publicNetworkAccess'] = 'Disabled'; $changed += 'public access Disabled' }
+        if ($gap -contains 'bypass') { $props['networkRuleBypassOptions'] = 'AzureServices'; $changed += 'trusted Azure services allowed' }
+        if ($gap -contains 'admin' -and -not $users.Count) { $props['adminUserEnabled'] = $false; $changed += 'admin user off' }
+        if ($props.Count) { $null = & $Arm 'PATCH' $path ([ordered]@{ properties = $props }) }
+    }
+    $want = { param($o) $g = @(Get-SIRegistryPrivateGap $o); if ($users.Count) { $g = @($g | Where-Object { $_ -ne 'admin' }) }; $o -and -not $g.Count -and (Test-SIPnSucceeded $o) }
+    $back = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Tries 30 -Test $want
+    $left = @(Get-SIRegistryPrivateGap $back)
+    $ok = [bool]($back -and -not $left.Count -and (Test-SIPnSucceeded $back))
+    $what = 'Premium, public access Disabled, trusted Azure services allowed, admin user off'
+    $line = if ($ok -and $created) { 'container registry {0} created private ({1}; read back)' -f $name, $what }
+            elseif ($ok -and $changed.Count) { 'container registry {0} made private: {1} (read back: {2})' -f $name, ($changed -join ', '), $what }
+            elseif ($ok) { 'container registry {0} is private ({1})' -f $name, $what }
+            elseif (-not $back) { 'container registry {0} does not read back after it was created' -f $name }
+            elseif ($left.Count -eq 1 -and $left[0] -eq 'admin' -and $users.Count) { 'container registry {0} is private, but its admin user STAYS ON: {1} still pull(s) with its password -- they must pull as their managed identity first' -f $name, ($users -join ', ') }
+            else { 'container registry {0} does not read back private yet (still: {1})' -f $name, ($left -join ', ') }
+    @{ Ok = $ok; Created = $created; Changed = @($changed); Gap = $left; Line = $line; Registry = $back }
+}
+
+function Get-SIRegistryDnsNames {
+    <# PURE. The names of -Registry that its private endpoint answers for: the login server and the data endpoint of its
+       region (<name>.<region>.data.azurecr.io -- the image layers come from there), or the data endpoints Azure names. #>
+    param($Registry)
+    if (-not $Registry) { return @() }
+    $out = New-Object System.Collections.Generic.List[string]
+    $ls = ([string](Get-SIPnProp $Registry @('properties', 'loginServer'))).Trim().ToLowerInvariant()
+    $nm = ([string](Get-SIPnProp $Registry @('name'))).Trim().ToLowerInvariant()
+    if (-not $ls -and $nm) { $ls = '{0}.azurecr.io' -f $nm }
+    if ($ls) { $out.Add($ls) }
+    $data = @(Get-SIPnProp $Registry @('properties', 'dataEndpointHostNames') | Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() })
+    if (-not $data.Count) {
+        $loc = (([string](Get-SIPnProp $Registry @('location'))) -replace '\s', '').ToLowerInvariant()
+        $short = if ($ls) { ($ls -split '\.')[0] } else { $nm }
+        if ($short -and $loc) { $data = @('{0}.{1}.data.azurecr.io' -f $short, $loc) }
+    }
+    foreach ($d in $data) { if (-not $out.Contains($d)) { $out.Add($d) } }
+    $out.ToArray()
+}
+
+function Invoke-SIPrivateNetworkRegistry {
+    <#
+        Setup's call AND the updater's (framework installer rule 11b; owner 2026-11-04: "if we have leftovers that are wrong,
+        then we must handle that"): the registry of a private install private BEFORE its first image build --
+          1. the registry created private, or a found one converged (Set-SIPrivateRegistry; the admin user stays on only
+             while a job or app still pulls with its password, named);
+          2. its private endpoint pe-si-registry + the privatelink.azurecr.io zone + link + zone group (the vault's and the
+             storage's mechanism: a central group's zone is used, a write SecurityInsight may not make is a hand-off line);
+          3. its agent pool in the network (si-vnet-pool, the endpoints subnet): image builds run inside it from the first;
+          4. the DNS check FROM THIS MACHINE for the registry's names (login server + data endpoint) -- -SkipDnsGate for
+             the updater, which runs inside the environment.
+        Returns @{ Ok; Lines; HandOff; Gate; RegistryOk; NetworkShapeOk; EndpointsOk; PoolOk; AgentPool; LoginServer; PasswordUsers }.
+    #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Target, [Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$RegistryId,
+          [string]$EndpointsSubnetId = '', [scriptblock]$Resolve, [switch]$SkipDnsGate, [switch]$SkipAgentPool,
+          # where a registry that is not there yet is created (the install's region); -Location is the endpoint's (the network's)
+          [string]$RegistryLocation = '',
+          [scriptblock]$Arm, [scriptblock]$Sleep, [string]$SubscriptionId)
+    if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIArm -Path $Path -AllowNotFound } else { Invoke-SIArm -Method $Method -Path $Path -Body $Body } } }
+    if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
+    if (-not $EndpointsSubnetId) { $EndpointsSubnetId = '{0}/subnets/{1}' -f ([string]$Target['VnetId']).TrimEnd('/'), [string]$Target['EndpointsSubnetName'] }
+    $lines = New-Object System.Collections.Generic.List[string]; $handOff = New-Object System.Collections.Generic.List[string]
+    $rg = ([string]$Target['ResourceGroupId']).TrimEnd('/')
+    # who still pulls with the registry's password (an install from before the managed identity) -- read, never guessed
+    $pulls = @()
+    foreach ($t in 'Microsoft.App/jobs', 'Microsoft.App/containerApps') { $pulls += @(Get-SIPnArmList -Arm $Arm -Path ('{0}/providers/{1}?api-version={2}' -f $rg, $t, $script:SIPnAppApi)) }
+    $regNow = & $Arm 'GET' ('{0}?api-version={1}' -f $RegistryId, $script:SIPnAcrApi) $null
+    $users = @(Get-SIRegistryPasswordUsers -Apps $pulls -LoginServer ([string](Get-SIPnProp $regNow @('properties', 'loginServer'))))
+    $regLoc = [string](Get-SIPnProp $regNow @('location')); if (-not $regLoc) { $regLoc = $(if ($RegistryLocation) { $RegistryLocation } else { $Location }) }
+    $r = Set-SIPrivateRegistry -Arm $Arm -RegistryId $RegistryId -Location $regLoc -PasswordUsers $users -Sleep $Sleep
+    $lines.Add($r.Line)
+    $regOk = [bool]$r.Ok
+    # the shape that matters for the network (Premium, closed) may be there while the admin user waits for a pull to move
+    $netOk = $r.Registry -and -not @(@($r.Gap) | Where-Object { $_ -ne 'admin' }).Count
+    $ep = @{ Ok = $false; Lines = @(); HandOff = @() }
+    if ($netOk) { $ep = Set-SIPrivateEndpointsWithDns -Arm $Arm -Target $Target -Location $Location -EndpointsSubnetId $EndpointsSubnetId -RegistryId $RegistryId -Sleep $Sleep }
+    foreach ($x in @($ep.Lines)) { $lines.Add($x) }; foreach ($x in @($ep.HandOff)) { $handOff.Add($x) }
+    $poolName = (Get-SIPrivateNetworkNames).AgentPool
+    $pool = @{ Ok = [bool]$SkipAgentPool; Line = '' }
+    if ($netOk -and -not $SkipAgentPool) {
+        try { $pool = Set-SIAcrAgentPool -Arm $Arm -RegistryId $RegistryId -Name $poolName -Location $regLoc -SubnetId $EndpointsSubnetId -Sleep $Sleep }
+        catch { $pool = @{ Ok = $false; Line = ('the registry''s agent pool {0} could not be made in the network: {1}' -f $poolName, $_.Exception.Message) } }
+        $lines.Add($pool.Line)
+    }
+    $gate = @{ Ok = $true; Lines = @(); Failed = @(); Records = @(); Names = @() }
+    if (-not $SkipDnsGate -and $ep.Ok) {
+        $gate = Invoke-SIPrivateNetworkDnsGate -Arm $Arm -Target $Target -RegistryId $RegistryId -Resolve $Resolve
+        foreach ($x in @($gate.Lines)) { $lines.Add($x) }
+    }
+    @{ Ok = [bool]($netOk -and $ep.Ok -and $pool.Ok -and $gate.Ok); Lines = $lines.ToArray(); HandOff = $handOff.ToArray(); Gate = $gate
+       RegistryOk = $regOk; NetworkShapeOk = [bool]$netOk; EndpointsOk = [bool]$ep.Ok; PoolOk = [bool]$pool.Ok; AgentPool = $(if ($pool.Ok -and -not $SkipAgentPool) { $poolName } else { '' })
+       LoginServer = [string](Get-SIPnProp $r.Registry @('properties', 'loginServer')); PasswordUsers = $users }
+}
+
+function Get-SIInstallPrivateState {
+    <# READ ONLY. Is the install in -ResourceGroupId PRIVATE -- does the environment its jobs run in sit internal in a
+       subnet? @{ Private; EnvironmentId; SubnetId; VnetId }. No job, or an environment that cannot be read = not private
+       (nothing is changed for it). #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$ResourceGroupId)
+    $no = @{ Private = $false; EnvironmentId = ''; SubnetId = ''; VnetId = '' }
+    $jobs = @(Get-SIPnArmList -Arm $Arm -Path ('{0}/providers/Microsoft.App/jobs?api-version={1}' -f $ResourceGroupId.TrimEnd('/'), $script:SIPnAppApi))
+    $envId = @($jobs | ForEach-Object { [string](Get-SIPnProp $_ @('properties', 'environmentId')) } | Where-Object { $_ } | Select-Object -Unique)[0]
+    if (-not $envId) { return $no }
+    $env = & $Arm 'GET' ('{0}?api-version={1}' -f $envId, $script:SIPnAppApi) $null
+    if (-not (Test-SIEnvironmentPrivate -Environment $env)) { return $no }
+    $sn = [string](Get-SIPnProp $env @('properties', 'vnetConfiguration', 'infrastructureSubnetId'))
+    @{ Private = $true; EnvironmentId = $envId; SubnetId = $sn; VnetId = ($sn -replace '(?i)/subnets/[^/]+$', '') }
+}
+
+function Invoke-SIUpdatePrivateRegistry {
+    <#
+        THE UPDATER'S CALL (framework installer rule 11, general since 2026-11-04: made, recovered OR FOUND, every resource
+        of a private install ends private, read back; the owner the same day: "if we have leftovers that are wrong, then we
+        must handle that" -- existing installs reach the new-install state through the updater). Runs INSIDE the install's
+        environment, so it checks name resolution from where the jobs pull. For a PRIVATE install only (Get-SIInstallPrivateState);
+        a public install is not touched (rule 11b covers private installs; a public one keeps its Basic registry).
+          1. the registry Premium (a private endpoint needs it; nothing in it changes);
+          2. the admin user OFF -- only when no job or app still pulls with its password (they are named otherwise);
+          3. its private endpoint pe-si-registry (+ zone, link, zone group) when it has none -- in the endpoints subnet of the
+             install's other private endpoints;
+          4. its agent pool in that subnet, so image builds run inside the network;
+          5. public network access CLOSED (Disabled, trusted Azure services allowed) -- ONLY when 3 and 4 read back AND the
+             registry's names resolve to private addresses HERE, inside (never a closed registry the jobs cannot reach).
+        -WhatIf: the plan only. Never throws for a step it cannot make: said, the next update tries again.
+        Returns @{ Private; Ok; Lines; Closed; Changed }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$ResourceGroupId, [Parameter(Mandatory)][string]$RegistryId,
+          [scriptblock]$Resolve, [switch]$WhatIf, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $lines = New-Object System.Collections.Generic.List[string]; $changed = New-Object System.Collections.Generic.List[string]
+    $st = Get-SIInstallPrivateState -Arm $Arm -ResourceGroupId $ResourceGroupId
+    if (-not $st.Private) { return @{ Private = $false; Ok = $true; Lines = @(); Closed = $false; Changed = @() } }
+    $rgId = $ResourceGroupId.TrimEnd('/')
+    $regPath = '{0}?api-version={1}' -f $RegistryId.TrimEnd('/'), $script:SIPnAcrApi
+    $reg = & $Arm 'GET' $regPath $null
+    $name = ($RegistryId.TrimEnd('/') -split '/')[-1]
+    if (-not $reg) { return @{ Private = $true; Ok = $false; Lines = @(('container registry {0} was not found' -f $name)); Closed = $false; Changed = @() } }
+    $gap = @(Get-SIRegistryPrivateGap $reg)
+    if (-not $gap.Count) { return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} is private (Premium, public access Disabled, trusted Azure services allowed, admin user off)' -f $name)); Closed = $true; Changed = @() } }
+    $pulls = @()
+    foreach ($t in 'Microsoft.App/jobs', 'Microsoft.App/containerApps') { $pulls += @(Get-SIPnArmList -Arm $Arm -Path ('{0}/providers/{1}?api-version={2}' -f $rgId, $t, $script:SIPnAppApi)) }
+    $users = @(Get-SIRegistryPasswordUsers -Apps $pulls -LoginServer ([string](Get-SIPnProp $reg @('properties', 'loginServer'))))
+    $prefix = (Get-SIPrivateNetworkNames).EndpointPrefix
+    $peOf = { param($k) & $Arm 'GET' ('{0}/providers/Microsoft.Network/privateEndpoints/{1}{2}?api-version={3}' -f $rgId, $prefix, $k, $script:SIPnNetApi) $null }
+    $regPe = & $peOf 'registry'
+    # the endpoints subnet: the one the registry's endpoint -- else the vault's, the storage's -- sits in (the install made them)
+    $peSubnet = ''
+    foreach ($k in 'registry', 'vault', 'blob', 'sql') { $p = $(if ($k -eq 'registry') { $regPe } else { & $peOf $k }); $s = [string](Get-SIPnProp $p @('properties', 'subnet', 'id')); if ($s) { $peSubnet = $s; break } }
+    if ($WhatIf) {
+        $plan = @()
+        if ($gap -contains 'sku') { $plan += 'Premium' }
+        if ($gap -contains 'admin') { $plan += $(if ($users.Count) { 'admin user stays on ({0} pull with its password)' -f ($users -join ', ') } else { 'admin user off' }) }
+        if (-not $regPe) { $plan += 'its private endpoint' }
+        $plan += 'its agent pool in the network'
+        if ($gap -contains 'public' -or $gap -contains 'bypass') { $plan += 'public access closed once its names resolve to private addresses inside' }
+        return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} would be made private: {1}' -f $name, ($plan -join '; '))); Closed = $false; Changed = @() }
+    }
+    $ok = $true
+    try {
+        if ($gap -contains 'sku') { $x = Set-SIRegistrySku -Arm $Arm -RegistryId $RegistryId -Sku 'Premium' -Sleep $Sleep; $lines.Add($x.Line); if ($x.Ok) { $changed.Add('Premium') } else { $ok = $false } }
+        if ($gap -contains 'admin') {
+            if ($users.Count) { $lines.Add(('container registry {0}: its admin user STAYS ON -- {1} still pull(s) with its password (they must pull as their managed identity first)' -f $name, ($users -join ', '))); $ok = $false }
+            else {
+                $null = & $Arm 'PATCH' $regPath ([ordered]@{ properties = [ordered]@{ adminUserEnabled = $false } })
+                $back = Read-SIPnBack -Arm $Arm -Path $regPath -Sleep $Sleep -Tries 12 -Test { param($o) $o -and -not [bool](Get-SIPnProp $o @('properties', 'adminUserEnabled')) }
+                if (-not [bool](Get-SIPnProp $back @('properties', 'adminUserEnabled'))) { $lines.Add(('container registry {0}: admin user off (read back)' -f $name)); $changed.Add('admin user off') } else { $lines.Add(('container registry {0}: the admin user still reads on after the change' -f $name)); $ok = $false }
+            }
+        }
+        if (-not $peSubnet) {
+            $lines.Add(('container registry {0}: no private endpoint of this install was found to place its own beside -- its public access stays as it is (Invardia support: setup\Set-SIPrivateNetworking.ps1 -Steps private-endpoints,private-dns,registry-agent-pool,registry-public-off)' -f $name))
+            return @{ Private = $true; Ok = $false; Lines = $lines.ToArray(); Closed = $false; Changed = $changed.ToArray() }
+        }
+        $vnet = $peSubnet -replace '(?i)/subnets/[^/]+$', ''
+        $target = Get-SIInstallPrivateNetworkTarget -Values ([ordered]@{ vnetId = $vnet; endpointsSubnetName = (($peSubnet -split '/')[-1]) }) -ResourceGroupId $rgId
+        $regLoc = [string](Get-SIPnProp $reg @('location'))
+        if (-not ((Test-SIPnSucceeded $regPe) -and (Get-SIPrivateEndpointState $regPe) -eq 'Approved')) {
+            $vnetObj = & $Arm 'GET' ('{0}?api-version={1}' -f $vnet, $script:SIPnNetApi) $null
+            $peLoc = [string](Get-SIPnProp $vnetObj @('location')); if (-not $peLoc) { $peLoc = $regLoc }
+            $ep = Set-SIPrivateEndpointsWithDns -Arm $Arm -Target $target -Location $peLoc -EndpointsSubnetId $peSubnet -RegistryId $RegistryId -Sleep $Sleep
+            foreach ($l in @($ep.Lines)) { $lines.Add($l) }
+            if ($ep.Ok) { $changed.Add('private endpoint') } else { $ok = $false }
+            $regPe = & $peOf 'registry'
+        }
+        $pool = Set-SIAcrAgentPool -Arm $Arm -RegistryId $RegistryId -Name (Get-SIPrivateNetworkNames).AgentPool -Location $regLoc -SubnetId $peSubnet -Sleep $Sleep
+        $lines.Add($pool.Line); if ($pool.Created -and $pool.Ok) { $changed.Add('agent pool') }; if (-not $pool.Ok) { $ok = $false }
+        $closed = $false
+        if ($gap -contains 'public' -or $gap -contains 'bypass') {
+            $why = Get-SIRegistryCloseProblem -RegistryEndpoint $regPe -Pools @(& $Arm 'GET' ('{0}/agentPools/{1}?api-version={2}' -f $RegistryId.TrimEnd('/'), (Get-SIPrivateNetworkNames).AgentPool, $script:SIPnAcrTasksApi) $null) -VnetId $vnet
+            $names = @(Get-SIRegistryDnsNames -Registry (& $Arm 'GET' $regPath $null))
+            $res = Test-SIInsideResolution -Names $names -Resolve $Resolve
+            if ($why) { $lines.Add(('container registry {0}: its public access stays open for now -- {1}' -f $name, $why)); $ok = $false }
+            elseif (-not $res.Ok) {
+                $lines.Add(('container registry {0}: its public access stays open for now -- its names do not resolve to private addresses inside the network yet ({1}); the network hand-off lists the records' -f $name, (@($res.Failed) -join ', ')))
+                $ok = $false
+            } elseif ($gap -contains 'public') {
+                $c = Set-SIPublicAccess -Arm $Arm -ResourceId $RegistryId -Sleep $Sleep
+                $lines.Add($c.Line); if ($c.Ok) { $closed = $true; $changed.Add('public access closed') } else { $ok = $false }
+            } else {
+                # closed already, only trusted Azure services not allowed yet
+                $null = & $Arm 'PATCH' $regPath ([ordered]@{ properties = [ordered]@{ networkRuleBypassOptions = 'AzureServices' } })
+                $b2 = Read-SIPnBack -Arm $Arm -Path $regPath -Sleep $Sleep -Tries 12 -Test { param($o) [string](Get-SIPnProp $o @('properties', 'networkRuleBypassOptions')) -eq 'AzureServices' }
+                $closed = [string](Get-SIPnProp $b2 @('properties', 'networkRuleBypassOptions')) -eq 'AzureServices'
+                $lines.Add(('container registry {0}: trusted Azure services allowed{1}' -f $name, $(if ($closed) { ' (read back)' } else { ' -- NOT after the change' }))); if (-not $closed) { $ok = $false }
+            }
+        } else { $closed = $true }
+    } catch { $lines.Add(('container registry {0}: {1} -- the next update tries again' -f $name, $_.Exception.Message)); $ok = $false; $closed = $false }
+    @{ Private = $true; Ok = $ok; Lines = $lines.ToArray(); Closed = $closed; Changed = $changed.ToArray() }
+}
+
 # ============================================================================================================== THE IN-NETWORK SQL IDENTITY
 
 function Set-SISqlIdentity {
@@ -934,10 +1209,13 @@ function Get-SIInsideCheckNames {
     <# PURE. The names that must resolve to private addresses before the public endpoints close: the web app's (and every
        app's) address, the database server, the Key Vault and the storage account's blob / queue / table endpoints -- each
        from what Azure says about the resource, each once. #>
-    param([string[]]$AppFqdns = @(), $SqlServer, $Vault, $Storage)
+    param([string[]]$AppFqdns = @(), $SqlServer, $Vault, $Storage,
+          # rule 11b: the container registry's login server and data endpoint (Get-SIRegistryDnsNames)
+          $Registry)
     $out = New-Object System.Collections.Generic.List[string]
     $add = { param($n) $h = Get-SIPnHost $n; if ($h -and -not $out.Contains($h)) { $out.Add($h) } }
     foreach ($f in @($AppFqdns)) { & $add $f }
+    foreach ($f in @(Get-SIRegistryDnsNames -Registry $Registry)) { & $add $f }
     & $add ([string](Get-SIPnProp $SqlServer @('properties', 'fullyQualifiedDomainName')))
     & $add ([string](Get-SIPnProp $Vault @('properties', 'vaultUri')))
     if ($Storage) {
@@ -1913,9 +2191,11 @@ function Invoke-SIPrivateNetworkDnsGate {
         cannot reach. Returns @{ Ok; Lines; Failed; Records; Names }. Read only.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][System.Collections.IDictionary]$Target, [string]$SqlServerId = '', [string]$KeyVaultId = '',
-          [string]$StorageAccountId = '', [scriptblock]$Resolve)
+          [string]$StorageAccountId = '', [scriptblock]$Resolve,
+          # rule 11b: the container registry's names too (login server + data endpoint), before its first image build
+          [string]$RegistryId = '')
     $get = { param($id, $api) if ($id) { & $Arm 'GET' ('{0}?api-version={1}' -f $id, $api) $null } else { $null } }
-    $names = @(Get-SIInsideCheckNames -SqlServer (& $get $SqlServerId $script:SIPnSqlApi) -Vault (& $get $KeyVaultId $script:SIPnKvApi) -Storage (& $get $StorageAccountId $script:SIPnStApi))
+    $names = @(Get-SIInsideCheckNames -SqlServer (& $get $SqlServerId $script:SIPnSqlApi) -Vault (& $get $KeyVaultId $script:SIPnKvApi) -Storage (& $get $StorageAccountId $script:SIPnStApi) -Registry (& $get $RegistryId $script:SIPnAcrApi))
     $recs = @(Get-SIPrivateLinkRecords -Arm $Arm -ResourceGroupId ([string]$Target['ResourceGroupId']) | Where-Object { $names -contains $_.Fqdn })
     $m = Test-SIInsideResolution -Names $names -Resolve $Resolve
     $lines = New-Object System.Collections.Generic.List[string]

@@ -3266,6 +3266,67 @@ function Write-SIDataHousekeepingProgress {
     $v
 }
 
+function Get-SIDataHousekeepingLeaseSql {
+    <#
+        #1063 (3.0.30): ONE CLEAN-UP AT A TIME. Since the wake-ups during a run (FlowBusy) clean up too, two executions of the
+        pipeline runner can reach the clean-up at once (a wake-up during a run, and a Run now or the next run's own start).
+        The lease is one row in the settings database, cfg.InstallState 'HousekeepingLease' (Value = the holder, UpdatedAt =
+        when it was taken; '' = free). Take: -> 'taken' (free, ours already, or the other holder's lease ran out: older than
+        @LeaseSeconds -- an execution that died never holds it for ever) or 'held:<holder> since <time>'; 'none' = the table
+        is not there (an install before cfg.InstallState: no lease, as before). Release: frees it only when it is ours.
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Take', 'Release')][string]$Action)
+    if ($Action -eq 'Release') {
+        return @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+    UPDATE cfg.InstallState SET Value = N'', UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'HousekeepingLease' AND Value = @Holder;
+'@
+    }
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT N'none'; RETURN; END
+BEGIN TRANSACTION;
+DECLARE @h nvarchar(400) = NULL, @at datetime2(0) = NULL;
+SELECT @h = Value, @at = UpdatedAt FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'HousekeepingLease';
+IF @h IS NULL
+    INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'HousekeepingLease', @Holder, NULL, @By);
+ELSE IF @h = N'' OR @h = @Holder OR @at < DATEADD(second, -@LeaseSeconds, SYSUTCDATETIME())
+    UPDATE cfg.InstallState SET Value = @Holder, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'HousekeepingLease';
+ELSE
+BEGIN
+    COMMIT TRANSACTION;
+    SELECT CONCAT(N'held:', @h, N' since ', CONVERT(nvarchar(20), @at, 126), N'Z');
+    RETURN;
+END
+COMMIT TRANSACTION;
+SELECT N'taken';
+'@
+}
+
+function Enter-SIDataHousekeepingLease {
+    <#
+        #1063 (3.0.30): takes the clean-up's lease (Get-SIDataHousekeepingLeaseSql). @{ Taken; Why }. NEVER throws. FAIL SAFE:
+        a lease that cannot be read or written = not taken (nothing is removed by this wake-up; the next one asks again).
+    #>
+    param([scriptblock]$SettingsInvoke, [Parameter(Mandatory)][string]$Holder, [int]$LeaseSeconds = 1020, [string]$By = 'caj-si-flow')
+    if (-not $SettingsInvoke) { return [pscustomobject]@{ Taken = $false; Why = 'the run records cannot be read here' } }
+    $v = $null
+    try { $v = & $SettingsInvoke (Get-SIDataHousekeepingLeaseSql -Action Take) @{ Holder = $Holder; LeaseSeconds = [int]$LeaseSeconds; By = $By } 'scalar' }
+    catch { return [pscustomobject]@{ Taken = $false; Why = ('whether another clean-up is going could not be read ({0})' -f $_.Exception.Message) } }
+    $v = @(@($v) | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+    if ($v -is [System.Collections.IDictionary]) { $v = @($v.Values)[0] }
+    if ($v -is [string] -and $v.StartsWith('held:')) { return [pscustomobject]@{ Taken = $false; Why = ('another wake-up is removing old collections ({0})' -f $v.Substring(5)) } }
+    [pscustomobject]@{ Taken = $true; Why = '' }
+}
+
+function Exit-SIDataHousekeepingLease {
+    <# #1063 (3.0.30): frees the clean-up's lease when it is ours. Never throws (a lease left behind runs out on its own). #>
+    param([scriptblock]$SettingsInvoke, [Parameter(Mandatory)][string]$Holder, [string]$By = 'caj-si-flow')
+    if (-not $SettingsInvoke) { return }
+    try { $null = & $SettingsInvoke (Get-SIDataHousekeepingLeaseSql -Action Release) @{ Holder = $Holder; By = $By } 'nonquery' } catch { }
+}
+
 function Invoke-SIDataStoppedRunCleanup {
     <#
         THE PIPELINE RUNNER'S CALL (#816). -Invoke: the data database (sql, params, mode 'reader' | 'nonquery' | 'scalar');
@@ -3287,16 +3348,26 @@ function Invoke-SIDataStoppedRunCleanup {
         or the one before it (#717 -- the plan and the database's mark), never the published one. Progress -- collections and
         rows left, paused and why -- is recorded in cfg.InstallState 'Housekeeping' (Write-SIDataHousekeepingProgress); the
         hourly heartbeat sends the rows left (Pipeline.housekeepingRowsLeft). Never blocks or fails anything else.
+        #1063 (3.0.30): reached by EVERY wake-up of the runner, also one during a run (the container entry's FlowBusy path,
+        SI_FLOW_HOUSEKEEPING_ONLY) -- ONE clean-up at a time: the lease (Enter-SIDataHousekeepingLease, -Holder = this
+        execution, held at most -TimeBudgetSeconds + 15 min); a wake-up that finds it held does nothing (Status skipped,
+        LeaseHeld) and records nothing -- the holder records the progress.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$SettingsInvoke, [double]$IdleStaleHours = 24,
           [int]$TimeBudgetSeconds = 120, [scriptblock]$Log, [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow',
           [scriptblock]$RaRunning, [string]$RaJob = 'risk-analysis-detailed',
-          [scriptblock]$JobRunning, [string[]]$Jobs = @('asset-datasync', 'data-out'))
+          [scriptblock]$JobRunning, [string[]]$Jobs = @('asset-datasync', 'data-out'),
+          [string]$Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { '{0}:{1}' -f [Environment]::MachineName, $PID }))
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
-    $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = '' }
+    $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = ''; LeaseHeld = $false }
     $hkStarted = [datetime]::UtcNow
+    $leaseTaken = $false
     try {
         if (-not $SettingsInvoke) { $out.Why = 'the run records cannot be read here -- nothing is removed'; return [pscustomobject]$out }
+        # #1063 (3.0.30): one clean-up at a time -- the lease first; held by another wake-up = this one does nothing
+        $lease = Enter-SIDataHousekeepingLease -SettingsInvoke $SettingsInvoke -Holder $Holder -LeaseSeconds ([Math]::Max(0, $TimeBudgetSeconds) + 900) -By $By
+        if (-not $lease.Taken) { $out.LeaseHeld = $true; $out.Why = ('{0} -- this wake-up removes nothing' -f $lease.Why); return [pscustomobject]$out }
+        $leaseTaken = $true
         $busy = Get-SIDataHousekeepingBusy -SettingsInvoke $SettingsInvoke -JobRunning $JobRunning -Jobs $Jobs
         $out['Busy'] = $busy
         if (-not $busy.Known) {
@@ -3407,6 +3478,8 @@ function Invoke-SIDataStoppedRunCleanup {
     } catch {
         $out.Status = 'failed'; $out.Why = $_.Exception.Message
         & $Log 'WARN' ('collections : stopped runs were not removed this time ({0}) -- nothing current is affected; the next wake-up tries again' -f $_.Exception.Message)
+    } finally {
+        if ($leaseTaken) { Exit-SIDataHousekeepingLease -SettingsInvoke $SettingsInvoke -Holder $Holder -By $By }
     }
     [pscustomobject]$out
 }

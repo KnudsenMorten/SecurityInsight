@@ -186,7 +186,12 @@ param(
     # of the customer's virtual network (delegated to Microsoft.App/environments); -EnvironmentInternal: with no public
     # address (the web app is then reachable from the customer's network only). Empty: as before, no virtual network.
     [Parameter()][string]$InfrastructureSubnetId = '',
-    [Parameter()][switch]$EnvironmentInternal
+    [Parameter()][switch]$EnvironmentInternal,
+    # framework installer rule 11b (a PRIVATE install): the registry is made private by the guided install BEFORE this
+    # script -- this script then never creates one and refuses one that is not private; -AcrAgentPool: the registry's agent
+    # pool in the network that every image build runs on, from the first. Empty: as before (public install).
+    [Parameter()][switch]$PrivateRegistry,
+    [Parameter()][string]$AcrAgentPool = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -607,8 +612,15 @@ if ($script:SITenantCounts) {
 # a job keeps the ones an earlier setup wrote (tags are merged on update).
 $siSizeTags = @(Get-SITenantSizeTags -Counts $script:SITenantCounts)
 
+# The build identity, computed ONCE here (git in a source tree, else the BUILD.json the package carries) and stamped into
+# the image as /app/BUILD.json -- the job banners, run health and telemetry read it; nothing asks git at run time.
+# It also tags every job (si-build), so the job itself says which build it runs. A RELEASED package shows its released
+# version (Get-SIReleasedDisplay), never a release-candidate label (framework installer rule 11b).
+. (Join-Path $PSScriptRoot 'engine\_shared\SI-BuildInfo.ps1')
+$siBuild = Get-SIBuildInfo -SolutionRoot $PSScriptRoot
 Write-Host ''
-Write-Host '=== SecurityInsight v2.2 Container App Job bootstrap ==='
+# framework installer rule 11b: "Console text names the product as it is today (no "v2.2" banners)"
+Write-Host ('=== SecurityInsight {0} -- container setup ===' -f $siBuild.display)
 Write-Host ('  Subscription : {0}  (from {1})' -f $subId, $subPick.Source)
 Write-Host ('  RG           : {0}' -f $ResourceGroupName)
 Write-Host ('  Location     : {0}' -f $Location)
@@ -653,28 +665,32 @@ foreach ($rp in @('Microsoft.App','Microsoft.OperationalInsights','Microsoft.Con
 Write-Host '[1/5] Ensuring Azure Container Registry ...'
 $acr = Get-SIContainerRegistry -ResourceGroupName $ResourceGroupName -Name $AcrName -SubscriptionId $subId
 # the security baseline at the end touches only a registry THIS run created (Test-SISecurityBaselineAppliesTo)
+# framework installer rule 11b: a PRIVATE install's registry is private from birth -- Premium, public access Disabled, admin
+# user off, its private endpoint, zone and DNS check -- made by the guided install's private-network-registry step BEFORE
+# this script (Invoke-SIPrivateNetworkRegistry). This script never creates a public registry for it, not for a moment.
+if (-not $acr -and $PrivateRegistry) {
+    throw ("the container registry '{0}' is not there yet: a private install creates it private first (the install's step 'Private network: the container registry'). Run the install command again: it continues from that step." -f $AcrName)
+}
+if ($acr -and $PrivateRegistry -and [string](Get-SISetupArmProp $acr @('properties', 'publicNetworkAccess')) -ne 'Disabled') {
+    throw ("the container registry '{0}' is not private yet (public network access is not Disabled): a private install builds nothing in it before it is. Run the install command again: it makes the registry private first." -f $AcrName)
+}
 $acrCreatedNow = $false
 if (-not $acr) {
-    Write-Host '       Creating ACR (Basic SKU, ~$5/mo) ...'
+    Write-Host '       Creating the container registry (Basic) ...'
     $acr = New-SIContainerRegistry -ResourceGroupName $ResourceGroupName -Name $AcrName -Location $Location -Sku 'Basic' -AdminEnabled $true -SubscriptionId $subId
     $acrCreatedNow = $true
 }
 if (-not $acr) { throw ("could not create or read the container registry '{0}' in '{1}'." -f $AcrName, $ResourceGroupName) }
-Write-Host ('       loginServer = {0}' -f $acr.loginServer)
+Write-Host ('       loginServer = {0}{1}' -f $acr.loginServer, $(if ($PrivateRegistry) { ' (private: reached through its private endpoint only)' } else { '' }))
 
 # ---- 2. Image build ----
 $image = ('{0}/si-orchestrator:{1}' -f $acr.loginServer, $ImageTag)
-# The build identity, computed ONCE here (git in a source tree, else the BUILD.json the package carries) and stamped into
-# the image as /app/BUILD.json -- the job banners, run health and telemetry read it; nothing asks git at run time.
-# It also tags every job (si-build), so the job itself says which build it runs.
-. (Join-Path $PSScriptRoot 'engine\_shared\SI-BuildInfo.ps1')
-$siBuild = Get-SIBuildInfo -SolutionRoot $PSScriptRoot
 $siBuildTag = ('si-build={0}{1}' -f $siBuild.display, $(if ($siBuild.shortCommit) { '+' + $siBuild.shortCommit } else { '' }))
 Write-Host ('       build: {0}' -f (Format-SIBuildLine $siBuild))
 if ($SkipImageBuild) {
     Write-Host '[2/5] Skipping image build (-SkipImageBuild).'
 } else {
-    Write-Host ('[2/5] Building image via ACR Tasks: {0} ...' -f $image)
+    Write-Host ('[2/5] Building image via ACR Tasks: {0}{1} ...' -f $image, $(if ("$AcrAgentPool".Trim()) { (' on the registry''s agent pool {0}, inside your network' -f "$AcrAgentPool".Trim()) } else { '' }))
     # Build context is this script's own folder -- the solution root (container/Dockerfile does COPY . /app/). It is packed
     # here with the .dockerignore honoured (customer config never leaves the install), uploaded, and the REGISTRY builds it
     # (setup\_shared\SI-AcrBuild.ps1 -- the four ARM calls `az acr build` made). .NET reads long paths: no short-path copy.
@@ -682,7 +698,7 @@ if ($SkipImageBuild) {
     if ($siBuild.source -eq 'git') { $null = Write-SIBuildInfo -Info $siBuild -Path (Join-Path $PSScriptRoot 'BUILD.json') }
     $build = Invoke-SIAcrRestBuild -SubscriptionId $subId -ResourceGroup $ResourceGroupName -RegistryName $AcrName -SourcePath $PSScriptRoot `
         -ImageNames @(('si-orchestrator:{0}' -f $ImageTag)) -DockerFilePath 'container/Dockerfile' -TimeoutSeconds 900 `
-        -OnPoll { param($s) Write-Host ('         build -- {0}' -f $s) }
+        -OnPoll { param($s) Write-Host ('         build -- {0}' -f $s) } -AgentPoolName "$AcrAgentPool".Trim()
     Write-Host ('       build {0}: {1} file(s), {2:N0} bytes uploaded, {3} s' -f $build.RunId, $build.Files, $build.Bytes, $build.Seconds)
     if (-not $build.Ok) { throw ('image build did not succeed: ' + $build.Status) }
     Write-Host '       build OK.'

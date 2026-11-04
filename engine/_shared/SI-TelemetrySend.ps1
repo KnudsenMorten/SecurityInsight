@@ -438,7 +438,9 @@ function ConvertTo-SITelemetryWire {
 # #709 report causes and the capability probe; #718 the hourly heartbeat's collection state and pipeline progress; #719 the
 # hourly heartbeat's eight further fields, SI-HeartbeatFields.ps1)
 function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 'evidence', 'Reports', 'Capabilities', 'CiColumns', 'Licences', 'Collections', 'runProgress',
-                                          'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build') }
+                                          'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build',
+                                          # #1065 (3.0.30): in Invardia's closed list and taken leniently -- here only so a refusal never costs the record
+                                          'setupSteps') }
 
 function ConvertTo-SITelemetrySupportSqlAccessWire {
     <# PURE. The heartbeat's supportSqlAccess, exactly { group, dbUser, checkedUtc, healedUtc }: group / dbUser true, false or
@@ -575,7 +577,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the status report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }

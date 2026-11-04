@@ -25,6 +25,22 @@ if (-not (Get-Command -Name 'Get-SILedgerAccessToken' -ErrorAction SilentlyConti
     $__ledger = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data-model\identity\SI-ObjectLedgerStore.ps1'
     if (Test-Path -LiteralPath $__ledger) { . $__ledger }
 }
+# the shared SQL retry (the open, and which statement failures are Azure SQL's temporary answers) -- the data sync's
+if (-not (Get-Command -Name 'Open-SISqlConnectionRetry' -ErrorAction SilentlyContinue) -or -not (Get-Command -Name 'Test-SISqlStatementTransient' -ErrorAction SilentlyContinue)) {
+    . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-SqlRetry.ps1'))
+}
+
+function Test-SIVulnSqlRerunSafe {
+    <#
+        PURE. May the SQL target's statement be run again on a new connection after a temporary Azure SQL answer? Yes when
+        the caller says so (-Rerun: an idempotent write -- TouchMany, MarkAbsentMany, the batch start), or when the statement
+        writes nothing (a read, a column probe). Never for an INSERT of a new record or an event row: a reset connection may
+        hide a commit, and a second send would answer "already recorded" or write a second event.
+    #>
+    param([AllowEmptyString()][string]$Sql, [bool]$Rerun = $false)
+    if ($Rerun) { return $true }
+    -not ([string]$Sql -match '(?i)\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|TRUNCATE|DROP|ALTER|CREATE)\b')
+}
 
 # #835: the list is a FUNCTION too -- a function runs with its caller's script scope, so a script that did not dot-source
 # this file itself would read $script:SIVulnRecordFields as $null and every record would come back EMPTY
@@ -627,6 +643,8 @@ function New-SIVulnTargetSql {
         long-lived connection to lose mid-run: on a VM for the engine SPN (certificate); in a container that signs in
         as the job's managed identity (#209), from the identity endpoint -- Pro is container-only, and a container
         has no certificate (#216).
+        Seams of the DEFAULT seam (tests): -GetToken { } -> a token (instead of the managed identity / certificate);
+        -Connect { param($Server, $Database, $Token) } -> an open connection; -StatementWaits; -Sleep { param($Seconds) }.
     #>
     param(
         [Parameter(Mandatory)][string]$Server,
@@ -637,7 +655,11 @@ function New-SIVulnTargetSql {
         [string]$Source = 'SecurityInsight',
         [string]$RunId = ([guid]::NewGuid().ToString()),
         [string]$Actor = 'SecurityInsight',
-        [scriptblock]$Invoke
+        [scriptblock]$Invoke,
+        [scriptblock]$GetToken,
+        [scriptblock]$Connect,
+        [int[]]$StatementWaits,
+        [scriptblock]$Sleep
     )
     if (-not $Invoke) {
         # the Azure SQL access token goes ONLY to an Azure SQL server; the connection string is built, never formatted
@@ -651,7 +673,9 @@ function New-SIVulnTargetSql {
         $srv = $Server; $db = $Database; $app = $AppId; $ten = $TenantId
         # A GetNewClosure() block runs in its own module scope and cannot see functions the caller dot-sourced, so
         # the token function travels INTO the closure as a value. (Found live: the fake seam in the tests hid it.)
-        if ($global:SI_UseManagedIdentity) {
+        if ($GetToken) {
+            $getToken = $GetToken
+        } elseif ($global:SI_UseManagedIdentity) {
             # The container entry point loads the identity helper; an engine never loads it itself.
             if (-not (Get-Command -Name 'Get-SIManagedIdentityToken' -ErrorAction SilentlyContinue)) {
                 throw 'New-SIVulnTargetSql: managed identity is on but the identity token helper is not loaded -- this sign-in works only inside a SecurityInsight container.'
@@ -671,30 +695,72 @@ function New-SIVulnTargetSql {
         # the internal tenant: 12,208), and a sign-in per row is both slow and a throttling risk. The holder is a
         # hashtable so the closure's copy and every later call share it.
         $tokenCache = @{ Token = $null; Until = [datetime]::MinValue }
+        # THE OPEN goes through the shared Open-SISqlConnectionRetry (a failover, a serverless resume, busy, a client timeout:
+        # waited out with a fresh token). A STATEMENT that meets one of Azure SQL's temporary answers (Test-SISqlStatementTransient:
+        # 9001, "a severe error occurred on the current command", a reset connection, 4083 ...) is run again on a NEW
+        # connection after Get-SISqlStatementRetryWaits -- only when it is safe to send twice (Test-SIVulnSqlRerunSafe: a read,
+        # or a write its caller marks idempotent with a 4th argument 'rerun'). Everything travels into the closure as a value.
+        $openSql = ${function:Open-SISqlConnectionRetry}
+        $isTransient = ${function:Test-SISqlStatementTransient}
+        $isRerunSafe = ${function:Test-SIVulnSqlRerunSafe}
+        $waits = if ($PSBoundParameters.ContainsKey('StatementWaits')) { @($StatementWaits) } else { @(Get-SISqlStatementRetryWaits) }
+        $sleepFn = if ($Sleep) { $Sleep } else { { param($Seconds) Start-Sleep -Seconds $Seconds } }
+        $connectFn = $Connect
         $Invoke = {
-            param([string]$sql, $p, [string]$mode)
-            if (-not $tokenCache.Token -or [datetime]::UtcNow -ge $tokenCache.Until) {
-                $tokenCache.Token = & $getToken
-                $tokenCache.Until = [datetime]::UtcNow.AddMinutes(45)
-            }
-            $token = $tokenCache.Token
-            $cn = New-Object System.Data.SqlClient.SqlConnection($csText)
-            $cn.AccessToken = $token
-            try {
-                $cn.Open()
-                $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = 0
-                if ($p) { foreach ($k in $p.Keys) { [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [System.DBNull]::Value } else { $p[$k] })) } }
-                switch ($mode) {
-                    'reader' {
-                        $rd = $cmd.ExecuteReader()
-                        $out = New-Object System.Collections.Generic.List[object]
-                        while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $rd.GetValue($i) }; $out.Add($h) }
-                        $rd.Close(); , $out.ToArray()
-                    }
-                    'scalar' { $cmd.ExecuteScalar() }
-                    default  { [void]$cmd.ExecuteNonQuery() }
+            param([string]$sql, $p, [string]$mode, [string]$rerun)
+            $tok = {
+                param([bool]$Fresh)
+                if ($Fresh -or -not $tokenCache.Token -or [datetime]::UtcNow -ge $tokenCache.Until) {
+                    $tokenCache.Token = & $getToken
+                    $tokenCache.Until = [datetime]::UtcNow.AddMinutes(45)
                 }
-            } finally { $cn.Dispose() }
+                $tokenCache.Token
+            }
+            $connect = if ($connectFn) { $connectFn } else {
+                {
+                    param($Server, $Database, $Token)
+                    $c0 = New-Object System.Data.SqlClient.SqlConnection($csText)
+                    $c0.AccessToken = $Token
+                    try { $c0.Open() } catch { $c0.Dispose(); throw }
+                    $c0
+                }
+            }
+            $safe = [bool](& $isRerunSafe -Sql $sql -Rerun ($rerun -eq 'rerun'))
+            $try = 0
+            while ($true) {
+                $cn = & $openSql -Server $srv -Database $db -Token $tok -Connect $connect
+                try {
+                    $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = 0
+                    if ($p) { foreach ($k in $p.Keys) { [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [System.DBNull]::Value } else { $p[$k] })) } }
+                    switch ($mode) {
+                        'reader' {
+                            $rd = $cmd.ExecuteReader()
+                            $out = New-Object System.Collections.Generic.List[object]
+                            while ($rd.Read()) { $h = @{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $h[$rd.GetName($i)] = $rd.GetValue($i) }; $out.Add($h) }
+                            $rd.Close(); , $out.ToArray()
+                        }
+                        'scalar' { $cmd.ExecuteScalar() }
+                        default  { [void]$cmd.ExecuteNonQuery() }
+                    }
+                    return
+                } catch {
+                    $err = $_
+                    # a broken connection is not handed out again by the pool
+                    if ($cn -is [System.Data.SqlClient.SqlConnection]) { try { [System.Data.SqlClient.SqlConnection]::ClearPool($cn) } catch { } }
+                    $transient = [bool](& $isTransient $err)
+                    if (-not $transient) { throw }
+                    $first = (([string]$err.Exception.Message) -split "`n")[0].Trim()
+                    if (-not $safe -or $try -ge @($waits).Count) {
+                        $why = if (-not $safe) { 'the statement writes a new record or an event row, so it is not sent twice' } else { 'it was tried {0} time(s)' -f ($try + 1) }
+                        $ex = New-Object System.Exception(('the SQL target {0} answered a temporary Azure SQL error ({1}); {2} -- transient-sql' -f $db, $first, $why), $err.Exception)
+                        $ex.Data['SIErrorClass'] = 'transient-sql'
+                        throw $ex
+                    }
+                    $w = [int]@($waits)[$try]; $try++
+                    Write-Host ('       the SQL target {0} answered a temporary Azure SQL error ({1}) -- connecting again and running the statement again in {2} s ({3}/{4})' -f $db, $first, $w, $try, @($waits).Count) -ForegroundColor DarkYellow
+                    if ($w -gt 0) { & $sleepFn $w }
+                } finally { $cn.Dispose() }
+            }
         }.GetNewClosure()
     }
     $t = [pscustomobject]@{ Kind = 'Sql'; Name = ('{0}/{1}' -f $Server, $Database); Source = $Source; RunId = $RunId; Actor = $Actor; Invoke = $Invoke; CountsAbsence = $true
@@ -910,7 +976,7 @@ SELECT @@ROWCOUNT;
                                                                Changed = $(if ($_.PSObject.Properties['Changed']) { [bool]$_.Changed } else { $true }) } })
         $json = ConvertTo-Json -InputObject @($rows) -Compress -Depth 3
         $tp = [ordered]@{ j = $json }; if ($ct) { $tp['SiBatch'] = [string]$this.SiBatchId }
-        try { $n = & $this.Invoke $sql $tp 'scalar'; @{ Ok = $true; Count = [int]$n; Error = '' } }
+        try { $n = & $this.Invoke $sql $tp 'scalar' 'rerun'; @{ Ok = $true; Count = [int]$n; Error = '' } }
         catch { @{ Ok = $false; Count = 0; Error = $_.Exception.Message } }
     }
     # #217: the absence count, set-based. Not a state change, so no event row (the close that follows is one).
@@ -929,7 +995,7 @@ SELECT @@ROWCOUNT;
         $rows = @($items | ForEach-Object { [pscustomobject]@{ SysId = [string]$_.SysId; AbsentRuns = [int]$_.AbsentRuns; Snapshot = ([datetime]$_.Snapshot).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') } })
         $json = ConvertTo-Json -InputObject @($rows) -Compress -Depth 3
         $mp['j'] = $json
-        try { $n = & $this.Invoke $sql $mp 'scalar'; @{ Ok = $true; Count = [int]$n; Error = '' } }
+        try { $n = & $this.Invoke $sql $mp 'scalar' 'rerun'; @{ Ok = $true; Count = [int]$n; Error = '' } }
         catch { @{ Ok = $false; Count = 0; Error = $_.Exception.Message } }
     }
     # #279 decision 1: the re-key, in ONE transaction and ONE update statement. One statement matters: the table allows one
@@ -1068,7 +1134,7 @@ function Start-SIVulnSqlBatch {
     param([Parameter(Mandatory)]$Target, [Parameter(Mandatory)][string]$Connector, [string]$SolutionVersion = '', [string]$Mode = 'live', [scriptblock]$Log)
     $bid = Get-SIVulnSqlBatchId -RunId ([string]$Target.RunId) -Connector $Connector
     try {
-        $a = & $Target.Invoke (Get-SIVulnSqlBatchStartSql) @{ BatchId = $bid; RunId = [string]$Target.RunId; Connector = $Connector; ContractVersion = '1'; Mode = $Mode; SolutionVersion = $SolutionVersion } 'reader'
+        $a = & $Target.Invoke (Get-SIVulnSqlBatchStartSql) @{ BatchId = $bid; RunId = [string]$Target.RunId; Connector = $Connector; ContractVersion = '1'; Mode = $Mode; SolutionVersion = $SolutionVersion } 'reader' 'rerun'
         $n = 0; foreach ($r in @($a)) { if ($r -is [System.Collections.IDictionary] -and $r.Contains('Stale')) { $n = [int]$r['Stale'] } elseif ($r -and $r.PSObject.Properties['Stale']) { $n = [int]$r.Stale } }
         if ($n -gt 0 -and $Log) { & $Log 'WARN' ('{0} earlier run(s) of {1} never ended (still writing) -- ended as failed' -f $n, $Connector) }
         # every write of the run from here on stamps the batch id (the batch row exists first: a reader never meets an id it cannot look up)

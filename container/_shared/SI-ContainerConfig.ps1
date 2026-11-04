@@ -2001,8 +2001,11 @@ function Get-SIExecutionGuardDecision {
           Run       -- no earlier execution is running: the run goes on.
           FlowBusy  -- THE FLOW RUNNER (SI_ENGINE=flow / caj-si-flow) woke up while its previous execution still runs. It
                        wakes every 5 minutes, so this is every wake-up of a long flow run: normal operation, NOT a guard.
-                       One plain INFO line; no run-health row, no guard event, no telemetry, no warning; exit 0. A start
-                       that was really blocked shows up as the flow's catch-up when it runs.
+                       One plain INFO line; no run-health row, no guard event, no telemetry, no warning. A start
+                       that was really blocked shows up as the flow's catch-up when it runs. #1063 (3.0.30): Housekeeping
+                       $true -- the entry does NOT end here: it goes on to the runner with SI_FLOW_HOUSEKEEPING_ONLY=1,
+                       which runs only the paced clean-up of old collections' rows and ends (exit 0). The data out's
+                       FlowBusy (Housekeeping $false) still ends at once.
           Skip      -- any other job started twice: the guard trips (skipped row + 'job.execution.previous-running').
         -FlowRequest: this flow execution CARRIES a request (Run the pipeline now / a stage / a step / from a step:
         SI_FLOW_FORCE, SI_FLOW_STAGE, SI_FLOW_STEP, SI_FLOW_FROM_STEP). It is never dropped here: it runs, and the runner's
@@ -2025,13 +2028,15 @@ function Get-SIExecutionGuardDecision {
             return [pscustomobject]@{ Action = 'Run'
                 Message = ('[flow] another flow execution is running ({0}, started {1}); this one carries a request, so it goes on -- the pipeline lock queues it while that run holds the install.' -f $Other.name, $started) }
         }
-        return [pscustomobject]@{ Action = 'FlowBusy'
-            Message = ('[flow] the flow is still running (execution {0}, started {1}); this wake-up does nothing.' -f $Other.name, $started) }
+        # #1063 (3.0.30): FlowBusy, Housekeeping $true -- the entry goes on to the runner in housekeeping-only mode: the paced
+        # clean-up of old collections' rows (the in-run clean-up), then it ends. It starts nothing; the running run goes on.
+        return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $true
+            Message = ('[flow] the flow is still running (execution {0}, started {1}); this wake-up starts nothing -- it only does the paced housekeeping.' -f $Other.name, $started) }
     }
     # #1038 (1): the data-out job is started by the data sync on every mark and by a person to resend -- a start while one
     # sends is normal operation, not a guard (the running one sends the newest mark when it has finished): one plain line
     if ($Engine -eq 'data-out' -or $Job -eq 'caj-si-data-out') {
-        return [pscustomobject]@{ Action = 'FlowBusy'
+        return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $false
             Message = ('[data-out] data out is already sending (execution {0}, started {1}); this start does nothing -- that run sends the newest marked collection.' -f $Other.name, $started) }
     }
     # #1021: the support grant job -- every start carries its own request on the queue, so one is never dropped; the signed

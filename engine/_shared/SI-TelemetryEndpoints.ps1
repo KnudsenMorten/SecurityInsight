@@ -7,7 +7,10 @@
         endpoints: [ { kind, url, label? } ]
           - the property is `endpoints` (lower case); each entry has kind and url, optionally label -- NO other key (one
             other key makes Invardia refuse the whole list);
-          - kind: ^[a-z][a-z0-9-]{1,30}$, §8.9's names: webapp = the Pro web app, mcp = its MCP server; each kind once;
+          - kind: ^[a-z][a-z0-9-]{1,30}$: web = the Pro web app, mcp = its MCP server; each kind once. 3.0.30 (Invardia's
+            alignment gap no-endpoint): Invardia's delivery check reads SI's web app as role `web` (Invardia DESIGN ch 9
+            "Customer endpoints": "SI: `web`, `mcp`"), so the kind earlier releases sent, `webapp` (framework §8.9's list),
+            was stored but never counted as the web app. `webapp` from an older row or caller is read as `web`;
           - url: https only, no user name / password, no query string, no fragment, at most 400 characters;
           - label: plain text, at most 60 characters (optional);
           - at most 12 entries; the field is left out when nothing is known.
@@ -40,9 +43,11 @@ function Get-SITelemetryEndpointRulesState {
     UrlMax        = 400
     LabelMax      = 60
     Keys          = @('kind', 'url', 'label')
-    # the names an older row used (role) -> §8.9's kinds
-    RoleAliases   = @{ web = 'webapp' }
-    Labels        = @{ webapp = 'SecurityInsight web app'; mcp = 'SecurityInsight MCP server' }
+    # the web app's kind on the wire: Invardia's role for SI's main address (3.0.30, alignment gap no-endpoint)
+    WebKind       = 'web'
+    # older names (a row or caller before 3.0.30: kind webapp) -> the kind sent
+    KindAliases   = @{ webapp = 'web' }
+    Labels        = @{ web = 'SecurityInsight web app'; mcp = 'SecurityInsight MCP server' }
     StateName     = 'Endpoints'      # cfg.InstallState row
     StateMax      = 400              # cfg.InstallState.Value is NVARCHAR(400)
     RunHealthPath = '/Admin/RunHealth'
@@ -97,7 +102,7 @@ function ConvertTo-SITelemetryEndpointLabel {
 function ConvertTo-SITelemetryEndpointList {
     <# PURE. Items (hashtables or objects, in priority order) as the §8.9 wire list: each entry exactly kind + url (+ label
        when one is given), valid entries only, each kind once (the first wins), at most 12. An item with `role` instead of
-       `kind` (a row written before §8.9) is read as kind, web -> webapp. Writes the entries one by one (none = nothing to send),
+       `kind` (a row written before §8.9) is read as kind; webapp (the kind before 3.0.30) is read as web. Writes the entries one by one (none = nothing to send),
        so every caller collects them with @(...) and the list is never wrapped in a second array. #>
     param([AllowNull()][object[]]$Items)
     $r = (Get-SITelemetryEndpointRulesState)
@@ -107,10 +112,8 @@ function ConvertTo-SITelemetryEndpointList {
         if ($null -eq $it -or $out.Count -ge $r.Max) { continue }
         $get = { param($n) if ($it -is [System.Collections.IDictionary]) { if ($it.Contains($n)) { $it[$n] } else { $null } } elseif ($it.PSObject.Properties[$n]) { $it.$n } else { $null } }
         $kind = "$(& $get 'kind')".Trim().ToLowerInvariant()
-        if (-not $kind) {
-            $role = "$(& $get 'role')".Trim().ToLowerInvariant()
-            $kind = if ($r.RoleAliases.ContainsKey($role)) { $r.RoleAliases[$role] } else { $role }
-        }
+        if (-not $kind) { $kind = "$(& $get 'role')".Trim().ToLowerInvariant() }
+        if ($r.KindAliases.ContainsKey($kind)) { $kind = $r.KindAliases[$kind] }
         if ($kind -notmatch $r.KindPattern -or $seen.ContainsKey($kind)) { continue }
         $url = ConvertTo-SITelemetryEndpointUrl ([string](& $get 'url'))
         if (-not $url) { continue }
@@ -155,7 +158,7 @@ function Resolve-SITelemetryEndpoints {
     param([AllowNull()][object[]]$Hosting, [AllowNull()][AllowEmptyString()][string]$PublicBaseUrl)
     $items = New-Object System.Collections.Generic.List[object]
     foreach ($h in @(ConvertTo-SITelemetryEndpointList -Items $Hosting)) { $items.Add($h) }
-    if ("$PublicBaseUrl".Trim()) { $items.Add([pscustomobject]@{ kind = 'webapp'; url = "$PublicBaseUrl".Trim() }) }
+    if ("$PublicBaseUrl".Trim()) { $items.Add([pscustomobject]@{ kind = (Get-SITelemetryEndpointRulesState).WebKind; url = "$PublicBaseUrl".Trim() }) }
     $labels = (Get-SITelemetryEndpointRulesState).Labels
     $withLabels = @(ConvertTo-SITelemetryEndpointList -Items $items.ToArray() | ForEach-Object {
         $e = [ordered]@{ kind = $_.kind; url = $_.url }
@@ -168,7 +171,7 @@ function Get-SITelemetryRunLink {
     <# PURE. The deep link of a run report that did not end ok: the web app's run-health page. '' without a web app.
        (An old entry with role 'web' counts as the web app.) #>
     param([AllowNull()][object[]]$Endpoints)
-    $web = @(ConvertTo-SITelemetryEndpointList -Items $Endpoints | Where-Object { "$($_.kind)" -eq 'webapp' } | Select-Object -First 1)
+    $web = @(ConvertTo-SITelemetryEndpointList -Items $Endpoints | Where-Object { "$($_.kind)" -eq (Get-SITelemetryEndpointRulesState).WebKind } | Select-Object -First 1)
     if (-not $web.Count) { return '' }
     $web[0].url + (Get-SITelemetryEndpointRulesState).RunHealthPath
 }

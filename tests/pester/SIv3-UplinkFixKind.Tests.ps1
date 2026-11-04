@@ -42,7 +42,7 @@ Describe 'Get-SIErrorFixKind -- from the closed error-class list only' {
         Get-SIErrorFixKind -ErrorClass 'database-full' | Should -Be 'product-defect' -Because '#904: a full database opens a ticket'
     }
     It 'customer-config is exactly the permission, licence and setting classes' {
-        @(Get-SICustomerConfigClasses | Sort-Object) | Should -Be @('arm-403', 'config-missing', 'defender-403', 'graph-403', 'kv-403', 'licence-invalid', 'settings-error', 'storage-403')
+        @(Get-SICustomerConfigClasses | Sort-Object) | Should -Be @('arm-403', 'config-missing', 'defender-403', 'grant-missing', 'graph-403', 'kv-403', 'licence-invalid', 'settings-error', 'storage-403')
         foreach ($c in @(Get-SICustomerConfigClasses)) { Get-SIErrorClasses | Should -Contain $c }
     }
     It 'everything else is a product defect -- unknown, throttling, timeouts, a missing table, sign-in and guard refusals' {

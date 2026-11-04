@@ -258,7 +258,12 @@ function Get-SIReportCause {
         '^(sql-login|settings-error)$' { return (& $r 'settings-unreachable' '') }
         '^table-missing$' { return (& $r 'no-data-source' '') }
         '^kql-query-defect$' { return (& $r 'query-defect' '') }
-        '^(platform-timeout|platform-5xx|throttled|mi-unavailable)$' { return (& $r 'platform-timeout' '') }
+        # 3.0.30: a temporary Azure SQL answer that outlasted the statement's own retry (SI-SqlRetry.ps1) is the platform's
+        '^(platform-timeout|platform-5xx|throttled|mi-unavailable|transient-sql)$' { return (& $r 'platform-timeout' '') }
+        # 3.0.30: a FULL database is its own cause -- the closed class too-large with MissingName 'database', code si-data-1404
+        # (the catalogue's "The database is full", the same code the data sync sends; Resolve-SIReportCauseCode). Before, it fell
+        # through to the unknown si-ra-0900 and support was asked to find a cause that was already known.
+        '^database-full$' { return (& $r 'too-large' 'database') }
         '^ingest-' { return (& $r 'count-less' '') }
     }
     # not recognised: a product defect until it is given its own code (framework 8.16: a failure without a cause is a defect)
@@ -269,7 +274,8 @@ function Resolve-SIReportCauseCode {
     <#
         PURE. The stable code of a cause: the catalogue's own code when one fits (si-ra-0101 DeviceTvm* absent, si-ra-0102 a
         missing optional CI column, si-ra-0103 a KQL reserved word, si-ra-0201 more rows than the count, si-ra-0302 the report
-        query too large, si-ra-0303 Risk Analysis out of memory (its generic code), si-set-0401 the settings database), else the GENERIC code of its class, else -- a cause nothing
+        query too large, si-ra-0303 Risk Analysis out of memory (its generic code), si-set-0401 the settings database, si-data-1404 the
+        database is full -- too-large with MissingName 'database'), else the GENERIC code of its class, else -- a cause nothing
         recognised -- si-ra-0900. NEVER throws, never returns ''.
     #>
     param([Parameter(Mandatory)]$Cause)
@@ -282,7 +288,7 @@ function Resolve-SIReportCauseCode {
             'missing-column'       { if ($mn -match ('^' + ((Get-SIUplinkCausesState).OptionalCiColumnPattern.Trim('^', '$') -replace '_', '-') + '$')) { return 'si-ra-0102' } }
             'query-defect'         { if ($mn -eq 'syn0002') { return 'si-ra-0103' } }
             'count-more'           { return 'si-ra-0201' }
-            'too-large'            { if ($mn -eq 'query-body') { return 'si-ra-0302' } }
+            'too-large'            { if ($mn -eq 'query-body') { return 'si-ra-0302' }; if ($mn -eq 'database') { return 'si-data-1404' } }
             'settings-unreachable' { return 'si-set-0401' }
         }
         $g = (Get-SIUplinkCausesState).GenericCodes[$cc]

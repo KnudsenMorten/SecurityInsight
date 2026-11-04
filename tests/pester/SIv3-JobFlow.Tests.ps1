@@ -917,7 +917,7 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         function script:Invoke-GuardBlock {
             param([string]$Engine, [string]$Job, [string]$Self, $Executions, [hashtable]$Env = @{})
             $script:GuardEvents = New-Object System.Collections.Generic.List[object]; $script:Rows = New-Object System.Collections.Generic.List[object]
-            $saved = @{}; foreach ($n in 'CONTAINER_APP_JOB_NAME', 'CONTAINER_APP_JOB_EXECUTION_NAME', 'SI_JOBS_SUBSCRIPTIONID', 'SI_JOBS_RESOURCEGROUP', 'SI_TRIGGER_FROM_QUEUE', 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP', 'SI_FLOW_CANCEL') { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+            $saved = @{}; foreach ($n in 'CONTAINER_APP_JOB_NAME', 'CONTAINER_APP_JOB_EXECUTION_NAME', 'SI_JOBS_SUBSCRIPTIONID', 'SI_JOBS_RESOURCEGROUP', 'SI_TRIGGER_FROM_QUEUE', 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP', 'SI_FLOW_CANCEL', 'SI_FLOW_HOUSEKEEPING_ONLY') { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
             try {
                 [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_NAME', $Job); [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME', $Self)
                 [Environment]::SetEnvironmentVariable('SI_JOBS_SUBSCRIPTIONID', 'sub'); [Environment]::SetEnvironmentVariable('SI_JOBS_RESOURCEGROUP', 'rg'); [Environment]::SetEnvironmentVariable('SI_TRIGGER_FROM_QUEUE', $null)
@@ -928,25 +928,41 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
                 function Send-SIRunHealthRow { param($Phase, $ExitReason, $ErrorMessage, [switch]$NoTelemetry, $RunContext) $script:Rows.Add([pscustomobject]@{ Phase = $Phase; Exit = $ExitReason }) }
                 function Send-SIGuardEvent { param($GuardId, $Outcome, $Engine, $Subject, $RunId, $Detail) $script:GuardEvents.Add($GuardId); [pscustomobject]@{ Status = 'recorded' } }
                 $out = @(. ([scriptblock]::Create($script:GuardBlock)) 3>&1 6>&1)
-                [pscustomobject]@{ Out = $out; Lines = @($out | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -ne 'exited-0' }); Warnings = @($out | Where-Object { $_ -is [System.Management.Automation.WarningRecord] }); Exited = ($out -contains 'exited-0') }
+                # #1063 (3.0.30): a plain flow wake-up during a run goes on in housekeeping-only mode (not an exit)
+                [pscustomobject]@{ Out = $out; Lines = @($out | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -ne 'exited-0' }); Warnings = @($out | Where-Object { $_ -is [System.Management.Automation.WarningRecord] }); Exited = ($out -contains 'exited-0')
+                                   HousekeepingOnly = ([Environment]::GetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY') -eq '1') -and [bool]$flowHousekeepingOnly }
             } finally { foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } }
         }
     }
     It 'the decision: the flow runner is FlowBusy (an INFO line); any other job started twice is still Skip; nothing running is Run' {
         $d = Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $script:Running[0] -Self 'caj-si-flow-29853040'
         $d.Action | Should -Be 'FlowBusy'
-        $d.Message | Should -Be '[flow] the flow is still running (execution caj-si-flow-29852960, started 2026-10-05T01:00:00Z); this wake-up does nothing.'
+        $d.Housekeeping | Should -BeTrue -Because '#1063 (3.0.30): a flow wake-up during a run does the paced housekeeping'
+        $d.Message | Should -Be '[flow] the flow is still running (execution caj-si-flow-29852960, started 2026-10-05T01:00:00Z); this wake-up starts nothing -- it only does the paced housekeeping.'
         (Get-SIExecutionGuardDecision -Engine 'endpoint' -Job 'caj-si-endpoint' -Other $script:Running[0] -Self 'x').Action | Should -Be 'Skip'
         (Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $null -Self 'x').Action | Should -Be 'Run'
+        # the data out's busy start still ends at once (no housekeeping there)
+        $do = Get-SIExecutionGuardDecision -Engine 'data-out' -Job 'caj-si-data-out' -Other $script:Running[0] -Self 'x'
+        $do.Action | Should -Be 'FlowBusy'; $do.Housekeeping | Should -BeFalse
+        # a request or a cancel is a full run, never housekeeping-only
+        foreach ($sw in @(@{ FlowRequest = $true }, @{ FlowRequest = $true; FlowCancel = $true })) {
+            $x = Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $script:Running[0] -Self 'x' @sw
+            $x.Action | Should -Be 'Run'; [bool]$x.PSObject.Properties['Housekeeping'] | Should -BeFalse
+        }
     }
-    It 'a flow-runner wake-up during a live flow run: ONE INFO line, no guard event, no Guard (or any) row, no WARNING, exit 0' {
+    It 'a flow-runner wake-up during a live flow run: ONE INFO line, no guard event, no Guard (or any) row, no WARNING -- and (#1063, 3.0.30) it goes on to the runner in housekeeping-only mode' {
         $r = Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running
-        $r.Exited | Should -BeTrue
+        $r.Exited | Should -BeFalse -Because 'ending here kept the in-run clean-up from ever running (live 2026-11-04)'
+        $r.HousekeepingOnly | Should -BeTrue
         $script:GuardEvents.Count | Should -Be 0
         $script:Rows.Count | Should -Be 0
         $r.Warnings.Count | Should -Be 0
         $r.Lines.Count | Should -Be 1
-        $r.Lines[0] | Should -Match '^\[flow\] the flow is still running \(execution caj-si-flow-29852960, started .+\); this wake-up does nothing\.$'
+        $r.Lines[0] | Should -Match '^\[flow\] the flow is still running \(execution caj-si-flow-29852960, started .+\); this wake-up starts nothing -- it only does the paced housekeeping\.$'
+        # the data out's busy start still ends at once, and is never housekeeping-only
+        $ex = @($script:Running | ForEach-Object { [pscustomobject]@{ name = ($_.name -replace 'flow', 'data-out'); properties = $_.properties } })
+        $o = Invoke-GuardBlock -Engine 'data-out' -Job 'caj-si-data-out' -Self 'caj-si-data-out-29853040' -Executions $ex
+        $o.Exited | Should -BeTrue; $o.HousekeepingOnly | Should -BeFalse
     }
     It 'a normal job started twice still trips the guard (skipped row + job.execution.previous-running)' {
         $ex = @($script:Running | ForEach-Object { [pscustomobject]@{ name = ($_.name -replace 'flow', 'endpoint'); properties = $_.properties } })
@@ -965,10 +981,11 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         foreach ($req in @(@{ SI_FLOW_FORCE = '1' }, @{ SI_FLOW_STAGE = 'collect' }, @{ SI_FLOW_STEP = 'endpoint' }, @{ SI_FLOW_FROM_STEP = 'identity' })) {
             $r = Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env $req
             $r.Exited | Should -BeFalse -Because (($req.Keys -join '') + ' is a request')
+            $r.HousekeepingOnly | Should -BeFalse -Because 'a request is a full run of the runner, never housekeeping-only'
             $script:GuardEvents.Count | Should -Be 0; $script:Rows.Count | Should -Be 0
             $r.Lines[0] | Should -Match 'carries a request'
         }
-        (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env @{ SI_FLOW_FORCE = '0' }).Exited | Should -BeTrue -Because 'SI_FLOW_FORCE=0 is no request'
+        (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env @{ SI_FLOW_FORCE = '0' }).HousekeepingOnly | Should -BeTrue -Because 'SI_FLOW_FORCE=0 is no request: a plain busy wake-up (housekeeping only)'
     }
     It '#946 (live 2026-10-29, three installs): a CANCEL execution beside a live runner is not FlowBusy -- it goes on to the cancel' {
         $getEnv = { param($n) if ($script:EnvOf.ContainsKey($n)) { [string]$script:EnvOf[$n] } else { '' } }
@@ -991,11 +1008,12 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         # the entry's guard as it runs: the cancel execution is not ended as FlowBusy, no guard event, no row
         $r = Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running -Env @{ SI_FLOW_CANCEL = '1'; SI_FLOW_CANCEL_REASON = 'support: the run is stuck' }
         $r.Exited | Should -BeFalse
+        $r.HousekeepingOnly | Should -BeFalse -Because 'a cancel is never housekeeping-only'
         $script:GuardEvents.Count | Should -Be 0; $script:Rows.Count | Should -Be 0
         $r.Lines[0] | Should -Match 'carries a cancel'
         [Environment]::SetEnvironmentVariable('SI_FLOW_CANCEL_REASON', $null)
-        # a plain wake-up is still FlowBusy
-        (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running).Exited | Should -BeTrue
+        # a plain wake-up is still FlowBusy (#1063, 3.0.30: it goes on in housekeeping-only mode)
+        (Invoke-GuardBlock -Engine 'flow' -Job 'caj-si-flow' -Self 'caj-si-flow-29853040' -Executions $script:Running).HousekeepingOnly | Should -BeTrue
         # wiring: the entry asks the one function, and passes the cancel on
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\Start-SIInContainer.ps1'))
         $src | Should -Match '\$guardFlowAsk = Test-SIFlowGuardRequest'

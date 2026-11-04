@@ -77,6 +77,7 @@ $script:SIInstallStepTitles = [ordered]@{
     'private-network-data'     = 'Private network: the storage''s and the Key Vault''s private endpoints, and the DNS check'
     'key-vault'                = 'Key Vault and your keys'
     'licence'                  = 'SecurityInsight Pro licence'
+    'private-network-registry' = 'Private network: the container registry, private from the start'
     'container-registry-image' = 'Container registry and image'
     'container-environment'    = 'Container Apps environment'
     'runtime-identity'         = 'SecurityInsight''s managed identity'
@@ -110,6 +111,7 @@ $script:SIInstallDataStepIds = @('preflight-sql-region', 'pro-sql', 'pro-schema'
 $script:SIInstallOptionStepIds = [ordered]@{
     'private-network-subnets' = 'privateNetwork'
     'private-network-data'    = 'privateNetwork'
+    'private-network-registry' = 'privateNetwork'
     'private-network'         = 'privateNetwork'
     'customer-managed-keys'   = 'customerManagedKeys'
 }
@@ -1776,10 +1778,19 @@ function Invoke-SIInstallBootstrap {
     if ($SkipImageBuild) { $a.SkipImageBuild = $true }
     # #681: private networking -- the environment is created in the customer's subnet, internal (the subnet step made it)
     if ([bool]$v['privateNetwork'] -and [string]$Ctx.Facts['appsSubnetId']) { $a.InfrastructureSubnetId = [string]$Ctx.Facts['appsSubnetId']; $a.EnvironmentInternal = $true }
+    # framework installer rule 11b: a private install's registry was made private by the private-network-registry step;
+    # Bootstrap never creates or uses a public one, and every image build runs on the registry's agent pool in the network
+    if ([bool]$v['privateNetwork']) {
+        $a.PrivateRegistry = $true
+        $a.AcrAgentPool = $(if ([string]$Ctx.Facts['acrAgentPool']) { [string]$Ctx.Facts['acrAgentPool'] } else { (Get-SIPrivateNetworkNames).AgentPool })
+    }
     $sched = Get-SIInstallSchedules -RunHourUtc ([int]$v['runHourUtc'])
     foreach ($k in $sched.Keys) { $a[$k] = $sched[$k] }
     $r = Invoke-SIInstallScript -Ctx $Ctx -RelativePath 'Bootstrap-ContainerAppJob.ps1' -Arguments $a
     $Ctx.Cache['bootstrapRan'] = $true
+    # rule 11 (found resources end private): an EMPTY environment that was not internal in the subnet was replaced -- recorded
+    $rep = @((@($r.Text) -join "`n") -split "`r?`n" | Where-Object { $_ -match 'ENVIRONMENT REPLACED:' }) | Select-Object -Last 1
+    if ($rep) { $Ctx.Facts['environmentReplaced'] = ([string]$rep).Trim() }
     if ($r.Error) {
         if (Test-SIInstallRegionRefused -Text ([string]$r.Error)) {
             throw (New-SIInstallFailure -Message ('Azure does not accept new resources of this kind in the region {0} for this subscription: {1}' -f [string]$v['location'], $r.Error) `
@@ -2535,6 +2546,10 @@ function Get-SIInstallStepTable {
     $t['licence'] = {
         param($ctx)
         if ($ctx.Edition -ne 'pro') { return (New-SIInstallResult -State 'skipped' -Message 'No licence was given: the free version is installed, with its database and web app. A licence added later turns on the paid features of SecurityInsight Pro.') }
+        # A Pro install WITHOUT a licence (the launcher stamped pro, 3.0.22: it starts on the public package) waits for its
+        # licence like every other step -- the public package carries no Pro steps, and `& $null` stopped a live private
+        # install here (2026-11-04)
+        if ($ctx.AwaitLicence -or -not ($ctx.ProSteps -and $ctx.ProSteps.Contains('licence'))) { return (New-SIInstallResult -State 'skipped' -Message $script:SIAwaitLicenceText) }
         & $ctx.ProSteps['licence'] $ctx
     }
 
@@ -2555,12 +2570,19 @@ function Get-SIInstallStepTable {
         }
         if (-not $env) { throw (New-SIInstallFailure -Message ('The Container Apps environment {0} was not found after the container setup.' -f $n.ContainerEnv)) }
         $ctx.Facts['containerEnvironmentId'] = [string](Get-SIInstallProp $env 'id')
-        # #681: an install that asks for private networking must not go on in an environment that is not in the network
-        if ([bool]$ctx.Values['privateNetwork'] -and -not (Test-SIEnvironmentPrivate -Environment $env)) {
-            return (New-SIInstallResult -State 'warning' -Message ('The Container Apps environment {0} existed before and is not in your virtual network: Azure cannot move it. The install goes on with it as it is.' -f $n.ContainerEnv) `
-                -Action ([ordered]@{ text = 'After the install, move it into your network (Invardia support runs this through the Support app; it shows the plan first):'; command = ('./setup/Set-SIPrivateNetworking.ps1 -ResourceGroup {0} -VnetId {1}' -f $n.ResourceGroup, [string]$ctx.Values['vnetId']) }))
+        # #681 + framework installer rule 11 (2026-11-04: made, recovered OR FOUND, every resource of a private install ends
+        # private): a private install NEVER goes on in an environment that is not internal in its subnet. The container setup
+        # replaces an EMPTY one (Initialize-SIManagedEnvironment) and stops with the plan for one that holds jobs or apps;
+        # should one still be here, the install stops -- nothing runs in a public environment of a private install.
+        if ([bool]$ctx.Values['privateNetwork'] -and -not (Test-SIEnvironmentPrivate -Environment $env -SubnetId ([string]$ctx.Facts['appsSubnetId']))) {
+            throw (New-SIInstallFailure -Message ('Private network: the Container Apps environment {0} is not internal in your virtual network ({1}), and Azure cannot convert one. Nothing runs in it.' -f $n.ContainerEnv, $(if (Get-Command -Name Get-SIManagedEnvironmentNetworkText -ErrorAction SilentlyContinue) { Get-SIManagedEnvironmentNetworkText -Environment $env } else { 'not internal in the subnet' })) `
+                -ActionText ('Run the install command again: an EMPTY environment is replaced by the internal one. One that holds jobs or apps is never removed by the install -- Invardia support moves them (it shows the plan first): ./setup/Set-SIPrivateNetworking.ps1 -ResourceGroup {0} -VnetId {1}' -f $n.ResourceGroup, [string]$ctx.Values['vnetId']) -Command $ctx.ResumeCommand)
         }
-        if ([bool]$ctx.Values['privateNetwork']) { return (New-SIInstallResult -Message ('Container Apps environment {0} in your virtual network, internal (no public address); its logs go to the SecurityInsight workspace.' -f $n.ContainerEnv)) }
+        if ([bool]$ctx.Values['privateNetwork']) {
+            $repl = [string]$ctx.Facts['environmentReplaced']
+            return (New-SIInstallResult -Message ('Container Apps environment {0} in your virtual network, internal (no public address); its logs go to the SecurityInsight workspace.{1}' -f $n.ContainerEnv, $(if ($repl) { ' ' + ($repl -replace '^\s*ENVIRONMENT REPLACED:\s*', 'Replaced: ') } else { '' })) `
+                -Detail $(if ($repl) { [ordered]@{ environmentReplaced = $repl } } else { $null }))
+        }
         New-SIInstallResult -Message ('Container Apps environment {0}; its logs go to the SecurityInsight workspace.' -f $n.ContainerEnv)
     }
 
@@ -2737,6 +2759,48 @@ function Get-SIInstallStepTable {
         $kvId = '{0}/providers/Microsoft.KeyVault/vaults/{1}' -f $rgId, $n.KeyVault
         $g = Invoke-SIInstallPrivateDataGate -Ctx $ctx -KeyVaultId $kvId -StorageAccountId ([string]$i['StorageAccountResourceId']) -What 'the storage account and the Key Vault'
         New-SIInstallResult -Message $g.Message -Detail ([ordered]@{ lines = @($g.Lines) })
+    }
+
+    # FRAMEWORK INSTALLER RULE 11b (Invardia 2026-11-04): "The container registry of a private install is private from birth
+    # too ... Premium + private endpoint + the azurecr zone in the preflight from the first create, images built inside the
+    # network, admin user OFF, pulls by managed identity." BEFORE the container setup builds its first image: the registry
+    # created private (or a FOUND one -- Basic, public, admin user on, from an earlier release -- converged), its private
+    # endpoint + privatelink.azurecr.io + the DNS check from this machine, and its agent pool in the network. Runs on every
+    # run of a private install (rule 11: "ENFORCE IT EVERY RUN").
+    $t['private-network-registry'] = {
+        param($ctx)
+        $v = $ctx.Values; $n = $ctx.Names
+        $rgId = '/subscriptions/{0}/resourceGroups/{1}' -f [string]$v['subscriptionId'], $n.ResourceGroup
+        $regId = '{0}/providers/Microsoft.ContainerRegistry/registries/{1}' -f $rgId, $n.Acr
+        $a = [ordered]@{ Target = (Get-SIInstallPrivateNetworkTarget -Values $v -ResourceGroupId $rgId)
+                         Location = $(if ([string]$ctx.Facts['vnetLocation']) { [string]$ctx.Facts['vnetLocation'] } else { [string]$v['location'] })
+                         RegistryLocation = [string]$v['location']; RegistryId = $regId; EndpointsSubnetId = [string]$ctx.Facts['endpointsSubnetId'] }
+        if ($ctx.Seams -and $ctx.Seams.Contains('Resolve') -and $ctx.Seams['Resolve'] -is [scriptblock]) { $a['Resolve'] = $ctx.Seams['Resolve'] }
+        $r = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Invoke-SIPrivateNetworkRegistry' -Arguments $a
+        if (-not $r.Ok) {
+            throw (New-SIInstallFailure -Message ('Private network: the container registry {0} could not be made private: {1}. No image is built before it is.' -f $n.Acr, $r.Error) `
+                -ActionText 'Fix the cause (the line above), then run the install command again: it continues from this step.' -Command $ctx.ResumeCommand)
+        }
+        $lines = @($r.Value.Lines)
+        foreach ($l in $lines) { Write-SIInstallConsole -Ctx $ctx -Text ('  ' + $l) -Color Gray }
+        if (-not $r.Value.NetworkShapeOk -or -not $r.Value.EndpointsOk -or -not $r.Value.PoolOk) {
+            throw (New-SIInstallFailure -Message ('Private network: the container registry {0} is not private yet -- {1}' -f $n.Acr, (@($lines | Select-Object -First 12) -join '; ')) `
+                -ActionText 'Run the install command again: it continues from this step (what is there is kept). No image is built in a registry that is not private.' -Command $ctx.ResumeCommand `
+                -Detail @{ lines = $lines; handOff = @($r.Value.HandOff) })
+        }
+        if (-not $r.Value.Gate.Ok) {
+            $recs = @($r.Value.Gate.Records | ForEach-Object { '{0}  A  {1}   (zone {2}, name {3})' -f $_.Fqdn, $_.Ip, $_.Zone, $_.Name })
+            throw (New-SIInstallFailure -Message ('Private network: the container registry {0} is private, with its private endpoint -- but this machine does not resolve its names to the private addresses yet ({1}). The install waits here: no image is built before it can.' -f $n.Acr, (@($r.Value.Gate.Failed) -join ', ')) `
+                -ActionText ('Ask your network team to add these DNS records where your network resolves (your hub''s privatelink.azurecr.io zone, or your DNS resolver), then run the install command again: it checks again from this machine and continues. ' + ($recs -join '; ')) `
+                -Command $ctx.ResumeCommand -Detail @{ lines = $lines; records = $recs })
+        }
+        $ctx.Facts['acrAgentPool'] = [string]$r.Value.AgentPool
+        $msg = 'Private network: container registry {0} is private (Premium, public access disabled, admin user off), reached through its private endpoint; this machine resolves {1} to the private addresses; image builds run on its agent pool {2} inside your network.' -f $n.Acr, (@($r.Value.Gate.Names) -join ', '), $r.Value.AgentPool
+        if (-not $r.Value.RegistryOk) {
+            # the network shape is there; only the admin user waits for a job or app that still pulls with its password
+            return (New-SIInstallResult -State 'warning' -Message (($msg -replace ', admin user off', '') + ' ' + [string]@($lines)[0]) -Detail ([ordered]@{ lines = $lines }))
+        }
+        New-SIInstallResult -Message $msg -Detail ([ordered]@{ lines = $lines })
     }
 
     # #681: PRIVATE NETWORKING (an option). The subnets come BEFORE the container setup -- the environment is created in
@@ -3295,7 +3359,11 @@ function Get-SIInstallRegionProbeResources {
                     [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.KeyVault; location = $Region; properties = $kvProps }
                 }
             }
-            'Microsoft.ContainerRegistry/registries' { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Basic' }; properties = [ordered]@{ adminUserEnabled = $false } } }
+            # rule 11b: a private install's registry is created Premium, public access Disabled, trusted services allowed
+            'Microsoft.ContainerRegistry/registries' {
+                if ($PrivateNetwork) { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Premium' }; properties = [ordered]@{ adminUserEnabled = $false; publicNetworkAccess = 'Disabled'; networkRuleBypassOptions = 'AzureServices' } } }
+                else { [ordered]@{ type = $t; apiVersion = '2023-07-01'; name = [string]$Names.Acr; location = $Region; sku = [ordered]@{ name = 'Basic' }; properties = [ordered]@{ adminUserEnabled = $false } } }
+            }
             'Microsoft.App/managedEnvironments' { [ordered]@{ type = $t; apiVersion = '2024-03-01'; name = [string]$Names.ContainerEnv; location = $Region; properties = [ordered]@{} } }
             'Microsoft.ManagedIdentity/userAssignedIdentities' { [ordered]@{ type = $t; apiVersion = '2023-01-31'; name = [string]$Names.ManagedIdentity; location = $Region } }
             'Microsoft.Sql/servers' {
@@ -3857,6 +3925,9 @@ function Invoke-SIGuidedInstallRun {
         # The first run is done only when it STARTED: a first run that waited for grants runs on the next resume, once they are
         # made (live 2026-10-06, Community rehearsal: the resume after the grants said "Done in an earlier run" and never ran it).
         $notStarted = ($s.Id -eq 'first-run' -and -not [string]$ctx.Facts['firstRunStarted'])
+        # framework installer rule 11 ("ENFORCE IT EVERY RUN"; made, recovered OR FOUND, every resource ends private): the
+        # registry's private shape is set and read back on every run of a private install, never "done in an earlier run"
+        if ($s.Id -eq 'private-network-registry') { $notStarted = $true }
         if ($Resume -and @($ctx.State['completed']) -contains $s.Id -and -not $notStarted) {
             $null = Send-SIInstallEvent -Ctx $ctx -StepId $s.Id -State 'skipped' -Message 'Done in an earlier run.'
             continue

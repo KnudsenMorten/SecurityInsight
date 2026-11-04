@@ -64,6 +64,12 @@ $siRoot = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $siRoot 'engine/_shared/SI-JobFlow.ps1')
 if (-not $Force -and "$env:SI_FLOW_FORCE" -in @('1', 'true', 'yes')) { $Force = $true }
 if (-not $Cancel -and "$env:SI_FLOW_CANCEL" -in @('1', 'true', 'yes')) { $Cancel = $true }
+# #1063 (3.0.30): A WAKE-UP DURING A RUN ONLY DOES THE HOUSEKEEPING. The container entry sets SI_FLOW_HOUSEKEEPING_ONLY=1
+# when this execution woke up while another flow execution (the running run's runner) still runs (its execution guard,
+# FlowBusy): the clean-up of old collections' rows below runs (paced, the lease, the running run's -RaRunning / -JobRunning),
+# then this wake-up ends -- nothing else: no request, trigger change, publish, lock or queue. Before 3.0.30 the entry ended
+# such a wake-up at once, so the in-run clean-up (#1063 (a)) never ran at an install whose runs go back to back.
+$housekeepingOnly = ("$env:SI_FLOW_HOUSEKEEPING_ONLY" -in @('1', 'true', 'yes')) -and -not ($Cancel -or $Force -or $Stage -or $Step -or $FromStep)
 # #700: the version this runner runs -- recorded on every new run, so the updater can tell a run of another version
 $siVersion = ''
 try { $vf = Join-Path $siRoot 'VERSION'; if (Test-Path -LiteralPath $vf) { $siVersion = ([IO.File]::ReadAllText($vf)).Trim() } } catch { $siVersion = '' }
@@ -145,7 +151,7 @@ if ($HostKind -eq 'Container') {
 
 # ---- CR8 (framework 12.11f item 1): the job trigger changes the web app ASKED for (it holds start-only rights on the jobs)
 # -- applied first, as this job's own identity, the trigger and tags only, read back, each row recorded. Never stops the run.
-if ($HostKind -eq 'Container' -and $proStore -and $armSeams) {
+if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and -not $housekeepingOnly) {
     try {
         $jtr = Join-Path $siRoot 'engine/_shared/SI-JobTriggerRequests.ps1'
         if (Test-Path -LiteralPath $jtr) {
@@ -156,7 +162,7 @@ if ($HostKind -eq 'Container' -and $proStore -and $armSeams) {
 }
 # ---- CR8 step 2, OBSERVE ONLY (framework 12.11f item 2): the people's changes verified against their signed Entra tokens
 # (signature, issuer, audience, time, person) -- recorded and said; NOTHING is refused. Never stops the run.
-if ($proStore) {
+if ($proStore -and -not $housekeepingOnly) {
     try {
         $sgr = Join-Path $siRoot 'engine/_shared/SI-SignedRequests.ps1'
         if (Test-Path -LiteralPath $sgr) {
@@ -197,7 +203,7 @@ elseif ($Force) { $pipeRequest = New-SIPipelineRequest -Scope pipeline -Trigger 
 # sync and the verification included; the database checks the run's own data: engine/_shared/data-sql/SI-DataPublishedRun.ps1).
 # The seam is the database the web app reads (the data database when it is its own). Never stops the pipeline.
 $publishSql = $null
-if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
+if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase -and -not $housekeepingOnly) {
     try {
         . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataPublishedRun.ps1')
         if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/data-model/SI-RecordSql.ps1') }
@@ -240,6 +246,11 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
         if ($seams -and $seams.PSObject.Methods['Running']) { $cleanJob = { param($j) $seams.Running($j) } }
         $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
+}
+# #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) has done its one job -- the housekeeping above; it starts nothing
+if ($housekeepingOnly) {
+    & $say 'INFO' 'a wake-up during a run: the housekeeping is done for this wake-up; it starts nothing -- the running run goes on'
+    exit 0
 }
 if ($pipeDefinition.Mode -eq 'schedules' -and -not $pipeRequest -and -not $Cancel) {
     & $say 'INFO' 'this install runs its jobs on their own schedules (Operations > Jobs: Schedules) -- the pipeline does nothing.'
@@ -418,6 +429,8 @@ if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
 # ---- the failed step's own run log (its class + first error lines go into the run's report) ----
 $stepLogs = if ($HostKind -eq 'Container') { New-SIJobFlowStepLogReader -StorageAccount ([string]$global:SI_StorageAccount) }
             else { New-SIJobFlowStepLogReader -LogRoot $(if ($global:SI_LauncherLogRoot) { [string]$global:SI_LauncherLogRoot } else { Join-Path $siRoot 'logs' }) }
+# 3.0.30: the same reader at the step's close -- a step whose engine wrote its run log is named by that log's last ERROR line
+$retry.StepLogs = $stepLogs
 
 # ---- one run: the runner + what every run reports (guards, run health, telemetry, audit) ----
 # NOTE: the names below are prefixed -- this block runs inside Invoke-SIPipelineDrain, whose own variables it would see first.

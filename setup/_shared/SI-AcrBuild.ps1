@@ -308,7 +308,9 @@ function Invoke-SIAcrQueueBuild {
     #>
     param([Parameter(Mandatory)][scriptblock]$Rest, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$ContextPath, [Parameter(Mandatory)][string]$Image, [Parameter(Mandatory)][string]$DockerfilePath,
-          [string]$ResourceGroup, [int]$TimeoutSeconds = 3600, [string]$WorkDir)
+          [string]$ResourceGroup, [int]$TimeoutSeconds = 3600, [string]$WorkDir,
+          # framework installer rule 11b: a private install's builds run on its agent pool in the network from the FIRST build
+          [string]$AgentPoolName = '')
     $reg = Get-SIAcrRegistry -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $AcrName -ResourceGroup $ResourceGroup
     $ctx = [IO.Path]::GetFullPath($ContextPath).TrimEnd('\', '/')
     $extra = @{}; $dfRel = ($DockerfilePath -replace '\\', '/')
@@ -325,7 +327,7 @@ function Invoke-SIAcrQueueBuild {
         $slot = Invoke-SIRestJson -Rest $Rest -Method POST -Uri (Get-SIArmUri -Path ($reg.Id + '/listBuildSourceUploadUrl') -ApiVersion $script:SIAcrTasksApi) -What 'the build upload slot'
         if (-not $slot -or -not "$($slot.uploadUrl)".Trim()) { throw ("registry '{0}' returned no upload URL" -f $AcrName) }
         $bytes = Send-SIAcrBuildContext -Rest $Rest -UploadUrl ([string]$slot.uploadUrl) -Path $tgz
-        $pool = Resolve-SIAcrAgentPool -Rest $Rest -Registry $reg
+        $pool = if ("$AgentPoolName".Trim()) { "$AgentPoolName".Trim() } else { Resolve-SIAcrAgentPool -Rest $Rest -Registry $reg }
         $body = New-SIAcrDockerBuildRequest -SourceLocation ([string]$slot.relativePath) -Image $Image -DockerfilePath $dfRel -LoginServer $reg.LoginServer -TimeoutSeconds $TimeoutSeconds -AgentPoolName $pool
         $run = Invoke-SIRestJson -Rest $Rest -Method POST -Uri (Get-SIArmUri -Path ($reg.Id + '/scheduleRun') -ApiVersion $script:SIAcrTasksApi) -Body (ConvertTo-Json -InputObject $body -Depth 10 -Compress) -What ('the build of {0}' -f $Image)
         [pscustomobject]@{ RunId = (Get-SIAcrRunId -Run $run); Image = $body.imageNames[0]; Bytes = $bytes; Files = @($pack.Files).Count; Writer = $pack.Writer; Registry = $reg }

@@ -872,15 +872,27 @@ function Invoke-SIRecordSqlDb {
         One statement against the database, signed in as the job. The connection is kept open for the process (one sign-in,
         not one per statement -- a CI build sends hundreds) and re-opened once when it was lost.
         -Mode: nonquery | scalar | rows (objects, the first result set).
+        A STATEMENT that meets one of Azure SQL's platform answers (Test-SISqlStatementTransient, engine\_shared\SI-SqlRetry.ps1:
+        4083 "the connection was recovered and rowcount ... not available", 9001, a failover, busy, a reset connection, "a
+        severe error occurred") is run again on a NEW connection after a pause (Get-SISqlStatementRetryWaits), and the log
+        says so. Live 2026-11-04: one 4083 failed a correlation run's CI build. Redoing is safe: every statement sent here is
+        one batch (its own transaction, MERGE by key; no #temp table outlives it) and the CI build is re-runnable; a 'rows'
+        answer is read whole before it is handed on. The CI build's lock lives on its own connection (Enter-SICiBuildLock),
+        never this one. Past the last attempt the error is thrown tagged transient-sql (Exception.Data['SIErrorClass']).
+        Any other failure is the answer at once.
+        Seams (tests): -Open { } -> an open connection; -StatementWaits; -Sleep { param($Seconds) }.
     #>
-    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params, [string]$Mode = 'nonquery', [int]$TimeoutSeconds = 0)
+    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params, [string]$Mode = 'nonquery', [int]$TimeoutSeconds = 0,
+          [scriptblock]$Open, [int[]]$StatementWaits, [scriptblock]$Sleep)
     $ErrorActionPreference = 'Stop'
     $key = ('{0}|{1}' -f $Server, $Database).ToLowerInvariant()
-    for ($try = 1; $try -le 2; $try++) {
+    $waits = if ($PSBoundParameters.ContainsKey('StatementWaits')) { @($StatementWaits) } elseif (Get-Command -Name Get-SISqlStatementRetryWaits -ErrorAction SilentlyContinue) { @(Get-SISqlStatementRetryWaits) } else { @() }
+    $reopened = $false; $try = 0
+    while ($true) {
         $cn = $script:SIRecordSqlConnections[$key]
         if ($null -eq $cn -or $cn.State -ne [System.Data.ConnectionState]::Open) {
             if ($cn) { try { $cn.Dispose() } catch { } }
-            $cn = Get-SIObjectLedgerConnection -Server $Server -Database $Database
+            $cn = if ($Open) { & $Open } else { Get-SIObjectLedgerConnection -Server $Server -Database $Database }
             if (-not $cn) { throw 'the database could not be opened' }
             Register-SISqlInfoMessages -Connection $cn
             $script:SIRecordSqlConnections[$key] = $cn
@@ -893,9 +905,25 @@ function Invoke-SIRecordSqlDb {
             if ($Mode -eq 'rows') { return @(Read-SISqlRows -Command $c) }
             return $c.ExecuteNonQuery()
         } catch {
+            $err = $_
+            $transient = $false
+            if (Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue) { $transient = [bool](Test-SISqlStatementTransient -ErrorRecord $err) }
+            if ($transient -and $try -lt @($waits).Count) {
+                # the connection is given up for good (never back into the pool) and the statement runs again on a new one
+                $script:SIRecordSqlConnections.Remove($key)
+                if ($cn -is [System.Data.SqlClient.SqlConnection]) { try { [System.Data.SqlClient.SqlConnection]::ClearPool($cn) } catch { } }
+                try { $cn.Dispose() } catch { }
+                $w = [int]@($waits)[$try]; $try++
+                $first = (([string]$err.Exception.Message) -split "`n")[0].Trim()
+                Write-Host ('       the database {0} answered a temporary Azure SQL error ({1}) -- connecting again and running the statement again in {2} s ({3}/{4})' -f $Database, $first, $w, $try, @($waits).Count) -ForegroundColor DarkYellow
+                if ($w -gt 0) { if ($Sleep) { & $Sleep $w } else { Start-Sleep -Seconds $w } }
+                continue
+            }
             # a lost connection (closed, broken, a token past its life) is re-opened once; anything else is the answer
-            if ($try -eq 1 -and $cn.State -ne [System.Data.ConnectionState]::Open) { $script:SIRecordSqlConnections.Remove($key); continue }
-            throw (New-Object System.Exception((Format-SISqlError -Exception $_.Exception -InfoMessages @($script:SISqlInfoMessages)), $_.Exception))
+            if (-not $reopened -and $cn.State -ne [System.Data.ConnectionState]::Open) { $reopened = $true; $script:SIRecordSqlConnections.Remove($key); continue }
+            $ex = New-Object System.Exception((Format-SISqlError -Exception $err.Exception -InfoMessages @($script:SISqlInfoMessages)), $err.Exception)
+            if ($transient) { $ex.Data['SIErrorClass'] = 'transient-sql' }
+            throw $ex
         }
     }
 }

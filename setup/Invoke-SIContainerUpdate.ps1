@@ -1525,6 +1525,35 @@ if (-not $acr) {
     exit 1
 }
 
+# ---- 1b. PRIVATE REGISTRY (framework installer rule 11 / 11b) ---------------------------------------------------------
+# Rule 11 (general since 2026-11-04): made, recovered OR FOUND, every resource of a PRIVATE install ends private, read
+# back; rule 11b: its registry is Premium, behind its private endpoint, admin user off, images built inside the network.
+# The owner the same day: "if we have leftovers that are wrong, then we must handle that" -- existing installs reach the
+# new-install state through the updater, not by a person's hand. A private install's registry made by an earlier release
+# (Basic, public, admin user on) is converged HERE, before the build, so the build already runs on the agent pool in the
+# network. Public installs: nothing (read only). Never fails the update: what cannot be done yet is said, and kept open.
+$pnLib = Join-Path $PSScriptRoot '_shared/SI-PrivateNetwork.ps1'
+if ($Apply -and -not $DetectOnly -and (Test-Path -LiteralPath $pnLib)) {
+    try {
+        if (-not (Get-Command -Name Invoke-SIUpdatePrivateRegistry -ErrorAction SilentlyContinue)) { . $pnLib }
+        $pnArm = {
+            param([string]$Method, [string]$Path, $Body)
+            $u = if ($Path -match '^https://') { $Path } else { 'https://management.azure.com' + $Path }
+            Invoke-SIRestJson -Rest $rest -Method $Method -Uri $u -Body $Body -AllowNotFound -What ('{0} {1}' -f $Method, ($Path -replace '\?.*$', ''))
+        }
+        $pr = Invoke-SIUpdatePrivateRegistry -Arm $pnArm -ResourceGroupId ('/subscriptions/{0}/resourceGroups/{1}' -f $sub, $acr.ResourceGroup) -RegistryId ([string]$acr.Id)
+        if ($pr.Private) {
+            Step '1b. PRIVATE REGISTRY'
+            foreach ($l in @($pr.Lines)) { if ($pr.Ok) { Info $l } else { Warn $l } }
+            if (@($pr.Changed).Count) {
+                # the registry read at the start is stale now (its public access): read again, so the build picks the agent pool
+                $script:SIAcrRegistryCache = @{}
+                $acr = Get-SIAcrRegistry -Rest $rest -SubscriptionId $sub -AcrName $target.AcrName -ResourceGroup $target.ResourceGroupName
+            }
+        }
+    } catch { Warn ("private registry: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
+
 $version = (Get-Content -LiteralPath (Join-Path $solRoot 'VERSION') -Raw).Trim()
 $tag     = Get-SIContainerImageTag -Version $version -ContentHash (Get-SIContainerContentHash -SolutionRoot $solRoot)
 $newImage = ('{0}/si-orchestrator:{1}' -f $acr.LoginServer, $tag)

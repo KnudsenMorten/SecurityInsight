@@ -1,3 +1,53 @@
+## v3.0.31 — A private install is private from the start, also its container registry
+
+### Install
+
+- On a private install, the container registry is created private from the start: the Premium tier, no public
+  access, its own private endpoint and DNS zone (checked from the install machine and listed for your network team),
+  and its admin user off. Images are built inside your network and pulled with the install's managed identity.
+- A private install that finds its registry public, or no registry at all, makes it private before anything is built.
+  The updater does the same for existing private installs, and closes the public access only once the private path
+  works.
+- A Container Apps environment that a private install finds public, and that is still empty, is replaced with the
+  internal one; one in use is never removed automatically.
+- Resuming an install downloads the release again when the one downloaded before is another edition or version.
+- The install shows the released version it installs, with no old product names, release-candidate labels or cost
+  figures in its output.
+
+## v3.0.30 — Old rows are removed during runs, duplicates are merged, and Invardia sees every install
+
+### Install
+
+- A SecurityInsight Pro install without its licence yet waits for the licence at the licence step, instead of stopping
+  with an error. The licence then arrives through the updater.
+
+### Data and runs
+
+- Old finding rows that are no longer needed are now removed while a run is going, paced by the database's load. Before,
+  this clean-up only ran between runs, so at installs whose runs follow each other it never ran and the database grew.
+- An asset record that SecurityInsight first stored under a temporary key, and then again under its lasting key, is now
+  merged at once: the copy is retired as merged, also in the ServiceNow hand-off. A new install's first run waits until
+  the lasting keys are ready, so it does not create such copies.
+- A database connection that the driver recovered mid-statement, or a database briefly unavailable, no longer fails a
+  run step: the statement is sent again where that is safe.
+- A full database now has its own report cause and step, and a failed step names its error instead of "unknown".
+- The web app's key check says "not known" when it cannot read the key's permissions, instead of reporting a problem
+  that is not there.
+
+### Status reports
+
+- Each install reports its web app's address in the form Invardia reads, so the "Open SecurityInsight" link appears in
+  Invardia's overview and in every support mail about the install.
+- Each install reports the state of its one-time setup steps (the updater's Key Vault and database rights, Invardia
+  support's read-only access and just-in-time grant, the mail send restriction), each from a check that ran at the
+  install. A step that could not be checked is not reported.
+
+### Releases
+
+- Every release hands Invardia its install parameters, the API and MCP reference (generated from the code), the docs
+  pack and its release notes, so the portal and invardia.com show them for the version you run.
+- Each script's documentation names its file, so every published script shows its documentation page.
+
 ## v3.0.29 — A clean package, a complete hand-over, the Key Vault always in the right shape
 
 ### Install

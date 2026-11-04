@@ -29,7 +29,7 @@ Describe 'the closed list' {
     It 'is exactly the agreed list, in order, with unknown as the fallback' {
         @(Get-SIErrorClasses) | Should -Be @('graph-401', 'graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'sql-login', 'mi-unavailable',
             'throttled', 'platform-timeout', 'platform-5xx', 'kql-query-defect', 'table-missing', 'ingest-4xx', 'ingest-short-count', 'settings-error',
-            'config-missing', 'licence-invalid', 'ai-error', 'guard-refused', 'report-incomplete', 'out-of-memory', 'database-full', 'transient-sql', 'unknown')
+            'config-missing', 'licence-invalid', 'ai-error', 'guard-refused', 'report-incomplete', 'out-of-memory', 'database-full', 'transient-sql', 'grant-missing', 'unknown')
         Get-SIErrorClass -Message 'something nobody has seen before' | Should -Be 'unknown'
         Get-SIErrorClass -Message '' | Should -Be 'unknown'
         Get-SIErrorClass | Should -Be 'unknown'

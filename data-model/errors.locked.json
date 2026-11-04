@@ -1193,6 +1193,10 @@
       {
         "who": "support",
         "text": "Raise the maximum size of the SecurityInsight database. The next run builds what is missing by itself."
+      },
+      {
+        "who": "customer",
+        "text": "Nothing is needed when support manages the database. If your organisation sets the database's size itself, raise its maximum size in the Azure portal (the database's Compute + storage page); the next run builds what is missing by itself."
       }
     ],
     "lesson": "A part that fails on a full database is a failure of that part, sent to support -- never only a warning line in the log.",

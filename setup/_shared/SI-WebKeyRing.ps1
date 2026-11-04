@@ -47,7 +47,10 @@ function Invoke-SIWebKeyRingConverge {
         The three steps. -Arm { param($Method, $Path, $ApiVersion, $Body) } -> @{ Status; Json }; -KeyVault { param($Method,
         $Uri, $Body) } -> @{ Status; Json }; -SetEnv { param($Name, $Value) } -> $true when it changed (throws on failure).
         -VaultId: the vault's ARM id; -PrincipalIds: the web app's identities; -CurrentEnv: the web app's value today.
-        Returns @{ Ok; KeyId; Lines; Report }. Never throws.
+        Returns @{ Ok; KeyId; Lines; Report (a failure); CustomerAction (texts); Actions (@{ Text; Class } per customer
+        action: grant-missing = the web identity has no grant on the key, config-missing = the vault uses access policies);
+        Warnings (@{ Text; Class }: grant-not-known = the updater cannot read the grants, a 401 / 403 on the read -- not
+        known, never "missing" and never a failure) }. Never throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][scriptblock]$KeyVault, [Parameter(Mandatory)][scriptblock]$SetEnv,
           [Parameter(Mandatory)][string]$VaultName, [AllowEmptyString()][string]$VaultId = '', [AllowEmptyCollection()][string[]]$PrincipalIds = @(),
@@ -58,12 +61,16 @@ function Invoke-SIWebKeyRingConverge {
           # the words of the customer's action: the command that makes the grant
           [string]$GrantCommand = 'pro-management\deploy\Deploy-SIManagement.ps1 -SigninStoreKeyVaultName <your Key Vault> -Apply (as an Owner of the resource group)')
     $lines = New-Object System.Collections.Generic.List[string]; $report = New-Object System.Collections.Generic.List[string]; $action = New-Object System.Collections.Generic.List[string]
+    $actions = New-Object System.Collections.Generic.List[object]; $warnings = New-Object System.Collections.Generic.List[object]
+    $addAction = { param($t, $c) $action.Add($t); $actions.Add([pscustomobject]@{ Text = $t; Class = $c }) }
     $keyId = Get-SIWebKeyRingKeyId -VaultName $VaultName
-    $done = { param($ok) [pscustomobject]@{ Ok = [bool]$ok; KeyId = $keyId; Lines = $lines.ToArray(); Report = $report.ToArray(); CustomerAction = $action.ToArray() } }
+    $done = { param($ok) [pscustomobject]@{ Ok = [bool]$ok; KeyId = $keyId; Lines = $lines.ToArray(); Report = $report.ToArray(); CustomerAction = $action.ToArray()
+                                            Actions = $actions.ToArray(); Warnings = $warnings.ToArray() } }
+    $keyMade = $false
     try {
         # 1. the key
         $g = & $KeyVault 'GET' ('{0}?api-version=7.4' -f $keyId) $null
-        if ([int]$g.Status -eq 404) { $g = & $KeyVault 'POST' ('{0}/create?api-version=7.4' -f $keyId) (Get-SIWebKeyRingCreateBody); if ([int]$g.Status -ge 200 -and [int]$g.Status -lt 300) { $lines.Add('web sign-in keys: the Key Vault key SI-Web-KeyRing was created') } }
+        if ([int]$g.Status -eq 404) { $g = & $KeyVault 'POST' ('{0}/create?api-version=7.4' -f $keyId) (Get-SIWebKeyRingCreateBody); if ([int]$g.Status -ge 200 -and [int]$g.Status -lt 300) { $keyMade = $true; $lines.Add('web sign-in keys: the Key Vault key SI-Web-KeyRing was created') } }
         if ([int]$g.Status -lt 200 -or [int]$g.Status -ge 300 -or -not $g.Json -or -not $g.Json.key) {
             $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the key could not be made or read in your Key Vault (HTTP {0}) -- the updater tries again on its next run' -f [int]$g.Status))
             return (& $done $false)
@@ -82,15 +89,26 @@ function Invoke-SIWebKeyRingConverge {
         $props = if ($v.Json.PSObject.Properties['properties']) { $v.Json.properties } else { $null }
         $rbac = $props -and $props.PSObject.Properties['enableRbacAuthorization'] -and [bool]$props.enableRbacAuthorization
         if (-not $rbac) {
-            $action.Add(('the web app''s sign-in keys are not protected with Key Vault: the Key Vault {0} uses access policies, not Azure RBAC -- switch it to Azure RBAC, then run {1}' -f $VaultName, $GrantCommand))
+            & $addAction ('the web app''s sign-in keys are not protected with Key Vault: the Key Vault {0} uses access policies, not Azure RBAC -- switch it to Azure RBAC, then run {1}' -f $VaultName, $GrantCommand) 'config-missing'
             return (& $done $false)
         }
         $scope = '{0}/keys/{1}' -f $VaultId.TrimEnd('/'), $script:SIWebKeyRingKeyName
+        if ($CheckGrantOnly -and $keyMade) {
+            # 3.0.30: a key made a moment ago has no grant on it yet (setup grants it) -- never a "missing grant" in its first run
+            $lines.Add('web sign-in keys: the key was just made; the grant is checked on the next run')
+            return (& $done $false)
+        }
         if ($CheckGrantOnly) {
             # the roles that let the web app wrap / unwrap with the key: Crypto Service Encryption User, Crypto User, Crypto
             # Officer, Key Vault Administrator -- on the key or above it
             $wrapRoles = @($script:SIWebKeyRingRoleId, '12338af0-0e69-4776-bea7-57ae8d297424', '14b46e9e-c2b7-41b4-b07b-48a6ebf60603', '00482a5a-887f-4fb3-b363-3b7fe8e74483')
             $l = & $Arm 'GET' ('{0}/providers/Microsoft.Authorization/roleAssignments?$filter=atScope()' -f $scope) '2022-04-01' $null
+            if ([int]$l.Status -in @(401, 403)) {
+                # 3.0.30: the updater may not READ the grants (no Microsoft.Authorization/roleAssignments/read there): whether
+                # the web app has its grant is NOT KNOWN -- a warning, never "missing" (a customer action) and never a failure
+                $warnings.Add([pscustomobject]@{ Text = ('web sign-in keys: not known -- the updater cannot read the grants on the key SI-Web-KeyRing (HTTP {0}); nothing was changed, the check runs again on the next run' -f [int]$l.Status); Class = 'grant-not-known' })
+                return (& $done $false)
+            }
             if ([int]$l.Status -lt 200 -or [int]$l.Status -ge 300 -or -not $l.Json) {
                 $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the grants on its key could not be read (HTTP {0}) -- the updater tries again on its next run' -f [int]$l.Status))
                 return (& $done $false)
@@ -99,7 +117,7 @@ function Invoke-SIWebKeyRingConverge {
                     $rid = [string]$_.roleDefinitionId; @($wrapRoles | Where-Object { $rid.EndsWith('/' + $_, [StringComparison]::OrdinalIgnoreCase) }).Count })
             foreach ($p in $principals) {
                 if (-not @($have | Where-Object { [string]$_.principalId -ieq $p }).Count) {
-                    $action.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the web app may not use its Key Vault key SI-Web-KeyRing -- run {0}' -f $GrantCommand))
+                    & $addAction ('the web app''s sign-in keys are not protected with Key Vault yet: the web app may not use its Key Vault key SI-Web-KeyRing -- run {0}' -f $GrantCommand) 'grant-missing'
                     return (& $done $false)
                 }
             }

@@ -42,7 +42,9 @@ function Test-SISqlStatementTransient {
         error occurred on the current command" after minutes of a saturated log, and a 52-hour run failed on it.
           transient: 9001, 3314, 40613, 40501, 40197, 49918 / 49919 / 49920 (not available, busy, moving), 4060 (cannot open
                      the database during a failover), 10928 / 10929 (resource limits), 1205 (chosen as a deadlock victim),
-                     -2 / 258 (a client timeout), 10053 / 10054 / 233 / 64 (a reset or closed connection), "a severe error
+                     -2 / 258 (a client timeout), 10053 / 10054 / 233 / 64 (a reset or closed connection), 4083 ("the
+                     connection was recovered and rowcount in the first query is not available": the driver re-made an idle
+                     connection under the statement -- live 2026-11-04, a correlation run's CI build failed on it), "a severe error
                      occurred on the current command", a transport-level error, a broken pooled connection ("Internal .NET
                      Framework Data Provider error 6").
           never:     the database is full (1105 / 40544 / 1101), a query defect (syntax, a type mismatch), a permission -- they
@@ -51,7 +53,7 @@ function Test-SISqlStatementTransient {
     #>
     param([AllowNull()]$ErrorRecord)
     if ($null -eq $ErrorRecord) { return $false }
-    $codes = @(9001, 3314, 40613, 40501, 40197, 49918, 49919, 49920, 4060, 10928, 10929, 1205, -2, 258, 10053, 10054, 233, 64)
+    $codes = @(9001, 3314, 40613, 40501, 40197, 49918, 49919, 49920, 4060, 10928, 10929, 1205, -2, 258, 10053, 10054, 233, 64, 4083)
     $full = @(1105, 40544, 1101)
     $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $null }
     $nums = New-Object System.Collections.Generic.List[int]
@@ -69,7 +71,7 @@ function Test-SISqlStatementTransient {
     foreach ($n in $nums) { if ($full -contains $n) { return $false } }
     if ($t -match '(?i)has reached its size quota|could not allocate (a new page|space)') { return $false }
     foreach ($n in $nums) { if ($codes -contains $n) { return $true } }
-    [bool]($t -match '(?i)a severe error occurred on the current command|transport-level error|connection was forcibly closed|forcibly closed by the remote host|connection reset|Connection reset by peer|broken pipe|Internal \.NET Framework Data Provider error 6|is not currently available|log for database .* is not available|\b(9001|3314|40613|40501|40197|49918|49919|49920)\b')
+    [bool]($t -match '(?i)a severe error occurred on the current command|transport-level error|connection was forcibly closed|forcibly closed by the remote host|connection reset|Connection reset by peer|broken pipe|Internal \.NET Framework Data Provider error 6|is not currently available|log for database .* is not available|connection was recovered and rowcount|\b(9001|3314|40613|40501|40197|49918|49919|49920|4083)\b')
 }
 
 function Get-SISqlStatementRetryWaits {

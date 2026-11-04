@@ -7715,6 +7715,17 @@ rule now.
     mark statement reads the published pointer in the same transaction under the same lock, so a mark or a range never
     interleaves with a publish -- never a kept one (it is not marked). A refused range is said as refused, not removed.
     Without a floor, a run start or a time budget nothing is removed.
+    **#1063 (3.0.30): "every wake-up" means every wake-up.** In a container the wake-ups during a run never got here: the
+    entry's execution guard saw the running run's own flow execution (it lives for the whole run) and ended the wake-up at
+    once -- *"the flow is still running ...; this wake-up does nothing"* (live 2026-11-04: three large installs, 9-12 M rows
+    left, the findings table only growing). Now such a wake-up (FlowBusy, no request) goes on to the runner in
+    housekeeping-only mode (`SI_FLOW_HOUSEKEEPING_ONLY=1`): the same one clean-up call, with the running run's Risk Analysis
+    and data out executions (`-RaRunning` / `-JobRunning`), paced, inside its time budget -- then it ends. It starts nothing
+    and touches no request, trigger change, publish, lock or queue. ONE clean-up at a time: a lease row
+    (cfg.InstallState 'HousekeepingLease': the holding execution; it runs out after the budget + 15 min, so a dead execution
+    never holds it); a wake-up that finds it held does nothing and records nothing, and a lease that cannot be read = nothing
+    removed. A request or a cancel is never housekeeping-only; the data out's busy start still ends at once; a VM runner
+    (one scheduled task, no entry guard) always reached the clean-up.
   - *The security owners' categories* are read from the Risk Analysis row's Category stored on the finding when its
     views' columns are derived (`sidata.Finding.RaCategory`, the same expression the pairs read, NULL for a row that is
     not JSON) through a narrow index, instead of one `SELECT DISTINCT` over every finding's JSON (239 s per collection on
@@ -8120,6 +8131,13 @@ the department's business owner.
    stops the run.
 5. *Never delete; one transaction.* The plan is staged and applied in one transaction under an application lock; a run
    that finds another run applied after it read the table writes nothing and plans again next time.
+6. *One CI per asset (#1082).* A first sync of a kind waits while the correlation map carries a ledger id for fewer than
+   half of that kind's assets (`pending`, nothing written) -- it never keys them by their asset id only to create them
+   again under the ledger key on the next run. A CI that was keyed by its asset id and whose asset is now seen under ONE
+   ledger CI is *merged*: retired at once as "merged into <key>" (history field `MergedInto`, counted with the run's
+   retired CIs), its asset lifecycle row retired the same way -- so every hand-off reads it retired -- and it is not
+   counted as active by the collapse check. Two live keys for one asset id, a ledger-to-ledger move and an operator's
+   never-merge are reported, never merged.
 
 Each run records its run health (engine `asset-cmdb-sql`), a telemetry run report (`si-cmdb-sql`) and an audit event
 `cmdb.ci.sync` (a plan is recorded as a plan). The CMDB page shows a read-only *SQL CI table* card: the last run and its

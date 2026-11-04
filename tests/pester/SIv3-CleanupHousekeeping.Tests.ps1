@@ -330,6 +330,160 @@ Describe 'the wiring: the pipeline runner''s wake-up' {
     }
 }
 
+Describe '#1063 (3.0.30): one clean-up at a time -- the lease' {
+    It 'held by another wake-up: this one does nothing on the data database and records nothing; free / ours / run out: taken, and freed at the end' {
+        $state = @((Row 1 (T 1) Complete -Retired), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete))
+        $base = New-Settings
+        $sent = New-Object System.Collections.ArrayList
+        $answer = @{ Take = 'held:caj-si-flow-other since 2026-11-04T10:00:00Z' }
+        $inv = { param([string]$sql, $p, [string]$mode)
+            if ($sql -match "N'HousekeepingLease'") { [void]$sent.Add([pscustomobject]@{ Sql = $sql; P = $p.Clone(); Mode = $mode }); if ($sql -match "SELECT N'taken'") { return $answer.Take }; return 1 }
+            & $base.Invoke $sql $p $mode }.GetNewClosure()
+        $d = New-HkData -State $state -Rows @{ 1 = 5 }
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $inv -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Holder 'caj-si-flow-me' -Log $script:Quiet
+        $r.Status | Should -Be 'skipped'; $r.LeaseHeld | Should -BeTrue
+        $r.Why | Should -Match '^another wake-up is removing old collections \(caj-si-flow-other since 2026-11-04T10:00:00Z\)'
+        $d.Sent.Count | Should -Be 0 -Because 'one clean-up at a time'
+        $base.Recorded.Count | Should -Be 0 -Because 'the holder records the progress'
+        @($sent | Where-Object { $_.Sql -match "SET Value = N''" }).Count | Should -Be 0 -Because 'a lease that is not ours is never freed'
+        # free: taken, the removal runs, the lease is freed (only when ours), the hold is the budget + 15 min
+        $answer.Take = 'taken'; $sent.Clear()
+        $r2 = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $inv -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Holder 'caj-si-flow-me' -Log $script:Quiet
+        $r2.Status | Should -Be 'ok'; $r2.LeaseHeld | Should -BeFalse
+        $d.Left['1'].Count | Should -Be 0
+        $sent.Count | Should -Be 2
+        $sent[0].P['Holder'] | Should -Be 'caj-si-flow-me'; $sent[0].P['LeaseSeconds'] | Should -Be 960; $sent[0].Mode | Should -Be 'scalar'
+        $sent[1].Sql | Should -Match "SET Value = N''.*WHERE Name = N'HousekeepingLease' AND Value = @Holder"
+        $sent[1].P['Holder'] | Should -Be 'caj-si-flow-me'
+    }
+    It 'FAIL SAFE: a lease that cannot be read = nothing removed; a failure inside the clean-up still frees the lease' {
+        $base = New-Settings
+        $inv = { param([string]$sql, $p, [string]$mode) if ($sql -match "SELECT N'taken'") { throw 'the settings database does not answer' }; & $base.Invoke $sql $p $mode }.GetNewClosure()
+        $d = New-HkData -State @((Row 1 (T 1) Complete -Retired), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete)) -Rows @{ 1 = 5 }
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $inv -JobRunning { param($j) $null } -NowUtc (T 7 8) -Log $script:Quiet
+        $r.Status | Should -Be 'skipped'; $r.Why | Should -Match 'whether another clean-up is going could not be read'
+        $d.Sent.Count | Should -Be 0
+        $freed = New-Object System.Collections.ArrayList
+        $inv2 = { param([string]$sql, $p, [string]$mode) if ($sql -match "SET Value = N''") { [void]$freed.Add($p['Holder']); return 1 }; & $base.Invoke $sql $p $mode }.GetNewClosure()
+        $boom = { param([string]$sql, $p, [string]$mode) throw 'the data database fell over' }
+        $r2 = Invoke-SIDataStoppedRunCleanup -Invoke $boom -SettingsInvoke $inv2 -JobRunning { param($j) $null } -NowUtc (T 7 8) -Holder 'h1' -Log $script:Quiet
+        $r2.Status | Should -Be 'failed'
+        @($freed) | Should -Be @('h1')
+    }
+    It 'the lease statement: one row in cfg.InstallState, taken under an update lock, run out after @LeaseSeconds, freed only by its holder' {
+        $t = Get-SIDataHousekeepingLeaseSql -Action Take
+        $t | Should -Match "WITH \(UPDLOCK, HOLDLOCK\) WHERE Name = N'HousekeepingLease'"
+        $t | Should -Match "@h = N'' OR @h = @Holder OR @at < DATEADD\(second, -@LeaseSeconds, SYSUTCDATETIME\(\)\)"
+        $t | Should -Match "SELECT CONCAT\(N'held:'"
+        Get-SIDataHousekeepingLeaseSql -Action Release | Should -Match "WHERE Name = N'HousekeepingLease' AND Value = @Holder"
+    }
+}
+
+Describe '#1063 (3.0.30): a flow wake-up DURING a run (FlowBusy) reaches the clean-up -- the container entry''s guard, then the runner, end to end' {
+    BeforeAll {
+        . (Join-Path $script:Root 'container\_shared\SI-ContainerConfig.ps1')
+        $src = [IO.File]::ReadAllText((Join-Path $script:Root 'container\Start-SIInContainer.ps1'))
+        $a = $src.IndexOf('$guardJob = [Environment]::GetEnvironmentVariable(''CONTAINER_APP_JOB_NAME'')'); $b = $src.IndexOf('# #211 (2)')
+        $a | Should -BeGreaterThan 0; $b | Should -BeGreaterThan $a
+        $script:GuardBlock = $src.Substring($a, $b - $a) -replace '\bexit 0\b', 'return ''exited-0'''
+        $script:RunnerPath = Join-Path $script:Root 'engine\flow\Invoke-SIJobFlowRun.ps1'
+        # the running run's runner (01:00) and this wake-up (01:05) -- both executions of caj-si-flow
+        $script:FlowExecs = @([pscustomobject]@{ name = 'caj-si-flow-29852960'; properties = [pscustomobject]@{ status = 'Running'; startTime = '2026-11-04T01:00:00Z' } },
+                              [pscustomobject]@{ name = 'caj-si-flow-29853040'; properties = [pscustomobject]@{ status = 'Running'; startTime = '2026-11-04T01:05:00Z' } })
+        $script:EnvNames = @('CONTAINER_APP_JOB_NAME', 'CONTAINER_APP_JOB_EXECUTION_NAME', 'SI_JOBS_SUBSCRIPTIONID', 'SI_JOBS_RESOURCEGROUP', 'SI_TRIGGER_FROM_QUEUE',
+                             'SI_COLLECT_PHASE', 'SI_FLOW_FORCE', 'SI_FLOW_STAGE', 'SI_FLOW_STEP', 'SI_FLOW_FROM_STEP', 'SI_FLOW_CANCEL', 'SI_FLOW_DRAIN',
+                             'SI_FLOW_HOUSEKEEPING_ONLY', 'SI_FLOW_SUBSCRIPTIONID', 'SI_FLOW_RESOURCEGROUP', 'SI_FLOW_TRIGGER')
+        $script:GlobalNames = @('SI_ProSqlServer', 'SI_ProSqlDatabase', 'SI_Pro_DataSqlServer', 'SI_Pro_DataSqlDatabase', 'SI_StorageAccount', 'SI_SPN_AppId', 'SI_SPN_TenantId', 'SI_SPN_CertThumbprint')
+        # the seams: Azure Resource Manager (the guard's execution list, the runner's job list and running executions), the
+        # settings store, the data database -- dot-sourced INTO the test itself (the nearest scope: no other definition of
+        # these names, loaded anywhere else in the test process, can shadow them; never global)
+        $script:WakeStubs = {
+        function Get-OptionalEnv { param([string]$Name, $Default = $null) $v = [Environment]::GetEnvironmentVariable($Name); if ([string]::IsNullOrWhiteSpace($v)) { $Default } else { $v } }
+        function Invoke-SIArm {
+            param([string]$Method = 'GET', [string]$Path, [string]$ApiVersion, $Body, [switch]$List, [switch]$AllowNotFound)
+            [void]$SIv3WakeArm.Add(('{0} {1}' -f $Method, $Path))
+            if ($List) { return $SIv3WakeExecs }
+            if ($Method -ne 'GET') { throw ('the wake-up must start or stop nothing: {0} {1}' -f $Method, $Path) }
+            if ($Path -match '/jobs$') { return [pscustomobject]@{ value = @('caj-si-flow', 'caj-si-asset-datasync', 'caj-si-data-out', 'caj-si-risk-analysis-detailed' | ForEach-Object { [pscustomobject]@{ name = $_ } }) } }
+            if ($Path -match '/executions$') { return [pscustomobject]@{ value = @() } }
+            $null
+        }
+        function Send-SIRunHealthRow { param($Phase, $ExitReason, $ErrorMessage, [switch]$NoTelemetry, $RunContext) [void]$SIv3WakeHealth.Add($ExitReason) }
+        function Send-SIGuardEvent { param($GuardId, $Outcome, $Engine, $Subject, $RunId, $Detail) [void]$SIv3WakeHealth.Add($GuardId) }
+        function New-SIProSettingsStore { param($Server, $Database, $AppId, $TenantId, $CertThumbprint) [pscustomobject]@{ Invoke = $SIv3WakeSettings } }
+        function New-SIDataSqlInvoke { param($Server, $Database, $AppId, $TenantId, $CertThumbprint) $SIv3WakeData.Invoke }
+        function Write-SIAuditEvent { param() }
+        }
+    }
+    It 'the guard says FlowBusy, the entry goes on in housekeeping-only mode, the runner removes the retired rows of collections marked before the run began -- paced, under the lease -- and starts nothing' {
+        $savedEnv = @{}; foreach ($n in $script:EnvNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
+        $savedGlobal = @{}; foreach ($n in $script:GlobalNames) { $savedGlobal[$n] = (Get-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue) }
+        # the seams' state: plain names, found by the stubs through the caller's scopes (a stub called from the runner script
+        # has the RUNNER's script scope as $script:)
+        $SIv3WakeExecs = $script:FlowExecs; $SIv3WakeArm = New-Object System.Collections.ArrayList; $SIv3WakeHealth = New-Object System.Collections.ArrayList
+        $SIv3WakeData = $null; $SIv3WakeSettings = $null
+        . $script:WakeStubs
+        try {
+            foreach ($n in $script:EnvNames) { [Environment]::SetEnvironmentVariable($n, $null) }
+            foreach ($n in $script:GlobalNames) { Remove-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue }
+            [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_NAME', 'caj-si-flow'); [Environment]::SetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME', 'caj-si-flow-29853040')
+            [Environment]::SetEnvironmentVariable('SI_JOBS_SUBSCRIPTIONID', 'sub'); [Environment]::SetEnvironmentVariable('SI_JOBS_RESOURCEGROUP', 'rg')
+            # 1. the container entry's execution guard, run as it is (exit -> return)
+            $engine = 'flow'
+            $g = @(. ([scriptblock]::Create($script:GuardBlock)) 3>&1 6>&1)
+            $g -contains 'exited-0' | Should -BeFalse -Because 'a busy flow wake-up no longer ends at the guard'
+            ($g | ForEach-Object { "$_" }) -join "`n" | Should -Match 'this wake-up starts nothing -- it only does the paced housekeeping'
+            [Environment]::GetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY') | Should -Be '1'
+            $SIv3WakeHealth.Count | Should -Be 0 -Because 'normal operation: no run-health row, no guard event'
+            # 2. the runner, as the entry dispatches it (-HostKind Container), with the settings the Pro layer loaded
+            [Environment]::SetEnvironmentVariable('SI_FLOW_SUBSCRIPTIONID', 'sub'); [Environment]::SetEnvironmentVariable('SI_FLOW_RESOURCEGROUP', 'rg')
+            $global:SI_ProSqlServer = 'sql.example'; $global:SI_ProSqlDatabase = 'sidb'
+            # a run is going (started 25 Oct); collections 1 and 2 were marked on 20 Oct, before it; 3 and 4 are the newest two
+            $state = @((Row 1 (T 1) Complete -Retired), (Row 2 (T 2) Complete -Retired), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete))
+            $SIv3WakeData = New-HkData -State $state -Rows @{ 1 = 5; 2 = 5; 3 = 4; 4 = 4 }
+            $set = New-Settings -Runs 1 -RunStart (T 25)
+            $settingsSql = New-Object System.Collections.ArrayList
+            $SIv3WakeSettings = { param([string]$sql, $p, [string]$mode) [void]$settingsSql.Add($sql); & $set.Invoke $sql $p $mode }.GetNewClosure()
+            # dot-sourced: in a container the runner loads the data layer into ITS OWN script scope, and that layer's tables are
+            # $script: variables; here the test loaded it, so the runner runs in the test's scope chain to see the same tables
+            $eap = $ErrorActionPreference
+            try { $out = @(. $script:RunnerPath -HostKind Container 6>&1 3>&1) } finally { $ErrorActionPreference = $eap }
+            $text = ($out | ForEach-Object { "$_" }) -join "`n"
+            $LASTEXITCODE | Should -Be 0
+            # the clean-up was reached and removed the rows during the run
+            $SIv3WakeData.Left['1'].Count | Should -Be 0 -Because ("the clean-up removes them during the run; the runner said: " + (($out | ForEach-Object { "$_" }) -join ' || ')); $SIv3WakeData.Left['2'].Count | Should -Be 0
+            $SIv3WakeData.Left['3'].Count | Should -Be 4; $SIv3WakeData.Left['4'].Count | Should -Be 4
+            $rec = $set.Recorded[$set.Recorded.Count - 1] | ConvertFrom-Json
+            $rec.removedRows | Should -BeGreaterOrEqual 10
+            # under the lease (taken as this execution, freed at the end)
+            @($settingsSql | Where-Object { $_ -match "SELECT N'taken'" }).Count | Should -Be 1
+            @($settingsSql | Where-Object { $_ -match "SET Value = N''" }).Count | Should -Be 1
+            # the running run's executions were asked (the data out gives way; Risk Analysis owns its collection)
+            @($SIv3WakeArm | Where-Object { $_ -match 'caj-si-data-out/executions$' }).Count | Should -BeGreaterThan 0
+            @($SIv3WakeArm | Where-Object { $_ -match 'caj-si-risk-analysis-detailed/executions$' }).Count | Should -BeGreaterThan 0
+            # and it started nothing: no lock, no queue, no run, no start
+            $text | Should -Match 'a wake-up during a run: the housekeeping is done for this wake-up; it starts nothing'
+            @($settingsSql | Where-Object { $_ -match 'PipelineQueue|INSERT\s+(INTO\s+)?cfg\.FlowRun\b' }).Count | Should -Be 0
+            @($SIv3WakeArm | Where-Object { $_ -notmatch '^GET ' }).Count | Should -Be 0
+        } finally {
+            foreach ($n in $script:EnvNames) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
+            foreach ($n in $script:GlobalNames) { Remove-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue; if ($savedGlobal[$n]) { Set-Variable -Name $n -Scope Global -Value $savedGlobal[$n].Value } }
+        }
+    }
+    It 'the runner in housekeeping-only mode: the clean-up comes before its exit, and nothing that changes the install comes before the clean-up' {
+        $r = [IO.File]::ReadAllText($script:RunnerPath)
+        $clean = $r.IndexOf('$null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql')
+        $exit = $r.IndexOf("if (`$housekeepingOnly) {`n") ; if ($exit -lt 0) { $exit = $r.IndexOf("if (`$housekeepingOnly) {`r`n") }
+        $clean | Should -BeGreaterThan 0; $exit | Should -BeGreaterThan $clean
+        $exit | Should -BeLessThan $r.IndexOf("Mode -eq 'schedules' -and -not `$pipeRequest")
+        $r | Should -Match ([regex]::Escape("if (`$HostKind -eq 'Container' -and `$proStore -and `$armSeams -and -not `$housekeepingOnly)"))
+        $r | Should -Match ([regex]::Escape("if (`$proStore -and -not `$housekeepingOnly)"))
+        $r | Should -Match ([regex]::Escape("[string]`$global:SI_ProSqlDatabase -and -not `$housekeepingOnly)"))
+        # a request (Run now, a stage, a step, from a step, a cancel) is never housekeeping-only
+        $r | Should -Match ([regex]::Escape('-and -not ($Cancel -or $Force -or $Stage -or $Step -or $FromStep)'))
+    }
+}
+
 Describe 'on a real SQL Server' {
     BeforeAll {
         function script:New-LocalInvoke([string]$Db) {

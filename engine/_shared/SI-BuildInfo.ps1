@@ -36,6 +36,15 @@ function ConvertTo-SIBuildDisplay {
     '{0}-rc.{1}' -f $v, ([int]$Rc)
 }
 
+function Get-SIReleasedDisplay {
+    <# PURE. The version a RELEASED package shows: its release label (BUILD.json 'release', stamped by Publish-SIRelease)
+       when that is a released number -- digits and dots, 3 or 4 parts (3.0.31, 3.0.0.123) -- else '' (not a release). #>
+    param([AllowNull()][AllowEmptyString()][string]$Release)
+    $r = "$Release".Trim()
+    if ($r -match '^\d{1,6}(\.\d{1,12}){2,3}$') { return $r }
+    ''
+}
+
 function Read-SIVersionFile {
     param([Parameter(Mandatory)][string]$SolutionRoot)
     $f = [System.IO.Path]::Combine($SolutionRoot, 'VERSION')
@@ -77,6 +86,10 @@ function Read-SIBuildInfo {
                 if ("$($j.display)".Trim()) { $o.display = "$($j.display)".Trim() }
                 # the release stamped by Publish-SIRelease travels on (an image build writes BUILD.json again from this)
                 if ($j.PSObject.Properties['release'] -and "$($j.release)".Trim()) { $o | Add-Member -NotePropertyName 'release' -NotePropertyValue "$($j.release)".Trim() -Force }
+                # framework installer rule 11b (2026-11-04: a released install showed "3.0.29-rc.9"): a package stamped as a
+                # RELEASE shows its released version -- never a release-candidate label (Get-SIReleasedDisplay)
+                $rel = Get-SIReleasedDisplay -Release $(if ($j.PSObject.Properties['release']) { [string]$j.release } else { '' })
+                if ($rel) { $o.display = $rel; $o.rc = $null }
                 return $o
             }
         } catch { }
@@ -202,8 +215,15 @@ function New-SIBuildArchiveArgs {
           [string]$ReleaseVersion)
     $sol = [System.IO.Path]::Combine($RepoRoot, 'SOLUTIONS', 'SecurityInsight')
     $info = Get-SIBuildInfo -SolutionRoot $sol -Ref $Ref -Channel $Channel -Ring $Ring
-    if ("$ReleaseVersion".Trim()) { $info | Add-Member -NotePropertyName 'release' -NotePropertyValue "$ReleaseVersion".Trim() -Force }
-    $dir = [System.IO.Path]::Combine($WorkDir, ('build-' + [guid]::NewGuid().ToString('N').Substring(0, 8)))
+    if ("$ReleaseVersion".Trim()) {
+        $info | Add-Member -NotePropertyName 'release' -NotePropertyValue "$ReleaseVersion".Trim() -Force
+        # a RELEASE package is the release, whether or not its tag exists yet when it is packed (the tag follows the
+        # pack): it shows the released version -- never "-rc.<n>" (2026-11-04: a released install showed 3.0.29-rc.9).
+        # The archive's VERSION file carries the same number (Publish-SIRelease, Set-SIReleaseArchiveVersion).
+        $rel = Get-SIReleasedDisplay -Release $ReleaseVersion
+        if ($rel) { $info.version = $rel; $info.display = $rel; $info.rc = $null }
+    }
+    $dir =[System.IO.Path]::Combine($WorkDir, ('build-' + [guid]::NewGuid().ToString('N').Substring(0, 8)))
     $file = Write-SIBuildInfo -Info $info -Path ([System.IO.Path]::Combine($dir, 'BUILD.json'))
     $p = if ($Prefix.EndsWith('/')) { $Prefix } else { $Prefix + '/' }
     [pscustomobject]@{

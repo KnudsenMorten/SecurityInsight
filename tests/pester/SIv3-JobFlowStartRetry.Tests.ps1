@@ -197,6 +197,45 @@ Describe 'the runner: everything else is a real failure and is never retried' {
         (Get-Step $r 'identity').State | Should -Be 'Skipped' -Because 'dependents are handled as before'
         @(Get-SIGuardCallsForFlow -Result $r | Where-Object { $_.GuardId -eq 'flow.step.start-failed' }).Count | Should -Be 0
     }
+    It '3.0.30: an engine failure with its own run log is named by the LAST ERROR line of that log, classified (never a bare job-failed)' {
+        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
+        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('ptc') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
+                Save = { param($s) }; Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1
+                StartEvidence = (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $true } -Logs @{ 'caj-si-ptc-e1' = $true }) }
+        $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
+        $script:LogReads = New-Object System.Collections.Generic.List[string]
+        $p.StepLogs = { param($Job, $StartedUtc, $EndedUtc)
+            $script:LogReads.Add([string]$Job)
+            [pscustomobject]@{ Name = 'run-logs/ptc/ptc_container_20261005T050000Z.log'; Lines = @(
+                '[INFO] ptc: reading',
+                '[ERROR] ptc: page 2 failed once: 429 Too Many Requests -- retried',
+                '[ERROR] ptc: the step failed: SQL error 40544 (line 1): The database ''sqldb-si'' has reached its size quota.') } }
+        $r = Invoke-SIJobFlow @p
+        $s = Get-Step $r 'ptc'
+        $s.State | Should -Be 'Failed'
+        $s.ErrorClass | Should -Be 'database-full' -Because 'the LAST ERROR line names the error, not the first'
+        $s.Error | Should -Match '^the execution ended failed: \[ERROR\] ptc: the step failed: SQL error 40544'
+        $s.Attempts | Should -Be 1 -Because 'an engine failure is still never started again'
+        @($script:LogReads).Count | Should -Be 1
+        (Get-SIJobFlowStepFailure -Step $s -LogLines $null).ErrorClass | Should -Be 'database-full' -Because 'the pipeline''s report carries the step''s class'
+    }
+    It '3.0.30: a log with nothing the classifier knows, or no log, leaves the step as it was' {
+        (Get-SIJobFlowLogErrorClass -Lines @('[INFO] all fine', '[ERROR] something odd happened')).ErrorClass | Should -Be ''
+        (Get-SIJobFlowLogErrorClass -Lines @()).ErrorClass | Should -Be ''
+        $x = Get-SIJobFlowLogErrorClass -Lines @('[ERROR] identity: Graph refused /users: Response status code does not indicate success: 403 (Forbidden). Authorization_RequestDenied graph.microsoft.com', '[INFO] done')
+        $x.ErrorClass | Should -Be 'graph-403'; $x.Line | Should -Match '^\[ERROR\] identity: Graph refused'
+        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
+        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('ptc') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
+                Save = { param($s) }; Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1
+                StartEvidence = (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $true }); StepLogs = { param($Job, $StartedUtc, $EndedUtc) $null } }
+        $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
+        $s = Get-Step (Invoke-SIJobFlow @p) 'ptc'
+        $s.ErrorClass | Should -Be 'job-failed'; $s.Error | Should -Be 'the execution ended failed'
+    }
+    It '3.0.30 WIRING: the container runner hands its step log reader to the step close' {
+        $src = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'engine', 'flow', 'Invoke-SIJobFlowRun.ps1'))
+        $src | Should -Match ([regex]::Escape('$retry.StepLogs = $stepLogs'))
+    }
     It 'a run log in the window is a real failure too' {
         $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
         $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $null } -Logs @{ 'caj-si-ptc-e1' = $true })

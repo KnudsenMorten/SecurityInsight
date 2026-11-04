@@ -142,6 +142,69 @@ Describe 'The database seam' {
     }
 }
 
+Describe 'The database seam: a temporary Azure SQL answer runs the statement again on a NEW connection (the CI build path)' {
+    BeforeAll {
+        # a fake connection per open; -Plan: one item per attempt (an exception = the statement fails with it, else its answer)
+        function script:New-FakeRecordDb([object[]]$Plan) {
+            $st = @{ Opens = 0; Disposed = 0; Plan = $Plan; Sent = (New-Object System.Collections.Generic.List[string]) }
+            $open = {
+                $st.Opens++
+                # a LOCAL copy: GetNewClosure() below captures only this scope's own variables
+                $sx = $st
+                $step = $st.Plan[[Math]::Min($st.Opens, $st.Plan.Count) - 1]
+                $do = { if ($step -is [System.Exception]) { throw $step }; $step }.GetNewClosure()
+                $prm = [pscustomobject]@{ Value = $null }
+                $params = [pscustomobject]@{}
+                $params | Add-Member -MemberType ScriptMethod -Name Add -Value { param($n, $t, $s) $prm }.GetNewClosure()
+                $cmd = [pscustomobject]@{ CommandText = ''; CommandTimeout = 0; Parameters = $params }
+                $cmd | Add-Member -MemberType ScriptMethod -Name ExecuteScalar -Value { $sx.Sent.Add($this.CommandText); & $do }.GetNewClosure()
+                $cmd | Add-Member -MemberType ScriptMethod -Name ExecuteNonQuery -Value { $sx.Sent.Add($this.CommandText); $null = & $do; 1 }.GetNewClosure()
+                $cn = [pscustomobject]@{ State = [System.Data.ConnectionState]::Open }
+                $cn | Add-Member -MemberType ScriptMethod -Name CreateCommand -Value { $cmd }.GetNewClosure()
+                $cn | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $sx.Disposed++ }.GetNewClosure()
+                $cn
+            }.GetNewClosure()
+            @{ State = $st; Open = $open }
+        }
+        function script:New-SqlNumberError([string]$Message, [int[]]$Numbers) { $e = [System.Exception]::new($Message); $e.Data['SISqlNumbers'] = $Numbers; $e }
+    }
+    BeforeEach { $script:SIRecordSqlConnections = @{} }
+    It '4083 twice, then the answer: three connections, the same statement three times, the pauses said' {
+        $db = New-FakeRecordDb -Plan @((New-SqlNumberError 'The connection was recovered and rowcount in the first query is not available.' @(4083)), (New-SqlNumberError 'The connection was recovered and rowcount in the first query is not available.' @(4083)), 7)
+        $slept = New-Object System.Collections.Generic.List[int]
+        $r = Invoke-SIRecordSqlDb -Server 's' -Database 'd' -Sql 'MERGE x' -Mode scalar -Open $db.Open -StatementWaits @(5, 15, 30) -Sleep { param($s) $slept.Add($s) }.GetNewClosure() 6>$null
+        $r | Should -Be 7
+        $db.State.Opens | Should -Be 3 -Because 'every new attempt runs on a NEW connection'
+        $db.State.Disposed | Should -Be 2 -Because 'the recovered connection is given up, never used again'
+        @($db.State.Sent) | Should -Be @('MERGE x', 'MERGE x', 'MERGE x')
+        @($slept) | Should -Be @(5, 15)
+    }
+    It 'past the last pause the error is thrown tagged transient-sql' {
+        $db = New-FakeRecordDb -Plan @((New-SqlNumberError 'A severe error occurred on the current command.' @(0)))
+        $caught = $null
+        try { Invoke-SIRecordSqlDb -Server 's' -Database 'd' -Sql 'MERGE x' -Mode nonquery -Open $db.Open -StatementWaits @(1, 1) -Sleep { param($s) } 6>$null } catch { $caught = $_ }
+        $caught | Should -Not -BeNullOrEmpty
+        $caught.Exception.Data['SIErrorClass'] | Should -Be 'transient-sql'
+        $db.State.Opens | Should -Be 3
+    }
+    It 'a query defect or a full database fails on the first attempt, with no pause' {
+        foreach ($e in @((New-SqlNumberError "Incorrect syntax near 'x'." @(102)), (New-SqlNumberError 'The database has reached its size quota.' @(40544)))) {
+            $script:SIRecordSqlConnections = @{}
+            $db = New-FakeRecordDb -Plan @($e, 1)
+            $slept = New-Object System.Collections.Generic.List[int]
+            { Invoke-SIRecordSqlDb -Server 's' -Database 'd' -Sql 'MERGE x' -Mode nonquery -Open $db.Open -StatementWaits @(1, 1) -Sleep { param($s) $slept.Add($s) }.GetNewClosure() } | Should -Throw
+            $db.State.Opens | Should -Be 1
+            $slept.Count | Should -Be 0
+        }
+    }
+    It 'WIRING: the CI build sends its statements through this seam' {
+        $run = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\data-model\SI-CiBuildRun.ps1'))
+        $run | Should -Match ([regex]::Escape('$sql = New-SIRecordSqlInvoke'))
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\data-model\SI-RecordSql.ps1'))
+        $src | Should -Match 'Invoke-SIRecordSqlDb -Server \{0\} -Database \{1\}'
+    }
+}
+
 Describe 'Publishing writes the records to the database only' {
     BeforeEach {
         $null = Reset-SIRecordCapture -Engine 'identity' -Clear

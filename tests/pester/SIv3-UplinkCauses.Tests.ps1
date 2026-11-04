@@ -89,11 +89,25 @@ Describe 'the cause and the code of one report' {
         @{ State = 'Failed'; Why = 'it failed: The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing. TaskCanceledException'; Code = 'si-ra-0904'; Cls = 'platform-timeout'; Name = '' }
         @{ State = 'NotApplicable'; Why = 'SI-RA: advanced hunting is not provisioned in this tenant'; Code = 'si-ra-0901'; Cls = 'no-data-source'; Name = 'defender-xdr' }
         @{ State = 'Failed'; Why = 'it is not in this run'; Code = 'si-ra-0900'; Cls = 'query-defect'; Name = '' }
+        # 3.0.30: a full database is its own known cause (the catalogue's si-data-1404), never the unknown si-ra-0900
+        @{ State = 'Failed'; Why = "it failed: SQL error 40544 (line 1): The database 'sqldb-si' has reached its size quota. Partition or delete data, drop indexes, or consult the documentation for possible resolutions."; Code = 'si-data-1404'; Cls = 'too-large'; Name = 'database' }
+        @{ State = 'Failed'; Why = 'it failed: Could not allocate space for object in database because the PRIMARY filegroup is full (1105)'; Code = 'si-data-1404'; Cls = 'too-large'; Name = 'database' }
+        # 3.0.30: a temporary Azure SQL answer that outlasted the statement's retry is the platform's (si-ra-0904)
+        @{ State = 'Failed'; Why = 'it failed: the database d answered a temporary Azure SQL error (A severe error occurred on the current command.); it was tried 7 time(s) -- transient-sql'; Code = 'si-ra-0904'; Cls = 'platform-timeout'; Name = '' }
     ) {
         $cause = Get-SIReportCause -State $State -Text $Why
         $cause.CauseClass | Should -Be $Cls
         $cause.MissingName | Should -Be $Name
         Resolve-SIReportCauseCode -Cause $cause | Should -Be $Code
+    }
+    It 'a full database: the catalogue''s si-data-1404 is too-large, opens a ticket and gives the customer a step' {
+        $e = @($script:Catalogue | Where-Object code -eq 'si-data-1404')[0]
+        $e | Should -Not -BeNullOrEmpty
+        $e.causeClass | Should -Be 'too-large'
+        $e.opensTicket | Should -BeTrue
+        @($e.steps | Where-Object who -eq 'customer').Count | Should -Be 1
+        @($e.steps | Where-Object who -eq 'customer')[0].text | Should -Match 'maximum size'
+        (Get-SIUplinkCausesState).CauseClasses | Should -Not -Contain 'database-full' -Because 'the cause class list is Invardia''s closed list; a full database uses too-large + its own code'
     }
     It 'Action / FixedIn: a fix this version already has is support, never a broken promise' {
         $e = $script:Catalogue | Where-Object code -eq 'si-ra-0102'

@@ -335,6 +335,7 @@ if (-not $siIngest.SubscriptionId) { Write-Warning '[ingest] no subscription fou
 # health, and ends successfully. Not for KEDA workers (their parallel executions are the design). A check that cannot be
 # made (no Reader on the job, ARM unreachable) is said and the run goes on -- the guard never blocks a run on its own failure.
 $guardJob = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_NAME'); $guardExec = [Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME')
+$flowHousekeepingOnly = $false; [Environment]::SetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY', $null)
 $guardSub = Get-OptionalEnv 'SI_JOBS_SUBSCRIPTIONID' (Get-OptionalEnv 'SI_FLOW_SUBSCRIPTIONID' $null); $guardRg = Get-OptionalEnv 'SI_JOBS_RESOURCEGROUP' (Get-OptionalEnv 'SI_FLOW_RESOURCEGROUP' $null)
 
 # #931: the values a person's start carries (Run now, a template release, a mail-only run, who started it) arrive as a
@@ -367,7 +368,16 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
     if ($guardDecision.Action -eq 'Run' -and $guardDecision.Message) { Write-Host $guardDecision.Message }
     # #277 (live, ring 1 2026-10-05): the flow runner wakes every 5 minutes -- a wake-up during a flow run is normal
     # operation, not a guard: one INFO line, no row, no guard event, no telemetry, no warning.
-    if ($guardDecision.Action -eq 'FlowBusy') { Write-Host $guardDecision.Message; Undo-SIStartRequestClaim; exit 0 }
+    # #1063 (3.0.30): the FLOW RUNNER's busy wake-up does not end here -- it goes on to the runner in housekeeping-only mode
+    # (SI_FLOW_HOUSEKEEPING_ONLY=1): the paced clean-up of old collections' rows runs, then it ends, starting nothing. Ending
+    # here kept the in-run clean-up from ever running (live 2026-11-04: three large installs, millions of rows left). The
+    # data out's busy start still ends here.
+    if ($guardDecision.Action -eq 'FlowBusy') {
+        Write-Host $guardDecision.Message; Undo-SIStartRequestClaim
+        if (-not $guardDecision.Housekeeping) { exit 0 }
+        $flowHousekeepingOnly = $true
+        [Environment]::SetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY', '1')
+    }
     if ($guardDecision.Action -eq 'Skip') {
         Write-Host $guardDecision.Message -ForegroundColor Yellow
         Undo-SIStartRequestClaim
@@ -386,8 +396,11 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
 # the roles in its own API tokens and one read of its Azure permissions now; its Pro database access when the settings
 # layer below signs in. The result travels on the run-health END record (PermissionGaps) to Get Started > Permissions.
 # Never stops the run: a check that cannot be made is "not checked".
-try { . (Join-Path $PSScriptRoot '../engine/_shared/SI-PermissionCheck.ps1'); $null = Invoke-SIPermissionSelfCheck -Engine $engine }
-catch { Write-Warning ('[permissions] the permission check could not run: {0}' -f $_.Exception.Message) }
+# (#1063: not on a flow wake-up during a run that only does the housekeeping -- the running run's runner checked it)
+if (-not $flowHousekeepingOnly) {
+    try { . (Join-Path $PSScriptRoot '../engine/_shared/SI-PermissionCheck.ps1'); $null = Invoke-SIPermissionSelfCheck -Engine $engine }
+    catch { Write-Warning ('[permissions] the permission check could not run: {0}' -f $_.Exception.Message) }
+}
 
 # #211 (2): SecurityInsight Pro keeps every setting in its database, and Pro is container-only -- so containers load that
 # layer too, as launcher Layer 5b does on a VM. Only where the Pro module is present AND a Pro database is configured;
@@ -403,6 +416,8 @@ if ((Test-Path -LiteralPath $proSettingsModule) -and $global:SI_ProSqlServer -an
     } catch {
         Write-Host ('[pro-settings] {0}' -f $_.Exception.Message) -ForegroundColor Red
         Publish-SILauncherTranscript -Engine $engine -Context (New-SIRunLogStorageContext) | Out-Null
+        # #1063: a flow wake-up during a run that only does the housekeeping never fails on it -- the next one tries again
+        if ($flowHousekeepingOnly) { Write-Host '[flow] the housekeeping is not done in this wake-up (the settings could not be loaded) -- the next wake-up tries again.'; exit 0 }
         # UPLINK-FIX (customer G 2026-10-07): the install is not finished (the jobs exist before the identity's database
         # user) -- nothing ran, a warning was recorded; the execution is not a failure
         if ($global:SI_ProSettingsInstallPending) { Write-Host '[pro-settings] the install is not finished yet -- this run did nothing; the next one after the install runs normally.'; exit 0 }

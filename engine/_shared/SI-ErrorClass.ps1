@@ -52,6 +52,9 @@ function Get-SIErrorClassesState {
     # 49918-49920, 4060 during a failover, 10928 / 10929, a reset connection) that did not pass within its bounded retry.
     # Set by the caller that retried it (the pipeline runner's lock), never derived from a text: not a product defect.
     'transient-sql',
+    # 3.0.30: the web app's identity has no grant on its Key Vault key (the updater only checks it; setup makes it) -- the
+    # customer's action with the command, never arm-403 (that is a real 403 answer). Set by the caller, never derived from a text.
+    'grant-missing',
     'unknown'
 ) }
     , $script:SIErrorClasses
@@ -149,7 +152,7 @@ function Test-SIOutOfMemoryText {
 # product defect: a class is put here only when its own definition above says the customer's configuration is the cause.
 function Get-SICustomerConfigClassesState {
     <# The value of $script:SICustomerConfigClasses, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
-    if ($null -eq $script:SICustomerConfigClasses) { $script:SICustomerConfigClasses = @('graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'licence-invalid', 'config-missing', 'settings-error') }
+    if ($null -eq $script:SICustomerConfigClasses) { $script:SICustomerConfigClasses = @('graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'licence-invalid', 'config-missing', 'settings-error', 'grant-missing') }
     , $script:SICustomerConfigClasses
 }
 $script:SICustomerConfigClasses = $null; $null = Get-SICustomerConfigClassesState

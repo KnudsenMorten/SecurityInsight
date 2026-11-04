@@ -75,7 +75,7 @@ function Get-RAWebAppLink {
     <# This install's web app address ('' when not known). Never throws. #>
     try {
         if (Get-Command -Name Get-SITelemetryInstallEndpoints -ErrorAction SilentlyContinue) {
-            foreach ($e in @(Get-SITelemetryInstallEndpoints)) { if ($e -and "$($e.kind)" -eq 'webapp' -and "$($e.url)") { return ([string]$e.url).TrimEnd('/') } }
+            foreach ($e in @(Get-SITelemetryInstallEndpoints)) { if ($e -and "$($e.kind)" -in @('web', 'webapp') -and "$($e.url)") { return ([string]$e.url).TrimEnd('/') } }
         }
         if ("$($global:SIWeb_PublicBaseUrl)".Trim()) { return ([string]$global:SIWeb_PublicBaseUrl).Trim().TrimEnd('/') }
     } catch { }

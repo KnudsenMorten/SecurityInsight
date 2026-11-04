@@ -1021,11 +1021,17 @@ function Invoke-SIUpdaterCore {
             $wk = Invoke-SIUpdaterWebKeyRing -VaultName (& $get 'SI_UPDATER_KEY_VAULT') -SubscriptionId $sub -ResourceGroup $rg -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env)
             foreach ($l in @($wk.Lines)) { Write-UpdLog $l }
             foreach ($t in @($wk.Report)) { Write-UpdLog ('WARNING: ' + $t); Add-SIUpdaterFailureIf 'web-keyring' $t }
+            # 3.0.30: grants the updater cannot READ (401 / 403) are NOT KNOWN -- a warning line, never a failure and never a
+            # customer action ("missing")
+            foreach ($w in @($(if ($wk.PSObject.Properties['Warnings']) { $wk.Warnings }))) { if ($w) { Write-UpdLog ('WARNING: ' + [string]$w.Text) } }
             # the grant on the key (the updater may not give roles) or a vault without Azure RBAC: the customer's action,
-            # reported as such (Outcome warning, the command) -- never an update failure
-            foreach ($t in @($(if ($wk.PSObject.Properties['CustomerAction']) { $wk.CustomerAction }))) {
-                Write-UpdLog ('NOTE: ' + $t)
-                if (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue) { Add-SIUpdaterCustomerAction -Step 'web-keyring' -Text $t -Class 'arm-403' }
+            # reported as such (Outcome warning, the command) -- never an update failure. Each with ITS class (grant-missing,
+            # config-missing ...); arm-403 only for an older converge that gives no class
+            $wkActions = if ($wk.PSObject.Properties['Actions']) { @($wk.Actions | Where-Object { $_ }) } else { @(@($(if ($wk.PSObject.Properties['CustomerAction']) { $wk.CustomerAction })) | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ Text = [string]$_; Class = 'arm-403' } }) }
+            foreach ($a in $wkActions) {
+                Write-UpdLog ('NOTE: ' + [string]$a.Text)
+                $aClass = if ([string]$a.Class) { [string]$a.Class } else { 'arm-403' }
+                if (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue) { Add-SIUpdaterCustomerAction -Step 'web-keyring' -Text ([string]$a.Text) -Class $aClass }
             }
         } catch { Write-UpdLog ('WARNING: web sign-in keys: {0}' -f $_.Exception.Message) }
     }

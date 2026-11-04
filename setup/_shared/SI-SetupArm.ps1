@@ -775,6 +775,28 @@ function Get-SIManagedEnvironmentUse {
     $found.ToArray()
 }
 
+function Test-SIManagedEnvironmentInNetwork {
+    <# PURE. Is -Environment (as ARM returns it) in -SubnetId, and internal when -Internal is asked? (Whatever its state:
+       one Azure is still making carries its network from the create.) #>
+    param($Environment, [Parameter(Mandatory)][string]$SubnetId, [switch]$Internal)
+    $s = ([string](Get-SISetupArmProp $Environment @('properties', 'vnetConfiguration', 'infrastructureSubnetId'))).Trim().TrimEnd('/')
+    if (-not $s -or -not [string]::Equals($s, $SubnetId.Trim().TrimEnd('/'), [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+    if ($Internal -and -not [bool](Get-SISetupArmProp $Environment @('properties', 'vnetConfiguration', 'internal'))) { return $false }
+    $true
+}
+
+function Get-SIManagedEnvironmentNetworkText {
+    <# PURE. How an environment sits, in words: 'public (not in a virtual network)' | 'in another subnet (<id>)' |
+       'in the virtual network but not internal (it has a public address)' | 'internal, in <subnet>'. #>
+    param($Environment)
+    $s = [string](Get-SISetupArmProp $Environment @('properties', 'vnetConfiguration', 'infrastructureSubnetId'))
+    if (-not $s) { return 'public (not in a virtual network)' }
+    if (-not [bool](Get-SISetupArmProp $Environment @('properties', 'vnetConfiguration', 'internal'))) { return ('in the subnet {0} but not internal (it has a public address)' -f $s) }
+    'internal, in the subnet {0}' -f $s
+}
+
+function Get-SIPrivateEnvironmentNameHint { 'cae-si-private' }
+
 function Initialize-SIManagedEnvironment {
     <#
         The Container Apps environment of an install, READY -- or a plain sentence why not. An environment that exists is
@@ -799,11 +821,38 @@ function Initialize-SIManagedEnvironment {
     $what = 'the Container Apps environment {0}' -f $Name
     $again = $false   # this run (or the one before it) already had a failed environment: the create below is a second try
     $cae = Get-SIManagedEnvironment -ResourceGroupName $ResourceGroupName -Name $Name -SubscriptionId $sub
+    # FRAMEWORK INSTALLER RULE 11 (general, 2026-11-04: made, recovered OR FOUND, every resource of a private install ends
+    # private) + the owner (2026-11-04: "if we have leftovers that are wrong, then we must handle that"): a private install
+    # that FINDS its environment not internal in its subnet (Azure cannot convert one) replaces it -- ONLY when it holds no
+    # job and no app (a half-made or failed one counts as empty); one that holds anything is never removed: it stops with
+    # the plan. An environment that IS internal in the subnet -- also one Azure is still making ("Waiting") -- is kept and
+    # waited for, below.
+    $script:SIManagedEnvironmentReplaced = $null
+    if ($cae -and "$InfrastructureSubnetId".Trim() -and -not (Test-SIManagedEnvironmentInNetwork -Environment $cae -SubnetId $InfrastructureSubnetId -Internal:$Internal)) {
+        $prd = Get-SIArmReadiness -Path $path -Resource $cae
+        $shape = Get-SIManagedEnvironmentNetworkText -Environment $cae
+        if (-not $prd.Failed -and [string]$prd.State -match '(?i)delet') {
+            Write-Host ('       {0} is being removed by Azure ({1}) -- waiting until it is gone, then it is created internal in your virtual network ...' -f $what, $prd.State) -ForegroundColor DarkYellow
+            $null = Wait-SIArmResourceGone -Path $path -ApiVersion '2025-07-01' -TimeoutSec 1800 -PollSec 15 -Sleep $Sleep -What $what
+        } else {
+            $use = @()
+            try { $use = @(Get-SIManagedEnvironmentUse -ResourceGroupName $ResourceGroupName -EnvironmentId ([string]$cae.id) -SubscriptionId $sub) }
+            catch { throw ('{0} is {1}, but this install is private: it must be internal in your virtual network. Azure cannot convert an environment, so an EMPTY one is replaced -- and what it holds could not be read: {2} Nothing was removed and nothing was changed. Run the install command again; if it stops here again, contact SecurityInsight support with this message.' -f $what, $shape, [string]$_.Exception.Message) }
+            if ($use.Count) {
+                throw ('{0} is {1}, but this install is private: it must be internal in your virtual network, and Azure cannot convert an environment. It holds {2}, so it is NOT removed. The plan (Invardia support runs it through the Support app; it shows each step first): 1. create the internal environment {3} in the subnet {4}; 2. move every job and app into it (setup\Set-SIPrivateNetworking.ps1 -Steps private-environment,move-jobs,move-apps); 3. remove the empty old environment. Nothing was removed and nothing was changed.' -f $what, $shape, ($use -join ', '), (Get-SIPrivateEnvironmentNameHint), $InfrastructureSubnetId)
+            }
+            Write-Host ('       {0} is {1} ({2}) and holds nothing, but this install is private -- Azure cannot convert an environment, so it is removed and created internal in your virtual network ...' -f $what, $shape, $(if ($prd.State) { $prd.State } else { 'no state' })) -ForegroundColor DarkYellow
+            try { Remove-SIManagedEnvironment -ResourceGroupName $ResourceGroupName -Name $Name -SubscriptionId $sub -Sleep $Sleep }
+            catch { throw ('{0} ({1}, empty) could not be removed: {2} Nothing else was changed. Run the install command again in a few minutes; it removes the empty environment and creates it internal in your virtual network.' -f $what, $shape, [string]$_.Exception.Message) }
+            Write-Host '       Removed.'
+            # the install records this line (Invoke-SIInstallBootstrap -> the step's facts): what was replaced, and why
+            Write-Host ('       ENVIRONMENT REPLACED: {0} was {1} and empty -- removed; it is created internal in your virtual network.' -f $Name, $shape)
+            $script:SIManagedEnvironmentReplaced = [pscustomobject]@{ Name = $Name; Was = $shape; State = [string]$prd.State; AtUtc = [DateTime]::UtcNow.ToString('o') }
+        }
+        $cae = $null
+    }
     if ($cae) {
         $rd = Get-SIArmReadiness -Path $path -Resource $cae
-        if ($rd.Ready -and "$InfrastructureSubnetId".Trim() -and -not [string](Get-SISetupArmProp $cae @('properties', 'vnetConfiguration', 'infrastructureSubnetId'))) {
-            Write-Warning ('{0} exists and is not in the virtual network: it is kept as it is (Azure cannot move an environment into a network). An existing install moves with setup\Set-SIPrivateNetworking.ps1.' -f $what)
-        }
         if ($rd.Ready) { return $cae }
         if (-not $rd.Failed -and [string]$rd.State -match '(?i)delet') {
             Write-Host ('       {0} is being removed by Azure ({1}) -- waiting until it is gone (this takes minutes), then it is created again ...' -f $what, $rd.State) -ForegroundColor DarkYellow
@@ -835,7 +884,9 @@ function Initialize-SIManagedEnvironment {
             $again = $true
         }
     }
-    Write-Host $(if ($again) { '       Creating the Container Apps environment again (Consumption profile, ~$0 idle) ...' } else { '       Creating CAE (Consumption profile, ~$0 idle) ...' })
+    # framework installer rule 11b: console text names what is made as it is -- no cost figure
+    $kindText = if ("$InfrastructureSubnetId".Trim()) { $(if ($Internal) { 'internal, in your virtual network' } else { 'in your virtual network' }) } else { 'workload profiles' }
+    Write-Host ('       Creating the Container Apps environment {0}{1} ({2}) ...' -f $Name, $(if ($again) { ' again' } else { '' }), $kindText)
     $createError = $null; $new = $null
     try { $new = New-SIManagedEnvironment -ResourceGroupName $ResourceGroupName -Name $Name -Location $Location -SubscriptionId $sub -Sleep $Sleep -InfrastructureSubnetId $InfrastructureSubnetId -Internal:$Internal } catch { $createError = $_ }
     if (-not $createError) { return $new }
@@ -1198,12 +1249,14 @@ function Invoke-SIAcrRestBuild {
     #>
     param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$RegistryName,
           [Parameter(Mandatory)][string]$SourcePath, [Parameter(Mandatory)][string[]]$ImageNames, [Parameter(Mandatory)][string]$DockerFilePath,
-          [int]$TimeoutSeconds = 1800, [switch]$NoWait, [scriptblock]$OnPoll, [scriptblock]$Sleep, [scriptblock]$Rest, [int]$PollSeconds = 15)
+          [int]$TimeoutSeconds = 1800, [switch]$NoWait, [scriptblock]$OnPoll, [scriptblock]$Sleep, [scriptblock]$Rest, [int]$PollSeconds = 15,
+          # framework installer rule 11b: the registry's agent pool in the network ('' = the registry decides, Resolve-SIAcrAgentPool)
+          [string]$AgentPoolName = '')
     if (-not (Get-Command -Name Invoke-SIAcrQueueBuild -ErrorAction Ignore)) { . (Join-Path $PSScriptRoot 'SI-AcrBuild.ps1') }
     if (-not $Rest) { $Rest = New-SIUpdateRestSeam }
     $started = Get-Date
     $q = Invoke-SIAcrQueueBuild -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $RegistryName -ResourceGroup $ResourceGroup `
-            -ContextPath $SourcePath -Image (@($ImageNames)[0]) -DockerfilePath $DockerFilePath -TimeoutSeconds $TimeoutSeconds
+            -ContextPath $SourcePath -Image (@($ImageNames)[0]) -DockerfilePath $DockerFilePath -TimeoutSeconds $TimeoutSeconds -AgentPoolName $AgentPoolName
     if (-not $q.RunId) { throw ('The registry {0} accepted no build run for {1}.' -f $RegistryName, (@($ImageNames)[0])) }
     $out = [ordered]@{ Ok = $true; Status = 'Queued'; RunId = [string]$q.RunId; Seconds = 0; Bytes = $q.Bytes; Files = $q.Files; Images = @($q.Image) }
     if ($NoWait) { return [pscustomobject]$out }

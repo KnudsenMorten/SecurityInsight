@@ -1351,9 +1351,38 @@ function Get-SIJobFlowStepFailure {
     switch ([string]$Step.ErrorClass) {
         'throttled' { $cls = 'throttled' }
         'timeout' { if ($cls -eq 'unknown') { $cls = 'platform-timeout' } }
+        default {
+            # 3.0.30: the step close already named the step by its own run log's last ERROR line (Get-SIJobFlowLogErrorClass)
+            if ($cls -eq 'unknown' -and [string]$Step.ErrorClass -and [string]$Step.ErrorClass -ne 'unknown' -and @(Get-SIErrorClasses) -contains [string]$Step.ErrorClass) { $cls = [string]$Step.ErrorClass }
+        }
     }
     if (-not $text) { $text = ('the step {0} ended {1}' -f (Get-SIJobFlowKey ([string]$Step.Job)), ([string]$Step.State).ToLowerInvariant()) }
     [pscustomobject]@{ Step = (Get-SIJobFlowKey ([string]$Step.Job)); Text = $text; ErrorClass = $cls }
+}
+
+function Get-SIJobFlowLogErrorClass {
+    <#
+        PURE. 3.0.30 (a read-only triage of production alerts: a failed step whose engine wrote its run log was reported
+        "unknown"). The error a failed step's OWN run log names: its LAST ERROR line ("[ERROR] ...", "ERROR: ...", a
+        Write-Error line) -- else, with no ERROR line, the block that ended the run (Get-SIErrorLines) -- classified by
+        Get-SIErrorClass. @{ Line (that line, '' none); ErrorClass ('' when the log does not tell: no line, 'unknown', or a
+        class that would read as a stop on purpose -- 'stopped' / 'cancelled' are never derived from a log) }.
+    #>
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Lines = @())
+    $last = ''
+    foreach ($raw in @($Lines)) {
+        $l = ([string]$raw).Trim()
+        # "[ERROR]" in any case; a bare ERROR only in capitals ("no error found" is not one)
+        if ($l -and ($l -match '(?i)\[ERROR\]|^Write-Error:' -or $l -cmatch '^(\S+\s+){0,3}ERROR[:\s]')) { $last = $l }
+    }
+    $text = $last
+    if (-not $text) { $text = Get-SIErrorLines -Lines @($Lines) -Max 1 }
+    $text = ([string]$text -split "`r?`n")[0].Trim()
+    $cls = ''
+    if ($text) { try { $cls = [string](Get-SIErrorClass -Message $text) } catch { $cls = '' } }
+    if ($cls -in @('unknown', 'stopped', 'cancelled')) { $cls = '' }
+    if ($text.Length -gt 500) { $text = $text.Substring(0, 497) + '...' }
+    [pscustomobject]@{ Line = $text; ErrorClass = $cls }
 }
 
 function Get-SIJobFlowStepCauseText {
@@ -1801,6 +1830,10 @@ function Invoke-SIJobFlow {
                   execution ended Failed without the engine ever starting (Get-SIJobFlowFailureClass: never-started) is
                   started again -StartRetries times after -StartRetryBackoffSeconds; the step record keeps Attempts and
                   RetryReason. Without it (the VM flow) nothing is retried.
+          -StepLogs (optional) an object with Read($Job, $StartedUtc, $EndedUtc) (New-SIJobFlowStepLogReader) or a
+                  scriptblock of the same arguments -> @{ Name; Lines }. With it, a step whose engine ran and failed (its run
+                  log exists) is named by its own error: the LAST ERROR line of that log, classified by Get-SIErrorClass
+                  (Get-SIJobFlowLogErrorClass), instead of the bare 'job-failed' -- 3.0.30, a failed step read "unknown".
         -Previous: the last run record (Resolve-SIJobFlowStart decides). -FromStep: a re-run that starts at that step (the
         steps before it are Skipped, 'before the re-run'). Returns the final run record (+ .Outcome = the Resolve answer).
     #>
@@ -1875,6 +1908,7 @@ function Invoke-SIJobFlow {
         [int]$PollSeconds = 30,
         [int]$StaleAfterMinutes = 15,
         $StartEvidence,
+        $StepLogs,
         [int]$StartRetries = $script:SIJobFlow.StartRetries,
         [int]$StartRetryBackoffSeconds = $script:SIJobFlow.StartRetryBackoff,
         [int]$NeverStartedMaxSeconds = $script:SIJobFlow.NeverStartedMaxSeconds,
@@ -2515,6 +2549,23 @@ function Invoke-SIJobFlow {
                 # the step's REAL error text is kept (2026-10-22: it was replaced by "Microsoft throttled this run", and the
                 # real cause -- a storage timeout -- was gone from Operations > Jobs); the words only fill an empty one
                 if ($endWhy -eq 'throttled') { $st.ErrorClass = 'throttled'; if ([string]::IsNullOrWhiteSpace([string]$st.Error)) { $st.Error = Get-SIThrottleText } }
+                # 3.0.30: the engine wrote its run log, so the job itself failed -- the step is named by ITS OWN error (the
+                # last ERROR line of that log, Get-SIErrorClass), not by the bare 'job-failed' that reached the report as
+                # "unknown". A class the log does not tell, or a log that cannot be read, leaves the step as it was.
+                # (the reader finds THIS step's log in the execution's window; none = nothing changes)
+                if ($StepLogs -and $cls.Class -eq 'engine-failed' -and [string]$st.ErrorClass -eq 'job-failed') {
+                    $sl = $null
+                    try { $sl = if ($StepLogs -is [scriptblock]) { & $StepLogs $st.Job $began $tNow } else { $StepLogs.Read([string]$st.Job, $began, $tNow) } }
+                    catch { & $Log 'WARN' ('step {0} {1}: its run log could not be read ({2})' -f $st.Order, $st.Job, $_.Exception.Message) }
+                    if ($sl -and $sl.PSObject.Properties['Lines']) {
+                        $lc = Get-SIJobFlowLogErrorClass -Lines @($sl.Lines)
+                        if ($lc.ErrorClass) {
+                            $st.ErrorClass = [string]$lc.ErrorClass
+                            $st.Error = Get-SIJobFlowStepCauseText -Recorded ([string]$st.Error) -Cause ([string]$lc.Line)
+                            & $Log 'INFO' ('step {0} {1}: its run log names the error ({2}): {3}' -f $st.Order, $st.Job, $lc.ErrorClass, $lc.Line)
+                        }
+                    }
+                }
             }
         }
         # A NEW INSTALL'S FIRST COLLECTION -- "two restarts" (owner 2026-10-13): a step that failed or was stopped is

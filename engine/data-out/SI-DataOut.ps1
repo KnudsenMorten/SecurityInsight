@@ -2600,7 +2600,8 @@ function Invoke-SIDataOutWriter {
         # #1043 the output's progress, in memory (written batched: Step-SIDataOutProgress); the plan read ONCE, before the first page
         $W.Progress = $null
         if (-not $NoProgress) {
-            $pa = @{ Output = $id; Label = [string]$Entry.label; Log = $Log; Planned = (Get-SIDataOutPlannedEstimate -OutputId $id -Grain ([string]$Map.grain) -Store $Store -Cursor $cur) }
+            $plSrc = Get-SIDataOutPlannedSource -OutputId $id -Grain ([string]$Map.grain) -Store $Store -Cursor $cur
+            $pa = @{ Output = $id; Label = [string]$Entry.label; Log = $Log; Planned = [long]$plSrc.Rows; PlannedKind = [string]$plSrc.Kind }
             if ($ProgressClock) { $pa['Clock'] = $ProgressClock }
             $W.Progress = New-SIDataOutProgress @pa
         }

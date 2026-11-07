@@ -114,6 +114,7 @@ These paths are delivered only to licensed customers through the private Automat
   setup/New-SIServiceNowTestPack.ps1
   setup/Clear-SIGuardEvents.ps1
   setup/Set-SICiCutoff.ps1
+  setup/Reset-SIData.ps1
   setup/Invoke-SIGuardAcceptEverywhere.ps1
   setup/Compare-SISummaryGroupings.ps1
   setup/Get-SIFindingFoldPreview.ps1

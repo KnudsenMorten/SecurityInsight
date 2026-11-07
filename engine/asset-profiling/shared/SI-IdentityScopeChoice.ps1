@@ -2,7 +2,8 @@
 <#
     A CUSTOMER'S CHOICE: WHICH EXPOSURE GRAPH IDENTITIES BECOME ASSETS (REQUIREMENTS #1056, owner approved 2026-11-01).
 
-    Two per-install switches, OFF by default -- an install that does not set them works exactly as before:
+    Two per-install switches, ON by default (config\settings.catalog.locked.json default true; launcher\_lib\
+    SecurityInsight.shared-defaults.ps1 sets both to $true) -- an install turns one off to keep these objects as assets:
       SI_Identity_SkipNeverSyncedDisabledAd  (customer choice "1C")  an on-premises AD account the Exposure Graph lists but
                                              that was never synced to Entra ID (the node has no Entra object id) becomes an
                                              asset only while it is ENABLED or PRIVILEGED. A disabled, non-privileged one gets
@@ -52,9 +53,13 @@
     Tests: tests\pester\SIv3-IdentityScopeChoice.Tests.ps1.
 #>
 
+# Default = the shipped default (config\settings.catalog.locked.json, launcher\_lib\SecurityInsight.shared-defaults.ps1):
+# used when the global is unset -- a container that never stored the setting runs ON, as the catalog says. A stored false
+# stays OFF. (The container also applies every catalog default at start; this keeps the rule where the code reads it,
+# the pattern of SI-DisabledAssets.ps1.)
 $script:SIIdentityScopeSettings = [ordered]@{
-    SkipNeverSyncedDisabledAd = 'SI_Identity_SkipNeverSyncedDisabledAd'
-    SkipDeletedGroups         = 'SI_Identity_SkipDeletedGroups'
+    SkipNeverSyncedDisabledAd = @{ Setting = 'SI_Identity_SkipNeverSyncedDisabledAd'; Default = $true }
+    SkipDeletedGroups         = @{ Setting = 'SI_Identity_SkipDeletedGroups';         Default = $true }
 }
 
 function ConvertTo-SIIdentityScopeFlag {
@@ -72,16 +77,18 @@ function ConvertTo-SIIdentityScopeFlag {
 function Get-SIIdentityScopeChoice {
     <#
         PURE (reads the two globals unless -Values is passed). The install's choice:
-        @{ SkipNeverSyncedDisabledAd; SkipDeletedGroups; Any }. Not set, or anything that is not a clear yes = OFF.
+        @{ SkipNeverSyncedDisabledAd; SkipDeletedGroups; Any }. Not set (or not readable as yes / no) = the
+        shipped default, ON; a clear no (false, 0, off) = OFF.
     #>
     param([hashtable]$Values)
     $out = [ordered]@{}
     foreach ($k in $script:SIIdentityScopeSettings.Keys) {
-        $name = $script:SIIdentityScopeSettings[$k]
+        $name = $script:SIIdentityScopeSettings[$k].Setting
         $raw = $null
         if ($Values) { if ($Values.ContainsKey($name)) { $raw = $Values[$name] } elseif ($Values.ContainsKey($k)) { $raw = $Values[$k] } }
         else { $raw = Get-Variable -Name $name -Scope Global -ValueOnly -ErrorAction SilentlyContinue }
-        $out[$k] = ((ConvertTo-SIIdentityScopeFlag $raw) -eq $true)
+        $flag = ConvertTo-SIIdentityScopeFlag $raw
+        $out[$k] = if ($null -eq $flag) { [bool]$script:SIIdentityScopeSettings[$k].Default } else { [bool]$flag }
     }
     $out['Any'] = [bool]($out.SkipNeverSyncedDisabledAd -or $out.SkipDeletedGroups)
     [pscustomobject]$out
@@ -305,15 +312,15 @@ function Get-SIEgIdentityScopeDecision {
         if ((Test-SIEgAdAccountDisabled -RawData $RawData) -ne $true) { return $keep }
         $priv = Get-SIEgAdPrivilege -RawData $RawData -CriticalGroups $CriticalGroups
         if ($priv.IsPrivileged) { return $keep }
-        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipNeverSyncedDisabledAd; Why = 'an on-premises AD account never synced to Entra ID, disabled and not privileged'; Held = $false }
+        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipNeverSyncedDisabledAd.Setting; Why = 'an on-premises AD account never synced to Entra ID, disabled and not privileged'; Held = $false }
     }
     if ($label -eq 'group' -and $oid -and $Choice.SkipDeletedGroups) {
         if ($GroupsUnknown) {
-            return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups; Why = 'the Entra ID group read was not complete this run -- the group keeps its last state'; Held = $true }
+            return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups.Setting; Why = 'the Entra ID group read was not complete this run -- the group keeps its last state'; Held = $true }
         }
         if ($null -eq $EntraGroups) { return $keep }
         if ($EntraGroups.Contains($oid)) { return $keep }
-        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups; Why = 'a group Entra ID no longer has (neither active nor in its deleted items)'; Held = $false }
+        return [pscustomobject]@{ Keep = $false; Setting = $script:SIIdentityScopeSettings.SkipDeletedGroups.Setting; Why = 'a group Entra ID no longer has (neither active nor in its deleted items)'; Held = $false }
     }
     return $keep
 }
@@ -355,7 +362,7 @@ function New-SIIdentityScopeCounter {
     $c = [ordered]@{}
     foreach ($k in $script:SIIdentityScopeSettings.Keys) {
         if (-not $Choice.$k) { continue }
-        $c[$script:SIIdentityScopeSettings[$k]] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k]; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = ''; NotFetched = 0L }
+        $c[$script:SIIdentityScopeSettings[$k].Setting] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k].Setting; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = ''; NotFetched = 0L }
     }
     $c
 }

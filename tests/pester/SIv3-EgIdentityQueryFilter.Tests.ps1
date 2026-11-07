@@ -32,9 +32,10 @@ BeforeAll {
     $script:Model = Get-SIDataModel -Root (Join-Path $script:SIRoot 'data-model')
     $script:Tier = Get-SIIdentityCriticalAdGroupNames -SIRoot $script:SIRoot
     $script:Switches = @('SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
-    function script:Set-Switches([object]$Ad = $null) {
-        foreach ($n in $script:Switches) { Remove-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue }
-        if ($null -ne $Ad) { Set-Variable -Name 'SI_Identity_SkipNeverSyncedDisabledAd' -Scope Global -Value $Ad }
+    # a switch not named here is set OFF (a stored false): unset means the shipped default, ON (2026-11-07)
+    function script:Set-Switches([object]$Ad = $false) {
+        Set-Variable -Name 'SI_Identity_SkipNeverSyncedDisabledAd' -Scope Global -Value $Ad
+        Set-Variable -Name 'SI_Identity_SkipDeletedGroups' -Scope Global -Value $false
     }
 
     function script:EgRow([string]$id, [string]$name, [string[]]$entityJson, $raw) {

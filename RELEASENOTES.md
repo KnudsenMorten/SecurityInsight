@@ -13,6 +13,47 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.60 — The fresh start of the data empties every table the quick way
+
+### Data
+
+- `Reset-SIData.ps1`: a paused index build on a table (the index build pauses while a run is going) made the database
+  refuse the quick empty, and the script then deleted the rows in small batches -- hours on a large table. It now stops
+  that paused index build first; the index is built again later. Batches are used only where another table's key holds
+  the table; any other refusal stops the script, and running it again goes on where it stopped.
+
+## v3.0.59 — Every setting you never changed now has its default, also in the containers
+
+### Settings
+
+- A setting that was never stored now always takes its shipped default when a job starts in a container. Before, a few
+  settings had no value at all in that case. This mattered for two identity settings that are on by default: the
+  on-premises AD accounts that were never synced to Entra ID, are disabled and are not privileged, and the groups that
+  Entra ID no longer has, are left out of the assets. Installations that never stored these two settings did not leave
+  them out.
+- **What you will see once:** at an installation that never stored these two settings, the first run after this update
+  leaves those accounts and groups out, and retires their existing CIs with the setting named as the reason. This is the
+  default your installation already had; it is now applied. To keep them, turn the setting off on the Settings page.
+- The privilege tier classifier rebuilds its role catalog once after this update (one extra AI pass), because its saved
+  settings now read the default explicitly.
+
+### Data
+
+- New support script `Reset-SIData.ps1`: a fresh start of the data at an installation that asks for one. It empties the
+  data (assets, CIs, findings, history and their run records) in place and keeps the installation itself: settings,
+  templates, the audit trail, users, roles and grants. It shows a plan first, refuses while a run or an update is going,
+  and reads back the result. The identity ids are kept unless asked for.
+
+### Data out
+
+- The progress line of an output now says "rows to read" when it estimates from the data, and "planned" only when it
+  estimates from the last batch. Before, a first estimate from the data read as the number of rows to be sent.
+
+### Updates
+
+- When the web app's sign-in still requires an assignment and the update may not change that, the update now names the
+  published script to run, with both ids filled in.
+
 ## v3.0.58 — The data sync no longer slows to a crawl at large installs
 
 ### Data sync

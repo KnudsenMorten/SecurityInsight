@@ -315,6 +315,32 @@ function Test-SIUpdaterSigninConsent {
     } catch { [pscustomobject]@{ Missing = $false; Text = ('{0}: the sign-in consent could not be checked ({1}) -- the update goes on' -f $WebApp, $_.Exception.Message) } }
 }
 
+$script:SIUpdaterAppRegistrationUrl = 'https://invardia.com/support/si/New-SIManagementAppRegistration.ps1'
+
+function Get-SIUpdaterWebAppCandidates {
+    <# PURE. The web app's container app names to try, in order: -WebApp when given; else the install record's name and
+       SI_UPDATER_WEB_APP when set, then the framework name ca-si-web, then ca-si-management (the name installs still carry). #>
+    param([string]$WebApp = '', [string]$RecordName = '', [string]$EnvName = '')
+    if ("$WebApp".Trim()) { return "$WebApp".Trim() }
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($n in @($RecordName, $EnvName, 'ca-si-web', 'ca-si-management')) {
+        $v = "$n".Trim()
+        if ($v -and -not @($out | Where-Object { $_ -ieq $v }).Count) { $out.Add($v) }
+    }
+    $out.ToArray()
+}
+
+function Get-SIUpdaterSignInOpenAction {
+    <# PURE. The customer action of a sign-in that still needs an assignment: the PUBLISHED script with -TenantId and -AppId
+       filled. -Kind: forbidden (this update may not change it) | failed (-Reason: the answer). #>
+    param([Parameter(Mandatory)][string]$WebApp, [Parameter(Mandatory)][string]$ClientId, [string]$TenantId = '', [ValidateSet('forbidden', 'failed')][string]$Kind = 'forbidden', [string]$Reason = '')
+    $run = 'download {0} and run it once with -TenantId {1} -AppId {2} -Apply (an administrator who may change the application, or Invardia support); it switches it off' -f $script:SIUpdaterAppRegistrationUrl, $(if ("$TenantId".Trim()) { "$TenantId".Trim() } else { '<tenant id>' }), $ClientId
+    if ($Kind -eq 'forbidden') {
+        return ('{0}: people added on the Access page cannot sign in yet -- Microsoft Entra still requires an assignment on the enterprise application, and this update may not change that. To switch it off, {1}.' -f $WebApp, $run)
+    }
+    '{0}: people added on the Access page cannot sign in yet -- switching off "assignment required" on the enterprise application failed ({1}). To switch it off, {2}.' -f $WebApp, $Reason, $run
+}
+
 function Set-SIUpdaterSignInOpen {
     <#
         #765 (owner 2026-10-19, "SI decides"). An install from before reaches the new-install state: the web app's
@@ -327,10 +353,20 @@ function Set-SIUpdaterSignInOpen {
         Returns @{ Changed; Missing ($true = say it as a customer action); Text ('' = nothing to say) }.
     #>
     param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId,
-          [string]$WebApp = 'ca-si-management', $App = $null, [scriptblock]$Graph)
+          [string]$WebApp = '', $App = $null, [scriptblock]$Graph)
     $none = [pscustomobject]@{ Changed = $false; Missing = $false; Text = '' }
     try {
-        $a = if ($App) { $App } else { Get-SIUpdaterContainerApp -App $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId }
+        # the web app's name: the one given, else the install record's / SI_UPDATER_WEB_APP, else ca-si-web (the framework
+        # name), else ca-si-management (the name installs still carry)
+        $a = $App
+        if (-not $a) {
+            $rec = ''; if (Get-Command -Name Get-SIInstallNameProp -ErrorAction SilentlyContinue) { try { $rec = [string](Get-SIInstallNameProp -Record $global:SI_InstallNames -Role 'web') } catch { $rec = '' } }
+            foreach ($cand in (Get-SIUpdaterWebAppCandidates -WebApp $WebApp -RecordName $rec -EnvName ([string][Environment]::GetEnvironmentVariable('SI_UPDATER_WEB_APP')))) {
+                $a = Get-SIUpdaterContainerApp -App $cand -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
+                if ($a) { $WebApp = $cand; break }
+            }
+        }
+        if (-not $WebApp) { $WebApp = 'ca-si-web' }
         if (-not $a) { return $none }
         $clientId = ''; $tenantId = ''
         foreach ($c in @($a.properties.template.containers)) {
@@ -343,7 +379,6 @@ function Set-SIUpdaterSignInOpen {
         }
         if (-not $clientId) { return $none }
         if (-not $Graph) { $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $Body -Resource 'https://graph.microsoft.com/' } }
-        $rerun = 'pro-management\deploy\New-SIManagementAppRegistration.ps1 -TenantId {0} -AppId {1} -Apply' -f $(if ($tenantId) { $tenantId } else { '<tenant id>' }), $clientId
         $sp = $null
         try { $sp = @((& $Graph 'GET' ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id,appRoleAssignmentRequired" -f $clientId) $null).value) | Select-Object -First 1 }
         catch { return [pscustomobject]@{ Changed = $false; Missing = $false; Text = ('{0}: whether people added in SecurityInsight can sign in could not be checked ({1}) -- the update goes on' -f $WebApp, $_.Exception.Message) } }
@@ -352,11 +387,8 @@ function Set-SIUpdaterSignInOpen {
         try { $null = & $Graph 'PATCH' ('https://graph.microsoft.com/v1.0/servicePrincipals/{0}' -f $sp.id) @{ appRoleAssignmentRequired = $false } }
         catch {
             $m = [string]$_.Exception.Message
-            $t = if ($m -match '(?i)\b403\b|Forbidden|Authorization_RequestDenied|Insufficient privileges') {
-                '{0}: people added on the Access page cannot sign in yet -- Microsoft Entra still requires an assignment on the enterprise application, and this update may not change that. Run {1} once (through the Support app); it switches it off.' -f $WebApp, $rerun
-            } else {
-                '{0}: people added on the Access page cannot sign in yet -- switching off "assignment required" on the enterprise application failed ({1}). Run {2} once (through the Support app).' -f $WebApp, $m, $rerun
-            }
+            $kind = if ($m -match '(?i)\b403\b|Forbidden|Authorization_RequestDenied|Insufficient privileges') { 'forbidden' } else { 'failed' }
+            $t = Get-SIUpdaterSignInOpenAction -WebApp $WebApp -ClientId $clientId -TenantId $tenantId -Kind $kind -Reason $m
             return [pscustomobject]@{ Changed = $false; Missing = $true; Text = $t }
         }
         $back = $null

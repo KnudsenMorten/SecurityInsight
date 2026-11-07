@@ -1,4 +1,3 @@
-#Requires -Version 5.1
 <#
 .SYNOPSIS
     Creates or updates the Entra app registration the SecurityInsight Pro management web app signs in with, and the
@@ -46,8 +45,14 @@
     # -> 'SecurityInsight Management' -- the same name in every environment (no ring, no environment in it).
     # An app created earlier under another name is found by -AppId (or -DisplayName '<its name>').
     .\New-SIManagementAppRegistration.ps1 -TenantId <tenant> -Fqdn ca-si-management.internal.<env-domain> -Apply
+.EXAMPLE
+    .\New-SIManagementAppRegistration.ps1 -TenantId <tenant> -AppId <the web app's client id> -Apply
+    # an existing install: puts the registration back in the new-install state (e.g. "assignment required" switched off)
+
+.LINK
+    https://invardia.com/docs/si/scripts/New-SIManagementAppRegistration/
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
     # ONE product-level name, identical in every environment (operator 2026-10-04: no release ring in names -- the name is
@@ -78,6 +83,12 @@ param(
     [switch]$Apply
 )
 
+#Requires -Version 7.0   # after the help and the param block: before the help, it hides the help from Get-Help
+# framework section 12.7 / 12.10: the documentation link first, a transcript of the run, -WhatIf changes nothing
+. ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'setup', '_shared', 'SI-ScriptRun.ps1'))
+$siRun = Start-SIScriptRun -Script 'New-SIManagementAppRegistration'
+if ($WhatIfPreference) { $Apply = $false }   # -WhatIf = the plan: nothing is changed
+try {
 $ErrorActionPreference = 'Stop'
 
 # the refused tenants: an internal list (internal\SI-RefusedTenants.ps1 -- publish strips it, so the public copy names none)
@@ -412,3 +423,4 @@ if (-not $Apply) { Write-Host 'Plan only -- nothing was changed. Re-run with -Ap
 
 [pscustomobject]@{ AppId = $clientId; ApplicationObjectId = $app.id; ServicePrincipalId = $spId; WebFederatedCredential = $ficPresent
                    SignInConsent = $signInConsent; SignInConsentError = $signInConsentError }
+} finally { Stop-SIScriptRun -Run $siRun }

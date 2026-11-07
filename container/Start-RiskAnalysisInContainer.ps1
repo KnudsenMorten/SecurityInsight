@@ -69,6 +69,11 @@ function Get-OptionalEnv {
 . /app/container/_shared/SI-ContainerRunState.ps1
 . /app/auth/SI-ManagedIdentity.ps1
 
+# The SHIPPED DEFAULT of every catalog setting whose global is unset (config\settings.catalog.locked.json; never the
+# VM's shared-defaults file) FIRST -- the engine's defaults, the customer's SI_CFG_* values and the stored cfg.Setting rows
+# below all still win. Without it an unstored setting was $null here and a switch shipped ON ran off.
+$catDefaults = Set-SIContainerCatalogDefaults -CatalogPath ([IO.Path]::Combine('/app', 'config', 'settings.catalog.locked.json'))
+Write-Host ('[config] {0} shipped default(s) applied to settings with no value' -f @($catDefaults.Applied).Count)
 # The VM launcher's own defaults for Risk Analysis (launcher/risk-analysis/LauncherConfig.defaults.ps1) FIRST -- the
 # customer's settings below override them, exactly as on a VM. Without them a container ran on the entry point's own
 # fallbacks (no Log Analytics, a 1024 bucket cap) instead of the defaults every VM run has.

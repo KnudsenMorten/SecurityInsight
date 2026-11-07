@@ -2204,7 +2204,7 @@ function Get-SIExposureGraphIdentities {
         $egKeep = Get-SIEgIdentityKeepKeys -SIRoot $siRoot
         if ($null -ne $egKeep) { Write-SIInfo ('[perms] EG identity nodes: keeping {0} rawData field(s) the profile, rules and mapping read' -f $egKeep.Count) }
     }
-    # #1056 A CUSTOMER'S CHOICE (SI-IdentityScopeChoice.ps1): two per-install switches, OFF by default -- off, nothing below
+    # #1056 A CUSTOMER'S CHOICE (SI-IdentityScopeChoice.ps1): two per-install switches, ON by default (unset = the shipped default) -- off, nothing below
     # changes. On, a never-synced disabled non-privileged AD account (SI_Identity_SkipNeverSyncedDisabledAd) and a group Entra
     # ID no longer has (SI_Identity_SkipDeletedGroups) are not RECORDED (no asset); they are counted. The index is unchanged.
     if (-not (Get-Command -Name Get-SIIdentityScopeChoice -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-IdentityScopeChoice.ps1') }

@@ -191,6 +191,11 @@ $engine     = Get-RequiredEnv 'SI_ENGINE'
 # covered by the orchestrator's own try/catch and the publish at the end.
 Start-SILauncherTranscript -Engine $engine -Flavour container -RepoRoot '/app' | Out-Null
 
+# The SHIPPED DEFAULT of every catalog setting whose global is unset (config\settings.catalog.locked.json; never the
+# VM's shared-defaults file) FIRST -- the engine's defaults, the customer's SI_CFG_* values and the stored cfg.Setting rows
+# below all still win. Without it an unstored setting was $null here and a switch shipped ON ran off.
+$catDefaults = Set-SIContainerCatalogDefaults -CatalogPath ([IO.Path]::Combine('/app', 'config', 'settings.catalog.locked.json'))
+Write-Host ('[config] {0} shipped default(s) applied to settings with no value' -f @($catDefaults.Applied).Count)
 # The engine's own VM launcher defaults (launcher/<engine>/LauncherConfig.defaults.ps1) FIRST, as on a VM -- the
 # customer's settings below override them. They carry no tenant value and no credential, and nothing in them decides the
 # storage mode or the sign-in (both are stated from this job's own env vars below). Without them a container lacked

@@ -48,6 +48,7 @@
     { "action": "connector.state.stage", "source": "web", "what": "a connector's enable / disable staged" },
     { "action": "connector.servicenow.verify", "source": "web", "what": "a ServiceNow check asked for (the connection, the Import Set table, its columns and its column mapping): the mail job runs it with its own identity and records the result; the web app never signs in to ServiceNow" },
     { "action": "data.export.download", "source": "web", "what": "data exported (CSV / Excel) -- the page, the filter and the row count" },
+    { "action": "data.store.reset", "source": "setup", "what": "a fresh start of the install's data (setup\\Reset-SIData.ps1): every data table emptied in place (the identity ledger only with -IncludeIdentityLedger), the configuration, users and grants kept -- the rows per table, whether the ledger was emptied, whether another system's keys were accepted as lost, the read-back" },
     { "action": "datamodel.item.stage", "source": "web", "what": "a risk factor or provider mapping of the Pro data model changed, turned off or put back (Configuration > Risk factors), staged" },
     { "action": "cioverride.set.stage", "source": "web", "what": "a manual override of one CI field (tier, purpose, category, department or a CMDB field) set or changed, with its reason and expiry, staged" },
     { "action": "cioverride.remove.stage", "source": "web", "what": "the removal (soft) of a manual CI override staged" },

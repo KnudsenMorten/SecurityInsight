@@ -1347,6 +1347,35 @@ for that whole window, and a large install rebuilds them into CIs on every build
 - **When to set it:** just before a run's collection -- every source that run collects then drops its old records in that
   run's CI build. Each build logs `one-time CI cut-off <time> (<reason>): N record(s) before it ignored, M CI(s) retired`.
 
+### A fresh start of the data (Pro; a support script)
+
+When an install's data should start again from nothing -- a scope mistake collected objects that were never wanted, and
+nobody uses the data yet -- `setup\Reset-SIData.ps1` empties the DATA in place and keeps the install itself. No database is
+dropped: the databases, every user, role, grant and the signed grant procedure stay, so SQL access is never lost.
+- **Emptied, derived from the shipped schema files** (`setup\_shared\SI-DataReset.ps1`): every table of every data schema
+  the Pro schema files create other than `cfg` (today `sidata`, `vuln`, `cmdbsync`, `snowstage`), plus every table the
+  database holds in those schemas that the files do not name (the published copies); the identity ledger's tables except
+  its schema record (`si.SchemaVersion`); and four `cfg` run-history tables of that data -- `cfg.ConnectorRun`,
+  `cfg.ConnectorChange`, `cfg.DataOutItem`, `cfg.DataOutBatch` -- each held by a test to the `notConfiguration` list of
+  `config\config-entities.locked.json`, never configuration.
+- **The identity ledger is KEPT by default:** stable ids; nothing outside SecurityInsight holds them, it is not what makes
+  the runs slow, the catch-up of the last collections keeps matching ids, and a ledger row for an object that is out of
+  scope makes no CI. `-IncludeIdentityLedger` (opt-in) empties it too, except its schema record (`si.SchemaVersion`).
+- **Kept:** every other `cfg` table -- the configuration set, templates, the change journal, the audit trail,
+  `cfg.InstallState`, the support tables, the pipeline's run records (the runner's slot memory and the updater's gate read
+  them), the performance measurements (the before / after of the running time) and a REST connector's keys to items in
+  another system.
+- **How:** TRUNCATE where no foreign key points at the table, else DELETE in batches whose size is measured and adapted;
+  identity values continue where they were, so a kept record that names an old id never meets a new row.
+- **When:** PLAN by default (rows and MB per table, what is kept). `-Apply` refuses while a run, an update, the clean-up or
+  the index build shows a fresh beat on its lock row (the liveness rule), while the newest pipeline run is not ended, or
+  while data-out holds its lease; it then holds the install lock for the whole reset. It refuses when a live ServiceNow /
+  REST output holds SecurityInsight's keys unless `-AcceptExternalKeysLost`. A second `-Apply` is a no-op that says so.
+- **Read back:** every emptied table has 0 rows, no kept table has fewer rows, and the two identity scope settings
+  (`SI_Identity_SkipNeverSyncedDisabledAd`, `SI_Identity_SkipDeletedGroups`) are on (no row = the shipped default, on);
+  recorded on the audit trail as `data.store.reset`. Reachable as the install identity or through the Invardia Support
+  app's SQL (`-SupportSql`); the core takes the store seam, the script is a thin wrapper.
+
 ### Risk Analysis writes its result to SQL, a query slice at a time (v3, #638 / #641)
 
 **The model (owner, 2026-10-13).** Per bucket: the report's Kusto query (unchanged), the rows scored, WRITTEN to the Pro
@@ -6469,7 +6498,12 @@ with `setup/Invoke-SIContainerUpdate.ps1 ... -Save`.
 Every feature of the VM launchers works when the engines run as Container Apps jobs. The settings are layered the same
 way, in the same order:
 
-1. **The engine's shipped defaults** (`launcher/<engine>/LauncherConfig.defaults.ps1`) — the container loads them first,
+0. **The catalog default of every setting** (`config/settings.catalog.locked.json`) — set first for every setting that
+   has a default and no value yet, converted by the catalog's own type. Secrets, settings the container states from its
+   own environment, the web app's settings and a setting whose "unset" has its own meaning are left out. So a setting you
+   never stored always runs with its shipped default, also in a container (the VM launcher reaches the same values
+   through its shared defaults). Every layer below still wins.
+1. **The engine's shipped defaults** (`launcher/<engine>/LauncherConfig.defaults.ps1`) — the container loads them next,
    exactly as the VM launcher does. They hold no tenant value and nothing the container decides itself (sign-in,
    storage, targets).
 2. **Your config** (`config/SecurityInsight.custom.ps1`) — passed to every job as `SI_CFG_<name>`.
@@ -7508,6 +7542,9 @@ document (~4 s). The other CI and collection pages measured 0.1-0.2 s (`/Cis/Sum
   larger size is the customer's and kept; `SI_Bootstrap_WebAppCpu` / `SI_Bootstrap_WebAppMemory` (Pro database first, then the
   config) win both ways. The sign-in front sidecar (0.25 / 0.5 GiB) is never resized: the app is 2.25 CPU / 4.5 GiB.
   The Pro database is S3 (above); `SI_Bootstrap_SqlServiceObjective` (Pro database first) sets it both ways, never below S1; the identity ledger stays S1 whatever is set (#756).
+  The one exception is an install where the owner has decided on a larger identity ledger, for an install whose CI build
+  keeps the ledger at its limit. Support raises that install's ledger by hand. The sizing never lowers a database, so the
+  larger ledger stays through every update. Each such install and its decision is recorded in the internal backlog.
 ### The database statistics stay fresh, so every view stays fast (Pro, framework §12.27)
 
 A view is only as fast as the plan SQL picks, and SQL picks the plan from its statistics. **Background statistics are on in

@@ -293,6 +293,70 @@ function Get-SIContainerEngineDefaultsPath {
     return $null
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# THE SHIPPED DEFAULT OF EVERY SETTING (framework: "an unstored setting reads the catalog default"). A container never
+# loads launcher\_lib\SecurityInsight.shared-defaults.ps1 (it also states Location, SubscriptionId and other values the
+# container takes from its own env vars), and the Pro settings layer sets a global only for a STORED row -- so a setting
+# nobody stored was $null in a container, and a switch whose code read $null as "off" ran off although its shipped
+# default is on (found 2026-11-07 for the two identity scope switches). The entry points therefore set, FIRST -- before
+# the engine's defaults file, the customer's SI_CFG_* values and the stored cfg.Setting rows, which all still win --
+# every catalog setting's global from config\settings.catalog.locked.json "default", only where the global is unset.
+# Left out: secrets, settings without a default, the names the container states from its own env vars
+# ($script:SIConfigProtected), the web app's settings (SIWeb_*: the Pro layer fills those only when unset), and the
+# settings below whose UNSET value has a meaning of its own.
+# ---------------------------------------------------------------------------------------------------------------------
+$script:SICatalogDefaultNotApplied = [ordered]@{
+    # not set = inferred from the SMTP credentials (anonymous relay when there are none); a stored false = authenticated.
+    # The catalog's false would turn a mail without credentials into a refused SMTP pre-flight -- so it stays unset.
+    'Mail_SendAnonymous' = 'not set means: inferred from the SMTP credentials'
+}
+
+function ConvertFrom-SICatalogDefault {
+    <# PURE. A catalog setting's "default" as the global's value, by the catalog's own type: bool / int / number / list /
+       text / enum. $null for a value that does not fit its type (then nothing is set). #>
+    param([Parameter(Mandatory)]$Setting)
+    $d = $Setting.default
+    if ($null -eq $d) { return $null }
+    switch ([string]$Setting.type) {
+        'bool'   { if ($d -is [bool]) { return [bool]$d }; $s = ([string]$d).Trim().ToLowerInvariant(); if ($s -in 'true', '1', 'on', 'yes') { return $true }; if ($s -in 'false', '0', 'off', 'no') { return $false }; return $null }
+        'int'    { $n = 0L; if ([long]::TryParse(([string]$d).Trim(), [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { if ($n -ge [int]::MinValue -and $n -le [int]::MaxValue) { return [int]$n }; return $n }; return $null }
+        'number' { $x = 0.0; if ([double]::TryParse(([string]$d).Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$x)) { return $x }; return $null }
+        'list'   { return , @(@($d) | ForEach-Object { [string]$_ }) }
+        default  { return [string]$d }
+    }
+}
+
+function Get-SIContainerCatalogDefaults {
+    <# PURE (reads the catalog). The settings whose shipped default a container applies: @( @{ Name; Type; Value } ). #>
+    param([Parameter(Mandatory)][string]$CatalogPath)
+    $cat = [IO.File]::ReadAllText($CatalogPath) | ConvertFrom-Json
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($s in @($cat.settings)) {
+        $n = [string]$s.name
+        if (-not $n -or $n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { continue }
+        if ($null -eq $s.default -or [bool]$s.secret) { continue }
+        if ((Test-SIConfigNameIsSecret -Name $n) -or ($script:SIConfigProtected -contains $n) -or $n.StartsWith('SIWeb_') -or $script:SICatalogDefaultNotApplied.Contains($n)) { continue }
+        $v = ConvertFrom-SICatalogDefault -Setting $s
+        if ($null -eq $v) { continue }
+        $out.Add([pscustomobject]@{ Name = $n; Type = [string]$s.type; Value = $v })
+    }
+    , $out.ToArray()
+}
+
+function Set-SIContainerCatalogDefaults {
+    <# Sets $global:<Name> to the catalog default for every setting whose global is unset (missing or $null); a value
+       already there is never touched. Returns @{ Applied = @(names); Kept = @(names already set) }. #>
+    param([Parameter(Mandatory)][string]$CatalogPath)
+    $applied = New-Object System.Collections.Generic.List[string]; $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($d in (Get-SIContainerCatalogDefaults -CatalogPath $CatalogPath)) {
+        $cur = Get-Variable -Name $d.Name -Scope Global -ErrorAction SilentlyContinue
+        if ($cur -and $null -ne $cur.Value) { $kept.Add($d.Name); continue }
+        Set-Variable -Name $d.Name -Scope Global -Value $d.Value
+        $applied.Add($d.Name)
+    }
+    [pscustomobject]@{ Applied = $applied.ToArray(); Kept = $kept.ToArray() }
+}
+
 $script:SIRunspaceNoise = @('?', '^', '$', '_', 'args', 'input', 'this', 'Error', 'LASTEXITCODE', 'Matches', 'MyInvocation', 'PSItem',
     'PWD', 'StackTrace', 'PSBoundParameters', 'PSCmdlet', 'PSCommandPath', 'PSScriptRoot', 'foreach', 'switch', 'ExecutionContext',
     'Host', 'PID', 'PSDebugContext', 'NestedPromptLevel', 'ConsoleFileName', 'ShellId')

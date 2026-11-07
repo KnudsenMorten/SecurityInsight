@@ -33,17 +33,19 @@ function New-SIDataOutProgress {
     <#
         The progress of ONE output (a hashtable the writer carries as W.Progress). -EverySec: the write cadence (60);
         -StallSec: no progress for this long is a stall (600); -SlowWriteSec: a database write this slow stops the database
-        writes for this output (5). -Planned: the rows the output is expected to send (-1 = not known).
+        writes for this output (5). -Planned: the rows the output is expected to send (-1 = not known); -PlannedKind: where
+        that number comes from (Get-SIDataOutPlannedSource) -- 'grain' is the rows the output READS (a first run: the
+        grain's table), never rows to send, and the line says so.
     #>
     param([Parameter(Mandatory)][string]$Output, [string]$Label = '', [scriptblock]$Log, [scriptblock]$Clock,
-          [int]$EverySec = 60, [int]$StallSec = 600, [int]$SlowWriteSec = 5, [long]$Planned = -1)
+          [int]$EverySec = 60, [int]$StallSec = 600, [int]$SlowWriteSec = 5, [long]$Planned = -1, [string]$PlannedKind = 'batch')
     if (-not $Clock) { $Clock = { [datetime]::UtcNow } }
     $now = [datetime](& $Clock)
     $sec = [ordered]@{}; foreach ($ph in (Get-SIDataOutProgressPhases)) { $sec[$ph] = 0.0 }
     @{ Output = $Output; Label = $(if ($Label) { $Label } else { $Output }); Log = $Log; Clock = $Clock
        EverySec = $EverySec; StallSec = $StallSec; SlowWriteSec = $SlowWriteSec
        Started = $now; Phase = 'read'; PhaseAt = $now; PhaseSec = $sec; Parts = [ordered]@{}
-       RowsRead = 0L; ItemsBuilt = 0L; PagesSent = 0L; RowsSent = 0L; RowsHeld = 0L; Planned = $Planned
+       RowsRead = 0L; ItemsBuilt = 0L; PagesSent = 0L; RowsSent = 0L; RowsHeld = 0L; Planned = $Planned; PlannedKind = $PlannedKind
        LastProgressUtc = $now; LastWriteUtc = $now; Stalls = 0; StallOpen = $false; Notes = (New-Object System.Collections.Generic.List[string])
        Store = $null; BatchId = ''; DbOff = $false; DbFails = 0; DbWrites = 0; DbSkipped = 0; Lines = 0; Done = $false }
 }
@@ -142,8 +144,14 @@ function Format-SIDataOutProgressLine {
     }
     $times = $tl -join ', '
     $r = Get-SIDataOutProgressRate -Progress $P -Now $Now
-    $plan = $(if ($P.Planned -ge 0) { & $fm ' of ~{0:N0} planned' $P.Planned } else { '' })
-    $counts = & $fm '{0:N0} rows read, {1:N0} items built, {2:N0} page(s) sent, {3:N0} rows sent{4}, {5:N0} held' $P.RowsRead $P.ItemsBuilt $P.PagesSent $P.RowsSent $plan $P.RowsHeld
+    # #1140: the grain's row count (a first run's plan) is the rows the output READS -- said as rows to read, beside the rows
+    # read; only an earlier batch's count is a plan of rows to SEND
+    $toRead = ''; $plan = ''
+    if ($P.Planned -ge 0) {
+        if ([string]$P.PlannedKind -eq 'grain') { $toRead = & $fm ' (of ~{0:N0} rows to read)' $P.Planned }
+        else { $plan = & $fm ' of ~{0:N0} planned' $P.Planned }
+    }
+    $counts = & $fm '{0:N0} rows read{6}, {1:N0} items built, {2:N0} page(s) sent, {3:N0} rows sent{4}, {5:N0} held' $P.RowsRead $P.ItemsBuilt $P.PagesSent $P.RowsSent $plan $P.RowsHeld $toRead
     if ($Final) { return (& $fm '{0}: progress -- done in {1:N1} s; {2}; {3:N1} rows/s; {4}' $P.Label $r.Elapsed $counts $r.RowsPerSec $(if ($times) { $times } else { 'no phase timed' })) }
     $left = $(if ($r.SecondsLeft -ge 0) { & $fm 'about {0:N0} min left' ([Math]::Ceiling($r.SecondsLeft / 60)) } else { 'time left not known yet' })
     & $fm '{0}: progress -- phase {1}; {2}; {3:N1} rows/s; {4} ({5})' $P.Label $P.Phase $counts $r.RowsPerSec $left $times
@@ -239,29 +247,39 @@ function Get-SIDataOutGrainCountSql {
     "SET NOCOUNT ON; SELECT ISNULL((SELECT SUM(p.rows) FROM sys.partitions AS p WHERE p.object_id = OBJECT_ID(N'$t') AND p.index_id IN (0, 1)), -1) AS N;"
 }
 
-function Get-SIDataOutPlannedEstimate {
+function Get-SIDataOutPlannedSource {
     <#
-        The rows an output is expected to send, read ONCE before its first page (never in the send path): the newest ended
-        batch's planned rows; else, for a first run, the grain's rows (the data database); else the items in hand; -1 = not
-        known. Never throws.
+        The rows an output is expected to send, read ONCE before its first page (never in the send path), and where the number
+        comes from: @{ Rows; Kind } -- 'batch' the newest ended batch's planned rows; else, for a first run, 'gen' / 'items'
+        (the items in hand) or 'grain' (the grain's table rows in the data database: rows to READ, not rows to send); 'none'
+        and -1 = not known. Never throws.
+        #1140 (live 2026-11-07): the batch read answered nothing although the last live batch qualified -- the store's reader
+        answers its rows as ONE array, and the filter looked at that array (not a dictionary) instead of at its rows. The rows
+        are unrolled first now (as every reader of the store does).
     #>
     param([Parameter(Mandatory)][string]$OutputId, [string]$Grain = '', $Store, [hashtable]$Cursor)
     try {
         if ($Store -and $Store.Invoke) {
-            $a = @(@(& $Store.Invoke (Get-SIDataOutPlannedSql) @{ OutputId = $OutputId } 'reader') | Where-Object { $_ -is [System.Collections.IDictionary] })
-            if ($a.Count -and $null -ne $a[0]['Planned'] -and -not ($a[0]['Planned'] -is [System.DBNull])) { return [long]$a[0]['Planned'] }
+            $a = @(& $Store.Invoke (Get-SIDataOutPlannedSql) @{ OutputId = $OutputId } 'reader' | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] })
+            if ($a.Count -and $null -ne $a[0]['Planned'] -and -not ($a[0]['Planned'] -is [System.DBNull])) { return [pscustomobject]@{ Rows = [long]$a[0]['Planned']; Kind = 'batch' } }
         }
     } catch { }
     try {
         if ($Cursor) {
-            if ($Cursor.Phase -eq 'gen') { return [long]$Cursor.Total }
-            if ($Cursor.Phase -eq 'items' -and $null -ne $Cursor.Items) { return [long]@($Cursor.Items).Count }
+            if ($Cursor.Phase -eq 'gen') { return [pscustomobject]@{ Rows = [long]$Cursor.Total; Kind = 'gen' } }
+            if ($Cursor.Phase -eq 'items' -and $null -ne $Cursor.Items) { return [pscustomobject]@{ Rows = [long]@($Cursor.Items).Count; Kind = 'items' } }
             $sql = $(if ($Grain) { Get-SIDataOutGrainCountSql -Grain $Grain } else { '' })
             if ($sql -and $Cursor.Invoke) {
                 $n = & $Cursor.Invoke $sql @{} 'scalar'
-                if ($null -ne $n -and -not ($n -is [System.DBNull]) -and [long]$n -ge 0) { return [long]$n }
+                if ($null -ne $n -and -not ($n -is [System.DBNull]) -and [long]$n -ge 0) { return [pscustomobject]@{ Rows = [long]$n; Kind = 'grain' } }
             }
         }
     } catch { }
-    -1L
+    [pscustomobject]@{ Rows = -1L; Kind = 'none' }
+}
+
+function Get-SIDataOutPlannedEstimate {
+    <# The rows of Get-SIDataOutPlannedSource alone (-1 = not known). Never throws. #>
+    param([Parameter(Mandatory)][string]$OutputId, [string]$Grain = '', $Store, [hashtable]$Cursor)
+    [long](Get-SIDataOutPlannedSource -OutputId $OutputId -Grain $Grain -Store $Store -Cursor $Cursor).Rows
 }

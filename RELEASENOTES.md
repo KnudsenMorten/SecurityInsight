@@ -1,3 +1,477 @@
+# SecurityInsight release notes
+
+<!-- install lines: from setup/install-parameters.json (installer) -->
+**Install SecurityInsight Community** in Azure Cloud Shell (PowerShell) with two lines: line 1 downloads the installer
+from the latest public release, line 2 runs it. Every other setting is a parameter of line 2 with its default.
+
+```powershell
+Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
+```
+
+SecurityInsight Pro and the Pro trial install from invardia.com, never from GitHub: start at
+[invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
+<!-- /install lines -->
+
+## v3.0.58 — The data sync no longer slows to a crawl at large installs
+
+### Data sync
+
+- The step that tracks each finding's lifecycle works through the findings in key ranges. At a large install every range
+  read the full list of retired assets, whatever its size, so each range cost about 8 seconds. The range size then shrank
+  to a single key and stayed there, and this one step could take a day or more. Each range now reads only the assets it
+  needs, and the range size takes a fixed cost per range into account, so it grows back to thousands of keys per range.
+
+## v3.0.57 — A stuck job no longer holds back the daily run
+
+### Pipeline
+
+- SecurityInsight now notices when one of its own jobs is still listed as running but shows no sign of life: an update,
+  a pipeline run or a clean-up of old data. Such a job is stopped, and the waiting run starts. A job counts as stuck
+  15 minutes after it last reported that it was working, or 30 minutes after it started if it never reported. A job
+  that is still working is never stopped. Before, a stuck update or run could hold back the daily collection for many
+  hours or even days.
+- When building the CI list, a temporary answer from the database while saving asset ids is now retried on a new
+  connection. Before, one such answer could end a long build and the work had to start again.
+
+### Support
+
+- The update again makes sure the queue that carries support requests exists. For the last few days it warned on
+  every run that the queue could not be checked.
+
+## v3.0.56 — One moved asset no longer holds back every vulnerability close
+
+### Vulnerabilities
+
+- When an asset's identifier moves to another CI and the correlation keeps both CIs, a finding stored under the old CI
+  could not be matched with certainty. Before, a single such finding stopped every close in the whole run. Now only the
+  CIs concerned are held for that run, and nothing on them is opened, updated or closed. Every other finding opens and
+  closes as normal. The run's warning names the CIs and the findings.
+
+### Setup and updates
+
+- The database setup step can run its grants alone: users, memberships and grants, with no procedure, schema or setting
+  changed. It may therefore run while a pipeline run is in progress.
+- Moving an install to its new identity names now counts a schema the new identity owns as already carrying the old
+  identity's rights on it, so the move's read-back is complete.
+
+## v3.0.55 — The database setup step finishes in one run
+
+### Setup and updates
+
+- On an install with the optional Support app, the database setup step now prepares the support tables in the identity
+  database before it gives the engine and the update their roles there. The first run of the step therefore succeeds
+  and reads everything back, where it used to need a second run.
+
+## v3.0.54 — An update waiting at the end of a long run is no longer missed
+
+### Pipeline
+
+- A run keeps its hold on the install for the whole run, including the long work at the end. An update that is waiting
+  is therefore always started right after the run ends, and never left for the next night.
+- The database statistics are refreshed once, after the run's results are published, so the pages are fast as soon as
+  the new results show.
+
+### Setup and updates
+
+- The update's own identity can read the tenant's applications, so it finds the Support app by itself when it keeps
+  the database setup step's permissions in place.
+- The index build step, the database setup step and the update connect through the same retrying connections as the
+  rest of the product. A short network or sign-in hiccup no longer stops them.
+
+## v3.0.53 — The database setup step keeps itself working, and a missing Defender licence is said plainly
+
+### Setup and updates
+
+- The database setup step's own identity joins the SQL server's admin group by itself: directly, or as an active
+  privileged group assignment when the group is protected, then read back before the step runs. The update keeps that
+  membership and renews a time-limited one before it ends; a renewal that fails while the membership is still valid is
+  a warning, never a stopped update. A step started right after a new membership waits for it to take effect.
+- Moving the SQL server's admin from one group to another is proven by a sign-in through the new group, and rolled back
+  automatically when that does not succeed.
+- Every update turns on background statistics in each product database, so a page never waits for the database to
+  refresh one.
+- The support step always uses this tenant's own Support app, and replaces a database user that was made for the wrong
+  one. The setup step's lines now reach the install's log workspace.
+
+### Risk analysis
+
+- A report whose Defender table is not in the tenant (for example without Defender vulnerability management) is shown
+  as not applicable again, even when Defender does not name the missing table. A real query problem still fails the
+  report on its first try.
+
+## v3.0.52 — Pages stay fast after every run
+
+### Pipeline
+
+- At the end of every run the pipeline brings the database's statistics up to date for the tables the run rewrote, before
+  the pages move to the new run and again after their copies are refreshed. Pages are planned on current figures and never
+  wait for the database to update a statistic while you look. It changes no data; if it cannot run, the run still completes
+  and the log says so in one line.
+- New installs set the database to update a stale statistic in the background, so a page read never waits for it.
+
+### Web app
+
+- A device's close-loop list reads only that device's findings, whatever the database's statistics say (it could read the
+  whole findings table for one device and take more than a minute).
+
+## v3.0.51 — Fast views, and an update never makes the web app hang
+
+### Web app
+
+- Every view reads narrow indexes and stored columns instead of each row's full source record. The navigation, the data
+  check every page makes, the device page, a CI's findings and daily history, the Summary view, the correlation figures,
+  the audit trail, the guard events and the change history answer in a fraction of the time they took, also while a
+  pipeline run is going. Every rewritten view was checked to show exactly the same rows as before.
+- A built-in check now refuses any new or changed view that would read the full source records or scan a large table, and
+  the web app writes one log line for any page read that takes two seconds or more.
+- While an update changes the database, the web app answers at once with a short "SecurityInsight is being updated"
+  notice and comes back by itself, instead of hanging. Its health probes no longer touch the database.
+- The device page names each finding from the published run.
+
+### Pipeline
+
+- The findings per CI are compared by their content in one read per record: a step that read far too much at a large
+  install is many times faster, with the same results.
+- The run's time is no longer stored inside each finding's record, so a finding that did not change is not rewritten on
+  every run. What SecurityInsight sends to SQL and ServiceNow is unchanged, byte for byte.
+- The large source records are kept outside the table rows, so every other read of those tables reads far less.
+
+### Updates and telemetry
+
+- An update no longer re-creates unchanged database procedures and triggers, so tables read at sign-in are not locked
+  while it runs.
+- A run record that could not be sent to Invardia is kept for up to seven days and sent later, in paced rounds.
+## v3.0.50 — The private build pool is never removed
+
+### Updates
+
+- On a private install, an update no longer removes the image build pool to change its size class. A pool of another
+  size class keeps it and only goes back to no agents between builds (read back). Removing and re-creating it could leave
+  the install without a pool, so that no update could build its images.
+- A build pool made by setup or an update starts with one agent (Azure does not create a pool with none), and is then
+  scaled to no agents between builds and read back.
+## v3.0.49 — One stable CI per machine, every CI state told to ServiceNow, and users' sign-in methods in full
+
+### Configuration items
+
+- A CI's id is stable: an id that was merged into another CI is never used again. A record that still points at it now
+  builds the CI it was merged into, and a CI that came back after a merge is retired once, as merged into the right CI,
+  with its findings moved there. Nothing is deleted.
+- Every CI that is not active is sent to ServiceNow with its state and a plain reason (for example "merged into <id>
+  (<name>) -- the same machine; use that CI", or "not seen since <date>"), and the CI that replaces a merged one names it.
+  A CI is never dropped from what SecurityInsight sends. CIs that were sent as retired without a reason are sent once
+  more, with it.
+- Exposure Graph keeps listing machines long after they are gone; a device or Azure resource that only Exposure Graph
+  still lists now goes "not seen" and is retired after its grace period, and Exposure Graph no longer keeps a CI active
+  when the source it mirrors stopped seeing it. Accounts are not affected: a dormant account stays, as a risk to report.
+- The SQL Server resource of an Azure VM is a linked child of the VM's CI, never offered as the same machine.
+- A Defender device without a name gets a generated name, so no CI is nameless.
+- On the first build after this update every CI is rebuilt once.
+
+### Identity collection
+
+- Every user's sign-in methods in full -- each method with its details and the device a Windows Hello or Authenticator
+  key lives on (linked to that device's CI) -- read in the background by its own job, privileged users first, then users
+  whose methods changed. Collections never wait for it. A setting chooses who is read (every user, privileged only, or
+  none); the first full read of a large tenant takes many hours, later runs read only changed users.
+
+### Private installs
+
+- An install with a private registry scales its image build pool up only while it builds, and back to none after, so it
+  costs nothing between updates. The heartbeat reports the pool's size.
+- Building indexes on large tables is its own job, and pauses the moment an update waits -- the update never waits for it.
+
+### Web app
+
+- The Assumptions page shows every collection-scope setting with the value in force.
+- An asset's close-loop table names each finding (title and kind: CVE, recommendation or certificate) and counts every
+  item.
+
+## v3.0.48 — Updates never stop a running pipeline, and a faster identity read at large tenants
+
+### Updates
+
+- An update never cancels a running pipeline any more. It waits for the run to end and is installed between two runs; a
+  waiting update still goes first. Only you stop a run. Before, an update that had waited 6 hours cancelled a run that
+  started on an older version, also after its Risk Analysis had finished.
+- An update now waits up to 90 minutes for its image build. An install with a private registry builds inside its own
+  network, which can take longer than the 30 minutes allowed before.
+
+### Identity collection
+
+- With "skip on-premises accounts that were never synced, are disabled and are not privileged" on, those accounts are now
+  left out in the Exposure Graph query itself instead of being read and then dropped. At a large tenant this reads far
+  fewer nodes. Any account with a sign of an Entra ID or of privilege is still read and decided as before; the log says
+  how many were not fetched.
+
+### Invardia support
+
+- The support status says the read-only access is in place only when the just-in-time grant procedures are installed
+  and signed in every database, not only when the read role exists.
+
+## v3.0.47 — A new install's first collection runs Risk Analysis without waiting
+
+### Pipeline
+
+- On a new install's first collection, the merged assets are shown as soon as the asset build has finished. The run
+  waited for that step before it went on, so at a large tenant Risk Analysis and every later step stood still for
+  hours. It now runs beside the rest of the run: Risk Analysis starts at once, nothing that needs the data sync starts
+  before it has ended, and the data sync runs again at its own place as before.
+
+### Invardia support
+
+- The support status now says "missing" for a database where the just-in-time support access is not installed yet,
+  where it said "unknown" before.
+
+## v3.0.46 — A safer download, shorter support sessions, and support access that is only there while it is needed
+
+### Install
+
+- The Community installer now refuses to run a download it cannot check: when the release states no SHA-256 for the
+  file, nothing is downloaded or installed and the installer says so. Pro already worked this way.
+
+### Invardia support
+
+- A support session lasts at most 8 hours. A request for longer is refused, both by the job that opens the access and,
+  once the support setup has been renewed at an install, by the database itself.
+- Support can now remove the Invardia Support app's standing administrator access to the SecurityInsight databases,
+  so it only gets access for the length of a support session you allow. The step checks first that the just-in-time
+  access works at the install, keeps another administrator of the SQL server in place, and can be undone. It is run
+  once per install, with your agreement.
+
+### Database setup
+
+- The database setup job now finds the identity each part of SecurityInsight signs in as, also while an install is
+  moving to new identity names.
+
+### Wording
+
+- Comments in the shipped scripts no longer carry internal tracking numbers or loose wording about checks; a test keeps
+  it that way.
+
+## v3.0.45 — Nobody needs database admin rights any more, and Invardia support works in every SecurityInsight database
+
+### Database setup without a person
+
+- **SecurityInsight now has its own database setup job.** It runs as its own managed identity, a member of your SQL
+  admin group, and creates every database user and right the product needs — for the engine, the updater, the web app,
+  the MCP server and asset tagging — then checks each one. A new install starts it and waits for its result. Every
+  update keeps it in place and runs it before installing new code; if it fails, the update waits and your installed
+  version keeps running. For an existing install, the job's identity is added to the SQL admin group once (Invardia
+  support, or your administrator); after that every update runs it. The scripts that did this by hand remain available
+  as a fallback.
+- Asset tagging's database access is now given by the update itself.
+- `Initialize-SIDataSql` and `Initialize-SIVulnTargetSql` are no longer needed for the Pro database: every update applies
+  those tables.
+
+### Invardia support
+
+- The support level you set in the Invardia portal now applies in every SecurityInsight database, not only the main one.
+- The request queue Invardia support uses to open a session is now created by the update at every install.
+
+### Web sign-in
+
+- The web app runs behind sign-in front 1.4.5 (wording in its code only; no change in behaviour).
+
+## v3.0.44 — Two identity scope settings on by default, and the same install lines everywhere
+
+### Changed defaults
+
+- **Exposure Graph identities without an asset are now left out by default** (default changed, owner 2026-11-04). Two
+  settings in Settings > Collection scope & limits are now on:
+  - *No asset for never-synced, disabled AD accounts*: an on-premises AD account that was never synced to Entra ID
+    becomes an asset only while it is enabled or privileged (an admin count, a critical or tier 0/1 AD group, an
+    assigned role, a service account, a sensitive account or a Microsoft criticality level).
+  - *No asset for groups Entra ID no longer has*: a group with an Entra object id becomes an asset only while Entra ID
+    still has it (active or in its deleted items). Nothing is decided when the group list could not be read completely.
+
+  An install that never chose a value takes the new default on its next run; a value you chose is kept. What is left
+  out is counted on the Data health page ("Left out by your choice"); the existing assets of such accounts and groups
+  retire with a reason naming the setting, and their findings close as asset retired, never as fixed. Accounts synced
+  to Entra ID, devices and findings are not affected. Turn a setting off and the next run records them again.
+
+### Install
+
+- The two install lines are now the same in the README, the release notes, the release page, the documentation and
+  the installer's own help: Community downloads from the latest public release, Pro and the trial from invardia.com,
+  and line 2 is the same for both.
+
+## v3.0.43 — Reports that no longer go missing on large tenants, bigger jobs for the heavy steps, and the support level set in the Invardia portal
+
+This release carries everything of 3.0.42 (which was released to the internal ring only) and two more fixes.
+
+### Report fixes
+
+- On a large tenant, a few Risk Analysis reports (attack paths and administrator sign-ins to devices) could end
+  incomplete because Log Analytics was briefly short of memory while it built the lookup of each asset's CI. SecurityInsight
+  now waits and asks again in that case, and builds such a lookup in parts where each part reads only its share of the
+  CIs. The rows are the same; the reports complete.
+- The device vulnerability reports (missing CVEs, recommendations, end-of-support software) now return their rows on a
+  tenant whose Defender has the vulnerability data but no device inventory table (for example Microsoft Defender for
+  Business). Before, one optional lookup of the device name failed the whole report. On a tenant with the device
+  inventory the rows are the same as before, and every open finding keeps its history.
+
+### Stability fixes
+
+- The heavy jobs (the collections, correlation, Risk Analysis, the data sync and vulnerabilities) now run with at least
+  4 CPU / 8 GiB. Every update raises an existing install's heavy jobs to that size; a job is never made smaller.
+- A collection whose run was stopped by an update, by support or by a person is now reported as partial, with that reason,
+  instead of failed. Only a run that itself failed reports a failed collection.
+- Support can stop the running pipeline run, wait until it has really stopped, and then update the install, as one step
+  with a read-back after each part.
+- The one-time cut-off now reads its own setting back correctly when support sets it.
+
+### Support access
+
+- The level of access the Invardia Support app has (none, troubleshoot or setup) now follows the level you set in the
+  Invardia customer portal. The updater reads it from Invardia on every run and applies it; a level you lower or remove in
+  the portal is applied the same way. If Invardia cannot be reached, the last level stays.
+
+## v3.0.42 — Device reports on Defender for Business, a stopped run is no longer "failed", and the support level set in the Invardia portal
+
+### Report fixes
+
+- The device vulnerability reports (missing CVEs, recommendations, end-of-support software) now return their rows on a
+  tenant whose Defender has the vulnerability data but no device inventory table (for example Microsoft Defender for
+  Business). Before, one optional lookup of the device name failed the whole report and it showed no rows. On a tenant that
+  has the device inventory, the rows are the same as before, and every open finding keeps its history.
+
+### Pipeline fixes
+
+- A collection whose run was stopped by an update, by support or by a person is now reported as partial, with that reason,
+  instead of failed. Only a run that itself failed reports a failed collection. The last complete collection shown stays the
+  one you can see.
+- Support can now stop the running pipeline run, wait until it has really stopped, and then update the install, as one
+  step with a read-back after each part.
+- The one-time cut-off now reads its own setting back correctly when support sets it.
+
+### Support access
+
+- The level of access the Invardia Support app has (none, troubleshoot or setup) now follows the level you set in the
+  Invardia customer portal. The updater reads it from Invardia on every run and applies it; a level you lower or remove in
+  the portal is applied the same way. If Invardia cannot be reached, the last level stays.
+
+## v3.0.41 — A one-time fresh start for large installs, and the AI account stays private on a private install
+
+### Correlation
+
+- Support (or the customer, from a script) can set a one-time cut-off: from the next collection of each source on, the
+  records collected before the cut-off are no longer taken into the CIs, and a CI that only those older records built is
+  retired, with the cut-off named as the reason. Nothing is deleted. It is meant for a fresh start of a large install whose
+  older collections hold records that are no longer wanted. The script shows how many CIs would retire before anything is
+  set, and records who set it and why.
+
+### Install fixes
+
+- On a private install the optional Azure OpenAI account is never created with public access: the setup says the account
+  would need a private endpoint and leaves the AI features off. An existing account is reported, never changed.
+
+## v3.0.40 — Inherited Azure tags in every collection mode, and safer installs
+
+### Azure fixes
+
+- Azure records collected in parts (a producer with workers, the mode of larger installs) now carry the tags they inherit
+  from their resource group, subscription and management groups, as single-job collections already did. The tags are
+  read once per collection, tenant-wide, and the log says how many of each were read.
+
+### Install fixes
+
+- The install creates the web app's Key Vault key for its sign-in keys and gives the web app its right to use it, then
+  reads both back, so a new install no longer waits for its updater (which may not give that right). Where the person
+  installing may not assign roles, the grant is listed as a task and the install goes on.
+- Support and maintenance scripts never open a private install's database: on a private install they write no firewall
+  rule, say why and go on with the other installs.
+
+## v3.0.39 — Collection runs only inside the pipeline
+
+### Pipeline fixes
+
+- The Endpoint, Identity and Azure collections each ran a second time a day on a timer of their own, outside the
+  pipeline. That extra collection belonged to no run. Now a collection that is a step of the pipeline is started only by
+  the pipeline: the update takes the extra timer away (and reads it back), and a timed start is skipped with one line in
+  the log. Installs that run their jobs on their own schedules keep their timers.
+- The Jobs page shows these three collections as their pipeline steps again; saving the pipeline can no longer drop them.
+- The verification job now checks that every collection ran inside the pipeline or was started by a person, and warns
+  about any that did not.
+
+## v3.0.38 — A private install's replies find their way back, and two editions never share a resource group
+
+### Install fixes
+
+- A private install connected to your hub network can now be given the address ranges your people browse from and
+  your hub firewall's private IP. On a network SecurityInsight creates, it then adds the route that sends replies back
+  through your firewall (and reads it back). Without that route the web app times out from your own network even when
+  DNS and the peering are right. On your own network nothing is changed: the network hand-off names the route your
+  network team adds. The two questions are asked only when a hub network is given.
+- When the resource group already holds the other SecurityInsight edition, the install stops before it creates anything
+  and asks you to choose another resource group name.
+
+## v3.0.37 — New installs get short, standard names
+
+### Install fixes
+
+- A new install names its resources the short, standard way: the resource group rg-si, the workspace log-si, the
+  collection endpoint dce-si, the Container Apps environment cae-si and its network vnet-si (in the install's own
+  resource group). The resources whose names must be unique across Azure end in six characters derived from the install:
+  sql-si-, kv-si-, stsi and acrsi followed by those characters. They stay the same on every resume and re-run.
+- Names you choose still win. An existing install, a resume of one and every update keep the names they already have;
+  nothing is renamed.
+
+## v3.0.36 — A private install finishes cleanly
+
+### Install fixes
+
+- On a private install, the final health check now checks the database the private way: public access closed, reached
+  through its private endpoint, and no rule that lets Azure services in. It no longer asks for that rule, and no step
+  (including a re-run or an update) ever creates it on a private install; a rule found there is removed.
+- Adding a member to a group SecurityInsight has just created now waits for Microsoft Entra to know the group (up to five
+  minutes, said in the log) and reads the membership back, instead of stopping with "does not exist".
+- The support-access step ends ok on a fresh install: its consent part is skipped in a database that does not yet carry
+  the support tables, and the next step adds them.
+
+## v3.0.35 — Inherited Azure tags are stored, and a permission the installer cannot read no longer stops it
+
+### Azure fixes
+
+- Every Azure record now carries the tags it inherits from its resource group, its subscription and its management
+  groups, each with the level and the name of the container it comes from (the nearest one wins when a tag is set at
+  several levels). Before, these were read only when a classification rule used them, and management-group tags were
+  not read at all. They are read tenant-wide, one read per level, and a level that cannot be read is said by name.
+
+### Install fixes
+
+- When the installer may not read or assign a permission outside SecurityInsight's own resource group (for example at
+  the tenant root), that grant is listed as a task for someone with the rights, and the install continues with a
+  warning. Only a failure inside SecurityInsight's own resource group stops it.
+
+## v3.0.34 — A new public install gets past its Key Vault
+
+### Install
+
+- A new public install no longer stops at the workspace step with "the Key Vault does not read back in the shape it
+  must have". A Key Vault open to all networks already lets trusted Microsoft services in, so nothing is asked of it;
+  only a vault whose firewall blocks traffic is given that exception. Private installs are unchanged.
+
+## v3.0.33 — A private install's build machines get their outbound path
+
+### Install
+
+- On a private install, the subnet that SecurityInsight creates for its private endpoints is given outbound access,
+  read back, so the container registry's build machines can start (new Azure subnets have no outbound access by
+  default). This is outbound only: nothing becomes reachable from outside.
+- Before the build agent pool is made, its subnet is checked for an outbound path. On a network you provide that has
+  none, the install stops with the one step your network team takes, instead of making a build pool that cannot start.
+- An update repairs a private install whose build pool does not run.
+
+## v3.0.32 — A private install waits for its build agent pool
+
+### Install
+
+- On a private install, the container registry step waits for its build agent pool while Azure creates it in your
+  network (up to 30 minutes, with a progress line every minute), instead of stopping and asking for the install to be
+  run again. A pool that Azure left failed is made again on the next run.
+
 ## v3.0.31 — A private install is private from the start, also its container registry
 
 ### Install
@@ -175,7 +649,7 @@
 ### Updates
 
 - Every update checks the CPU and memory of the jobs and the web app again, and raises one that is too small for your
-  tenant. Updates since 3.0.0 had skipped this check.
+  tenant. Until now only a new install did this.
 
 ## v3.0.18 — Cleaner assets: one CI per machine, a choice of what goes to ServiceNow
 
@@ -4921,7 +5395,7 @@ First write after cache expiry:
    - **NEW: per-engine TABLE-name override** mirroring the existing DCR-name override. `$global:SI_PublicIp_TableName` (and fallback to `$global:SI_Shodan_TableName`) wins over the `SI_<Engine>_Profile` pattern. Default in `LauncherConfig.defaults.ps1` is `SI_VulnerabilityPIP` (matches the legacy hardcoded value, preserves table + RA YAML query continuity).
 4. **`IpAddress` column 0% [EMPTY]** in pre-ingest audit (separate from #2). Schema declares `IpAddress` as `source: derived`, but `Get-SIDerivedValue` in `Build-PublicIpProfileRow.ps1` had no `'IpAddress'` case in its switch -- so the schema-iterated render returned `$null` even though `PrimaryEntityId` (same value) was populated 100%. Added the missing case (`IpAddress` and `IpVersion` both now alias `PrimaryEntityId` per schema sourcePath).
 5. **`Cannot bind argument to parameter 'AccountKey' because it is an empty string`** in Stage Schedule + Stage Reconcile under OAuth mode. Two fixes -- both silent skips that respect the v2.2.314+ OAuth-on-storage policy (we no longer carry a storage key, period):
-   - **`Invoke-Schedule.ps1`** -- CMDB auto-refresh is OAuth-incompatible (the underlying helper uses SharedKey-signed Table Storage REST). Under OAuth the auto-refresh is a silent no-op; Reconcile continues against the most-recent cached snapshot. TODO: rewrite `Refresh-CmdbCache.ps1` to use OAuth bearer tokens.
+   - **`Invoke-Schedule.ps1`** -- CMDB auto-refresh is OAuth-incompatible (the underlying helper uses SharedKey-signed Table Storage REST). Under OAuth the auto-refresh is a silent no-op; Reconcile continues against the most-recent cached snapshot. A later release rewrites `Refresh-CmdbCache.ps1` to use OAuth bearer tokens.
    - **`CmdbCache.ps1::Initialize-SICmdbCacheTables`** -- no-ops silently under OAuth mode. The Reconcile stage's existing empty-cache fallback path takes over.
 
 ### Cert-auth bridge + auth log consistency (operator ask)
@@ -4957,7 +5431,7 @@ Posting data to LogAnalytics table [ SI_VulnerabilityPIP_CL ] -- SUCCESS
 
 All three sinks (LA + JSON + Excel) green. Same table + DCR as the legacy engine -- RA YAML queries against `SI_VulnerabilityPIP_CL` continue to work unchanged.
 
-### TODO (out of scope for this hotfix)
+### Not in this hotfix
 
 - **`CmdbCache.ps1`** still uses SharedKey signing internally. Should be rewritten to use OAuth bearer tokens against Table Storage REST so the auto-refresh works under OAuth mode (currently a manual operator step).
 - **`Refresh-CmdbCache.ps1`** has a Mandatory `-StorageKey` parameter; needs an OAuth path too.
@@ -6100,7 +6574,7 @@ Single-line bump of `SOLUTIONS/SecurityInsight/VERSION` from `2.2.308` to `2.2.3
 
 ### Process fix
 
-Future releases must bump `VERSION` in the same commit as the tag, not separately. (TODO follow-up: add a tiny `Cut-SIRelease.ps1` helper that reads the next semver, writes `VERSION`, commits, and dual-tags in one shot so this never drifts again.)
+Future releases must bump `VERSION` in the same commit as the tag, not separately. (Follow-up: add a tiny `Cut-SIRelease.ps1` helper that reads the next semver, writes `VERSION`, commits, and dual-tags in one shot so this never drifts again.)
 
 ---
 
@@ -9333,7 +9807,7 @@ For Azure tables (`_ap`): column_ifexists returns `""`, case() falls through to 
 
 For any future CL profile table that gets added without AadDeviceId: same graceful fallback. No semantic error.
 
-### Lesson learned (added to authoring guide TODO)
+### Lesson learned (added to the authoring guide)
 
 A replace_all that targets a templated section (`_ep`-style let-binding) must use a pattern unique to the intended table. The v2.2.217 pattern `summarize arg_max(CollectionTime, *) by PrimaryEntityId` was too generic -- it appears in every CL profile table's dedup step. Future templated edits should use either:
 - A wider surrounding context that's unique to the intended table (e.g., includes `SI_Endpoint_Profile_CL` table name), OR
@@ -12794,7 +13268,7 @@ Migration to v2.2 entry-point pattern:
 
 Engine code unchanged — same 1300-line script, same YAML schema, same merge semantics. Just a clean entry path.
 
-Community-vm launcher + per-engine LauncherConfig samples are TODO for a follow-up — the internal-vm pattern is enough to unblock the immediate use case.
+Community-vm launcher + per-engine LauncherConfig samples follow in a later release — the internal-vm pattern is enough to unblock the immediate use case.
 
 ---
 
@@ -14255,7 +14729,7 @@ Cumulative patch covering issues surfaced during the v2.2.0 stable cut. No engin
 - **`*.internal-vm.*` files stripped from public stable + preview builds.** The 6 maintainer-only `launcher.internal-vm.ps1` files (azure / endpoint / identity / privilege-tier-classifier / publicip / risk-analysis) assume the AutomateIT monorepo path conventions. Public customers use `launcher.community-vm.ps1`.
 - **`demo/` folder excluded** from public publish. `demo/community/*` carries Contoso-internal customer values; `demo/Install-DemoConfig.ps1` is a maintainer's demo-VM refresh helper. Stays in the upstream monorepo, never published.
 - **README chain skipped on flat layout** when `SecurityInsight/README.md` was already copied verbatim during the layout-mirror step. The fallback chain (`DOCS/README.public.md` → public-marker extraction → auto-stub) was running unconditionally and crashing on `Join-Path $docsSrc 'README.public.md'` when `$docsSrc` was nulled.
-- **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up TODO: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
+- **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
 - **Duplicate `dependencies if-block` removed** from `publish.yml` (merge artifact from v2.2.0 stable cut — both branches added similar logic).
 
 ### Repo hygiene

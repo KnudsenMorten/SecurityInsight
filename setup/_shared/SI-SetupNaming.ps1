@@ -4,6 +4,9 @@
     The names and tags setup gives the Azure resources it CREATES for a new SecurityInsight install.
 
 .DESCRIPTION
+    NEW GUIDED INSTALLS (framework section 5.5, owner 2026-11-04): <type>-si[-<purpose>] with no ring / edition / hosting, and
+    <t> (SHA-256 of the install id) on the globally unique names -- Get-SISetupInstallNames. Everything below is the EARLIER
+    pattern: what every existing install runs with, the server / unattended setup, and a resource group named in it.
     Pattern: <type>-si-<ring>-<edition>-<hosting>, for example rg-si-prod-community-ca.
       ring    : r0 | r1 | r2 | prod (prod = a single production install, the default)
       edition : community | pro (spelled out)
@@ -188,6 +191,85 @@ function Get-SISetupSubscriptionSuffix {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($id)) } finally { $sha.Dispose() }
     (-join ($h[0..2] | ForEach-Object { $_.ToString('x2') }))
+}
+
+# ------------------------------------------------------------------------------------------------------------------------
+# Framework section 5.5 (owner 2026-11-04, OPEN-30: "i hate the si method, and love the pim method"): the names a NEW guided install
+# gets. <type>-si[-<purpose>] -- no edition, ring, prod or hosting in any name (the 7 resource-group tags carry those) -- and
+# the globally unique names end in <t> = 6 hex characters of SHA-256 of the install id (PIM's Get-PimInstallToken, the
+# reference). NEW INSTALLS ONLY: an existing install keeps every name it has (Resolve-SIInstallDefaultResourceGroup,
+# Resolve-SIInstallExistingNames); the updater never derives a name.
+# ------------------------------------------------------------------------------------------------------------------------
+
+$script:SISetupDefaultInstallId = 'securityinsight'
+
+function Get-SISetupInstallToken {
+    <# PURE. <t>: the first 6 hex characters (lower case) of SHA-256 over the install id, trimmed and lower-cased, UTF-8 --
+       byte for byte PIM's Get-PimInstallToken (framework section 5.5). The same install id always gives the same <t>. #>
+    param([Parameter(Mandatory)][string]$InstallId)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$InstallId".Trim().ToLowerInvariant())) } finally { $sha.Dispose() }
+    (-join ($h[0..2] | ForEach-Object { $_.ToString('x2') }))
+}
+
+function Get-SISetupDerivedInstallId {
+    <# PURE. The install id of an install that was not given one of its own (PIM's Get-PimInstallDerivedId, same form):
+       'si-' + 12 hex characters of SHA-256 of 'tenant|subscription|resource group' (lower case). The same three answers give
+       the same id on every run and resume; another tenant, subscription or resource group gives another one. #>
+    param([Parameter(Mandatory)][string]$TenantId, [Parameter(Mandatory)][string]$SubscriptionId, [string]$ResourceGroup = 'rg-si')
+    $rg = if ("$ResourceGroup".Trim()) { "$ResourceGroup".Trim() } else { 'rg-si' }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(('{0}|{1}|{2}' -f "$TenantId".Trim(), "$SubscriptionId".Trim(), $rg).ToLowerInvariant())) } finally { $sha.Dispose() }
+    'si-' + (-join ($h[0..5] | ForEach-Object { $_.ToString('x2') }))
+}
+
+function Get-SISetupNamingInstallId {
+    <# PURE. The install id <t> is made from: the install's own id (Invardia's, or -InstallId given by the customer), else --
+       when it is SecurityInsight's default id 'securityinsight', which EVERY install without its own id shares and which would
+       give every customer the same SQL server / Key Vault / storage / registry name -- the derived id
+       (Get-SISetupDerivedInstallId). #>
+    param([AllowEmptyString()][AllowNull()][string]$InstallId, [AllowEmptyString()][AllowNull()][string]$TenantId,
+          [AllowEmptyString()][AllowNull()][string]$SubscriptionId, [AllowEmptyString()][AllowNull()][string]$ResourceGroup)
+    $id = "$InstallId".Trim()
+    if ($id -and $id -ine $script:SISetupDefaultInstallId) { return $id }
+    if ("$TenantId".Trim() -and "$SubscriptionId".Trim()) { return (Get-SISetupDerivedInstallId -TenantId $TenantId -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) }
+    if ($id) { return $id }
+    $script:SISetupDefaultInstallId
+}
+
+function Get-SISetupInstallNames {
+    <#
+        PURE. Framework section 5.5 "THE AGREED LIST" for SecurityInsight -- the names a NEW guided install gets:
+          ResourceGroup rg-si, ContainerEnv cae-si, Workspace log-si, Dce dce-si, Vnet vnet-si (in the install's own group),
+          SqlServer sql-si-<t>, KeyVault kv-si-<t>, StorageAccount stsi<t>, Acr acrsi<t>, the engine identity id-si-engine,
+          the components of Get-SISetupComponentNames -New (ca-si-web, ca-si-mcp, caj-si-updater, id-si-web / -mcp /
+          -updater / -tagging) and the -New display names (grp-si-sql-admins). -ResourceGroup: the customer's own group wins.
+        Length rules: storage 3-24 lower-case letters and digits, Key Vault 3-24, registry 5-50 letters and digits, SQL 1-63
+        -- every name here is 13 characters or fewer.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidateSet('community', 'pro')][string]$Edition,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{6}$')][string]$InstallToken,
+        [AllowEmptyString()][AllowNull()][string]$ResourceGroup
+    )
+    $t = $InstallToken
+    $n = [ordered]@{
+        EnvLabel        = ''
+        InstallToken    = $t
+        ResourceGroup   = $(if ("$ResourceGroup".Trim()) { "$ResourceGroup".Trim() } else { 'rg-si' })
+        Workspace       = 'log-si'
+        Dce             = 'dce-si'
+        StorageAccount  = 'stsi{0}' -f $t
+        Acr             = 'acrsi{0}' -f $t
+        KeyVault        = 'kv-si-{0}' -f $t
+        ContainerEnv    = 'cae-si'
+        Vnet            = 'vnet-si'
+        ManagedIdentity = 'id-si-engine'
+        SqlServer       = 'sql-si-{0}' -f $t
+    }
+    $d = Get-SISetupDisplayNames -New -Edition $Edition; foreach ($k in $d.Keys) { $n[$k] = $d[$k] }
+    $c = Get-SISetupComponentNames -New; foreach ($k in $c.Keys) { $n[$k] = $c[$k] }
+    $n
 }
 
 function Get-SISetupGlobalName {

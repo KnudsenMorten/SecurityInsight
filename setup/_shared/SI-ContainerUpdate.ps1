@@ -18,8 +18,8 @@ function Resolve-SIContainerUpdateTarget {
         Where the container hosting lives, or $null when this is not a container install.
         Explicit parameters win, then the customer's own config globals -- the SAME names setup uses
         (SI_Bootstrap_*). There are NO shipped defaults on purpose: a default would be the operator's own
-        resource names, and a customer who set nothing would then target the operator's infrastructure
-        (PIM BUG-28). Nothing configured = a VM install = nothing to update.
+        resource names, and a customer who set nothing would then target the operator's infrastructure.
+        Nothing configured = a VM install = nothing to update.
     #>
     param(
         [string]$ResourceGroupName,

@@ -5,9 +5,8 @@
       (a) A WAITING UPDATE GOES FIRST -- while the updater's wait mark is set, a run that ends starts no new run (the updater
           is started first), and a scheduled collection collects nothing (it is not the pipeline's own step); while the
           updater installs (it holds the install's lock) a scheduled collection collects nothing either. No mark = as today.
-      (b) A BOUND ON THE WAIT -- after 6 hours the update cancels the run that started on an OLDER version (#700's cancel)
-          and installs; a run that started on the version being installed is never cancelled; the pipeline runner starts
-          the updater for it on a busy wake-up too (at most once an hour).
+      (b) NO BOUND THAT CANCELS (owner 2026-11-05: "it must not auto cancel a running job due to missing upd" / "it is
+          always controlled by operator owner"): an update waits for the run; only the operator or owner stops a run.
     Offline; PS 7. No Azure, no database (fakes and the file store).
 #>
 
@@ -16,7 +15,6 @@ BeforeAll {
     . ([IO.Path]::Combine($script:SIRoot, 'engine', '_shared', 'SI-JobFlow.ps1'))
     . ([IO.Path]::Combine($script:SIRoot, 'engine', '_shared', 'SI-CollectionRunGate.ps1'))
     . ([IO.Path]::Combine($script:SIRoot, 'container', 'updater', '_shared', 'SI-UpdaterRunGate.ps1'))
-    . ([IO.Path]::Combine($script:SIRoot, 'container', 'updater', '_shared', 'SI-UpdaterWaitBound.ps1'))
     $script:Now = [datetime]::SpecifyKind([datetime]'2026-10-29T12:00:00', 'Utc')
     function script:New-Mark([double]$HoursAgo, [string]$Kind = 'run') {
         [pscustomobject]@{ SinceUtc = $script:Now.AddHours(-$HoursAgo); SetUtc = $script:Now.AddMinutes(-5); Kind = $Kind; Reason = 'update waits: run r1 is running' }
@@ -102,40 +100,22 @@ Describe '#947 (a) the pipeline: a run that ends while an update waits starts no
     }
 }
 
-Describe '#947 (b) a bound on the wait: after 6 hours the update cancels an OLD-version run, never a new-version one' {
-    It 'overdue only for a WAIT on a named run, with a version to install, after 6 hours' {
-        $w = [pscustomobject]@{ Go = $false; Verdict = 'Wait'; Kind = 'run'; Reason = 'update waits: run r1 is running'; RunId = 'r1' }
-        Test-SIUpdaterWaitOverdue -Gate $w -SinceUtc $script:Now.AddHours(-6) -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeTrue
-        Test-SIUpdaterWaitOverdue -Gate $w -SinceUtc $script:Now.AddHours(-5.9) -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeFalse
-        Test-SIUpdaterWaitOverdue -Gate $w -SinceUtc $null -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeFalse
-        Test-SIUpdaterWaitOverdue -Gate $w -SinceUtc $script:Now.AddHours(-9) -NowUtc $script:Now -TargetVersion '' | Should -BeFalse
-        Test-SIUpdaterWaitOverdue -Gate ([pscustomobject]@{ Go = $false; Verdict = 'Unreadable'; Kind = 'store'; RunId = '' }) -SinceUtc $script:Now.AddHours(-9) -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeFalse
-        Test-SIUpdaterWaitOverdue -Gate ([pscustomobject]@{ Go = $false; Verdict = 'Wait'; Kind = 'run'; RunId = '' }) -SinceUtc $script:Now.AddHours(-9) -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeFalse -Because 'a wait for a step or a held lock names no run to cancel'
-        Test-SIUpdaterWaitOverdue -Gate ([pscustomobject]@{ Go = $true; Verdict = 'Go'; Kind = ''; RunId = '' }) -SinceUtc $script:Now.AddHours(-9) -NowUtc $script:Now -TargetVersion '3.0.8' | Should -BeFalse
+Describe 'An update never cancels a running pipeline -- only the operator or owner stops a run (owner 2026-11-05)' {
+    It 'no updater edition cancels a run or carries the wait bound' {
+        $files = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'container\updater') -Recurse -Filter '*.ps1')
+        $files.Count | Should -BeGreaterThan 0
+        foreach ($g in $files) {
+            $src = [IO.File]::ReadAllText($g.FullName)
+            $src | Should -Not -Match 'Invoke-SIUpdaterOverdueCancel|Invoke-SIUpdaterCancelOldRun|SI-UpdaterWaitBound|Invoke-SIPipelineCancelRun' -Because "$($g.Name): an update waits for the run, it never cancels one"
+        }
+        Test-Path -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterWaitBound.ps1') | Should -BeFalse
     }
-    It 'under 6 hours nothing is cancelled; at 6 hours the run is cancelled and the gate is asked again until the install is free' {
-        $w = [pscustomobject]@{ Go = $false; Verdict = 'Wait'; Kind = 'run'; Reason = 'update waits'; RunId = 'r1' }
-        $script:Cancels = New-Object System.Collections.Generic.List[string]
-        $cancel = { param($id, $v, $why) $script:Cancels.Add(('{0}|{1}' -f $id, $v)); [pscustomobject]@{ Outcome = 'Cancelled'; Text = 'pipeline run r1 cancelled' } }
-        $script:Asks = 0
-        $again = { $script:Asks++; if ($script:Asks -lt 2) { [pscustomobject]@{ Go = $false; Verdict = 'Wait'; Kind = 'run'; Reason = 'still beating'; RunId = 'r1' } } else { [pscustomobject]@{ Go = $true; Verdict = 'Go'; Kind = ''; Reason = 'the lock is held by this update'; RunId = '' } } }
-        $r = Invoke-SIUpdaterOverdueCancel -Gate $w -SinceUtc $script:Now.AddHours(-2) -NowUtc $script:Now -TargetVersion '3.0.8' -Cancel $cancel -GateAgain $again -Sleep { param($s) } -Log { param($m) }
-        $r.Go | Should -BeFalse; $script:Cancels.Count | Should -Be 0
-        $r = Invoke-SIUpdaterOverdueCancel -Gate $w -SinceUtc $script:Now.AddHours(-7) -NowUtc $script:Now -TargetVersion '3.0.8' -Cancel $cancel -GateAgain $again -Sleep { param($s) } -Log { param($m) }
-        $r.Go | Should -BeTrue
-        @($script:Cancels) | Should -Be @('r1|3.0.8')
-        $script:Asks | Should -Be 2
+    It 'the pipeline runner never starts the updater to cut a running run short' {
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
+        $src | Should -Not -Match 'Get-SIPipelineUpdateOverdueStart' -Because 'the updater is started only between runs (when a run has ended), never to cut one short'
+        Get-Command -Name Get-SIPipelineUpdateOverdueStart -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
     }
-    It 'a run of the version being installed (SameVersion) is left alone: the update keeps waiting, the gate is not asked again' {
-        $w = [pscustomobject]@{ Go = $false; Verdict = 'Wait'; Kind = 'run'; Reason = 'update waits'; RunId = 'r1' }
-        $script:Asks = 0
-        $r = Invoke-SIUpdaterOverdueCancel -Gate $w -SinceUtc $script:Now.AddHours(-7) -NowUtc $script:Now -TargetVersion '3.0.8' -Sleep { param($s) } -Log { param($m) } `
-                 -Cancel { param($id, $v, $why) [pscustomobject]@{ Outcome = 'SameVersion'; Text = 'started on this version' } } -GateAgain { $script:Asks++; [pscustomobject]@{ Go = $true } }
-        $r.Go | Should -BeFalse; $script:Asks | Should -Be 0
-        # a cancel that throws is the same: nothing changes
-        (Invoke-SIUpdaterOverdueCancel -Gate $w -SinceUtc $script:Now.AddHours(-7) -NowUtc $script:Now -TargetVersion '3.0.8' -Sleep { param($s) } -Log { param($m) } -Cancel { throw 'HTTP 403' } -GateAgain { [pscustomobject]@{ Go = $true } }).Go | Should -BeFalse
-    }
-    It 'the #700 cancel the update runs: an OLD-version run is cancelled; a run of the NEW version, or of another run id, never' {
+    It 'the operator''s cancel (#700, Stop-SIRunAndUpdate): -OtherVersionThan cancels an OLD-version run, never a run of the new version or another run id' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ('si947c-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); New-Item -ItemType Directory -Path $dir | Out-Null
         try {
             $store = New-SIJobFlowFileStore -Path (Join-Path $dir 'flow-run.json')
@@ -155,34 +135,5 @@ Describe '#947 (b) a bound on the wait: after 6 hours the update cancels an OLD-
             $store.Load().CancelledBy | Should -Be 'the update to 3.0.8'
             @($script:Stops) | Should -Be @('caj-si-ptc-e1')
         } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
-    }
-    It 'the updater''s real cancel names the run and the version (only that run, only another version)' {
-        $fn = (Get-Command Invoke-SIUpdaterCancelOldRun).Definition
-        $fn | Should -Match 'Invoke-SIPipelineCancelRun .*-FlowRunId \$RunId -OtherVersionThan \$TargetVersion'
-        $fn | Should -Match ([regex]::Escape('^caj-si-flow-[a-z0-9\-]+$'))
-    }
-    It 'both updaters ask for the bound at the gate, with the mark''s first time and the version being installed' {
-        # every updater edition this copy carries (the Community copy has its own only): each one with a run gate asks for the bound
-        $gated = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared') -Filter '*.ps1' | Where-Object { ([IO.File]::ReadAllText($_.FullName)).Contains('$passGate = {') })
-        $gated.Count | Should -BeGreaterThan 0
-        foreach ($g in $gated) {
-            $src = [IO.File]::ReadAllText($g.FullName)
-            $src | Should -Match 'Invoke-SIUpdaterOverdueCancel -Gate \$r -SinceUtc \$odSince -NowUtc \$now -TargetVersion \$odTarget -GateAgain \$askGate'
-            $src | Should -Match '\$odSince = if \(\$gate\.Tag\) \{ \$gate\.Tag\.SinceUtc \}'
-        }
-    }
-    It 'the runner starts a 6-hour-waiting updater on a busy wake-up too -- at most once an hour, never beside a running updater' {
-        $old = [pscustomobject]@{ name = 'u0'; properties = [pscustomobject]@{ status = 'Succeeded'; startTime = $script:Now.AddHours(-8).ToString('o'); endTime = $script:Now.AddHours(-7.9).ToString('o') } }
-        (Get-SIPipelineUpdateOverdueStart -Waits (New-Mark 7) -Executions @($old) -NowUtc $script:Now).Start | Should -BeTrue
-        (Get-SIPipelineUpdateOverdueStart -Waits (New-Mark 5) -Executions @($old) -NowUtc $script:Now).Start | Should -BeFalse
-        (Get-SIPipelineUpdateOverdueStart -Waits (New-Mark 7 'store') -Executions @($old) -NowUtc $script:Now).Start | Should -BeFalse
-        (Get-SIPipelineUpdateOverdueStart -Waits $null -Executions @($old) -NowUtc $script:Now).Start | Should -BeFalse
-        $running = [pscustomobject]@{ name = 'u1'; properties = [pscustomobject]@{ status = 'Running'; startTime = $script:Now.AddMinutes(-90).ToString('o') } }
-        (Get-SIPipelineUpdateOverdueStart -Waits (New-Mark 7) -Executions @($running) -NowUtc $script:Now).Start | Should -BeFalse
-        $recent = [pscustomobject]@{ name = 'u2'; properties = [pscustomobject]@{ status = 'Succeeded'; startTime = $script:Now.AddMinutes(-30).ToString('o'); endTime = $script:Now.AddMinutes(-20).ToString('o') } }
-        (Get-SIPipelineUpdateOverdueStart -Waits (New-Mark 7) -Executions @($recent) -NowUtc $script:Now).Start | Should -BeFalse
-        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
-        $src.IndexOf('Get-SIPipelineUpdateOverdueStart') | Should -BeGreaterThan 0
-        $src.IndexOf('Get-SIPipelineUpdateOverdueStart') | Should -BeLessThan $src.IndexOf('$drain = Invoke-SIPipelineDrain')
     }
 }

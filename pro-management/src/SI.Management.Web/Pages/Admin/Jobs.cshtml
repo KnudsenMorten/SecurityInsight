@@ -26,7 +26,9 @@
     var isFlow = Model.FlowMode == "flow";
     var lastRun = Model.LastFlowRun;
     var stepRun = lastRun?.Steps.ToDictionary(s => s.Job, s => s) ?? new Dictionary<string, FlowStepRun>();
-    var installed = Model.List.Select(j => JobSchedule.Key(j.Name)).ToHashSet();
+    // #1096: a collection in parts is installed as its engine's step (its producer + worker)
+    var installed = Model.List.Select(j => JobFlow.StepKey(j.Name)).ToHashSet();
+    var installedNames = Model.List.Select(j => j.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
     var next = JobFlow.NextRun(Model.Flow, lastRun, fnow);
     var ed = Model.Flow;
     var stages = Model.Flow.StageList;
@@ -148,7 +150,7 @@
                         <tbody>
                             @foreach (var (grp, order, s) in mine)
                             {
-                                var jobName = JobFlow.JobName(s.Job);
+                                var jobName = JobFlow.StepRunJob(s.Job, installedNames) ?? JobFlow.JobName(s.Job);
                                 var sr = Rec(s.Job);
                                 var st = !s.Enabled ? "Disabled" : JobFlow.IsThrottled(sr) ? "Throttled" : sr?.State switch { "Success" => "Success", "Failed" or "TimedOut" or "Interrupted" => "Failed", "Running" or "Starting" => "Running", "Skipped" => "Skipped", "Disabled" => "Disabled", _ => "Waiting" };
                                 var outsideJob = Model.StepExecutions.TryGetValue(s.Job, out var sxv) ? sxv.Job : null;
@@ -264,7 +266,8 @@
 @{
     // #306: in pipeline mode the steps are shown in their stages above; this list has the jobs OUTSIDE the pipeline only
     var pipelineMode = Model.Configured && Model.Error is null && Model.FlowMode == "flow";
-    var listed = pipelineMode ? Model.List.Where(x => Model.StepOf(x.Name) is null).ToList() : Model.List.ToList();
+    // #1096: a collection in parts' producer + worker belong to their engine's step -- never listed here with a timer of their own
+    var listed = pipelineMode ? SI.Management.Web.Pages.Admin.JobsModel.OtherJobs(Model.List, Model.Flow).ToList() : Model.List.ToList();
 }
 @if (listed.Count > 0)
 {

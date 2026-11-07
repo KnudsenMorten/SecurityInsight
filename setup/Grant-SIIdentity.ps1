@@ -222,15 +222,36 @@ if ($OnlyAppPermissions) {
 
 $tasks = New-Object System.Collections.Generic.List[string]
 $missing = 0
+# GRANT-READ-1 (3.0.34): the install's OWN scopes -- its resource group and the SI resources it creates. A refusal (401 /
+# 403) to read or make a grant OUTSIDE them is "not known": a customer task, and the run goes on (live 2026-11-04: the
+# tenant root management group's role assignments could not be read by the installing admin, and that read stopped the
+# whole install). A refusal INSIDE them still stops the run, as before.
+$ownScopes = @()
+if ($IdentityResourceGroup -and $sub) { $ownScopes += ('/subscriptions/{0}/resourceGroups/{1}' -f $sub, $IdentityResourceGroup) }
+$ownScopes += @($dcrRgId, $stgId, $kvId | Where-Object { $_ })
 foreach ($g in @($plan | Where-Object { $_.Kind -eq 'AzureRole' })) {
-    $have = @(Get-SIAzRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -ErrorAction SilentlyContinue | Where-Object { $_.Scope -eq $g.Scope })
+    $notKnown = ''
+    $have = @()
+    try { $have = @(Get-SIAzRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -ErrorAction Stop | Where-Object { $_.Scope -eq $g.Scope }) }
+    catch {
+        if ((Get-SIGrantRefusalOutcome -Message ([string]$_.Exception.Message) -Scope $g.Scope -OwnScopes $ownScopes) -ne 'not-known') { throw }
+        $notKnown = Get-SIGrantShortError $_
+    }
     $state = if ($have.Count) { 'present' } elseif ($Apply) {
         try { New-SIRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -PrincipalType ServicePrincipal -ErrorAction Stop | Out-Null; 'granted' }
-        catch { if ($_.Exception.Message -match 'Conflict|already exists') { 'present' } else { $missing++; 'FAILED' } }
-    } else { $missing++; 'MISSING' }
+        catch {
+            if ($_.Exception.Message -match 'Conflict|already exists') { 'present' }
+            # the read was refused AND so is the write: whether the grant is there is not known -- a customer task
+            elseif ($notKnown -and (Get-SIGrantRefusalOutcome -Message ([string]$_.Exception.Message) -Scope $g.Scope -OwnScopes $ownScopes) -eq 'not-known') { $missing++; 'UNKNOWN' }
+            else { $missing++; 'FAILED' }
+        }
+    } elseif ($notKnown) { $missing++; 'UNKNOWN' } else { $missing++; 'MISSING' }
     Write-Host ('  [{0,-7}] {1,-34} on {2}' -f $state, $g.Role, $g.Scope)
-    if ($state -in 'FAILED', 'MISSING') {
-        $tasks.Add(('# {0}' -f $g.Why))
+    if ($state -eq 'UNKNOWN') {
+        Write-Host ('            not known: this account may not read the role assignments there ({0}) -- a customer task, the run goes on' -f $notKnown) -ForegroundColor Yellow
+    }
+    if ($state -in 'FAILED', 'MISSING', 'UNKNOWN') {
+        $tasks.Add($(if ($state -eq 'UNKNOWN') { '# {0} -- NOT KNOWN: the account that ran setup may not read the role assignments at this scope; check it there and grant it when it is missing' -f $g.Why } else { '# {0}' -f $g.Why }))
         # #564: a portal path, never an az command (a customer has no az CLI); the guided install reads this line format
         $tasks.Add(('# Azure role "{1}" on "{2}" for the managed identity {0} -- Azure portal: open the scope > Access control (IAM) > Add > Add role assignment > {1} > Managed identity' -f $principal, $g.Role, $g.Scope))
     }

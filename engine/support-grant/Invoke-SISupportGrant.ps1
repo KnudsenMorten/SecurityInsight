@@ -7,7 +7,7 @@
     Started by the Invardia Support session with a plain start (no override), after it put ONE request on the queue. The job
     revokes any expired grant first, reads and deletes the queue, takes the newest request that is not older than 15
     minutes, and opens or closes the grant through the signed procedures of every product database (the Pro database
-    first). The request is a REQUEST: the customer's recorded consent decides the level, maxUntil is at most 24 hours.
+    first). The request is a REQUEST: the customer's recorded consent decides the level, maxUntil is at most 8 hours.
     See SI-SupportGrant.ps1 for the whole design.
 
     It needs no pipeline, no licence, no heartbeat and no updater (framework 4b: consent means support always works): only

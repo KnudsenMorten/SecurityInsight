@@ -62,6 +62,8 @@ public static class ViewerError
     /// </summary>
     public static string Text(Exception ex)
     {
+        // #1112: a query that met an update of the database says so -- the page works again in a few minutes
+        if (SI.Management.Web.Updating.UpdateWindowNotice.Is(ex)) return SI.Management.Web.Updating.UpdateWindowNotice.Text;
         if (Ours(ex)) return ex.Message;
         var reference = Reference();
         // the log is set once per process (Program.cs); a host that has stopped leaves a disposed logger behind -- writing

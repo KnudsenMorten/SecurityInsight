@@ -218,7 +218,8 @@ Describe 'the pipeline never starts while an update runs (and the updater never 
     It 'the runner asks before it starts anything: the updater''s executions (container), its script (VM)' {
         $s = Get-Code 'engine\flow\Invoke-SIJobFlowRun.ps1'
         $s | Should -Match '/\{1\}/executions'' -f \$armSeams\.Base, \$updaterJobName'
-        $s | Should -Match 'Get-SIPipelineUpdateRunning -Executions'
+        # 2026-11-06 (no fresh beat = dead): the container asks the liveness rule over the executions AND the lock rows
+        $s | Should -Match 'Get-SIPipelineUpdateLiveness -Executions @\(\$r\.value\) -Locks \$updLocks -LocksKnown \$updKnown'
         $s | Should -Match 'Get-SIPipelineUpdateRunning -Processes'
         $s | Should -Match 'Invoke-SIPipelineDrain .*-UpdateRunning \$updateRunning'
     }

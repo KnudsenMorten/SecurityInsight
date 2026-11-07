@@ -64,7 +64,7 @@ The samples below are line 2 with what you change added.
 
 ```powershell
 ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
-    -Location northeurope -ResourceGroup rg-securityinsight -MailTo secops@contoso.com
+    -Location 'northeurope' -ResourceGroup 'rg-securityinsight' -MailTo 'secops@contoso.com'
 ```
 
 **3. Read every subscription**, in a management group or in the whole tenant, not only the one SecurityInsight runs in
@@ -72,7 +72,7 @@ The samples below are line 2 with what you change added.
 
 ```powershell
 ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' `
-    -CollectionScope managementGroup -ManagementGroupId '<management group id>'
+    -CollectionScope 'managementGroup' -ManagementGroupId '<management group id>'
 ```
 
 **4. Private network only**: no public endpoints, the web app reachable from your network only. You get the hand-off
@@ -90,7 +90,7 @@ list for your network team at the end.
 
 ```powershell
 ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -PreflightOnly
-./Install-SecurityInsight.ps1 -Resume
+./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Resume
 ```
 
 **Pro trial:** start it at [invardia.com/trial](https://invardia.com/trial/), then run the same two lines with line 1

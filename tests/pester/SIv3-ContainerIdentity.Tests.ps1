@@ -378,7 +378,11 @@ Describe 'no managed-identity branch without the switch (WIRING over the engine 
         Get-Code 'engine\asset-trend\Invoke-SITrend.ps1' | Should -Match '\$authParams = if \(\$global:SI_UseManagedIdentity\) \{'
     }
     It 'the engines never load the managed-identity helper themselves (a VM never has it)' {
+        # The index build job is a container-ONLY job entry (Start-SIInContainer hands SI_ROLE = index-build to it; it never
+        # runs on a VM), so it signs in through the container's managed identity like the other container entries.
+        $containerOnly = @('engine\index-build\Invoke-SIIndexBuildJob.ps1')
         $loaders = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'engine') -Recurse -File -Filter '*.ps1' |
+            Where-Object { $_.FullName.Substring($script:SIRoot.Length + 1).Replace('/', '\') -notin $containerOnly } |
             Where-Object { (Get-Code $_.FullName.Substring($script:SIRoot.Length + 1)) -match '(?m)^\s*\.\s+[^\r\n]*SI-ManagedIdentity\.ps1|Join-Path[^\r\n]*SI-ManagedIdentity\.ps1' })   # a LOAD (dot-source / a path built to it), not a file name in an error text
         $loaders | Should -BeNullOrEmpty
     }

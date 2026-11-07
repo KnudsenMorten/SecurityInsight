@@ -192,12 +192,12 @@ Describe '#945 wiring: the runner asks on every wake-up, before the drain, and s
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
         $a = $src.IndexOf('Get-SIJobFlowEndedExecutionCloses'); $b = $src.IndexOf('$drain = Invoke-SIPipelineDrain')
         $a | Should -BeGreaterThan 0; $a | Should -BeLessThan $b
-        $from = $src.LastIndexOf('# ---- #945', $a); $to = $src.IndexOf('# ---- #947', $a)
+        $from = $src.LastIndexOf('# ---- #945', $a); $to = $src.IndexOf('$drain = $null', $a)
         $to | Should -BeGreaterThan $from
         $block = $src.Substring($from, $to - $from)
         $block | Should -Match '\$runStore\.CloseOpenStep'
         $block | Should -Match '\$armSeams\.Executions\('
         ($block -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n" | Should -Not -Match "/stop/|\.Stop\(|'POST'"
-        $src.IndexOf('Get-SIJobFlowEndedExecutionCloses') | Should -BeLessThan $src.IndexOf('Get-SIPipelineUpdateOverdueStart')
+        $src.IndexOf('Get-SIJobFlowEndedExecutionCloses') | Should -BeLessThan $src.IndexOf('$drain = $null')
     }
 }

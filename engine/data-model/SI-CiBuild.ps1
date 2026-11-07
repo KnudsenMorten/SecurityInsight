@@ -634,6 +634,32 @@ function New-SICiDocument {
         }
     }
     if ($unknownFields.Count -gt 0) { $ci['si_unknown_fields'] = $unknownFields.ToArray() }
+    # NO MACHINE CI IS NAMELESS (owner 2026-11-05: a ring 1 install had 271 active device CIs with an EMPTY name, 270 with a
+    # Defender link). The placeholder rule above (#1054) names a CI only when a record CARRIES a placeholder; a Defender
+    # device with no computerDnsName carries NO name at all, so si_asset_name was never resolved and stayed empty. A device
+    # or cloud resource CI that no record names gets a name here: a cloud resource the name in its Azure resource id, else
+    # the generated 'unnamed-device-<short id>' from the record of the first source in this order: Defender, Azure,
+    # Defender for Cloud, Intune, Entra, Exposure Graph, any other (ordinal record key) -- the same on every build.
+    if ($class -in 'device', 'cloud_resource' -and [string]::IsNullOrWhiteSpace([string]$ci['si_asset_name'])) {
+        $order = @('mde', 'azure', 'mdc', 'intune', 'entra', 'eg')
+        $pickC = $null; $pickR = 999
+        foreach ($c in $candArr) {
+            $rk2 = [array]::IndexOf($order, [string]$c.Provider); if ($rk2 -lt 0) { $rk2 = 100 }
+            if ($null -eq $pickC -or $rk2 -lt $pickR -or ($rk2 -eq $pickR -and [string]::CompareOrdinal([string]$c.Key, [string]$pickC.Key) -lt 0)) { $pickC = $c; $pickR = $rk2 }
+        }
+        if ($null -ne $pickC) {
+            $gen = $null
+            if ($class -eq 'cloud_resource') {
+                $nid = [string]$pickC.Key; $ix = $nid.IndexOf(':'); if ($ix -ge 0) { $nid = $nid.Substring($ix + 1) }
+                if ($nid -match '^/subscriptions/') { $gen = ($nid.TrimEnd('/') -split '/')[-1] }
+            }
+            if (-not $gen) { $gen = Get-SICiUnnamedDeviceName -RecordKey ([string]$pickC.Key) }
+            if ($gen) {
+                $ci['si_asset_name'] = $gen
+                $resolvedSources['si_asset_name'] = [ordered]@{ provider = [string]$pickC.Provider; record = [string]$pickC.Key; observed_at = (ConvertTo-SIUtcOrNull (Get-SIItemValue $pickC.Record 'si_source_last_seen')); stale = $false; from = 'generated'; placeholder = '' }
+            }
+        }
+    }
     $recordLinks = $links.ToArray()
     # AZURE CHILD RESOURCES (owner 2026-10-11, SI-AzureChildren.ps1): every child resource a record of this CI lists
     # (si_child_resources -- a VM extension, a disk, a network interface, a SQL database ...) is a LINKED OBJECT of this CI, so

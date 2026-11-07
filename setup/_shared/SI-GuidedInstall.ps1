@@ -94,7 +94,8 @@ $script:SIInstallStepTitles = [ordered]@{
     'updater-job'              = 'Updates from Invardia'
     'customer-managed-keys'    = 'Your own encryption key: database, storage and Log Analytics'
     'support-app-access'       = 'Invardia Support access'
-    'mail'                     = 'E-mail: the shared mailbox or your SMTP relay'
+    'db-job'                   = 'The database setup job (no person needs database admin rights)'
+    'mail'                    = 'E-mail: the shared mailbox or your SMTP relay'
     'private-network'          = 'Private network: private endpoints, private DNS, public endpoints closed'
     'first-run'                = 'First run'
     'health-check'             = 'Health check'
@@ -105,7 +106,7 @@ $script:SIInstallStepTitles = [ordered]@{
 # The paid steps: only in a Pro install (the licence step runs in both and says 'skipped' without one).
 $script:SIInstallProStepIds = @('pro-cmdb')
 # The database and web app steps (SI-GuidedInstallData.ps1): in EVERY install, both versions (owner 2026-10-18).
-$script:SIInstallDataStepIds = @('preflight-sql-region', 'pro-sql', 'pro-schema', 'pro-templates', 'pro-settings', 'web-app', 'updater-job')
+$script:SIInstallDataStepIds = @('preflight-sql-region', 'pro-sql', 'pro-schema', 'pro-templates', 'pro-settings', 'web-app', 'updater-job', 'db-job')
 # #681 / #683: the steps of an OPTION are in the plan only when the install asks for the option (the answer that turns it
 # on) -- an install without them runs exactly the steps it ran before.
 $script:SIInstallOptionStepIds = [ordered]@{
@@ -340,8 +341,13 @@ function Test-SIInstallValueType {
 }
 
 function Test-SIInstallShowIf {
-    <# PURE. Is the parameter shown, given the answers? showIf = { key: value, ... } -- every pair must match. #>
+    <# PURE. Is the parameter shown, given the answers? showIf = { key: value, ... } -- every pair must match; showIfSet =
+       [ key, ... ] -- every key must hold an answer (#1095: the return route is asked only when a hub is named). #>
     param($Param, [System.Collections.IDictionary]$Values)
+    foreach ($k in @(Get-SIInstallProp $Param 'showIfSet' | Where-Object { $_ })) {
+        $sv = if ($Values -and $Values.Contains([string]$k)) { $Values[[string]$k] } else { $null }
+        if ($null -eq $sv -or ($sv -is [string] -and [string]::IsNullOrWhiteSpace($sv))) { return $false }
+    }
     $cond = Get-SIInstallProp $Param 'showIf'
     if ($null -eq $cond) { return $true }
     foreach ($p in (ConvertTo-SIInstallHashtable $cond).GetEnumerator()) {
@@ -479,16 +485,26 @@ function Get-SIInstallNames {
         names everything inside it the same way; any other resource group gets the default names for the edition. The
         workspace is the wizard's answer when it gave one, or the existing workspace's.
     #>
-    param([Parameter(Mandatory)][System.Collections.IDictionary]$Values, [string[]]$Explicit = @(), [ValidateSet('community', 'pro')][string]$Edition = 'community')
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Values, [string[]]$Explicit = @(), [ValidateSet('community', 'pro')][string]$Edition = 'community',
+          # framework section 5.5: the install id <t> is made from (Get-SISetupNamingInstallId); '' = SecurityInsight's default id
+          [string]$InstallId = '')
     $rg = [string]$Values['resourceGroup']
-    # Globally unique names (storage, Key Vault, registry, SQL server) carry the subscription's suffix; an EXISTING install
-    # keeps the names it has (Resolve-SIInstallExistingNames, run by preflight-names before anything is checked or created).
+    # An EXISTING install keeps the names it has (Resolve-SIInstallExistingNames, run by preflight-names before anything is
+    # checked or created; Resolve-SIInstallDefaultResourceGroup for its resource group).
     $sub = [string]$Values['subscriptionId']
-    # CR5 (#655 step 2): the NEW-install names with SI_Setup_NewInstallNames on (REMOVE-ME, ON by default since 2026-10-18);
-    # an existing install keeps today's names either way (Resolve-SIInstallExistingNames)
+    # CR5 (#655 step 2) + framework section 5.5 (OPEN-30): the NEW-install names with SI_Setup_NewInstallNames on (ON by default)
     $new = Test-SISetupNewInstallNames -Values $Values
+    # a resource group in the EARLIER pattern (rg-si-<ring>-<edition>-<hosting>: every existing install's default, or chosen)
+    # names everything inside it the earlier way -- the subscription's suffix on the globally unique names, as before
     $n = Get-SISetupNamesFromResourceGroup -ResourceGroupName $rg -SubscriptionId $sub -NewNames:$new
-    if (-not $n) { $n = Get-SISetupResourceNames -Ring 'prod' -Edition $Edition -Hosting 'ca' -SubscriptionId $sub -NewNames:$new; $n.ResourceGroup = $rg }
+    if (-not $n) {
+        if ($new) {
+            # framework section 5.5: rg-si / cae-si / log-si / dce-si / vnet-si, and <t> from the install id on sql / kv / st / acr
+            $nid = Get-SISetupNamingInstallId -InstallId $InstallId -TenantId ([string]$Values['tenantId']) -SubscriptionId $sub -ResourceGroup $rg
+            $n = Get-SISetupInstallNames -Edition $Edition -InstallToken (Get-SISetupInstallToken -InstallId $nid) -ResourceGroup $rg
+            $n.NamingInstallId = $nid
+        } else { $n = Get-SISetupResourceNames -Ring 'prod' -Edition $Edition -Hosting 'ca' -SubscriptionId $sub; $n.ResourceGroup = $rg }
+    }
     $n.WorkspaceResourceGroup = $rg
     if ([string]$Values['workspaceMode'] -eq 'existing' -and $Values['workspaceId']) {
         $parts = ([string]$Values['workspaceId']).Trim('/') -split '/'
@@ -497,8 +513,137 @@ function Get-SIInstallNames {
     $n
 }
 
+function Get-SIInstallEarlierDefaultResourceGroup {
+    <# PURE. The resource group earlier releases gave a guided install by default (rg-si-prod-<edition>-ca). #>
+    param([ValidateSet('community', 'pro')][string]$Edition = 'community')
+    'rg-si-prod-{0}-ca' -f $Edition
+}
+
+function Resolve-SIInstallDefaultResourceGroup {
+    <#
+        PURE. Framework section 5.5 (OPEN-30) -- the new default resource group rg-si is for NEW installs only. Which resource group
+        this run uses when the customer did NOT name one (-Explicit has no 'resourceGroup'):
+          * the setting SI_Setup_NewInstallNames off                    -> the earlier default rg-si-prod-<edition>-ca
+          * an earlier run of THIS install recorded its group           -> that group (state facts.names.ResourceGroup)
+          * an earlier run of THIS install made by an older release     -> the earlier default (its state has names or a
+            (state with names or a completed resource-group step,          created group, but no recorded group: it ran
+             no recorded group)                                            with the earlier default) -- a resume never moves
+          * otherwise (a new install)                                   -> the answer as it is (rg-si)
+        A group the customer named always wins. -Prior: the install's state file (Read-SIInstallState), $null when none.
+        Returns @{ ResourceGroup; Source = explicit | setting-off | recorded | earlier-run | new }.
+    #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Values, [string[]]$Explicit = @(),
+          [ValidateSet('community', 'pro')][string]$Edition = 'community', [AllowNull()]$Prior)
+    $cur = [string]$Values['resourceGroup']
+    if (@($Explicit) -contains 'resourceGroup') { return @{ ResourceGroup = $cur; Source = 'explicit' } }
+    $old = Get-SIInstallEarlierDefaultResourceGroup -Edition $Edition
+    if (-not (Test-SISetupNewInstallNames -Values $Values)) { return @{ ResourceGroup = $old; Source = 'setting-off' } }
+    if ($Prior) {
+        $facts = Get-SIInstallProp $Prior 'facts'
+        $names = Get-SIInstallProp $facts 'names'
+        $rec = [string](Get-SIInstallProp $names 'ResourceGroup')
+        if ($rec.Trim()) { return @{ ResourceGroup = $rec.Trim(); Source = 'recorded' } }
+        if ($names -or @(Get-SIInstallProp $Prior 'completed') -contains 'resource-group') { return @{ ResourceGroup = $old; Source = 'earlier-run' } }
+    }
+    @{ ResourceGroup = $cur; Source = 'new' }
+}
+
+function Resolve-SIInstallEarlierDefaultGroup {
+    <#
+        Framework section 5.5: an EXISTING install the new default would miss. When the run uses the new default group (rg-si, not
+        from this install's state) and that group does not exist, but the EARLIER default group (rg-si-prod-<edition>-ca) does
+        and holds SecurityInsight (any of its components or globally unique names, earlier names), that is this tenant's
+        install: the run continues in it under its earlier names (Get-SIInstallNames again) -- never a second install next to
+        it. Reads only; one line says it. Returns the earlier group's name when it switched, else $null.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    if ([string]$Ctx.ResourceGroupSource -notin @('new')) { return $null }
+    $n = $Ctx.Names
+    if ([string]$n.ResourceGroup -cne 'rg-si') { return $null }
+    $old = Get-SIInstallEarlierDefaultResourceGroup -Edition $Ctx.Edition
+    $sub = [string]$Ctx.Values['subscriptionId']
+    try {
+        if (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzResourceGroup' -Arguments ([ordered]@{ Name = $n.ResourceGroup; ErrorAction = 'SilentlyContinue' })) { return $null }
+        if (-not (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzResourceGroup' -Arguments ([ordered]@{ Name = $old; ErrorAction = 'SilentlyContinue' }))) { return $null }
+        $inRg = @(Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIArmResource' -Arguments ([ordered]@{ ResourceGroupName = $old; SubscriptionId = $sub; ErrorAction = 'SilentlyContinue' }) | Where-Object { $_ })
+    } catch { return $null }
+    $legacy = Get-SISetupNamesFromResourceGroup -ResourceGroupName $old
+    $ours = Test-SIInstallHasTodayComponents -InRg $inRg -Legacy $legacy
+    if (-not $ours) {
+        foreach ($k in $script:SIInstallGlobalNameTypes.Keys) {
+            $type = $script:SIInstallGlobalNameTypes[$k]
+            if (@($inRg | Where-Object { ([string](Get-SIInstallProp $_ 'ResourceType') -eq $type -or [string](Get-SIInstallProp $_ 'Type') -eq $type) -and [string](Get-SIInstallProp $_ 'Name') -match $script:SIInstallGlobalNamePrefixes[$k] }).Count) { $ours = $true; break }
+        }
+    }
+    if (-not $ours) { return $null }
+    $Ctx.Values['resourceGroup'] = $old
+    $Ctx.ResourceGroupSource = 'existing'
+    $Ctx.Names = Get-SIInstallNames -Values $Ctx.Values -Explicit @($Ctx.Explicit) -Edition $Ctx.Edition -InstallId ([string]$Ctx.InstallId)
+    $old
+}
+
+function Get-SIInstallGroupEdition {
+    <#
+        PURE. Which SecurityInsight edition a resource group already holds, or $null (empty, not SecurityInsight's, or unknown).
+        -Group: the group as Get-SIAzResourceGroup returns it (its Tags); -InRg: its resources (Name + ResourceType / Type).
+          1. the group's tags -- the 7 tags every install's group carries: product 'si' (or purpose 'SecurityInsight') with
+             edition 'community' / 'pro'. A group tagged by anything else never counts.
+          2. no such tags (a group made by hand before the install): the edition in the earlier names of SecurityInsight's
+             resources in it (sql-si-prod-community-ca-..., cae-si-r1-pro-ca, stsiprodcommunityca01, ...). One edition only;
+             both seen = unknown ($null), never a stop on a guess.
+    #>
+    param([AllowNull()]$Group, [AllowNull()][AllowEmptyCollection()][object[]]$InRg = @())
+    $tags = Get-SIInstallProp $Group 'Tags'
+    if ($null -ne $tags) {
+        $prod = "$(Get-SIInstallProp $tags 'product')".Trim().ToLowerInvariant()
+        $purp = "$(Get-SIInstallProp $tags 'purpose')".Trim().ToLowerInvariant()
+        $ed   = "$(Get-SIInstallProp $tags 'edition')".Trim().ToLowerInvariant()
+        if (($prod -eq 'si' -or $purp -eq 'securityinsight') -and $ed -in @('community', 'pro')) { return $ed }
+    }
+    $seen = @{}
+    foreach ($r in @($InRg | Where-Object { $_ })) {
+        $nm = "$(Get-SIInstallProp $r 'Name')".ToLowerInvariant()
+        if ($nm -notmatch '^(rg|log|dce|cae|sql|kv|st|acr|id|ca|caj)-?si') { continue }
+        if ($nm -match '(r0|r1|r2|prod)-?(community|pro)-?(ca|vm)') { $seen[$Matches[2]] = $true }
+    }
+    if ($seen.Count -eq 1) { return [string]@($seen.Keys)[0] }
+    $null
+}
+
+function Assert-SIInstallGroupEdition {
+    <#
+        Framework section 5.5 (both editions default to rg-si): two editions never share a resource group. When the install's
+        resource group (the default rg-si or one the customer named) already holds SecurityInsight of the OTHER edition, the
+        install STOPS here -- in preflight, before anything is created -- with one step: run again with -ResourceGroup <another
+        name>. The same edition = a re-run of that install, fine; an empty group, a group that is not SecurityInsight's, a group
+        that does not exist yet or cannot be read = fine (nothing to protect, or no proof to stop on). Reads only.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    $n = $Ctx.Names; $sub = [string]$Ctx.Values['subscriptionId']
+    $rg = [string]$n.ResourceGroup
+    try {
+        $g = Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzResourceGroup' -Arguments ([ordered]@{ Name = $rg; ErrorAction = 'SilentlyContinue' })
+        if (-not $g) { return }
+        $inRg = @()
+        $tagEd = Get-SIInstallGroupEdition -Group $g
+        if (-not $tagEd) { $inRg = @(Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIArmResource' -Arguments ([ordered]@{ ResourceGroupName = $rg; SubscriptionId = $sub; ErrorAction = 'SilentlyContinue' }) | Where-Object { $_ }) }
+        $have = if ($tagEd) { $tagEd } else { Get-SIInstallGroupEdition -Group $null -InRg $inRg }
+    } catch { return }
+    if (-not $have -or $have -eq [string]$Ctx.Edition) { return }
+    $label = @{ community = 'Community'; pro = 'Pro' }
+    $msg = ('{0} already holds SecurityInsight {1}. Two editions never share a resource group -- run the install again with -ResourceGroup <another name>.' -f $rg, $label[$have])
+    throw (New-SIInstallFailure -Message $msg -ActionText ('Run the install again with -ResourceGroup <another name> (the {0} edition gets a resource group of its own; nothing was created).' -f $label[[string]$Ctx.Edition]))
+}
+
 $script:SIInstallGlobalNameTypes = $script:SISetupGlobalNameTypes
 $script:SIInstallGlobalNamePrefixes = $script:SISetupGlobalNamePrefixes
+# framework section 5.5: the names inside the group the new install names changed (kept for an existing install, recorded per run)
+$script:SIInstallGroupNameTypes = [ordered]@{
+    Workspace    = 'Microsoft.OperationalInsights/workspaces'
+    Dce          = 'Microsoft.Insights/dataCollectionEndpoints'
+    ContainerEnv = 'Microsoft.App/managedEnvironments'
+}
+$script:SIInstallGroupNamePrefixes = @{ Workspace = '^log-si'; Dce = '^dce-si'; ContainerEnv = '^cae-si' }
 
 function Select-SIInstallExistingName {
     <# PURE. Select-SISetupExistingName (setup\_shared\SI-SetupNaming.ps1) with one older name; two or more candidates:
@@ -552,6 +697,23 @@ function Resolve-SIInstallExistingNames {
         $type = $script:SIInstallGlobalNameTypes[$k]
         $names = @($inRg | Where-Object { [string](Get-SIInstallProp $_ 'ResourceType') -eq $type -or [string](Get-SIInstallProp $_ 'Type') -eq $type } | ForEach-Object { [string](Get-SIInstallProp $_ 'Name') })
         $pick = Select-SIInstallExistingName -Existing $names -Wanted $n[$k] -Legacy $legacy[$k] -Prefix $script:SIInstallGlobalNamePrefixes[$k]
+        if ($pick) { if ($pick -ne $n[$k]) { $kept += $pick }; $n[$k] = $pick }
+    }
+    # Framework section 5.5 (OPEN-30): the names INSIDE the group that the new install names changed (log-si, dce-si, cae-si). An
+    # earlier run's record wins; else the one of that kind already in the group (today's name or an earlier one) -- an
+    # existing install in a group of the customer's own naming never gets a second workspace, endpoint or environment. A
+    # workspace the customer named, or an existing workspace they chose, is theirs and is left alone.
+    $wsOwn = ([string]$Ctx.Values['workspaceMode'] -eq 'existing' -and $Ctx.Values['workspaceId']) -or (@($Ctx.Explicit) -contains 'workspaceName' -and $Ctx.Values['workspaceName'])
+    foreach ($k in $script:SIInstallGroupNameTypes.Keys) {
+        if ($k -eq 'Workspace' -and $wsOwn) { continue }
+        $rec = [string](Get-SIInstallProp $recorded $k)
+        if ($rec) { if ($rec -ne $n[$k]) { $kept += $rec }; $n[$k] = $rec; continue }
+        if ([string]$n[$k] -ceq [string]$legacy[$k]) { continue }
+        . $list
+        $type = $script:SIInstallGroupNameTypes[$k]
+        # (the private environment cae-si-private is decided below, never taken as the install's own environment here)
+        $names = @($inRg | Where-Object { [string](Get-SIInstallProp $_ 'ResourceType') -eq $type -or [string](Get-SIInstallProp $_ 'Type') -eq $type } | ForEach-Object { [string](Get-SIInstallProp $_ 'Name') } | Where-Object { $_ -cne 'cae-si-private' })
+        $pick = Select-SISetupExistingName -Existing $names -Wanted $n[$k] -Legacy @($legacy[$k]) -Prefix $script:SIInstallGroupNamePrefixes[$k]
         if ($pick) { if ($pick -ne $n[$k]) { $kept += $pick }; $n[$k] = $pick }
     }
     # #681: an install moved onto private networking (setup\Set-SIPrivateNetworking.ps1) runs in cae-si-private: every later
@@ -619,6 +781,9 @@ function Save-SIInstallNames {
     $rec = [ordered]@{}
     foreach ($k in $script:SIInstallGlobalNameTypes.Keys) { if ($k -ne 'SqlServer' -or ($Ctx.Data -or $Ctx.Pro)) { $rec[$k] = [string]$Ctx.Names[$k] } }
     foreach ($k in @($script:SIInstallComponentNameTypes.Keys) + 'WebAppDisplayName' + 'SqlAdminGroupDisplayName' + 'SqlAdminGroupName') { if ([string]$Ctx.Names[$k]) { $rec[$k] = [string]$Ctx.Names[$k] } }
+    # framework section 5.5: the resource group and the names inside it, and the install id <t> was made from -- a resume (and every
+    # later run of this install) keeps them, whatever a later release's defaults are (Resolve-SIInstallDefaultResourceGroup)
+    foreach ($k in @('ResourceGroup') + @($script:SIInstallGroupNameTypes.Keys) + 'InstallToken' + 'NamingInstallId') { if ([string]$Ctx.Names[$k]) { $rec[$k] = [string]$Ctx.Names[$k] } }
     $Ctx.Facts['names'] = $rec
 }
 
@@ -713,7 +878,8 @@ function Read-SIInstallGrantReport {
     $permTasks = New-Object System.Collections.Generic.List[string]
     foreach ($raw in @($Lines)) {
         $l = "$raw"
-        if ($l -match '^\s*\[(present|granted|FAILED|MISSING)\s*\]\s+(.+?)\s+on\s+(/\S+)\s*$') {
+        # GRANT-READ-1 (3.0.34): UNKNOWN = a grant outside the resource group whose role assignments setup may not read
+        if ($l -match '^\s*\[(present|granted|FAILED|MISSING|UNKNOWN)\s*\]\s+(.+?)\s+on\s+(/\S+)\s*$') {
             $roles.Add([pscustomobject]@{ State = $Matches[1]; Role = $Matches[2].Trim(); Scope = $Matches[3]
                 Inside = (Test-SIInstallScopeInside -Scope $Matches[3] -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) })
         } elseif ($l -match '^\s*\[(present|granted|FAILED|MISSING|UNKNOWN|ABSENT)\s*\]\s+(\S+)\s+\(([^)]+)\)(\s+--.*)?\s*$') {
@@ -735,6 +901,7 @@ function Read-SIInstallGrantReport {
         Roles = $roles.ToArray(); Permissions = $perms.ToArray()
         InsideMissing  = @($roles | Where-Object { $_.Inside -and (& $missing $_) })
         OutsideMissing = @($roles | Where-Object { -not $_.Inside -and (& $missing $_) })
+        OutsideNotKnown = @($roles | Where-Object { -not $_.Inside -and $_.State -eq 'UNKNOWN' })
         PermissionsMissing = @($perms | Where-Object { & $missing $_ })
         InsideTasks = $insideTasks; OutsideTasks = $outsideTasks; PermissionTasks = $permTasks.ToArray()
     }
@@ -877,6 +1044,8 @@ function Get-SIInstallDefaultSeams {
 
 # The mark the installer's own Key Vault Secrets Officer carries on Azure's side (the role assignment's description).
 $script:SIInstallKvOfficerMark = 'SecurityInsight setup: the installer''s access for the install''s own secrets -- removed again when the install finishes'
+# #1098: the mark of the installer's temporary Key Vault Crypto Officer (the web app's sign-in key SI-Web-KeyRing is made with it)
+$script:SIInstallKvCryptoOfficerMark = 'SecurityInsight setup: the installer''s access for the web app''s sign-in key -- removed again when the install finishes'
 
 function Complete-SIInstallKvOfficer {
     <#
@@ -885,23 +1054,38 @@ function Complete-SIInstallKvOfficer {
         already held is never touched. Read back: the role is checked gone. Returns '' when done or nothing to do, else
         the reason (a warning with what to remove by hand). The fact is cleared only after a confirmed removal, so the next
         run tries again. Never throws.
+        #1098: the installer's temporary 'Key Vault Crypto Officer' (kvCryptoOfficerGrantedAt, its own mark) is removed the
+        same way, read back the same way.
     #>
+    param([Parameter(Mandatory)]$Ctx)
+    $whys = @()
+    foreach ($r in @(
+            @{ Role = 'Key Vault Secrets Officer'; Mark = $script:SIInstallKvOfficerMark; Fact = 'kvOfficerGrantedAt'; For = 'the install''s own secrets' },
+            @{ Role = 'Key Vault Crypto Officer'; Mark = $script:SIInstallKvCryptoOfficerMark; Fact = 'kvCryptoOfficerGrantedAt'; For = 'the web app''s sign-in key' })) {
+        $w = Complete-SIInstallKvRole -Ctx $Ctx -Role $r.Role -Mark $r.Mark -Fact $r.Fact -For $r.For
+        if ($w) { $whys += $w }
+    }
+    ($whys -join '; ')
+}
+
+function Complete-SIInstallKvRole {
+    <# One temporary role of the installer on the install's vault (Complete-SIInstallKvOfficer). Never throws. #>
     # 2026-11-01: the grant ALSO carries its own mark on Azure's side (the role assignment's description,
     # $script:SIInstallKvOfficerMark) -- an install whose own record (kvOfficerGrantedAt) was lost still finds and removes the
     # assignment it gave. An assignment without the mark and without the record is the person's own, never touched.
-    param([Parameter(Mandatory)]$Ctx)
+    param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][string]$Role, [Parameter(Mandatory)][string]$Mark, [Parameter(Mandatory)][string]$Fact, [string]$For = 'the install''s own secrets')
     try {
         $f = $Ctx.Facts
         if (-not ($f -is [System.Collections.IDictionary])) { return '' }
         $oid = [string]$f['userObjectId']; $kvId = [string]$f['keyVaultId']
         if (-not $oid -or -not $kvId) { return '' }
-        $role = 'Key Vault Secrets Officer'
+        $role = $Role
         $atVault = { param($list) @($list | Where-Object { $_ -and ([string](Get-SIInstallProp $_ 'Scope')).TrimEnd('/') -ieq $kvId.TrimEnd('/') }) }
-        $given = [string]$f['kvOfficerGrantedAt']
+        $given = [string]$f[$Fact]
         $marked = @()
         try {
             $marked = @(& $atVault (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role; ErrorAction = 'SilentlyContinue' })) |
-                        Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $script:SIInstallKvOfficerMark })
+                        Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $Mark })
         } catch { if (-not $given) { return '' } }
         if (-not $given -and -not $marked.Count) { return '' }
         $why = ''
@@ -914,11 +1098,11 @@ function Complete-SIInstallKvOfficer {
             $left = @(& $atVault (Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = $role; ErrorAction = 'SilentlyContinue' })))
             # given by this install: nothing of the role may be left; found by its mark only: the marked ones must be gone
             if ($given) { if ($left.Count) { $why = 'it is still assigned after the removal' } }
-            elseif (@($left | Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $script:SIInstallKvOfficerMark }).Count) { $why = 'it is still assigned after the removal' }
+            elseif (@($left | Where-Object { [string](Get-SIInstallProp $_ 'Description') -eq $Mark }).Count) { $why = 'it is still assigned after the removal' }
         } catch { $why = $_.Exception.Message }
         if (-not $why) {
-            $Ctx.Facts['kvOfficerGrantedAt'] = $null
-            Write-SIInstallConsole -Ctx $Ctx -Text ('Your "{0}" on the install''s Key Vault, given for the install''s own secrets, was removed again (read back).' -f $role) -Color Green
+            $Ctx.Facts[$Fact] = $null
+            Write-SIInstallConsole -Ctx $Ctx -Text ('Your "{0}" on the install''s Key Vault, given for {1}, was removed again (read back).' -f $role, $For) -Color Green
             return ''
         }
         Write-SIInstallConsole -Ctx $Ctx -Text ('Your "{0}" on the install''s Key Vault ({1}) could not be removed: {2}. Remove it in the vault''s Access control (IAM), or run the install command again.' -f $role, $kvId, $why) -Color Yellow
@@ -2181,7 +2365,20 @@ function Get-SIInstallStepTable {
         $ctx.Facts['userPrincipalName'] = [string](Get-SIInstallProp $me 'UserPrincipalName')
         $subId = '/subscriptions/{0}' -f $sub; $rgId = '{0}/resourceGroups/{1}' -f $subId, $rg
         # what the person holds in the subscription, directly AND through their groups
-        $all = @(Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIRoleAssignmentAssignedTo' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $subId; ErrorAction = 'SilentlyContinue' }))
+        # GRANT-READ-1 (3.0.34): a refusal (401 / 403) to read the subscription's role assignments is "not known", never a
+        # stop: what applies at the resource group is then read there (it lists what is inherited from above, too); a
+        # refusal at the resource group itself still stops
+        $readAssigned = {
+            param([string]$Scope)
+            try { [pscustomobject]@{ Ok = $true; Items = @(Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIRoleAssignmentAssignedTo' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $Scope; ErrorAction = 'SilentlyContinue' })) } }
+            catch {
+                if ((Get-SIGrantRefusalOutcome -Message ([string]$_.Exception.Message) -Scope $Scope -OwnScopes @($rgId)) -ne 'not-known') { throw }
+                [pscustomobject]@{ Ok = $false; Items = @() }
+            }
+        }
+        $subRead = & $readAssigned $subId
+        $all = @($subRead.Items)
+        if (-not $subRead.Ok) { $all = @((& $readAssigned $rgId).Items) }
         $isAncestor = { param($scope, $of) $s = "$scope".TrimEnd('/').ToLowerInvariant(); $o = "$of".ToLowerInvariant(); ($s -eq '' -or $o -eq $s -or $o.StartsWith($s + '/') -or $s -like '/providers/microsoft.management/managementgroups/*') }
         $atRg  = @($all | Where-Object { & $isAncestor (Get-SIInstallProp $_ 'Scope') $rgId } | ForEach-Object { [string](Get-SIInstallProp $_ 'RoleDefinitionName') })
         $atSub = @($all | Where-Object { & $isAncestor (Get-SIInstallProp $_ 'Scope') $subId } | ForEach-Object { [string](Get-SIInstallProp $_ 'RoleDefinitionName') })
@@ -2206,8 +2403,12 @@ function Get-SIInstallStepTable {
         $outsideScopes = @(Get-SIInstallReaderScopes -Values $v); if ($v['securityWorkspaceId']) { $outsideScopes += [string]$v['securityWorkspaceId'] }
         $canOutside = $true
         foreach ($sc in $outsideScopes) {
-            $roles = @(Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIRoleAssignmentAssignedTo' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $subId; ErrorAction = 'SilentlyContinue' }) |
-                Where-Object { & $isAncestor (Get-SIInstallProp $_ 'Scope') $sc } | ForEach-Object { [string](Get-SIInstallProp $_ 'RoleDefinitionName') })
+            # GRANT-READ-1: the subscription's role assignments could not be read -- what the person may do outside is not
+            # known, so those grants are handed on (never a stop)
+            if (-not $subRead.Ok) { $canOutside = $false; continue }
+            $sr = & $readAssigned $subId
+            $roles = @(@($sr.Items) | Where-Object { & $isAncestor (Get-SIInstallProp $_ 'Scope') $sc } | ForEach-Object { [string](Get-SIInstallProp $_ 'RoleDefinitionName') })
+            if (-not $sr.Ok) { $canOutside = $false }
             if (-not @($roles | Where-Object { $script:SIInstallRoleRbac -contains $_ }).Count) { $canOutside = $false }
         }
         if (-not $canOutside) { $handoff += 'read access outside the resource group (an Owner or User Access Administrator there)' }
@@ -2273,8 +2474,14 @@ function Get-SIInstallStepTable {
     $t['preflight-names'] = {
         param($ctx)
         $v = $ctx.Values; $sub = [string]$v['subscriptionId']
+        # framework section 5.5: an existing install under the EARLIER default group is never missed by the new default rg-si
+        $earlierRg = Resolve-SIInstallEarlierDefaultGroup -Ctx $ctx
+        if ($earlierRg) { $v = $ctx.Values }
+        # framework section 5.5: two editions never share a resource group (both default to rg-si) -- stops before anything is made
+        Assert-SIInstallGroupEdition -Ctx $ctx
         # An existing install keeps its storage / Key Vault / registry / SQL server names; a new one gets the suffixed names.
         $keptNames = @(Resolve-SIInstallExistingNames -Ctx $ctx)
+        if ($earlierRg) { $keptNames = @($earlierRg) + $keptNames }
         $n = $ctx.Names
         $problems = @(); $cmds = @()
         # A name check is answered by its resource provider: before that provider is registered on the subscription, ARM
@@ -2495,6 +2702,19 @@ function Get-SIInstallStepTable {
             $null = Invoke-SIInstallAz -Ctx $ctx -Command 'New-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Secrets Officer'; Description = $script:SIInstallKvOfficerMark; ErrorAction = 'Stop' })
             $ctx.Facts['kvOfficerGrantedAt'] = (& $ctx.Seams.Now).ToString('o')
         }
+        # #1098: and a temporary Key Vault Crypto Officer -- the web app's deploy (Deploy-SIManagement step 4e) makes the web
+        # app's sign-in key SI-Web-KeyRing with it (a key needs Crypto Officer; Secrets Officer got HTTP 403 live). Same
+        # mechanism: its own mark, removed again at the end with the Secrets Officer (Complete-SIInstallKvOfficer, read back).
+        # Never a stop: without it the deploy makes the key through Azure Resource Manager, or the updater makes it.
+        try {
+            $haveC = @(Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Crypto Officer'; ErrorAction = 'SilentlyContinue' }))
+            if (-not $haveC.Count) {
+                $null = Invoke-SIInstallAz -Ctx $ctx -Command 'New-SIAzRoleAssignment' -Arguments ([ordered]@{ ObjectId = $oid; Scope = $kvId; RoleDefinitionName = 'Key Vault Crypto Officer'; Description = $script:SIInstallKvCryptoOfficerMark; ErrorAction = 'Stop' })
+                $ctx.Facts['kvCryptoOfficerGrantedAt'] = (& $ctx.Seams.Now).ToString('o')
+            }
+        } catch {
+            Write-SIInstallConsole -Ctx $ctx -Text ('Your temporary "Key Vault Crypto Officer" on {0} could not be given ({1}); the web app''s sign-in key is made another way, or by the updater.' -f $n.KeyVault, (Protect-SIInstallText ([string]$_.Exception.Message))) -Color Yellow
+        }
         Update-SIInstallConfigFile -Ctx $ctx
         # The keys -- never wizard answers: asked for here, only when the feature is on, and written straight to the vault.
         $want = @()
@@ -2610,6 +2830,17 @@ function Get-SIInstallStepTable {
                 -Command ((@($g.InsideTasks) + @(Get-SIInstallGrantCommand -Ctx $ctx)) -join "`n") `
                 -Detail ([ordered]@{ missing = @($g.InsideMissing | ForEach-Object { '{0} on {1}' -f $_.Role, $_.Scope }) }))
         }
+        # GRANT-READ-1 (3.0.34): a grant OUTSIDE the resource group that setup may not read is NOT KNOWN -- never a stop
+        # (live 2026-11-04: the tenant root management group's role assignments could not be read and the install stopped
+        # here). The step says so honestly (warning, each one listed as a customer task) and the install goes on.
+        $nk = @($g.OutsideNotKnown)
+        if ($nk.Count) {
+            $nkScopes = @($nk | ForEach-Object { [string]$_.Scope } | Select-Object -Unique)
+            $nkTasks = @($g.OutsideTasks | Where-Object { $t = [string]$_; @($nkScopes | Where-Object { $t -match ('on "{0}"' -f [regex]::Escape($_)) }).Count })
+            return (New-SIInstallResult -State 'warning' -Message ('{0} grant(s) inside the resource group are in place. Not known: {1} grant(s) outside the resource group, where your account may not read the role assignments: {2}. The install goes on; they are customer tasks.' -f $inside.Count, $nk.Count, ((@($nk | ForEach-Object { '{0} on {1}' -f $_.Role, $_.Scope })) -join '; ')) `
+                -Action ([ordered]@{ text = ('CUSTOMER TASK: an Owner or User Access Administrator of {0} checks these grants there and makes any that are missing (the Azure portal path is on each line), or runs SecurityInsight''s grant script below in this install''s folder:' -f ($nkScopes -join ', ')); command = ((@($nkTasks) + @(Get-SIInstallGrantCommand -Ctx $ctx)) -join "`n") }) `
+                -Detail ([ordered]@{ notKnown = @($nk | ForEach-Object { '{0} on {1}' -f $_.Role, $_.Scope }) }))
+        }
         New-SIInstallResult -Message ('{0} grant(s) inside the resource group are in place.' -f $inside.Count)
     }
 
@@ -2619,7 +2850,9 @@ function Get-SIInstallStepTable {
         if ($g.OutsideMissing.Count) {
             $scopes = @($g.OutsideMissing | ForEach-Object { $_.Scope } | Select-Object -Unique)
             $cmd = (@($g.OutsideTasks) + @(Get-SIInstallGrantCommand -Ctx $ctx)) -join "`n"
-            return (New-SIInstallResult -State 'warning' -Message ('Waiting for {0} read grant(s) outside the resource group; SecurityInsight cannot read that data until they are made.' -f $g.OutsideMissing.Count) `
+            # GRANT-READ-1: grants setup may not even read there are said as NOT KNOWN (they may be in place already)
+            $nkNote = if (@($g.OutsideNotKnown).Count) { ' {0} of them are not known: your account may not read the role assignments there, so they may be in place already.' -f @($g.OutsideNotKnown).Count } else { '' }
+            return (New-SIInstallResult -State 'warning' -Message (('Waiting for {0} read grant(s) outside the resource group; SecurityInsight cannot read that data until they are made.' -f $g.OutsideMissing.Count) + $nkNote) `
                 -Action ([ordered]@{ text = ('Ask an Owner or User Access Administrator of {0} to make these grants (the Azure portal path is on each line) or to run SecurityInsight''s grant script below in this install''s folder:' -f ($scopes -join ', ')); command = $cmd }) `
                 -Detail ([ordered]@{ missing = @($g.OutsideMissing | ForEach-Object { '{0} on {1}' -f $_.Role, $_.Scope }) }))
         }
@@ -2783,6 +3016,11 @@ function Get-SIInstallStepTable {
         }
         $lines = @($r.Value.Lines)
         foreach ($l in $lines) { Write-SIInstallConsole -Ctx $ctx -Text ('  ' + $l) -Color Gray }
+        # #1087: the build subnet has no outbound path and is the customer's (never changed): ONE customer step, no pool made
+        if ($r.Value.PoolBlocked) {
+            throw (New-SIInstallFailure -Message ('Private network: the container registry {0} is private, but its build agent pool is not made: {1}. No image is built before it is.' -f $n.Acr, [string]$r.Value.OutboundStep) `
+                -ActionText ('Your step: {0}.' -f [string]$r.Value.OutboundStep) -Command $ctx.ResumeCommand -Detail @{ lines = $lines })
+        }
         if (-not $r.Value.NetworkShapeOk -or -not $r.Value.EndpointsOk -or -not $r.Value.PoolOk) {
             throw (New-SIInstallFailure -Message ('Private network: the container registry {0} is not private yet -- {1}' -f $n.Acr, (@($lines | Select-Object -First 12) -join '; ')) `
                 -ActionText 'Run the install command again: it continues from this step (what is there is kept). No image is built in a registry that is not private.' -Command $ctx.ResumeCommand `
@@ -2860,17 +3098,30 @@ function Get-SIInstallStepTable {
                 # block reads the install's context through this scope, under a name the callee does not use
                 $siPnGraphCtx = $ctx
                 $graph = { param($m, $u, $b) Invoke-SIInstallGraph -Ctx $siPnGraphCtx -Method $m -Uri $u -Body $b }
-                $mm = Set-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId ([string]$mi.Value.PrincipalId) -Apply -Sleep $ctx.Seams.Sleep
+                # #1092: the admin group was made minutes ago (the database steps) -- a 404 on it is Entra replication: waited
+                # for and tried again for up to 5 minutes (said in the log), then read back; only past that a warning
+                $mm = Set-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId ([string]$mi.Value.PrincipalId) -Apply -Sleep $ctx.Seams.Sleep -Print { param($t) Write-SIInstallConsole -Ctx $siPnGraphCtx -Text $t -Color DarkGray }
                 if ($mm.State -notin 'present', 'added') { $miNote = (' The in-network SQL identity {0} is not a member of the database admin group yet ({1}).' -f (Get-SIPrivateNetworkNames).SqlIdentity, $mm.Detail) }
             }
         }
+        # #1095: THE RETURN ROUTE of SecurityInsight's own spoke (rt-si on the apps subnet: each range your people browse from
+        # -> your hub firewall), only from the answers returnRouteRanges + returnRouteNextHop; a customer's network is never
+        # changed (the hand-off item instead). This step runs again on the next run until it ends ok, so answers given later
+        # with -Resume are made then.
+        $rrLines = @(); $rrNote = ''
+        $rr = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Invoke-SIPrivateNetworkReturnRoute' -Arguments ([ordered]@{ Target = $target; Location = [string]$a.Location })
+        if ($rr.Ok -and $rr.Value) {
+            $rrLines = @([string]$rr.Value.Line)
+            if (-not $rr.Value.Ok) { $rrNote = ' ' + [string]$rr.Value.Line + '.' }
+            if (Get-Command -Name Write-SIInstallConsole -ErrorAction SilentlyContinue) { Write-SIInstallConsole -Ctx $ctx -Text ('  ' + [string]$rr.Value.Line) -Color $(if ($rr.Value.Ok) { 'Gray' } else { 'Yellow' }) }
+        } elseif (-not $rr.Ok) { $rrNote = (' The return route could not be made: {0}.' -f $rr.Error) }
         $r = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Invoke-SIPrivateNetworkEndpoints' -Arguments $a
         $cmd = './setup/Set-SIPrivateNetworking.ps1 -ResourceGroup {0} -VnetId {1}' -f $n.ResourceGroup, $target.VnetId
         if (-not $r.Ok) {
             return (New-SIInstallResult -State 'warning' -Message ('The private endpoints could not be made: {0}. The install works as it is; its public endpoints are NOT closed.' -f $r.Error) `
                 -Action ([ordered]@{ text = 'Run the install command again (this step is safe to repeat), or have Invardia support finish it with (it shows the plan first):'; command = $cmd }))
         }
-        $lines = @($r.Value.Lines)
+        $lines = @($rrLines) + @($r.Value.Lines)
         if (-not $r.Value.Ok) {
             return (New-SIInstallResult -State 'warning' -Message ('Private network: not everything is in place -- {0}.' -f ($lines -join '; ')) `
                 -Action ([ordered]@{ text = 'Run the install command again (this step is safe to repeat), or have Invardia support finish it with (it shows the plan first):'; command = $cmd }) -Detail ([ordered]@{ lines = $lines }))
@@ -2895,8 +3146,21 @@ function Get-SIInstallStepTable {
                 -Action ([ordered]@{ text = ($hoText + ' After your hub changes, run the install command again from a machine in that network: it checks again and closes the public endpoints.'); command = $ctx.ResumeCommand }) `
                 -Detail $hoDetail)
         }
+        # #1091: the database is closed -- a rule that lets every Azure address in (AllowAllWindowsAzureIps, left from before
+        # the install went private) is taken away and read back; the install itself never makes it on a private install
+        if ($a.Contains('SqlServerId') -and (Get-Command -Name Remove-SIInstallSqlAzureServicesRule -ErrorAction SilentlyContinue)) {
+            $fwLine = Remove-SIInstallSqlAzureServicesRule -Ctx $ctx
+            if ($fwLine) {
+                $lines += $fwLine; $hoDetail['lines'] = $lines
+                if ($fwLine -notlike '*removed (read back)*') {
+                    return (New-SIInstallResult -State 'warning' -Message ('Private network: the private endpoints are in place and the public endpoints closed, but {0}.' -f $fwLine) `
+                        -Action ([ordered]@{ text = 'Run the install command again (this step is safe to repeat; it takes the rule away), or delete it in the Azure portal: SQL servers > the server > Security > Networking > Firewall rules:'; command = $ctx.ResumeCommand }) -Detail $hoDetail)
+                }
+            }
+        }
         $okMsg = ('Private network: {0} private endpoint(s), private DNS in place, the public endpoints of the database, the storage and the Key Vault closed. From now on SecurityInsight is reached from your network only, and it stays that way -- run later setup commands from a machine in that network.' -f @($lines | Where-Object { $_ -like 'private endpoint *' }).Count)
         if ($miNote) { return (New-SIInstallResult -State 'warning' -Message ($okMsg + $miNote) -Action ([ordered]@{ text = 'Have Invardia support finish it with (it shows the plan first):'; command = ($cmd + ' -Steps sql-identity') }) -Detail $hoDetail) }
+        if ($rrNote) { return (New-SIInstallResult -State 'warning' -Message ($okMsg + $rrNote) -Action ([ordered]@{ text = 'Run the install command again (this step is safe to repeat), or have Invardia support finish it with (it shows the plan first):'; command = ($cmd + (' -ReturnRouteRanges {0} -ReturnRouteNextHop {1} -Steps return-route' -f (@($target.ReturnRouteRanges) -join ','), $target.ReturnRouteNextHop)) }) -Detail $hoDetail) }
         if ($hoOpen) { return (New-SIInstallResult -State 'warning' -Message ($okMsg + ' Your users reach the web app once your network team has done its part of the hand-off.') -Action ([ordered]@{ text = $hoText; command = '' }) -Detail $hoDetail) }
         New-SIInstallResult -Message $okMsg -Detail $hoDetail
     }
@@ -3006,6 +3270,16 @@ function Get-SIInstallStepTable {
             return (New-SIInstallResult -State 'warning' -Message ('Installed. Waiting for {0} item(s): {1}.' -f $keys.Count, ($titles -join '; ')) `
                 -Action ([ordered]@{ text = 'The commands for the right people (also shown at each step above):'; command = ($cmds -join "`n") }) `
                 -Detail ([ordered]@{ waitingFor = $keys }))
+        }
+        # #1095: a private install WITH the return-route answers: the route table is attached to the apps subnet and sends
+        # every range to the firewall -- read back here; not in place = a warning naming the fix (never a failure)
+        if ([bool]$ctx.Values['privateNetwork'] -and "$($ctx.Values['returnRouteRanges'])".Trim() -and "$($ctx.Values['returnRouteNextHop'])".Trim()) {
+            $rgId = '/subscriptions/{0}/resourceGroups/{1}' -f [string]$ctx.Values['subscriptionId'], $ctx.Names.ResourceGroup
+            $rc = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Get-SIPrivateNetworkReturnRouteCheck' -Arguments ([ordered]@{ Target = (Get-SIInstallPrivateNetworkTarget -Values $ctx.Values -ResourceGroupId $rgId) })
+            if ($rc.Ok -and $rc.Value -and [bool]$rc.Value.Checked -and -not [bool]$rc.Value.Ok) {
+                return (New-SIInstallResult -State 'warning' -Message ('Installed, but the return route is not in place: {0}.' -f [string]$rc.Value.Line) `
+                    -Action ([ordered]@{ text = 'The fix (then run the install command again):'; command = [string]$rc.Value.Fix }) -Detail ([ordered]@{ returnRoute = [string]$rc.Value.Line }))
+            }
         }
         # the Invardia Support app's database access: what the check above read back, or why it could not be checked
         $supNote = ''; try { $supNote = ([string]$ctx.Facts['supportAppDatabaseNote']).Trim() } catch { }
@@ -3798,7 +4072,17 @@ function Invoke-SIGuidedInstallRun {
     # for, at most once a minute, as a progress event of the running step (SI-SetupArm.ps1 Send-SISetupWaitProgress)
     $global:SI_InstallWaitNotify = { param([string]$Message) Send-SIInstallProgress -Message $Message }
     $global:SI_InstallWaitLastAt = $null
-    $ctx.Names = Get-SIInstallNames -Values $ctx.Values -Explicit $ctx.Explicit -Edition $edition
+    # framework section 5.5 (OPEN-30): the new default group rg-si is for NEW installs only -- an earlier run of this install (its
+    # state, read here before anything is named) keeps the group it has; a group the customer named always wins
+    $priorForNames = Read-SIInstallState -Directory $stateDir
+    if ($priorForNames -and [string]$priorForNames['installId'] -ne $ctx.InstallId) { $priorForNames = $null }
+    $rgPick = Resolve-SIInstallDefaultResourceGroup -Values $ctx.Values -Explicit @($ctx.Explicit) -Edition $edition -Prior $priorForNames
+    $ctx.ResourceGroupSource = [string]$rgPick.Source
+    if ([string]$rgPick.ResourceGroup -and [string]$rgPick.ResourceGroup -cne [string]$ctx.Values['resourceGroup']) {
+        $ctx.Values['resourceGroup'] = [string]$rgPick.ResourceGroup
+        if ($rgPick.Source -in @('recorded', 'earlier-run')) { & $say ('An earlier run of this install used the resource group {0}: this run keeps it and its names.' -f $rgPick.ResourceGroup) 'Yellow' }
+    }
+    $ctx.Names = Get-SIInstallNames -Values $ctx.Values -Explicit $ctx.Explicit -Edition $edition -InstallId $ctx.InstallId
     $ctx.Engines = @($script:SIInstallCommunityEngines)
     # The privilege-tier classifier needs Azure OpenAI: without it Bootstrap leaves the job out on purpose (every role
     # would become Tier 99 and replace the shipped catalog -- Select-SIBootstrapEngines). An install without AI

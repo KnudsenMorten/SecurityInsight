@@ -278,11 +278,14 @@ else
             else if (Model.VulnItems.Count == 0) { <p class="hint">The close-loop holds no item for this CI.</p> }
             else
             {
-                <p class="hint">@Fmt.Int(Model.VulnItems.Count(v => v.State == "Open")) open, @Fmt.Int(Model.VulnItems.Count(v => v.State != "Open")) closed.</p>
+                var vOpen = Model.VulnItems[0].OpenTotal ?? Model.VulnItems.Count(v => v.State == "Open");
+                var vClosed = Model.VulnItems[0].ClosedTotal ?? Model.VulnItems.Count(v => v.State != "Open");
+                var vShown = Math.Min(Model.VulnItems.Count, 100);
+                <p class="hint">@Fmt.Int(vOpen) open, @Fmt.Int(vClosed) closed.@if (vShown < vOpen + vClosed) { <text> The @Fmt.Int(vShown) shown are the first, open first.</text> }</p>
                 <div class="table-wrap">
                     <table data-sortable data-vuln-items>
-                        <thead><tr><th scope="col">CVE</th><th scope="col">Severity</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Closed</th></tr></thead>
-                        <tbody>@foreach (var v in Model.VulnItems.Take(100)) { <tr><td>@v.Cve</td><td>@v.Severity</td><td>@v.State</td><td>@Fmt.Time(v.FirstSeen)</td><td>@Fmt.Time(v.ClosedAt) <span class="muted">@v.CloseReason</span></td></tr> }</tbody>
+                        <thead><tr><th scope="col">Finding</th><th scope="col">Kind</th><th scope="col">Severity</th><th scope="col">State</th><th scope="col">Since</th><th scope="col">Closed</th></tr></thead>
+                        <tbody>@foreach (var v in Model.VulnItems.Take(100)) { <tr><td>@if (!string.IsNullOrWhiteSpace(v.Title) && !string.Equals(v.Title, v.Cve, StringComparison.Ordinal)) { <span>@v.Title</span><br /><span class="muted">@v.Cve</span> } else { @v.Cve }</td><td>@v.Kind</td><td>@v.Severity</td><td>@v.State</td><td>@Fmt.Time(v.FirstSeen)</td><td>@Fmt.Time(v.ClosedAt) <span class="muted">@v.CloseReason</span></td></tr> }</tbody>
                     </table>
                 </div>
             }

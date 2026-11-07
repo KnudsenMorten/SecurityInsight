@@ -14,6 +14,12 @@
                    checks the grant, and a missing one is the customer's action with the command -- never a failed update.
       3. THE SETTING DataProtection__KeyVaultKeyId on the web app -- ONLY after every grant is in place (the web app turns
                    the protection on when it sees it, and rotates the keys stored before without encryption).
+    SETUP (#1098) reads both back before the setting: the key (a GET after it is made) and the grant (the list of the role
+    assignments on the key shows the identity). When the vault's DATA PLANE cannot be used from the installing machine (a
+    private vault answers only inside its network; or the installer's Key Vault right is not honoured yet) setup reads -- and
+    when missing makes -- the key through Azure Resource Manager (the management plane: Microsoft.KeyVault/vaults/keys), so
+    the grant (always ARM) is still made whenever the key exists. A refused role write (401 / 403) is NOT KNOWN: a customer
+    task naming the role, the key and the identity -- never a stop.
     Any step that cannot be done is said in plain words and the later steps are not taken: the web app keeps working exactly
     as before. Seams (-Arm, -KeyVault, -SetEnv) carry every Azure call, so it runs offline in the tests. Never throws.
 #>
@@ -42,6 +48,19 @@ function Get-SIWebKeyRingCreateBody {
                 tags = [ordered]@{ purpose = 'SecurityInsight web app sign-in keys: only the web app wraps and unwraps with it' } }
 }
 
+function Get-SIWebKeyRingArmCreateBody {
+    <# PURE. The same key as Get-SIWebKeyRingCreateBody, in Azure Resource Manager's shape (Microsoft.KeyVault/vaults/keys). #>
+    [ordered]@{ tags = [ordered]@{ purpose = 'SecurityInsight web app sign-in keys: only the web app wraps and unwraps with it' }
+                properties = [ordered]@{ kty = 'RSA'; keySize = 3072; keyOps = @('wrapKey', 'unwrapKey'); attributes = [ordered]@{ enabled = $true; exportable = $false } } }
+}
+
+function Get-SIWebKeyRingGrantTask {
+    <# PURE. #1098: the customer task when setup may not give the web app its role on the key (a refused role write = not known). #>
+    param([Parameter(Mandatory)][string]$Scope, [Parameter(Mandatory)][string]$PrincipalId, [AllowEmptyString()][string]$IdentityName = '', [int]$Status = 403)
+    $who = if ("$IdentityName".Trim()) { 'the web app''s managed identity {0} (object id {1})' -f "$IdentityName".Trim(), $PrincipalId } else { 'the web app''s managed identity (object id {0})' -f $PrincipalId }
+    ('CUSTOMER TASK (not known -- you may not give roles here, HTTP {0}): Azure role "Key Vault Crypto Service Encryption User" on the key SI-Web-KeyRing ({1}) for {2} -- Azure portal: the Key Vault > Keys > SI-Web-KeyRing > Access control (IAM) > Add role assignment. The updater then turns the protection on by itself.' -f $Status, $Scope, $who)
+}
+
 function Invoke-SIWebKeyRingConverge {
     <#
         The three steps. -Arm { param($Method, $Path, $ApiVersion, $Body) } -> @{ Status; Json }; -KeyVault { param($Method,
@@ -59,7 +78,9 @@ function Invoke-SIWebKeyRingConverge {
           # the customer's action (CustomerAction), never a failed update. Setup (run by an Owner) makes the grant.
           [switch]$CheckGrantOnly,
           # the words of the customer's action: the command that makes the grant
-          [string]$GrantCommand = 'pro-management\deploy\Deploy-SIManagement.ps1 -SigninStoreKeyVaultName <your Key Vault> -Apply (as an Owner of the resource group)')
+          [string]$GrantCommand = 'pro-management\deploy\Deploy-SIManagement.ps1 -SigninStoreKeyVaultName <your Key Vault> -Apply (as an Owner of the resource group)',
+          # #1098: the web app's identity by name, for the customer task when the role may not be given
+          [AllowEmptyString()][string]$IdentityName = '')
     $lines = New-Object System.Collections.Generic.List[string]; $report = New-Object System.Collections.Generic.List[string]; $action = New-Object System.Collections.Generic.List[string]
     $actions = New-Object System.Collections.Generic.List[object]; $warnings = New-Object System.Collections.Generic.List[object]
     $addAction = { param($t, $c) $action.Add($t); $actions.Add([pscustomobject]@{ Text = $t; Class = $c }) }
@@ -71,7 +92,34 @@ function Invoke-SIWebKeyRingConverge {
         # 1. the key
         $g = & $KeyVault 'GET' ('{0}?api-version=7.4' -f $keyId) $null
         if ([int]$g.Status -eq 404) { $g = & $KeyVault 'POST' ('{0}/create?api-version=7.4' -f $keyId) (Get-SIWebKeyRingCreateBody); if ([int]$g.Status -ge 200 -and [int]$g.Status -lt 300) { $keyMade = $true; $lines.Add('web sign-in keys: the Key Vault key SI-Web-KeyRing was created') } }
-        if ([int]$g.Status -lt 200 -or [int]$g.Status -ge 300 -or -not $g.Json -or -not $g.Json.key) {
+        $keyOk = [int]$g.Status -ge 200 -and [int]$g.Status -lt 300 -and $g.Json -and $g.Json.key
+        if ($keyOk -and $keyMade -and -not $CheckGrantOnly) {
+            # #1098: setup reads the key it made back
+            $rb = & $KeyVault 'GET' ('{0}?api-version=7.4' -f $keyId) $null
+            $keyOk = [int]$rb.Status -ge 200 -and [int]$rb.Status -lt 300 -and $rb.Json -and $rb.Json.key
+            if ($keyOk) { $lines.Add('web sign-in keys: the key SI-Web-KeyRing reads back') } else { $g = $rb }
+        }
+        if (-not $keyOk -and -not $CheckGrantOnly -and $VaultId) {
+            # #1098: the vault's data plane cannot be used from here (a private vault answers only inside its network, or the
+            # installer's Key Vault right is not honoured yet) -- the key is read, and made when missing, through Azure
+            # Resource Manager, so the grant below (ARM) is still made whenever the key exists
+            $dpStatus = [int]$g.Status
+            $armKey = '{0}/keys/{1}' -f $VaultId.TrimEnd('/'), $script:SIWebKeyRingKeyName
+            $ak = & $Arm 'GET' $armKey '2023-07-01' $null
+            if ([int]$ak.Status -eq 404) {
+                $null = & $Arm 'PUT' $armKey '2023-07-01' (Get-SIWebKeyRingArmCreateBody)
+                $ak = & $Arm 'GET' $armKey '2023-07-01' $null
+                if ([int]$ak.Status -ge 200 -and [int]$ak.Status -lt 300 -and $ak.Json) { $keyMade = $true; $lines.Add('web sign-in keys: the Key Vault key SI-Web-KeyRing was created through Azure Resource Manager and reads back') }
+            }
+            if ([int]$ak.Status -ge 200 -and [int]$ak.Status -lt 300 -and $ak.Json) {
+                $keyOk = $true
+                if (-not $keyMade) { $lines.Add(('web sign-in keys: the key SI-Web-KeyRing exists (read through Azure Resource Manager; the vault''s data plane answered HTTP {0} from here)' -f $dpStatus)) }
+            } else {
+                $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the key SI-Web-KeyRing could not be made or read from this machine -- the Key Vault answered HTTP {0} (a private Key Vault answers only inside its network) and Azure Resource Manager HTTP {1} -- the updater, inside the network, makes the key on its next run' -f $dpStatus, [int]$ak.Status))
+                return (& $done $false)
+            }
+        }
+        if (-not $keyOk) {
             $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the key could not be made or read in your Key Vault (HTTP {0}) -- the updater tries again on its next run' -f [int]$g.Status))
             return (& $done $false)
         }
@@ -127,7 +175,23 @@ function Invoke-SIWebKeyRingConverge {
             $body = [ordered]@{ properties = [ordered]@{ roleDefinitionId = ('/subscriptions/{0}/providers/Microsoft.Authorization/roleDefinitions/{1}' -f $SubscriptionId, $script:SIWebKeyRingRoleId); principalId = $p; principalType = 'ServicePrincipal' } }
             $r = & $Arm 'PUT' $path '2022-04-01' $body
             $st = [int]$r.Status
-            if ($st -eq 409 -or ($st -ge 200 -and $st -lt 300)) { if ($st -ne 409) { $lines.Add('web sign-in keys: the web app may use the key SI-Web-KeyRing (that key only)') } ; continue }
+            if ($st -eq 409 -or ($st -ge 200 -and $st -lt 300)) {
+                # #1098: read back -- the list of the role assignments on the key shows the identity with the role
+                $rb = & $Arm 'GET' ('{0}/providers/Microsoft.Authorization/roleAssignments?$filter=atScope()' -f $scope) '2022-04-01' $null
+                $seen = ([int]$rb.Status -ge 200 -and [int]$rb.Status -lt 300 -and $rb.Json) -and @(@($rb.Json.value) | Where-Object { $_ -and $_.properties -and [string]$_.properties.principalId -ieq $p -and ([string]$_.properties.roleDefinitionId).EndsWith('/' + $script:SIWebKeyRingRoleId, [StringComparison]::OrdinalIgnoreCase) }).Count
+                if (-not $seen) {
+                    $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the web app''s use of its key did not read back (HTTP {0}) -- the setting is not set; the updater checks it again on its next run' -f [int]$rb.Status))
+                    return (& $done $false)
+                }
+                $lines.Add('web sign-in keys: the web app may use the key SI-Web-KeyRing (that key only; read back)')
+                continue
+            }
+            if ($st -in @(401, 403)) {
+                # #1098 (the 403-outside rule, #1088): the person may not give roles -- NOT KNOWN, a customer task naming the
+                # role, the key and the identity; never a stop, and the setting is not set
+                & $addAction (Get-SIWebKeyRingGrantTask -Scope $scope -PrincipalId $p -IdentityName $IdentityName -Status $st) 'grant-missing'
+                return (& $done $false)
+            }
             $report.Add(('the web app''s sign-in keys are not protected with Key Vault yet: the web app could not be given the use of its key (HTTP {0}) -- the updater tries again on its next run' -f $st))
             return (& $done $false)
         }

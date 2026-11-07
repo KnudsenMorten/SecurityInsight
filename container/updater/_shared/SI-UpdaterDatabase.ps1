@@ -13,6 +13,9 @@
          Deploy-SIManagement -GrantSql uses) for the principals of THIS install -- the web app's and the MCP server's
          identities, found on the container apps (the install record's names, else SI_UPDATER_WEB_APP / SI_UPDATER_MCP_APP,
          else ca-si-management / ca-si-mcp) and their database users found by SID; never a hard-coded name, never a CREATE USER;
+      2b. ASSET TAGGING'S DATABASE ACCESS (framework SEC-08, every update, a current schema too): what a person once ran
+         setup\Grant-SITaggingDatabase.ps1 for -- given by the product and read back (Invoke-SIUpdaterTaggingDatabaseAccess);
+         what this install's updater may not give is one warning naming that script. Never a stop;
       3. THE RECORD: cfg.InstallState 'SchemaVersion' (fingerprint of the schema files + the grants, the release, the time).
          A fingerprint equal to the record = "schema current", nothing sent -- visible and fast.
     The updater's identity needs db_ddladmin + db_securityadmin on the Pro database for 1 and 2 (setup\Grant-SIUpdaterDatabase.ps1).
@@ -120,6 +123,75 @@ function Invoke-SIUpdaterEngineAccessCheck {
     } catch { Write-UpdLog ('WARNING: the engine identity''s database rights could not be checked: {0}' -f $_.Exception.Message); @() }
 }
 
+function Get-SIUpdaterNamedIdentity {
+    <# A user-assigned identity of the install's resource group by its name: @{ Name; ClientId }, or $null (not there). Throws on any other ARM answer. #>
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId)
+    $r = Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.ManagedIdentity/userAssignedIdentities/' + $Name)) -ApiVersion '2023-01-31' -AllowNotFound
+    if (-not $r -or -not $r.PSObject.Properties['properties'] -or -not $r.properties -or -not "$($r.properties.clientId)".Trim()) { return $null }
+    [pscustomobject]@{ Name = [string]$r.name; ClientId = ([string]$r.properties.clientId).Trim() }
+}
+
+function Invoke-SIUpdaterTaggingDatabaseAccess {
+    <#
+        Framework SEC-08 (no person needs database admin rights at an install; existing installs reach the new-install state
+        through the update): ASSET TAGGING'S DATABASE ACCESS, checked on every update and given by the product -- what a
+        person ran setup\Grant-SITaggingDatabase.ps1 for as the SQL server's admin. The identity (the install record's
+        taggingIdentity, else uami-securityinsight-tagging) found in the install's resource group; none = this install has
+        no asset tagging, nothing said. Its state read (the RELEASE's Get-SITaggingDatabaseStateSql), the plan made (the
+        release's Get-SITaggingDatabaseUpdatePlan): through the signed grant procedure when this install has it
+        (-UseProcedure), else the one GRANT today's grant path may give; whatever this update may not give is ONE plain
+        warning naming the customer action. Every change is read back. Never a stop, never throws. -FindIdentity: a test
+        seam { param($Name) } -> @{ Name; ClientId } or $null. Returns @{ Action; Ok; Line } or $null.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId,
+          [switch]$UseProcedure, [scriptblock]$FindIdentity)
+    try {
+        if (-not $Store -or -not $Store.Invoke) { return $null }
+        # an older release carries no plan: nothing done (the next update brings it)
+        if (-not (Get-Command -Name Get-SITaggingDatabaseUpdatePlan -ErrorAction SilentlyContinue)) { return $null }
+        $name = ''
+        if (Get-Command -Name Get-SIInstallName -ErrorAction SilentlyContinue) { try { $name = [string](Get-SIInstallName -Role taggingIdentity) } catch { $name = '' } }
+        if (-not "$name".Trim()) { $name = 'uami-securityinsight-tagging' }
+        $id = $null
+        try { $id = if ($FindIdentity) { & $FindIdentity $name } else { Get-SIUpdaterNamedIdentity -Name $name -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } }
+        catch { Write-UpdLog ("asset tagging's database access: its identity {0} could not be read ({1}) -- checked again at the next update" -f $name, $_.Exception.Message); return $null }
+        if (-not $id -or -not "$($id.ClientId)".Trim()) { return $null }
+        $read = { @(& $Store.Invoke (Get-SITaggingDatabaseStateSql -ClientId ([string]$id.ClientId)) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1 }
+        $schemas = if ($script:SIGrantSchemas) { @($script:SIGrantSchemas) } else { @('sidata', 'cfg', 'vuln', 'cmdbsync', 'snowstage') }
+        $planOf = { param($row) Get-SITaggingDatabaseUpdatePlan -State $row -UserName $name -ClientId ([string]$id.ClientId) -Procedure:([bool]$UseProcedure) -Schemas $schemas }
+        $state = $null
+        try { $state = & $read } catch { $state = $null }
+        $plan = & $planOf $state
+        switch ($plan.Action) {
+            'current' { return [pscustomobject]@{ Action = 'current'; Ok = $true; Line = '' } }
+            'unknown' { Write-UpdLog $plan.Line; return [pscustomobject]@{ Action = 'unknown'; Ok = $false; Line = $plan.Line } }
+            'task'    { Write-UpdLog $plan.Line; return [pscustomobject]@{ Action = 'task'; Ok = $false; Line = $plan.Line } }
+        }
+        if ($plan.Action -eq 'procedure') {
+            $g = Invoke-SIGrantProcedureApply -Invoke $Store.Invoke -Rows $plan.Rows
+            foreach ($x in @($g.Refused) + @($g.Failed)) { if ($x) { Write-UpdLog ("WARNING: asset tagging's database access: {0}" -f (Format-SIGrantOutcome -Row $x)) } }
+        } else {
+            & $Store.Invoke $plan.Sql @{} 'nonquery'
+        }
+        # the read-back: the change counts only when the database says so
+        $after = $null
+        try { $after = & $read } catch { $after = $null }
+        $check = & $planOf $after
+        if ($check.Action -eq 'current') {
+            $line = '{0} (read back)' -f $plan.Line
+            Write-UpdLog $line
+            return [pscustomobject]@{ Action = $plan.Action; Ok = $true; Line = $line }
+        }
+        $still = if (@($check.Missing).Count) { 'still missing after this update: ' + (@($check.Missing) -join ', ') } else { 'the change could not be read back' }
+        $line = "WARNING: asset tagging's database access: {0}. One time, as the SQL server's admin (or through the Support app): setup\Grant-SITaggingDatabase.ps1 -Apply" -f $still
+        Write-UpdLog $line
+        [pscustomobject]@{ Action = $plan.Action; Ok = $false; Line = $line }
+    } catch {
+        Write-UpdLog ("WARNING: asset tagging's database access could not be checked: {0}" -f $_.Exception.Message)
+        $null
+    }
+}
+
 function Get-SIUpdaterGrantProcedurePlan {
     <#
         #672 (framework §12.23 P4 / P9): does THIS install apply grants through the certificate-signed procedure? Loads the
@@ -222,7 +294,19 @@ function Invoke-SIUpdaterDatabase {
     $applyArgs = @{ SIRoot = $SIRoot; Invoke = $Store.Invoke; RunFile = $runFile; ExtraFingerprint = $grantSql; SkipWhenRecorded = $true; Log = { param($m) Write-UpdLog $m } }
     # (a release before #1050 has no -Beat: its apply runs as it always did)
     if ((Get-Command -Name Invoke-SIProSchemaApply).Parameters.ContainsKey('Beat')) { $applyArgs.Beat = $ixBeat }
-    $apply = Invoke-SIProSchemaApply @applyArgs
+    $applyParams = (Get-Command -Name Invoke-SIProSchemaApply).Parameters
+    # #1112: the database window -- the install's lock says "database schema" while the files' transactions run, so the web
+    # app answers "SecurityInsight is being updated" at once instead of waiting behind their locks. A release before #1112
+    # has no -Window: the whole apply is the window (its no-op and its online index builds too -- the safe side).
+    $hasWindow = (Get-Command -Name Set-SIUpdaterDatabaseWindow -ErrorAction SilentlyContinue)
+    $outerWindow = $false
+    if ($hasWindow) {
+        if ($applyParams.ContainsKey('Window')) { $applyArgs.Window = { param([bool]$On) $null = Set-SIUpdaterDatabaseWindow -On $On } }
+        else { $outerWindow = $true }
+    }
+    if ($outerWindow) { $null = Set-SIUpdaterDatabaseWindow -On $true }
+    try { $apply = Invoke-SIProSchemaApply @applyArgs }
+    finally { if ($outerWindow -or ($hasWindow -and $global:SI_UpdaterDbWindow)) { $null = Set-SIUpdaterDatabaseWindow -On $false } }
     switch ($apply.Action) {
         'refused' {
             $null = Send-SIUpdaterDatabaseGuard -SIRoot $SIRoot -Store $Store -GuardId 'schema.gate.refused' -Outcome 'refused' -Subject $apply.FailedFile -Detail $apply.Reason
@@ -234,7 +318,10 @@ function Invoke-SIUpdaterDatabase {
         }
         # #881's read right also on an update whose schema is current: it was granted only when the schema changed, so an
         # install whose schema was already recorded never got it (idempotent: "held already" says nothing)
-        'noop' { $null = Invoke-SIUpdaterEngineDatabaseGrant -SIRoot $SIRoot -Store $Store; $null = Invoke-SIUpdaterEngineAccessCheck -SIRoot $SIRoot -Store $Store -Exclude $principals.ToArray(); return (& $res $true 'noop' $apply.Reason $apply.Hash $principals) }
+        'noop' { $null = Invoke-SIUpdaterEngineDatabaseGrant -SIRoot $SIRoot -Store $Store; $null = Invoke-SIUpdaterEngineAccessCheck -SIRoot $SIRoot -Store $Store -Exclude $principals.ToArray()
+                 # SEC-08: asset tagging's database access, also on an update whose schema is current (idempotent: current = nothing said)
+                 $null = Invoke-SIUpdaterTaggingDatabaseAccess -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -UseProcedure:([bool]$proc.Use)
+                 return (& $res $true 'noop' $apply.Reason $apply.Hash $principals) }
     }
 
     # ---- 2. the grants: through the signed procedure when this install has it (#672), else today's transaction ----
@@ -268,6 +355,9 @@ function Invoke-SIUpdaterDatabase {
     # ---- #881: the engine role's read right on the database's own load -- a batch of its own, a warning when refused ----
     $null = Invoke-SIUpdaterEngineDatabaseGrant -SIRoot $SIRoot -Store $Store
 
+    # ---- SEC-08: asset tagging's database access given by the product (no person; a warning when it may not) ----
+    $null = Invoke-SIUpdaterTaggingDatabaseAccess -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -UseProcedure:([bool]$proc.Use)
+
     # ---- #672: the engine identity's rights CHECKED (never changed here: framework §12.23 P8) -- a warning, never a stop ----
     $null = Invoke-SIUpdaterEngineAccessCheck -SIRoot $SIRoot -Store $Store -Exclude $principals.ToArray()
 
@@ -279,82 +369,264 @@ function Invoke-SIUpdaterDatabase {
     & $res $true 'applied' $why $apply.Hash $principals
 }
 
-function Invoke-SIUpdaterIndexWindow {
+function Test-SIUpdaterGraphRights {
     <#
-        #1050 (owner 2026-11-01): SI_UPDATER_MODE = index-build -- the pipeline runner's wake-up started this run in an idle
-        window. ONE index that did not fit an update (cfg.IndexBuild, state waiting -- the one that has waited longest) is
-        built from its stored statement, under the install's lock (the run gate, as an update takes it), with the lock beaten
-        while it builds; a pipeline run that wants to start meanwhile waits for it. Built: the row says so and the build's
-        rate is recorded for the next estimate. A failed build waits again (said in plain words). Nothing else runs.
-        -Seams (tests): RunGate { param($Holder) }, ExitGate { param($Holder) }, Build { param($Sql, $Beat) } -> seconds,
-        Beat { param($Holder, $What) }. Returns the exit code (0; a build that failed is a WARNING, never a failed update).
+        Framework §4.5 SQL-ADMIN-GROUP G5, the updater's side: the Microsoft Graph application permissions its own Graph token
+        carries (the roles claim -- read with no directory right) checked against the G5 list (the release's
+        Test-SIDbInitUpdaterGraphRoles). The updater cannot grant itself: what is missing is ONE warning naming what and who
+        grants it (setup). Never a hold, never throws. -GraphRoles { } -> Get-SIDbInitTokenRoles' answer (a test seam).
+        Returns @{ Ok ($null = not known); Missing; Lines }.
     #>
-    param($Store, [string]$SIRoot, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [hashtable]$Env = @{}, [hashtable]$Seams = @{})
-    if (-not $Store) { Write-UpdLog 'index build: this install has no Pro database -- nothing to build'; return 0 }
-    if (-not (Get-Command -Name Read-SIIndexBuildRows -ErrorAction SilentlyContinue)) {
-        $f = if ($SIRoot) { [IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-IndexBuild.ps1') } else { '' }
-        if (-not $f -or -not (Test-Path -LiteralPath $f)) { Write-UpdLog 'index build: this updater image does not carry the index build -- nothing done (the next update brings it)'; return 0 }
-        . $f
-    }
-    $rows = @()
-    try { $rows = @(Read-SIIndexBuildRows -Invoke $Store.Invoke) } catch { Write-UpdLog ('index build: the waiting indexes could not be read ({0}) -- nothing done' -f $_.Exception.Message); return 0 }
-    $now = [datetime]::UtcNow
-    $pick = @($rows | Where-Object { $_.State -eq 'waiting' -and "$($_.Statement)".Trim() } | Sort-Object { if ($_.SinceUtc) { ([datetime]$_.SinceUtc).ToUniversalTime() } else { [datetime]::MaxValue } })[0]
-    if (-not $pick) { Write-UpdLog 'index build: no index waits -- nothing to build'; return 0 }
-    $force = (-not $pick.ForcedUtc) -and $pick.SinceUtc -and (($now - ([datetime]$pick.SinceUtc).ToUniversalTime()).TotalDays -ge (Get-SIIndexBuildContract).WaitDays)
-    $holder = if (Get-Command -Name Get-SIUpdaterRunGateHolder -ErrorAction SilentlyContinue) { Get-SIUpdaterRunGateHolder -Env $Env } else { 'caj-si-updater' }
-    $real = -not (Get-Module -Name Pester)
-    $g = if ($Seams['RunGate']) { & $Seams.RunGate $holder }
-         elseif ($real -and (Get-Command -Name Invoke-SIUpdaterRunGate -ErrorAction SilentlyContinue)) { Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -What ('an index build of SecurityInsight: {0}' -f $pick.Name) -SubscriptionId $SubscriptionId }
-         else { [pscustomobject]@{ Go = $true; Reason = 'no run gate here'; LockTaken = $false } }
-    if (-not $g.Go) { Write-UpdLog ('index build: not now -- {0}; the pipeline runner starts it again at its next idle wake-up' -f $g.Reason); return 0 }
-    if ($g.LockTaken -and (Get-Command -Name Register-SIUpdaterLockBeat -ErrorAction SilentlyContinue)) { Register-SIUpdaterLockBeat -Store $Store -Holder $holder -Beat $(if ($Seams['Beat']) { $Seams['Beat'] } else { $null }) -Real:([bool]$real) }
-    $est = if ($pick.EstMinutes) { 'about ' + (Format-SIIndexDuration ([int]$pick.EstMinutes)) } else { 'its time is not known' }
+    param([scriptblock]$GraphRoles)
     try {
-        $there = $false
-        try {
-            $n = @(Get-SIIndexReaderRows (& $Store.Invoke "SET NOCOUNT ON; SELECT COUNT(*) AS N FROM sys.indexes WHERE name = @I AND object_id = OBJECT_ID(@T);" ([ordered]@{ I = $pick.Name; T = $pick.Table }) 'reader'))
-            $there = $n.Count -gt 0 -and [int](Get-SIIndexRowValue $n[0] 'N') -gt 0
-        } catch { $there = $false }
-        if ($there) { $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State built -Why 'found built'; Write-UpdLog ('index build: {0} on {1} is there already -- nothing to build' -f $pick.Name, $pick.Table); return 0 }
-        Write-UpdLog ('index build: {0} on {1} -- built now in an idle window ({2}){3}' -f $pick.Name, $pick.Table, $est, $(if ($force) { '; it has waited 7 days without an idle window long enough, so it is built now, once -- the next pipeline run waits for it' } else { '' }))
-        $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State building -Forced:$force -Why $(if ($force) { 'built after 7 days of waiting (once)' } else { 'built in an idle window' })
-        $say = [pscustomobject]@{ Last = [datetime]::UtcNow }
-        $ixName = $pick.Name
-        # the functions, captured (a closure's own scope does not see the functions of the updater's script)
-        $fBeat = ${function:Invoke-SIUpdaterLockBeat}; $fLog = ${function:Write-UpdLog}; $every = (Get-SIIndexBuildContract).SayEveryMinutes
-        $beat = {
-            param($Minutes)
-            if ($fBeat) { $null = & $fBeat -What ('building index {0} ({1} min)' -f $ixName, $Minutes) -MinSeconds 30 }
-            if (([datetime]::UtcNow - $say.Last).TotalMinutes -ge $every) { $say.Last = [datetime]::UtcNow; if ($fLog) { & $fLog ('index build: {0} still building ({1} min so far)' -f $ixName, $Minutes) } }
-        }.GetNewClosure()
-        $secs = 0.0
-        try {
-            if ($Seams['Build']) { $secs = [double](& $Seams.Build $pick.Statement $beat) }
-            else {
-                # the shared open (engine\_shared\SI-SqlRetry.ps1: the token, a retry on a database that is not ready yet)
-                if (-not (Get-Command -Name Open-SISqlConnectionRetry -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-SqlRetry.ps1')) }
-                $tokOf = $Store.GetToken
-                $cn = Open-SISqlConnectionRetry -Server ([string]$Store.Server) -Database ([string]$Store.Database) -Token { param($Fresh) [string](& $tokOf) }.GetNewClosure()
-                try { $secs = Invoke-SIIndexBuildCommand -Connection $cn -Sql $pick.Statement -Beat $beat } finally { $cn.Dispose() }
+        if (-not (Get-Command -Name Test-SIDbInitUpdaterGraphRoles -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Ok = $null; Missing = @(); Lines = @() } }
+        if (-not $GraphRoles) {
+            $GraphRoles = { if (Get-Command -Name Get-SIAzureToken -ErrorAction SilentlyContinue) { Get-SIDbInitTokenRoles -Token ([string](Get-SIAzureToken -Resource 'https://graph.microsoft.com/')) } else { $null } }
+        }
+        $t = & $GraphRoles
+        if ($null -eq $t) {
+            $l = 'the updater identity''s Microsoft Graph permissions could not be read from its token -- checked again at the next update'
+            Write-UpdLog $l
+            return [pscustomobject]@{ Ok = $null; Missing = @(); Lines = @($l) }
+        }
+        $c = Test-SIDbInitUpdaterGraphRoles -Held @($t.Roles)
+        foreach ($l in $c.Lines) { Write-UpdLog $l }
+        [pscustomobject]@{ Ok = [bool]$c.Ok; Missing = @($c.Missing); Lines = @($c.Lines) }
+    } catch {
+        $l = 'WARNING: the updater identity''s Microsoft Graph permissions could not be checked ({0}) -- checked again at the next update' -f $_.Exception.Message
+        Write-UpdLog $l
+        [pscustomobject]@{ Ok = $null; Missing = @(); Lines = @($l) }
+    }
+}
+
+function Invoke-SIUpdaterDbJobMembership {
+    <#
+        Framework §4.5 SQL-ADMIN-GROUP G2-G4, the updater's side: the database setup job identity's membership of the SQL
+        server's admin group, CONVERGED and RENEWED on every update through the release's Sync-SIDbInitMembership (the same
+        path setup uses). The group = the SQL server's Entra administrator (ARM: the server in the install's resource group).
+        With the G5 rights the updater reads the active PIM-for-Groups assignment and makes / extends it; a direct add
+        (members/$ref) is tried first and is refused for a role-assignable group without directory rights, as decided.
+        Returns @{ Member ($true | $false | $null = not known); JustAdded; State; Renewal; End; Detail }. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$SubscriptionId,
+          [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$PrincipalId,
+          [scriptblock]$Sleep, [datetime]$NowUtc = [datetime]::UtcNow)
+    $unknown = { param($d) [pscustomobject]@{ Member = $null; JustAdded = $false; State = 'unknown'; Renewal = $null; End = $null; Detail = [string]$d } }
+    try {
+        if (-not (Get-Command -Name Sync-SIDbInitMembership -ErrorAction SilentlyContinue)) { return (& $unknown 'this release does not keep the membership') }
+        $n = Get-SIDbInitNames
+        $name = (($Server -split '\.')[0]).Trim()
+        if ($name -notmatch '^[a-z0-9][a-z0-9-]{0,62}$') { return (& $unknown ('the database server ''{0}'' is not a server name' -f $Server)) }
+        $srv = $null
+        try { $srv = & $Arm 'GET' ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Sql/servers/{2}?api-version={3}' -f $SubscriptionId, $ResourceGroup, $name, $n.SqlApi) $null }
+        catch { return (& $unknown ('the database server {0} could not be read ({1})' -f $name, $_.Exception.Message)) }
+        if (-not $srv) { return (& $unknown ('the database server {0} is not in the install''s resource group' -f $name)) }
+        $gid = Get-SIDbInitAdminGroupId -Server $srv
+        if (-not $gid) { return (& $unknown ('the database server {0}''s administrator is not a group' -f $name)) }
+        $s = Sync-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $gid -Sleep $Sleep -NowUtc $NowUtc -Print { param($t) Write-UpdLog ([string]$t).Trim() }
+        [pscustomobject]@{ Member = $s.Member; JustAdded = [bool]$s.JustAdded; State = [string]$s.State; Renewal = $s.Renewal; End = $s.End; Detail = [string]$s.Detail }
+    } catch { & $unknown ('the membership could not be checked: {0}' -f $_.Exception.Message) }
+}
+
+function Save-SIUpdaterDbJobMembership {
+    <# The membership's own row (cfg.InstallState 'DbJobMembership') -- what the heartbeat's setup step db-job says next to the
+       job's result. A failure to write is a log line, never a stop. #>
+    param($Store, [Parameter(Mandatory)][string]$State, $End = $null, [string]$Via = '', [string]$Why = '', [datetime]$NowUtc = [datetime]::UtcNow)
+    try {
+        $v = New-SIDbInitMembershipRecordValue -State $State -End $End -Via $Via -Why $Why -NowUtc $NowUtc
+        & $Store.Invoke (Get-SIDbInitRecordSql -Name (Get-SIDbInitNames).MembershipRecord) @{ Value = $v; Version = $null; By = 'caj-si-updater' } 'nonquery'
+    } catch { Write-UpdLog ('the membership''s record could not be written: {0}' -f $_.Exception.Message) }
+}
+
+function Test-SIUpdaterDbJobSignInFailure {
+    <# PURE. Did a run fail because its identity could not sign in yet (no row for this run -- the job writes none when it
+       cannot sign in -- or a row whose reason is a refused sign-in)? Only such a run is started again after a NEW membership. #>
+    param([bool]$Mine, $Record)
+    if (-not $Mine) { return $true }
+    $why = if ($Record -and $Record.PSObject.Properties['why']) { [string]$Record.why } else { '' }
+    [bool]((Test-SIDbInitLoginRefused -Message $why) -or $why -match '(?i)could not sign in')
+}
+
+function Invoke-SIUpdaterDbJob {
+    <#
+        Framework SEC-08 (Invardia DESIGN ch 12, points 2, 5, 7, 9, 10) and §4.5 SQL-ADMIN-GROUP G2-G5: THE DATABASE SETUP JOB
+        caj-si-dbinit on every update, BEFORE the database step (the release's setup\_shared\SI-DbInitJob.ps1 holds the
+        design). In order:
+          1. the job's identity id-si-dbinit and the job itself are kept present (ARM, Contributor on the resource group): the
+             identity made when it is not there, the job PUT with the engine jobs' image, environment and pull identity and
+             today's list of product identities (existing installs reach the new-install state through the update);
+          1b. G5: the updater's own Microsoft Graph permissions CHECKED (its token's roles) -- a missing one is a warning naming
+             who grants it; never a hold;
+          1c. G2-G4: the job identity's membership of the SQL admin group CONVERGED (direct, else an active PIM-for-Groups
+             assignment, read back) and RENEWED when it ends within 30 days. A renewal that fails while the assignment is
+             still valid is a WARNING (and the membership's own row, which the heartbeat's db-job step says); the membership
+             is written as its own row cfg.InstallState 'DbJobMembership';
+          2. is the membership proven? A row the JOB wrote (state ok / failed), or the membership read in 1c. Neither: a
+             'waiting' row is written, the heartbeat's setup step db-job asks for the one membership, and the update goes on
+             on today's path (point 10). A membership that a run of the job PROVED, now GONE and not restorable, HOLDS the
+             update (the job could not run: the installed version keeps running);
+          3. the job is started (SI_DBINIT_BY updater, its own run id) and waited for; the run counts only when the execution
+             Succeeded AND the row it wrote carries THIS run's id with state ok. A membership made in THIS run may not have
+             reached the identity's token yet (live 2026-11-05: a run minutes after the PIM assignment failed, one 20 minutes
+             later succeeded): a run that could not sign in is started again after a growing wait (-SettleWaits, said in the
+             log); when they are used up the update goes on on today's path ('waiting'). Any other failed run HOLDS THE UPDATE
+             (Ok = $false: nothing is rolled, the old version keeps running -- point 9).
+        Anything the updater may not do itself (an ARM refusal, no engine job to take the image from) is one warning and the
+        update goes on. Never throws. -Arm / -Lists / -Graph / -GraphRoles / -Sleep / -Now are test seams.
+        Returns @{ Ok; Action = skipped | waiting | not-ready | ok | failed; Reason }.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId,
+          [scriptblock]$Arm, [scriptblock]$Lists, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500,
+          [scriptblock]$Graph, [scriptblock]$GraphRoles, [int[]]$SettleWaits = @(300, 600, 900), [scriptblock]$Now = { [datetime]::UtcNow })
+    $res = { param($ok, $a, $why) [pscustomobject]@{ Ok = $ok; Action = $a; Reason = $why } }
+    try {
+        if (-not $Store -or -not $Store.Invoke) { return (& $res $true 'skipped' 'no Pro database on this install') }
+        $file = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-DbInitJob.ps1')
+        if (-not (Test-Path -LiteralPath $file)) { return (& $res $true 'skipped' 'this release carries no database setup job') }
+        . $file
+        # framework §4.5 G2: the one add-and-wait policy the membership's direct add uses (Add-SIDbInitMember)
+        $gm = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-GroupMemberAdd.ps1'); if (Test-Path -LiteralPath $gm) { . $gm }
+        # the release's two install switches (SI_Setup_SignedGrantProcedure, SI_Setup_EngineLeastPrivilege) -- pure files
+        foreach ($f in 'SI-GrantProcedure.ps1', 'SI-EngineGrants.ps1') { $p = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', $f); if (Test-Path -LiteralPath $p) { . $p } }
+        $n = Get-SIDbInitNames
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        if (-not $Lists) {
+            $Lists = {
+                param([string]$Kind)
+                $prov = switch ($Kind) { 'jobs' { 'Microsoft.App/jobs' } 'apps' { 'Microsoft.App/containerApps' } default { 'Microsoft.ManagedIdentity/userAssignedIdentities' } }
+                $api = if ($Kind -eq 'identities') { $n.MiApi } else { $n.AppApi }
+                @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider $prov) -ApiVersion $api -List | Where-Object { $_ })
             }
-        } catch {
-            $why = 'the build in an idle window failed ({0}) -- it waits for the next window; the release works without it' -f $_.Exception.Message
-            $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State waiting -Why $why
-            Write-UpdLog ('WARNING: index build: {0}: {1}' -f $pick.Name, $why)
-            return 0
         }
-        $took = Format-SIIndexDuration ([int][Math]::Ceiling($secs / 60.0))
-        $null = Save-SIIndexBuildRow -Invoke $Store.Invoke -Table $pick.Table -Index $pick.Name -State built -Why ('built in {0}' -f $took)
-        $pg = Get-SIIndexTablePages -Invoke $Store.Invoke -Table $pick.Table
-        if ($pg) { $null = Add-SIIndexBuildRateSample -Invoke $Store.Invoke -Pages $pg.Pages -Seconds $secs }
-        Write-UpdLog ('index build: {0} on {1} built in {2} (estimated {3})' -f $pick.Name, $pick.Table, $took, $est)
-        0
-    } finally {
-        if (Get-Command -Name Unregister-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterLockBeat }
-        if ($g.LockTaken) {
-            $null = if ($Seams['ExitGate']) { & $Seams.ExitGate $holder } elseif ($real -and (Get-Command -Name Exit-SIUpdaterRunGate -ErrorAction SilentlyContinue)) { Exit-SIUpdaterRunGate -Store $Store -Holder $holder } else { $null }
-            Write-UpdLog 'index build: the install''s lock is released'
+        # ---- 1. the identity and the job, kept present ----
+        $jobs = @(& $Lists 'jobs'); $apps = @(& $Lists 'apps'); $ids = @(& $Lists 'identities')
+        $tpl = Get-SIDbInitTemplateJob -Jobs $jobs
+        if (-not $tpl.Ok) { $why = 'WARNING: the database setup job: {0} -- it is checked again at the next update' -f $tpl.Problem; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
+        $mi = Set-SIDbInitIdentity -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Location $tpl.Location -Sleep $Sleep
+        if (-not $mi.Ok) { $why = 'WARNING: the database setup job: {0} -- checked again at the next update' -f $mi.Problem; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
+        if ($mi.Made) { Write-UpdLog ('the database setup job: its identity {0} was made' -f $n.Identity) }
+        $nm = { param($role, $def) $v = ''; if (Get-Command -Name Get-SIInstallName -ErrorAction SilentlyContinue) { try { $v = [string](Get-SIInstallName -Role $role) } catch { $v = '' } }; if ("$v".Trim()) { "$v".Trim() } else { $def } }
+        $principals = @(Get-SIDbInitPrincipals -Identities $ids -Jobs $jobs -Apps $apps -WebApp @((& $nm 'web' 'ca-si-management')) -McpApp @((& $nm 'mcp' 'ca-si-mcp')) `
+                            -UpdaterJob @((& $nm 'updater' 'caj-si-updater')) -TaggingIdentity @((& $nm 'taggingIdentity' 'uami-securityinsight-tagging'), 'id-si-tagging'))
+        if (-not @($principals | Where-Object { $_.component -eq 'engine' }).Count) { $why = 'WARNING: the database setup job: the engine identity was not found on the engine jobs -- checked again at the next update'; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
+        $signed = $false; $roleOnly = $false
+        try { if (Get-Command -Name Test-SIGrantProcedureSetup -ErrorAction SilentlyContinue) { $signed = [bool](Test-SIGrantProcedureSetup) } } catch { }
+        try { if (Get-Command -Name Test-SIEngineLeastPrivilegeSetup -ErrorAction SilentlyContinue) { $roleOnly = [bool](Test-SIEngineLeastPrivilegeSetup) } } catch { }
+        $server = if ($Store.PSObject.Properties['Server'] -and $Store.Server) { [string]$Store.Server } else { '' }
+        if (-not $server) { $why = 'WARNING: the database setup job: the database server is not known to this run -- checked again at the next update'; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
+        $db = if ($Store.PSObject.Properties['Database'] -and $Store.Database) { [string]$Store.Database } else { $n.ProDatabase }
+        # the job's lines reach the install's Log Analytics workspace (a warning only, never a hold)
+        if (Get-Command -Name Set-SIDbInitEnvironmentLogs -ErrorAction SilentlyContinue) { Write-UpdLog ((Set-SIDbInitEnvironmentLogs -Arm $Arm -EnvironmentId $tpl.EnvironmentId -WorkspaceResourceId $tpl.WorkspaceResourceId).Line) }
+        $body = Get-SIDbInitJobBody -Location $tpl.Location -EnvironmentId $tpl.EnvironmentId -Image $tpl.Image -RegistryServer $tpl.RegistryServer -PullIdentityId $tpl.PullIdentityId `
+                    -IdentityId $mi.Id -IdentityClientId $mi.ClientId -Server $server -Database $db -LedgerDatabase $n.LedgerDatabase -Principals $principals -SignedGrants $signed -EngineRoleOnly $roleOnly
+        $job = Set-SIDbInitJob -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Body $body -Sleep $Sleep
+        if (-not $job.Ok) { $why = 'WARNING: the database setup job: {0} -- checked again at the next update' -f $job.Problem; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
+        # ---- 1b. G5: the updater's own Graph permissions, checked (never granted here; never a hold) ----
+        $null = Test-SIUpdaterGraphRights -GraphRoles $GraphRoles
+        # ---- 1c. G2-G4: the job identity's membership of the SQL admin group, converged and renewed ----
+        $nowUtc = & $Now
+        if (-not $Graph) { $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $Body -Resource 'https://graph.microsoft.com/' } }
+        $mem = Invoke-SIUpdaterDbJobMembership -Arm $Arm -Graph $Graph -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -PrincipalId $mi.PrincipalId -Sleep $Sleep -NowUtc $nowUtc
+        $ren = $mem.Renewal
+        if ($mem.Member -eq $true) {
+            Write-UpdLog ('the database setup job {0}: {1}' -f $n.Job, $mem.Detail)
+            if ($ren -and [string]$ren.State -eq 'failed') {
+                Write-UpdLog ('WARNING: the database setup job {0}: its membership of the SQL admin group could not be renewed ({1}) -- it is still valid, so the update goes on; tried again at the next update' -f $n.Job, $ren.Detail)
+                Save-SIUpdaterDbJobMembership -Store $Store -State 'renewal-failed' -End $ren.End -Via $mem.State -Why $ren.Detail -NowUtc $nowUtc
+            } else {
+                if ($ren -and [string]$ren.State -in 'renewed', 'current') { Write-UpdLog ('the database setup job {0}: {1}' -f $n.Job, $ren.Detail) }
+                Save-SIUpdaterDbJobMembership -Store $Store -State 'ok' -End $(if ($ren) { $ren.End } else { $null }) -Via $mem.State -NowUtc $nowUtc
+            }
+        } elseif ($mem.State -eq 'unknown') {
+            Write-UpdLog ('the database setup job {0}: its membership of the SQL admin group was not checked ({1}) -- the job''s own last result decides' -f $n.Job, $mem.Detail)
+        } else {
+            Write-UpdLog ('the database setup job {0}: its identity {1} is not a member of the SQL admin group and could not be made one ({2})' -f $n.Job, $n.Identity, $mem.Detail)
         }
+        # ---- 2. is the membership proven (a row the JOB wrote, or read above)? ----
+        $row = @(& $Store.Invoke (Get-SIDbInitRecordReadSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+        $rec = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $row @('Value')))
+        $proven = [bool]($rec -and [string]$rec.state -in 'ok', 'failed')
+        if ($proven -and $mem.Member -eq $false) {
+            # a membership a run of the job PROVED is gone, and it could not be made again: the job cannot sign in -- held
+            Save-SIUpdaterDbJobMembership -Store $Store -State 'gone' -Why $mem.Detail -NowUtc $nowUtc
+            $why = 'the database setup job {0}: its identity {1} is no longer a member of the SQL admin group and could not be made one again ({2}) -- the update is held, the installed version keeps running; Invardia support (the Support app) or the customer adds it again' -f $n.Job, $n.Identity, $mem.Detail
+            Write-UpdLog ('WARNING: ' + $why)
+            return (& $res $false 'failed' $why)
+        }
+        if (-not $proven -and $mem.Member -ne $true) {
+            if ($mem.Member -eq $false) { Save-SIUpdaterDbJobMembership -Store $Store -State 'missing' -Why $mem.Detail -NowUtc $nowUtc }
+            if (-not $rec) {
+                try { & $Store.Invoke (Get-SIDbInitRecordSql) @{ Value = (New-SIDbInitRecordValue -State 'waiting' -By 'updater' -Why 'not run yet: the identity of the job must be added once to the SQL admin group'); Version = $null; By = 'caj-si-updater' } 'nonquery' } catch { }
+            }
+            $why = 'the database setup job {0} is ready, but has not run yet: its identity {1} must be added once to the SQL admin group (Invardia support, or the customer); until then this update keeps today''s path' -f $n.Job, $n.Identity
+            Write-UpdLog $why
+            return (& $res $true 'waiting' $why)
+        }
+        # ---- 3. the run (a failure holds the update; a run after a NEW membership is given time to reach the token) ----
+        Write-UpdLog ('the database setup job {0}: started ({1})' -f $n.Job, $(if ($mem.JustAdded) { 'its identity became a member of the SQL admin group in this run' } elseif ($mem.Member -eq $true) { 'its identity is a member of the SQL admin group, read back' } else { 'its identity is a member of the SQL admin group since its run of ' + [string]$rec.at }))
+        $settle = @($SettleWaits | Where-Object { $_ -gt 0 })
+        $try = 0
+        while ($true) {
+            $r = Start-SIDbInitRun -Arm $Arm -JobId $job.JobId -Job $job.Job -By 'updater' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep
+            $after = $null
+            try { $row = @(& $Store.Invoke (Get-SIDbInitRecordReadSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1; $after = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $row @('Value'))) } catch { $after = $null }
+            $mine = [bool]($after -and $after.PSObject.Properties['run'] -and [string]$after.run -eq $r.Run)
+            if ($r.Ok -and $mine -and [string]$after.state -eq 'ok') {
+                Write-UpdLog ('the database setup job {0}: every identity read back ({1}; execution {2})' -f $n.Job, [string]$after.n, $r.Execution)
+                return (& $res $true 'ok' ('every identity read back (execution {0})' -f $r.Execution))
+            }
+            if (-not ($mem.JustAdded -and (Test-SIUpdaterDbJobSignInFailure -Mine $mine -Record $after))) { break }
+            if ($try -ge $settle.Count) {
+                $why = 'the database setup job {0}: its identity became a member of the SQL admin group in this run, but after {1} runs the membership has still not reached its sign-in (last execution {2}) -- this update keeps today''s path; the next update runs it again' -f $n.Job, ($try + 1), $(if ($r.Execution) { $r.Execution } else { 'not started' })
+                Write-UpdLog ('WARNING: ' + $why)
+                return (& $res $true 'waiting' $why)
+            }
+            $w = [int]$settle[$try]; $try++
+            Write-UpdLog ('the database setup job {0}: run {1} could not sign in yet -- its identity became a member of the SQL admin group only in this run and the membership has not reached its token; started again in {2} s (try {3} of {4})' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { '(not started)' }), $w, ($try + 1), ($settle.Count + 1))
+            & $Sleep $w
+        }
+        $why = 'the database setup job {0} did not complete (execution {1}: {2}{3}) -- the update is held, the installed version keeps running; {4}' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status,
+                   $(if ($mine -and $after.PSObject.Properties['why'] -and [string]$after.why) { '; ' + [string]$after.why } elseif (-not $mine) { '; it recorded no result for this run' } else { '' }), (Get-SIDbInitLogText -ResourceGroup $ResourceGroup -Execution $r.Execution)
+        Write-UpdLog ('WARNING: ' + $why)
+        & $res $false 'failed' $why
+    } catch {
+        $why = 'WARNING: the database setup job could not be checked ({0}) -- checked again at the next update' -f $_.Exception.Message
+        Write-UpdLog $why
+        & $res $true 'not-ready' $why
+    }
+}
+
+function Invoke-SIUpdaterIndexBuildJob {
+    <#
+        #1111 (owner 2026-11-05: "why not split this into 2 jobs" / "we cannot have env that doesnt upd suddently"): THE INDEX
+        BUILD JOB caj-si-index-build kept present on every Pro run -- new installs and existing ones alike -- and READ BACK
+        (engine\index-build\SI-IndexBuildJob.ps1, Invoke-SIIndexBuildJobEnsure): the engine jobs' image, environment and pull
+        identity, THIS updater's own managed identity (the identity the index builds have always run as: no new grant), the
+        Pro database. The pipeline runner's idle wake-up starts it; the updater itself never builds a waiting index and has
+        run mode for it -- an update never waits for an index build (the run gate takes that job's lock at once).
+        One line; never throws, never fails or holds the update. -Arm / -Lists / -Sleep are test seams.
+    #>
+    param([string]$SIRoot, $Store, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [string]$UpdaterJob = 'caj-si-updater',
+          [scriptblock]$Arm, [scriptblock]$Lists, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    try {
+        if (-not $Store) { return [pscustomobject]@{ Ok = $true; Action = 'skipped'; Reason = 'no Pro database on this install' } }
+        foreach ($rel in @('engine/_shared/SI-IndexBuild.ps1', 'setup/_shared/SI-DbInitJob.ps1', 'engine/index-build/SI-IndexBuildJob.ps1')) {
+            $f = if ($SIRoot) { [IO.Path]::Combine($SIRoot, $rel) } else { '' }
+            if (-not $f -or -not (Test-Path -LiteralPath $f)) { return [pscustomobject]@{ Ok = $true; Action = 'skipped'; Reason = 'this release carries no index build job' } }
+            . $f
+        }
+        $api = (Get-SIIndexBuildJobNames).AppApi
+        # (the paths carry their api-version, as the database setup job's do)
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        if (-not $Lists) { $Lists = { param([string]$Kind) @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider 'Microsoft.App/jobs') -ApiVersion $api -List | Where-Object { $_ }) } }
+        $server = if ($Store.PSObject.Properties['Server'] -and $Store.Server) { [string]$Store.Server } else { '' }
+        $db = if ($Store.PSObject.Properties['Database'] -and $Store.Database) { [string]$Store.Database } else { '' }
+        $r = Invoke-SIIndexBuildJobEnsure -Arm $Arm -Lists $Lists -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -Database $db -UpdaterJob $UpdaterJob -Sleep $Sleep
+        Write-UpdLog $r.Reason
+        $r
+    } catch {
+        $why = 'WARNING: the index build job could not be checked ({0}) -- checked again at the next update' -f $_.Exception.Message
+        Write-UpdLog $why
+        [pscustomobject]@{ Ok = $false; Action = 'failed'; Reason = $why }
     }
 }

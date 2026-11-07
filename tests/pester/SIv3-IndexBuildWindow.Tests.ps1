@@ -10,9 +10,10 @@
         (cfg.IndexBuild: its statement, pages, estimate, why) with ONE plain line, and the release runs without it;
       - small or fitting tables behave as before; a resumable index is still created / resumed with MAX_DURATION;
       - the install's lock is beaten while ANY index builds (the runner's build runs asynchronously and calls the beat);
-      - the idle window: the pipeline runner's wake-up starts the updater (SI_UPDATER_MODE = index-build) only when nothing
-        is going and the estimate ends before the next run -- or after 7 days of waiting, ONCE (the next run waits for it);
-      - the updater's index-build run: the run gate's lock, the stored statement, the row built / waiting again, the rate.
+      - the idle window: the pipeline runner's wake-up starts the index build job (caj-si-index-build, #1111 -- never the
+        updater) only when nothing is going, no update waits or runs, and the window fits (a resumable index: its minutes; a
+        filtered one: its estimate) -- or after 7 days of waiting, ONCE (the next run waits for it);
+      - the job itself (pause / resume / the update goes first / one outcome always): SIv3-IndexBuildJob.Tests.ps1.
     PURE + FAKES for the decisions; REAL SQL (the test VM's SQL Express) for the build command, the row store, the pages and
     the sample read. The ~20 M-row measurement is tagged Scale (on demand only, never in a gate).
 #>
@@ -146,8 +147,10 @@ Describe '#1050 the update: a filtered index starts only when its estimate fits'
 
 Describe '#1050 the idle window' {
     BeforeAll {
-        function script:Row([string]$State = 'waiting', [int]$Est = 130, [int]$DaysAgo = 1, $Forced = $null, [string]$Name = 'IX_Finding_RaFindingKey') {
-            [pscustomobject]@{ Table = 'sidata.Finding'; Name = $Name; Statement = 'CREATE INDEX x'; State = $State; EstMinutes = $Est; SinceUtc = $script:T0.AddDays(-$DaysAgo); ForcedUtc = $Forced; LastStartUtc = $null }
+        # a FILTERED index by default (the estimate decides); -Plain: one without a filter (resumable: the window decides)
+        function script:Row([string]$State = 'waiting', [int]$Est = 130, [int]$DaysAgo = 1, $Forced = $null, [string]$Name = 'IX_Finding_RaFindingKey', [switch]$Plain) {
+            $stmt = if ($Plain) { "CREATE INDEX $Name ON sidata.Finding (CollectionId, Category)" } else { "CREATE INDEX $Name ON sidata.Finding (CollectionId) WHERE RaFindingKey IS NOT NULL WITH (ONLINE = ON)" }
+            [pscustomobject]@{ Table = 'sidata.Finding'; Name = $Name; Statement = $stmt; State = $State; EstMinutes = $Est; SinceUtc = $script:T0.AddDays(-$DaysAgo); ForcedUtc = $Forced; LastStartUtc = $null; Why = '' }
         }
         $script:Idle = [pscustomobject]@{ Busy = $false; Why = '' }
     }
@@ -160,11 +163,13 @@ Describe '#1050 the idle window' {
         $d.Start | Should -BeTrue; $d.Force | Should -BeFalse; $d.Index.Name | Should -Be 'IX_A'
         $d.Why | Should -Match 'about 2 h 10 min, and the next run starts 2026-11-01 18:00Z'
     }
-    It 'never while a run starts or runs, the updater runs, an index builds, or housekeeping says busy' {
+    It 'never while a run starts or runs, an update waits or runs (#1111: the update goes first), the index build job runs, or housekeeping says busy' {
         $w = @((Row))
         (Get-SIIndexBuildWindowDecision -Rows $w -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle -RunDue $true).Start | Should -BeFalse
         (Get-SIIndexBuildWindowDecision -Rows $w -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle -UpdaterRunning 'caj-si-updater-x1').Start | Should -BeFalse
-        (Get-SIIndexBuildWindowDecision -Rows @($w + (Row -State building -Name 'IX_Z')) -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle).Start | Should -BeFalse
+        $uw = Get-SIIndexBuildWindowDecision -Rows $w -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle -UpdateWaits 'update waits: run r-1 is running'
+        $uw.Start | Should -BeFalse; $uw.Why | Should -Match 'an update waits .* -- the update goes first'
+        (Get-SIIndexBuildWindowDecision -Rows @($w + (Row -State building -Name 'IX_Z')) -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle -IndexJobRunning 'caj-si-index-build-x1').Start | Should -BeFalse
         $d = Get-SIIndexBuildWindowDecision -Rows $w -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy ([pscustomobject]@{ Busy = $true; Why = 'a data sync is running' })
         $d.Start | Should -BeFalse; $d.Why | Should -Be 'a data sync is running'
     }
@@ -189,90 +194,39 @@ Describe '#1050 the idle window' {
         $l[0] | Should -Match 'waits for an idle window of about 2 h 10 min'
         $l[1] | Should -Match 'IX_B on sidata\.Finding: being built now'
     }
-    It 'WIRING: the runner''s wake-up decides with the housekeeping state, the next run and the updater, and starts the updater in index-build mode' {
+    It '#1111 a RESUMABLE index (no filter, or a paused build) starts in any window of at least 10 min, for the window''s minutes -- never its whole estimate' {
+        $d = Get-SIIndexBuildWindowDecision -Rows @((Row -Plain -Est 600)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddMinutes(90) -Busy $script:Idle
+        $d.Start | Should -BeTrue; $d.Resumable | Should -BeTrue; $d.Force | Should -BeFalse
+        $d.Minutes | Should -Be 75 -Because '90 min to the next run minus the 15-minute lead'
+        $d.Why | Should -Match 'built resumably for up to 1 h 15 min \(it pauses at the end of the window'
+        $p = Get-SIIndexBuildWindowDecision -Rows @((Row -State paused -Est 600)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddMinutes(90) -Busy $script:Idle
+        $p.Start | Should -BeTrue -Because 'a paused build is resumable whatever its statement'; $p.Why | Should -Match '^resumed for up to 1 h 15 min'
+        (Get-SIIndexBuildWindowDecision -Rows @((Row -Plain)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddMinutes(20) -Busy $script:Idle).Start | Should -BeFalse -Because '5 min of window is too short'
+        $n = Get-SIIndexBuildWindowDecision -Rows @((Row -Plain)) -NowUtc $script:T0 -NextRunUtc $null -Busy $script:Idle
+        $n.Start | Should -BeTrue; $n.Minutes | Should -Be 0 -Because 'no run scheduled: no window end'
+    }
+    It '#1111 a row left ''building'' while no index build job runs is a build that ended without an outcome: it is started again' {
+        $d = Get-SIIndexBuildWindowDecision -Rows @((Row -State building)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle
+        $d.Start | Should -BeTrue; $d.Why | Should -Match 'its last build ended without an outcome'
+        (Get-SIIndexBuildWindowDecision -Rows @((Row -State building)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddHours(8) -Busy $script:Idle -IndexJobRunning 'caj-si-index-build-q1').Start | Should -BeFalse -Because 'the job that builds it is still running'
+    }
+    It '#1111 the status line of a paused index' {
+        $l = @(Get-SIIndexBuildStatusLines -Rows @((Row -State paused)))
+        $l[0] | Should -Match 'IX_Finding_RaFindingKey on sidata\.Finding: paused \(an update went first\) -- it resumes in the next idle window'
+    }
+    It 'WIRING (#1111): the runner''s wake-up decides with the housekeeping state, the next run, the update (running AND waiting) and the job, and starts caj-si-index-build -- never the updater' {
         $w = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
         $w | Should -Match ([regex]::Escape('$ixBusy = Get-SIDataHousekeepingBusy -SettingsInvoke $proStore.Invoke -JobRunning $ixJobRunning -Jobs $ixJobs'))
         $w | Should -Match ([regex]::Escape('$ixDue = Get-SIJobFlowDue -Definition $pipeDefinition -Previous $runStore.Load() -NowUtc $ixNow'))
-        $w | Should -Match ([regex]::Escape('(New-SIUpdateNowStartTemplate -Job $ixJob -Mode (Get-SIIndexBuildContract).Mode)'))
+        $w | Should -Match ([regex]::Escape('-UpdaterRunning $ixUpd -UpdateWaits $ixWaits -IndexJobRunning $ixJobRunning'))
+        $w | Should -Match ([regex]::Escape("& `$armSeams.Arm 'POST' ('{0}/{1}/start' -f `$armSeams.Base, `$ixJobName) (New-SIJobStartTemplate -Job `$ixJob -Env `$ixEnv -What 'the index build job')"))
         $w.IndexOf('$ixDec = Get-SIIndexBuildWindowDecision') | Should -BeLessThan $w.IndexOf('$drain = Invoke-SIPipelineDrain') -Because 'before the drain: an index build holds the install''s lock, a run then waits'
-        (Get-SIIndexBuildContract).Mode | Should -Be 'index-build'
-        $s = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
-        $s | Should -Match ([regex]::Escape("if (`$updMode -eq 'index-build') {"))
-        $s.IndexOf("if (`$updMode -eq 'index-build') {") | Should -BeLessThan $s.IndexOf('Invoke-SIUpdaterLicenceRequest -Env') -Because 'no licence step, no update'
+        (Get-SIIndexBuildContract).Job | Should -Be 'caj-si-index-build'
+        (Get-SIIndexBuildContract).ContainsKey('Mode') | Should -BeFalse -Because 'the updater has no index-build mode any more'
         $g = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\pro-settings\SI-EngineGrants.ps1'))
         $g | Should -Match ([regex]::Escape("@{ Object = 'cfg.IndexBuild';              Verbs = 'SELECT' }"))
         $q = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'sql\si-pro-settings.sql'))
         $q | Should -Match "IF OBJECT_ID\('cfg\.IndexBuild'\) IS NULL\s+CREATE TABLE cfg\.IndexBuild"
-    }
-}
-
-Describe '#1050 the updater''s index-build run (SI_UPDATER_MODE = index-build)' {
-    BeforeAll {
-        . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterDatabase.ps1')
-        $global:SITestIxLog = New-Object System.Collections.Generic.List[string]
-        function global:Write-UpdLog { param([string]$m) $global:SITestIxLog.Add($m) }
-        function script:New-IxStore([string]$State = 'waiting', [int]$DaysAgo = 1, [bool]$There = $false) {
-            $s = [pscustomobject]@{ Saves = (New-Object System.Collections.Generic.List[string]); Rate = $null; There = $There
-                                    Row = [pscustomobject]@{ TableName = 'sidata.Finding'; IndexName = 'IX_Finding_RaFindingKey'; Statement = 'CREATE INDEX IX_Finding_RaFindingKey ON sidata.Finding (CollectionId) WHERE RaFindingKey IS NOT NULL WITH (ONLINE = ON)'
-                                             State = $State; Pages = 11500000; EstMinutes = 195; RateSource = 'x'; Why = ''; SinceUtc = [datetime]::UtcNow.AddDays(-$DaysAgo); LastStartUtc = $null; LastEndUtc = $null; ForcedUtc = $null } }
-            $s | Add-Member -NotePropertyName Invoke -NotePropertyValue ({
-                param($sql, $p, $mode)
-                if ($sql -match 'FROM cfg\.IndexBuild;') { return , @($s.Row) }
-                if ($sql -match 'FROM sys\.indexes WHERE name = @I') { return , @(@{ N = [int]$s.There }) }
-                if ($sql -match 'INSERT cfg\.IndexBuild|UPDATE cfg\.IndexBuild') { $s.Saves.Add(('{0}{1}' -f $p.State, $(if ($p.Forced) { '+forced' } else { '' }))); return }
-                if ($sql -match 'sys\.allocation_units') { return , @(@{ Pages = [long]11500000; RowCnt = [long]17200000 }) }
-                if ($sql -match 'SELECT Value FROM cfg\.InstallState WHERE Name = @N') { return , @() }
-                if ($sql -match 'cfg\.InstallState') { $s.Rate = $p.V; return }
-                , @()
-            }.GetNewClosure())
-            $s
-        }
-        function script:New-IxSeams([bool]$Go = $true, [switch]$Fail) {
-            $x = [pscustomobject]@{ Gate = 0; Exit = 0; Built = $null; Beats = 0 }
-            $h = @{
-                RunGate  = { param($holder) $x.Gate++; [pscustomobject]@{ Go = $Go; Reason = $(if ($Go) { 'no pipeline run is going' } else { 'update waits: run 42 is running' }); LockTaken = $Go } }.GetNewClosure()
-                ExitGate = { param($holder) $x.Exit++ }.GetNewClosure()
-                Build    = { param($sql, $beat) $x.Built = $sql; & $beat 1; if ($Fail) { throw 'Could not allocate space for object' }; 7700.0 }.GetNewClosure()
-            }
-            [pscustomobject]@{ X = $x; Seams = $h }
-        }
-    }
-    AfterAll { Remove-Item -Path Function:\Write-UpdLog -ErrorAction SilentlyContinue }
-    BeforeEach { $global:SITestIxLog.Clear() }
-    It 'builds the waiting index from its stored statement under the install''s lock; built; the rate recorded; the lock released' {
-        $st = New-IxStore; $s = New-IxSeams
-        (Invoke-SIUpdaterIndexWindow -Store $st -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s.Seams) | Should -Be 0
-        $s.X.Gate | Should -Be 1; $s.X.Exit | Should -Be 1
-        $s.X.Built | Should -Be $st.Row.Statement
-        @($st.Saves) | Should -Be @('building', 'built')
-        $st.Rate | Should -Match '"s":\[\[1493\.5,11500000,7700\]\]'
-        ($global:SITestIxLog -join "`n") | Should -Match 'IX_Finding_RaFindingKey on sidata\.Finding built in 2 h 9 min \(estimated about 3 h 15 min\)'
-    }
-    It 'a run is going: nothing is built, the lock is not taken, said plainly' {
-        $st = New-IxStore; $s = New-IxSeams -Go $false
-        Invoke-SIUpdaterIndexWindow -Store $st -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s.Seams | Should -Be 0
-        $s.X.Built | Should -BeNullOrEmpty; $s.X.Exit | Should -Be 0; $st.Saves.Count | Should -Be 0
-        ($global:SITestIxLog -join ' ') | Should -Match 'index build: not now -- update waits: run 42 is running'
-    }
-    It 'a failed build waits again (a warning, never a failed run); the lock is released' {
-        $st = New-IxStore; $s = New-IxSeams -Fail
-        Invoke-SIUpdaterIndexWindow -Store $st -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s.Seams | Should -Be 0
-        @($st.Saves) | Should -Be @('building', 'waiting'); $s.X.Exit | Should -Be 1
-        ($global:SITestIxLog -join ' ') | Should -Match 'WARNING: index build: IX_Finding_RaFindingKey: the build in an idle window failed \(Could not allocate space'
-    }
-    It 'after 7 days of waiting the build is marked as the one-time build and says the next run waits for it' {
-        $st = New-IxStore -DaysAgo 8; $s = New-IxSeams
-        Invoke-SIUpdaterIndexWindow -Store $st -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s.Seams | Should -Be 0
-        @($st.Saves)[0] | Should -Be 'building+forced'
-        ($global:SITestIxLog -join ' ') | Should -Match 'waited 7 days without an idle window long enough, so it is built now, once -- the next pipeline run waits for it'
-    }
-    It 'an index already there (built meanwhile) is only recorded; nothing waits = nothing done' {
-        $st = New-IxStore -There $true; $s = New-IxSeams
-        Invoke-SIUpdaterIndexWindow -Store $st -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s.Seams | Should -Be 0
-        $s.X.Built | Should -BeNullOrEmpty; @($st.Saves) | Should -Be @('built'); $s.X.Exit | Should -Be 1
-        $none = New-IxStore -State built; $s2 = New-IxSeams
-        Invoke-SIUpdaterIndexWindow -Store $none -SIRoot $script:SIRoot -SubscriptionId 's' -ResourceGroup 'r' -Seams $s2.Seams | Should -Be 0
-        $s2.X.Gate | Should -Be 0 -Because 'nothing waits: the install''s lock is not even asked for'
     }
 }
 
@@ -350,6 +304,35 @@ FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_object
         Add-SIIndexBuildRateSample -Invoke $script:Q -Pages 11500000 -Seconds 7700 | Should -BeTrue
         Add-SIIndexBuildRateSample -Invoke $script:Q -Pages 100 -Seconds 2 | Should -BeFalse -Because 'too short to measure'
         @(Read-SIIndexBuildRate -Invoke $script:Q).Count | Should -Be 1
+    }
+    It '#1111 the row store: paused keeps the first wait time and records the end; the status says it resumes' {
+        Save-SIIndexBuildRow -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_P' -State waiting -Statement 'CREATE INDEX IX_P ON sidata.Finding (CollectionId, FindingId)' -Why 'not built in this update' | Should -BeTrue
+        $first = @(Read-SIIndexBuildRows -Invoke $script:Q | Where-Object Name -eq 'IX_P')[0]
+        Save-SIIndexBuildRow -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_P' -State building -By 'caj-si-index-build' | Should -BeTrue
+        Save-SIIndexBuildRow -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_P' -State paused -Why 'paused at 40% -- the updater runs (x1); the update went first' -By 'caj-si-index-build' | Should -BeTrue
+        $p = @(Read-SIIndexBuildRows -Invoke $script:Q | Where-Object Name -eq 'IX_P')[0]
+        $p.State | Should -Be 'paused'; $p.SinceUtc | Should -Be $first.SinceUtc; $p.LastEndUtc | Should -Not -BeNullOrEmpty
+        $p.Statement | Should -Be 'CREATE INDEX IX_P ON sidata.Finding (CollectionId, FindingId)'
+        @(Get-SIIndexBuildStatusLines -Rows @($p))[0] | Should -Match 'IX_P on sidata\.Finding: paused \(paused at 40% -- the updater runs'
+    }
+    It '#1111 the build command: an INTERRUPT (an update goes first) cancels a running statement at the next check and throws the reason -- the statement never runs on' {
+        $cn = New-Object System.Data.SqlClient.SqlConnection $script:Cs; $cn.Open()
+        $asked = New-Object System.Collections.Generic.List[int]
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $err = $null
+            try { $null = Invoke-SIIndexBuildCommand -Connection $cn -Sql "WAITFOR DELAY '00:01:00'; CREATE INDEX IX_Interrupted ON sidata.Finding (FindingId);" -BeatSeconds 1 -DrainSeconds 30 `
+                    -Interrupt { param($m) $asked.Add($m); if ($asked.Count -ge 2) { 'the updater runs (caj-si-updater-x9)' } else { '' } }.GetNewClosure() }
+            catch { $err = $_.Exception }
+            $sw.Stop()
+            $err | Should -Not -BeNullOrEmpty
+            $err | Should -BeOfType ([System.OperationCanceledException])
+            $err.Data['SIInterrupted'] | Should -Be 'the updater runs (caj-si-updater-x9)'
+            $sw.Elapsed.TotalSeconds | Should -BeLessThan 30 -Because 'cancelled at the second check, not after the minute'
+        } finally { $cn.Dispose() }
+        Test-SIIndexExists -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_Interrupted' | Should -BeFalse
+        Test-SIIndexExists -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_Finding_RaFindingKey' | Should -BeTrue
+        Read-SIIndexResumableOp -Invoke $script:Q -Table 'sidata.Finding' -Index 'IX_Interrupted' | Should -BeNullOrEmpty -Because 'no resumable operation exists for it'
     }
 }
 

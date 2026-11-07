@@ -300,6 +300,48 @@ function Set-SIDataOutEnvelope {
     $Row
 }
 
+# =====================================================================================================================
+#  THE CI'S STATE IN WORDS (owner 2026-11-05: "make sure that the records sent to ci shows the state so the servicenow team
+#  knows what to do with it and can close it" / "retired cis must go to servicenow" / "never delete or stop sending")
+# =====================================================================================================================
+$script:SIDataOutCiGoneReason = 'retired: not in SecurityInsight''s data any more -- close it'
+$script:SIDataOutCiStateColumn = 'u_si_state'
+
+function Get-SIDataOutCiStateReason {
+    <#
+        PURE. The u_si_reason of a CI row: the CI's own lifecycle reason (si_lifecycle_reason -- "merged into <id> (<name>)
+        -- the same machine; use that CI", "retired: not seen since <date> ...", "retired at once: deleted in <source> ...",
+        "retired at once: every linked object is gone ...", "not seen since <date> -- retired on <date> unless it is seen
+        again ..."). An ACTIVE CI has none (''). A retired / not seen CI that carries no reason says its state in words,
+        never an empty reason.
+    #>
+    param($Item)
+    $lc = ([string](Get-SIItemValue $Item 'si_lifecycle')).Trim().ToLowerInvariant()
+    if (-not $lc -or $lc -eq 'active') { return '' }
+    $r = ([string](Get-SIItemValue $Item 'si_lifecycle_reason')).Trim()
+    if ($r) { return $r }
+    if ($lc -eq 'retired') {
+        $into = ([string](Get-SIItemValue $Item 'si_merged_into')).Trim()
+        if ($into) { return ('merged into {0} -- the same machine; use that CI' -f $into) }
+        return 'retired: no source records it any more -- close it'
+    }
+    if ($lc -in 'not_seen', 'not-seen') { return 'not seen: no source has seen it within the seen window -- retired after its grace period unless it is seen again' }
+    ''
+}
+
+function Add-SIDataOutReasonToHash {
+    <#
+        PURE. The u_row_hash of a CI row that carries a state reason: the content hash with the reason folded in, so a row
+        whose REASON changed (a retired CI first sent without one; merged into another CI) is a changed row for a target
+        that skips an unchanged hash -- sent once more, then unchanged again. No reason: the hash as it is (an active CI's
+        hash never changes because of this).
+    #>
+    param([AllowEmptyString()][string]$Hash = '', [AllowEmptyString()][string]$Reason = '')
+    if (-not $Reason) { return $Hash }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Hash + '|u_si_reason=' + $Reason))) -replace '-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+}
+
 function Get-SIDataOutRowHashText {
     <# PURE. The u_row_hash of a row: SHA-256 over its content columns (the envelope, the hash and the run columns are not content). #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Row, [AllowEmptyCollection()][string[]]$Exclude = @())
@@ -433,13 +475,23 @@ function New-SIDataOutBatchParams {
 # =====================================================================================================================
 
 function Get-SIDataOutReplacesSql {
-    <# For a page of CI keys (@KeyList, a JSON array): the previous key each replaces (rekey / merge), newest first. #>
+    <#
+        For a page of CI keys (@KeyList, a JSON array): the previous key each replaces (rekey / merge), newest first.
+        Only a previous key that is a CI (sidata.Ci) -- an older 'merge' row from a Defender device id to a CI is no CI the
+        CMDB ever received, and u_si_replaces must name the CI the CMDB should reconcile (owner 2026-11-05).
+    #>
     @'
 SET NOCOUNT ON;
 IF OBJECT_ID('sidata.AssetIdHistory') IS NULL SELECT CAST(NULL AS nvarchar(400)) AS CurrentId, CAST(NULL AS nvarchar(400)) AS PreviousId WHERE 1 = 0;
+ELSE IF OBJECT_ID('sidata.Ci') IS NULL
+     SELECT h.CurrentId, h.PreviousId FROM sidata.AssetIdHistory AS h
+     JOIN OPENJSON(@KeyList) WITH (k nvarchar(400) '$') AS p ON p.k = h.CurrentId
+     WHERE h.EventType IN (N'rekey', N'merge') AND h.PreviousId <> h.CurrentId
+     ORDER BY h.DetectedAt DESC;
 ELSE SELECT h.CurrentId, h.PreviousId FROM sidata.AssetIdHistory AS h
      JOIN OPENJSON(@KeyList) WITH (k nvarchar(400) '$') AS p ON p.k = h.CurrentId
      WHERE h.EventType IN (N'rekey', N'merge') AND h.PreviousId <> h.CurrentId
+       AND EXISTS (SELECT 1 FROM sidata.Ci AS c WHERE c.CiId = h.PreviousId)
      ORDER BY h.DetectedAt DESC;
 '@
 }

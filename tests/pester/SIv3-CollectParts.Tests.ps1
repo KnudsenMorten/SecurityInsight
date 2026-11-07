@@ -250,7 +250,7 @@ Describe 'a scheduled job collects in parts, one after another, each part in its
         $i | Should -BeGreaterThan 0
         $e.IndexOf('SI_COLLECT_INFO_FILE', $i) | Should -BeGreaterThan $i
     }
-    It 'skips the execution guard in a child (its parent already passed it)' {
+    It 'a child runs under its parent''s execution guard (the parent already passed it)' {
         $script:Entry | Should -Match ([regex]::Escape("-ne '1' -and -not (Get-OptionalEnv 'SI_COLLECT_PHASE' `$null)) {"))
     }
     It 'says a failed part, runs the others, and ends the run failed -- those objects are unknown, not gone' {

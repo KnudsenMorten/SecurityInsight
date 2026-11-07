@@ -61,8 +61,11 @@ BeforeAll {
 Describe '1. capture: every inherited tag with the container it came from' {
     It 'the resource group wins over the subscription (by level, not by the order of the index entry), names compared case-insensitively' {
         $s = Get-SIParentTagScopes -Key "$($script:RgKey)/providers/microsoft.hybridcompute/machines/arc1" -ParentChain $script:Chain
-        @($s).Count | Should -Be 3 -Because "'used for' and 'Used for' are ONE Azure tag name"
+        @($s | Where-Object { $_.effective }).Count | Should -Be 3 -Because "'used for' and 'Used for' are ONE Azure tag name"
+        @($s).Count | Should -Be 4 -Because 'every level''s tag is kept (the subscription''s shadowed one too, not effective)'
         $u = @($s | Where-Object { $_.name -eq 'used for' })[0]
+        $u.effective | Should -BeTrue
+        @($s | Where-Object { $_.name -eq 'used for' })[1].effective | Should -BeFalse
         $u.value | Should -Be 'Ukendt'
         $u.scope | Should -Be 'resourceGroup'
         $u.from | Should -Be 'rg-app'
@@ -89,7 +92,8 @@ Describe '1. capture: every inherited tag with the container it came from' {
         $obj = @(Get-SICapturedRecords | Where-Object { $_.Provider -eq 'azure' })[0].Object
         $obj.parentTags['Used for'] | Should -Be 'Ukendt' -Because 'the resource group is nearer than the subscription (the old code let the subscription win here)'
         $obj.parentTags['owner'] | Should -Be 'ops@contoso.test'
-        @($obj.parentTagScopes).Count | Should -Be 3
+        @($obj.parentTagScopes).Count | Should -Be 4
+        @($obj.parentTagScopes | Where-Object { $_.effective }).Count | Should -Be 3
     }
     It 'the new part is an attached part (a record of only attached parts is not published) and not a source of its own' {
         . (Join-Path $script:SIRoot 'engine\data-model\SI-RecordHandover.ps1')

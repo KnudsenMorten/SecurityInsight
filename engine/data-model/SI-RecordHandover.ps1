@@ -370,6 +370,29 @@ function Publish-SIRecordHandover {
         # #874: a slice whose close is deferred is closed with the others by its starter, which judges the whole collection.
         if ($Slices -gt 1 -and -not $DeferClose) { $runClose | Add-Member -NotePropertyName Judge -NotePropertyValue $false -Force }
     } catch { $runClose = $null }
+    # #1089: THE TAGS EVERY AZURE RECORD INHERITS -- the producer read them once for the collection and handed them over
+    # beside the records (SI-CollectParts.ps1); attached here to every merged azure record (Publish-SIRecords ->
+    # Add-SIRecordPartsFromRuleIndexes), the other indexes this process holds kept. Not there: said once, the records go on.
+    $savedIndexes = $global:SIRuleIndexesForRecords
+    if ($Engine -eq 'azure') {
+        try {
+            if (-not (Get-Command -Name Read-SIParentChainHandover -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-CollectParts.ps1') }
+            $pcIdx = Read-SIParentChainHandover -Store $Store -Engine $Engine -RunId $RunId
+            $merge = @{}
+            if ($savedIndexes -is [System.Collections.IDictionary]) { foreach ($k in @($savedIndexes.Keys)) { $merge[$k] = $savedIndexes[$k] } }
+            $bs = @{}; if ($merge['BuildStats'] -is [System.Collections.IDictionary]) { foreach ($k in @($merge['BuildStats'].Keys)) { $bs[$k] = $merge['BuildStats'][$k] } }
+            if ($null -ne $pcIdx) {
+                $merge['parentChain'] = $pcIdx
+                $bs['parentChain'] = @{ Built = $true; Rows = $pcIdx.Count; From = 'producer' }
+            } else {
+                $bs['parentChain'] = @{ Built = $false; Error = ('the producer handed over no parent chain for run {0}' -f $RunId) }
+            }
+            $merge['BuildStats'] = $bs
+            $global:SIRuleIndexesForRecords = $merge
+        } catch {
+            Write-Warning ('inherited tags: the parent chain of run {0} could not be read -- {1}' -f $RunId, $_.Exception.Message)
+        }
+    }
     if ($PartsFailed -gt 0) {
         if ($runClose) { $runClose.Failed = [int]$runClose.Failed + $PartsFailed }
         Write-Warning ('records: {0} part(s) of run {1} failed -- the records of the other parts are published, but this collection is NOT complete: the failed parts'' objects keep their last good state (unknown, not gone).' -f $PartsFailed, $RunId)
@@ -416,6 +439,7 @@ function Publish-SIRecordHandover {
             Write-Warning ('records: bucket {0} of run {1} could not be published -- {2}. Those records are missing from this collection (unknown, not gone).' -f $b, $RunId, $_.Exception.Message)
         } finally { $global:SIRecordCaptureState = $null; [System.GC]::Collect() }
     }
+    $global:SIRuleIndexesForRecords = $savedIndexes
     if ($DeferClose) {
         # #874: the starter closes the collection with every process's close -- this one hands its own over
         Write-SIRecordHandoverExportWarning -ExportFailed $exportFailed -RunId $RunId

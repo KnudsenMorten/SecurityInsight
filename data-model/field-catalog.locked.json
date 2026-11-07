@@ -3099,7 +3099,7 @@
       },
       "defaultVisible": false,
       "pii": false,
-      "description": "Tags inherited from the resource group and subscription: source, name, value."
+      "description": "Tags inherited from the resource group, subscription and management groups: source, name, value."
     },
     {
       "name": "si_azure_resource_type",
@@ -6047,7 +6047,7 @@
       },
       "defaultVisible": false,
       "pii": false,
-      "description": "Azure tags the asset inherits from its resource group or subscription, for tag names the asset does not set itself. Each tag says where it comes from: name, value, scope (resource group or subscription) and the name of that resource group or subscription. When both set the same tag, the resource group's value is used."
+      "description": "Azure tags the asset inherits from its resource group, subscription or management groups, for tag names the asset does not set itself. Each tag says where it comes from: name, value, scope (resource group, subscription or management group) and the name of that resource group, subscription or management group. When several set the same tag, the nearest one's value is used: the resource group, then the subscription, then the management groups from the nearest up."
     },
     {
       "name": "si_tags_all",
@@ -6070,7 +6070,7 @@
       },
       "defaultVisible": false,
       "pii": false,
-      "description": "All tags of the asset in one list: its own tags first, then the Azure tags it inherits from its resource group or subscription. Shown and sent as 'name = value', an inherited tag with '(resource group)' or '(subscription)' after it. Use this field when a system such as ServiceNow should receive every tag in one column."
+      "description": "All tags of the asset in one list: its own tags first, then the Azure tags it inherits from its resource group, subscription or management groups. Shown and sent as 'name = value', an inherited tag with '(resource group)', '(subscription)' or '(management group)' after it. Use this field when a system such as ServiceNow should receive every tag in one column."
     },
     {
       "name": "si_identity_type",
@@ -8474,6 +8474,222 @@
       "defaultVisible": false,
       "pii": false,
       "description": "The user's default MFA method (Microsoft Graph userRegistrationDetails.defaultMfaMethod)."
+    },
+    {
+      "name": "si_auth_methods",
+      "classes": "identity",
+      "type": "dynamic",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": true,
+      "description": "Every sign-in method of the user, one entry each, read per user from Microsoft Graph (authentication methods, permission UserAuthenticationMethod.Read.All): type, id, displayName, created; a phone: phoneNumber, phoneType, smsSignInState; an e-mail: emailAddress; Microsoft Authenticator: deviceTag, appVersion; a FIDO2 key or passkey: model, aaGuid, attestationLevel, attestationCertificateCount; Windows Hello for Business or a platform credential: keyStrength, platform; a Temporary Access Pass: lifetimeMinutes, isUsable, isUsableOnce, startDateTime; and for Windows Hello and Microsoft Authenticator the device the key lives on: deviceName, deviceOs, deviceOsVersion, deviceCompliant, deviceManaged, deviceTrustType, deviceId (the Entra device id -- the device's CI), deviceObjectId, deviceLastSignIn. Read in the background and kept with its read date (si_auth_methods_read); empty = not read yet (unknown). Phone numbers and addresses are personal data."
+    },
+    {
+      "name": "si_auth_method_types",
+      "classes": "identity",
+      "type": "dynamic",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The kinds of sign-in method the user holds (password, phone, email, microsoftAuthenticator, fido2, windowsHelloForBusiness, softwareOath, temporaryAccessPass, platformCredential, x509Certificate, qrCodePin ...), from the per-user read. Empty = not read yet (unknown)."
+    },
+    {
+      "name": "si_has_password",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The user has a cloud password among its sign-in methods (per-user read). Unknown until the user's methods were read; a synchronised account's on-premises password is not a cloud method."
+    },
+    {
+      "name": "si_passwordless_capable",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The user has registered a way to sign in without a password (Microsoft Graph userRegistrationDetails.isPasswordlessCapable, every user, each collection)."
+    },
+    {
+      "name": "si_mfa_capable",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The user has registered a strong authentication method and MFA is allowed by policy (userRegistrationDetails.isMfaCapable)."
+    },
+    {
+      "name": "si_sspr_registered",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The user has registered for self-service password reset (userRegistrationDetails.isSsprRegistered)."
+    },
+    {
+      "name": "si_sspr_capable",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The user is registered and allowed to reset its password itself (userRegistrationDetails.isSsprCapable)."
+    },
+    {
+      "name": "si_sspr_enabled",
+      "classes": "identity",
+      "type": "bool",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Self-service password reset is enabled for the user (userRegistrationDetails.isSsprEnabled)."
+    },
+    {
+      "name": "si_preferred_mfa_method",
+      "classes": "identity",
+      "type": "string",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The second-factor method the user chose as preferred (userRegistrationDetails.userPreferredMethodForSecondaryAuthentication)."
+    },
+    {
+      "name": "si_system_preferred_mfa_methods",
+      "classes": "identity",
+      "type": "dynamic",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The methods Microsoft picks for the user when system-preferred MFA is on (userRegistrationDetails.systemPreferredAuthenticationMethods)."
+    },
+    {
+      "name": "si_auth_methods_changed",
+      "classes": "identity",
+      "type": "datetime",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "When the user's registered methods last changed, as the tenant-wide registration report says (userRegistrationDetails.lastUpdatedDateTime)."
+    },
+    {
+      "name": "si_auth_methods_read",
+      "classes": "identity",
+      "type": "datetime",
+      "group": "identity",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "When SecurityInsight last read the user's sign-in methods per user (the date of si_auth_methods, si_auth_method_types, si_has_password and si_passwordless_only). Empty = not read yet."
     },
     {
       "name": "si_ca_mfa_enforced",

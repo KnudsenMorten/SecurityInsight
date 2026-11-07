@@ -356,6 +356,21 @@ Describe 'THE RUN LIMIT: SecurityInsight chooses none -- every engine job gets t
         $pb = $script:World.Bodies['caj-si-identity-producer'] | ConvertFrom-Json
         [double]$pb.properties.template.containers[0].resources.cpu | Should -Be 4.0; $pb.properties.template.containers[0].resources.memory | Should -Be '8Gi'
     }
+    It 'OPEN-27 (owner 2026-11-04): the HEAVY jobs are raised to at least 4 CPU / 8 GiB, the light ones keep 2 CPU / 4 GiB; never lowered' {
+        $jobs = @((New-Job 'caj-si-risk-analysis-detailed' '2.0' '4.0Gi' 604800), (New-Job 'caj-si-raworker-detailed' '2.0' '4.0Gi' 604800),
+                  (New-Job 'caj-si-asset-correlation' '2.0' '4.0Gi' 604800), (New-Job 'caj-si-asset-datasync' '2.0' '4.0Gi' 604800),
+                  (New-Job 'caj-si-identity-worker' '2.0' '4.0Gi' 604800), (New-Job 'caj-si-flow' '2.0' '4.0Gi' 604800),
+                  (New-Job 'caj-si-close-loop-mail' '2.0' '4.0Gi' 604800), (New-Job 'caj-si-risk-analysis' '8.0' '16.0Gi' 604800))
+        $script:World = New-World -Counts $null -Jobs $jobs
+        $r = Invoke-Floor $jobs
+        foreach ($h in 'caj-si-risk-analysis-detailed', 'caj-si-raworker-detailed', 'caj-si-asset-correlation', 'caj-si-asset-datasync', 'caj-si-identity-worker') {
+            @($r.Lines | Where-Object { $_ -like "job size: $h raised *" }) | Should -Match '-> 4\.0 CPU / 8Gi, 7 days -- a heavy job runs with at least 4 CPU / 8 GiB' -Because $h
+            $b = $script:World.Bodies[$h] | ConvertFrom-Json
+            [double]$b.properties.template.containers[0].resources.cpu | Should -Be 4.0; $b.properties.template.containers[0].resources.memory | Should -Be '8Gi'
+        }
+        foreach ($l in 'caj-si-flow', 'caj-si-close-loop-mail') { @($r.Lines | Where-Object { $_ -like "job size: $l runs 2.0 CPU / 4.0Gi*nothing to raise" }).Count | Should -Be 1 -Because "$l is a light job" }
+        @($r.Lines | Where-Object { $_ -like 'job size: caj-si-risk-analysis runs 8.0 CPU / 16.0Gi*nothing to raise' }).Count | Should -Be 1 -Because 'never lowered'
+    }
     It 'the customer''s own run limit: a SHORTER one set on purpose is kept (the update leaves that job''s run limit alone, as it did), also under the engine''s long name; a longer one than 7 days cannot be set; CPU and memory are still raised' {
         $jobs = @((New-Job 'caj-si-asset-correlation' '4.0' '8.0Gi' 21600), (New-Job 'caj-si-ptc' '1.0' '2.0Gi' 3600), (New-Job 'caj-si-endpoint' '4.0' '8.0Gi' 604800))
         $own = @{ SI_Bootstrap_ReplicaTimeout_AssetCorrelation = '21600'; SI_Bootstrap_ReplicaTimeout_PrivilegeTierClassifier = '3600'; SI_Bootstrap_ReplicaTimeout_Endpoint = '604800' }
@@ -434,7 +449,7 @@ Describe 'THE RUN LIMIT: SecurityInsight chooses none -- every engine job gets t
     It 'the update''s floor step is this function, before the sizing step, and it reads the jobs again after raising one' {
         $h = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\Invoke-SIContainerUpdate.ps1'))
         $h | Should -Match 'Invoke-SIJobFloor -Rest \$rest'
-        $h | Should -Match ([regex]::Escape("Step ('8c. JOB FLOOR (2 CPU / 4 GiB; run limit {0}, the longest Azure takes)'"))
+        $h | Should -Match ([regex]::Escape("Step ('8c. JOB FLOOR (heavy jobs 4 CPU / 8 GiB, the others 2 CPU / 4 GiB; run limit {0}, the longest Azure takes)'"))
         $h | Should -Match '(?s)function Invoke-SIUpdateJobFloor \{.*?\$script:SISqlTierJobs = \$v.*?\n\}'
         $h | Should -Not -Match '\$fTo\b|JOB FLOOR \(2 CPU / 4 GiB, 2 h\)'
     }
@@ -471,12 +486,12 @@ Describe 'A RUN LIMIT ABOVE 24 HOURS THAT AZURE REFUSES is written as 24 hours: 
         foreach ($n in 'caj-si-asset-correlation', 'caj-si-risk-analysis') {
             $b = $script:World.Bodies[$n] | ConvertFrom-Json
             $b.properties.configuration.replicaTimeout | Should -Be 86400
-            [double]$b.properties.template.containers[0].resources.cpu | Should -Be 2.0 -Because 'the size raise is never lost'
-            $b.properties.template.containers[0].resources.memory | Should -Be '4Gi'
+            [double]$b.properties.template.containers[0].resources.cpu | Should -Be 4.0 -Because 'the size raise is never lost (a heavy job: 4 CPU / 8 GiB)'
+            $b.properties.template.containers[0].resources.memory | Should -Be '8Gi'
         }
         @($r.Results | Where-Object { $_.Action -eq 'raised' }).Count | Should -Be 2
         @($r.Lines | Where-Object { $_ -match 'did not accept' }) | Should -Be @('job size: Azure did not accept a run limit of 168 hours for caj-si-asset-correlation; it keeps 24 hours.')
-        @($r.Lines | Where-Object { $_ -match 'caj-si-asset-correlation raised' })[0] | Should -Match '1 h -> 2\.0 CPU / 4Gi, 24 h -- every job runs with at least 2 CPU / 4 GiB; a step gets the longest run limit Azure takes'
+        @($r.Lines | Where-Object { $_ -match 'caj-si-asset-correlation raised' })[0] | Should -Match '1 h -> 4.0 CPU / 8Gi, 24 h -- a heavy job runs with at least 4 CPU / 8 GiB; a step gets the longest run limit Azure takes'
         @($r.Lines) -join "`n" | Should -Not -Match 'NOT raised'
         # a job that has 24 h already on such an Azure: asked once, kept, said -- and no update fails for it
         Set-SIRunLimitRefused -Value $false

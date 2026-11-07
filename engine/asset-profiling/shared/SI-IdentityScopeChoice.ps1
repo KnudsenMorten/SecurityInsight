@@ -17,6 +17,11 @@
       collection   the Exposure Graph identity read (IdentityRoleFetcher.ps1) asks Get-SIEgIdentityScopeDecision for every
                    Exposure Graph user / group node it would record; a node left out is not recorded (no record part, no
                    full-metadata copy). The index that enriches the Entra objects is unchanged.
+                   SI_Identity_SkipNeverSyncedDisabledAd is ALSO applied in the hunting query itself
+                   (Get-SIEgNeverSyncedSkipKql): the user nodes the decision could only leave out are not fetched and do
+                   not count toward the buckets; the count probe counts them (NotFetched) and they join the left-out count.
+                   Every test in the query leans the safe way, so the decision after the read still sees -- and keeps --
+                   every node it would keep. A group Entra ID no longer has is decided after the read (it needs Entra's list).
       run report   one plain line per switch in the identity step's log (Format-SIIdentityScopeLine) and one row per switch
                    and run in sidata.CollectionLeftOut (Write-SIIdentityScopeCounts) -- the Data health page shows them.
       asset drop   the collection's asset-drop check adds the records a switch left out this run back to the count it
@@ -208,6 +213,75 @@ function Get-SIEgAdPrivilege {
     [pscustomobject]@{ IsPrivileged = ($why.Count -gt 0); Why = $why.ToArray() }
 }
 
+function Get-SIEgNeverSyncedSkipKql {
+    <#
+        PURE. SI_Identity_SkipNeverSyncedDisabledAd IN THE HUNTING QUERY ITSELF: the KQL steps (to put after
+        "ExposureGraphNodes | where NodeLabel == 'user'") that set the column _siSkip -- true for a user node the Exposure
+        Graph read would only fetch to leave out (an on-premises AD account never synced to Entra ID, disabled and not
+        privileged). The read asks only for the nodes where _siSkip is false and counts the others; the decision after the
+        read (Get-SIEgIdentityScopeDecision) still runs on every node that is fetched.
+        NEVER LEAVES OUT A NODE SI KEEPS: every test leans the safe way --
+          rawData        only a node whose NodeProperties.rawData is an object (the object the decision reads) is ever skipped
+          never synced   ANY mention of AadObjectId in EntityIds, or a GUID in any of the rawData fields the read takes an
+                         Entra object id from, counts as synced (the read itself needs more to find one)
+          disabled       only what the decision reads as disabled for certain: accountEnabled / isEnabled / enabled false
+                         (false, 0, off, no), userAccountControl as a number with bit 0x2, or with the ACCOUNTDISABLE flag
+                         name as a list item; anything else is not disabled
+          privileged     ANY sign of a privilege signal: an admin count with a digit 1-9, nestedCriticalAdGroups that is not
+                         plainly empty, a tier 0/1 group name of the privilege tier catalog anywhere in nestedAdGroupNames,
+                         assignedRoles that is not plainly empty, a service-account or sensitive flag that is not plainly
+                         false, a criticality level with any value
+          AD identity    (so the count is the same count the decision makes) a domain SID, or an account name and domain
+        Field names are compared without case (the rawData text is lower-cased once). -CriticalGroups:
+        Get-SIIdentityCriticalAdGroupNames. A catalog name with characters outside letters, digits, space, '.', '_', '-'
+        cannot be matched safely in the text: then any non-empty nestedAdGroupNames counts as privileged.
+    #>
+    param([AllowNull()]$CriticalGroups)
+    $names = New-Object System.Collections.Generic.List[string]
+    $unsafeName = $false
+    foreach ($g in @($CriticalGroups)) {
+        if ($null -eq $g) { continue }
+        $n = ([string]$g).Trim().ToLowerInvariant()
+        if (-not $n) { continue }
+        if ($n -cmatch '^[a-z0-9]([a-z0-9 _.\-]*[a-z0-9])?$') { $names.Add($n.Replace('.', '\.')) } else { $unsafeName = $true }
+    }
+    $groupTest = 'false'
+    if ($unsafeName) { $groupTest = 'not(tostring(_siRl.nestedadgroupnames) in ("", "[]"))' }
+    elseif ($names.Count -gt 0) {
+        # a name as a whole item: what is before and after it is not a letter or digit (a quote, a comma, a space, an escape)
+        $groupTest = 'tostring(_siRl.nestedadgroupnames) matches regex @"(^|[^a-z0-9]|\\u[0-9a-f]{4})(' + ($names -join '|') + ')($|[^a-z0-9])"'
+    }
+    $flagNotFalse = { param($f) ('not(trim(@"\s+", tostring(_siRl.{0})) in ("", "false", "0", "off", "no"))' -f $f) }
+    $flagFalse = { param($f) ('trim(@"\s+", tostring(_siRl.{0})) in ("false", "0", "off", "no")' -f $f) }
+    $guid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    $sidKeys = @('adsid', 'accountsid', 'onpremsid', 'onpremisessecurityidentifier', 'securityidentifier', 'sid')
+    $rawSid = 'case(' + ((@($sidKeys | ForEach-Object { 'tostring(_siRl.{0}) matches regex @"^s-1-[0-9]", tostring(_siRl.{0})' -f $_ })) -join ', ') + ', "")'
+    $oidText = 'strcat(' + ((@('aadid', 'accountobjectid', 'objectid', 'aadobjectid', 'groupid', 'principalid', 'userid', 'id') | ForEach-Object { 'tostring(_siRl.{0})' -f $_ }) -join ', " ", ') + ')'
+    $uac = '_siRl.useraccountcontrol'
+    $uacNames = '"accountdisabled", "accountdisable", "account_disabled", "disabled"'
+    $parts = @(
+        '| extend _siIds = tolower(tostring(EntityIds)), _siRd = NodeProperties.rawData'
+        '| extend _siRl = iff(gettype(_siRd) == "dictionary" and not(_siIds contains "aadobjectid"), todynamic(tolower(tostring(_siRd))), dynamic(null))'
+        ('| extend _siHasOid = _siIds contains "aadobjectid" or {0} matches regex @"{1}"' -f $oidText, $guid)
+        ('| extend _siSid = coalesce(extract(@"securityidentifier[^}}]*?(s-1-[0-9-]+)", 1, _siIds), {0})' -f $rawSid)
+        '| extend _siIsAd = _siSid startswith "s-1-5-21-" or (gettype(_siRl.accountname) == "string" and isnotempty(tostring(_siRl.accountname)) and gettype(_siRl.accountdomain) == "string" and isnotempty(tostring(_siRl.accountdomain)))'
+        ('| extend _siUacT = gettype({0}), _siUacS = trim(@"\s+", tostring({0}))' -f $uac)
+        ('| extend _siDisabled = {0} or {1} or {2}' -f (& $flagFalse 'accountenabled'), (& $flagFalse 'isenabled'), (& $flagFalse 'enabled')) +
+            (' or (_siUacT in ("long", "int") and binary_and(tolong({0}), 2) == 2)' -f $uac) +
+            ' or (_siUacT == "string" and _siUacS matches regex @"^[0-9]+$" and binary_and(tolong(_siUacS), 2) == 2)' +
+            (' or (_siUacT == "array" and array_length(set_intersect({0}, dynamic([{1}]))) > 0)' -f $uac, $uacNames) +
+            ' or (_siUacT == "string" and not(_siUacS startswith "[") and _siUacS matches regex @"(^|[,;])\s*(accountdisabled|accountdisable|account_disabled|disabled)\s*($|[,;])")'
+        ('| extend _siPriv = tostring(_siRl.admincount) matches regex @"[1-9]"' +
+            ' or not(tostring(_siRl.nestedcriticaladgroups) in ("", "[]", "{}") or (gettype(_siRl.nestedcriticaladgroups) == "dictionary" and gettype(_siRl.nestedcriticaladgroups.data) == "array" and array_length(_siRl.nestedcriticaladgroups.data) == 0))' +
+            (' or {0}' -f $groupTest) +
+            ' or not(tostring(_siRl.assignedroles) in ("", "[]"))' +
+            (' or {0} or {1} or {2}' -f (& $flagNotFalse 'hasserviceprincipalname'), (& $flagNotFalse 'isserviceaccount'), (& $flagNotFalse 'issensitive')) +
+            ' or iff(gettype(_siRl.criticalitylevel) == "dictionary", isnotempty(tostring(_siRl.criticalitylevel.criticalitylevel)), isnotempty(tostring(_siRl.criticalitylevel))))')
+        '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and _siDisabled and not(_siPriv)'
+    )
+    ($parts -join ' ')
+}
+
 function Get-SIEgIdentityScopeDecision {
     <#
         PURE. Does one Exposure Graph identity node become a record (an asset) under the install's choice?
@@ -281,7 +355,7 @@ function New-SIIdentityScopeCounter {
     $c = [ordered]@{}
     foreach ($k in $script:SIIdentityScopeSettings.Keys) {
         if (-not $Choice.$k) { continue }
-        $c[$script:SIIdentityScopeSettings[$k]] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k]; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = '' }
+        $c[$script:SIIdentityScopeSettings[$k]] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k]; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = ''; NotFetched = 0L }
     }
     $c
 }
@@ -304,6 +378,11 @@ function Format-SIIdentityScopeLine {
     $n = '{0:N0}' -f [long]$Count.LeftOut
     switch ([string]$Count.Setting) {
         'SI_Identity_SkipNeverSyncedDisabledAd' {
+            # left out in the hunting query itself (Get-SIEgNeverSyncedSkipKql): part of the count, never fetched
+            $nf = 0L; if ($Count.PSObject.Properties['NotFetched'] -and $null -ne $Count.NotFetched) { $nf = [long]$Count.NotFetched }
+            if ($nf -gt 0) {
+                return ('Exposure Graph identities: {0} on-premises AD account(s) never synced to Entra ID, disabled and not privileged, got no asset (SI_Identity_SkipNeverSyncedDisabledAd is on): {1:N0} not fetched (left out in the Exposure Graph query itself), {2:N0} left out after the read; {3:N0} never-synced account(s) kept because they are enabled or privileged. Existing CIs of the accounts left out retire with that reason.' -f $n, $nf, ([long]$Count.LeftOut - $nf), [long]$Count.Kept)
+            }
             return ('Exposure Graph identities: {0} on-premises AD account(s) never synced to Entra ID, disabled and not privileged, got no asset (SI_Identity_SkipNeverSyncedDisabledAd is on); {1:N0} never-synced account(s) kept because they are enabled or privileged. Existing CIs of the accounts left out retire with that reason.' -f $n, [long]$Count.Kept)
         }
         'SI_Identity_SkipDeletedGroups' {

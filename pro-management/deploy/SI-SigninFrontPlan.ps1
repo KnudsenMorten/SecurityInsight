@@ -28,6 +28,13 @@ $script:SISigninFrontWebSettings = @('SI_Web_SigninFront', 'SIGNIN_UPSTREAM_PORT
 # Container Apps on the Consumption profile: at most 4 CPU / 8 GiB for ALL containers of a revision together
 $script:SISigninFrontAppMaxCpu = 4.0
 $script:SISigninFrontAppMaxMemoryGi = 8.0
+# The health probes of the front container (the only container the ingress reaches; the web app has none on its own port).
+# Live 2026-11-05: the probes were sent without times, so Kubernetes' defaults applied (timeout 1 s, failure after 3) and while
+# an update changed the database the serving revision failed BOTH ("timeout in 1 seconds"). The front's GET /healthz needs no
+# database and no dependency (its README: "/healthz stays up so the platform does not restart-loop it"), so a probe only
+# fails when the process itself does not answer: liveness after 6 misses of 10 s (a minute), each given 5 s; readiness the
+# same, so a busy moment never takes the ONLY replica out of rotation (the web app answers "being updated" meanwhile).
+$script:SISigninFrontProbeSettings = [ordered]@{ timeoutSeconds = 5; periodSeconds = 10; failureThreshold = 6 }
 
 function Get-SISigninFrontPin {
     <# PURE (reads one shipped file). The pinned component (pro-management\signin-front.pin.json under -SIRoot). Throws when
@@ -200,6 +207,40 @@ function Get-SISigninFrontProp {
     $o
 }
 
+function Get-SISigninFrontProbes {
+    <# PURE. The front container's probes (ARM shape): Liveness + Readiness, GET /healthz on the front's port, with the times of
+       $script:SISigninFrontProbeSettings -- never Kubernetes' defaults (1 s). #>
+    param([Parameter(Mandatory)][int]$Port)
+    $one = { param($type)
+        $p = [ordered]@{ type = $type; httpGet = [ordered]@{ path = '/healthz'; port = $Port } }
+        foreach ($k in $script:SISigninFrontProbeSettings.Keys) { $p[$k] = [int]$script:SISigninFrontProbeSettings[$k] }
+        $p }
+    # emitted one by one (a caller's @() or assignment gets the two probes, never an array in an array)
+    & $one 'Liveness'
+    & $one 'Readiness'
+}
+
+function Test-SISigninFrontProbes {
+    <# PURE. Does -Container (ARM, as read or as built) carry the front's probes (Get-SISigninFrontProbes) -- each type once, its
+       path, port and times? Fields ARM adds on its own (scheme, successThreshold, initialDelaySeconds) are not compared.
+       Returns @{ Ok; Why }. #>
+    param([AllowNull()]$Container, [Parameter(Mandatory)][int]$Port)
+    $have = @(@(Get-SISigninFrontProp $Container @('probes')) | Where-Object { $_ })
+    foreach ($want in (Get-SISigninFrontProbes -Port $Port)) {
+        $p = @($have | Where-Object { [string](Get-SISigninFrontProp $_ @('type')) -eq $want.type })
+        if ($p.Count -ne 1) { return [pscustomobject]@{ Ok = $false; Why = ('the front has {0} {1} probe(s), not one' -f $p.Count, $want.type) } }
+        $p = $p[0]
+        if ([string](Get-SISigninFrontProp $p @('httpGet', 'path')) -ne '/healthz' -or [int](0 + (Get-SISigninFrontProp $p @('httpGet', 'port'))) -ne $Port) {
+            return [pscustomobject]@{ Ok = $false; Why = ('the front''s {0} probe does not ask GET /healthz on port {1}' -f $want.type, $Port) }
+        }
+        foreach ($k in $script:SISigninFrontProbeSettings.Keys) {
+            $v = [int](0 + (Get-SISigninFrontProp $p @($k)))
+            if ($v -ne [int]$want[$k]) { return [pscustomobject]@{ Ok = $false; Why = ('the front''s {0} probe has {1} {2}, not {3}' -f $want.type, $k, $(if ($v) { $v } else { '(not set)' }), $want[$k]) } }
+        }
+    }
+    [pscustomobject]@{ Ok = $true; Why = '' }
+}
+
 function Get-SISigninFrontState {
     <# PURE. What the app (ARM, as read) runs: @{ HasFront; FrontImage; WebOn (the switch on the web container); WebImage;
        TargetPort; Containers }. The web container is the FIRST one (every other SI tool points at containers[0]). #>
@@ -308,12 +349,13 @@ function New-SISigninFrontPatch {
     if ($front) {
         $front.image = $FrontImage
         $front.env = Set-SISigninFrontEnvList -Env @($(if ($front.Contains('env')) { $front.env })) -Set $FrontEnv
+        # the probes with realistic times (2026-11-05), put right on a front that has the old ones
+        if (-not (Test-SISigninFrontProbes -Container $front -Port ([int]$Pin.listenPort)).Ok) { $front.probes = Get-SISigninFrontProbes -Port ([int]$Pin.listenPort) }
     } else {
         $front = [ordered]@{ name = $name; image = $FrontImage; env = (Set-SISigninFrontEnvList -Env @() -Set $FrontEnv)
                              resources = [ordered]@{ cpu = $fCpu; memory = [string]$Pin.memory }
                              # README 1.0.0: the health probe is the front's GET /healthz (the app gets none on its own port)
-                             probes = @([ordered]@{ type = 'Liveness'; httpGet = [ordered]@{ path = '/healthz'; port = [int]$Pin.listenPort } },
-                                        [ordered]@{ type = 'Readiness'; httpGet = [ordered]@{ path = '/healthz'; port = [int]$Pin.listenPort } }) }
+                             probes = (Get-SISigninFrontProbes -Port ([int]$Pin.listenPort)) }
         $cs = @($cs) + @($front)
     }
     # the revision's total stays within the profile: the web container gives up what the front takes
@@ -373,9 +415,12 @@ function New-SISigninFrontImagePatch {
     # a front that needs its store (1.3.0 on) stays on what it runs until its settings are there -- it would refuse to start
     $fenvLines = @($fenv | Where-Object { $_ } | ForEach-Object { '{0}={1}' -f (Get-SISigninFrontProp $_ @('name')), (Get-SISigninFrontProp $_ @('value')) })
     if (-not (Test-SISigninFrontStoreReady -Pin $Pin -Env (@($fenvLines) + @($store)))) { return $null }
-    if ([string]$front.image -eq $FrontImage -and $one -and $anonOk -and $storeOk) { return $null }
+    # 2026-11-05: the front's probes with realistic times -- an install rolled before them gets them with this update
+    $probesOk = (Test-SISigninFrontProbes -Container $front -Port ([int]$Pin.listenPort)).Ok
+    if ([string]$front.image -eq $FrontImage -and $one -and $anonOk -and $storeOk -and $probesOk) { return $null }
     $front.image = $FrontImage
     $front.env = Set-SISigninFrontEnvList -Env $fenv -Set (@($anonLine) + @($store))
+    if (-not $probesOk) { $front.probes = Get-SISigninFrontProbes -Port ([int]$Pin.listenPort) }
     # ONE replica behind the front 1.0.0 (its keys and token cache are in memory) -- kept, or put right
     if (-not ($tpl.Contains('scale') -and $tpl.scale -is [System.Collections.IDictionary])) { $tpl.scale = [ordered]@{} }
     $tpl.scale.maxReplicas = 1; $tpl.scale.minReplicas = 1
@@ -440,6 +485,10 @@ function Test-SISigninFrontReadBack {
         if ($s.MaxReplicas -ne 1 -or $s.MinReplicas -ne 1) { return [pscustomobject]@{ Ok = $false; Why = ('the app may run {0} to {1} replicas, not exactly one (the front keeps its keys in memory)' -f $s.MinReplicas, $s.MaxReplicas) } }
         $wantAnon = Get-SISigninFrontAnonymousPathsValue -Pin $Pin
         if ([string]$s.AnonymousPaths -cne $wantAnon) { return [pscustomobject]@{ Ok = $false; Why = ('the front''s SIGNIN_ANONYMOUS_PATHS is "{0}", not SecurityInsight''s "{1}"' -f $s.AnonymousPaths, $wantAnon) } }
+        # 2026-11-05: the probes as written (realistic times, never Kubernetes' 1 s default)
+        $fc = @(@(Get-SISigninFrontProp $App @('properties', 'template', 'containers')) | Where-Object { $_ -and [string](Get-SISigninFrontProp $_ @('name')) -eq [string]$Pin.containerName }) | Select-Object -First 1
+        $pr = Test-SISigninFrontProbes -Container $fc -Port ([int]$Pin.listenPort)
+        if (-not $pr.Ok) { return [pscustomobject]@{ Ok = $false; Why = $pr.Why } }
     } else {
         if ($s.HasFront) { return [pscustomobject]@{ Ok = $false; Why = 'the sign-in front container is still in the app' } }
         if ($s.WebOn) { return [pscustomobject]@{ Ok = $false; Why = 'the web container''s switch is still on' } }

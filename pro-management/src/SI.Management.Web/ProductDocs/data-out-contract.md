@@ -97,8 +97,8 @@ Every row of both ServiceNow push outputs carries these columns, whatever else a
 | `u_row_hash` | A SHA-256 fingerprint of the row's **content** columns. The action, the batch, the clear marker, the reason, the replaced key and the run columns (`u_source_run`, `u_run_time`, `u_changed_at`) are not part of it. An unchanged record arrives as `update` with the same hash |
 | `u_si_batch_id` | The batch that delivered the row, `<run id>:<output>` |
 | `u_si_cleared` | The clear marker: the clearable columns that are empty now, comma separated (below) |
-| `u_si_reason` | Why the row is `held` or `out_of_scope`, in plain words; empty otherwise |
-| `u_si_replaces` | The key this record replaces after a re-key (below); empty otherwise |
+| `u_si_reason` | Why, in plain words: on a CI that is not active its state (`merged into <CI id> (<name>) - the same machine; use that CI`, `retired: not seen since <date> ...`, `retired at once: deleted in <source> ...`, `not seen since <date> - retired on <date> unless it is seen again ...`); on a `held` or `out_of_scope` row, why; empty on an active CI |
+| `u_si_replaces` | The key this record replaces after a re-key or a merge (below); empty otherwise |
 | `u_source_run` | The SecurityInsight run the values come from. A `held` row keeps the run of its last values |
 
 ## The columns on every database row
@@ -211,8 +211,10 @@ A device that is re-onboarded, or two records that turn out to be one asset, can
 1. The row under the **new** key carries `u_si_replaces` = the **old** key. For a vulnerable item:
    `<old CI key>|<finding key>`.
 2. Your importer **moves** the record found by the old key to the new key (it does not create a second record).
-3. The old key gets no row of its own. Once the batch with `u_si_replaces` is complete, the old key leaves the state and
-   `u_si_replaces` is not sent again.
+3. A **CI**'s old key is never dropped: it keeps its own row on every run - `u_si_state` = `retired`, `u_action` =
+   `close`, `u_si_reason` naming the CI that replaces it (`merged into <id> (<name>) - the same machine; use that CI`, or
+   `replaced by <id>`). A vulnerable item's old key gets no row of its own and leaves the state once the batch with
+   `u_si_replaces` is complete.
 
 Import every complete batch, oldest first: a re-key, an `out_of_scope` row and the `held` row of a record that left
 SecurityInsight's data arrive once.

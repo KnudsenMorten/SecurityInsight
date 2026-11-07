@@ -3,7 +3,7 @@
   "kind": "output-map",
   "id": "servicenow-vulnerable-item",
   "version": "1.1.0",
-  "description": "ServiceNow vulnerable items (Vulnerability Response): the import-set view snowstage.vImportVulnerableItem and the data-out push (#914 one contract: u_action, u_row_hash, u_si_batch_id on every row; key u_si_correlation_id + u_vulnerability; u_source_record_id = <CI key>|<finding>). Column names are a contract; append only.",
+  "description": "ServiceNow vulnerable items (Vulnerability Response): the import-set view snowstage.vImportVulnerableItem and the data-out push (one contract: u_action, u_row_hash, u_si_batch_id on every row; key u_si_correlation_id + u_vulnerability; u_source_record_id = <CI key>|<finding>). Column names are a contract; append only.",
   "grain": "ci_finding",
   "columns": [
     {

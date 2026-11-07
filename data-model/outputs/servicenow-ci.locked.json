@@ -3,7 +3,7 @@
   "kind": "output-map",
   "id": "servicenow-ci",
   "version": "1.2.0",
-  "description": "ServiceNow CMDB hand-off: the import-set view snowstage.vImportCi and the data-out push (#914 one contract: u_action, u_row_hash, u_si_batch_id on every row). The column NAMES are a contract with the customer's transform map; a new column is only ever appended.",
+  "description": "ServiceNow CMDB hand-off: the import-set view snowstage.vImportCi and the data-out push (one contract: u_action, u_row_hash, u_si_batch_id on every row). The column NAMES are a contract with the customer's transform map; a new column is only ever appended.",
   "grain": "ci",
   "columns": [
     {

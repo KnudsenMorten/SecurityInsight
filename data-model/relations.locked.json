@@ -151,6 +151,20 @@
       "source": "entra",
       "confidence": "exact",
       "stage": "production"
+    },
+    {
+      "id": "has_sign_in_key_on_device",
+      "kind": "has_sign_in_key_on",
+      "label": "has a sign-in key on device",
+      "from": ["identity"],
+      "field": "si_auth_methods",
+      "target": "id",
+      "idType": "AadDeviceId",
+      "valuePath": ["deviceId"],
+      "detailPath": ["type"],
+      "source": "entra",
+      "confidence": "exact",
+      "stage": "production"
     }
   ]
 }

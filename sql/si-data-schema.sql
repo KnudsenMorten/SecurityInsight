@@ -2616,6 +2616,39 @@ CREATE TABLE sidata.CollectionLeftOut (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CollectionLeftOut_Setting' AND object_id = OBJECT_ID('sidata.CollectionLeftOut'))
 CREATE INDEX IX_CollectionLeftOut_Setting ON sidata.CollectionLeftOut (Setting, CollectedAt) INCLUDE (Feed, LeftOut, Applied);
 -- ---------------------------------------------------------------------------------------------
+-- THE USERS' SIGN-IN METHODS, READ IN THE BACKGROUND (ADDED 2026-11-05, owner: "make the auth api collection a gui
+-- setting" / "cache auth methods and chk for last chg hash per user" / "the pipeline never waits"). The per-user read
+-- (every property of every method, and the device of a Windows Hello / Authenticator method) is slow on a large tenant, so
+-- the identity collection never makes it: it records each user here and takes the detail saved here; its own job
+-- (caj-si-signin-methods, every 15 minutes) reads users per user into it, privileged first (engine\asset-profiling\shared\SI-SignInMethodsChoice.ps1).
+--   UserSignInMethods        one narrow row per member user the identity collection keeps: Privileged and the change key
+--                            the registration report gives it (CurrentStamp = lastUpdatedDateTime, CurrentHash = a hash of
+--                            methodsRegistered) as the last collection saw it (SeenAt); the key its detail was read under
+--                            (ReadStamp / ReadHash), when (ReadAt; NULL = not read yet), whether its devices were read
+--                            whole (DevicesRead) and when the filler last tried it (LastTryAt).
+--   UserSignInMethodsDetail  the detail itself, one row per user read: the JSON of every method, kept COMPRESSed (about
+--                            0.5 KB a user: ~75 MB at 150,000 users), apart from the narrow rows the filler's pick scans.
+-- Users no collection listed for 60 days are let go by the filler.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.UserSignInMethods') IS NULL
+CREATE TABLE sidata.UserSignInMethods (
+    UserId          NVARCHAR(64)   NOT NULL CONSTRAINT PK_UserSignInMethods PRIMARY KEY,
+    Privileged      BIT            NOT NULL CONSTRAINT DF_UserSignInMethods_Privileged DEFAULT 0,
+    CurrentStamp    NVARCHAR(64)   NULL,
+    CurrentHash     NVARCHAR(64)   NULL,
+    SeenAt          DATETIME2(3)   NOT NULL CONSTRAINT DF_UserSignInMethods_SeenAt DEFAULT SYSUTCDATETIME(),
+    ReadStamp       NVARCHAR(64)   NULL,
+    ReadHash        NVARCHAR(64)   NULL,
+    ReadAt          DATETIME2(3)   NULL,
+    DevicesRead     BIT            NULL,
+    LastTryAt       DATETIME2(3)   NULL
+);
+IF OBJECT_ID('sidata.UserSignInMethodsDetail') IS NULL
+CREATE TABLE sidata.UserSignInMethodsDetail (
+    UserId          NVARCHAR(64)   NOT NULL CONSTRAINT PK_UserSignInMethodsDetail PRIMARY KEY,
+    Detail          VARBINARY(MAX) NOT NULL
+);
+-- ---------------------------------------------------------------------------------------------
 -- PROOF OF DELETION (ADDED 2026-11-02, REQUIREMENTS #1057). Per source a per-install switch, off by default
 -- (SI_DeletionProof_Entra / _Azure / _Intune). One row per provider record that is missing from a complete collection AND
 -- that its source proved deleted (Entra ID deleted items, an Azure resource-changes Delete, an Intune audit Delete). The CI
@@ -5009,3 +5042,202 @@ CREATE TABLE sidata.DataOutLock (
     Kind            NVARCHAR(16)   NULL,           -- data-out | datasync
     UntilUtc        DATETIME2(3)   NULL            -- the lease: free once passed
 );
+
+-- ---------------------------------------------------------------------------------------------
+-- THE VIEWS READ NARROW INDEXES, NEVER THE DOCUMENTS (ADDED 2026-11-05; owner: "every views must be fast" / "it is a missing
+-- index issue"). Measured at a ring-0 install: a device page 72 s, a CI's findings 20 s, its daily history 16 s, every page's
+-- data version 6-26 s -- each read the wide rows (DocJson in row) or scanned a day range of every CI, and the database's
+-- storage was at its limit from the pipeline's own scans. Each index below covers one read, so the read never touches a
+-- document. The published copies (sidata.<Table>Pub) take the same indexes (sidata.PublishedCopyEnsure).
+--   IX_CiFinding_Ci       a CI's findings, best first (the CI page, the findings per CI)
+--   IX_CiFinding_Hash     the CI build's content-hash compare (its replace-what-changed step)
+--   IX_CiDaily_Ci         a CI's daily history (the clustered key starts with the day: a range over every CI)
+--   IX_Ci_Version         the data version's counts of CIs with their prepared columns filled (every page asks)
+--   IX_Ci_Tier            the CI counts by tier
+--   IX_Finding_RaAsset    the risk analysis rows per asset of a collection
+-- ---------------------------------------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiFinding_Ci' AND object_id = OBJECT_ID('sidata.CiFinding'))
+    EXEC (N'CREATE INDEX IX_CiFinding_Ci ON sidata.CiFinding (CiId, WeightedRiskScore DESC, RiskScore DESC) INCLUDE (FindingKey, FindingType, Title, Severity, Tier, RiskRating, SecurityDomain, DetectedBy, RiskFactors, ExemptionId, CollectionTime)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiFinding_Hash' AND object_id = OBJECT_ID('sidata.CiFinding'))
+    EXEC (N'CREATE INDEX IX_CiFinding_Hash ON sidata.CiFinding (ContentHash) INCLUDE (CiId)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiDaily_Ci' AND object_id = OBJECT_ID('sidata.CiDaily'))
+    EXEC (N'CREATE INDEX IX_CiDaily_Ci ON sidata.CiDaily (CiId, [Day]) INCLUDE (Tier, RiskScore, WeightedRiskScore, OpenFindings)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Ci_Version' AND object_id = OBJECT_ID('sidata.Ci'))
+    EXEC (N'CREATE INDEX IX_Ci_Version ON sidata.Ci (CollectionTime) INCLUDE (DocFieldsHash, ContentHash, CtxHash, CtxSet)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Ci_Tier' AND object_id = OBJECT_ID('sidata.Ci'))
+    EXEC (N'CREATE INDEX IX_Ci_Tier ON sidata.Ci (Tier) INCLUDE (Lifecycle)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_RaAsset' AND object_id = OBJECT_ID('sidata.Finding'))
+    EXEC (N'CREATE INDEX IX_Finding_RaAsset ON sidata.Finding (CollectionId, RaAssetId) INCLUDE (AssetKey, ExemptionId)');
+
+-- THE CI PAGE'S FINDING MODEL (ADDED 2026-11-05; owner: "every views must be fast"): sidata.vCiFindingModel(Pub) for one CI
+-- sought IX_CiFindingState_Ci and then looked every finding's row up for the model's columns (10 s, 52 MB for one CI at a
+-- ring-0 install). This index carries them; the published copy takes it too (sidata.PublishedCopyEnsure).
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiFindingState_Model' AND object_id = OBJECT_ID('sidata.CiFindingState'))
+    EXEC (N'CREATE INDEX IX_CiFindingState_Model ON sidata.CiFindingState (CiId) INCLUDE (FindingType, Title, Severity, State, FirstDetected, LastSeen, ClosedAt, CloseReason, ReopenCount, Owner, OwnerSource, SlaDays, DueAt, ExemptionId, ExemptionReason, ExemptedUntil, TicketState, Excluded)');
+-- THE REST OF THE VIEWS' INDEXES (ADDED 2026-11-05; the view plan guard, pro-management ViewPlanGuardLocalSqlTests): each
+-- read below sought or scanned the table's documents at a large install's size.
+--   IX_Ci_BreakGlassList            the break glass accounts (risk factors page): the accounts by reason, with their columns
+--   IX_AssetMetadata_SourceRecent   the data sync's sample of each source's newest objects (the column chooser's list)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Ci_BreakGlassList' AND object_id = OBJECT_ID('sidata.Ci'))
+    EXEC (N'CREATE INDEX IX_Ci_BreakGlassList ON sidata.Ci (BreakGlassReason) INCLUDE (Name, Upn, Tier, BreakGlassAttribute, Lifecycle)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AssetMetadata_SourceRecent' AND object_id = OBJECT_ID('sidata.AssetMetadata'))
+    EXEC (N'CREATE INDEX IX_AssetMetadata_SourceRecent ON sidata.AssetMetadata (SourceSystem, Dropped, AssetMetadataId DESC)');
+-- THE COPIES TAKE THE INDEXES ADDED ABOVE TOO (ADDED 2026-11-05): the pages read the published copies (sidata.<Table>Pub), and
+-- the copy pass earlier in this file runs before the indexes added after it -- so the copies would take them only at the
+-- next update. The same pass again, here at the end (the same body, sidata.PublishedCopyEnsure: what a copy lacks).
+DECLARE @SIPubTableEnd sysname;
+DECLARE SIPubCopiesEnd CURSOR LOCAL FAST_FORWARD FOR
+    SELECT v FROM (VALUES (N'Ci'), (N'CiLink'), (N'CiFinding'), (N'CiService'), (N'CiRecord'), (N'CiFindingState'), (N'CiRelation'), (N'Asset'), (N'AssetIdentifier'), (N'AssetTag')) AS x(v);
+OPEN SIPubCopiesEnd;
+FETCH NEXT FROM SIPubCopiesEnd INTO @SIPubTableEnd;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    EXEC sp_executesql @SIPubEnsure, N'@Table sysname', @Table = @SIPubTableEnd;
+    FETCH NEXT FROM SIPubCopiesEnd INTO @SIPubTableEnd;
+END
+CLOSE SIPubCopiesEnd;
+DEALLOCATE SIPubCopiesEnd;
+-- ---------------------------------------------------------------------------------------------
+-- THE DOCUMENTS ARE STORED OUT OF THE ROW (ADDED 2026-11-05; owner: "every views must be fast" / "fix for all, no exceptions").
+-- Measured at a ring-0 install: the findings table held 470 MB of row data for 70,622 rows (6.8 KB a row: DetailJson in the
+-- row), the findings per CI 148 MB for 20,022 rows, the CIs and records the same -- one row per page, so every scan, count,
+-- index build or key range over these tables read the documents too, and the views starved behind the pipeline's own reads.
+-- With the option on, a document is kept on its own pages and the row carries a 16-byte pointer: a read that does not name
+-- the document never reads it; a read that does reads it as before. Same data, same statements. A metadata change (no data
+-- is moved here): a row's document moves out when the row is next written -- every new collection, every CI the build
+-- writes, every copy refresh. The published copies (sidata.<Table>Pub) take it too.
+-- ---------------------------------------------------------------------------------------------
+DECLARE @SILobOut TABLE (N int IDENTITY(1, 1) NOT NULL, T sysname NOT NULL);
+INSERT @SILobOut (T) VALUES (N'sidata.Finding'), (N'sidata.Ci'), (N'sidata.CiPub'), (N'sidata.CiFinding'), (N'sidata.CiFindingPub'),
+    (N'sidata.CiRecord'), (N'sidata.CiRecordPub'), (N'sidata.AssetMetadata'), (N'sidata.CiFindingStage');
+DECLARE @SILobI int = 1, @SILobT sysname;
+WHILE @SILobI <= (SELECT MAX(N) FROM @SILobOut)
+BEGIN
+    SELECT @SILobT = T FROM @SILobOut WHERE N = @SILobI;
+    -- a table that is there and does not keep its documents out of the row yet
+    IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID(@SILobT) AND large_value_types_out_of_row = 0)
+        EXEC sys.sp_tableoption @TableNamePattern = @SILobT, @OptionName = N'large value types out of row', @OptionValue = N'1';
+    SET @SILobI += 1;
+END
+-- ---------------------------------------------------------------------------------------------
+-- STATISTICS KEPT FRESH BY THE PIPELINE, AND VIEWS NEVER WAIT FOR THEM (ADDED 2026-11-05; owner: "Fix code + refresh now").
+-- Measured at a ring-0 install: the pages took one to two minutes. The product never refreshed statistics, and every run
+-- rewrites its tables -- a quarter of all statistics had more changes than rows, the findings table's were weeks old with
+-- millions of changes. The database updated a stale statistic SYNCHRONOUSLY on the first page read after a run (a full read
+-- of the table's sampled pages at the storage limit, 20+ s for one statistic); when the page's read hit its time limit the
+-- update was cancelled with it and never finished, so the next page paid again. And the planner, on statistics from weeks
+-- before, chose plans that read the whole findings table for one device.
+--   sidata.StatisticsRefresh       the pipeline runner calls it (engine\_shared\data-sql\SI-DataStatistics.ps1) when a run
+--                                  has ended -- once, only after the run is published (the source tables and the
+--                                  published copies just refreshed) -- one table per call: every statistic of the next table (by name, after
+--                                  @After) whose changes passed the database's own threshold for a stale statistic
+--                                  (500 changes on a table of up to 500 rows, else the lower of 500 + 20 % of the rows and
+--                                  the square root of 1,000 x the rows) is updated with the database's default sampling --
+--                                  never a full scan. One statistic that fails is counted and named, the others go on.
+--                                  Changes no row. Gated to a job identity (the product's gated-procedure pattern).
+--                                  @AsyncOnly = 1: only the database setting below.
+--   sidata.StatisticsRefreshTable  the work, WITH EXECUTE AS SELF -- the identity that applied this schema: setup's admin on a
+--                                  new install, the updater (db_ddladmin: ALTER on the tables) on an existing one. Updating a
+--                                  statistic needs ALTER on the table -- a right no job identity holds, and none is granted.
+--                                  (EXECUTE AS OWNER cannot be made by the updater: it may not impersonate the owner.)
+--                                  Reached only through sidata.StatisticsRefresh (no grant of its own); it builds every
+--                                  name it runs from the catalog (QUOTENAME), never from its caller. Made again (by whoever
+--                                  applies the schema) when it is missing, its marker is older, or the identity it runs as is
+--                                  gone -- never by the module guard (its text is held in a variable for that reason).
+-- THE SETTING: AUTO_UPDATE_STATISTICS_ASYNC ON -- a read that finds a stale statistic is planned on the statistic it has and
+-- the update runs in the background: no page ever waits for a statistic. An ALTER DATABASE cannot run inside this file's
+-- transaction, so the procedure sets it (the pipeline runner's every wake-up asks) -- where the identity it runs as may change
+-- the database: a procedure made by setup's admin, or by an admin's schema apply. The updater may not change the database:
+-- there the setting is left as it is, said nowhere, and the refresh after every run still keeps the statistics fresh.
+-- ---------------------------------------------------------------------------------------------
+DECLARE @SIStatsProc nvarchar(max) = N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefreshTable @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
+    @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT
+WITH EXECUTE AS SELF
+AS
+BEGIN
+    -- si-statistics-refresh v1
+    -- the statistics of ONE table brought up to date (see the section header in sql\si-data-schema.sql). Changes no row.
+    SET NOCOUNT ON;
+    SELECT @Table = NULL, @Refreshed = 0, @Failed = 0, @Error = NULL;
+    SELECT @Async = d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID();
+    -- inside a caller''s transaction nothing is done: a database setting cannot change there, and a statistic is not updated
+    -- under a caller''s locks
+    IF @@TRANCOUNT > 0 BEGIN SET @Error = N''called inside a transaction -- nothing was done''; RETURN; END
+    -- THE SETTING (the first call of a pass): pages never wait for a statistic. A lock that does not come within 10 seconds =
+    -- not now (the next pass tries again), never a wait behind the readers.
+    IF @After IS NULL AND ISNULL(@Async, 0) = 0
+    BEGIN
+        BEGIN TRY
+            SET LOCK_TIMEOUT 10000;
+            ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC ON;
+            SET LOCK_TIMEOUT -1;
+        END TRY
+        BEGIN CATCH
+            -- the identity this runs as may not change the database (made by the updater), or the lock did not come: the
+            -- setting stays as it is (@Async says so); the statistics below are refreshed all the same
+            SET LOCK_TIMEOUT -1;
+        END CATCH
+        SELECT @Async = d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID();
+    END
+    IF @AsyncOnly = 1 RETURN;
+    -- every statistic of every user table, stale by the database''s own threshold; a statistic never computed counts once its
+    -- table holds more than 500 rows
+    DECLARE @st TABLE (ObjectId int NOT NULL, TableName nvarchar(300) NOT NULL, StatName sysname NOT NULL, StatsId int NOT NULL);
+    INSERT @st (ObjectId, TableName, StatName, StatsId)
+    SELECT s.object_id, QUOTENAME(SCHEMA_NAME(t.schema_id)) + N''.'' + QUOTENAME(t.name), s.name, s.stats_id
+    FROM sys.stats AS s
+    JOIN sys.tables AS t ON t.object_id = s.object_id AND t.is_ms_shipped = 0
+    LEFT JOIN sys.indexes AS i ON i.object_id = s.object_id AND i.index_id = s.stats_id AND s.auto_created = 0 AND s.user_created = 0
+    OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) AS sp
+    OUTER APPLY (SELECT SUM(p.rows) AS N FROM sys.partitions AS p WHERE p.object_id = s.object_id AND p.index_id IN (0, 1)) AS tr
+    WHERE ISNULL(i.is_hypothetical, 0) = 0
+      -- never computed: only an unfiltered statistic (a filtered one whose filter matches no row stays empty after an update)
+      AND (   (sp.last_updated IS NULL AND s.has_filter = 0 AND ISNULL(tr.N, 0) > 500)
+           OR (sp.last_updated IS NOT NULL AND ISNULL(sp.modification_counter, 0) >
+                  CASE WHEN ISNULL(sp.rows, 0) <= 500 THEN 500.0
+                       WHEN 500.0 + 0.2 * sp.rows < SQRT(1000.0 * sp.rows) THEN 500.0 + 0.2 * sp.rows
+                       ELSE SQRT(1000.0 * sp.rows) END));
+    SELECT TOP (1) @Table = TableName FROM @st
+    WHERE @After IS NULL OR TableName COLLATE Latin1_General_BIN2 > @After COLLATE Latin1_General_BIN2
+    ORDER BY TableName COLLATE Latin1_General_BIN2;
+    IF @Table IS NULL RETURN;
+    DECLARE @list TABLE (N int IDENTITY(1, 1) NOT NULL, StatName sysname NOT NULL);
+    INSERT @list (StatName) SELECT StatName FROM @st WHERE TableName = @Table ORDER BY StatsId;
+    DECLARE @i int = 1, @n int = (SELECT COUNT(*) FROM @list), @name sysname, @sql nvarchar(max);
+    WHILE @i <= @n
+    BEGIN
+        SELECT @name = StatName FROM @list WHERE N = @i;
+        -- the database''s default sampling: never a full scan of a large table
+        SET @sql = N''UPDATE STATISTICS '' + @Table + N'' ('' + QUOTENAME(@name) + N'');'';
+        BEGIN TRY
+            EXEC (@sql);
+            SET @Refreshed += 1;
+        END TRY
+        BEGIN CATCH
+            SET @Failed += 1;
+            IF @Error IS NULL SET @Error = @Table + N'' '' + QUOTENAME(@name) + N'': '' + ERROR_MESSAGE();
+        END CATCH
+        SET @i += 1;
+    END
+END';
+IF OBJECT_ID(N'sidata.StatisticsRefreshTable') IS NULL
+   OR CHARINDEX(N'si-statistics-refresh v1', ISNULL(OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefreshTable')), N'')) = 0
+   OR NOT EXISTS (SELECT 1 FROM sys.sql_modules AS m JOIN sys.database_principals AS p ON p.principal_id = m.execute_as_principal_id
+                  WHERE m.object_id = OBJECT_ID(N'sidata.StatisticsRefreshTable'))
+    EXEC (@SIStatsProc);
+EXEC (N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefresh @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
+    @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT
+AS
+BEGIN
+    -- the gate (a job identity: db_datawriter / si_engine, or the owner), then the work -- sidata.StatisticsRefreshTable, reached
+    -- through this procedure only (same owner: no grant of its own). Answers through its OUTPUT parameters only.
+    SET NOCOUNT ON;
+    IF ISNULL(IS_ROLEMEMBER(N''db_datawriter''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''si_engine''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) <> 1
+        THROW 51793, N''only a job identity may refresh the statistics -- nothing was changed'', 1;
+    EXEC sidata.StatisticsRefreshTable @After = @After, @AsyncOnly = @AsyncOnly, @Table = @Table OUTPUT, @Refreshed = @Refreshed OUTPUT,
+        @Failed = @Failed OUTPUT, @Error = @Error OUTPUT, @Async = @Async OUTPUT;
+END');
+-- the refresh checks its caller itself (a job identity, or the owner) -- every job identity may call it, before and after the
+-- engine's least-privilege cut-over (the product's gated-procedure pattern); the work procedure has no grant at all
+IF IS_ROLEMEMBER(N'db_owner') = 1 OR IS_ROLEMEMBER(N'db_securityadmin') = 1
+GRANT EXECUTE ON OBJECT::sidata.StatisticsRefresh TO public;

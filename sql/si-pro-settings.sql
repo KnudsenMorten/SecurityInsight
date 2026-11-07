@@ -329,6 +329,19 @@ IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestSignature') IS NULL ALTER TABLE
 
 IF COL_LENGTH('cfg.TemplatePackStaged', 'ManifestKeyId') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD ManifestKeyId NVARCHAR(128) NULL;
 
+-- THE PACK'S NAME, CONTENT AND LEAST CODE VERSION AS STORED COLUMNS (ADDED 2026-11-05; owner: "every views must be fast").
+-- The navigation's "held template packs" and the template pages listed the staged packs with JSON_VALUE over PackJson: every
+-- list parsed every staged pack (about 1 GB at a ring-0 install, up to 81 s, every 30 s from any page). Computed once when a
+-- row is written (PERSISTED -- JSON_VALUE is deterministic); no writer changes (every INSERT names its columns).
+IF COL_LENGTH('cfg.TemplatePackStaged', 'PackName') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD PackName AS CONVERT(nvarchar(400), JSON_VALUE(PackJson, '$.Name')) PERSISTED;
+
+IF COL_LENGTH('cfg.TemplatePackStaged', 'PackContent') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD PackContent AS CONVERT(nvarchar(400), JSON_VALUE(PackJson, '$.Content')) PERSISTED;
+
+IF COL_LENGTH('cfg.TemplatePackStaged', 'PackMinCode') IS NULL ALTER TABLE cfg.TemplatePackStaged ADD PackMinCode AS CONVERT(nvarchar(64), JSON_VALUE(PackJson, '$.MinCodeVersion')) PERSISTED;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TemplatePackStaged_List' AND object_id = OBJECT_ID('cfg.TemplatePackStaged'))
+CREATE INDEX IX_TemplatePackStaged_List ON cfg.TemplatePackStaged (PackVersion) INCLUDE (CodeVersion, Sha256, Fingerprint, Ring, Origin, IsFull, ItemCount, StagedAt, StagedBy, PackName, PackContent, PackMinCode);
+
 -- Phase E (REQUIREMENTS §9.3.3 E): CONNECTORS DEFINED IN SQL.
 -- One row per connector -- where the vulnerability close-loop sends its results (engine\asset-cmdb\_shared\SI-Connector.ps1).
 --   Kind       sql | servicenow | rest           validated in code, no CHECK: the list will grow (see Phase C's note)
@@ -1766,6 +1779,11 @@ ALTER TABLE cfg.FlowStepRun ADD Attempts INT NULL;
 
 IF COL_LENGTH('cfg.FlowStepRun', 'RetryReason') IS NULL
 ALTER TABLE cfg.FlowStepRun ADD RetryReason NVARCHAR(1000) NULL;
+
+-- The steps by state (ADDED 2026-11-05; owner: "every views must be fast"): the runner and the pipeline pages ask for the
+-- running / waiting steps on every wake-up and every page -- SQL's own missing-index list counted 2,467 scans of the table.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FlowStepRun_State' AND object_id = OBJECT_ID('cfg.FlowStepRun'))
+CREATE INDEX IX_FlowStepRun_State ON cfg.FlowStepRun (State) INCLUDE (Job, Execution, StartedUtc, EndedUtc);
 
 -- =====================================================================================================================
 -- #306 PIPELINES AND STAGES. Additive and guarded (an existing install only gains columns and tables).
@@ -3281,6 +3299,29 @@ CREATE TABLE cfg.RaSourceAccept (
 -- one ACTIVE acceptance per report and table
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_RaSourceAccept_Active' AND object_id = OBJECT_ID('cfg.RaSourceAccept'))
 CREATE UNIQUE INDEX UX_RaSourceAccept_Active ON cfg.RaSourceAccept (ReportName, SourceTable) WHERE ClearedUtc IS NULL;
+
+-- THE UPLINK OUTBOX (framework 8.4, agreed with Invardia 2026-11-05): a run report Invardia did NOT take at the end of its
+-- job (no answer, a timeout, a 429, any answer that is not ok) is kept here -- one row per record, the record exactly as it
+-- would have been sent. The heartbeat job (caj-si-heartbeat) sends the rows again after its own heartbeat, oldest first, in
+-- rounds, and deletes a row once Invardia took it. Bounded: at most 7 days and at most 5,000 rows -- beyond that the OLDEST
+-- go and are counted (cfg.InstallState 'UplinkOutbox'). Written by the engine identity (engine\_shared\SI-UplinkOutbox.ps1).
+-- Run state, never configuration. Columns: Job = the record's stable job id; Kind = the record's kind (run; checked in
+-- code); Attempts = POSTs made so far (the job's own send is the first); LastAnswer = the uplink's last answer, redacted.
+IF OBJECT_ID('cfg.UplinkOutbox') IS NULL
+CREATE TABLE cfg.UplinkOutbox (
+    OutboxId        BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_UplinkOutbox PRIMARY KEY,
+    Job             NVARCHAR(64)    NOT NULL,
+    Kind            NVARCHAR(16)    NOT NULL CONSTRAINT DF_UplinkOutbox_Kind DEFAULT N'run',
+    RecordJson      NVARCHAR(MAX)   NOT NULL,
+    CreatedUtc      DATETIME2(3)    NOT NULL CONSTRAINT DF_UplinkOutbox_CreatedUtc DEFAULT SYSUTCDATETIME(),
+    Attempts        INT             NOT NULL CONSTRAINT DF_UplinkOutbox_Attempts DEFAULT 0,
+    LastAttemptUtc  DATETIME2(3)    NULL,
+    LastAnswer      NVARCHAR(400)   NULL
+);
+
+-- the drain reads the oldest first; the bound counts and cuts by age
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_UplinkOutbox_Created' AND object_id = OBJECT_ID('cfg.UplinkOutbox'))
+CREATE INDEX IX_UplinkOutbox_Created ON cfg.UplinkOutbox (CreatedUtc, OutboxId) INCLUDE (Job);
 -- >>> GENERATED SUPPORT GRANT (engine\pro-settings\SI-SupportGrantSql.ps1, Get-SISupportGrantSchemaSql) -- do not edit by hand
 
 IF SCHEMA_ID(N'cfg') IS NULL EXEC (N'CREATE SCHEMA cfg');
@@ -3337,6 +3378,10 @@ BEGIN
     IF (NOT EXISTS (SELECT 1 FROM deleted)) AND NOT EXISTS (SELECT 1 FROM inserted WHERE Source <> N''derived'')
        AND (SELECT COUNT(*) FROM cfg.SupportConsent) = (SELECT COUNT(*) FROM inserted)
        AND (ISNULL(IS_ROLEMEMBER(N''si_updater''), 0) = 1 OR ISNULL(IS_ROLEMEMBER(N''db_ddladmin''), 0) = 1) RETURN;
+    -- the level the customer set in the Invardia portal, applied by the UPDATER from its own call to Invardia (framework
+    -- SUPPORT ACCESS point 2): it may write a row only as ConsentedBy N''Invardia portal'', or remove the row (level none)
+    IF (ISNULL(IS_ROLEMEMBER(N''si_updater''), 0) = 1 OR ISNULL(IS_ROLEMEMBER(N''db_ddladmin''), 0) = 1)
+       AND NOT EXISTS (SELECT 1 FROM inserted WHERE Source <> N''customer'' OR ConsentedBy <> N''Invardia portal'') RETURN;
     THROW 51806, N''cfg.SupportConsent: the consent is written by the customer admin (Grant-SISupportAccess) only'', 1;
 END');
 
@@ -3346,14 +3391,14 @@ IF OBJECT_ID(N'cfg.SupportGrantOpen') IS NULL EXEC (N'CREATE PROCEDURE cfg.Suppo
 AS
 BEGIN
     -- si-support-grant v1 (SecurityInsight #1021): the Invardia Support app''s just-in-time grant. The principal is ALWAYS the Support app of
-    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most 24 hours.
+    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most 8 hours.
     SET NOCOUNT ON; SET XACT_ABORT ON;
     IF (NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N''si_support_signer%''))
         THROW 51801, N''the support grant procedure is not signed -- Install-SISupportGrantProcedure has not run on this database'', 1;
     DECLARE @now datetime2(0) = SYSUTCDATETIME();
     DECLARE @until datetime2(0) = TRY_CONVERT(datetime2(0), REPLACE(REPLACE(@MaxUntilUtc, N''Z'', N''''), N''+00:00'', N''''), 126);
     IF @Level IS NULL OR @Level NOT IN (N''troubleshoot'', N''setup'') THROW 51802, N''the level must be troubleshoot or setup'', 1;
-    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, 1442, @now) THROW 51802, N''maxUntil must be a UTC time in the next 24 hours'', 1;
+    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, 482, @now) THROW 51802, N''maxUntil must be a UTC time in the next 8 hours'', 1;
     IF LEN(LTRIM(RTRIM(ISNULL(@Reason, N'''')))) = 0 OR LEN(@Reason) > 200 THROW 51802, N''a reason of at most 200 characters is required'', 1;
     IF TRY_CONVERT(uniqueidentifier, @RequestId) IS NULL THROW 51802, N''the request id must be a GUID'', 1;
     DECLARE @app uniqueidentifier, @consent nvarchar(16);
@@ -4136,3 +4181,28 @@ UNION ALL
 SELECT N''pivotview'' AS Entity, LEFT(CONCAT(t.[Owner], N''|'', t.[Name]), 900) AS EntityKey, (SELECT t.[ViewId] AS [ViewId], t.[Name] AS [Name], t.[Owner] AS [Owner], t.[Shared] AS [Shared], t.[State] AS [State], t.[CreatedAt] AS [CreatedAt], t.[UpdatedAt] AS [UpdatedAt], t.[RemovedAt] AS [RemovedAt], t.[RemovedBy] AS [RemovedBy] FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES) AS RecordJson FROM cfg.PivotView AS t WHERE t.[RemovedAt] IS NULL');
 
 -- <<< GENERATED CONFIG JOURNAL
+
+-- THE CHANGE LOG AND THE COMMIT LIST READ NARROW INDEXES (ADDED 2026-11-05; the view plan guard): the settings history, the
+-- template history and the settings change log take the newest changes (by name or all) off this index and read the before /
+-- after values of those rows only; the configuration journal's commit list groups the commits over the second.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ChangeLog_NameRecent' AND object_id = OBJECT_ID('cfg.ChangeLog'))
+CREATE INDEX IX_ChangeLog_NameRecent ON cfg.ChangeLog (Name, ChangeId DESC) INCLUDE (ChangedAt);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ConfigJournal_List' AND object_id = OBJECT_ID('cfg.ConfigJournal'))
+CREATE INDEX IX_ConfigJournal_List ON cfg.ConfigJournal (CommitId) INCLUDE (CommittedUtc, InitiatedBy, ApprovedBy, Source, UndoOf, Reason, Entity, EntityKey);
+
+-- THE AUDIT TRAIL AND THE GUARD EVENTS ARE PAGED OVER NARROW INDEXES (ADDED 2026-11-05; the view plan guard): the grids are
+-- chosen, counted and sorted over every column but the documents (before / after, the measured values), which are read for
+-- the page's rows only; the guard events' "cleared since" read seeks the guard's key.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AuditEvent_List' AND object_id = OBJECT_ID('cfg.AuditEvent'))
+CREATE INDEX IX_AuditEvent_List ON cfg.AuditEvent (TsUtc) INCLUDE (RecordType, Action, Actor, ActorSource, Target, Reason, Outcome, OutcomeText, WhatIf, CorrelationId, ScopeDomain, ScopeDepartmentId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_GuardEvent_List' AND object_id = OBJECT_ID('cfg.GuardEvent'))
+CREATE INDEX IX_GuardEvent_List ON cfg.GuardEvent (TsUtc DESC) INCLUDE (GuardId, GuardKey, Area, Job, Source, Outcome, Severity, Protected, Subject, Detail, MeasuredText, HeldCount, ActionText, RunId, TripCount, MailState, TelemetryState, SiVersion, Attribution);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_GuardEvent_Key' AND object_id = OBJECT_ID('cfg.GuardEvent'))
+CREATE INDEX IX_GuardEvent_Key ON cfg.GuardEvent (GuardKey, Id) INCLUDE (Outcome, Detail);
+
+-- The change log newest first over every name (the settings history and change log without a name): the same narrow walk.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ChangeLog_Recent' AND object_id = OBJECT_ID('cfg.ChangeLog'))
+CREATE INDEX IX_ChangeLog_Recent ON cfg.ChangeLog (ChangeId DESC) INCLUDE (Name, ChangedAt);

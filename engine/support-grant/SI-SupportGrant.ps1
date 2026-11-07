@@ -9,7 +9,7 @@
     THE MESSAGE IS A REQUEST, NEVER AN INSTRUCTION (agreed with Invardia and PIM, SEC-92). Raw JSON, only these keys:
         SI_SUPPORT_ACTION    open | close                                         required
         SI_SUPPORT_LEVEL     troubleshoot | setup                                 required (a close carries one too)
-        SI_SUPPORT_MAXUNTIL  ISO-8601 UTC, in the future, at most 24 h ahead      required (a close carries one too)
+        SI_SUPPORT_MAXUNTIL  ISO-8601 UTC, in the future, at most 8 h ahead       required (a close carries one too)
         SI_SUPPORT_REASON    the ticket / session reason, 1-200 characters        required
         SI_SUPPORT_TICKET    the ticket number, at most 64 characters             optional
         SI_AUDIT_STARTED_BY  who started it, at most 256 characters               optional
@@ -44,7 +44,10 @@ $script:SISupportGrantJob = [ordered]@{
     Queue          = 'si-support-requests'
     MaxMessageBytes = 4096
     StaleMinutes   = 15
-    MaxHours       = 24
+    # a support session is at most 8 hours (framework rule, owner 2026-11-04) -- the open procedure refuses more as well;
+    # two minutes for the clock difference between the Support session that wrote maxUntil and this job
+    MaxHours       = 8
+    ClockSlackMinutes = 2
     Keys           = @('SI_SUPPORT_ACTION', 'SI_SUPPORT_LEVEL', 'SI_SUPPORT_MAXUNTIL', 'SI_SUPPORT_REASON', 'SI_SUPPORT_TICKET', 'SI_AUDIT_STARTED_BY')
     Required       = @('SI_SUPPORT_ACTION', 'SI_SUPPORT_LEVEL', 'SI_SUPPORT_MAXUNTIL', 'SI_SUPPORT_REASON')
     # the result word -> the exit code
@@ -84,7 +87,7 @@ function ConvertFrom-SISupportGrantMessage {
         PURE. One queue message's text -> @{ Ok; Why; Action; Level; MaxUntilUtc; Reason; Ticket; StartedBy }. Refused (Ok
         false, Why in plain words) when: larger than 4 KB, not ONE JSON object, a key that is not in the list, a value that
         is not text, a required key missing, an action / level not in the list, maxUntil not an ISO-8601 UTC time, in the
-        past or more than 24 hours ahead, a reason empty or longer than 200 characters, a ticket or a name with control
+        past or more than 8 hours ahead, a reason empty or longer than 200 characters, a ticket or a name with control
         characters or too long. Nothing in it is ever run.
     #>
     param([AllowNull()][AllowEmptyString()][string]$Text, [Parameter(Mandatory)][datetime]$NowUtc)
@@ -134,7 +137,7 @@ function ConvertFrom-SISupportGrantMessage {
     $until = [datetime]::SpecifyKind($until.AddTicks(-($until.Ticks % [TimeSpan]::TicksPerSecond)), 'Utc')
     $now = $NowUtc.ToUniversalTime()
     if ($until -le $now) { return (& $no 'SI_SUPPORT_MAXUNTIL is in the past') }
-    if ($until -gt $now.AddHours($c.MaxHours)) { return (& $no ('SI_SUPPORT_MAXUNTIL is more than {0} hours ahead' -f $c.MaxHours)) }
+    if ($until -gt $now.AddHours($c.MaxHours).AddMinutes($c.ClockSlackMinutes)) { return (& $no ('SI_SUPPORT_MAXUNTIL is more than {0} hours ahead' -f $c.MaxHours)) }
     $reason = $vals['SI_SUPPORT_REASON'].Trim()
     if ($reason.Length -gt 200 -or $reason -match $ctl) { return (& $no 'SI_SUPPORT_REASON must be 1-200 characters of text') }
     $ticket = if ($vals.ContainsKey('SI_SUPPORT_TICKET')) { $vals['SI_SUPPORT_TICKET'].Trim() } else { '' }
@@ -223,8 +226,9 @@ function Get-SISupportGrantStatus {
         READ ONLY. cfg.SupportGrantStatus on every product database -> @{ Wire; Text; Rows }. Wire = the heartbeat's JIT shape
         of supportSqlAccess { readOnly, jitOpen, jitUntil, jitLevel, checkedUtc } (sent only where its switch says so);
         $null when no database answered. NEVER throws.
-          readOnly  true = the Support app's user is in the read-only role in EVERY database; false = it is not in one;
-                    null = at least one could not be read and none was read as missing
+          readOnly  true = in EVERY database the Support app's user is in the read-only role AND the grant procedures are
+                    there and signed (the path that opens a session works); false = not so in one (no role, no procedures,
+                    or not signed); null = at least one could not be read and none was read as missing
           jitOpen   a grant is open in any database;  jitUntil its latest maxUntil;  jitLevel setup | troubleshoot | null
     #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Databases, [Parameter(Mandatory)][datetime]$NowUtc)
@@ -233,9 +237,13 @@ function Get-SISupportGrantStatus {
     foreach ($db in @($Databases.Keys)) {
         try {
             $r = Read-SISupportGrantRow -Invoke $Databases[$db] -Sql (Get-SISupportGrantCallSql -Name Status)
-            if ($null -eq $r) { $unknown++; $said.Add(('{0}: no support grant procedures yet' -f $db)); continue }
+            # no procedures in this database is MISSING, not unknown: it was read, and the grant is not there (seen live
+            # 2026-11-05: the Pro database had them, the identity database not -- the heartbeat said unknown)
+            if ($null -eq $r) { $missing++; $said.Add(('{0}: no support grant procedures yet' -f $db)); continue }
             $rows.Add($r)
-            if ((Get-SISupportGrantRowValue $r 'ReadOnlyHeld') -ne '1') { $missing++ }
+            # readOnly true = the just-in-time model is in place: the read role held AND the grant procedures present and SIGNED
+            # (the path that opens a session works) -- Invardia's rule for every product (framework, PIM the same)
+            if ((Get-SISupportGrantRowValue $r 'ReadOnlyHeld') -ne '1' -or (Get-SISupportGrantRowValue $r 'Signed') -ne '1') { $missing++ }
             $n = 0; [void][int]::TryParse((Get-SISupportGrantRowValue $r 'JitOpen'), [ref]$n)
             if ($n -gt 0) {
                 $open = $true

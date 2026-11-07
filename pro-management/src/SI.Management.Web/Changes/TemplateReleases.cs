@@ -250,10 +250,24 @@ SELECT CASE WHEN OBJECT_ID(N'cfg.TemplatePackStaged') IS NULL THEN 0 ELSE 1 END 
        CASE WHEN COL_LENGTH(N'cfg.Template', N'ContentHash') IS NULL OR OBJECT_ID(N'cfg.TemplateRevision') IS NULL OR OBJECT_ID(N'cfg.InstallState') IS NULL OR OBJECT_ID(N'cfg.ItemOverride') IS NULL THEN 0 ELSE 1 END AS HasVersioning;
 """;
 
+    /// The staged packs WITHOUT their documents: the name, content and least code version are stored columns (si-pro-settings.sql,
+    /// 2026-11-05) -- the list never parses a pack. Before the schema has them (an update between the web app and its schema),
+    /// <see cref="StagedListFromJsonSql"/> answers the same.
     public const string StagedListSql = """
+SELECT PackVersion, CodeVersion, Sha256, Fingerprint, Ring, Origin, IsFull, ItemCount, StagedAt, StagedBy, PackName,
+       PackContent, PackMinCode AS MinCodeVersion FROM cfg.TemplatePackStaged;
+""";
+
+    public const string StagedListFromJsonSql = """
 SELECT PackVersion, CodeVersion, Sha256, Fingerprint, Ring, Origin, IsFull, ItemCount, StagedAt, StagedBy, JSON_VALUE(PackJson, '$.Name') AS PackName,
        JSON_VALUE(PackJson, '$.Content') AS PackContent, JSON_VALUE(PackJson, '$.MinCodeVersion') AS MinCodeVersion FROM cfg.TemplatePackStaged;
 """;
+
+    public const string StagedColumnsSql = """
+SELECT CASE WHEN COL_LENGTH(N'cfg.TemplatePackStaged', N'PackMinCode') IS NULL THEN 0 ELSE 1 END AS HasColumns;
+""";
+
+    private static volatile bool _stagedColumns;
 
     public const string StagedPackSql = """
 SELECT PackVersion, Sha256, PackJson FROM cfg.TemplatePackStaged WHERE PackVersion = @Pack;
@@ -279,7 +293,8 @@ SELECT ValueJson FROM cfg.Setting WHERE Scope = N'solution' AND Name = N'SI_Inva
 """;
 
     public const string HistorySql = """
-SELECT TOP (50) ChangeId, Kind, NewValue, ChangedAt, ChangedBy, Reason FROM cfg.ChangeLog WHERE Name = N'template-release' ORDER BY ChangeId DESC;
+WITH k AS (SELECT TOP (50) n.ChangeId FROM cfg.ChangeLog AS n WHERE n.Name = N'template-release' ORDER BY n.ChangeId DESC)
+SELECT c.ChangeId, c.Kind, c.NewValue, c.ChangedAt, c.ChangedBy, c.Reason FROM k JOIN cfg.ChangeLog AS c ON c.ChangeId = k.ChangeId ORDER BY c.ChangeId DESC;
 """;
 
     public const string RevisionsSql = """
@@ -341,12 +356,16 @@ SELECT N'Saved' AS Outcome;
         return (r?.Long("HasPackStaged") == 1, r?.Long("HasVersioning") == 1);
     }
 
-    public async Task<IReadOnlyList<StagedPackInfo>> StagedAsync(CancellationToken ct) =>
-        (await _sql.QueryAsync(StagedListSql, new Dictionary<string, object?>(), ct))
+    public async Task<IReadOnlyList<StagedPackInfo>> StagedAsync(CancellationToken ct)
+    {
+        if (!_stagedColumns)
+            _stagedColumns = (await _sql.QueryAsync(StagedColumnsSql, new Dictionary<string, object?>(), ct)).FirstOrDefault()?.Long("HasColumns") == 1;
+        return (await _sql.QueryAsync(_stagedColumns ? StagedListSql : StagedListFromJsonSql, new Dictionary<string, object?>(), ct))
             .Select(r => new StagedPackInfo(r.Str("PackVersion") ?? "", r.Str("CodeVersion") ?? "", (r.Str("Sha256") ?? "").Trim(), (r.Str("Fingerprint") ?? "").Trim(),
                 r.Str("Ring"), r.Str("Origin") ?? "", r.Long("IsFull") == 1 || string.Equals(r.Str("IsFull"), "True", StringComparison.OrdinalIgnoreCase),
                 (int)(r.Long("ItemCount") ?? 0), r.Date("StagedAt"), r.Str("StagedBy"), r.Str("PackName"), r.Str("PackContent"), r.Str("MinCodeVersion")))
             .OrderByDescending(p => p.PackVersion, Comparer<string>.Create(CompareVersions)).ToList();
+    }
 
     /// One staged pack, checked: its text must still match the SHA-256 it was staged with, and be a pack.
     public async Task<TemplatePack> PackAsync(string packVersion, CancellationToken ct)

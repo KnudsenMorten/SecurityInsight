@@ -13,7 +13,7 @@
       * faster queries (no parse_json on hot path)
       * reusable in YAML rules + dashboards + workbooks
       * customer can override individual derivations via a -RiskFactorOverride
-        hashtable on $global:SI_*  (TODO: hook in )
+        hashtable on $global:SI_*  (not wired in yet)
 
     All functions:
       * accept a $Record (post-Classify staging shape)

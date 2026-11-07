@@ -27,6 +27,10 @@
       * the drain (Invoke-SIPipelineDrain): what one wake-up of the runner does. PS 5.1 and 7.
 #>
 
+# NO FRESH BEAT = DEAD: the rule that decides whether another execution still runs (the updater check below)
+$siExecLive = Join-Path $PSScriptRoot 'SI-ExecutionLiveness.ps1'
+if ((Test-Path -LiteralPath $siExecLive) -and -not (Get-Command -Name Get-SIExecutionLiveness -ErrorAction SilentlyContinue)) { . $siExecLive }
+
 $script:SIPipeline = @{
     StageIds        = @('collect', 'correlate', 'deliver')
     StageNames      = @{ collect = 'Collect'; correlate = 'Correlate'; deliver = 'Deliver' }
@@ -1346,27 +1350,45 @@ function New-SIPipelineBlobDocs {
     }
 }
 
+function Get-SIPipelineUpdateLiveness {
+    <#
+        PURE. Is the updater updating SecurityInsight now, and which of its executions are DEAD (no fresh beat)?
+        -Executions: the updater job's executions as ARM lists them (name, properties.status, properties.startTime).
+        -Locks / -LocksKnown: the lock rows (SI-ExecutionLiveness.ps1 Read-SIExecutionLocks). NO FRESH BEAT = DEAD: a Running /
+        Processing execution counts only while it beats the install lock (Holder caj-si-updater:<execution>, from its run gate)
+        or its own 'updater' row (from its first moment after the sign-in); one that never beat counts for 30 minutes after
+        its start, one that beat until 15 minutes after its last beat. Without readable lock rows (-LocksKnown $false) the old
+        rule holds: every Running one counts. The fixed outer fallback stays: an execution older than -MaxHours never counts
+        (a dead one is stopped too). -Stopped: names this process stopped already (left out). -Processes (VM): command lines
+        of the running PowerShell processes; one that runs Update-SecurityInsight.ps1 counts.
+        Returns @{ Running = why ('' = no update runs); Dead = @(liveness of the dead ones) }.
+    #>
+    param([AllowEmptyCollection()][object[]]$Executions = @(), [AllowEmptyCollection()][string[]]$Processes = @(), [datetime]$NowUtc = [datetime]::UtcNow, [int]$MaxHours = 6,
+          [AllowEmptyCollection()][object[]]$Locks = @(), [bool]$LocksKnown = $false, [System.Collections.IDictionary]$Stopped)
+    $why = ''
+    $sel = Select-SIExecutionLiveness -Executions $Executions -Kind updater -Locks $Locks -LocksKnown $LocksKnown -NowUtc $NowUtc -Stopped $Stopped
+    foreach ($lv in @($sel.Live | Sort-Object { if ($_.StartedUtc) { $_.StartedUtc } else { [datetime]::MinValue } })) {
+        if ($lv.StartedUtc -and ($NowUtc.ToUniversalTime() - $lv.StartedUtc).TotalHours -gt $MaxHours) { continue }
+        $why = ('caj-si-updater execution {0}{1}' -f $lv.Name, $(if ($lv.StartedUtc) { (', started {0:u}' -f $lv.StartedUtc) } else { '' }))
+        break
+    }
+    if (-not $why) {
+        foreach ($c in @($Processes | Where-Object { $_ })) {
+            if ([string]$c -match '(?i)Update-SecurityInsight\.ps1') { $why = 'Update-SecurityInsight.ps1 is running on this machine'; break }
+        }
+    }
+    [pscustomobject]@{ Running = $why; Dead = @($sel.Dead) }
+}
+
 function Get-SIPipelineUpdateRunning {
     <#
-        PURE. Why the pipeline must not start now because the updater is updating SecurityInsight -- '' when it is not.
-        -Executions: the updater job's executions as ARM lists them (name, properties.status, properties.startTime); one in
-        Running / Processing that started less than -MaxHours ago counts (an execution older than the updater can run is
-        Azure's stale record, not an update). -Processes (VM): command lines of the running PowerShell processes; one that
-        runs Update-SecurityInsight.ps1 counts.
+        PURE. Why the pipeline must not start now because the updater is updating SecurityInsight -- '' when it is not
+        (Get-SIPipelineUpdateLiveness .Running, the same parameters; without lock rows: every Running execution younger
+        than -MaxHours counts, as before).
     #>
-    param([AllowEmptyCollection()][object[]]$Executions = @(), [AllowEmptyCollection()][string[]]$Processes = @(), [datetime]$NowUtc = [datetime]::UtcNow, [int]$MaxHours = 6)
-    foreach ($e in @($Executions | Where-Object { $_ })) {
-        $st = ''; if ($e.PSObject.Properties['properties'] -and $e.properties -and $e.properties.PSObject.Properties['status']) { $st = [string]$e.properties.status }
-        if ($st -notin @('Running', 'Processing')) { continue }
-        $t = $null
-        if ($e.properties.PSObject.Properties['startTime'] -and $e.properties.startTime) { try { $t = ([datetime]$e.properties.startTime).ToUniversalTime() } catch { $t = $null } }
-        if ($t -and ($NowUtc.ToUniversalTime() - $t).TotalHours -gt $MaxHours) { continue }
-        return ('caj-si-updater execution {0}{1}' -f [string]$e.name, $(if ($t) { (', started {0:u}' -f $t) } else { '' }))
-    }
-    foreach ($c in @($Processes | Where-Object { $_ })) {
-        if ([string]$c -match '(?i)Update-SecurityInsight\.ps1') { return 'Update-SecurityInsight.ps1 is running on this machine' }
-    }
-    ''
+    param([AllowEmptyCollection()][object[]]$Executions = @(), [AllowEmptyCollection()][string[]]$Processes = @(), [datetime]$NowUtc = [datetime]::UtcNow, [int]$MaxHours = 6,
+          [AllowEmptyCollection()][object[]]$Locks = @(), [bool]$LocksKnown = $false)
+    [string](Get-SIPipelineUpdateLiveness -Executions $Executions -Processes $Processes -NowUtc $NowUtc -MaxHours $MaxHours -Locks $Locks -LocksKnown $LocksKnown).Running
 }
 
 function ConvertFrom-SIPipelineUpdateWaitsTag {
@@ -1408,32 +1430,43 @@ function Get-SIPipelineUpdateStart {
     [pscustomobject]@{ Start = $true; Running = $false; Text = '' }
 }
 
-function Get-SIPipelineUpdateOverdueStart {
+function Get-SIPipelineEndOfRunUpdateFirst {
     <#
-        PURE (#947 (b), owner 2026-10-29). An update has waited -MaxHours (6) or more for the pipeline (its wait mark -Waits,
-        kind 'run', SinceUtc = when it first began to wait): the runner starts the updater ON A BUSY WAKE-UP TOO -- the update
-        then cancels the run that started on an older version and installs (SI-UpdaterWaitBound.ps1 Invoke-SIUpdaterOverdueCancel).
-        Without this an update that waits would only be asked again at its next daily start. At most once every -EveryMinutes
-        (60): an updater execution that is running, or that started within that time, is not started again.
-        -Executions: the updater job's executions (ARM shape). Returns @{ Start; Text }.
+        PURE. #1129 (live 2026-11-05, ring 0: an update that waited for a run was held 21 minutes after the run's last step by
+        the end-of-run work -- 640 s of statistics refresh before the publish, the publish, the refresh again). When an update
+        waits for THIS run (the updater's wait mark, kind 'run'), the end-of-run work that is maintenance only -- the
+        statistics refresh, which since 2026-11-05 runs only after the publish -- is left to the next run's end, so the update lands as soon as the run is published; the
+        publish itself (data) always runs. -Waits: the mark (ConvertFrom-SIPipelineUpdateWaitsTag) or $null. Returns the
+        line to say, or '' (nothing waits / a 'store' mark: the refresh runs as always).
     #>
-    param($Waits, [AllowEmptyCollection()][object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$NowUtc, [int]$MaxHours = 6, [int]$EveryMinutes = 60)
-    $no = { param($t) [pscustomobject]@{ Start = $false; Text = $t } }
-    if (-not $Waits -or [string]$Waits.Kind -ne 'run' -or -not $Waits.SinceUtc) { return (& $no '') }
-    $now = $NowUtc.ToUniversalTime()
-    $hours = ($now - ([datetime]$Waits.SinceUtc).ToUniversalTime()).TotalHours
-    if ($hours -lt $MaxHours) { return (& $no '') }
-    foreach ($e in @($Executions | Where-Object { $_ })) {
-        $p = if ($e.PSObject.Properties['properties']) { $e.properties } else { $e }
-        $st = [string]$p.status
-        $t = $null
-        if ($p.PSObject.Properties['startTime'] -and "$($p.startTime)".Trim()) { try { $t = ([datetime]$p.startTime).ToUniversalTime() } catch { $t = $null } }
-        if ($st -in @('Running', 'Processing') -and -not ($p.PSObject.Properties['endTime'] -and "$($p.endTime)".Trim()) -and (-not $t -or ($now - $t).TotalHours -lt 6)) {
-            return (& $no ('the updater is running ({0})' -f [string]$e.name))
+    param($Waits)
+    if (-not $Waits -or [string]$Waits.Kind -ne 'run') { return '' }
+    $since = if ($Waits.SinceUtc) { (' (since {0:yyyy-MM-dd HH:mm}Z)' -f ([datetime]$Waits.SinceUtc).ToUniversalTime()) } else { '' }
+    ('an update of SecurityInsight waits for this run{0} -- the statistics refresh is left to the next run''s end, so the update is installed as soon as the run is published (the pages are not affected: only their speed)' -f $since)
+}
+
+function New-SIPipelineLockBeat {
+    <#
+        #1129 (live 2026-11-05, ring 0): the beat of the install's lock while the runner works on a run that has ENDED (the
+        statistics refresh, the publish, the second statistics refresh). Returns a script block that renews the lock
+        (-Control .HeartbeatLock with -Holder / -FlowRunId / -What) and answers whether it is still held.
+        WHY A FUNCTION: the runner built this beat as `{ $control.HeartbeatLock($lockHolder, ...) }.GetNewClosure()` inside
+        its run block. A GetNewClosure() block keeps only the variables of the scope it is made in; the runner's $control and
+        $lockHolder live in the runner script's own scope, and in the container the runner is started by the entry script
+        (`& $script`), so the closure saw $null -- every beat threw "You cannot call a method on a null-valued expression",
+        which the callers swallow. Live: the lock kept its 20:14:03Z heartbeat through 14+ minutes of statistics refresh and
+        publish, and would have lapsed (15 minutes) under a runner still publishing. Here every value is a parameter of this
+        function, so the closure always holds them. A failing beat is said ONCE per beat (-Log), never thrown.
+    #>
+    param([Parameter(Mandatory)]$Control, [Parameter(Mandatory)][string]$Holder, [string]$FlowRunId = '', [string]$What = '', [scriptblock]$Log)
+    $beatState = @{ Said = $false }
+    {
+        try { [bool]$Control.HeartbeatLock($Holder, $FlowRunId, $What) }
+        catch {
+            if (-not $beatState.Said -and $Log) { $beatState.Said = $true; try { & $Log 'WARN' ('the install''s lock could not be renewed ({0}) -- the work goes on; the lock lapses 15 minutes after its last renewal' -f $_.Exception.Message) } catch { } }
+            $false
         }
-        if ($t -and ($now - $t).TotalMinutes -lt $EveryMinutes) { return (& $no ('the updater started {0} minutes ago ({1})' -f [int]($now - $t).TotalMinutes, [string]$e.name)) }
-    }
-    [pscustomobject]@{ Start = $true; Text = ('an update has waited {0} hours for the pipeline -- the updater is started; it cancels a run that started on an older version and installs' -f [int][Math]::Floor($hours)) }
+    }.GetNewClosure()
 }
 
 # =====================================================================================================================
@@ -1641,7 +1674,10 @@ function Invoke-SIPipelineDrain {
              stays queued and starts on a later wake-up, on the new build. Asked before the queue, and again before each
              further queued run. A wait of kind 'store' (the updater could not read the state store) starts the updater
              but holds no run back. NEVER A BLOCK: -StartUpdate answering that the updater already ran for this mark and
-             ended without taking it away (or that it could not be started) is said, and the queue runs;
+             ended without taking it away (or that it could not be started) is said, and the queue runs. #1129: the
+             install's lock is released BEFORE the updater is started (-StartUpdate { param($Waits, $BeforeStart) } calls
+             $BeforeStart right before its start), so the update's run gate finds the install free and installs instead of
+             deferring on this runner's lock; a start that fails after that release ends the wake-up (the next one runs the queue);
           then the queued requests run one after the other, oldest first, until the queue is empty; the lock is beaten
              on every save;
           5. the lock is released.
@@ -1649,7 +1685,7 @@ function Invoke-SIPipelineDrain {
         $Previous, $FlowRunId) } (one run -> its final record; $Request $null = resume), -UpdateRunning { } ('' = no update
         runs, else why; a failing check never stops the pipeline), -CodeCurrent { } ($false once an update has replaced the
         code this runner runs; a failing check counts as current), -UpdateWaits { } ($null = no update waits, else
-        @{ Kind run | store; SinceUtc; SetUtc; Reason }; a failing check holds nothing back), -StartUpdate { param($Waits) }
+        @{ Kind run | store; SinceUtc; SetUtc; Reason }; a failing check holds nothing back), -StartUpdate { param($Waits, $BeforeStart) }
         (@{ Started; Text }), -Now, -Log.
         A RUNNER NEVER STARTS A NEW RUN ON REPLACED CODE: one execution drains the queue, and a long run outlives an update
         (the update never stops a running pipeline; since 2026-10-23 it waits for it). Before it takes ANOTHER request after a run it did, it asks -CodeCurrent;
@@ -1778,7 +1814,7 @@ function Invoke-SIPipelineDrain {
         # 'store' starts it and holds nothing back; a start that did not happen, or an updater that already ran for this
         # mark and left it, is said and the queue runs (never a block). Returns $true = hold the queue (this wake-up ends).
         # once per mark in a wake-up: the same mark (its SetUtc) asked again after a run gets the answer it had (no second start)
-        $hand = @{ Started = ''; Mark = $null; Hold = $false }
+        $hand = @{ Started = ''; Mark = $null; Hold = $false; Released = $false }
         $handOff = {
             if (-not $UpdateWaits) { return $false }
             $wt = $null
@@ -1786,10 +1822,29 @@ function Invoke-SIPipelineDrain {
             if (-not $wt) { return $false }
             if ($null -ne $hand.Mark -and $wt.SetUtc -and ([datetime]$wt.SetUtc).ToUniversalTime() -eq $hand.Mark) { return $hand.Hold }
             $hand.Mark = $(if ($wt.SetUtc) { ([datetime]$wt.SetUtc).ToUniversalTime() } else { [datetime]::MinValue }); $hand.Hold = $false
+            # #1129 (live 2026-11-05, ring 0): the updater is started only AFTER this runner has released the install's lock.
+            # Before, the lock was released in this function's finally -- after the start -- so the updater's run gate could
+            # find "the pipeline runner holds the install" and defer again, leaving a new mark that only the NEXT wake-up acts
+            # on. -StartUpdate calls this block right before its start (and only when it really starts the updater); a wait
+            # of kind 'store' holds no run back, so its lock is kept (the queue may still run under it).
+            $relCtl = $Control; $relHolder = $Holder; $relHand = $hand; $relLog = $Log
+            $releaseFirst = $null
+            if ([string]$wt.Kind -ne 'store') {
+                $releaseFirst = {
+                    try { $relCtl.ReleaseLock($relHolder); $relHand.Released = $true; & $relLog 'INFO' 'the install''s lock is released before the updater is started -- the update finds the install free' }
+                    catch { & $relLog 'WARN' ('the install''s lock could not be released before the updater is started ({0}) -- it frees itself when its heartbeat is old' -f $_.Exception.Message) }
+                }.GetNewClosure()
+            }
             $st = $null
             if ($StartUpdate) {
-                try { $st = & $StartUpdate $wt } catch { $st = [pscustomobject]@{ Started = $false; Text = ('the updater could not be started ({0})' -f $_.Exception.Message) } }
+                try { $st = & $StartUpdate $wt $releaseFirst } catch { $st = [pscustomobject]@{ Started = $false; Text = ('the updater could not be started ({0})' -f $_.Exception.Message) } }
             } else { $st = [pscustomobject]@{ Started = $false; Text = 'this runner cannot start the updater' } }
+            if ($hand.Released -and -not ($st -and $st.Started)) {
+                # the lock is given up already: this runner takes nothing more -- the next wake-up runs the queue (or starts the updater)
+                & $Log 'WARN' ('an update of SecurityInsight waits for the pipeline, but {0} -- the install''s lock was released for it, so what waits in the queue starts on the next wake-up' -f $(if ($st -and $st.Text) { $st.Text } else { 'the updater was not started' }))
+                $hand.Hold = $true
+                return $true
+            }
             $ql = @(try { $Control.List() } catch { @() }); $nq = @($ql | Where-Object { $_.State -eq 'Queued' }).Count
             $since = if ($wt.SinceUtc) { (' since {0:yyyy-MM-dd HH:mm}Z' -f ([datetime]$wt.SinceUtc).ToUniversalTime()) } else { '' }
             if ($st -and $st.Started) {

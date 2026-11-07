@@ -666,6 +666,9 @@ function Get-SIContainerJobResources {
     # never keep the next hour's tick from starting (the execution guard skips a tick while the previous one runs). Its size
     # is the floor every job gets (2 CPU / 4 GiB -- the update raises any job below it).
     if ($Engine -eq 'heartbeat') { $timeout = Get-SIHeartbeatJobRunLimit }
+    # the users' sign-in methods read in the background: the same short limit -- a run reads for its slice (8 minutes by
+    # default, at most 25) and a run that hangs must never keep the next one from starting
+    if ($Engine -eq 'signin-methods') { $timeout = Get-SIHeartbeatJobRunLimit }
     if ($TenantCounts) {
         $sized = Get-SITenantSizedJobResources -Engine $Engine -Counts $TenantCounts
         if ($sized -and [double]($sized.Memory -replace 'Gi$', '') -gt [double]($mem -replace 'Gi$', '')) {
@@ -1030,6 +1033,12 @@ function Get-SIContainerEngineDispatch {
                 return [pscustomobject]@{ Script = $script; Args = $a; Skip = 'the configuration backup has no database: set SI_ProSqlServer and SI_ProSqlDatabase to enable it' }
             }
             return [pscustomobject]@{ Script = $script; Args = $a; Skip = $null }
+        }
+        'signin-methods' {
+            # the users' sign-in methods read in the background (caj-si-signin-methods), on its own timer outside the pipeline:
+            # Graph and its own tables only, never a lock of the pipeline or the updater. It decides itself what it can do (no
+            # database / the setting off = it says so and ends) and never fails.
+            return [pscustomobject]@{ Script = 'engine/signin-methods/Invoke-SISignInMethods.ps1'; Args = $a; Skip = $null }
         }
         'heartbeat' {
             # #718: the hourly status report to Invardia (caj-si-heartbeat), on its own timer outside the pipeline. It decides
@@ -1943,6 +1952,18 @@ function Get-SIBootstrapTriggerPlan {
     [pscustomobject]@{ Trigger = 'Schedule'; RememberCron = '' }
 }
 
+function Get-SIBootstrapProducerTriggerPlan {
+    <#
+        PURE (#1096). How Bootstrap CREATES a collect producer (caj-si-<engine>-producer): exactly as its engine's job
+        (-TriggerPlan: Get-SIBootstrapTriggerPlan for the engine). Pipeline mode: the engine is a step, the pipeline starts its
+        producer -> Manual, the engine's timer (-Cron) remembered in si-disabled-cron (a later switch to per-job schedules gives
+        it back). Schedules mode, or an engine that is no step: its cron. @{ Trigger = Manual | Schedule; RememberCron }.
+    #>
+    param([Parameter(Mandatory)]$TriggerPlan, [string]$Cron)
+    if ([string]$TriggerPlan.Trigger -eq 'Manual') { return [pscustomobject]@{ Trigger = 'Manual'; RememberCron = $(if ([string]$TriggerPlan.RememberCron) { [string]$TriggerPlan.RememberCron } else { $Cron }) } }
+    [pscustomobject]@{ Trigger = 'Schedule'; RememberCron = '' }
+}
+
 function ConvertTo-SIManualCreateArgs {
     <#
         PURE (#269). `az containerapp job create` arguments for a Schedule job turned into the same job with a MANUAL
@@ -2038,6 +2059,12 @@ function Get-SIExecutionGuardDecision {
     if ($Engine -eq 'data-out' -or $Job -eq 'caj-si-data-out') {
         return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $false
             Message = ('[data-out] data out is already sending (execution {0}, started {1}); this start does nothing -- that run sends the newest marked collection.' -f $Other.name, $started) }
+    }
+    # the users' sign-in methods read in the background: a run while the previous one still reads is normal (a slow tenant), not
+    # a guard -- this one ends at once and the running one carries on; one plain line, no guard event
+    if ($Engine -eq 'signin-methods' -or $Job -eq 'caj-si-signin-methods') {
+        return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $false
+            Message = ('[signin-methods] the previous background read is still running (execution {0}, started {1}); this run ends at once and reads nothing.' -f $Other.name, $started) }
     }
     # #1021: the support grant job -- every start carries its own request on the queue, so one is never dropped; the signed
     # procedures' lock keeps two grants on the same database apart (framework 4b: support always works)

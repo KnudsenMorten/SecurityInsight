@@ -19,6 +19,9 @@
       updater-job    Install-SIUpdaterJob -Source invardia -UpdateRing <updateRing> -UseManagedIdentity -GrantSql (#417).
                      Only where the package carries the Invardia update client: the free version's update channel is
                      built separately, and until then the step says so and is skipped.
+      db-job         framework SEC-08: the database setup job caj-si-dbinit (setup\_shared\SI-DbInitJob.ps1) -- its own
+                     identity id-si-dbinit made, added to the SQL admin group and READ BACK from its memberOf, the job made
+                     and started once, waited for, its result read (Invoke-SIInstallDbJob).
     The step ids keep their names (pro-sql, pro-schema, ...): the status page and support tickets refer to them.
 
     The paid steps (the licence, the v2.2 CMDB migration) and the Invardia Support app's database access stay in
@@ -39,6 +42,9 @@ $script:SIInstallLedgerDatabase = 'sqldb-si-identity'
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-SqlTier.ps1'))
 # #695: a new database administrator is waited for before the first sign-in (Invoke-SISqlLoginRetry, Test-SISqlLoginNotReady)
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-SqlAdminReady.ps1'))
+# framework SEC-08: the database setup job caj-si-dbinit (step db-job) and the one add-and-wait policy for a group member
+. ([IO.Path]::Combine($PSScriptRoot, 'SI-DbInitJob.ps1'))
+if (-not (Get-Command -Name Invoke-SIGroupMemberAddRetry -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-GroupMemberAdd.ps1')) }
 
 function Set-SIInstallSqlAdminSetAt {
     <# #695: the moment the database server's Entra administrator was set by this install (UTC, round-trip text), so the
@@ -251,6 +257,58 @@ function Set-SIInstallSqlAzureServicesRule {
         -ActionText 'Run the install command again: it continues from this step.' -Command $Ctx.ResumeCommand)
 }
 
+function Get-SIInstallSqlPrivateShapeCheck {
+    <#
+        #1091: the end-of-install check of a PRIVATE install's database server -- the private shape, never the public rule:
+          * NO AllowAllWindowsAzureIps rule (its presence lets every Azure address in -- owner: "we cannot have anything public");
+          * public network access Disabled, and a private endpoint whose connection is Approved (once the private-network
+            step has run: before it, the server is still open by design).
+        -RuleRead = the result of the rule's read (Invoke-SIInstallArmTry Get-SISqlFirewallRule). Each problem is
+        'private-network|<sentence>' -- that step closes the server and takes the rule away. Something that could not be
+        READ is not reported. Never throws.
+    #>
+    param([Parameter(Mandatory)]$Ctx, $RuleRead, [string[]]$Done = @())
+    $out = New-Object System.Collections.Generic.List[string]
+    try {
+        $n = $Ctx.Names; $srv = [string]$n.SqlServer
+        if ($RuleRead -and $RuleRead.Ok -and $RuleRead.Value) {
+            $out.Add('private-network|' + ('the database server {0} has the rule AllowAllWindowsAzureIps, which lets every Azure address in -- a private install must not have it (its jobs and web app reach the database through its private endpoint)' -f $srv))
+        }
+        if (@($Done) -contains 'private-network') {
+            $s = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlServerNetworkShape' -Arguments ([ordered]@{ ResourceGroupName = [string]$n.ResourceGroup; ServerName = $srv })
+            if ($s.Ok -and $s.Value) {
+                $pna = [string](Get-SIInstallProp $s.Value 'PublicNetworkAccess')
+                if ($pna -ne 'Disabled') { $out.Add('private-network|' + ('the database server {0} still accepts connections from outside your network (public network access {1}) -- a private install has it Disabled' -f $srv, $(if ($pna) { $pna } else { 'not set, which Azure takes as Enabled' }))) }
+                $ok = @(@(Get-SIInstallProp $s.Value 'PrivateEndpoints') | Where-Object { $_ -and [string](Get-SIInstallProp $_ 'Status') -eq 'Approved' })
+                if (-not $ok.Count) { $out.Add('private-network|' + ('the database server {0} has no approved private endpoint -- the install''s jobs and web app cannot reach it from inside your network' -f $srv)) }
+            }
+        }
+    } catch { }
+    $out.ToArray()
+}
+
+function Remove-SIInstallSqlAzureServicesRule {
+    <#
+        #1091: a PRIVATE install's database server carries NO AllowAllWindowsAzureIps rule. The install never makes it on a
+        private install (Set-SIInstallSqlAzureServicesRule, the web app's deploy, the updater: none of them); one that is
+        there anyway (left from before the install went private) is taken away by the private-network step once the
+        server's public access is closed, and READ BACK. Returns a line for the step's result ('' = nothing to do); a
+        removal that fails says so -- never throws.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    try {
+        if (-not [bool]$Ctx.Values['privateNetwork']) { return '' }
+        $a = [ordered]@{ ResourceGroupName = [string]$Ctx.Names.ResourceGroup; ServerName = [string]$Ctx.Names.SqlServer; Name = 'AllowAllWindowsAzureIps' }
+        $have = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlFirewallRule' -Arguments $a
+        if (-not $have.Ok) { return ('the database server''s rule AllowAllWindowsAzureIps could not be read: {0}' -f $have.Error) }
+        if (-not $have.Value) { return '' }
+        $rm = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Remove-SISqlFirewallRule' -Arguments $a
+        $back = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlFirewallRule' -Arguments $a
+        if ($rm.Ok -and $back.Ok -and -not $back.Value) { return ('the database server {0}: the rule AllowAllWindowsAzureIps removed (read back) -- a private install has no public rule' -f $a.ServerName) }
+        ('the database server {0} still has the rule AllowAllWindowsAzureIps -- it could not be removed{1}' -f $a.ServerName, $(if (-not $rm.Ok) { ': ' + $rm.Error } else { '' }))
+    } catch { [string]$_.Exception.Message }
+}
+
 function Get-SIInstallSqlAdminGroupArgs {
     <# The arguments of setup/Set-SISqlAdminGroup.ps1 for this install: the admin group (grp-si-sql-admins, or the
        customer's own group by its id) with the installing identity as a member. Throws when a named group is not found. #>
@@ -326,7 +384,13 @@ function Get-SIInstallEndCheck {
                 if ($r.Ok -and $r.Value -eq $false) { $bad.Add($from + '|' + ('the database {0} is not on {1}' -f $db, $n.SqlServer)) }
             }
             $r = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlFirewallRule' -Arguments ([ordered]@{ ResourceGroupName = $rg; ServerName = $n.SqlServer; Name = 'AllowAllWindowsAzureIps' })
-            if ($r.Ok -and -not $r.Value) { $bad.Add($from + '|' + ('the database server {0} has no rule that lets the install''s own jobs and web app in (AllowAllWindowsAzureIps)' -f $n.SqlServer)) }
+            if ([bool]$v['privateNetwork']) {
+                # #1091 (a private Pro install on 3.0.31): a PRIVATE install's database has its public access closed and its
+                # jobs and web app reach it through its private endpoint -- the rule must NOT be there (owner: "we cannot have
+                # anything public"). Its PRESENCE is the problem; the private-network step takes it away.
+                foreach ($x in @(Get-SIInstallSqlPrivateShapeCheck -Ctx $Ctx -RuleRead $r -Done $done)) { $bad.Add([string]$x) }
+            }
+            elseif ($r.Ok -and -not $r.Value) { $bad.Add($from + '|' + ('the database server {0} has no rule that lets the install''s own jobs and web app in (AllowAllWindowsAzureIps)' -f $n.SqlServer)) }
         }
         $from = 'web-app'
         if ($done -contains 'web-app' -and [bool]$v['webApp']) {
@@ -488,6 +552,124 @@ function Test-SIInstallSqlUnregistered {
     <# True when preflight-providers found Microsoft.Sql not registered yet (the install registers it before pro-sql). #>
     param($Ctx)
     @($Ctx.Facts['providersToRegister'] | Where-Object { $_ }) -contains 'Microsoft.Sql'
+}
+
+function Get-SIInstallDbJobAdminGroup {
+    <# The SQL admin group's object id for the database setup job: the server's Entra administrator when it is a group, else
+       the install's own group (the answer sqlAdminGroupId, else the group by the name the install gave it). '' = not found. #>
+    param([Parameter(Mandatory)]$Ctx)
+    $cur = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlServerEntraAdmin' -Arguments ([ordered]@{ ResourceGroupName = $Ctx.Names.ResourceGroup; Name = $Ctx.Names.SqlServer })
+    if ($cur.Ok -and $cur.Value -and [string](Get-SIInstallProp $cur.Value 'PrincipalType') -ieq 'Group' -and [string](Get-SIInstallProp $cur.Value 'Sid')) { return [string](Get-SIInstallProp $cur.Value 'Sid') }
+    $gid = ([string]$Ctx.Values['sqlAdminGroupId']).Trim()
+    if ($gid) { return $gid }
+    $names = @((Get-SIInstallSqlAdminGroupName -Names $Ctx.Names))
+    if ($Ctx.Names -is [System.Collections.IDictionary] -and $Ctx.Names.Contains('SqlAdminGroupDisplayName') -and [string]$Ctx.Names['SqlAdminGroupDisplayName']) { $names += [string]$Ctx.Names['SqlAdminGroupDisplayName'] }
+    foreach ($nm in @($names | Select-Object -Unique)) {
+        try {
+            $g = Invoke-SIInstallGraph -Ctx $Ctx -Uri ("https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '{0}'&`$select=id,displayName" -f $nm.Replace("'", "''"))
+            $one = @(Get-SIInstallProp $g 'value' | Where-Object { $_ })
+            if ($one.Count -eq 1) { return [string](Get-SIInstallProp $one[0] 'id') }
+        } catch { }
+    }
+    ''
+}
+
+function Invoke-SIInstallDbJob {
+    <#
+        framework SEC-08 (Invardia DESIGN ch 12 points 1-3, 7, 8): the guided install's database setup job.
+          1. the job's OWN identity id-si-dbinit in the install's resource group (made, read back);
+          2. a member of the install's SQL admin group (the server's Entra administrator) -- added with the person's sign-in
+             (an Entra step, not SQL: the one rights step a person does) and READ BACK from the identity's memberOf BEFORE
+             the job is started (a managed identity's token is cached for hours: started too early, it would keep a token
+             without the group);
+          3. the job caj-si-dbinit made with the engine jobs' image, environment and pull identity and the install's
+             product identities, started ONCE (SI_DBINIT_BY installer, the Invardia Support app when the install names one),
+             waited for; its result = the execution's own status (the job exits 0 only when every identity read back).
+        Returns a step result. Anything that could not be done is a WARNING with what to do, never a failed install: the
+        steps before it gave the same database rights with the person's sign-in on this version.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    $n = $Ctx.Names; $nn = Get-SIDbInitNames
+    $sub = [string]$Ctx.Values['subscriptionId']; $rg = [string]$n.ResourceGroup
+    # NOT closures: they run inside the shared functions and find $__siDbCtx in this function's scope
+    $__siDbCtx = $Ctx
+    $arm = { param([string]$Method, [string]$Path, $Body)
+        $a = [ordered]@{ Method = $Method; Path = $Path }
+        if ($null -ne $Body) { $a['Body'] = $Body }
+        if ($Method -eq 'GET') { $a['AllowNotFound'] = $true }
+        Invoke-SIInstallAz -Ctx $__siDbCtx -Command 'Invoke-SIArm' -Arguments $a }
+    $graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIInstallGraph -Ctx $__siDbCtx -Method $Method -Uri $Uri -Body $Body }
+    $sleep = $Ctx.Seams.Sleep
+    $warn = { param($msg, $what) New-SIInstallResult -State 'warning' -Message ('The database setup job: {0}' -f $msg) -Action ([ordered]@{ text = $what; command = $Ctx.ResumeCommand }) }
+    try {
+        # an install signed in as an application made itself the server's administrator for its own steps (#616): the job
+        # signs in through the GROUP, so the group is the administrator again first (a later step sets the app again)
+        if ([bool]$Ctx.Facts['sqlAdminIsInstallApp']) { $back = Restore-SIInstallSqlAdminGroup -Ctx $Ctx; if ($back) { return (& $warn ('the admin group could not be made the database server''s administrator again ({0}), so the job was not started' -f $back) 'Run the install command again: it continues from this step.') } }
+        # 1. the identity
+        $jobs = @((Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SIContainerAppJobList' -Arguments ([ordered]@{ ResourceGroupName = $rg })).Value | Where-Object { $_ })
+        $tpl = Get-SIDbInitTemplateJob -Jobs $jobs
+        if (-not $tpl.Ok) { return (& $warn $tpl.Problem 'Run the install command again once the engine jobs are there; or the next update makes the job.') }
+        $mi = Set-SIDbInitIdentity -Arm $arm -SubscriptionId $sub -ResourceGroup $rg -Location $tpl.Location -Sleep $sleep
+        if (-not $mi.Ok) { return (& $warn $mi.Problem 'Run the install command again: it continues from this step.') }
+        # 2. the membership, read back from the identity's side
+        $gid = Get-SIInstallDbJobAdminGroup -Ctx $Ctx
+        if (-not $gid) { return (& $warn ('the SQL admin group of {0} was not found, so its identity {1} could not be made a member' -f $n.SqlServer, $nn.Identity) 'Make the admin group the database server''s administrator (setup\Set-SISqlAdminGroup.ps1), then run the install command again.') }
+        # framework §4.5 SQL-ADMIN-GROUP G2-G4: converged (direct, else an active PIM-for-Groups assignment) and renewed when it
+        # ends within 30 days -- the same path the updater runs on every update
+        $m = Sync-SIDbInitMembership -Graph $graph -PrincipalId $mi.PrincipalId -GroupId $gid -Sleep $sleep -Print { param($t) Write-SIInstallConsole -Ctx $__siDbCtx -Text $t -Color 'DarkGray' }
+        if ($m.State -notin 'already', 'added') {
+            return (& $warn ('its identity {0} is not a member of the SQL admin group ({1}), so the job was not started -- the product starts it once the membership is there' -f $nn.Identity, $m.Detail) `
+                ('An Entra administrator (Privileged Role Administrator for a role-assignable group) adds the managed identity {0} to the SQL admin group; then run the install command again.' -f $nn.Identity))
+        }
+        if ($m.Renewal -and [string]$m.Renewal.State -in 'renewed', 'failed') { Write-SIInstallConsole -Ctx $__siDbCtx -Text ('   {0}' -f $m.Renewal.Detail) -Color $(if ($m.Renewal.State -eq 'failed') { 'Yellow' } else { 'DarkGray' }) }
+        # 3. the job, one run, its result
+        $principals = New-Object System.Collections.Generic.List[object]
+        $addP = { param($c, $name, $cid) if ($name -and "$cid" -match '^[0-9a-fA-F-]{36}$' -and -not @($principals | Where-Object { $_.clientId -ieq $cid -or $_.component -eq $c }).Count) { $principals.Add([ordered]@{ component = $c; name = [string]$name; clientId = [string]$cid }) } }
+        & $addP 'engine' ([string]$n.ManagedIdentity) ([string]$Ctx.Facts['identityClientId'])
+        $updPid = ''
+        foreach ($k in @(@{ C = 'updater'; K = 'UpdaterIdentity' }, @{ C = 'web'; K = 'WebIdentity' }, @{ C = 'mcp'; K = 'McpIdentity' }, @{ C = 'tagging'; K = 'TaggingIdentity' })) {
+            $idName = Get-SISetupComponentName -Names $n -Key $k.K
+            $r = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SIUserAssignedIdentity' -Arguments ([ordered]@{ ResourceGroupName = $rg; Name = $idName; ErrorAction = 'SilentlyContinue' })
+            if ($r.Ok -and $r.Value) {
+                & $addP $k.C $idName ([string](Get-SIInstallProp $r.Value 'ClientId'))
+                if ($k.C -eq 'updater') { $updPid = [string](Get-SIInstallProp $r.Value 'PrincipalId') }
+            }
+        }
+        # framework §4.5 G5: the updater identity's Microsoft Graph permissions -- the three PIM-for-Groups rights + GroupMember.Read.All + Application.Read.All (read only), granted
+        # here with the person's sign-in (the updater cannot grant itself) and read back
+        $g5 = $null
+        if ($updPid) {
+            $g5 = Grant-SIDbInitUpdaterGraphRoles -Graph $graph -PrincipalId $updPid -Sleep $sleep
+            Write-SIInstallConsole -Ctx $__siDbCtx -Text ('   {0}' -f $g5.Detail) -Color $(if ($g5.Ok) { 'DarkGray' } else { 'Yellow' })
+        }
+        if (-not @($principals | Where-Object { $_.component -eq 'engine' }).Count) { return (& $warn 'the engine identity''s client id is not known to this run' 'Run the install command again: it continues from this step.') }
+        . ([IO.Path]::Combine($Ctx.SIRoot, 'engine', 'pro-settings', 'SI-GrantProcedure.ps1'))
+        . ([IO.Path]::Combine($Ctx.SIRoot, 'engine', 'pro-settings', 'SI-EngineGrants.ps1'))
+        # the job's lines reach the install's Log Analytics workspace (a warning only, never a stop)
+        $wsId = $tpl.WorkspaceResourceId; if (-not $wsId) { try { $wsId = [string](Get-SIInstallInfra -Ctx $Ctx)['WorkspaceResourceId'] } catch { $wsId = '' } }
+        $lg = Set-SIDbInitEnvironmentLogs -Arm $arm -EnvironmentId $tpl.EnvironmentId -WorkspaceResourceId $wsId
+        Write-SIInstallConsole -Ctx $Ctx -Text ('   ' + $lg.Line) -Color $(if ($lg.Ok) { 'DarkGray' } else { 'Yellow' })
+        $body = Get-SIDbInitJobBody -Location $tpl.Location -EnvironmentId $tpl.EnvironmentId -Image $tpl.Image -RegistryServer $tpl.RegistryServer -PullIdentityId $tpl.PullIdentityId `
+                    -IdentityId $mi.Id -IdentityClientId $mi.ClientId -Server (Get-SIInstallSqlFqdn -Ctx $Ctx) -Database $script:SIInstallProDatabase -LedgerDatabase $script:SIInstallLedgerDatabase `
+                    -Principals $principals.ToArray() -SignedGrants ([bool](Test-SIGrantProcedureSetup -Values $Ctx.Values)) -EngineRoleOnly ([bool](Test-SIEngineLeastPrivilegeSetup -Values $Ctx.Values))
+        $job = Set-SIDbInitJob -Arm $arm -SubscriptionId $sub -ResourceGroup $rg -Body $body -Sleep $sleep
+        if (-not $job.Ok) { return (& $warn $job.Problem 'Run the install command again: it continues from this step.') }
+        $app = ''; try { $app = ([string]$Ctx.Values['supportAppId']).Trim() } catch { $app = '' }
+        $support = if ($app -match '^[0-9a-fA-F-]{36}$') { '{0}|{1}' -f $app, 'invardia-support-app' } else { '' }
+        $run = Start-SIDbInitRun -Arm $arm -JobId $job.JobId -Job $job.Job -By 'installer' -Support $support -Sleep $sleep
+        $Ctx.Facts['dbJobExecution'] = $run.Execution
+        if (-not $run.Ok) {
+            return (& $warn ('the run {0} ended {1} -- its lines: {2}' -f $(if ($run.Execution) { $run.Execution } else { '(not started)' }), $run.Status, (Get-SIDbInitLogText -ResourceGroup $rg -Execution $run.Execution)) `
+                'Fix the cause the job''s lines name, then run the install command again; the next update also runs it.')
+        }
+        if ($g5 -and -not $g5.Ok) {
+            return (& $warn ('it ran (execution {0}), but {1} -- without them the updater cannot keep the job identity''s membership of the SQL admin group current' -f $run.Execution, $g5.Detail) `
+                'An Entra administrator grants the updater identity those Microsoft Graph application permissions (or run the install command again with that right).')
+        }
+        New-SIInstallResult -Message ('The database setup job {0} ran as its own identity {1} (a member of the SQL admin group, read back): every database user of the install was made and read back (execution {2}). Updates run it again; nobody needs database admin rights for it.' -f $nn.Job, $nn.Identity, $run.Execution)
+    } catch {
+        & $warn ('it could not be set up: {0}' -f $_.Exception.Message) 'Run the install command again: it continues from this step.'
+    }
 }
 
 function Get-SIInstallDataStepTable {
@@ -889,9 +1071,15 @@ function Get-SIInstallDataStepTable {
         # names a Pro edition in force -- a licence bought later switches it on, a removed one off, with no redeploy
         # (pro-management/src/SI.Management.Core/Licensing/McpLicenceGate.cs). No edition check here.
         if ([bool]$v['aiClassification'] -and $v['openAiEndpoint']) { $dep.ChatEndpoint = [string]$v['openAiEndpoint']; $dep.ChatDeployment = [string]$v['openAiDeployment'] }
+        $script:SIInstallLastDeployResult = $null
         Use-SIInstallUserSqlToken -Ctx $ctx -Action {
-            Assert-SIInstallScriptOk -Ctx $ctx -What 'Deploying the web app' -Result (Invoke-SIInstallScript -Ctx $ctx -RelativePath 'pro-management/deploy/Deploy-SIManagement.ps1' -Arguments $dep)
+            $script:SIInstallLastDeployResult = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'pro-management/deploy/Deploy-SIManagement.ps1' -Arguments $dep
+            Assert-SIInstallScriptOk -Ctx $ctx -What 'Deploying the web app' -Result $script:SIInstallLastDeployResult
         }
+        $depResult = $script:SIInstallLastDeployResult
+        # #1098: what the web app's sign-in key step could not do with the installer's rights (a refused role write on the key
+        # = not known) -- a CUSTOMER TASK at the end of this step, never a stop
+        $keyRingTasks = @(@($(if ($depResult) { $depResult.Objects })) | Where-Object { $_ -and $_.PSObject.Properties['WebKeyRingTasks'] } | ForEach-Object { @($_.WebKeyRingTasks) } | Where-Object { $_ } | ForEach-Object { [string]$_ })
         # #521: ARM reads (Get-SIContainerApp, Get-SIUserAssignedIdentity) -- no az CLI
         # The web app's ADDRESS is what the sign-in registration needs next: without it nobody can sign in. It is read until
         # Azure shows it (6 tries, 10 s apart); no address is NOT a finished step -- the step stops, and a resume runs it again.
@@ -957,6 +1145,10 @@ function Get-SIInstallDataStepTable {
             return (New-SIInstallResult -State 'warning' -Message ($msg + (' The web app''s sign-in permissions could NOT be consented to for the organisation ({0}): if your tenant does not let users consent, the first sign-in says "Approval required".' -f [string](Get-SIInstallProp $regInfo 'SignInConsentError'))) `
                 -Action ([ordered]@{ text = ('An administrator grants it once -- Entra admin center > Enterprise applications > {0} > Permissions > Grant admin consent. Or, after the support app has the permission to consent, run the install command again:' -f $n.WebAppDisplayName); command = $ctx.ResumeCommand }))
         }
+        if ($keyRingTasks.Count) {
+            return (New-SIInstallResult -State 'warning' -Message ($msg + ' The web app''s sign-in keys are not protected with its Key Vault key yet: you may not give the web app its role on the key.') `
+                -Action ([ordered]@{ text = ($keyRingTasks -join "`n"); command = $ctx.ResumeCommand }))
+        }
         New-SIInstallResult -Message $msg
     }
 
@@ -1020,6 +1212,12 @@ function Get-SIInstallDataStepTable {
         # called by the install next to where it closes its database firewall rule) -- not here: a resume that runs
         # another database step and skips this one would leave the application as the administrator.
         New-SIInstallResult -Message $done
+    }
+
+    # framework SEC-08: the database setup job (its identity in the SQL admin group, read back; one run; its result)
+    $t['db-job'] = {
+        param($ctx)
+        Invoke-SIInstallDbJob -Ctx $ctx
     }
     $t
 }

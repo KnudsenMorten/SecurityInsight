@@ -3,6 +3,10 @@
     SecurityInsight Pro -- ONE TIME: let the product updater (caj-si-updater) apply a release's database schema and grants.
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the updater's database user and its rights
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     Since #352 an update applies the release's Pro database schema (additive, gated) and the grants its code needs BEFORE it
     rolls any code -- never new code on an old schema. For that the updater's identity needs, on the Pro database:
       db_datareader + db_datawriter   its state rows and the template gate (most installs already have these)

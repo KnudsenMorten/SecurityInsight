@@ -13,7 +13,7 @@
          every request answered 500 on PIM internal (2026-10-21); the Windows test VM could not show it. The aspnet
          image carries ICU. -->
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>1.4.4</Version>
+    <Version>1.4.5</Version>
     <!-- A package with a known vulnerability (direct or transitive) FAILS the build: sign-in code never ships on one. -->
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>

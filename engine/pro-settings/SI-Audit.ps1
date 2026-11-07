@@ -95,7 +95,7 @@ function ConvertTo-SIAuditJson {
 function Get-SIAuditActor {
     <#
         Who a job / setup step runs as: the managed identity (its client id) in a container, else the signed-in Windows
-        account, else the operating-system user -- never a parameter (PIM BUG-180). -Job names the job it ran in.
+        account, else the operating-system user -- never a parameter. -Job names the job it ran in.
     #>
     param([string]$Job)
     $id = if (Get-Command -Name Get-SIProSessionActor -ErrorAction SilentlyContinue) { Get-SIProSessionActor }

@@ -12,7 +12,7 @@
       2. THE OLD WRONG CIs LEAVE THE RIGHT WAY: an eg device record with AD ids and no device id is a GONE link, so its CI
          is retired AT ONCE with the reason -- and a real device's CI that holds such a record stays active.
       3. ONE HARD ID, ONE ACTIVE CI: a CI whose records now build another CI (a merge left its old row behind -- the pilot's
-         xel-sql-05: the same Defender, Azure, Defender for Cloud ids on two active CIs; an Azure VM whose Exposure Graph
+         sql-host-05: the same Defender, Azure, Defender for Cloud ids on two active CIs; an Azure VM whose Exposure Graph
          node id changed) is retired at once, naming the survivor (Get-SICiMergedRetireSql) -- on a real SQL Server too.
     Offline: every query is a seam. Real-SQL cases run against the test VM's local SQL Server Express and skip, saying so,
     where there is none. PS 5.1 + 7.
@@ -55,17 +55,17 @@ BeforeAll {
             EntityIds = $eids; NodeProperties = [pscustomobject]@{ rawData = $raw }; SIDeviceCandidateCount = $count; SIDeviceCandidates = @($cands) }
     }
     $script:DcRaw = { param($rid) [pscustomobject]@{ adSid = ($script:DomSid + '-' + $rid); isDomainController = $true; isSensitive = $true; isExchangeServerDnsName = $false; isTaggedAsExchangeServer = $false } }
-    # the domain map: five unique onboarded domain-joined matches of the domain SID are in hngmn.local
-    $script:DomainRows = @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'hngmn.local'; Matches = 5 })
+    # the domain map: five unique onboarded domain-joined matches of the domain SID are in corp.example
+    $script:DomainRows = @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'corp.example'; Matches = 5 })
     $script:Map = ConvertTo-SIEgAdComputerDomainMap -Rows $script:DomainRows
 }
 
 Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
     It 'the pilot''s domain controller: one Defender device with its name, onboarded, domain-joined, in its SID''s proven domain -> matched' {
-        $row = & $script:Node 'n-dc7' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -raw (& $script:DcRaw 1001)
+        $row = & $script:Node 'n-dc7' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.corp.example')) -raw (& $script:DcRaw 1001)
         $m = Resolve-SIEgAdComputerMatch -Row $row -DomainMap $script:Map
         ($m.State, $m.DeviceId) | Should -Be @('matched', $script:Dc1Dev)
-        $m.Reason | Should -Match 'hngmn\.local'
+        $m.Reason | Should -Match 'corp\.example'
     }
     It 'its own DNS domain proves it directly (dnsHostName / dotted name / distinguished name); another DNS domain is refused' {
         $c = @((& $script:Cand $script:Dc1Dev 'srv7.corp.contoso.com'))
@@ -75,12 +75,12 @@ Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'srv7' $c -raw ([pscustomobject]@{ dnsHostName = 'srv7.fabrikam.local' }))).State | Should -Be 'domain_mismatch'
     }
     It 'the name is the sAMAccountName without its $, else the node name -- the first label, any case' {
-        $row = & $script:Node 'n' 'ignored' @((& $script:Cand $script:Dc1Dev 'AZVM-DC01.hngmn.local')) -raw ([pscustomobject]@{ sAMAccountName = 'AZVM-DC01$'; adSid = ($script:DomSid + '-1001') })
+        $row = & $script:Node 'n' 'ignored' @((& $script:Cand $script:Dc1Dev 'AZVM-DC01.corp.example')) -raw ([pscustomobject]@{ sAMAccountName = 'AZVM-DC01$'; adSid = ($script:DomSid + '-1001') })
         Get-SIEgAdComputerShortName -Row $row | Should -Be 'azvm-dc01'
         (Resolve-SIEgAdComputerMatch -Row $row -DomainMap $script:Map).State | Should -Be 'matched'
     }
     It 'NEVER a wrong merge: two devices with the name (or a count above the list) are ambiguous; none is no_device' {
-        $two = @((& $script:Cand $script:SqlA 'sql01.hngmn.local'), (& $script:Cand $script:SqlB 'sql01.other.local'))
+        $two = @((& $script:Cand $script:SqlA 'sql01.corp.example'), (& $script:Cand $script:SqlB 'sql01.other.local'))
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'sql01' $two -raw (& $script:DcRaw 1101)) -DomainMap $script:Map).State | Should -Be 'ambiguous'
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'sql01' @($two[0]) 3 -raw (& $script:DcRaw 1101)) -DomainMap $script:Map).State | Should -Be 'ambiguous' -Because 'the count is exact, the list is capped'
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ghost01' @() -raw (& $script:DcRaw 1102)) -DomainMap $script:Map).State | Should -Be 'no_device'
@@ -88,18 +88,18 @@ Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
     }
     It 'the one device must be onboarded and domain-joined' {
         $raw = & $script:DcRaw 1103
-        (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.hngmn.local' 'Domain Joined' 'Can be onboarded')) -raw $raw) -DomainMap $script:Map).State | Should -Be 'not_onboarded'
+        (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.corp.example' 'Domain Joined' 'Can be onboarded')) -raw $raw) -DomainMap $script:Map).State | Should -Be 'not_onboarded'
         foreach ($j in 'Workgroup', 'AAD Joined', '') {
-            (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.hngmn.local' $j)) -raw $raw) -DomainMap $script:Map).State | Should -Be 'not_domain_joined' -Because "join type '$j'"
+            (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.corp.example' $j)) -raw $raw) -DomainMap $script:Map).State | Should -Be 'not_domain_joined' -Because "join type '$j'"
         }
-        (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.hngmn.local' 'Hybrid Azure AD Join')) -raw $raw) -DomainMap $script:Map).State | Should -Be 'matched'
+        (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'ws01' @((& $script:Cand $script:Ws01 'ws01.corp.example' 'Hybrid Azure AD Join')) -raw $raw) -DomainMap $script:Map).State | Should -Be 'matched'
     }
     It 'a domain nothing proves is refused: no SID and no DNS domain, a SID domain only one machine vouches for, or split evenly' {
-        $c = @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local'))
+        $c = @((& $script:Cand $script:Dc1Dev 'azvm-dc01.corp.example'))
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'azvm-dc01' $c) -DomainMap $script:Map).State | Should -Be 'domain_unproven'
-        $one = ConvertTo-SIEgAdComputerDomainMap -Rows @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'hngmn.local'; Matches = 1 })
+        $one = ConvertTo-SIEgAdComputerDomainMap -Rows @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'corp.example'; Matches = 1 })
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'azvm-dc01' $c -raw (& $script:DcRaw 1001)) -DomainMap $one).State | Should -Be 'domain_unproven'
-        $split = ConvertTo-SIEgAdComputerDomainMap -Rows @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'hngmn.local'; Matches = 3 }, [pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'other.local'; Matches = 3 })
+        $split = ConvertTo-SIEgAdComputerDomainMap -Rows @([pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'corp.example'; Matches = 3 }, [pscustomobject]@{ DomainSid = $script:DomSid; Suffix = 'other.local'; Matches = 3 })
         $split[$script:DomSid].Suffix | Should -BeNullOrEmpty
         (Resolve-SIEgAdComputerMatch -Row (& $script:Node 'n' 'azvm-dc01' $c -raw (& $script:DcRaw 1001)) -DomainMap $split).State | Should -Be 'domain_unproven'
     }
@@ -118,7 +118,7 @@ Describe '#1052 the safe match (Resolve-SIEgAdComputerMatch)' {
     }
     It 'candidates read back as JSON text (the hunting API''s dynamic column) decide the same' {
         $row = & $script:Node 'n-dc7' 'azvm-dc01' @() 1 -raw (& $script:DcRaw 1001)
-        $row.SIDeviceCandidates = (ConvertTo-Json -InputObject @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -Compress)
+        $row.SIDeviceCandidates = (ConvertTo-Json -InputObject @((& $script:Cand $script:Dc1Dev 'azvm-dc01.corp.example')) -Compress)
         (Resolve-SIEgAdComputerMatch -Row $row -DomainMap $script:Map).State | Should -Be 'matched'
     }
 }
@@ -149,19 +149,19 @@ Describe '#1052 BEFORE / AFTER on the pilot fixture' {
         # (ambiguous), a computer account without a device (ghost01)
         $script:Arm1 = '/subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/rg-dc/providers/microsoft.compute/virtualmachines/azvm-dc01'
         $script:Estate = {
-            Add-SIRecordPart -Provider mde -RecordType device -Key $script:Dc1Dev -Part machine -Object ([pscustomobject]@{ id = $script:Dc1Dev; computerDnsName = 'azvm-dc01.hngmn.local'; osPlatform = 'WindowsServer2022'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; lastSeen = $script:Now.AddHours(-2).ToString('o') })
-            Add-SIRecordPart -Provider mde -RecordType device -Key $script:Dc2Dev -Part machine -Object ([pscustomobject]@{ id = $script:Dc2Dev; computerDnsName = 'azvm-dc02.hngmn.local'; osPlatform = 'WindowsServer2022'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; lastSeen = $script:Now.AddHours(-2).ToString('o') })
-            foreach ($d in $script:SqlA, $script:SqlB) { Add-SIRecordPart -Provider mde -RecordType device -Key $d -Part machine -Object ([pscustomobject]@{ id = $d; computerDnsName = 'sql01.hngmn.local'; osPlatform = 'WindowsServer2019'; lastSeen = $script:Now.AddHours(-2).ToString('o') }) }
-            Add-SIRecordPartFromSource -SourceSystem 'exposure-graph' -Object ([pscustomobject]@{ NodeId = 'dddd0000000000000000000000000dc1'; NodeLabel = 'device'; NodeName = 'azvm-dc01.hngmn.local'
+            Add-SIRecordPart -Provider mde -RecordType device -Key $script:Dc1Dev -Part machine -Object ([pscustomobject]@{ id = $script:Dc1Dev; computerDnsName = 'azvm-dc01.corp.example'; osPlatform = 'WindowsServer2022'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; lastSeen = $script:Now.AddHours(-2).ToString('o') })
+            Add-SIRecordPart -Provider mde -RecordType device -Key $script:Dc2Dev -Part machine -Object ([pscustomobject]@{ id = $script:Dc2Dev; computerDnsName = 'azvm-dc02.corp.example'; osPlatform = 'WindowsServer2022'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; lastSeen = $script:Now.AddHours(-2).ToString('o') })
+            foreach ($d in $script:SqlA, $script:SqlB) { Add-SIRecordPart -Provider mde -RecordType device -Key $d -Part machine -Object ([pscustomobject]@{ id = $d; computerDnsName = 'sql01.corp.example'; osPlatform = 'WindowsServer2019'; lastSeen = $script:Now.AddHours(-2).ToString('o') }) }
+            Add-SIRecordPartFromSource -SourceSystem 'exposure-graph' -Object ([pscustomobject]@{ NodeId = 'dddd0000000000000000000000000dc1'; NodeLabel = 'device'; NodeName = 'azvm-dc01.corp.example'
                     EntityIds = @('{"type":"SenseDeviceId","id":"' + $script:Dc1Dev + '"}'); NodeProperties = '{"rawData":{}}' })
             Add-SIRecordPartFromSource -SourceSystem 'exposure-graph' -Object ([pscustomobject]@{ NodeId = '875fbc2f00000000000000000000aaaa'; NodeLabel = 'microsoft.compute/virtualmachines'; NodeName = 'azvm-dc01'
                     EntityIds = @('{"type":"AzureResourceId","id":"' + $script:Arm1.ToUpperInvariant() + '"}'); NodeProperties = '{"rawData":{}}' })
             Add-SIRecordPart -Provider azure -RecordType azure_resource -Key $script:Arm1 -Part resource -Object ([pscustomobject]@{ id = $script:Arm1; name = 'azvm-dc01'; type = 'microsoft.compute/virtualmachines'; properties = [pscustomobject]@{ extended = [pscustomobject]@{ instanceView = [pscustomobject]@{ computerName = 'azvm-dc01' } } } }) -ResourceType 'microsoft.compute/virtualmachines'
         }
         $script:AccountRows = @(
-            (& $script:Node '777358c6613b4935b6ab5962926ef275' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.hngmn.local')) -raw (& $script:DcRaw 1001) -guid '6f9619ff-8b86-d011-b42d-00c04fc96401')
-            (& $script:Node '888358c6613b4935b6ab5962926ef276' 'azvm-dc02' @((& $script:Cand $script:Dc2Dev 'azvm-dc02.hngmn.local')) -raw (& $script:DcRaw 1002) -guid '6f9619ff-8b86-d011-b42d-00c04fc96402')
-            (& $script:Node '999358c6613b4935b6ab5962926ef277' 'sql01' @((& $script:Cand $script:SqlA 'sql01.hngmn.local'), (& $script:Cand $script:SqlB 'sql01.hngmn.local')) -raw (& $script:DcRaw 1101) -guid '6f9619ff-8b86-d011-b42d-00c04fc96403')
+            (& $script:Node '777358c6613b4935b6ab5962926ef275' 'azvm-dc01' @((& $script:Cand $script:Dc1Dev 'azvm-dc01.corp.example')) -raw (& $script:DcRaw 1001) -guid '6f9619ff-8b86-d011-b42d-00c04fc96401')
+            (& $script:Node '888358c6613b4935b6ab5962926ef276' 'azvm-dc02' @((& $script:Cand $script:Dc2Dev 'azvm-dc02.corp.example')) -raw (& $script:DcRaw 1002) -guid '6f9619ff-8b86-d011-b42d-00c04fc96402')
+            (& $script:Node '999358c6613b4935b6ab5962926ef277' 'sql01' @((& $script:Cand $script:SqlA 'sql01.corp.example'), (& $script:Cand $script:SqlB 'sql01.corp.example')) -raw (& $script:DcRaw 1101) -guid '6f9619ff-8b86-d011-b42d-00c04fc96403')
             (& $script:Node 'aaa358c6613b4935b6ab5962926ef278' 'ghost01' @() -raw (& $script:DcRaw 1102) -guid '6f9619ff-8b86-d011-b42d-00c04fc96404'))
         $script:Ask = { param($k) if ($k -match '\| count$') { return @{ Ok = $true; Rows = @([pscustomobject]@{ Count = 4 }); Error = '' } }
             if ($k -match 'summarize Matches = count\(\) by DomainSid') { return @{ Ok = $true; Rows = $script:DomainRows; Error = '' } }
@@ -239,7 +239,7 @@ Describe '#1052 the old wrong CIs leave the right way -- and a real CMDB row is 
             eg_node_id = '777358c6613b4935b6ab5962926ef275'; ad_object_guid = '6f9619ff-8b86-d011-b42d-00c04fc96401'; si_device_roles = @('domain_controller'); si_asset_name = 'azvm-dc01'
             si_collection_time = $script:Now.AddDays(-13); si_source_last_seen = $script:Now.AddDays(-13); si_collection_complete = $true }
         $script:Mde = [ordered]@{ si_provider = 'mde'; si_record_type = 'device'; si_class = 'device'; si_record_key = ('mde:' + $script:Dc1Dev); mde_device_id = $script:Dc1Dev
-            si_asset_name = 'azvm-dc01.hngmn.local'; si_collection_time = $script:Now; si_source_last_seen = $script:Now.AddHours(-1); si_collection_complete = $true }
+            si_asset_name = 'azvm-dc01.corp.example'; si_collection_time = $script:Now; si_source_last_seen = $script:Now.AddHours(-1); si_collection_complete = $true }
         $script:EgDev = [ordered]@{ si_provider = 'eg'; si_record_type = 'device'; si_class = 'device'; si_record_key = 'eg:5555'; eg_node_id = '5555'; si_collection_time = $script:Now; si_source_last_seen = $script:Now; si_collection_complete = $true }
         $script:Cat = $script:Model['field-catalog']
     }
@@ -274,12 +274,12 @@ Describe '#1052 the old wrong CIs leave the right way -- and a real CMDB row is 
 }
 
 Describe '#1052 one hard id, one active CI' {
-    It 'a NEW Exposure Graph node id for an Azure VM joins the CI that holds its Azure resource id (xel-sql-05: 859bdbc0 -> d12c5e6e -> 627a780c)' {
+    It 'a NEW Exposure Graph node id for an Azure VM joins the CI that holds its Azure resource id (sql-host-05: 859bdbc0 -> d12c5e6e -> 627a780c)' {
         $null = Reset-SIRecordCapture -Engine azure -Clear
-        $arm = '/subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/rg-lz-datacenter01-xellent/providers/microsoft.compute/virtualmachines/xel-sql-05'
-        Add-SIRecordPart -Provider azure -RecordType azure_resource -Key $arm -Part resource -Object ([pscustomobject]@{ id = $arm; name = 'xel-sql-05'; type = 'microsoft.compute/virtualmachines' }) -ResourceType 'microsoft.compute/virtualmachines'
+        $arm = '/subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/sql-host-05'
+        Add-SIRecordPart -Provider azure -RecordType azure_resource -Key $arm -Part resource -Object ([pscustomobject]@{ id = $arm; name = 'sql-host-05'; type = 'microsoft.compute/virtualmachines' }) -ResourceType 'microsoft.compute/virtualmachines'
         foreach ($n in 'd12c5e6e000000000000000000000001', '627a780c000000000000000000000002') {
-            Add-SIRecordPartFromSource -SourceSystem 'exposure-graph' -Object ([pscustomobject]@{ NodeId = $n; NodeLabel = 'microsoft.compute/virtualmachines'; NodeName = 'xel-sql-05'; EntityIds = @('{"type":"AzureResourceId","id":"' + $arm.ToUpperInvariant() + '"}'); NodeProperties = '{"rawData":{}}' })
+            Add-SIRecordPartFromSource -SourceSystem 'exposure-graph' -Object ([pscustomobject]@{ NodeId = $n; NodeLabel = 'microsoft.compute/virtualmachines'; NodeName = 'sql-host-05'; EntityIds = @('{"type":"AzureResourceId","id":"' + $arm.ToUpperInvariant() + '"}'); NodeProperties = '{"rawData":{}}' })
         }
         $res = ConvertTo-SIRecordRows -Captured @(Get-SICapturedRecords) -Model $script:Model
         @($res.Errors) | Should -BeNullOrEmpty
@@ -291,7 +291,7 @@ Describe '#1052 one hard id, one active CI' {
         $s | Should -Match "JOIN sidata\.CiRecord r ON r\.RecordKey = l\.Provider \+ N':' \+ l\.NativeId"
         $s | Should -Match "JOIN sidata\.Ci d ON d\.CiId = r\.CiId AND ISNULL\(d\.Lifecycle, N''\) <> N'retired'"
         $s | Should -Match "SET Lifecycle = N'retired', ContentHash = NULL"
-        $s | Should -Match "retired at once: merged into CI "
+        $s | Should -Match "N'merged into ' \+ x\.IntoCiId" -Because 'the reason in plain words: merged into <survivor> (<name>) -- the same machine; use that CI'
         $s | Should -Match 'INSERT sidata\.CiChange'
         $s | Should -Not -Match '(?i)\bDELETE\b|\bTRUNCATE\b|\bDROP\b'
     }
@@ -329,8 +329,8 @@ Describe '#1052 real SQL: the merged twin is retired, the survivor and an unrela
         $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:DbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:DbName]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
-    It 'xel-sql-05: the twin (same Defender / Azure / Defender for Cloud ids, no current record) and the old graph-node CI are retired naming the survivor; the survivor, a current CI and a lone orphan inside the brake are untouched' {
-        $arm = '/subscriptions/s1/resourcegroups/rg-lz-datacenter01-xellent/providers/microsoft.compute/virtualmachines/xel-sql-05'
+    It 'sql-host-05: the twin (same Defender / Azure / Defender for Cloud ids, no current record) and the old graph-node CI are retired naming the survivor; the survivor, a current CI and a lone orphan inside the brake are untouched' {
+        $arm = '/subscriptions/s1/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/sql-host-05'
         $mde = '0d9c7d5f00000000000000000000000000000001'
         $null = & $script:Sql @"
 INSERT sidata.Ci (CiId, Lifecycle, LastSeen, CollectionTime, DocJson, ContentHash) VALUES
@@ -357,10 +357,10 @@ INSERT sidata.CiGroupMember (RecordKey, GroupKey, BatchNo) VALUES
         $st = @{}; foreach ($x in (Q 'SELECT CiId, Lifecycle, ContentHash, JSON_VALUE(DocJson, ''$.si_lifecycle'') AS Doc, JSON_VALUE(DocJson, ''$.si_lifecycle_reason'') AS Why FROM sidata.Ci')) { $st[[string]$x.CiId] = $x }
         $st['a7b37ed0'].Lifecycle | Should -Be 'retired'
         $st['a7b37ed0'].Doc | Should -Be 'retired'
-        $st['a7b37ed0'].Why | Should -Match '^retired at once: merged into CI 5802bfcd -- its (azure|mdc|mde) record '
+        $st['a7b37ed0'].Why | Should -Be 'merged into 5802bfcd -- the same machine; use that CI'
         $st['a7b37ed0'].ContentHash | Should -BeNullOrEmpty
         $st['a0b8f186'].Lifecycle | Should -Be 'retired' -Because 'its only record (the old graph node) builds the survivor now'
-        $st['a0b8f186'].Why | Should -Match 'merged into CI 5802bfcd -- its eg record d12c5e6e'
+        $st['a0b8f186'].Why | Should -Be 'merged into 5802bfcd -- the same machine; use that CI'
         $st['5802bfcd'].Lifecycle | Should -Be 'active' -Because 'the survivor: its records build it'
         $st['other001'].Lifecycle | Should -Be 'active'
         $st['orphan01'].Lifecycle | Should -Be 'active' -Because 'an orphan whose records went nowhere is the retire brake''s, not merged'

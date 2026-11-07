@@ -11,7 +11,7 @@
       "parts": {
         "user": "GET /users (security $select)",
         "registration": "GET /reports/authenticationMethods/userRegistrationDetails (bulk)",
-        "authenticationMethods": "GET /users/{id}/authentication/methods (Graph $batch, the users the profile keeps; written only when the user's list was read in full): readComplete, methodTypes, passwordlessOnly (absent = unknown)",
+        "authenticationMethods": "the per-user read GET /users/{id}/authentication/methods (+ the device of each Windows Hello for Business / Microsoft Authenticator method, $expand=device), done in the background and kept in the install's database with its read date; the collection takes it from there (written only for a user whose list was read in full): readComplete, methodTypes, types, hasPassword, passwordlessOnly (absent = unknown), items (one SI-shaped entry per method, with its device), methods (every property Graph returned), devicesRead, readAt",
         "roles": "roleAssignments + roleEligibilitySchedules for the user (collector)",
         "memberOf": "GET /users/{id}/transitiveMemberOf (collector)",
         "azureRoles": "Azure RBAC role assignments of the principal (Azure Resource Graph authorizationresources, collector)",
@@ -1293,6 +1293,144 @@
       ],
       "normalize": [
         "trim"
+      ]
+    },
+    {
+      "field": "si_auth_methods",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "authenticationMethods.items"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_auth_method_types",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "authenticationMethods.types"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_has_password",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "authenticationMethods.hasPassword"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_passwordless_capable",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isPasswordlessCapable"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_mfa_capable",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isMfaCapable"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_sspr_registered",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isSsprRegistered"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_sspr_capable",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isSsprCapable"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_sspr_enabled",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.isSsprEnabled"
+      ],
+      "normalize": [
+        "bool"
+      ]
+    },
+    {
+      "field": "si_preferred_mfa_method",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.userPreferredMethodForSecondaryAuthentication"
+      ],
+      "normalize": [
+        "trim"
+      ]
+    },
+    {
+      "field": "si_system_preferred_mfa_methods",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.systemPreferredAuthenticationMethods"
+      ],
+      "normalize": []
+    },
+    {
+      "field": "si_auth_methods_changed",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "registration.lastUpdatedDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
+      "field": "si_auth_methods_read",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "authenticationMethods.readAt"
+      ],
+      "normalize": [
+        "datetime_utc"
       ]
     },
     {

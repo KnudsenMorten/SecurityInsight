@@ -225,7 +225,7 @@ Reports:
           let _TvmOnly = DeviceTvmSoftwareVulnerabilities
               | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)
               | summarize DeviceName = any(DeviceName), TvmSeverity = any(VulnerabilitySeverityLevel) by DeviceId, CveId
-              | join kind=leftouter (DeviceInfo | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId) on DeviceId
+              | join kind=leftouter (union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo) | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId) on DeviceId
               // an MDE-excluded device is dropped from the graph rows (EG_IsExcluded) -- drop it here too
               | where isempty(ExclusionReason)
               | join kind=leftouter (DeviceTvmSoftwareVulnerabilitiesKB | project CveId, CvssScore, IsExploitAvailable, LastModifiedTime, PublishedDate, VulnerabilityDescription) on CveId
@@ -637,7 +637,7 @@ Reports:
           let _TvmOnly = DeviceTvmSoftwareVulnerabilities
               | where tolower(tostring(DeviceId)) in (_sliceTvmDevices)
               | summarize DeviceName = any(DeviceName), TvmSeverity = any(VulnerabilitySeverityLevel) by DeviceId, CveId
-              | join kind=leftouter (DeviceInfo | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId) on DeviceId
+              | join kind=leftouter (union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo) | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId) on DeviceId
               // an MDE-excluded device is dropped from the graph rows (EG_IsExcluded) -- drop it here too
               | where isempty(ExclusionReason)
               | join kind=leftouter (DeviceTvmSoftwareVulnerabilitiesKB | project CveId, CvssScore, IsExploitAvailable, LastModifiedTime, PublishedDate, VulnerabilityDescription) on CveId
@@ -672,7 +672,7 @@ Reports:
           let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities
               | summarize by _expCve = toupper(tostring(CveId)), _expDevice = tolower(tostring(DeviceId))
               | where isnotempty(_expCve) and isnotempty(_expDevice)
-              | join kind=leftanti (DeviceInfo
+              | join kind=leftanti (union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo)
                   | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", ""))
                   | summarize arg_max(Timestamp, ExclusionReason) by DeviceId
                   | where isnotempty(ExclusionReason)
@@ -1001,7 +1001,7 @@ Reports:
 
           // Step 1  Latest DeviceInfo per device (DeviceName for the impacted-asset list).
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(lookback)
               | summarize arg_max(Timestamp, *) by DeviceId
               | project
@@ -1298,7 +1298,7 @@ Reports:
 
           // Step 1  Latest DeviceInfo per device (DeviceName + OS for display).
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(lookback)
               | summarize arg_max(Timestamp, *) by DeviceId
               | project
@@ -1585,7 +1585,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId
@@ -1820,7 +1820,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId
@@ -2062,7 +2062,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId
@@ -2320,7 +2320,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId
@@ -2534,7 +2534,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId
@@ -2765,7 +2765,7 @@ Reports:
 
           // the newest device row -- its name and operating system for display, and whether Defender excludes the device
           let DeviceInfoLatest =
-              DeviceInfo
+              union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)
               | where Timestamp >= ago(30d)
               | extend DI_Excluded = tostring(column_ifexists("ExclusionReason", ""))
               | summarize arg_max(Timestamp, *) by DeviceId

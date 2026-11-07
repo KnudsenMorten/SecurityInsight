@@ -204,10 +204,13 @@ function Start-SIAcrBuild {
         queued. -Az: accepted from an updater image made before #521, and ignored.
     #>
     param([scriptblock]$Rest, [scriptblock]$Az, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$Image, [Parameter(Mandatory)][string]$File,
-          [string]$SubscriptionId, [string]$ResourceGroup)
+          [string]$SubscriptionId, [string]$ResourceGroup,
+          # the registry's own limit for the build task: above every wait (Wait-SIAcrBuilds -TimeoutMinutes, 90 in an update),
+          # so the wait decides and a slow private agent pool is not cut by the registry first
+          [int]$TimeoutSeconds = 6000)
     if (-not $SubscriptionId) { $SubscriptionId = Get-SIUpdateRestSubscription }
     $Rest = Resolve-SIFastRollRest -Rest $Rest -SubscriptionId $SubscriptionId
-    $q = Invoke-SIAcrQueueBuild -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $AcrName -ResourceGroup $ResourceGroup -ContextPath ((Get-Location).ProviderPath) -Image $Image -DockerfilePath $File
+    $q = Invoke-SIAcrQueueBuild -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $AcrName -ResourceGroup $ResourceGroup -ContextPath ((Get-Location).ProviderPath) -Image $Image -DockerfilePath $File -TimeoutSeconds $TimeoutSeconds
     $runId = [string]$q.RunId
     if (-not $runId) { $runId = Find-SIAcrRunId -Rest $Rest -Registry $q.Registry -Image $Image }
     [pscustomobject]@{ Image = $Image; RunId = $runId; File = $File; Started = [datetime]::UtcNow; Status = 'Queued'; LogTail = @() }

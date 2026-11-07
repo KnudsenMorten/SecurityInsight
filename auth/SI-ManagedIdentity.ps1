@@ -66,7 +66,7 @@ function Get-SIManagedIdentityToken {
                        Reading it needs local Administrators or the 'Hybrid agent extension applications' group. Arc
                        has the SYSTEM-assigned identity only, so no client_id.
 
-        TRAP: THE client_id IS NOT OPTIONAL IN PRACTICE for a user-assigned identity. PIM measured it (BUG-76): with a
+        TRAP: THE client_id IS NOT OPTIONAL IN PRACTICE for a user-assigned identity. PIM4EntraPS measured it: with a
         user-assigned identity only, the endpoint has nothing to default to and the failure surfaces far away as
         "Login failed" / 401. So it is always sent when known.
 

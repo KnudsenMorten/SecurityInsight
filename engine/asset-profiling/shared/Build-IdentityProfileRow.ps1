@@ -515,8 +515,8 @@ function Get-SIDerivedValue {
             if ($arm -match '/providers/(?<rp>[^/]+/[^/]+)') { return $matches.rp.ToLower() }
             return ''
         }
-        'AttachedResourceTier'            { return $null }     # TODO: cross-engine join
-        'AttachedResourceCount'           { return $null }     # TODO: count UAMI consumers
+        'AttachedResourceTier'            { return $null }     # not filled: needs a cross-engine join
+        'AttachedResourceCount'           { return $null }     # not filled: needs the UAMI consumers counted
         'HasSidHistory' {
             $sh = Get-SIEgValue $meta 'sidHistory'
             return ([int]([array]$sh).Count -gt 0)

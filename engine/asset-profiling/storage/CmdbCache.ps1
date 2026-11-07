@@ -196,7 +196,7 @@ function Initialize-SICmdbCacheTables {
     #
     # It read: "Under OAuth mode the key is empty by design, so the signature helper throws ...
     # Skip table init silently in that case -- the empty-cache path in Reconcile already handles
-    # missing entries gracefully. TODO: rewrite CmdbCache to use OAuth bearer tokens."
+    # missing entries gracefully." -- and it asked for a later rewrite to OAuth bearer tokens.
     #
     # "Handles it gracefully" turned out to mean: the cache is never written, so cmdbName /
     # cmdbCriticality / cmdbDataSensitivity came through EMPTY on every run, for every customer on

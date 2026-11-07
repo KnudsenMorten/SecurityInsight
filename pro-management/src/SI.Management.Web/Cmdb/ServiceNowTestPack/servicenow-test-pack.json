@@ -202,7 +202,7 @@
     "An asset-keyed row (u_id_source = asset: no ledger id yet) does not create a CI.",
     "Proposed CIs (vProposedCi) are a report: nothing is created from them unless your rules allow creation for that class.",
     "Key-values and relations with u_state = removed are removed or flagged, never left as present.",
-    "A CI with u_si_state = not-seen or retired is handled by your rules (a flag, a task, install_status) -- never deleted because SecurityInsight no longer sees it.",
+    "SecurityInsight tells every CI's state in its own fields and never deletes a CI: u_si_state = active | not-seen | retired, u_si_reason in plain words, u_action = close on a retired CI, u_si_replaces on the CI that replaces a merged one. A retired or not-seen CI is sent on every run. Your team decides what to do with it -- a retired CI is closed, a merged one is reconciled to the CI it names.",
     "Vulnerable items coalesce on u_source_record_id when present, else on u_si_correlation_id + u_vulnerability, so a re-sent or re-keyed row never creates a second item.",
     "A finding that is not a CVE (u_finding_type other than cve) maps to a third-party entry with u_vulnerability as its id and u_title as its name.",
     "Only u_close_reason = Remediated closes as fixed; Out of scope, Duplicate, AssetRetired and NoLongerMonitored map to non-fix close codes.",
@@ -631,7 +631,7 @@
           "type": "nvarchar(16)",
           "required": "when known",
           "meaning": "The asset's state in SecurityInsight: active (seen), not-seen (not seen for more than 8 days, still in the grace period of its kind) or retired (not seen for longer than the grace period -- 30 days by default, set per kind: client PCs, servers, service principals, users, Azure VMs, other Azure resources -- or retired early by an Admin). Seen again = active again.",
-          "servicenow": "Your transform decides: a flag, a task, or install_status. SecurityInsight never retires or deletes a CI in ServiceNow.",
+          "servicenow": "Your team decides what it does with each state -- SecurityInsight tells the state, it never writes to or deletes a CI in ServiceNow. active: keep it. not-seen: SecurityInsight has not seen the asset within its seen window; it is retired after its grace period unless it is seen again (the date is in u_si_reason). retired: close it (u_action = close); the reason is in u_si_reason -- merged into another CI (use the CI it names; that CI's row names this one in u_si_replaces), not seen for longer than its grace period, deleted in its source, every linked object gone, or no longer in SecurityInsight's data. A retired CI is sent on every run, never dropped; seen again it comes back active.",
           "example": "active"
         },
         {
@@ -2419,7 +2419,7 @@
           "type": "string",
           "required": "when known (an empty value is left out)",
           "meaning": "The asset's state in SecurityInsight: active (seen), not-seen (not seen for more than 8 days, still in the grace period of its kind) or retired (not seen for longer than the grace period -- 30 days by default, set per kind: client PCs, servers, service principals, users, Azure VMs, other Azure resources -- or retired early by an Admin). Seen again = active again.",
-          "servicenow": "Your transform decides: a flag, a task, or install_status. SecurityInsight never retires or deletes a CI in ServiceNow.",
+          "servicenow": "Your team decides what it does with each state -- SecurityInsight tells the state, it never writes to or deletes a CI in ServiceNow. active: keep it. not-seen: SecurityInsight has not seen the asset within its seen window; it is retired after its grace period unless it is seen again (the date is in u_si_reason). retired: close it (u_action = close); the reason is in u_si_reason -- merged into another CI (use the CI it names; that CI's row names this one in u_si_replaces), not seen for longer than its grace period, deleted in its source, every linked object gone, or no longer in SecurityInsight's data. A retired CI is sent on every run, never dropped; seen again it comes back active.",
           "example": "active"
         },
         {
@@ -2466,16 +2466,16 @@
           "name": "u_si_reason",
           "type": "string",
           "required": "when known (an empty value is left out)",
-          "meaning": "Why the row is held or out_of_scope, in plain words. Empty otherwise.",
-          "servicenow": "work notes",
-          "example": ""
+          "meaning": "Why, in plain words: on a CI row that is not active, its state -- merged into <CI id> (<name>) -- the same machine; use that CI / retired: not seen since <date> ... / retired at once: deleted in <source> / retired at once: every linked object is gone / not seen since <date> -- retired on <date> unless it is seen again / replaced by <CI id> / retired: not in SecurityInsight's data any more. On a held or out_of_scope row, why. Empty on an active CI.",
+          "servicenow": "work notes; on a retired CI, the close note your team acts on",
+          "example": "not seen: no source has seen it within the seen window -- retired after its grace period unless it is seen again"
         },
         {
           "name": "u_si_replaces",
           "type": "string",
           "required": "when known (an empty value is left out)",
-          "meaning": "The key this record replaces (a device re-onboarded or merged). The old key gets no row of its own.",
-          "servicenow": "Transform: find the record by this key and move it to the row's key, instead of creating a new one.",
+          "meaning": "The key this record replaces (a device re-onboarded, or another CI merged into this one -- the same machine). A CI's old key keeps its own row: retired, u_action = close, its u_si_reason naming this CI.",
+          "servicenow": "Transform: reconcile to this CI -- find the record by the old key and move it to this row's key (or relate it), instead of creating a new one; close the old CI.",
           "example": ""
         },
         {
@@ -2611,7 +2611,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "411e4fa1d0dbfa242f7619444aefeaa0f42e335ca3377b4c3c5d9c6b161e7da9",
+            "u_row_hash": "47621c0f5a072d275277cef526b7180a8b4620edf696abf96897b81fb1ba717c",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "not-seen",
@@ -2620,7 +2620,7 @@
             "u_action": "update",
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_mac_address,u_object_id,u_azure_resource_id,u_entra_object_id,u_criticality,u_data_sensitivity",
-            "u_si_reason": "",
+            "u_si_reason": "not seen: no source has seen it within the seen window -- retired after its grace period unless it is seen again",
             "u_si_replaces": "",
             "u_tags_all": null,
             "u_tags": null,
@@ -2775,7 +2775,7 @@
             "u_source_run": "demo-run-1006",
             "u_run_time": "2026-10-06 05:00:00",
             "u_discovery_source": "SecurityInsight",
-            "u_row_hash": "201b9066a1426dd83ec084554335ff3061940d448a3956f69d5d15fde0aaa855",
+            "u_row_hash": "d0712eb1a74ae5fdfb10d0d2f209ddb8f51491e49e2f61e60d3f08f5ef08a694",
             "u_changed_at": "2026-10-06 05:00:00",
             "u_data_sensitivity": "",
             "u_si_state": "retired",
@@ -2784,7 +2784,7 @@
             "u_action": "close",
             "u_si_batch_id": "demo-run-1006:servicenow-ci",
             "u_si_cleared": "u_mac_address,u_object_id,u_azure_resource_id,u_aad_device_id,u_entra_object_id,u_criticality,u_data_sensitivity",
-            "u_si_reason": "",
+            "u_si_reason": "retired: no source records it any more -- close it",
             "u_si_replaces": "",
             "u_tags_all": null,
             "u_tags": null,
@@ -3064,16 +3064,16 @@
           "name": "u_si_reason",
           "type": "string",
           "required": "when known (an empty value is left out)",
-          "meaning": "Why the row is held or out_of_scope, in plain words. Empty otherwise.",
-          "servicenow": "work notes",
+          "meaning": "Why, in plain words: on a CI row that is not active, its state -- merged into <CI id> (<name>) -- the same machine; use that CI / retired: not seen since <date> ... / retired at once: deleted in <source> / retired at once: every linked object is gone / not seen since <date> -- retired on <date> unless it is seen again / replaced by <CI id> / retired: not in SecurityInsight's data any more. On a held or out_of_scope row, why. Empty on an active CI.",
+          "servicenow": "work notes; on a retired CI, the close note your team acts on",
           "example": "the output scope leaves the finding out -- closed as out of scope, not as fixed"
         },
         {
           "name": "u_si_replaces",
           "type": "string",
           "required": "when known (an empty value is left out)",
-          "meaning": "The key this record replaces (a device re-onboarded or merged). The old key gets no row of its own.",
-          "servicenow": "Transform: find the record by this key and move it to the row's key, instead of creating a new one.",
+          "meaning": "The key this record replaces (a device re-onboarded, or another CI merged into this one -- the same machine). A CI's old key keeps its own row: retired, u_action = close, its u_si_reason naming this CI.",
+          "servicenow": "Transform: reconcile to this CI -- find the record by the old key and move it to this row's key (or relate it), instead of creating a new one; close the old CI.",
           "example": ""
         }
       ],

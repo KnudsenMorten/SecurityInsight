@@ -20,9 +20,11 @@ public sealed class SqlSettingsReader : ISettingsStoreReader
         "SELECT Name, Scope, ValueJson, KeyVaultSecretName, UpdatedAt, UpdatedBy, CONVERT(bigint, RowVersion) AS Version\n" +
         "FROM cfg.Setting\nORDER BY Name, Scope;";
 
+    // 2026-11-05 (the view plan guard): the newest changes' keys first (a narrow index), then the values of those rows only
     public const string ChangeLogSql =
-        "SELECT TOP (@Top) ChangeId, Name, Scope, Action, OldValue, NewValue, ChangedAt, ChangedBy, Reason\n" +
-        "FROM cfg.ChangeLog\nWHERE (@Name IS NULL OR Name LIKE @Name)\nORDER BY ChangeId DESC;";
+        "WITH k AS (SELECT TOP (@Top) n.ChangeId FROM cfg.ChangeLog AS n WHERE (@Name IS NULL OR n.Name LIKE @Name) ORDER BY n.ChangeId DESC)\n" +
+        "SELECT c.ChangeId, c.Name, c.Scope, c.Action, c.OldValue, c.NewValue, c.ChangedAt, c.ChangedBy, c.Reason\n" +
+        "FROM k JOIN cfg.ChangeLog AS c ON c.ChangeId = k.ChangeId\nORDER BY c.ChangeId DESC;";
 
     private readonly ISqlExecutor _sql;
     public SqlSettingsReader(ISqlExecutor sql) => _sql = sql;

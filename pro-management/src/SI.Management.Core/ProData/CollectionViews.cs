@@ -45,7 +45,14 @@ public sealed record AssetInfo(string AssetKey, string AssetName, string AssetKi
 public sealed record IdentifierRow(string Type, string Value, DateTime? FirstSeen, DateTime? LastSeen);
 public sealed record RecommendationRow(string RecommendationId, string Name, string Severity);
 public sealed record AssetHistoryRow(string CollectionId, DateTime CollectionTime, long Findings, double TotalRisk, double MaxRisk);
-public sealed record AssetVulnRow(string Cve, string Severity, string State, DateTime? FirstSeen, DateTime? LastSeen, DateTime? ClosedAt, string? CloseReason);
+public sealed record AssetVulnRow(string Cve, string Severity, string State, DateTime? FirstSeen, DateTime? LastSeen, DateTime? ClosedAt, string? CloseReason,
+    string? Title = null, long? OpenTotal = null, long? ClosedTotal = null)
+{
+    /// What the close-loop key is (owner 2026-11-05, "looks weird": a recommendation id under the header "CVE"): every finding
+    /// of the asset is in the close-loop -- a CVE, a configuration recommendation (its id), or SI's own certificate check.
+    public string Kind => Cve.StartsWith("CVE-", StringComparison.OrdinalIgnoreCase) ? "CVE"
+        : Cve.StartsWith("certificate:", StringComparison.OrdinalIgnoreCase) ? "Certificate" : "Recommendation";
+}
 public sealed record ExclusionDocRow(string Key, DateTime? UpdatedAt, string UpdatedBy, long BodyLength);
 /// The Services view's state for one collection (#255): when its service aggregates were computed (null = not yet), how
 /// many services, how many CIs are in no service. Part of the Services grids' cache scope, so a re-derived membership is
@@ -382,7 +389,7 @@ public sealed class CollectionViews : ICollectionViews
     {
         var (rows, text) = await Run(new SqlQuery(CollectionViewSql.AssetVulnItems, new Dictionary<string, object?> { ["AssetKey"] = Key(assetKey), ["Source"] = _vulnSource }), ct).ConfigureAwait(false);
         return R<IReadOnlyList<AssetVulnRow>>(rows.Select(r => new AssetVulnRow(S(r, "Cve"), S(r, "Severity"), S(r, "State"), T(r, "FirstSeen"), T(r, "LastSeen"),
-            T(r, "ClosedAt"), SN(r, "CloseReason"))).ToList(), text);
+            T(r, "ClosedAt"), SN(r, "CloseReason"), SN(r, "Title"), ProDataQueries.LN(r, "OpenTotal"), ProDataQueries.LN(r, "ClosedTotal"))).ToList(), text);
     }
 
     public async Task<QueryResult<ServicesState>> ServicesStateAsync(ViewCollection collection, CancellationToken ct)

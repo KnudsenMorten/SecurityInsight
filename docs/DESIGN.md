@@ -1118,6 +1118,17 @@ disabled-account reports (`DisabledAccount_ActivePIMAssignment`, `DisabledUser_S
 `DisabledPrivilegedUser`) can now fire. Until 2026-10-10 Output dropped every disabled identity -- a 22,705-user tenant
 published ~8,940 users, 0 of them disabled.
 
+**Exposure Graph identities without an asset -- on by default** (owner 2026-11-04). Two settings decide which Exposure
+Graph identity nodes become assets at all: `SI_Identity_SkipNeverSyncedDisabledAd` (an on-premises AD account never
+synced to Entra ID becomes an asset only while it is enabled or privileged) and `SI_Identity_SkipDeletedGroups` (a group
+with an Entra object id becomes an asset only while Entra ID still has it, active or in its deleted items; decided only
+on a complete read of the group list). Both are **on by default** -- the shipped default and the settings catalog say on;
+an install that never stored a value takes it on its next update (the shipped defaults load first and a stored value is
+laid over them, so there is nothing to migrate), and a value an install stored is kept, on or off. What they leave out is
+counted per run (`sidata.CollectionLeftOut`, the Data health page "Left out by your choice"); the CI of an object left
+out retires with a reason naming the setting, and its findings close as asset retired, never as fixed. Accounts synced
+to Entra ID, AD-only groups, devices and findings are never affected; turned off, the next run records them again.
+
 **Memory follows a page, not the tenant** (#702, 2026-10-15). The users and service principals are streamed page by page
 into the collection's parts (#475); the tenant-wide lookups every record reads are built the same way: the MFA
 registration rows, the service principal index (permission names, application ids) and the Exposure Graph identity nodes
@@ -1315,6 +1326,26 @@ counts as seen; rows from before the row kinds count as both); each CI's PROPERT
 must be at least 31 days** (the installer checks or sets it). The data sync no longer reads `SI_CI_CL` / `SI_Record_CL`:
 what is left of it for the CI tables is the findings per CI (`SI_Finding_CL` → `sidata.CiFinding`) and the CIs' finding
 totals, set-based in SQL.
+
+### The one-time CI cut-off (3.0.41, Pro; a hidden support setting)
+
+The CI build groups every record collected within its look-back (`SI_ActiveStaleDays`, default 30 days). Records an old
+collection left behind -- for example accounts a setting now leaves out and that are no longer collected -- stay current
+for that whole window, and a large install rebuilds them into CIs on every build. The one-time cut-off ends that at once:
+
+- **The state** is one row, `cfg.InstallState` `CiCutoff` = `{ cutoffUtc, setBy, reason, setUtc }`. It is NOT a setting:
+  not in the settings catalog, not on the web Settings page, not over MCP. It is set (and taken back with `-Clear`, which
+  keeps the row as the record) by `setup\Set-SICiCutoff.ps1` -- PLAN by default; `-Apply` writes, reads the row back and
+  writes one audit row (`cibuild.cutoff.set` / `cibuild.cutoff.clear`).
+- **The rule:** while it is in force, the look-back's lower bound is the later of (now - look-back) and the cut-off -- for
+  each source (provider + record type) that has collected again at or after the cut-off. A source that has not collected
+  since keeps its records until it has, so a cut-off set just before the next collection never empties a source.
+- **Retire, never delete:** a CI that no current record builds and that had a look-back record before the cut-off and none
+  after it is retired at once, with the reason `one-time cut-off <time>: <reason>` in its change history. Records are never
+  deleted (retention removes them as usual). A retired CI reaches data-out like every retired CI.
+- **Expiry:** once the cut-off is older than the look-back, the build ignores it and says so; the row stays.
+- **When to set it:** just before a run's collection -- every source that run collects then drops its old records in that
+  run's CI build. Each build logs `one-time CI cut-off <time> (<reason>): N record(s) before it ignored, M CI(s) retired`.
 
 ### Risk Analysis writes its result to SQL, a query slice at a time (v3, #638 / #641)
 
@@ -4950,6 +4981,33 @@ the previous run is still running" -- it is NOT "after it finishes". **Decision:
 in the flow). Routing per-job intervals through the runner was rejected: it would make a second scheduler beside the
 flow for the one case the flow already covers.
 
+**No fresh beat = dead (every execution kind that can hold the install back: the update, the pipeline runner, the
+clean-up pass; `engine/_shared/SI-ExecutionLiveness.ps1`).** Azure's "Running" says nothing about whether the code still
+works: an update whose container never started, or a runner that hung, used to hold the daily run back for hours. Now an
+execution counts as running only while a lock row that names it (its Holder is the execution name, or
+`caj-si-updater:<execution>`) was beaten recently:
+- **the update** beats its own row (`cfg.PipelineLock` LockId `updater`) from its first moment after the sign-in (every
+  log line, at most once a minute, with a fresh database token per beat) and the install lock (`install`) from its run
+  gate on;
+- **the pipeline runner** of a run beats the install lock (`install`), as it always has;
+- **the clean-up pass** (a wake-up during a run) takes a lock of its OWN (LockId `housekeeping`; an install without a
+  database: the document `sistate/flow/housekeeping.lock` beside `pipeline.lock`) as the container entry's first act,
+  beats it with the clean-up's lines and releases it at its end. A live clean-up pass never holds a wake-up back.
+
+**The two numbers:** an execution that beat before is DEAD **15 minutes after its last beat**; one that has **never beaten
+is dead only 30 minutes after it started** (nothing runs before the image is pulled). An execution with neither a start
+time nor a beat is never judged dead; lock rows that cannot be read keep the old rule (every running execution counts,
+nothing is stopped). A dead execution is **stopped** (ARM `executions/<name>/stop`), said in one WARNING line on the log
+("... showed no sign of life and was stopped: <execution> (started ...) never reported that it was working ... -- the
+waiting work goes on now"), raised to Invardia as the uplink alert `si.execution.stopped-dead` (identified installs only;
+Measured `ageMin`, `minutesSinceBeat` -- left out when it never beat -- and `queuedRunStarted` 0/1; Area `execution`; Job
+`updater` / `flow` / `housekeeping`; ActionText names the execution and the lock; FirstSeenUtc = the stop time; Count 1),
+and the queued work goes on in the same wake-up. **The fixed 6 hours stay as the outer fallback:** an update execution
+older than 6 hours never counts as running, and a stop that FAILS still holds the work back (never two runs side by side)
+unless the execution started more than 6 hours ago. Where it is asked: the pipeline's "is an update running" check, the
+updater's own step-aside (an earlier update that is dead is stopped and this one goes on), and the flow job's execution
+guard (a dead flow execution is stopped and the wake-up runs the queue instead of only the clean-up).
+
 **Bootstrap.** `caj-si-flow` is infrastructure (always deployed, never KEDA, 7-day replica timeout, the identity's grant
 on the jobs' resource group). A NEW job's trigger follows the mode (`Get-SIBootstrapTriggerPlan`): flow -> a step is
 created Manual with its timer remembered in `si-disabled-cron` (exactly what Disable leaves), the runner Scheduled;
@@ -5157,7 +5215,12 @@ shipped too, so the end state is the same. A value the customer set (e.g. 22:15)
 update. The updater's start check (`Test-SIUpdaterNightlyTick`) knows both timers: on the 18:30 ticks the start that is 18:30
 local runs, on a job not moved yet its 23:00 ticks are still checked against 23:00; a run started by hand, by a release or by
 the web app always runs. The updater still runs BEFORE the pipeline the same evening (18:30 < 19:00; the pipeline waits while
-an update runs). The map's fallback (no region known) is 19:00 Danish time and the updater's `30 16,17 * * *`; the web app
+an update runs). **One update window a day, with a second chance after a run.** An update that finds a pipeline run going
+does not wait a day: it leaves a wait mark on its own job, and the pipeline runner starts the updater once as soon as that
+run ends (the run's own runner, or the next wake-up that holds the install's lock), never during a run and never twice for
+the same mark. The run keeps its lock alive through all of its own work, including the long work at the end (publish, the
+statistics refresh), and gives the lock back before it starts the updater. A wake-up therefore never takes over a lock that
+is still in use, and the second chance is never lost (3.0.54). The map's fallback (no region known) is 19:00 Danish time and the updater's `30 16,17 * * *`; the web app
 (`JobFlow.UpdaterCadenceText`) shows the time the job's tag records. The text below describes the region step (23:00 / 23:30),
 which stays the first of the two moves.
 
@@ -5981,7 +6044,7 @@ install*) setup builds the private variant itself (`setup\_shared\SI-PrivateNetw
 | Public endpoints | The data resources are created private (above); one that is still open (an existing install moving, below) is closed at the **end**, after every step that still reaches the database, the vault or the storage from the machine that runs setup, only once every private endpoint reads back, and only once the names (the web app, the database server, the Key Vault, the storage endpoints) **resolve to private addresses from inside**: from the machine that runs setup when it is in your network, else from a one-time job in SecurityInsight's own environment (`caj-si-insidecheck`, always removed), else on the operator's word (`-ConfirmedFromInside`). Until then they stay **open** -- a closed resource nothing can reach is never left -- and the install ends with one action: do the hand-off, then run the install again from inside (a resource your policy keeps closed already is named as reachable from inside only). Then: the database server, the storage account and the Key Vault `publicNetworkAccess = Disabled` (the Key Vault's firewall *Deny* as well, trusted Microsoft services allowed) -- no firewall-only state. The registry's public endpoint stays open until image builds run inside your network (below). **Once closed, they stay closed**: no setup run, update or support step opens them again -- not even for a few minutes. |
 | The in-network SQL identity | `id-si-sql`, a user-assigned identity made a member of the database server's admin group before the database closes. No standing job carries it; only the one-time support job below does, while it runs. |
 | Support access to a private database | The vendor support identity's own database user is made **before** the database closes (the move of an existing install refuses to close it otherwise). Afterwards support reaches the database **only from inside**: `setup\Invoke-SISupportSqlAccessJob.ps1` creates a one-time job in SecurityInsight's own private environment, signed in as `id-si-sql`, that makes (or confirms) that user, reads it back, and is removed -- no firewall rule, no public access, no jump host. It gives no role, membership or permission to anything. |
-| Image builds inside the network | An agent pool of the registry (`si-vnet-pool`, one agent) in the endpoints subnet, made by the steps `registry-agent-pool` and then `registry-public-off` of `setup\Set-SIPrivateNetworking.ps1` (also on a new private install). Setup and the updater use the pool by themselves once the registry is closed; closing it is refused until the pool runs and the registry's private endpoint is approved. |
+| Image builds inside the network | An agent pool of the registry (`si-vnet-pool`, tier S2, 0 agents between builds: scaled to 2 agents just before the first image build of an install, update or setup step and back to 0 when its builds are done -- also after a failed or timed-out build -- each read back) in the endpoints subnet. **The pool is never removed** (3.0.50): Azure cannot change a pool's tier in place and refuses to make a pool with 0 agents, so a pool of another tier keeps its tier and is only scaled to 0 (said in the log), and a new pool is made with 1 agent and scaled to 0 once it has Succeeded (read back; a refused scale keeps 1 agent and says so). An update under an older updater image never moves a tier; only a full update does. The pool is made by the steps `registry-agent-pool` and then `registry-public-off` of `setup\Set-SIPrivateNetworking.ps1` (also on a new private install). Setup and the updater use the pool by themselves once the registry is closed; closing it is refused until the pool runs and the registry's private endpoint is approved. |
 
 The steps are `private-network-subnets` (before the container setup) and `private-network` (after mail, before the first
 run); they are in the plan only when the option is chosen. Both are safe to run again. After the install, run setup
@@ -6965,7 +7028,7 @@ filter and trend them quickly.
 - **How full the database is.** Every data sync reads how much of the database's maximum size its data uses (the same
   reading the daily heartbeat carries). Above 70 % the run says so in its log and on its run record, in plain words, so
   the database never fills up unnoticed -- when it is full, nothing new can be stored.
-- **Setup.** `setup\Initialize-SIDataSql.ps1` creates the schema (additive); the job's identity needs read and
+- **Setup.** The install and every update apply the schema (additive) -- nothing to run by hand; the job's identity needs read and
   write on the database.
 
 ### 5a. Correlation evidence -- why SecurityInsight says these records are ONE asset
@@ -7012,6 +7075,8 @@ SecurityInsight adds over a single-source discovery. It is shown with its eviden
 ### 5b. Closing vulnerabilities -- absence is not remediation
 
 A vulnerability is closed as fixed only when it has been missing for several complete runs in a row (`SI_VulnSync_CloseAfterRuns`, default 2), each on an asset that was actually seen in that run with its own vulnerability data. An asset missing from a run is unknown: its findings stay open, and the run says "asset not seen this run, held". Partial runs, halted runs and the same data read twice count nothing. A finding that is seen again starts its count over; a closed one that returns is reopened. An asset that is positively retired or excluded closes with that reason. The plan and the run log state why each item closed or was held. One consequence: when a device's very last vulnerability is fixed, nothing is left to show the device was seen, so that finding stays open until a later run proves it.
+
+**A finding whose asset moved to another CI is held on its own CIs, not across the run.** Sometimes an asset's identifier moves from one CI to another, and the correlation keeps both CIs instead of merging them. A finding stored under the old CI then gets a different CI from the correlation map, so the run cannot tell which record it belongs to. Both CIs are held for that run, the one it was stored under and the one the map gives now: nothing on either is opened, updated or closed, the same rule as for a part of the run that could not be read. Every other CI is planned and closed as normal. When the CI it was stored under cannot be told, the CIs of that one page of the run are held instead. The run warns and names the CIs and the findings concerned. This is a deliberate change of the safety rule: earlier, a single such finding stopped every close in the whole run, every run, until the correlation settled. A wrong close is still impossible, because the held CIs are left as they are.
 
 ### 6. Pro web app
 
@@ -7443,6 +7508,15 @@ document (~4 s). The other CI and collection pages measured 0.1-0.2 s (`/Cis/Sum
   larger size is the customer's and kept; `SI_Bootstrap_WebAppCpu` / `SI_Bootstrap_WebAppMemory` (Pro database first, then the
   config) win both ways. The sign-in front sidecar (0.25 / 0.5 GiB) is never resized: the app is 2.25 CPU / 4.5 GiB.
   The Pro database is S3 (above); `SI_Bootstrap_SqlServiceObjective` (Pro database first) sets it both ways, never below S1; the identity ledger stays S1 whatever is set (#756).
+### The database statistics stay fresh, so every view stays fast (Pro, framework §12.27)
+
+A view is only as fast as the plan SQL picks, and SQL picks the plan from its statistics. **Background statistics are on in
+every product database.** The database setup job turns them on at each update, so a page never waits while SQL refreshes a
+statistic inside its own read. **After each run's results are published, the pipeline refreshes the statistics once.** It
+refreshes only the tables that changed more than SQL's own threshold, one table per call, through a signed procedure the
+engine may run. A refresh that fails is a warning in the run's log and never fails the run. The device page reads its
+findings through a covering index seek, so it touches only that device's rows.
+
 ### What a view shows by default is prepared in SQL (Pro, #592)
 
 A column of a data view's SHIPPED layout -- the CI id, the identifier values, the linked objects, the CI context, the
@@ -7526,6 +7600,32 @@ names a property differently, both names are mapped.
 
 The open alert count, the highest severity and the Autopilot flag are prepared, typed columns, so the device list
 shows, sorts and filters them without reading the CI document.
+
+### Every page is fast by default -- narrow reads, fresh statistics, never a wait (Pro, #1113, #1120)
+
+A page's read is a keyed seek of a narrow index or a stored column. It never scans a table that carries a row's full
+source record, and never reads that record for more than a page of rows. This is the default for every view, not a list of
+pages fixed one by one:
+- **The plan guard** (a test on real SQL): every read statement of the web app, found by reflection (a new view is checked the
+  moment it is written), is planned against the schema as an update applies it, with every table told it holds ten million
+  rows and its statistics kept stale. A plan that scans such a table, or looks rows up in it one by one, fails the build.
+- **The slow-read line**: every page read of 2 seconds or longer is one warning in the web app's log, with the statement's
+  name, the seconds and the rows. The read itself is unchanged.
+- **Fresh statistics after every run (3.0.52).** Each run rewrites the product's tables. When a run has ended, the pipeline
+  runner brings the database's statistics up to date once, only after the publish (the pages move to the new run first;
+  measured live, a refresh before the publish took 640 s at an S2 database and held the pages back). That one refresh
+  covers the tables the run wrote and the pages' copies the publish refreshed; it is left to the next run's end when an
+  update waits for the run. It refreshes one table at a time, only statistics past the database's own staleness threshold, with
+  the database's default sampling (never a full read of a large table). It changes no row. A failure is one warning line; the
+  run completes. The procedure runs as the identity that applied the schema, so no job identity needs rights on the tables.
+- **A page never waits for a statistic.** The database is set to update a stale statistic in the background
+  (`AUTO_UPDATE_STATISTICS_ASYNC`). Without it, the first page read after a run waited for SQL to rebuild a statistic at the
+  storage limit, and a page that timed out cancelled that rebuild, so the next page waited again. Setup turns it on for a new
+  install; on an existing install the database setup job turns it on with the next update.
+- **A view whose plan could change with the statistics** is written so it cannot: the device page's close-loop list starts
+  from the device's few keys and seeks the findings index by collection and device, whatever the statistics say.
+- **Performance tests measure what an install has.** A measurement does not refresh statistics by itself before it measures,
+  unless the product does the same at that point.
 
 ### The default layout of a view, by what its rows are (Pro)
 
@@ -7777,6 +7877,19 @@ it is whole.**
   computed in SQL against the staged input (`Get-SIDataCiStagedFrozenOwnersSql`). A database without that table stores the
   findings and skips the lifecycle for that run (a WARNING: nothing is closed). The staging table is emptied after the
   lifecycle ran; the next run's first chunk empties it too.
+- **Each range costs its own owners only, and its size learns what does not grow (2026-11-07).** On a real database the
+  lifecycle runs in owner ranges (`Invoke-SIDataFindingStateRanged`). A range reads only the retired CIs its own rows name
+  (lifecycle rows of the range and its staged findings) -- the list of every retired CI, with the reason read from each
+  CI's document, was read by every range whatever its size, about 8 s per range at a large install. Its staged rows are read
+  without a forced seek: an install missing the key index must run slower, never fail.
+  No schema change and no index to build: the range reads were already seeks on `PK_CiFindingState (OwnerKey, ...)` and
+  the staging key `(Kind, OwnerKey, FindingKey)`. The range loops (this one and `Invoke-SIDataKeyRanges`) size the next
+  range from the measured time as before (`Get-SIDataNextSize`, target 5 s, at most double per range), but on the part
+  of the time that grows with the size: the fixed cost per range is learned from ranges of a tiny size (one or two rows,
+  the smallest such time; `Update-SIDataFixedCostMs`), and the next size is worked out on the measured time minus that
+  cost (at least 1 ms). A fixed cost above the target no longer halves the size to one row for the rest of the run. Until
+  a tiny range has been measured the rule is exactly the proportional one of before; every other caller keeps it. A run
+  that stops part-way still goes on after the last owner key its mark holds.
 - **Data out** (`SI-DataOut.ps1`). Every output reads ITS grain itself, a page at a time (`Read-SIDataOutItemPages`: the
   CIs and records by their key, the open findings by `CiFindingId`, the closed lifecycle rows by `(OwnerKey,
   FindingKey)`). **Page by page, end to end (2026-10-21, any size):** the writer PULLS the next page only when its
@@ -8095,7 +8208,7 @@ The CMDB above is *inbound* (services you own or import). The SQL CMDB connector
 properties) writes every asset SecurityInsight knows into a CI table in the same Pro database, for reporting and Power BI.
 It is the SQL twin of the ServiceNow CMDB connector and follows the vulnerability connector's safety model.
 
-**The tables** (`sql/si-cmdbsync-schema.sql`, schema `cmdbsync`, applied by `setup/Initialize-SIDataSql.ps1`):
+**The tables** (`sql/si-cmdbsync-schema.sql`, schema `cmdbsync`, applied by the install and by every update before it installs new code):
 
 | Object | What it holds |
 |---|---|
@@ -8463,8 +8576,9 @@ The Community copy (channel `community`):
 1. It reads the public release on GitHub, anonymously: `api.github.com/repos/KnudsenMorten/SecurityInsight/releases/latest`,
    or `releases/tags/v<version>` with `-Version`.
 2. It downloads the release asset `SecurityInsight-v<version>.zip` into a NEW, empty folder in the temp folder
-   (`securityinsight-release-<version>-<random>`).
-3. It checks the download before anything runs: not empty; the size and SHA-256 the release states (when it states them);
+   (`securityinsight-release-<version>-<random>`) -- only when GitHub states the asset's SHA-256. A release that states
+   none is refused before anything is downloaded: exit 3, nothing installed.
+3. It checks the download before anything runs: not empty; the size the release states; the SHA-256 the release states;
    the zip opens; it holds `setup/Install-SecurityInsight.ps1`; its `VERSION` is the release's version. A failed check
    stops with the reason in plain words, exit 3, the folder removed, nothing installed.
 4. It unpacks the zip (an entry that would land outside the folder is refused) and runs the full installer FROM there with
@@ -8985,6 +9099,64 @@ setup: a refusal is one line.
 app holds "Container Apps Jobs Contributor" on the resource group.
 **The updater** changes none of it.
 
+#### The database setup job `caj-si-dbinit` -- no person needs database admin rights (framework SEC-08)
+
+The database work that needs the SQL server's admin group is done by the install's OWN job, never by a person in that group.
+`setup/_shared/SI-DbInitJob.ps1` holds the design; `container/Start-SIDbInit.ps1` is the job's entry point.
+- **The job.** ONE Container Apps job per install, `caj-si-dbinit`: manual trigger, one replica, no retry, 30 minutes. It runs
+  the install's own engine image (`si-orchestrator` -- every update rolls it with the engine jobs; no new image to sign) with
+  its own entry point, as its OWN user-assigned identity `id-si-dbinit` -- a standing member of the install's SQL admin group
+  (the group that is the server's Entra administrator). The server's administrator is never switched for it. The job also
+  carries the engine jobs' pull identity, for the image only. No secret.
+- **What it does**, as `id-si-dbinit`, with the SQL the person-run scripts already send (their builders, never a second copy):
+  the engine identity's user, the role `si_engine`, its grants (`Get-SIEngineDatabaseAccessSql`; the broad roles only while
+  `SI_Setup_EngineLeastPrivilege` is off) and the identity ledger's user; the updater's user and rights
+  (`Get-SIUpdaterDatabaseAccessSql`); the certificate-signed grant procedure (`Get-SIGrantProcedureAdminSql`) when
+  `SI_Setup_SignedGrantProcedure` is on or the procedure is already installed; the web app's and the MCP server's users and
+  grants (`Get-SIManagementUserSql`); the sign-in front's store -- the web identity's schema `signin` and `CREATE TABLE`
+  (`Get-SISigninStoreSql`); asset tagging's user (`Get-SITaggingDatabaseAccessSql`). Only in a run that names the Invardia
+  Support app (the install's Support setting, or a support repair): that app's own database user (`Get-SISupportAppDatabaseAccessSql`)
+  and the support grant's tables and signed procedures (`Get-SISupportGrantAdminSteps`) -- an update never touches it. Each
+  identity's user is found by its client id (SID) first, so a user an earlier install made under another name is kept.
+- **Read back, one result row.** After the statements every identity is read back by its client id with the roles it must
+  hold, plus the sign-in schema's owner, the grant procedure's signature and the support grant's state. The job writes ONE
+  row, `cfg.InstallState 'DbJob'` (compact JSON, at most 400 characters: `state` ok / failed, `at`, `run`, `by`, `n`, `why`),
+  and exits 0 only when everything read back (1 = a step or the read-back failed, 2 = refused inputs). A refused sign-in is
+  waited out (16 tries, 20 s apart) -- a membership that is new may still be replicating.
+- **The install** (step `db-job`, after the Support step): makes `id-si-dbinit`, adds it to the SQL admin group with the
+  installing person's sign-in (an Entra step -- the one rights step a person does, never SQL) and reads the membership back
+  from the identity's own `memberOf` (a group's member list hides service principals from many callers) BEFORE the job is
+  made and started: a managed identity's token is cached for hours, so a run before the membership exists would keep a token
+  without the group. It starts the job once, waits, and takes the execution's status as the verdict. A problem is a warning
+  with what to do, never a failed install.
+- **Every update** (`Invoke-SIUpdaterDbJob`, before the database step): keeps the identity and the job present (the engine
+  jobs' image, environment and pull identity; today's identities) -- existing installs reach the new-install state through
+  the update. The updater cannot read the directory, so it starts the job only once a row the JOB wrote proves the
+  membership; until then it writes a `waiting` row, the heartbeat's setup step `db-job` asks for the one membership
+  (Invardia support, or the customer), and the update keeps today's path. With the membership proven it starts the job and
+  counts the run only when the execution Succeeded AND the row carries THIS run's id with state ok. **A failed run holds the
+  update**: nothing is rolled and the installed version keeps running. What the updater may not do itself (an ARM refusal,
+  no engine job to take the image from) is one warning, never a hold.
+- **The support grant in EVERY product database** (found live 2026-11-04): its procedures are in the Pro database, the identity ledger and the data database, and each checks ITS OWN `cfg.SupportConsent`. The job lists the server's databases (in `master`) and, in every other one where the support grant's table is, makes the role `si_engine` with EXECUTE on `cfg.SupportGrantOpen` / `Close` / `Sweep` / `Status` and the engine's user in it, and the role `si_updater` with SELECT / INSERT / UPDATE / DELETE on `cfg.SupportConsent` and the updater's user in it (`Get-SIDbInitSupportDbSql`), copies the Pro database's consent row as it is (it is the owner there), reads each back and records the list (`cfg.InstallState 'SupportGrantDatabases'`).
+  On every run the updater MIRRORS the Pro database's consent into those databases as its own identity (`Invoke-SISupportConsentMirror`, next to the portal's level), read back: the portal's row (Source `customer`, ConsentedBy `Invardia portal` -- the one row the consent trigger lets `si_updater` write) or no row. A consent the customer's admin gave is copied by the job. Never written by the Support app; never a failed update.
+- **A repair / an existing install's first run**: `setup/Start-SIDbInitJob.ps1`, through the Invardia Support session -- the
+  same identity, membership (read back first), job and one run; PLAN by default.
+- **How the membership is made -- always by this setup code, never by hand.** A direct add to the group first. When that is
+  refused (the caller may not change the group's members), an ACTIVE PIM-for-Groups member assignment instead: permanent
+  first, 180 days only when the group's PIM policy refuses a permanent one (said, so the renewal is known). Either way it is
+  read back from the identity's `memberOf` before the job starts. When both are refused, both answers are named and the job
+  is not started -- the caller needs the right to manage that group's members or its PIM assignments.
+- **Background statistics in every product database.** Each run of the job also sets every product database to update a
+  stale statistic in the background (`AUTO_UPDATE_STATISTICS_ASYNC ON`, only when it is off). Only the server's admin group
+  may change that setting, and the update runs the job every time, so an existing install reaches what a new install has. A
+  setting that cannot change now is a warning, never a failed update.
+- **The heartbeat** reports the row as the setup step `db-job` (ok; missing with the reason; missing "not run yet" while
+  `waiting`).
+- **The person-run scripts stay as fallbacks** (`Grant-SIUpdaterDatabase`, `Install-SIGrantProcedure`,
+  `Install-SISupportGrantProcedure`, `Move-SIEngineToLeastPrivilege`, `Grant-SISupportAppDatabase`, `Grant-SISupportAccess`,
+  `Set-SISigninFront`, `Install-SIUpdaterJob -GrantSql`, `Deploy-SIManagement -GrantSql`); their help says the product does
+  it now. `Initialize-SIDataSql` and `Initialize-SIVulnTargetSql` are not needed for the Pro database: the install and every
+  update apply those schema files.
 #### Support-app cut-overs -- the shared pattern (framework §12.23 P8)
 
 `setup/_shared/SI-SupportCutover.ps1`, used by `Set-SISecurityBaseline.ps1` and `Move-SIEngineToLeastPrivilege.ps1` (the
@@ -9010,6 +9182,25 @@ pattern PIM used to move all its environments, 2026-10-14):
 - **Only through the Support session**: ARM via `Invoke-InvardiaSupportArm`, SQL via `Invoke-InvardiaSupportSql`, Graph
   via `Invoke-InvardiaSupportGraph` -- all in the customer's audit log. Without a session the scripts refuse; tests pass
   their own seams.
+#### The Support app's standing admin taken away -- `setup/Remove-SISupportStandingAccess.ps1` (#1021, the last step)
+
+Once the just-in-time support grant works at an install, the Support app's two STANDING rights go, in the cut-over pattern
+above (plan by default; `-Apply`; `-Rollback <record> -Apply`), one install at a time:
+- **db-owner** -- its own database user leaves `db_owner` in every product database (one transaction each). The user and
+  its read-only role `si_support_read` stay.
+- **admin-group** -- its service principal leaves the SQL admin group (the server's Entra admin), LAST, read back from its
+  `memberOf`; then its own sign-in is read (no longer `dbo`; the sign-in may carry the old membership for some minutes).
+- **Refused, nothing changed**, unless every product database has the four support grant procedures (this release's text,
+  signed, private key removed, the signer in `db_owner`), the engine may run them and its user is in `si_engine`, the
+  Support app's user is in `si_support_read`, the consent is recorded and no grant is open; the support request queue and
+  the support grant job are there; the database setup job's last result is ok; and the server's Entra admin is the group
+  and the group keeps at least one OTHER member (read from the group and from each install identity's `memberOf`) --
+  nobody loses access to the database.
+- **The record** names the steps made (`cfg.InstallState 'SupportStandingAccess'`); the heartbeat's support SQL access
+  check reads it: without it the expected state is the standing one (a member, `db_owner`); with it the expected state is
+  just in time (not a member, the read-only role in every database) and a membership read after it is named "standing
+  admin is back". The heartbeat's four fields keep their meaning: `group` = a member (as read), `dbUser` = its own user
+  with the state's role in every database.
 #### The engine identity's database rights -- the least-privilege role `si_engine` (#672, framework §12.23 SQL-ACCESS)
 
 The design (P1-P8) is the framework's (`DOCS/REQUIREMENTS.md` §12.23) and is not restated here; this is SI's engine part.
@@ -9076,6 +9267,15 @@ step: the engine keeps db_datareader + db_datawriter there.
   `not-moved` (still has the broad roles -- said once, no warning), `drift` in plain words (a statement the role would
   refuse with file:line, another role such as db_owner, an old gated procedure) as a WARNING line. Never a grant, never a
   block, never throws.
+- **Every update: asset tagging's database access, given by the product (no person needs database admin rights).**
+  `Invoke-SIUpdaterTaggingDatabaseAccess` (same file) finds asset tagging's identity in the install's resource group (the
+  install record's name; none = no asset tagging, nothing said), reads its state with the release's
+  `Get-SITaggingDatabaseStateSql` (read-only: its user by the client id's SID, read access, INSERT on `cfg.AuditEvent`) and
+  acts on `Get-SITaggingDatabaseUpdatePlan`: everything there = nothing written or said; with the signed grant procedure
+  ONE call gives all of it (the user into `si_tagging`, SELECT on the product schemas, the audit INSERT, SELECT on the
+  sign-in key ring denied); on today's grant path only the audit INSERT for an existing user (one GRANT); every change is
+  read back. What this install's updater may not give (no user, or no read access, without the procedure) is ONE warning
+  naming `setup\Grant-SITaggingDatabase.ps1 -Apply`, which stays as the fallback. Never a stop, never throws.
 
 **Grants in a later release -- the certificate-signed grant procedure `cfg.ApplyComponentGrants`** (#672; framework §12.23
 P4 + P9 "five years without contact"; BUILT 2026-10-15 on branch `si-v3-scale/signed-grant-proc`, not merged, not run on
@@ -11546,8 +11746,8 @@ both editions as one file set; its paid pages are switched off by the licence.
   engines print one line and publish nothing, and every free engine runs normally.
 - **Licence files.** `LICENSE` is the PolyForm Shield License 1.0.0, verbatim, with a header scoping
   it to the Community edition. `LICENSE-PRO` ships in both copies: part 1 lists the paid web pages, actions
-  and services that ship in the Community copy switched off by the licence (proprietary: they may not be
-  enabled or their licence check bypassed without a Pro licence), part 2 the Pro paths only the Pro package
+  and services that ship in the Community copy switched off by the licence (proprietary: they may be
+  enabled and used only with a Pro licence), part 2 the Pro paths only the Pro package
   contains.
 - **Side by side in one tenant.** A new Community edition install names its tenant-wide directory objects
   apart from a Pro install's: the web app's sign-in application "SecurityInsight Community", the engine's

@@ -717,6 +717,9 @@ function Get-SIEntraMfaRegistrationByPrincipal {
             IsAdmin                     = if ($r.PSObject.Properties['isAdmin'])                     { [bool]$r.isAdmin }                     else { $false }
             MfaMethods                  = $mfaMethods
             MfaMethodCount              = $mfaMethods.Count
+            # the report's whole list as it came (password included): the change key of the saved per-user sign-in methods
+            # (SI-SignInMethodsChoice.ps1) -- a user whose list and lastUpdatedDateTime did not change is not read again
+            MethodsRegistered           = @($methodsRaw | Where-Object { $_ } | ForEach-Object { [string]$_ })
             DefaultMfaMethod            = if ($r.PSObject.Properties['defaultMfaMethod'])            { [string]$r.defaultMfaMethod }          else { '' }
             # @( ) around the whole if (#726): an empty list must stay a list through the on-disk map (an if-statement's empty
             # result is "nothing", which the on-disk entry can only keep as null -- and @($null) is one null, not none)
@@ -2113,6 +2116,28 @@ function ConvertTo-SIEgResolvedIds {
     $out.ToArray()
 }
 
+function Get-SIEgIdentityQueryText {
+    <#
+        PURE. The hunting queries of the Exposure Graph identity read, one place for all of them:
+          -Kind count   the count probe ("| count"; with -Filter: "| summarize Count = countif(not(_siSkip)), NotFetched =
+                        countif(_siSkip)" -- the nodes it will ask for, and the ones it leaves out)
+          -Kind page    the nodes of one label (-Buckets 0) or of one hash bucket (-Buckets N -Bucket b)
+        -Filter: the KQL steps that set _siSkip (Get-SIEgNeverSyncedSkipKql), '' = none -- then the text is exactly the one
+        the read always sent. The count and every page use the SAME filter, so the buckets follow the smaller count.
+    #>
+    param([Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][ValidateSet('count', 'page')][string]$Kind,
+          [AllowEmptyString()][string]$Filter = '', [int]$Buckets = 0, [int]$Bucket = 0)
+    $proj = 'project NodeId, NodeLabel, NodeName, Categories, EntityIds, NodeProperties'
+    $q = "ExposureGraphNodes | where NodeLabel == '$Label'"
+    if ($Kind -eq 'count') {
+        if (-not $Filter) { return "$q | count" }
+        return ('{0} {1} | summarize Count = countif(not(_siSkip)), NotFetched = countif(_siSkip)' -f $q, $Filter)
+    }
+    if ($Buckets -gt 0) { $q = '{0} | extend _bucket = hash(NodeId, {1}) | where _bucket == {2}' -f $q, $Buckets, $Bucket }
+    if ($Filter) { $q = '{0} {1} | where not(_siSkip)' -f $q, $Filter }
+    '{0} | {1}' -f $q, $proj
+}
+
 function Get-SIExposureGraphIdentities {
     [CmdletBinding()]
     param()
@@ -2204,6 +2229,12 @@ function Get-SIExposureGraphIdentities {
             }
         }
     }
+    # SI_Identity_SkipNeverSyncedDisabledAd in the query itself: the user nodes the decision below could only leave out are
+    # not fetched at all, and not counted toward the buckets (Get-SIEgNeverSyncedSkipKql leans the safe way on every test, so
+    # nothing it leaves out is a node the decision keeps). The decision still runs on every node that is fetched.
+    $userSkipKql = ''
+    if ($scopeOn -and $scopeChoice.SkipNeverSyncedDisabledAd) { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical }
+    $notFetchedTotal = 0L
     $skipNoProps = 0; $skipNoOid = 0; $kept = 0; $adKept = 0; $dropped = 0; $rowsTotal = 0; $sampleRowKeys = ''
     $perLabelTotal = @{}; $perLabelKept = @{}; $perLabelSkipNoOid = @{}; $perLabelAdKept = @{}
     $diagSamplesPerLabel = @{}   # per-label: capture first 1 raw EntityIds payload that fails to extract -- helps diagnose schema drift
@@ -2365,11 +2396,13 @@ function Get-SIExposureGraphIdentities {
 
     foreach ($label in $labels) {
         $rowCount = 0
+        $labelFilter = ''; if ($label -eq 'user') { $labelFilter = $userSkipKql }
+        $notFetched = 0L
         # The DefenderGraph route WARNS and returns @() on failure -- it does not throw -- so the old
         # catch that forced the bucketed path was unreachable: a failed probe read as count 0 and the
         # label was fetched in ONE query, however large (#125). Invoke-SIEgIdentityQuery retries and
         # reports the failure explicitly.
-        $countQ = "ExposureGraphNodes | where NodeLabel == '$label' | count"
+        $countQ = Get-SIEgIdentityQueryText -Label $label -Kind count -Filter $labelFilter
         $probe  = Invoke-SIEgIdentityQuery -Query $countQ
         if ($probe.Ok) {
             $countRes = @($probe.Rows)
@@ -2377,26 +2410,35 @@ function Get-SIExposureGraphIdentities {
                 $first = $countRes[0]
                 if ($first.PSObject.Properties['Count']) { $rowCount = [int]$first.Count }
                 elseif ($first.PSObject.Properties['count_']) { $rowCount = [int]$first.count_ }
+                if ($labelFilter -and $first.PSObject.Properties['NotFetched'] -and $null -ne $first.NotFetched) { $notFetched = [long]$first.NotFetched }
             }
         } else {
             Write-Warning ('  EG count probe failed for label={0} -- {1}; using the bucketed fetch (safe for any size)' -f $label, $probe.Error)
             $rowCount = $bucketThreshold + 1   # force bucketed path on probe failure (ceil(threshold / page) buckets)
+            # without the count, the nodes the query would leave out cannot be counted: this label is read whole, as before
+            # the filter existed, and the decision after the read leaves out (and counts) every one of them
+            if ($labelFilter) {
+                $labelFilter = ''
+                Write-SIInfo ('     [{0,-18}] read without the in-query filter this run (the count could not be read); every node is decided after the read' -f $label)
+            }
         }
+        $notFetchedTotal += $notFetched
+        $nfNote = ''
+        if ($labelFilter) { $nfNote = ('  ({0:N0} not fetched: never synced to Entra ID, disabled and not privileged -- SI_Identity_SkipNeverSyncedDisabledAd is on)' -f $notFetched) }
 
-        $proj = "project NodeId, NodeLabel, NodeName, Categories, EntityIds, NodeProperties"
         $fetched = 0
         $useBuckets = ($rowCount -gt $chunkRows)
         $bucketCount = [int][Math]::Ceiling($rowCount / [double]$chunkRows)
         if (-not $useBuckets) {
             # Single query
-            $kql    = "ExposureGraphNodes | where NodeLabel == '$label' | $proj"
+            $kql    = Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $labelFilter
             $single = Invoke-SIEgIdentityQuery -Query $kql
             if ($single.Ok) {
                 $chunk = @($single.Rows)
                 . $indexChunk $chunk
                 $fetched = $chunk.Count
                 $chunk = $null; $single = $null
-                Write-SIInfo ('     [{0,-18}] count={1,5}  fetched={2,5}  (single)' -f $label, $rowCount, $fetched)
+                Write-SIInfo (('     [{0,-18}] count={1,5}  fetched={2,5}  (single)' -f $label, $rowCount, $fetched) + $nfNote)
             } else {
                 # A failed single fetch is retried SMALLER, not given up: the usual cause is a response
                 # too large for the API, which is exactly what buckets fix.
@@ -2417,7 +2459,7 @@ function Get-SIExposureGraphIdentities {
             # let go. A bucket answered with Microsoft's maximum of rows was CUT (A3): it is read again as two buckets of the
             # doubled count (its nodes are in bucket b or b + N of 2N), until none is cut -- never a cut bucket read as whole.
             $egSpec = New-Object System.Collections.Generic.List[object]
-            $egQuery = { param($n, $bk) "ExposureGraphNodes | where NodeLabel == '{0}' | extend _bucket = hash(NodeId, {1}) | where _bucket == {2} | {3}" -f $label, $n, $bk, $proj }
+            $egQuery = { param($n, $bk) Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $labelFilter -Buckets $n -Bucket $bk }
             for ($b = 0; $b -lt $bucketCount; $b++) { $egSpec.Add(@($bucketCount, $b)) }
             $egRun = @{ Queries = @(foreach ($x in $egSpec) { & $egQuery $x[0] $x[1] })
                         Split = { param($i) $x = $egSpec[$i]; $n2 = 2 * [int]$x[0]; foreach ($nb in @([int]$x[1], ([int]$x[1] + [int]$x[0]))) { $egSpec.Add(@($n2, $nb)); & $egQuery $n2 $nb } } }
@@ -2434,14 +2476,19 @@ function Get-SIExposureGraphIdentities {
                 $fx = $egSpec[[int]$f.Index]
                 Write-Warning ('  EG fetch failed for label={0} bucket={1}/{2} -- {3}' -f $label, $fx[1], $fx[0], $f.Error)
             }
-            Write-SIInfo ('     [{0,-18}] count={1,5}  fetched={2,5}  ({3} buckets; {4} request(s), up to {5} at once, Microsoft asked to slow down {6} time(s){7})' -f $label, $rowCount, $fetched, $bucketCount, $egRes.Requests, $egRes.MaxConcurrency, $egRes.ThrottledWaves, ($(if ($egRes.Cuts) { ('; {0} cut bucket(s) read again in halves' -f $egRes.Cuts) } else { '' }) + $(if ($egRes -and $egRes.PSObject.Properties['SleptSeconds'] -and [double]$egRes.SleptSeconds -gt 0) { ('; {0} s waited before asking again' -f ([Math]::Round([double]$egRes.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)) } else { '' })))
+            Write-SIInfo (('     [{0,-18}] count={1,5}  fetched={2,5}  ({3} buckets; {4} request(s), up to {5} at once, Microsoft asked to slow down {6} time(s){7})' -f $label, $rowCount, $fetched, $bucketCount, $egRes.Requests, $egRes.MaxConcurrency, $egRes.ThrottledWaves, ($(if ($egRes.Cuts) { ('; {0} cut bucket(s) read again in halves' -f $egRes.Cuts) } else { '' }) + $(if ($egRes -and $egRes.PSObject.Properties['SleptSeconds'] -and [double]$egRes.SleptSeconds -gt 0) { ('; {0} s waited before asking again' -f ([Math]::Round([double]$egRes.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)) } else { '' }))) + $nfNote)
             if ($failedBuckets -gt 0) {
                 Write-Warning ('  EG identity nodes for label={0} are INCOMPLETE: {1} of {2} bucket(s) failed after retries. Identities in those buckets carry no EG enrichment this run (UNKNOWN, not absent).' -f $label, $failedBuckets, $bucketCount)
             }
         }
     }
 
-    if ($rowsTotal -eq 0) {
+    # the nodes the query left out are the decision's left-out count too (the same count, now made before the read)
+    if ($notFetchedTotal -gt 0 -and $null -ne $scopeCounter) {
+        $nfC = $scopeCounter['SI_Identity_SkipNeverSyncedDisabledAd']
+        if ($nfC) { $nfC.LeftOut = [long]$nfC.LeftOut + $notFetchedTotal; $nfC.NotFetched = [long]$notFetchedTotal }
+    }
+    if ($rowsTotal -eq 0 -and $notFetchedTotal -eq 0) {
         Write-Warning '  EG returned 0 identity nodes (license or permission issue?)'
         $script:_SICache['EgIdentitiesMap'] = $egMap
         return $egMap

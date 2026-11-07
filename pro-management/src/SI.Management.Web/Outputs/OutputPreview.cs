@@ -32,7 +32,7 @@ ELSE
 IF OBJECT_ID(N'sidata.CiFinding') IS NULL OR OBJECT_ID(N'sidata.Ci') IS NULL
     SELECT CAST(NULL AS bigint) AS CiFindingId WHERE 1 = 0;
 ELSE IF OBJECT_ID(N'sidata.CiFindingState') IS NULL
-    SELECT TOP (@Take) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
+    SELECT TOP (@Take) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson, CONVERT(nvarchar(30), f.CollectionTime, 127) AS SiCollectionTimeText,
            c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.CmdbId, c.CmdbName, c.CmdbCriticality,
            CAST(NULL AS nvarchar(64)) AS CmdbDataSensitivity,
            CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS datetime2(3)) AS FirstDetected, CAST(NULL AS datetime2(3)) AS LastSeen,
@@ -41,7 +41,7 @@ ELSE IF OBJECT_ID(N'sidata.CiFindingState') IS NULL
     LEFT JOIN sidata.Ci AS c ON c.CiId = f.CiId
     ORDER BY f.CiFindingId;
 ELSE
-    SELECT TOP (@Take) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
+    SELECT TOP (@Take) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson, CONVERT(nvarchar(30), f.CollectionTime, 127) AS SiCollectionTimeText,
            c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.CmdbId, c.CmdbName, c.CmdbCriticality,
            CAST(NULL AS nvarchar(64)) AS CmdbDataSensitivity,
            s.State, s.FirstDetected, s.LastSeen, s.ClosedAt, s.CloseReason, s.AbsentRuns
@@ -227,10 +227,29 @@ ELSE
         return it;
     }
 
+    /// The engine's Add-SIDataOutFindingRunTime (#1116): the run's time is no longer stored inside a database-path finding
+    /// record -- it is put back from the row's CollectionTime column (the same text) right after "si_finding_rows", so the
+    /// item is the one it was. A record that still carries it, and every other record, is returned as it is.
+    public static string? AddFindingRunTime(string? text, string? time)
+    {
+        if (text is null || string.IsNullOrEmpty(time)) return text;
+        if (text.Contains("\"si_collection_time\"", StringComparison.Ordinal)) return text;
+        if (!text.Contains("\"si_finding_source\":\"database\"", StringComparison.Ordinal)) return text;
+        var pair = "\"si_collection_time\":\"" + time + "\"";
+        var m = System.Text.RegularExpressions.Regex.Match(text, "\"si_finding_rows\":-?\\d+");
+        if (m.Success) return text.Insert(m.Index + m.Length, "," + pair);
+        var end = text.LastIndexOf('}');
+        if (end < 0) return text;
+        var sep = text[..end].Trim().EndsWith('{') ? "" : ",";
+        return text.Insert(end, sep + pair);
+    }
+
     /// ConvertFrom-SIDataOutFindingRow.
     public static JsonObject FindingItem(SqlRow r)
     {
-        var it = Doc(r);
+        JsonObject it;
+        try { it = JsonNode.Parse(AddFindingRunTime(r.Str("DocJson"), r.Str("SiCollectionTimeText")) ?? "{}") as JsonObject ?? new JsonObject(); }
+        catch (System.Text.Json.JsonException) { it = new JsonObject(); }
         foreach (var (field, col) in new[] { ("si_ci_id", "CiId"), ("si_asset_id", "AssetId"), ("si_finding_key", "FindingKey"), ("si_risk_score", "RiskScore"),
                      ("si_weighted_risk_score", "WeightedRiskScore"), ("si_tier", "Tier"), ("si_asset_name", "CiName"), ("si_class", "CiClass"), ("si_asset_type", "CiAssetType"),
                      ("si_cmdb_id", "CmdbId"), ("si_cmdb_name", "CmdbName"), ("si_cmdb_criticality", "CmdbCriticality"), ("si_cmdb_data_sensitivity", "CmdbDataSensitivity") })

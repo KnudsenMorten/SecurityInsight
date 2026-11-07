@@ -9,7 +9,9 @@
       * a membership the Support app had BEFORE the grant (PreExisting) is never removed by the close;
       * an expired marker (a job that died mid-grant) is removed by the sweep -- only the expired one;
       * the engine cannot write the consent, the markers or the journal itself, and cannot add itself to db_owner;
-      * an ALTER of a procedure drops its signature -> the open refuses (51801); the sign step refuses a changed text.
+      * an ALTER of a procedure drops its signature -> the open refuses (51801); the sign step refuses a changed text;
+      * a support session is at most 8 hours (the open refuses 9 h); an install with the earlier 24 h open is brought to
+        this release's by the admin steps (dropped by its exact SHA-256, created, signed); a hand-changed text never is.
     The Support app's user is made FOR a SQL login created WITH SID = its client id's bytes (the same SID an Entra
     application's TYPE = E user has), so the procedures find it exactly as in Azure.
 #>
@@ -169,7 +171,7 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
         $null = & $script:Close
     }
 
-    It 'the request is checked INSIDE the procedure: a bad level, a maxUntil over 24 h or in the past, an empty reason -> 51802' {
+    It 'the request is checked INSIDE the procedure: a bad level, a maxUntil over 8 h or in the past, an empty reason -> 51802' {
         foreach ($p in @(
             @{ RequestId = [guid]::NewGuid().ToString(); Level = 'admin'; MaxUntilUtc = [datetime]::UtcNow.AddHours(1).ToString('yyyy-MM-ddTHH:mm:ssZ'); Reason = 'x'; Ticket = ''; StartedBy = '' },
             @{ RequestId = [guid]::NewGuid().ToString(); Level = 'setup'; MaxUntilUtc = [datetime]::UtcNow.AddHours(30).ToString('yyyy-MM-ddTHH:mm:ssZ'); Reason = 'x'; Ticket = ''; StartedBy = '' },
@@ -226,6 +228,49 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
         & $script:A 'DROP PROCEDURE cfg.SupportGrantOpen;' @{} 'nonquery'
         & $script:A ($def -replace 'SET NOCOUNT ON;', 'SET NOCOUNT ON; -- changed') @{} 'nonquery'
         { & $script:A $sign.Sql @{} 'scalar' } | Should -Throw '*not this release*'
+    }
+
+    It 'a support session is at most 8 hours: the open refuses 9 h (51802) and takes 7 h 50 min' {
+        # the previous test leaves a hand-changed open: the admin steps put this release's back first
+        & $script:A 'DROP PROCEDURE cfg.SupportGrantOpen;' @{} 'nonquery'
+        foreach ($s in $script:Steps) { $null = & $script:A $s.Sql @{} 'scalar' }
+        $e = $null; try { $null = & $script:Open 'setup' 540 } catch { $e = $_ }
+        Get-SISupportGrantErrorResult $e | Should -Be 'bad-request'
+        "$e" | Should -Match 'in the next 8 hours'
+        (& $script:Member 'db_owner') | Should -Be 0
+        $r = & $script:Open 'setup' 470
+        [int]$r['RoleHeld'] | Should -Be 1
+        $null = & $script:Close
+        (& $script:Member 'db_owner') | Should -Be 0
+    }
+
+    It 'an install with the EARLIER open (24 h): the admin steps replace it with this release''s, sign it, and it refuses 9 h; a hand-changed text is never dropped' {
+        # the install as an earlier release left it: the 24 h open, signed (by an admin step of that release)
+        $old = ([IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\fixtures\support-grant-open-24h.sql.txt')) -replace "`r", '').TrimEnd()
+        & $script:A 'DROP PROCEDURE cfg.SupportGrantOpen;' @{} 'nonquery'
+        & $script:A $old @{} 'nonquery'
+        & $script:A 'GRANT EXECUTE ON OBJECT::cfg.SupportGrantOpen TO [si_engine];' @{} 'nonquery'
+        # the schema file the updater runs leaves it alone (created once, never altered)
+        $null = & $script:A (Get-SISupportGrantSchemaSql) @{} 'nonquery'
+        [string](& $script:A "SELECT OBJECT_DEFINITION(OBJECT_ID(N'cfg.SupportGrantOpen'))" @{} 'scalar') | Should -Match 'DATEADD\(MINUTE, 1442, @now\)'
+        $st = ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])
+        $st.Current | Should -Be 3
+        # the admin steps (as Install-SISupportGrantProcedure runs them): replaced, signed, read back complete
+        foreach ($s in $script:Steps) { $null = & $script:A $s.Sql @{} 'scalar' }
+        [string](& $script:A "SELECT OBJECT_DEFINITION(OBJECT_ID(N'cfg.SupportGrantOpen'))" @{} 'scalar') | Should -Match 'DATEADD\(MINUTE, 482, @now\)'
+        $st = ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])
+        ($st.Lines -join '; ') | Should -BeNullOrEmpty
+        $e = $null; try { $null = & $script:Open 'setup' 540 } catch { $e = $_ }
+        Get-SISupportGrantErrorResult $e | Should -Be 'bad-request'
+        $r = & $script:Open 'setup' 60
+        [int]$r['RoleHeld'] | Should -Be 1
+        $null = & $script:Close
+        # a text no release made is NOT dropped by the admin schema step (and the sign step refuses it)
+        $def = Get-SISupportGrantProcedureText -Name Open
+        & $script:A 'DROP PROCEDURE cfg.SupportGrantOpen;' @{} 'nonquery'
+        & $script:A ($def -replace 'SET NOCOUNT ON;', 'SET NOCOUNT ON; -- changed') @{} 'nonquery'
+        $null = & $script:A @($script:Steps | Where-Object Step -eq 'schema')[0].Sql @{} 'scalar'
+        [string](& $script:A "SELECT OBJECT_DEFINITION(OBJECT_ID(N'cfg.SupportGrantOpen'))" @{} 'scalar') | Should -Match '-- changed'
     }
 }
 

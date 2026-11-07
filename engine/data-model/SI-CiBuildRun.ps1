@@ -428,10 +428,12 @@ function Invoke-SICiCore {
           # (Get-SICiCmdbBatchIndex), called once the documents are built and before the rules -- instead of -CmdbIndex
           [scriptblock]$CmdbLookup,
           # #1057 record key -> its source's proof of deletion (Invoke-SIDeletionProof); none = no proof
-          [hashtable]$DeletionProof)
+          [hashtable]$DeletionProof,
+          # the merged-away ids (ConvertTo-SISupersededMap): never used again, a record resolves to the end of the chain
+          [hashtable]$Superseded)
     if ($null -eq $Lifecycle) { $Lifecycle = Get-SICiLifecycleSettings }
     Set-SICiWatchPhase -Watch $Watch -Phase 'looking up the ids of its assets'
-    $idy = Resolve-SIObjectIdentity -Groups @($Groups) -Ledger $Ledger -Now $Now
+    $idy = Resolve-SIObjectIdentity -Groups @($Groups) -Ledger $Ledger -Now $Now -MergedAway $Superseded
     $owner = Get-SICmdbOwner
     $docs = New-Object System.Collections.Generic.List[object]
     $minted = 0; $merged = 0
@@ -623,6 +625,29 @@ function Get-SICiGroupLedgerKeys {
     }
 }
 
+function New-SICiLedgerSqlInvoke {
+    <#
+        THE IDENTITY LEDGER'S STATEMENTS GO THROUGH THE SAME RETRY AS EVERY OTHER STATEMENT OF THE CI BUILD. Live 2026-11-06:
+        a CI build failed after 20 h, at batch 143 of 266 ("its CIs are built; writing their ids"), on "The connection was
+        recovered and rowcount in the first query is not available" -- a temporary Azure SQL answer that the build's own
+        statements already run again (Invoke-SIRecordSqlDb), but the ledger's were sent straight on the ledger's one
+        connection (Invoke-SIObjectLedgerSql), so the first one ended the build.
+        Returns { param($Sql, $Params, $Mode) } over the ledger's database (New-SIRecordSqlInvoke -> Invoke-SIRecordSqlDb: a
+        statement that meets a temporary Azure SQL answer runs again on a NEW connection after a pause; any other error is
+        the answer at once). Safe to run again: the batch's ledger read is a read, and its write is one statement in one
+        transaction (SET XACT_ABORT ON) that upserts the anchors by (type, value) and adds a supersession only when it is not
+        there yet -- run twice it leaves the same rows.
+        $null for a blob ledger, or a SQL provider that names no database (a test's own connection): its connection is used.
+    #>
+    param($Provider)
+    if ($null -eq $Provider -or [string]$Provider.Kind -ne 'sql') { return $null }
+    $srv = ''; $db = ''
+    if ($Provider.PSObject.Properties['Server']) { $srv = [string]$Provider.Server }
+    if ($Provider.PSObject.Properties['Database']) { $db = [string]$Provider.Database }
+    if ([string]::IsNullOrWhiteSpace($srv) -or [string]::IsNullOrWhiteSpace($db)) { return $null }
+    New-SIRecordSqlInvoke -Server $srv.Trim() -Database $db.Trim()
+}
+
 function Invoke-SICiBuild {
     <#
     .SYNOPSIS  Records (SQL) -> CIs (SQL + the SI_CI_CL copy). Returns a summary; never throws.
@@ -790,8 +815,15 @@ function Invoke-SICiBuild {
             if ($lk.Waited) { $now = [datetime]::UtcNow; if ($PSBoundParameters.ContainsKey('BuildTime')) { $now = $BuildTime.ToUniversalTime() }; $phase['wait'] = [Math]::Round($sw.Elapsed.TotalSeconds, 1); $sw.Restart() }
         }
 
+        # 0c. #1100 THE ONE-TIME CI CUT-OFF (hidden: cfg.InstallState 'CiCutoff', set by setup\Set-SICiCutoff.ps1 --
+        # SI-CiCutoff.ps1): in force, the records of a feed collected again since the cut-off that are older than it are not
+        # current; past the look-back it changes nothing (one line). A read that fails = not applied this build.
+        $ciCut = Read-SICiCutoff -Sql $sql -Now $now -LookbackDays $LookbackDays -Log $Log
+        if ($ciCut.Line) { & $Log 'INFO' $ciCut.Line }
+        $cutUtc = $null; if ($ciCut.Applied) { $cutUtc = $ciCut.CutoffUtc }
+
         # 1. grouping, in SQL
-        $gr = Invoke-SICiGrouping -Sql $sql -LookbackDays $LookbackDays -BatchCis $BatchCis -BudgetSeconds $GroupingBudgetSeconds -Log $Log
+        $gr = Invoke-SICiGrouping -Sql $sql -LookbackDays $LookbackDays -BatchCis $BatchCis -BudgetSeconds $GroupingBudgetSeconds -Log $Log -CutoffUtc $cutUtc
         & $mark 'group'
         # the statement always answers ONE row (Rounds >= 1): no row is a failure, never "no records" (customer H 2026-10-09)
         if ($null -eq $gr -or $null -eq (Get-SIItemValue $gr 'Rounds')) {
@@ -813,6 +845,9 @@ function Invoke-SICiBuild {
         $prov = $null
         try { if ($null -ne $LedgerProvider) { $prov = $LedgerProvider } else { $prov = Get-SIObjectLedgerProvider } } catch { & $Log 'WARN' ("CIs were NOT built: the identity ledger could not be opened ({0})." -f $_.Exception.Message); return [pscustomobject]@{ Failed = $true; Reason = 'ledger'; CiCount = 0; Cis = @() } }
         if ($null -eq $prov) { & $Log 'WARN' 'CIs were NOT built: no identity ledger is configured (SQL or storage account) -- an id that is not remembered moves.'; return [pscustomobject]@{ Failed = $true; Reason = 'no-ledger'; CiCount = 0; Cis = @() } }
+        # the ledger's statements run through the shared statement retry (New-SICiLedgerSqlInvoke); $null = its own connection
+        $ledgerSql = New-SICiLedgerSqlInvoke -Provider $prov
+        $ledgerRows = { param($LSql, $LParams) if ($ledgerSql) { @(& $ledgerSql $LSql $LParams 'rows') } else { @(Invoke-SIObjectLedgerSql -Connection $prov.Connection -Sql $LSql -Params $LParams) } }
         $whole = $null
         if ([string]$prov.Kind -ne 'sql') {
             # #639 a blob ledger is one document: read whole once per build (there is no per-batch read of a blob). An
@@ -829,6 +864,19 @@ function Invoke-SICiBuild {
             $nSplit = Remove-SICiSplitLedgerKeys -Ledger $whole.Ledger -Split $splitKeys
             if ($nSplit -gt 0) { & $Log 'INFO' ("CIs: {0} identifier(s) of CIs a person split again leave the CI they were merged into" -f $nSplit) }
         }
+        # THE MERGED-AWAY IDS (owner 2026-11-05: "ci object must be the stable id"): an id that was merged into another
+        # (the identity ledger's superseded table, a CI->CI merge in sidata.AssetIdHistory, a retired CI's si_merged_into)
+        # is never used for a record again -- such a record resolves to the end of the merge chain and the old id's anchors
+        # are re-pointed there (Resolve-SIObjectIdentity -Superseded). A pair a person split again is left out.
+        $supMap = @{}
+        try {
+            $supData = @(& $sql (Get-SICiSupersededSql) @{} 'rows')
+            $supLedger = @()
+            if ([string]$prov.Kind -eq 'sql') { $supLedger = @(& $ledgerRows 'SET NOCOUNT ON; IF OBJECT_ID(N''si.ObjectIdentitySuperseded'') IS NOT NULL SELECT OldId, NewId, SupersededAt FROM si.ObjectIdentitySuperseded;' @{}) }
+            elseif ($prov.PSObject.Properties['Store'] -and $prov.Store -and $prov.Store.PSObject.Properties['Superseded']) { $supLedger = @($prov.Store.Superseded) }
+            $supMap = ConvertTo-SISupersededMap -Rows (ConvertTo-SICiSupersededRows -DataRows $supData -LedgerRows $supLedger)
+            if ($supMap.Count -gt 0) { & $Log 'INFO' ("CIs: {0} id(s) were merged into another CI -- a record that still names one resolves to the CI it was merged into, never to the old id" -f $supMap.Count) }
+        } catch { & $Log 'WARN' ("CIs: the merged-away ids could not be read ({0}) -- this build resolves ids from the identity ledger alone." -f $_.Exception.Message); $supMap = @{} }
         if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
         # #462 the manual CI overrides in force (sidata.CiOverride; a database without the table has none)
         if ($null -eq $OverrideRows) { try { $OverrideRows = @(& $sql (Get-SICiOverrideReadSql) @{} 'rows') } catch { & $Log 'WARN' ("CIs: the manual CI overrides could not be read ({0}) -- the rules decide this run." -f $_.Exception.Message); $OverrideRows = @() } }
@@ -950,7 +998,7 @@ function Invoke-SICiBuild {
         if ((-not $fullBuild -or $carryOn) -and $since) {
             try {
                 if ([string]$prov.Kind -eq 'sql') {
-                    $lchg = ConvertTo-SICiLedgerChanges -Rows @(Invoke-SIObjectLedgerSql -Connection $prov.Connection -Sql (Get-SICiLedgerChangedSql) -Params @{ sinceText = $since })
+                    $lchg = ConvertTo-SICiLedgerChanges -Rows @(& $ledgerRows (Get-SICiLedgerChangedSql) @{ sinceText = $since })
                 } else {
                     $sinceT = ConvertTo-SIUtcOrNull $since
                     $lchg = ConvertTo-SICiLedgerChanges -Rows @(foreach ($lk in @($whole.Ledger.Keys)) {
@@ -1079,7 +1127,7 @@ function Invoke-SICiBuild {
             $ledger = $null
             & $sayStep 'looking up the ids its assets already have'
             if ([string]$prov.Kind -eq 'sql') {
-                $ledger = Get-SIObjectLedgerSubset -Connection $prov.Connection -Keys @(Get-SICiGroupLedgerKeys -Groups $bg.Groups)
+                $ledger = Get-SIObjectLedgerSubset -Connection $prov.Connection -Keys @(Get-SICiGroupLedgerKeys -Groups $bg.Groups) -Invoke $ledgerSql
                 # #1053 a side a person split again: its identifiers leave the CI it was merged into (this batch's copy)
                 if ($splitKeys.Count -gt 0) { $null = Remove-SICiSplitLedgerKeys -Ledger $ledger -Split $splitKeys }
             }
@@ -1089,7 +1137,7 @@ function Invoke-SICiBuild {
             & $Log 'INFO' ("CIs: batch {0} of {1} -- building {2} CI(s) from {3} record(s)" -f $b, $nBatches, @($bg.Groups).Count, [int]$bg.Records); $said.At = [datetime]::UtcNow
             if ($ciWatch) { $ciWatch.What = ('batch {0} of {1} -- ' -f $b, $nBatches) }
             $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -Watch $ciWatch `
-                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof
+                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof -Superseded $supMap
             Set-SICiWatchPhase -Watch $ciWatch -Phase 'linking its CIs to their owners and users, and preparing them for the database'
             # KEEP IT OUT UNTIL FULLY EVALUATED (Get-SICiHeld): a CI whose rules took too long got only part of the rules, so
             # nothing of this run's result of it is written, posted, linked or handed on -- $docs are the complete CIs of the
@@ -1154,7 +1202,9 @@ function Invoke-SICiBuild {
                 # the ledger first: a CI is never written under an id the ledger does not hold
                 & $sayStep 'its CIs are built; writing their ids'
                 if ([string]$prov.Kind -eq 'sql') {
-                    $lw = Save-SIObjectLedgerSet -Connection $prov.Connection -Decisions $core.Decisions -Superseded $core.Superseded -Now $now
+                    # (through the shared statement retry: a temporary Azure SQL answer runs it again on a new connection -- it
+                    # is one transaction that upserts by key, so a second run leaves the same rows; New-SICiLedgerSqlInvoke)
+                    $lw = Save-SIObjectLedgerSet -Connection $prov.Connection -Decisions $core.Decisions -Superseded $core.Superseded -Now $now -Invoke $ledgerSql
                     $t.Anchors += [int]$lw.AnchorsWritten; $t.Superseded += [int]$lw.SupersededWritten
                 } else {
                     foreach ($d in $core.Decisions) { if ($d.CorrelationId) { $blobDecisions.Add([pscustomobject]@{ CorrelationId = $d.CorrelationId; Action = $d.Action; NewIdentifiers = @($d.NewIdentifiers) }) } }
@@ -1455,6 +1505,23 @@ function Invoke-SICiBuild {
             }
         }
 
+        # #1100 THE ONE-TIME CI CUT-OFF in force: a CI built ONLY from records collected before it (none at or after it) is
+        # retired AT ONCE with the cut-off's reason -- never deleted (Get-SICiCutoffRetireSql); before the retire brake
+        # below, which would keep it for days. One line per build says the cut-off, the records it left out and the CIs it retired.
+        $cutRetired = 0
+        if ($ciCut.Applied) {
+            if (-not $DryRun) {
+                try {
+                    $cr = @(& $sql (Get-SICiCutoffRetireSql -CutoffUtc $ciCut.CutoffUtc -LookbackDays $LookbackDays) @{ run = [string]$RunId; cutReason = [string]$ciCut.Reason } 'rows') | Select-Object -First 1
+                    if ($cr) { $cutRetired = [int](Get-SIItemValue $cr 'Retired') }
+                } catch {
+                    & $Log 'WARN' ("CIs: the CIs the one-time cut-off leaves without a record could not be retired this build ({0}) -- tried again on the next build." -f $_.Exception.Message)
+                    $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the CIs the one-time CI cut-off leaves without a record were not retired this build ({0}) -- every CI is stored; the next build retires them' -f $_.Exception.Message) })
+                }
+            }
+            & $Log 'INFO' (Format-SICiCutoffBuildLine -CutoffUtc $ciCut.CutoffUtc -Reason $ciCut.Reason -Ignored ([int](Get-SIItemValue $gr 'CutIgnored')) -Retired $cutRetired -DryRun:$DryRun)
+        }
+
         # the CIs no current record builds any more (records aged out of the lookback, or none at all) are RETIRED once unseen
         # longer than the retire brake -- never deleted; recorded again, they are rebuilt active (Get-SICiRetireSql)
         $retired = $null
@@ -1612,6 +1679,8 @@ function Invoke-SICiBuild {
             # #1052 the CIs merged into another and retired at once this build; hard ids still on two active CIs
             MergedRetired = $(if ($mergedRetired) { [int](Get-SIItemValue $mergedRetired 'Retired') } else { 0 })
             SharedLiveHardIds = $(if ($mergedRetired) { [int](Get-SIItemValue $mergedRetired 'SharedLive') } else { 0 })
+            # #1100 the one-time CI cut-off: in force this build, the records it left out, the CIs it retired at once
+            CutoffApplied = [bool]$ciCut.Applied; CutoffIgnored = $(if ($ciCut.Applied) { [int](Get-SIItemValue $gr 'CutIgnored') } else { 0 }); CutoffRetired = $cutRetired
             # the CI views' stored columns filled at the end of this build ($null: not this edition, or a dry run)
             ViewColumns = $viewColumns
             # #639 what the build caught and went on from (WARNING / FAILED, one plain line each)

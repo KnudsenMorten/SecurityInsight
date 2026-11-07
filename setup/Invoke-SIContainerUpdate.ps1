@@ -175,7 +175,9 @@ param(
     # Roll by hand even though an updater job owns this install's rollout (Upgrade-SIToPro.ps1). The job will
     # move the containers back to the version your ring approves on its next run.
     [switch]$Force,
-    [int]$BuildTimeoutMinutes = 30,
+    # 90 (was 30): a private install builds on its agent pool inside its network, slower than the shared builders -- seen live
+    # 2026-11-05, the build of the release image was still going after 30 minutes and the update gave up ("Timeout")
+    [int]$BuildTimeoutMinutes = 90,
     # #405: RING 1 (internal) -- the templates shipped with this tree installed DIRECTLY (Publish-SITemplates
     # -InstallCurrent): no pack number, no gate, no pack recorded as a release. The ring 1 deploy passes it.
     [switch]$InstallTemplatesDirect,
@@ -219,6 +221,15 @@ function Step([string]$m) { $global:SI_UpdateStage = $m; Write-Host "==> $m" -Fo
 }
 function Info([string]$m) { Write-Host "    $m"; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
 function Warn([string]$m) { if (-not "$global:SI_UpdateFirstWarn".Trim()) { $global:SI_UpdateFirstWarn = $m }; Write-Host "    $m" -ForegroundColor Yellow; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
+# framework rule 11g: a build pool that could not be brought back to 0 agents (or was removed and not made again) is a failure
+# line of its OWN (step 'build-pool') -- the updater reports it also when the update itself succeeded; it never changes the exit code
+function Add-SIUpdateBuildPoolFailure([string]$Text) {
+    if ($null -eq $global:SI_UpdateFailures) { $global:SI_UpdateFailures = New-Object System.Collections.Generic.List[object] }
+    $global:SI_UpdateFailures.Add([pscustomobject]@{ Step = 'build-pool'; Code = ''; Text = $Text })
+}
+# framework rule 11g: the build pool's scale up / down and the updater's tier step (setup\_shared\SI-AcrBuildPool.ps1)
+$bpLib = Join-Path $PSScriptRoot '_shared/SI-AcrBuildPool.ps1'
+if (Test-Path -LiteralPath $bpLib) { . $bpLib }
 
 # ---- 1. DETECT --------------------------------------------------------------------------------
 Step '1. DETECT'
@@ -609,7 +620,7 @@ function Invoke-SIUpdateJobFloor {
         . $lib
         $all = @(Get-SIArmJobList -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName)
         if (-not @($all | Where-Object { [string]$_.name -like 'caj-si-*' }).Count) { return }
-        Step ('8c. JOB FLOOR (2 CPU / 4 GiB; run limit {0}, the longest Azure takes)' -f (Format-SIJobTimeout -Seconds ([int](Get-SIJobRunLimit))))
+        Step ('8c. JOB FLOOR (heavy jobs 4 CPU / 8 GiB, the others 2 CPU / 4 GiB; run limit {0}, the longest Azure takes)' -f (Format-SIJobTimeout -Seconds ([int](Get-SIJobRunLimit))))
         $fl = Invoke-SIJobFloor -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Jobs $all -Globals $globals `
                 -UpdaterName ([string](Get-SIUpdaterManagedJob -Globals $globals)) -WhatIf:(-not $Apply -or $DetectOnly)
         foreach ($l in @($fl.Lines)) { if ($l -match 'NOT raised|not checked') { Warn $l } else { Info $l } }
@@ -717,7 +728,44 @@ function Invoke-SIUpdateOrchestration {
         }
         $r = Invoke-SIJobOrchestrationRepair -Jobs $all -Arm $arm -WhatIf:(-not $Apply -or $DetectOnly) -Log { param($l, $m) if ($l -eq 'WARN') { Warn $m } else { Info $m } }
         $global:SI_UpdateOrchestration = $r
+        # #1096 (found live: a collect producer kept its own daily timer beside the pipeline -- a second, full collection every
+        # day that belonged to no run): in pipeline mode a producer whose engine is a step is started ONLY by the pipeline --
+        # Manual, its cron remembered, read back; the state a new install has. Idempotent. Never fails the update.
+        try { Invoke-SIUpdateCollectProducers -Arm $arm } catch { Warn ("collect producers: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
     } catch { Warn ("pipeline schedule: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
+# #1096 THE COLLECT PRODUCERS IN THE PIPELINE (engine\_shared\SI-JobFlow.ps1 Invoke-SICollectProducerTrigger): the mode is the
+# stored one (cfg.JobFlow Mode), else caj-si-flow on its timer = the pipeline; the pipeline is the stored one, else the default
+# over the installed jobs. A Pro install whose stored pipeline cannot be read is left as it is (one line) -- a producer whose
+# engine is not a step of the stored pipeline is that engine's only collection and must keep its timer.
+function Invoke-SIUpdateCollectProducers {
+    param([Parameter(Mandatory)][scriptblock]$Arm)
+    $all = @(Get-SIArmJobList -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName)
+    if (-not @($all | Where-Object { [string]$_.name -match '^caj-si-.+-producer$' }).Count) { return }
+    $def = $null; $storedMode = ''
+    $envOr = { param($n) $v = [Environment]::GetEnvironmentVariable($n); if ("$v".Trim()) { "$v".Trim() } else { '' } }
+    $gv = { param($n) if ($globals.ContainsKey($n) -and "$($globals[$n])".Trim()) { "$($globals[$n])".Trim() } else { '' } }
+    $proSrv = & $envOr 'SI_UPDATER_PRO_SQL_SERVER'; if (-not $proSrv) { $proSrv = & $gv 'SI_ProSqlServer' }
+    $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
+    if ($proSrv -and $proDb) {
+        if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
+        try {
+            # the open through the shared retry (engine\_shared\SI-SqlRetry.ps1: a failover or a resume is tried again with a fresh token)
+            if (-not (Get-Command -Name Open-SISqlConnectionRetry -ErrorAction Ignore)) { . (Join-Path $solRoot 'engine/_shared/SI-SqlRetry.ps1') }
+            $cn = Open-SISqlConnectionRetry -Server $proSrv -Database $proDb -Token { param([bool]$Fresh) ([string](Get-SIAzureToken -Resource 'https://database.windows.net/' -ForceRefresh:$Fresh)).Trim() }
+            try {
+                $cmd = $cn.CreateCommand(); $cmd.CommandText = (Get-SIJobFlowSqlText -Name ReadDefinition); $cmd.CommandTimeout = 0
+                $rd = $cmd.ExecuteReader()
+                try { if ($rd.Read()) { if (-not $rd.IsDBNull(0)) { $def = ConvertFrom-SIJobFlowJson -Json ([string]$rd.GetValue(0)) }; if (-not $rd.IsDBNull(1)) { $storedMode = ([string]$rd.GetValue(1)).ToLowerInvariant() } } } finally { $rd.Dispose() }
+            } finally { $cn.Dispose() }
+        } catch { Warn ("collect producers: the stored pipeline could not be read ({0}) -- nothing changed; the next update tries again." -f $_.Exception.Message); return }
+    }
+    $flowJob = @($all | Where-Object { [string]$_.name -eq 'caj-si-flow' })[0]
+    $mode = if ($storedMode -in @('flow', 'schedules')) { $storedMode } elseif ($flowJob -and [string]$flowJob.properties.configuration.triggerType -eq 'Schedule') { 'flow' } else { 'schedules' }
+    Step '9q. COLLECT PRODUCERS (started only by the pipeline)'
+    $cp = Invoke-SICollectProducerTrigger -Jobs $all -Arm $Arm -Mode $mode -Definition $def -WhatIf:(-not $Apply -or $DetectOnly)
+    foreach ($l in @($cp.Lines)) { if ($l -match 'NOT taken off|not checked|not a step') { Warn $l } else { Info $l } }
+    $global:SI_UpdateCollectProducers = $cp
 }
 # THE WEB APP'S SIZE (owner 2026-10-18: "reduce web app to 2cpus 4 gb ram" -- 7 days of telemetry: at most 0.1 CPU / 0.5 GiB
 # used of 4 CPU / 8 GiB): every update SETS the Pro web app's own container (the name the install record gives, else
@@ -1550,8 +1598,36 @@ if ($Apply -and -not $DetectOnly -and (Test-Path -LiteralPath $pnLib)) {
                 $script:SIAcrRegistryCache = @{}
                 $acr = Get-SIAcrRegistry -Rest $rest -SubscriptionId $sub -AcrName $target.AcrName -ResourceGroup $target.ResourceGroupName
             }
+            # framework rule 11g: the build pool at tier S2 with 0 agents between builds -- an older pool is made again at S2
+            # ONLY while no build runs (same subnet, read back); anything uncertain leaves it as it is (said). An updater image
+            # from before rule 11g builds without scaling the pool: its pool is left as it is until the updater's next image.
+            if (Get-Command -Name Invoke-SIBuildPoolConverge -ErrorAction SilentlyContinue) {
+                if (-not (Test-SIBuildPoolOldUpdater)) {
+                    $bc = Invoke-SIBuildPoolConverge -Arm $pnArm -RegistryId ([string]$acr.Id) -Pool (Get-SIPrivateNetworkNames).AgentPool
+                    if ($bc.Line) { if ($bc.Ok) { Info $bc.Line } else { Warn $bc.Line } }
+                    if ($bc.Failure) { Add-SIUpdateBuildPoolFailure $bc.Line }
+                } else { Info 'the build pool is left as it is in this update: this updater image builds without scaling the pool; its next image (this update''s last step) scales it from the next update on' }
+            }
         }
     } catch { Warn ("private registry: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
+
+# ---- 1c. RETURN ROUTE (#1095) -- REPORT ONLY ------------------------------------------------------------------------------
+# A private install whose apps subnet has no route table (or one with neither a 0.0.0.0/0 nor a VirtualAppliance route): behind
+# a firewall in a hub, replies to the customer's people time out. The updater only SAYS it (a warning in its log) -- it never
+# makes a route: the next hop is the customer's firewall IP, a value it cannot know. Never fails the update.
+if (Test-Path -LiteralPath $pnLib) {
+    try {
+        if (-not (Get-Command -Name Get-SIUpdateReturnRouteReport -ErrorAction SilentlyContinue)) { . $pnLib }
+        $rrArm = {
+            param([string]$Method, [string]$Path, $Body)
+            if ($Method -ne 'GET') { throw 'the return-route report only reads' }
+            $u = if ($Path -match '^https://') { $Path } else { 'https://management.azure.com' + $Path }
+            Invoke-SIRestJson -Rest $rest -Method $Method -Uri $u -Body $Body -AllowNotFound -What ('{0} {1}' -f $Method, ($Path -replace '\?.*$', ''))
+        }
+        $rrRep = Get-SIUpdateReturnRouteReport -Arm $rrArm -ResourceGroupId ('/subscriptions/{0}/resourceGroups/{1}' -f $sub, $acr.ResourceGroup)
+        if ($rrRep.Private -and $rrRep.Line) { Step '1c. RETURN ROUTE'; if ($rrRep.Warn) { Warn $rrRep.Line } else { Info $rrRep.Line } }
+    } catch { Warn ("return route: not checked ({0}) -- the update goes on." -f $_.Exception.Message) }
 }
 
 $version = (Get-Content -LiteralPath (Join-Path $solRoot 'VERSION') -Raw).Trim()
@@ -1583,9 +1659,24 @@ if (-not $Apply -or $DetectOnly) { Info ("{0} job(s) would move to the new image
 # failed build prints the end of its log.
 Step '2. BUILD'
 $bArgs = @{ Rest = $rest; AcrName = $target.AcrName; SubscriptionId = $sub; ResourceGroup = $acr.ResourceGroup }
+# framework rule 11g: a private install's build pool is scaled up before the first build (read back) and back to 0 agents in
+# the FINALLY below -- after a success, a failed or a timed-out build (read back). Inside the updater, its run holds the pool
+# (one session for every image of the update) and the close here only leaves it.
+$poolSession = [bool](Get-Command -Name Open-SIBuildPoolSession -ErrorAction SilentlyContinue)
+$poolKeepUp = $false
+if ($poolSession) { $poolKeepUp = Test-SIBuildPoolOldUpdater; $null = Open-SIBuildPoolSession }
+try {
 if (Test-SIAcrTag @bArgs -Repo 'si-orchestrator' -Tag $tag -LoginServer $acr.LoginServer) {
     Info "tag $tag is already in the registry -- not rebuilding."
 } else {
+    if ($poolSession) {
+        $poolName = Resolve-SIAcrAgentPool -Rest $rest -Registry $acr
+        if ($poolName) {
+            $poolUp = Request-SIBuildPoolUp -Rest $rest -RegistryId ([string]$acr.Id) -Pool $poolName
+            if ($poolUp.Line) { if ($poolUp.Ok) { Info $poolUp.Line } else { Warn $poolUp.Line } }
+            if (-not $poolUp.Ok) { throw ("{0}. No job was changed." -f $poolUp.Line) }
+        }
+    }
     $layer = Get-SIImageLayerPlan -DockerfilePath (Join-Path $solRoot 'container/Dockerfile') -BaseRepo 'si-base' -LoginServer $acr.LoginServer
     $work = Join-Path ([IO.Path]::GetTempPath()) ('si-build-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -1614,6 +1705,14 @@ if (Test-SIAcrTag @bArgs -Repo 'si-orchestrator' -Tag $tag -LoginServer $acr.Log
         if ($eb.Status -ne 'Succeeded') { throw "The image build did not succeed ($($eb.Status)). No job was changed." }
     } finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
+} finally {
+    if ($poolSession) {
+        # -KeepUp only while an updater image from before rule 11g builds the rest of this update without scaling the pool
+        $pc = Close-SIBuildPoolSession -KeepUp:$poolKeepUp
+        if ($pc.Line) { if ($pc.Ok) { Info $pc.Line } else { Warn $pc.Line } }
+        if ($pc.Closed -and $pc.Touched -and -not $pc.Ok) { Add-SIUpdateBuildPoolFailure $pc.Line }
+    }
+}
 
 # ---- 3. ROLL / 4. VERIFY / 5. ROLLBACK ---------------------------------------------------------
 # #416: every job by ONE ARM PATCH of its template (never a PUT -- secrets; never one job update after another -- 16 jobs
@@ -1633,7 +1732,8 @@ if ($failed.Count) {
     # SUP-2026-00198: each failure the updater reports is recorded with ITS step and its catalogue code -- the roll's own
     # failure is 'roll' (si-upd-0803 refused / si-upd-0805 not verified), and only a job that could not be PUT BACK is a
     # 'restore' failure (si-upd-0804). Until then a clean rollback was reported as "restore failed" with the roll's 400.
-    $global:SI_UpdateFailures = New-Object System.Collections.Generic.List[object]
+    # (a build-pool failure line recorded before the roll stays on the list -- rule 11g)
+    if ($null -eq $global:SI_UpdateFailures) { $global:SI_UpdateFailures = New-Object System.Collections.Generic.List[object] }
     foreach ($grp in @($failed | Group-Object -Property { Get-SIRollFailureCode -Result $_ })) {
         $first = $grp.Group[0]
         $global:SI_UpdateFailures.Add([pscustomobject]@{ Step = 'roll'; Code = $grp.Name

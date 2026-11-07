@@ -159,7 +159,7 @@ source knows the value. The push leaves an empty value out of the row and lists 
 | `u_row_hash` | nvarchar(64) | always | A fingerprint of the row's content; it changes only when the content changes | Not mapped; change detection | 64 hex characters |
 | `u_changed_at` | datetime2(3) | always | Hand-off database: when the row's content or state last changed (a plain re-sighting does not move it). Push: the start of the sync | Not mapped; the delta filter (hand-off database) | `2026-10-01 05:00:00` |
 | `u_data_sensitivity` | nvarchar(32) | when known | The data sensitivity SecurityInsight weighs risk with: your profile rule's override, else the CMDB record | Optional; low-priority source, or unmapped | `Internal` |
-| `u_si_state` | nvarchar(16) | when known | `active`, `not-seen` or `retired` (see [CI states](servicenow-records-and-states#ci-states)) | Your transform decides: a flag, a task, or `install_status` | `active` |
+| `u_si_state` | nvarchar(16) | when known | `active`, `not-seen` or `retired` (see [CI states](servicenow-records-and-states#ci-states)) | Your team decides what to do with each state: `active` keep it; `not-seen` not seen within its seen window, retired after its grace period unless seen again (the date is in `u_si_reason`); `retired` close it - `u_si_reason` says why, and a merged CI names the CI to use. SecurityInsight never deletes a CI and sends a retired CI on every run | `active` |
 | `u_si_asset_type` | nvarchar(64) | when known | What the asset is, in SecurityInsight's one list (Workstation, Server, Database, Key vault, User, Service principal, …; Other, Unknown) | Optional; a filter or a note | `Workstation` |
 | `u_si_asset_subtype` | nvarchar(64) | when known | The kind within the type (SQL Server, Domain controller, SQL Database, …; General) | Optional; picks the sub-CI SQL findings belong to | `Windows` |
 | `u_owner` | nvarchar(256) | when known | The owner SecurityInsight knows from your CMDB services (database of your own only) | Optional, for example `owned_by` | `Jane Doe` |
@@ -278,8 +278,8 @@ On every row of both push outputs:
 | `u_row_hash` | string | always | SHA-256 of the row's content columns: never the action, the batch, the clear marker, the reason, the replaced key or the run columns | 64 hex characters |
 | `u_si_batch_id` | string | always | The batch that delivered the row, `<run id>:<output>` | `demo-run-1006:servicenow-ci` |
 | `u_si_cleared` | string | when known | The clearable columns that are empty now, comma separated; never on a `held` row | `u_cmdb_ci,u_closed_at,u_close_reason` |
-| `u_si_reason` | string | when known | Why the row is `held` or `out_of_scope` | `absent 1 complete run(s) - SecurityInsight closes a finding only after enough complete runs without it` |
-| `u_si_replaces` | string | when known | The key this record replaces after a re-key; the old key gets no row of its own | `mdedeviceid:0000…0077` |
+| `u_si_reason` | string | when known | Why, in plain words: a CI's state when it is not active (merged into, not seen since, deleted in, every linked object gone, replaced by, not in SecurityInsight's data any more); why a row is `held` or `out_of_scope` | `absent 1 complete run(s) - SecurityInsight closes a finding only after enough complete runs without it` |
+| `u_si_replaces` | string | when known | The key this record replaces after a re-key or a merge; a CI's old key keeps its own row: `retired`, `close`, its reason naming this CI | `mdedeviceid:0000…0077` |
 | `u_source_run` | string | when known | The run the values come from | `demo-run-1006` |
 
 Create each column at least as long as the ServiceNow schema (JSON) of its table gives it.

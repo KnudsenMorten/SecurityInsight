@@ -93,6 +93,16 @@ if ($siRole) {
             & pwsh -NoProfile -File $raScript
             exit $LASTEXITCODE
         }
+        'index-build' {
+            # #1111: the index build job (caj-si-index-build), started by the pipeline runner's idle wake-up, as the updater's
+            # identity. Before any engine sign-in, storage or licence step: it needs none of them (its own tokens, the Pro
+            # database and the updater job's state). Run IN this process (not a child pwsh): a stop of the execution then
+            # still runs the job's finally -- its outcome line and its row set back.
+            $ixScript = '/app/engine/index-build/Invoke-SIIndexBuildJob.ps1'
+            Write-Host "[SI_ROLE=index-build] dispatching to $ixScript" -ForegroundColor Cyan
+            & $ixScript
+            exit $LASTEXITCODE
+        }
         'worker' {
             # Engine-aware dispatch within the worker role. Most engines
             # (endpoint/identity/azure/publicip) go through Invoke-SIEngineRun.
@@ -139,6 +149,10 @@ if ($siRole) {
             elseif ($engineEnv -eq 'data-out') {
                 $dispatchDirect = $true
             }
+            # the users' sign-in methods read in the background (caj-si-signin-methods), on its own timer outside the pipeline.
+            elseif ($engineEnv -eq 'signin-methods') {
+                $dispatchDirect = $true
+            }
             # #1021: the support grant job (caj-si-support-grant), started by the Invardia Support session with a request on its queue.
             elseif ($engineEnv -eq 'support-grant') {
                 $dispatchDirect = $true
@@ -149,7 +163,7 @@ if ($siRole) {
             }
             # else: fall through to legacy worker path below (Invoke-SIEngineRun)
         }
-        default  { throw "Unknown SI_ROLE '$siRole' -- expected one of: worker | producer | ra" }
+        default  { throw "Unknown SI_ROLE '$siRole' -- expected one of: worker | producer | ra | index-build" }
     }
 }
 
@@ -360,6 +374,33 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
         $guardList = @(Invoke-SIArm -Path ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}/executions' -f $guardSub, $guardRg, $guardJob) -ApiVersion '2025-07-01' -List)
         $guardOther = Get-SIJobExecutionOverlap -Executions $guardList -Self $guardExec
     } catch { Write-Warning ('[guard] could not check for a running execution of {0} ({1}) -- the run goes on' -f $guardJob, $_.Exception.Message) }
+    # NO FRESH BEAT = DEAD (engine\_shared\SI-ExecutionLiveness.ps1): another FLOW execution counts as running only while it
+    # beats the install lock (the runner of a run) or the clean-up's own lock; one that never beat counts for 30 minutes after
+    # its start. A dead one is STOPPED, said, raised to Invardia, and this wake-up goes on to the queue. Lock rows that
+    # cannot be read keep the old rule (every running one counts, nothing is stopped).
+    $guardLockStore = $null
+    if ($guardOther -and ($engine -eq 'flow' -or $guardJob -eq 'caj-si-flow') -and (($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) -or [string]$global:SI_StorageAccount)) {
+        try {
+            if (-not (Get-Command -Name Select-SIFlowGuardOther -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-ExecutionLiveness.ps1') }
+            if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) {
+                if (-not (Get-Command -Name Get-SIGuardProInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../engine/_shared/SI-Guard.ps1') }
+                $guardInv = Get-SIGuardProInvoke
+                if ($guardInv) { $guardLockStore = New-SIExecutionLockStore -Invoke $guardInv }
+            } elseif ([string]$global:SI_StorageAccount) { $guardLockStore = New-SIExecutionLockStore -Docs (New-SIExecutionLockBlobDocs -Account ([string]$global:SI_StorageAccount)) }
+            $guardLocks = @(); $guardKnown = $false
+            if ($guardLockStore) { $glr = Read-SIExecutionLocks -Store $guardLockStore; $guardLocks = @($glr.Rows); $guardKnown = [bool]$glr.Known }
+            if ($null -eq $global:SI_ExecutionStopped) { $global:SI_ExecutionStopped = @{} }
+            $guardLive = Select-SIFlowGuardOther -Executions $guardList -Self $guardExec -Locks $guardLocks -LocksKnown $guardKnown -Stopped $global:SI_ExecutionStopped
+            if (@($guardLive.Dead).Count) {
+                $guardStop = Invoke-SIExecutionDeadStop -Dead @($guardLive.Dead) -OthersLive ([bool]$guardLive.Other) -Stopped $global:SI_ExecutionStopped `
+                    -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning ('[flow] ' + $m) } else { Write-Host ('[flow] ' + $m) } } `
+                    -Stop { param($n) $null = Invoke-SIArm -Method POST -Path (Get-SIExecutionStopPath -Base ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $guardSub, $guardRg) -Job $guardJob -Execution $n) -Body @{} } `
+                    -Alert { param($ev) if (-not (Get-Command -Name Get-SITelemetryContext -ErrorAction SilentlyContinue)) { try { . (Join-Path $PSScriptRoot '../engine/_shared/SI-TelemetrySend.ps1') } catch { } }; $null = Send-SIExecutionStoppedAlert -Event $ev }
+                # a stop that failed (and is not past the 6-hour fallback) still holds this wake-up back: never two runs side by side
+                $guardOther = if ($guardLive.Other) { $guardLive.Other } elseif (@($guardStop.Blocking).Count) { @($guardStop.Blocking)[0].Execution } else { $null }
+            } else { $guardOther = $guardLive.Other }
+        } catch { Write-Warning ('[flow] whether the other flow execution still works could not be read ({0}) -- it is treated as running' -f $_.Exception.Message) }
+    }
     # A flow execution that carries a request (Run now) is never dropped by the guard: the runner's lock queues it.
     # #946: a cancel of the running run (SI_FLOW_CANCEL) is a request too -- it is meant for the run the other execution holds.
     $guardFlowAsk = Test-SIFlowGuardRequest
@@ -377,6 +418,14 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
         if (-not $guardDecision.Housekeeping) { exit 0 }
         $flowHousekeepingOnly = $true
         [Environment]::SetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY', '1')
+        # the clean-up pass's OWN lock, taken as its first act (its beat is what tells a later wake-up it still works; the
+        # runner beats it during the clean-up and releases it at the end). Held by another LIVE clean-up: nothing to do here.
+        if ($guardLockStore) {
+            if (-not (Enter-SIExecutionLock -Store $guardLockStore -Lock 'housekeeping' -Holder ([string]$guardExec) -What 'clean-up of old data')) {
+                Write-Host '[flow] another clean-up of old data is still working -- this wake-up does nothing.'
+                exit 0
+            }
+        }
     }
     if ($guardDecision.Action -eq 'Skip') {
         Write-Host $guardDecision.Message -ForegroundColor Yellow
@@ -447,9 +496,17 @@ if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) {
             $gateInvoke = Get-SIGuardProInvoke
             # the job's own run limit: this execution's start + the job's replica timeout (not known = said so, the wait goes on)
             $gateDeadline = $null
+            # #1096: the job's own trigger (Schedule = its timer started this execution unless the pipeline did) and how the
+            # jobs run when no pipeline is stored (caj-si-flow on its timer = the pipeline). Not read = '' (no skip).
+            $gateJobTrigger = ''; $gatePipelineMode = ''
             if ($guardSub -and $guardRg) {
                 try {
+                    $gateFlowArm = Invoke-SIArm -Path ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/caj-si-flow' -f $guardSub, $guardRg) -ApiVersion '2025-07-01' -AllowNotFound
+                    if ($gateFlowArm) { $gatePipelineMode = if ([string]$gateFlowArm.properties.configuration.triggerType -eq 'Schedule') { 'flow' } else { 'schedules' } }
+                } catch { $gatePipelineMode = '' }
+                try {
                     $gateJobArm = Invoke-SIArm -Path ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $guardSub, $guardRg, $guardJob) -ApiVersion '2025-07-01'
+                    $gateJobTrigger = [string]$gateJobArm.properties.configuration.triggerType
                     $gateLimit = 0; [void][int]::TryParse([string]$gateJobArm.properties.configuration.replicaTimeout, [ref]$gateLimit)
                     $gateMine = @(@($guardList) | Where-Object { $_ -and [string]$_.name -eq [string]$guardExec })[0]
                     $gateStart = if ($gateMine -and $gateMine.properties.startTime) { [datetime]$gateMine.properties.startTime } else { [System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime() }
@@ -469,7 +526,8 @@ if ($global:SI_ProSqlServer -and $global:SI_ProSqlDatabase) {
                 }
             }
             $gate = Invoke-SICollectionRunGate -Invoke $gateInvoke -Job (Get-SICollectionRunGateJobKey $guardJob) -Self ([string]$guardExec) -DeadlineUtc $gateDeadline `
-                        -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host $m } } -UpdateWaits $gateUpdateWaits
+                        -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host $m } } -UpdateWaits $gateUpdateWaits `
+                        -JobTrigger $gateJobTrigger -PipelineMode $gatePipelineMode
             if ($gate.Action -in @('Skip', 'Limit')) {
                 try {
                     if (-not (Get-Command -Name Send-SIRunHealthRow -ErrorAction SilentlyContinue)) { . '/app/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1' }

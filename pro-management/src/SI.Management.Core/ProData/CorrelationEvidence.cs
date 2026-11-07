@@ -94,20 +94,35 @@ ac AS (
     FROM sidata.AssetCorrelation AS a
     JOIN sel AS s ON s.CollectionId = a.CollectionId
 )
+-- ONE pass over the rows (2026-11-05: eleven appended branches read every CI's row of every collection eleven times --
+-- 299 MB, 5.5 s at a ring-0 install): each row is paired with the list of measures (a constant list, no lookup), and a
+-- measure whose condition does not hold is left out (Keep = 0 -- also when its column is NULL, as the branches' WHERE did)
 SELECT CONVERT(nvarchar(64), x.CollectionId) AS CollectionId, x.CollectionTime, x.Measure, x.[Key], SUM(x.N) AS N
 FROM (
-    SELECT ac.CollectionId, ac.CollectionTime, N'assets' AS Measure, N'' AS [Key], CONVERT(bigint, 1) AS N FROM ac
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'sources', CASE WHEN ac.SourceCount >= 3 THEN N'3+' WHEN ac.SourceCount = 2 THEN N'2' ELSE N'1' END, 1 FROM ac
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'single', COALESCE(ac.Sources, N'(none)'), 1 FROM ac WHERE ac.SourceCount <= 1
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'confidence', ac.Confidence, 1 FROM ac
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'join', ac.JoinRule, 1 FROM ac
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'conflicts', N'', 1 FROM ac WHERE ac.Conflicts > 0
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'idchanged', N'', 1 FROM ac WHERE ac.IdChanges > 0
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'idchanges', N'', CONVERT(bigint, ac.IdChanges) FROM ac WHERE ac.IdChanges > 0
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'duplicates', N'', 1 FROM ac WHERE ac.PossibleDuplicateOf IS NOT NULL
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'cmdb', ac.CmdbState, 1 FROM ac WHERE ac.CmdbState IS NOT NULL
-    UNION ALL SELECT ac.CollectionId, ac.CollectionTime, N'cmdbsource', ac.CmdbSource, 1 FROM ac WHERE ac.CmdbSource IS NOT NULL
+    SELECT ac.CollectionId, ac.CollectionTime, m.Measure,
+           CASE m.Measure
+                WHEN N'sources' THEN CASE WHEN ac.SourceCount >= 3 THEN N'3+' WHEN ac.SourceCount = 2 THEN N'2' ELSE N'1' END
+                WHEN N'single' THEN COALESCE(ac.Sources, N'(none)')
+                WHEN N'confidence' THEN ac.Confidence
+                WHEN N'join' THEN ac.JoinRule
+                WHEN N'cmdb' THEN ac.CmdbState
+                WHEN N'cmdbsource' THEN ac.CmdbSource
+                ELSE N'' END AS [Key],
+           CASE WHEN m.Measure = N'idchanges' THEN CONVERT(bigint, ac.IdChanges) ELSE CONVERT(bigint, 1) END AS N,
+           CASE m.Measure
+                WHEN N'single' THEN CASE WHEN ac.SourceCount <= 1 THEN 1 ELSE 0 END
+                WHEN N'conflicts' THEN CASE WHEN ac.Conflicts > 0 THEN 1 ELSE 0 END
+                WHEN N'idchanged' THEN CASE WHEN ac.IdChanges > 0 THEN 1 ELSE 0 END
+                WHEN N'idchanges' THEN CASE WHEN ac.IdChanges > 0 THEN 1 ELSE 0 END
+                WHEN N'duplicates' THEN CASE WHEN ac.PossibleDuplicateOf IS NOT NULL THEN 1 ELSE 0 END
+                WHEN N'cmdb' THEN CASE WHEN ac.CmdbState IS NOT NULL THEN 1 ELSE 0 END
+                WHEN N'cmdbsource' THEN CASE WHEN ac.CmdbSource IS NOT NULL THEN 1 ELSE 0 END
+                ELSE 1 END AS Keep
+    FROM ac
+    CROSS JOIN (VALUES (N'assets'), (N'sources'), (N'single'), (N'confidence'), (N'join'), (N'conflicts'), (N'idchanged'),
+                       (N'idchanges'), (N'duplicates'), (N'cmdb'), (N'cmdbsource')) AS m (Measure)
 ) AS x
+WHERE x.Keep = 1
 GROUP BY x.CollectionId, x.CollectionTime, x.Measure, x.[Key]
 ORDER BY x.CollectionTime, x.Measure, x.[Key];
 """;

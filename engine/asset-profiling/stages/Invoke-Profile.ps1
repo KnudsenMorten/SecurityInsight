@@ -54,6 +54,16 @@ function Invoke-SIProfile {
     Write-SIInfo ("{0} records read from Classify staging" -f $records.Count)
 
     if ($rules.Count -eq 0 -or $records.Count -eq 0) {
+        # the azure engine's records still carry the tags they inherit (resource group / subscription / management
+        # groups) without a single rule: the parent-chain index is data on the CI (Build-SIRuleIndexes)
+        if ($engine -eq 'azure' -and $records.Count -gt 0) {
+            $indexStats = Build-SIRuleIndexes -Engine $engine -Rules @() -Assets $records -RunContext $RunContext
+            foreach ($k in $indexStats.Keys) {
+                $s = $indexStats[$k]
+                if ($s.Built) { Write-SIInfo ("index '{0}' built ({1} entries, {2} ms)" -f $k, $s.Rows, $s.Ms) }
+                else          { Write-SIInfo ("index '{0}' NOT built ({1})" -f $k, $s.Error) }
+            }
+        }
         return [pscustomobject]@{
             Stage         = 'Profile'
             Engine        = $engine

@@ -63,7 +63,17 @@ SELECT N'Saved' AS Outcome;
     /// ?preview=flow|schedules -- what switching would do, before anything changes.
     [BindProperty(SupportsGet = true)] public string? Preview { get; set; }
     public IReadOnlyList<FlowSwitchRow> PreviewRows { get; private set; } = Array.Empty<FlowSwitchRow>();
-    public int? StepOf(string jobName) { var i = Flow.Steps.ToList().FindIndex(s => s.Job == JobSchedule.Key(jobName)); return i < 0 ? null : i + 1; }
+    /// #1096: a collection in parts' producer and worker are their engine's step (JobFlow.StepKey) -- shown with that step, never
+    /// under "Other jobs" with a timer of their own.
+    public int? StepOf(string jobName) { var i = Flow.Steps.ToList().FindIndex(s => s.Job == JobFlow.StepKey(jobName)); return i < 0 ? null : i + 1; }
+
+    /// #1096: the jobs listed under "Other jobs" in pipeline mode -- every job that is not a step, and not one half of a step's
+    /// collection in parts. PURE over the list and the pipeline (the view uses it; tests read it).
+    public static IReadOnlyList<JobInfo> OtherJobs(IEnumerable<JobInfo> jobs, FlowDefinition flow)
+    {
+        var steps = flow.Steps.Select(s => s.Job).ToHashSet(StringComparer.Ordinal);
+        return jobs.Where(j => !steps.Contains(JobFlow.StepKey(j.Name))).ToList();
+    }
 
     [BindProperty] public string? Step { get; set; }
     [BindProperty] public string? Direction { get; set; }

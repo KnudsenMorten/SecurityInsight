@@ -57,10 +57,19 @@ function Get-DiscoveryFromEntraUsers {
     $mfaRegMap = Get-SIEntraMfaRegistrationByPrincipal -Token $token
     $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $mfaRegMap) { $mfaRegMap.Count } else { 0 }))
 
-    # #549 passwordless-only accounts: each kept user's authentication methods (GET /users/{id}/authentication/methods,
-    # Graph $batch, UserAuthenticationMethod.Read.All), read per page of users below. A refused, throttled or partial read
-    # leaves si_passwordless_only UNKNOWN for the users not read -- never false (shared\SI-AuthMethodsRead.ps1).
+    # #549 passwordless-only accounts and every sign-in method in full (owner 2026-11-05): the per-user read (GET
+    # /users/{id}/authentication/methods + each Windows Hello / Authenticator method's device) is NEVER made here -- it is
+    # slow on a large tenant (8.5 hours at 150,000 users, measured) and the collection never waits for it. Its own job
+    # (caj-si-signin-methods, every 15 minutes) reads users into the install's database in the background, privileged first; each page of users below records
+    # its users (privileged, the registration report's change key) and takes their saved detail, dated with its read. A
+    # user not read yet stays UNKNOWN -- never false (shared\SI-SignInMethodsChoice.ps1, setting SI_Identity_SignInMethodsPerUser).
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) "shared/SI-SignInMethodsChoice.ps1")
     Reset-SIEntraAuthMethodsState
+    Reset-SISignInMethodsPlan
+    $signInChoice = Get-SISignInMethodsChoice
+    if ($signInChoice.Note) { Write-SIInfo ('[perms] sign-in methods: {0}' -f $signInChoice.Note) }
+    $signInCache = $null
+    if ($signInChoice.Mode -ne 'off') { $signInCache = New-SISignInMethodsCache }
     $authReadDisabled = $true
     if (-not (Get-Command -Name Test-SIDisabledIncluded -ErrorAction SilentlyContinue)) {
         $disFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared/SI-DisabledAssets.ps1'
@@ -72,15 +81,10 @@ function Get-DiscoveryFromEntraUsers {
         param($PageUsers)
         $sel = @(Select-SIAuthMethodReadUsers -Users $PageUsers -IncludeDisabled $authReadDisabled)
         if ($sel.Count -eq 0) { return }
-        # a read that fails part-way is NEVER complete: the users not read stay unknown, the run says so (no silent loss)
-        try { $got = Get-SIEntraPasswordlessByUser -Token $token -Users $sel }
-        catch {
-            $st = Get-SIEntraAuthMethodsState
-            if ($st) { $st.Complete = $false; $st.Error = [string]$_.Exception.Message }
-            Write-SIWarn ('[perms] the sign-in-method read stopped part-way ({0}) -- the users not read are unknown this run' -f $_.Exception.Message)
-            return
-        }
-        foreach ($k in @($got.Keys)) { $authMap[$k] = $got[$k] }
+        # from the saved detail only (no Graph call); never throws -- a failure leaves the users unknown and is said once
+        $got = $null
+        try { $got = Invoke-SISignInMethodsPage -Users $sel -Choice $signInChoice -IsPrivileged $isSignInPrivileged -Registration $mfaRegMap -Cache $signInCache } catch { $got = $null }
+        if ($got) { foreach ($k in @($got.Keys)) { $authMap[$k] = $got[$k] } }
     }
 
     # transitive group -> role expansion. Discover which GROUPS hold
@@ -120,6 +124,11 @@ function Get-DiscoveryFromEntraUsers {
     $ph = Start-SIIdentityPhase -Phase 'users: Azure RBAC'
     $azureLookup = Get-SIAzureDelegationsByPrincipal -ExcludeSubscriptionPatterns @($global:SI_AzureSubscriptionExcludePatterns)
     $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $azureLookup) { $azureLookup.Count } else { 0 })) -Detail 'principals with an Azure role'
+
+    # privileged for the sign-in methods' background read (read first; the only users read under 'privileged'): the role and
+    # Azure look-ups above, and the registration report's isAdmin
+    $signInPrivLookups = @{ PermRoles = $permRolesMap; EligRoles = $eligRolesMap; MemberToGroups = $memberToGroups; PimGroups = $pimGroupsMap; Azure = $azureLookup; Registration = $mfaRegMap }
+    $isSignInPrivileged = { param($u) Test-SISignInMethodsPrivileged -UserId ([string]$u.id) -Lookups $signInPrivLookups }
 
     # Defender XDR IdentityInfo (synced AD groups + MFA + risk signals).
     # prefer $global:SI_DefenderWorkspaceResourceId (separate Defender/
@@ -355,7 +364,7 @@ function Get-DiscoveryFromEntraUsers {
                 Add-SIFullSourceObject -SourceSystem 'entra-user' -Object $su -AnchorColumn 'EntraAccountObjectId' -AnchorValue ([string]$su.id)
                 $su | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue ([bool]$streamState.Deleted) -Force
             }
-            # #549 this page's kept users' sign-in methods, before their records are built
+            # #549 this page's kept users' sign-in methods (the detail read in the background), before their records are built
             $amW = [System.Diagnostics.Stopwatch]::StartNew()
             try { & $readAuthMethods @($PageRows) } catch { }
             Add-SIIdentityPhaseTotal -Phase 'users: sign-in methods (inside the user pages)' -Seconds $amW.Elapsed.TotalSeconds -Rows @($PageRows).Count -Calls 1
@@ -382,7 +391,8 @@ function Get-DiscoveryFromEntraUsers {
         $null = Stop-SIIdentityPhase $phPages -Rows ([long]$page.Count + [long]$delPage.Count) -Detail ('{0} page(s)' -f ([int]$page.Pages + [int]$delPage.Pages))
         Write-SIIdentityPhaseTotals -Prefix 'users:'
         $null = Write-SIGraphRetrySummary
-        Write-SIEntraAuthMethodsOutcome
+        # the one line: which mode ran, how many users came from the detail read in the background, how many are not read yet
+        Write-SISignInMethodsSummary -Cache $signInCache
         Write-SIInfo ('[perms] EntraUsers: {0} user(s) + {1} soft-deleted streamed into {2} part(s), page by page' -f $page.Count, $delPage.Count, $stream.Parts)
         return
     }
@@ -436,12 +446,13 @@ function Get-DiscoveryFromEntraUsers {
         Write-SIInfo ('[perms] EntraUsers: included {0} soft-deleted user(s) from /directory/deletedItems' -f $deletedCount)
     }
 
-    # #549 the kept users' sign-in methods, before their records are built (soft-deleted users are left out by the selection)
+    # #549 the kept users' sign-in methods (the detail read in the background), before their records are built (soft-deleted users are left out by the selection)
     $ph = Start-SIIdentityPhase -Phase 'users: sign-in methods'
     try { & $readAuthMethods $rows.ToArray() } catch { }
     $null = Stop-SIIdentityPhase $ph -Rows ([long]$rows.Count)
     $null = Write-SIGraphRetrySummary
-    Write-SIEntraAuthMethodsOutcome
+    # the one line: which mode ran, how many users came from the detail read in the background, how many are not read yet
+    Write-SISignInMethodsSummary -Cache $signInCache
 
     $_total = $rows.Count; $_i = 0
     Reset-SIProgress -Label 'EntraUsers' -ErrorAction SilentlyContinue

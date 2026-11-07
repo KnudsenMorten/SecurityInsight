@@ -245,7 +245,7 @@ SELECT CAST(SCOPE_IDENTITY() AS BIGINT) AS Id;
     private const string Columns = """
 SELECT e.Id AS Id, e.TsUtc AS Ts, e.GuardId AS Guard, e.Area AS Area, e.Job AS Job, e.Outcome AS Outcome, e.Severity AS Severity,
        e.Protected AS Protected, e.Subject AS Subject, e.Detail AS Detail, e.MeasuredText AS Measured, e.HeldCount AS Held, e.TripCount AS Trips,
-       e.MailState AS Mail, e.TelemetryState AS Telemetry, e.ActionText AS ActionText, e.Source AS Source, e.RunId AS RunId, e.ValuesJson AS ValuesJson,
+       e.MailState AS Mail, e.TelemetryState AS Telemetry, e.ActionText AS ActionText, e.Source AS Source, e.RunId AS RunId,
 """;
 
     /// Owner 2026-10-17: the version a trip happened on and which release it was (cfg.GuardEvent SiVersion / Attribution, when
@@ -285,12 +285,19 @@ WHERE (@From IS NULL OR e.TsUtc >= @From)
 """;
 
     public const string FindSql = Columns + "\n" + """
-       N'open' AS Ack, CAST(NULL AS nvarchar(256)) AS AckBy, CAST(NULL AS datetime2(0)) AS AckUtc
+       e.ValuesJson AS ValuesJson, N'open' AS Ack, CAST(NULL AS nvarchar(256)) AS AckBy, CAST(NULL AS datetime2(0)) AS AckUtc
 FROM cfg.GuardEvent AS e
 WHERE e.Id = @EventId;
 """;
 
-    private static GridSpec Build(string source) => GridSql.Check(new GridSpec("guards", "", source,
+    /// 2026-11-05 (the view plan guard): the events WITHOUT their values document -- the page is chosen, counted and sorted over
+    /// the other columns (IX_GuardEvent_List), and the values are read for the page's rows only (the late join); the export
+    /// and a request that needs them read the source with them.
+    private static string WithValues(string source, IReadOnlyCollection<string> needed) =>
+        needed.Contains("ValuesJson", StringComparer.OrdinalIgnoreCase)
+            ? source.Replace("e.RunId AS RunId,", "e.RunId AS RunId, e.ValuesJson AS ValuesJson,", StringComparison.Ordinal) : source;
+
+    private static GridSpec Build(string source) => GridSql.Check(new GridSpec("guards", "", WithValues(source, ["ValuesJson"]),
     [
         new GridColumn("Id", "#", GridType.Number, GridFilter.Range, SortSql: "(g.[Id] + 0)", Hidden: true),
         new GridColumn("Ts", "When", GridType.Date),
@@ -311,13 +318,14 @@ WHERE e.Id = @EventId;
         new GridColumn("Job", "Job", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("Source", "Source", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("RunId", "Run", GridType.Text, Sortable: false, Hidden: true),
-        new GridColumn("ValuesJson", "Values", GridType.Text, Sortable: false, Hidden: true),
+        new GridColumn("ValuesJson", "Values", GridType.Text, Sortable: false, Hidden: true, LateSql: "gl.ValuesJson"),
         new GridColumn("AckBy", "Acknowledged by", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("AckUtc", "Acknowledged", GridType.Date, Sortable: false, Hidden: true),
         new GridColumn("Version", "Version", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("Attribution", "Which release", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("Cleared", "Cleared", GridType.Text, Sortable: false, Hidden: true),
-    ], DefaultSort: "Ts", DefaultDesc: true, KeyColumn: "Id", SourceParameters: ["From"], Immutable: false));   // #317: newest first, on the When column
+    ], DefaultSort: "Ts", DefaultDesc: true, KeyColumn: "Id", SourceParameters: ["From"], Immutable: false,
+    Late: new GridLate(needed => WithValues(source, needed), "JOIN cfg.GuardEvent AS gl ON gl.Id = g.[Id]")));   // #317: newest first, on the When column
 
     /// The grid over the events WITH their acknowledgement (the page's filters and sorts are checked against it).
     public static readonly GridSpec Spec = Build(Source);

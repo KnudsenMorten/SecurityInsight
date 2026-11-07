@@ -122,6 +122,93 @@
           ]
         }
       }
+    },
+    {
+      "id": "report-optional-deviceinfo-2026-11-04",
+      "decided": "owner 2026-11-04 (alignment night: a defect fix is allowed in the freeze -- SI never shows fewer rows than the source)",
+      "description": "On a tenant whose hunting schema has the vulnerability tables but no DeviceInfo (Defender for Business), one optional join to DeviceInfo -- for a device name, an operating system or an exclusion reason only -- failed the whole report, so the device reports showed 0 rows. Every DeviceInfo read is now an optional table with a typed empty fallback (union isfuzzy=true). On a tenant WITH DeviceInfo the rows and their keys are the same (proven read-only on both kinds of tenant); only the query text changed, so the fingerprint is carried and nothing closes as report changed.",
+      "reports": {
+        "Device_Missing_CVEs_Summary": {
+          "restoreText": [
+            {
+              "now": "(union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo)",
+              "was": "(DeviceInfo"
+            }
+          ]
+        },
+        "Device_Missing_CVEs_Detailed": {
+          "restoreText": [
+            {
+              "now": "(union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo)",
+              "was": "(DeviceInfo"
+            }
+          ]
+        },
+        "Device_Recommendations_Summary": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_Recommendations_Detailed": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_EndOfSupport_Software_Summary": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_EndOfSupport_Software_Detailed": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_Certificates_Summary": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_Certificates_Detailed": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_BrowserExtensions_Summary": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        },
+        "Device_BrowserExtensions_Detailed": {
+          "restoreText": [
+            {
+              "now": "union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime, DeviceName:string, OSPlatform:string)[]), (DeviceInfo)",
+              "was": "DeviceInfo"
+            }
+          ]
+        }
+      }
     }
   ]
 }

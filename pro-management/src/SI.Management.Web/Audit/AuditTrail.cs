@@ -53,11 +53,13 @@ public sealed class AuditTrailReader
 {
     public const string ExistsSql = "SELECT CASE WHEN OBJECT_ID(N'cfg.AuditEvent') IS NULL THEN 0 ELSE 1 END AS HasTable;";
 
+    /// 2026-11-05 (the view plan guard): the trail WITHOUT the before / after documents -- the page is chosen, counted and
+    /// sorted over these columns (IX_AuditEvent_List), and the documents are read for the page's rows only (Spec's late join);
+    /// only a search reads them for every row (it searches them).
     public const string Source = """
 SELECT a.Id AS Id, a.TsUtc AS Ts, a.RecordType AS Kind, a.Action AS Action, LEFT(a.Action, CHARINDEX(N'.', a.Action + N'.') - 1) AS Category,
        a.Actor AS Actor, a.ActorSource AS Source, a.Target AS Target, a.Reason AS Reason, a.Outcome AS Outcome, a.OutcomeText AS OutcomeText,
        CAST(a.WhatIf AS INT) AS WhatIf, a.CorrelationId AS Correlation, a.ScopeDomain AS Domain, a.ScopeDepartmentId AS Department,
-       LEFT(a.BeforeJson, 4000) AS BeforeJson, LEFT(a.AfterJson, 4000) AS AfterJson,
        CASE WHEN a.RecordType = N'event' AND a.CorrelationId IS NOT NULL
             THEN (SELECT COUNT_BIG(*) FROM cfg.AuditEvent AS d WHERE d.CorrelationId = a.CorrelationId AND d.RecordType = N'change') ELSE 0 END AS Changes
 FROM cfg.AuditEvent AS a
@@ -80,7 +82,16 @@ WHERE d.RecordType = N'change' AND d.CorrelationId IN (SELECT c.[value] FROM OPE
 ORDER BY d.Id;
 """;
 
-    public static readonly GridSpec Spec = GridSql.Check(new GridSpec("audit", "", Source,
+    /// The trail with the documents named in <paramref name="docs"/> (each as the page shows it: the first 4,000 characters).
+    private static string WithDocs(IReadOnlyCollection<string> docs)
+    {
+        var cols = string.Concat(new[] { "BeforeJson", "AfterJson" }.Where(d => docs.Contains(d, StringComparer.OrdinalIgnoreCase))
+            .Select(d => $"LEFT(a.{d}, 4000) AS {d}, "));
+        const string at = "a.ScopeDepartmentId AS Department,";
+        return cols.Length == 0 ? Source : Source.Replace(at, at + "\n       " + cols.TrimEnd(), StringComparison.Ordinal);
+    }
+
+    public static readonly GridSpec Spec = GridSql.Check(new GridSpec("audit", "", WithDocs(["BeforeJson", "AfterJson"]),
     [
         // sorted as an expression: the grid always adds the key column as the tie-breaker, and SQL Server refuses the same
         // column twice in ORDER BY (found by AuditLocalSqlTests)
@@ -97,13 +108,15 @@ ORDER BY d.Id;
         new GridColumn("WhatIf", "Plan", GridType.Flag, GridFilter.Values),
         new GridColumn("Changes", "Changes", GridType.Number, Sortable: true),
         new GridColumn("OutcomeText", "Detail", GridType.Text, Search: true, Sortable: false, Hidden: true),
-        new GridColumn("BeforeJson", "Before", GridType.Text, Search: true, Sortable: false, Hidden: true),
-        new GridColumn("AfterJson", "After", GridType.Text, Search: true, Sortable: false, Hidden: true),
+        new GridColumn("BeforeJson", "Before", GridType.Text, Search: true, Sortable: false, Hidden: true, LateSql: "LEFT(al.BeforeJson, 4000)"),
+        new GridColumn("AfterJson", "After", GridType.Text, Search: true, Sortable: false, Hidden: true, LateSql: "LEFT(al.AfterJson, 4000)"),
         new GridColumn("Kind", "Record", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("Correlation", "Correlation", GridType.Text, Sortable: false, Hidden: true),
         new GridColumn("Department", "Department", GridType.Number, Sortable: false, Hidden: true),
     ], DefaultSort: "Ts", DefaultDesc: true, KeyColumn: "Id",   // #317: newest first, on the When column (▼ shown there)
-    SourceParameters: ["From", "To", "AllRows", "Me", "AnyDomain", "Domains", "Departments"], Immutable: false));
+    SourceParameters: ["From", "To", "AllRows", "Me", "AnyDomain", "Domains", "Departments"], Immutable: false,
+    // the documents for the page's rows only, by the event's key
+    Late: new GridLate(WithDocs, "JOIN cfg.AuditEvent AS al ON al.Id = g.[Id]")));
 
     private readonly ISqlExecutor _sql;
     public AuditTrailReader(ISqlExecutor sql) => _sql = sql;

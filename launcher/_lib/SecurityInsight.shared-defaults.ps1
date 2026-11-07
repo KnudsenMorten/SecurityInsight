@@ -103,8 +103,17 @@ $global:SI_DisabledAssets_Connectors   = $false   # sent out by connectors and e
 # choice): the identity collection records no asset for the objects below, counts them in its log and on the Data health
 # page, and their existing CIs retire with a reason naming the setting. Real users, groups, devices and findings are not
 # affected. Read by engine\asset-profiling\shared\SI-IdentityScopeChoice.ps1.
-$global:SI_Identity_SkipNeverSyncedDisabledAd = $false   # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
-$global:SI_Identity_SkipDeletedGroups         = $false   # groups: only those Entra ID still has (active or recently deleted) become assets
+$global:SI_Identity_SkipNeverSyncedDisabledAd = $true    # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
+$global:SI_Identity_SkipDeletedGroups         = $true    # groups: only those Entra ID still has (active or recently deleted) become assets
+
+# --- The users' sign-in methods in full, read in the background ---
+# Every property of every sign-in method of a user (and the device of a Windows Hello / Authenticator method) needs one read
+# per user, which Microsoft throttles: about 8-9 hours at 150,000 users. The collections never make it -- its own job
+# (caj-si-signin-methods, every 15 minutes) reads users in the background, privileged first, and the collections take what it saved (with its read date; not read
+# yet = unknown, never no). Read by engine\asset-profiling\shared\SI-SignInMethodsChoice.ps1.
+$global:SI_Identity_SignInMethodsPerUser     = 'all'   # all = every member user | privileged = privileged users only | off = the tenant-wide registration report only
+$global:SI_Identity_SignInMethodsMaxAgeDays  = 90      # a user's detail is read again at the latest after this many days (sooner when its methods change)
+$global:SI_Identity_SignInMethodsFillMinutes = 8       # minutes of background reading per 15-minute run
 
 # --- Retire at once on proof of deletion (#1057) ---
 # Off by default -- an install that does not turn them on works exactly as before. On (per install, per source): an asset

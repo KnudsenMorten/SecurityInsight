@@ -330,7 +330,8 @@ Describe 'wiring: the identity discovery reads the methods and stamps the outcom
     }
     It 'reads before the records are built -- per streamed page AND for the whole set -- and says the outcome once per path' {
         ([regex]::Matches($script:Disc, [regex]::Escape('& $readAuthMethods')).Count) | Should -Be 2
-        ([regex]::Matches($script:Disc, 'Write-SIEntraAuthMethodsOutcome').Count) | Should -Be 2
+        # (2026-11-05: the per-user read moved to the background; the collection takes the saved detail and says so once per path)
+        ([regex]::Matches($script:Disc, 'Write-SISignInMethodsSummary -Cache \$signInCache').Count) | Should -Be 2
         $i = $script:Disc.IndexOf('& $readAuthMethods @($PageRows)'); $j = $script:Disc.IndexOf('foreach ($su in $PageRows) { $batch.Add((& $buildUser $su)) }')
         ($i -gt 0 -and $j -gt $i) | Should -BeTrue
         $k = $script:Disc.IndexOf('& $readAuthMethods $rows.ToArray()'); $l = $script:Disc.IndexOf('& $buildUser $u', $k)

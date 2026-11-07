@@ -6,6 +6,10 @@
     protected by Entra sign-in (operator decision 2026-10-03: public ingress + Entra Conditional Access).
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the database part of -GrantSql: the web app's and the MCP server's database users and their grants
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     PLAN BY DEFAULT: prints every step and every Azure call (method + resource), changes nothing. -Apply runs them.
 
     NO az CLI, NO PowerShell module (owner 2026-10-10): every call is ARM / data-plane / Microsoft Graph REST through
@@ -510,18 +514,25 @@ if ("$SigninStoreKeyVaultName".Trim() -and $Apply -and $webApp -and $script:look
     $kvName = "$SigninStoreKeyVaultName".Trim()
     $kvSeam = { param($m, $u, $b)
         $j = if ($null -ne $b -and -not ($b -is [string])) { $b | ConvertTo-Json -Depth 10 -Compress } else { $b }
-        try { $r = Invoke-SIAzRestRequest -Method $m -Uri $u -Audience KeyVault -Body $j -AllowStatus @(403, 404) -What ('Key Vault {0}' -f $m); [pscustomobject]@{ Status = [int]$r.StatusCode; Json = $(if ("$($r.Content)".Trim()) { $r.Content | ConvertFrom-Json } else { $null }) } }
-        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match 'HTTP (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
+        # #1098: a private vault from outside its network answers no request at all -- two tries, not six
+        try { $r = Invoke-SIAzRestRequest -Method $m -Uri $u -Audience KeyVault -Body $j -AllowStatus @(403, 404) -MaxAttempts 2 -What ('Key Vault {0}' -f $m); [pscustomobject]@{ Status = [int]$r.StatusCode; Json = $(if ("$($r.Content)".Trim()) { $r.Content | ConvertFrom-Json } else { $null }) } }
+        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match 'HTTP(?: Status:)? (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
+    # #1098: Invoke-SIArm's errors say "HTTP Status: 403" -- read as that status (it was read as 0, so a refused role write
+    # could not be told from any other failure)
     $armSeam = { param($m, $p, $api, $b)
         try { $j = Invoke-SIArm -Method $m -Path $p -ApiVersion $api -Body $b; [pscustomobject]@{ Status = 200; Json = $j } }
-        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match '(?i)\b(409|Conflict|RoleAssignmentExists)\b') { 409 } elseif ("$($_.Exception.Message)" -match 'HTTP (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
+        catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match '(?i)\b(409|Conflict|RoleAssignmentExists)\b') { 409 } elseif ("$($_.Exception.Message)" -match 'HTTP(?: Status:)? (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
     $vault = $null; try { $vault = Get-SIKeyVaultArm -Name $kvName -SubscriptionId $SubscriptionId } catch { $vault = $null }
     $curKr = ''; foreach ($e in @((Get-SIManagementProp $webApp @('properties', 'template', 'containers')) | Select-Object -First 1 | ForEach-Object { $_.env } | Where-Object { $_ })) { if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $curKr = [string]$e.value } }
+    # #1098: the key and the grant are made here and read back (the installer holds a temporary Key Vault Crypto Officer on
+    # the vault for this, given by the guided install with its Secrets Officer and removed with it); the setting is then
+    # written as the updater writes it, so the updater's first run finds nothing left to do
     $kr = Invoke-SIWebKeyRingConverge -Arm $armSeam -KeyVault $kvSeam -SetEnv { param($n, $v) Set-SIContainerAppEnvVar -ResourceGroupName $ResourceGroup -Name $AppName -SetEnv @("$n=$v") -SubscriptionId $SubscriptionId } `
-              -VaultName $kvName -VaultId $(if ($vault) { [string]$vault.id } else { '' }) -PrincipalIds @($webId.PrincipalId) -SubscriptionId $SubscriptionId -CurrentEnv $curKr
+              -VaultName $kvName -VaultId $(if ($vault) { [string]$vault.id } else { '' }) -PrincipalIds @($webId.PrincipalId) -SubscriptionId $SubscriptionId -CurrentEnv $curKr -IdentityName $IdentityName
     foreach ($l in @($kr.Lines)) { Write-Host ('  ' + $l) }
     foreach ($l in @($kr.Report)) { Write-Host ('  ' + $l + ' (the updater converges it on its next run)') -ForegroundColor Yellow }
     foreach ($l in @($(if ($kr.PSObject.Properties['CustomerAction']) { $kr.CustomerAction }))) { Write-Host ('  ' + $l) -ForegroundColor Yellow }
+    $webKeyRingTasks = @($(if ($kr.PSObject.Properties['CustomerAction']) { $kr.CustomerAction }) | Where-Object { $_ })
 } else { Write-Host '  (plan / not given) the web app''s grant on its key is made here with -SigninStoreKeyVaultName -Apply; the updater then makes the key and sets the web app''s setting.' }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -608,4 +619,6 @@ else { Write-Host 'Plan only -- nothing was changed. Re-run with -Apply to make 
 [pscustomobject]@{
     WebFqdn = $fqdn; McpFqdn = $mcpFqdn
     WebIdentity = $webId; McpIdentity = $mcpId
+    # #1098: what the web app's sign-in key step left to the customer (the guided install shows it as a task, never a stop)
+    WebKeyRingTasks = @($(if (Get-Variable -Name webKeyRingTasks -ErrorAction SilentlyContinue) { $webKeyRingTasks }))
 }

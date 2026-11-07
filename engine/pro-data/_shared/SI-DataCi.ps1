@@ -406,6 +406,51 @@ function Get-SIDataCiFindingHashSql {
     @{ Apply = $apply.ToString(); Expr = 'HASHBYTES(''SHA2_256'', ' + ((@(@($cols | ForEach-Object { & $part $_ }) + $doc)) -join ' + ') + ')' }
 }
 
+function Get-SIDataCiFindingHashRangeSql {
+    <#
+        PURE. ONE KEY RANGE of content hashes into a #temp table (-Into: #skh with C = the hash too, or #tkh), worked out in
+        STEPS over a #temp copy of the range's documents -- the same bytes as Get-SIDataCiFindingHashSql's one expression.
+        2026-11-05 (live, internal: ONE statement of that expression read 317 GB for about 20,000 staged rows in 121 s and
+        emptied the database's memory, so every page of the web app read from disk): the optimizer inlines the chain of
+        CROSS APPLYs, each level names the one before twice and the hash was named twice (H and C), so the document was read
+        again for every branch of every level -- exponential in the run fields. Here each document is read ONCE into #hd
+        (with whether it is JSON and which run fields its text names, from the ORIGINAL document, as the chain asks), the
+        fields are taken out by ONE update of the rows that name one (the chain's conditions read from those flags), the hash
+        is stored in a column and copied from there. -Where: an extra predicate on the source rows (the stored side's rows without a hash). -All is not here: the
+        every-column hash has no chain (Get-SIDataCiFindingHashSql -All).
+    #>
+    param([Parameter(Mandatory)][string]$Alias, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Key,
+          [Parameter(Mandatory)][string[]]$Names, [Parameter(Mandatory)][ValidateSet('#skh', '#tkh')][string]$Into,
+          [Parameter(Mandatory)][long]$After, [Parameter(Mandatory)][long]$Upto, [string]$Where = '')
+    $fields = @(Get-SIDataCiFindingRunFields)
+    $cols = @($Names | Where-Object { $_ -notin 'CollectionTime', 'DocJson' })
+    $part = { param([string]$c) 'CASE WHEN {0}.[{1}] IS NULL THEN 0x00 ELSE 0x01 + CAST(DATALENGTH({0}.[{1}]) AS binary(4)) + CAST({0}.[{1}] AS varbinary(max)) END' -f $Alias, $c }
+    $range = '{0}.[{1}] > {2} AND {0}.[{1}] <= {3}' -f $Alias, $Key, $After, $Upto
+    if ($Where) { $range += ' AND (' + $Where + ')' }
+    $doc0 = '{0}.[DocJson]' -f $Alias
+    $fDef = (@(for ($i = 1; $i -le $fields.Count; $i++) { 'F{0} BIT NOT NULL' -f $i }) -join ', ')
+    $fCol = (@(for ($i = 1; $i -le $fields.Count; $i++) { 'F{0}' -f $i }) -join ', ')
+    $fVal = (@(for ($i = 1; $i -le $fields.Count; $i++) { 'CASE WHEN CHARINDEX(N''"{0}"'', {1}) > 0 THEN 1 ELSE 0 END' -f $fields[$i - 1], $doc0 }) -join ', ')
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("IF OBJECT_ID('tempdb..#hd') IS NOT NULL DROP TABLE #hd;")
+    [void]$sb.AppendLine(('CREATE TABLE #hd (K BIGINT NOT NULL PRIMARY KEY, J INT NOT NULL, {0}, D NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, H BINARY(32) NULL);' -f $fDef))
+    [void]$sb.AppendLine(('INSERT #hd (K, J, {0}, D) SELECT {1}.[{2}], CASE WHEN {3} IS NULL THEN 0 ELSE ISJSON({3}) END, {4}, {3} FROM {5} AS {1} WHERE {6};' -f $fCol, $Alias, $Key, $doc0, $fVal, $Table, $range))
+    # the run fields out in ONE update of the rows that name one (each document rewritten once): the chain of the one
+    # expression, its conditions read from the flags (no document read for them)
+    $chain = 'D'; $any = @()
+    for ($i = 1; $i -le $fields.Count; $i++) {
+        $chain = 'CASE WHEN F{1} = 1 THEN JSON_MODIFY({0}, N''$."{2}"'', NULL) ELSE {0} END' -f $chain, $i, $fields[$i - 1]
+        $any += ('F{0} = 1' -f $i)
+    }
+    [void]$sb.AppendLine(('UPDATE #hd SET D = {0} WHERE J = 1 AND ({1});' -f $chain, ($any -join ' OR ')))
+    $expr = 'HASHBYTES(''SHA2_256'', ' + ((@(@($cols | ForEach-Object { & $part $_ }) + 'CASE WHEN d.D IS NULL THEN 0x00 ELSE 0x01 + CAST(d.D AS varbinary(max)) END')) -join ' + ') + ')'
+    [void]$sb.AppendLine(('UPDATE d SET H = {0} FROM #hd AS d JOIN {1} AS {2} ON {2}.[{3}] = d.K;' -f $expr, $Table, $Alias, $Key))
+    if ($Into -eq '#skh') { [void]$sb.AppendLine('INSERT #skh (StageId, H, C) SELECT K, H, H FROM #hd;') }
+    else { [void]$sb.AppendLine('INSERT #tkh (CiFindingId, H) SELECT K, H FROM #hd;') }
+    [void]$sb.Append('DROP TABLE #hd;')
+    $sb.ToString()
+}
+
 function Get-SIDataCiFindingContentHashCheckSql {
     <# 1 when sidata.CiFinding carries its content hash column (the schema of this release), else 0: the swap then writes as before. #>
     "SELECT CASE WHEN COL_LENGTH('sidata.CiFinding', 'ContentHash') IS NOT NULL THEN 1 ELSE 0 END"
@@ -465,8 +510,13 @@ function Get-SIDataCiFindingSwapSql {
         $keep = @"
 UPDATE f SET CollectionTime = s.CollectionTime, DocJson = s.DocJson, ContentHash = k.C /* one-statement-ok: only the kept rows, inside the swap's one transaction (the stored set is replaced atomically) */
 FROM sidata.CiFinding AS f JOIN @tk AS t ON t.CiFindingId = f.CiFindingId JOIN @sk AS k ON k.H = t.H AND k.Rn = t.Rn JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
-WHERE f.CollectionTime <> s.CollectionTime OR ISNULL(DATALENGTH(f.DocJson), -1) <> ISNULL(DATALENGTH(s.DocJson), -1) OR CAST(f.DocJson AS varbinary(max)) <> CAST(s.DocJson AS varbinary(max))
-   OR f.ContentHash IS NULL OR f.ContentHash <> k.C
+WHERE ISNULL(DATALENGTH(f.DocJson), -1) <> ISNULL(DATALENGTH(s.DocJson), -1) OR CAST(f.DocJson AS varbinary(max)) <> CAST(s.DocJson AS varbinary(max))
+OPTION (RECOMPILE);
+-- #1116: an unchanged record is not rewritten -- only the run's time and the hash
+UPDATE f SET CollectionTime = s.CollectionTime, ContentHash = k.C /* one-statement-ok: only the kept rows, inside the swap's one transaction (the stored set is replaced atomically) */
+FROM sidata.CiFinding AS f JOIN @tk AS t ON t.CiFindingId = f.CiFindingId JOIN @sk AS k ON k.H = t.H AND k.Rn = t.Rn JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
+WHERE (f.CollectionTime <> s.CollectionTime OR f.ContentHash IS NULL OR f.ContentHash <> k.C)
+  AND ISNULL(DATALENGTH(f.DocJson), -1) = ISNULL(DATALENGTH(s.DocJson), -1) AND (f.DocJson IS NULL OR CAST(f.DocJson AS varbinary(max)) = CAST(s.DocJson AS varbinary(max)))
 OPTION (RECOMPILE);
 "@
     }
@@ -623,13 +673,19 @@ function Invoke-SIDataCiFindingSwap {
     $insCols = $cols; $insVals = $sCols; $keep = ''
     if ($ContentHash) {
         $insCols += ', ContentHash'; $insVals += ', i.C'
-        # a kept row: the run's time and document from its staged row, and its hash -- each only where it differs
+        # a kept row: its source record from its staged row ONLY where the record's text differs (#1116, owner 2026-11-05:
+        # the run's time is no longer inside the record -- an unchanged finding's record is never rewritten); the run's time
+        # (the CollectionTime column) and its hash where they differ, without touching the record
         $keep = @'
 UPDATE f SET CollectionTime = s.CollectionTime, DocJson = s.DocJson, ContentHash = k.C /* one-statement-ok: one hash range (#rkeep holds this range's rows only) */
 FROM sidata.CiFinding AS f JOIN #rkeep AS k ON k.CiFindingId = f.CiFindingId JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
-WHERE f.CollectionTime <> s.CollectionTime OR ISNULL(DATALENGTH(f.DocJson), -1) <> ISNULL(DATALENGTH(s.DocJson), -1) OR CAST(f.DocJson AS varbinary(max)) <> CAST(s.DocJson AS varbinary(max))
-   OR f.ContentHash IS NULL OR f.ContentHash <> k.C;
+WHERE ISNULL(DATALENGTH(f.DocJson), -1) <> ISNULL(DATALENGTH(s.DocJson), -1) OR CAST(f.DocJson AS varbinary(max)) <> CAST(s.DocJson AS varbinary(max));
 SET @w = @@ROWCOUNT;
+UPDATE f SET CollectionTime = s.CollectionTime, ContentHash = k.C /* one-statement-ok: one hash range (#rkeep holds this range's rows only) */
+FROM sidata.CiFinding AS f JOIN #rkeep AS k ON k.CiFindingId = f.CiFindingId JOIN sidata.CiFindingStage AS s ON s.StageId = k.StageId
+WHERE (f.CollectionTime <> s.CollectionTime OR f.ContentHash IS NULL OR f.ContentHash <> k.C)
+  AND ISNULL(DATALENGTH(f.DocJson), -1) = ISNULL(DATALENGTH(s.DocJson), -1) AND (f.DocJson IS NULL OR CAST(f.DocJson AS varbinary(max)) = CAST(s.DocJson AS varbinary(max)));
+SET @w += @@ROWCOUNT;
 '@
     }
     $hex = { param($b) if ($null -eq $b -or $b -is [System.DBNull]) { $null } else { '0x' + ([BitConverter]::ToString([byte[]]$b)).Replace('-', '') } }
@@ -652,9 +708,12 @@ SET @w = @@ROWCOUNT;
                 $upto = [long][Math]::Min([double]$hi, [double]$after + [double]$size)
                 $sw = [Diagnostics.Stopwatch]::StartNew()
                 if ($side.A -eq 't' -and -not $byAll -and -not $Full) {
-                    # a stored row's content hash is read where it has one; only a row without one has it worked out
+                    # a stored row's content hash is read where it has one; only a row without one has it worked out (in steps)
                     & $Run ("INSERT #tkh (CiFindingId, H) SELECT t.CiFindingId, t.ContentHash FROM sidata.CiFinding AS t WHERE t.ContentHash IS NOT NULL AND t.CiFindingId > {0} AND t.CiFindingId <= {1};" -f $after, $upto) 'none'
-                    & $Run ("INSERT #tkh (CiFindingId, H) SELECT t.CiFindingId, {0} FROM sidata.CiFinding AS t{1} WHERE t.ContentHash IS NULL AND t.CiFindingId > {2} AND t.CiFindingId <= {3};" -f $mT.Expr, $mT.Apply, $after, $upto) 'none'
+                    & $Run (Get-SIDataCiFindingHashRangeSql -Alias 't' -Table 'sidata.CiFinding' -Key 'CiFindingId' -Names $names -Into '#tkh' -After $after -Upto $upto -Where 't.ContentHash IS NULL') 'none'
+                } elseif (-not $byAll) {
+                    # the content hash of the staged side, or (the weekly check) of every stored row: in steps, each document read once
+                    & $Run (Get-SIDataCiFindingHashRangeSql -Alias $side.A -Table $side.Tbl -Key $side.Key -Names $names -Into $side.Into -After $after -Upto $upto) 'none'
                 } else {
                     # the staged side; the stored side by every column, or (the weekly check) by its content worked out from its data
                     & $Run ("INSERT {0} ({1}, {2}) SELECT {3}.{1}, {4} FROM {5} AS {3}{6} WHERE {3}.{1} > {7} AND {3}.{1} <= {8};" -f $side.Into, $side.Key, $side.Cols, $side.A, $side.Sel, $side.Tbl, $side.Apply, $after, $upto) 'none'
@@ -1162,6 +1221,10 @@ function Invoke-SIDataKeyRanges {
     $take = [Math]::Max(1L, $FirstTake)
     $hasLo = ($null -ne $After -and "$After" -ne ''); $lo = $(if ($hasLo) { [string]$After } else { $null })
     $i = 0; $lastMs = 0L
+    # 2026-11-07 the fixed cost per range, learned from the ranges of a tiny size (Update-SIDataFixedCostMs): the next size is
+    # worked out on the part of the time that grows with it, so a step whose every command costs more than -TargetMs whatever
+    # its size does not stay at one row per range
+    $fixedMs = 0L
     $out = New-Object System.Collections.Generic.List[object]
     $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)
     $val = { param($row, $n) if ($null -eq $row) { $null } elseif ($row -is [System.Collections.IDictionary]) { $v = $row[$n]; if ($v -is [System.DBNull]) { $null } else { $v } } else { $v = $row.$n; if ($v -is [System.DBNull]) { $null } else { $v } } }
@@ -1181,7 +1244,8 @@ function Invoke-SIDataKeyRanges {
         if ($OnDone) { & $OnDone $range $ans }
         if ($last) { break }
         $hasLo = $true; $lo = [string]$hi
-        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 }
+        if (Get-Command -Name Update-SIDataFixedCostMs -ErrorAction SilentlyContinue) { $fixedMs = Update-SIDataFixedCostMs -FixedMs $fixedMs -Size $take -ElapsedMs $lastMs }
+        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 -FixedMs $fixedMs }
     }
     , $out.ToArray()
 }
@@ -1451,7 +1515,7 @@ SELECT COALESCE(k.OwnerCi, ci.CiId, ck.CiId, lk.CiId), LEFT(ISNULL(k.AssetIdK, N
        (SELECT k.OwnerCi AS si_ci_id, k.AssetIdK AS si_asset_id, k.FKey AS si_finding_key, v.FType AS si_finding_type, v.Cve AS si_cve, f1.Title AS si_title,
                f1.AssetName AS si_asset_name, f1.SecurityDomain AS si_security_domain, rep.FirstReport AS si_report_name, JSON_QUERY(rep.ReportsJson) AS si_detected_by,
                v.Sev AS si_severity, v.Score AS si_risk_score, v.Weighted AS si_weighted_risk_score, v.Rating AS si_risk_rating,
-               JSON_QUERY(fac.FactorsJson) AS si_finding_risk_factors, g.Cnt AS si_finding_rows, CONVERT(nvarchar(30), @ct, 127) AS si_collection_time,
+               JSON_QUERY(fac.FactorsJson) AS si_finding_risk_factors, g.Cnt AS si_finding_rows,
                g.Tier AS si_tier, CONVERT(nvarchar(64), g.ExemptionId) AS si_exemption_id, cp.Component AS si_component/*doc*/, N'database' AS si_finding_source
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
        NULLIF(LEFT(cp.Component, 64), N'')/*val*/

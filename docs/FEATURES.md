@@ -2,7 +2,7 @@
 
 This is the delivered feature set of **SecurityInsight**, written in plain language for IT
 admins, security teams and decision-makers. Everything listed here is built and in production
-use. It is grouped by area and is safe to share publicly. (Status as of 2026-10-28, SecurityInsight 3.0.)
+use. It is grouped by area and is safe to share publicly. (Status as of 2026-11-06, SecurityInsight 3.0.53.)
 
 SecurityInsight turns your Microsoft security telemetry into a **risk-based, prioritized** view
 of what to fix first. It profiles every asset (endpoint, identity, Azure resource, public IP),
@@ -14,8 +14,46 @@ Chapter numbering matches the internal backlog, so a feature
 keeps its chapter as it moves from planned → delivered.
 
 **Editions.** Everything in this catalog except the *SecurityInsight Pro* chapter at the end is part of the free **Community** edition, licensed under the
-PolyForm Shield License 1.0.0. **SecurityInsight Pro** adds cross-engine correlation (one object id
-across every engine, plus asset properties), the ServiceNow CMDB connector and a vulnerability close-loop to ServiceNow or a SQL database. Pro is delivered only to
+PolyForm Shield License 1.0.0. Both editions run the same code in your own Azure as Azure Container Apps jobs, with the
+web app and a database, and the licence switches the Pro features on. Cross-engine correlation, the full asset
+properties, the web app's findings, views, tier board, management views, trends and wall board, and asset tagging are
+in both editions; some lines in the Pro chapter below describe these and are in Community too.
+**SecurityInsight Pro** adds governance (exemptions, departments, follow-up tasks, external advisors), the CMDB in
+SecurityInsight and its connectors, the ServiceNow CMDB connector and the vulnerability close-loop, mail alerts and
+management summary mails, roles and scopes, the audit trail, template releases by update ring, Ask SecurityInsight,
+the MCP server and management presentations, updates from Invardia and Invardia support. Pro comes as **Pro Business**
+and **Pro Enterprise** with the same features: Pro Business carries a device limit in its signed licence, Pro
+Enterprise has none.
+
+| | Community | Pro Business | Pro Enterprise |
+|---|:---:|:---:|:---:|
+| Runs in your own Azure as Container Apps jobs, with its own database, on managed identities | ✅ | ✅ | ✅ |
+| Install in two lines: no PowerShell modules, no Azure CLI, no client secret | ✅ | ✅ | ✅ |
+| Four profilers: devices, identities, Azure resources, public IPs (Shodan) | ✅ | ✅ | ✅ |
+| Defender vulnerabilities and recommendations, Exposure Graph attack paths | ✅ | ✅ | ✅ |
+| Tiers from real rights, privilege tier catalog, optional AI role classification | ✅ | ✅ | ✅ |
+| One object across every source (correlation) | ✅ | ✅ | ✅ |
+| Every Risk Analysis report, risk score and weighted risk score | ✅ | ✅ | ✅ |
+| CMDB from a CSV file | ✅ | ✅ | ✅ |
+| Excel, summary mail with optional AI summary, Log Analytics tables, JSON | ✅ | ✅ | ✅ |
+| Web app: findings, management views, trends, wall board, Excel export | ✅ | ✅ | ✅ |
+| Fast pages: every view reads stored, indexed columns, kept current after every run | ✅ | ✅ | ✅ |
+| One daily pipeline; an update waits for a running pipeline and never stops it | ✅ | ✅ | ✅ |
+| A database setup job: no person needs database admin rights | ✅ | ✅ | ✅ |
+| Asset tagging with a dry run first | ✅ | ✅ | ✅ |
+| Signed updates from the Community channel | ✅ | | |
+| Departments, governed exemptions, follow-up tasks and governance mails | | ✅ | ✅ |
+| CMDB in SecurityInsight, business services ranked by weighted risk | | ✅ | ✅ |
+| ServiceNow CMDB and the vulnerability close-loop (ServiceNow, SQL, REST) | | ✅ | ✅ |
+| Alert mails and management summary mails | | ✅ | ✅ |
+| Roles and scopes for people and groups, audit trail | | ✅ | ✅ |
+| Template releases by update ring, conformance and deviations | | ✅ | ✅ |
+| Ask SecurityInsight (AI chat), the MCP server and management presentations | | ✅ | ✅ |
+| Updates from Invardia by update ring and a signed licence | | ✅ | ✅ |
+| Support from Invardia (support service, Support app, just-in-time database access - each optional) | Community help on GitHub; Support app optional | ✅ | ✅ |
+| Number of devices | No limit | The limit in your licence | No limit |
+
+Pro is delivered only to
 licensed customers -- see [pricing](https://invardia.com/pricing/), [buy](https://invardia.com/order/) or start a [60-day Pro trial](https://invardia.com/trial/); licensed customers get support at
 [support@invardia.com](mailto:support@invardia.com) or [portal.invardia.com](https://portal.invardia.com/) › Support. Without a licence, SecurityInsight runs as the Community edition with every
 feature here working normally.
@@ -301,6 +339,8 @@ feature here working normally.
 - **The updater runs on its own schedule.** ✅ 2026-10-27 -- Updates are never a step of the pipeline, so an update never waits for the night's run and never holds it up.
 - **Risk Analysis mail works in containers.** ✅ 2026-10-27 -- The mail password reaches the container jobs as a Key Vault reference, so a container install runs Risk Analysis and mails its result.
 - **Every job gets the size it needs.** ✅ 2026-10-28 -- A new install gives every job the CPU and memory it needs, never below 2 CPU and 4 GiB. A size you set yourself is kept. (Checking and raising the sizes on every update arrives with the next update; until then an update leaves the sizes as they are.)
+- **An update never stops a running pipeline.** ✅ 2026-11-05 -- An update that finds a pipeline run going waits for the run to end and is installed between two runs; only you stop a run. An update also waits up to 90 minutes for its image build.
+- **The image build pool of a private install is never removed.** ✅ 2026-11-05 -- An update keeps the pool and only scales it to no agents between builds, so a private install can always build its next update.
 
 ## 12. Performance & scale
 
@@ -325,6 +365,8 @@ feature here working normally.
 - **The asset build does only what changed.** ✅ 2026-10-28 -- The daily build of your assets works only on what changed since the last build, and a weekly full build checks the rest. Two builds never run at the same time: a second one waits for the first and then builds what is left.
 - **Risk Analysis Detailed scales out.** ✅ 2026-10-27 -- The Detailed reports are shared over several worker jobs that run side by side, so a large estate is not processed one report after the other.
 - **The data sync writes only what changed.** ✅ 2026-10-27 -- The findings per asset are replaced row by row only where they changed, and collections about to be removed are not prepared first. On a live install with a small database this more than halved the data sync, from 99.6 to 46 minutes.
+- **Pages are fast by default.** ✅ 2026-11-05 -- Every view of the web app reads narrow indexes and stored columns instead of each row's full source record, also while a pipeline run is going; every rewritten view was checked to show exactly the same rows as before, and a built-in check refuses a new view that would scan a large table. While an update changes the database, the web app shows a short notice and comes back by itself instead of hanging.
+- **The database's statistics are kept fresh.** ✅ 2026-11-05 -- At the end of every run the pipeline brings the statistics of the tables the run rewrote up to date, and every install updates a stale statistic in the background, so a page never waits for the database to refresh one. It changes no data; if it cannot run, the run still completes and the log says so in one line.
 
 ## 13. Operations & day-2
 
@@ -450,6 +492,10 @@ These run only with a Pro licence ([invardia.com/pricing](https://invardia.com/p
 - **One incomplete report never holds the rest.** ✅ 2026-10-26 -- When one Risk Analysis report could not be completed, every other report of the run is loaded and shown, the incomplete one is named in the mail, and its last good result is kept.
 - **A data health check at the end of every run.** ✅ 2026-10-27 -- Every pipeline run ends with a check of your stored results against the live sources, and the result is sent to Invardia support every day. An install that lacks the step gets it with its next update.
 - **Weekly context discovery for Risk Analysis.** ✅ 2026-10-25 -- Once a week SecurityInsight reads the current columns of its sources and proposes the context fields worth mapping into the reports.
+- **The heavy jobs have room to work.** ✅ 2026-11-04 -- The collections, correlation, Risk Analysis, the data sync and vulnerabilities run with at least 4 CPU / 8 GiB; every update raises an existing install's heavy jobs to that size and never makes a job smaller.
+- **Support can stop a run, update, and start again -- in order.** ✅ 2026-11-04 -- When an install must move to a fix, Invardia support stops the running pipeline run the product's own way, waits until it has really stopped, starts the update and reads back the installed version; a fresh run then starts on the new version.
+- **No person needs database admin rights.** ✅ 2026-11-05 -- A database setup job runs as its own identity, a member of your SQL admin group, creates every database user and right SecurityInsight needs and reads each one back; every update keeps it in place.
+- **Invardia support gets database access only while a session is open.** ✅ 2026-11-05 -- When Invardia support opens a session at the level you allow in the portal, the access is granted in every SecurityInsight database and read back; when the session closes or its time runs out, it is removed again.
 - **Support sees a run while it goes on.** ✅ 2026-10-28 -- Every half hour a Pro install tells Invardia support which step is running, when the run is expected to end, how each job did, how its sources and its database are doing and when the last mail went out -- also in the middle of a long run.
 
 ---

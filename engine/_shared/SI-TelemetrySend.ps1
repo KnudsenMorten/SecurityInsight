@@ -27,9 +27,15 @@
     OFF: $global:SI_Telemetry_Enabled = $false (or the environment variable SI_TELEMETRY_ENABLED = false). Then nothing is
     built, nothing is read, no file is written and no network call is made.
 
-    RULE: TELEMETRY NEVER FAILS OR SLOWS A RUN. One attempt per record, a 5-second timeout, no retry. The first answer that is
-    not 'ok' stops all telemetry for the rest of the process (no retry storm, and nothing is queued for later), and is
-    said ONCE as a warning. Nothing here throws to its caller.
+    RULE: TELEMETRY NEVER FAILS OR SLOWS A RUN. One attempt per record from the run, a 5-second timeout, no retry in the run.
+    The first answer that is not 'ok' stops all telemetry for the rest of the process (no retry storm), and is said ONCE as
+    a warning. Nothing here throws to its caller.
+    THE OUTBOX (framework 8.4, agreed with Invardia 2026-11-05; SI-UplinkOutbox.ps1): a RUN record that was not taken --
+    no answer, a timeout, a 429, any answer that is not ok, or not sent at all because an earlier report of this process
+    was refused -- is kept in the install's own Pro database (cfg.UplinkOutbox) with ONE cheap insert (a 5-second lock
+    timeout); a failed insert is said once and the record dropped. Identified installs with the Pro database open only; an
+    install without SQL does nothing new. The heartbeat job sends the kept records again later (oldest first, in rounds,
+    after its own heartbeat) -- never an engine run. Heartbeats and setup reports are never kept: the next one replaces them.
 
     PS 5.1 and 7.
 #>
@@ -57,6 +63,8 @@ if (-not (Get-Command -Name ConvertTo-SIUplinkReports -ErrorAction SilentlyConti
 if (-not (Get-Command -Name Get-SIInvardiaEnvironmentIdFromAnswer -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaPortalLink.ps1')) }
 # Invardia S16: the install's LASTING id (SI-InstallId) as InstallId on every identified record (never the anonymous id)
 if (-not (Get-Command -Name Add-SIUplinkInstallId -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaInstallId.ps1')) }
+# framework 8.4: a run record that was not taken is kept in the Pro database (cfg.UplinkOutbox); the heartbeat job sends it again
+if (-not (Get-Command -Name Add-SIUplinkOutboxRecord -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-UplinkOutbox.ps1')) }
 
 function Initialize-SIAitUplinkScope {
     <# The framework client (AitUplink.ps1, kept as it is) holds its closed lists and the community endpoint at script scope.
@@ -440,7 +448,11 @@ function ConvertTo-SITelemetryWire {
 function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 'evidence', 'Reports', 'Capabilities', 'CiColumns', 'Licences', 'Collections', 'runProgress',
                                           'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build',
                                           # #1065 (3.0.30): in Invardia's closed list and taken leniently -- here only so a refusal never costs the record
-                                          'setupSteps') }
+                                          'setupSteps',
+                                          # framework rule 11g: a private install's image build pool -- behind its own switch, off until Invardia confirms
+                                          'BuildPool',
+                                          # framework 8.4: the run records kept unsent (the outbox) -- behind its own switch (on: Invardia deployed it 2026-11-05)
+                                          'UplinkBacklog') }
 
 function ConvertTo-SITelemetrySupportSqlAccessWire {
     <# PURE. The heartbeat's supportSqlAccess, exactly { group, dbUser, checkedUtc, healedUtc }: group / dbUser true, false or
@@ -577,7 +589,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the status report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
@@ -1166,13 +1178,20 @@ function Send-SITelemetryRunEnd {
           [scriptblock]$CapabilityProbe,
           # #710: { param($EnvironmentId) } when Invardia's answer names an environment id this install has not recorded yet
           # (default: Save-SIInvardiaEnvironmentMark on the Pro database the run has open) -- the test seam
-          [scriptblock]$OnEnvironment)
+          [scriptblock]$OnEnvironment,
+          # framework 8.4: the Pro database a run record that is NOT taken is kept in (cfg.UplinkOutbox; default: the Pro
+          # settings store the run has open -- never in a test session) -- the test seam
+          [scriptblock]$OutboxInvoke)
     $supSeen = ''
     $envSeen = $false
-    $out = { param($s, $sent, $why) [pscustomobject]@{ Status = $s; Sent = @($sent); Reason = $why; SupersededBy = $supSeen } }
+    $keptRun = $false
+    $out = { param($s, $sent, $why) [pscustomobject]@{ Status = $s; Sent = @($sent); Reason = $why; SupersededBy = $supSeen; Kept = [bool]$keptRun } }
     try {
         if (-not (Test-SITelemetryEnabled)) { return (& $out 'disabled' @() 'telemetry is switched off (SI_Telemetry_Enabled)') }
-        if ($global:SI_TelemetryHalted) { return (& $out 'halted' @() 'an earlier report in this process was not accepted -- nothing more is sent from it') }
+        # an earlier report of this process was not taken: nothing more is SENT from it -- the run record is still built and
+        # KEPT in the outbox where the Pro database is open (framework 8.4); without one, nothing is built
+        $halted = [bool]$global:SI_TelemetryHalted
+        if ($halted -and -not $OutboxInvoke -and -not (Get-SIUplinkOutboxInvoke)) { return (& $out 'halted' @() 'an earlier report in this process was not accepted -- nothing more is sent from it') }
         # A TEST SESSION NEVER SENDS. ~60 suites run engine code that reaches the run-health END record; none of them
         # may report to Invardia or write an install id on the test machine. Pester is never loaded by an engine run.
         # Only a test that hands in its own -Transport (a stub) gets past this line.
@@ -1201,6 +1220,10 @@ function Send-SITelemetryRunEnd {
             $Transport = { param($Record, $Endpoint, $AccessCode, $TimeoutSec) Send-SITelemetryUplink -Record $Record -Endpoint $Endpoint -AccessCode $AccessCode -TimeoutSec $TimeoutSec }
         }
         $anon = ($Context.Mode -eq 'anonymous')
+        # framework 8.4: where a run record that is not taken is kept -- identified installs with the Pro database open only
+        $obInvoke = $null
+        if (-not $anon) { $obInvoke = if ($OutboxInvoke) { $OutboxInvoke } else { Get-SIUplinkOutboxInvoke } }
+        if ($halted -and -not $obInvoke) { return (& $out 'halted' @() 'an earlier report in this process was not accepted -- nothing more is sent from it') }
         $lid = if (-not $anon -and $Context.PSObject.Properties['LicenceId']) { [string]$Context.LicenceId } else { '' }
         # framework §8.4: the install's own links (identified heartbeat) and the run-health deep link (identified failed run)
         $eps = @()
@@ -1303,6 +1326,8 @@ function Send-SITelemetryRunEnd {
         $queue = New-Object System.Collections.Generic.List[object]
         $relF = $null
         $hbDue =Test-SITelemetryHeartbeatDue -LastSentDate (Get-SITelemetryLastHeartbeat -StateDirectory $Context.StateDirectory) -NowUtc $nowUtc
+        # a halted process sends nothing: no heartbeat and no setup report are built (only the run record, for the outbox)
+        if ($halted) { $hbDue = $false }
         if ($hbDue -and -not $NoHeartbeat) {
             # #424: users / guests / devices, Pro (identified) only. A count that cannot be computed is left out.
             $hbCounts = $null
@@ -1326,7 +1351,20 @@ function Send-SITelemetryRunEnd {
             $queue.Add((ConvertTo-SITelemetryWire -Record (New-SITelemetryHeartbeat @base) -Mode $Context.Mode -Counts $hbCounts -Now $nowUtc -Endpoints $eps -LicenceId $lid -EnvironmentName $envName -GuardMode $gmWire `
                             -Wave $(if ($relF) { $relF.Wave } else { $null }) -ReleaseMode $(if ($relF) { $relF.ReleaseMode } else { $null }) -Components $(if ($relF) { $relF.Components } else { $null }) -Evidence $(if ($relF) { $relF.Evidence } else { $null }) -Probe $probe -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })))
         }
-        $queue.Add((ConvertTo-SITelemetryWire -Record $runRec -Mode $Context.Mode -Counts $counts -Now $nowUtc -Link $runLink -LicenceId $lid -EnvironmentName $envName -Reports $causeItems -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })))
+        $runWire = ConvertTo-SITelemetryWire -Record $runRec -Mode $Context.Mode -Counts $counts -Now $nowUtc -Link $runLink -LicenceId $lid -EnvironmentName $envName -Reports $causeItems -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })
+        $queue.Add($runWire)
+        # framework 8.4: the run record as it would be sent, taken BEFORE the send (a refused send may strip fields from it) --
+        # kept in the outbox when it is not taken. Only where an outbox applies (identified, the Pro database open).
+        $runJson = ''
+        if ($obInvoke -and $null -ne $runWire) { try { $runJson = ConvertTo-SIUplinkOutboxJson -Record $runWire } catch { $runJson = '' } }
+        $runTaken = $false
+        $keepRun = { param([string]$Why)
+            if ($runTaken -or -not $runJson) { return $false }
+            [bool](Add-SIUplinkOutboxRecord -Invoke $obInvoke -Job $job -Json $runJson -Answer $Why -NowUtc $nowUtc) }
+        if ($halted) {
+            $keptRun = & $keepRun 'not sent: an earlier report of this process was not taken'
+            return (& $out 'halted' @() ('an earlier report in this process was not accepted -- nothing more is sent from it{0}' -f $(if ($keptRun) { '; the run report is kept and goes with a later status report' } else { '' })))
+        }
         # #491 / framework §8.7: the setup report (the control list) once a day with the heartbeat -- identified installs only,
         # LAST in the queue so a refused setup report never costs the heartbeat or the run report. SI_Telemetry_SetupControls:
         # all (default, owner 2026-10-18: "telemetry must be on") = every control in the catalog, and when Invardia refuses
@@ -1366,15 +1404,18 @@ function Send-SITelemetryRunEnd {
                 $setupMinimum = $null
             }
             if ("$($r.Status)" -ne 'ok') {
-                # STOP at the first answer that is not ok -- for the rest of this process. No retry, nothing queued.
+                # STOP at the first answer that is not ok -- for the rest of this process. No retry in the run. The RUN record,
+                # when it was not taken (this one, or the one after a refused heartbeat), is kept in the outbox (framework 8.4)
                 $global:SI_TelemetryHalted = $true
                 $why = ConvertTo-AitUplinkRedacted -Text ("$($r.Reason)")
+                $keptRun = & $keepRun $why
                 if (-not $global:SI_TelemetryWarned) {
                     $global:SI_TelemetryWarned = $true
-                    Write-Warning ("The status report to Invardia was not sent ({0}). The run is not affected; nothing more is sent from this run. To turn these reports off, set `$global:SI_Telemetry_Enabled = `$false." -f $why)
+                    Write-Warning ("The status report to Invardia was not sent ({0}). The run is not affected; nothing more is sent from this run{1}. To turn these reports off, set `$global:SI_Telemetry_Enabled = `$false." -f $why, $(if ($keptRun) { ' -- the run report is kept in this install''s database and goes with a later status report' } else { '' }))
                 }
                 return (& $out 'failed' $sent $why)
             }
+            if ([object]::ReferenceEquals($w, $runWire)) { $runTaken = $true }
             $sent.Add([string]$w.Kind)
             # #517: Invardia re-issued the installed licence -> recorded ONCE per process for the updater's licence step
             if (-not $supSeen -and $r.PSObject.Properties['SupersededBy']) {

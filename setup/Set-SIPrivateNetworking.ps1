@@ -22,6 +22,12 @@
                              back Connected. The rights on both networks are read first -- missing = refused before any
                              change; never half a peering (a second side that fails removes the first). Without it the
                              peering stays on the network hand-off list. The rollback removes the peerings it made.
+        return-route         #1095, SecurityInsight's OWN spoke only, with -ReturnRouteRanges + -ReturnRouteNextHop (the
+                             customer's ranges and hub firewall IP): the route table attached to the apps subnet (else rt-si
+                             in the install's resource group) sends each range to the firewall as VirtualAppliance, BGP
+                             route propagation off, attached to the apps subnet -- routes and attachment read back. Routes
+                             it did not make are kept. A customer's network is never changed (the hand-off item instead).
+                             The rollback removes what it made (a table it created, else only the routes it added).
         registry-premium     the container registry to Premium (a private endpoint needs it; a higher daily price)
         private-endpoints    pe-si-sql, pe-si-vault, pe-si-blob, pe-si-queue, pe-si-table, pe-si-registry in the
                              endpoints' subnet (an endpoint of that name pointing elsewhere is never replaced)
@@ -105,6 +111,10 @@ param(
     # the customer's choice: link the environment's DNS zone to the hub too (the rights are read first; missing = refused
     # before any change, a hand-off line)
     [switch]$LinkZonesToHub,
+    # #1095: the return route of SecurityInsight's own spoke (step return-route): the ranges the customer's people browse
+    # from, and the hub firewall's private IP (the next hop). Both the customer's values -- never guessed.
+    [string[]]$ReturnRouteRanges = @(),
+    [string]$ReturnRouteNextHop = '',
     [switch]$Apply,
     [string[]]$Steps = @(),
     [string]$Rollback = '',
@@ -141,7 +151,7 @@ $ErrorActionPreference = 'Stop'
 # Support app, so its support-sql step cannot run there (a cut-over in the Community copy skips that step: -Steps)
 $__siSad = [IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SupportAppDatabase.ps1')
 if ([IO.File]::Exists($__siSad)) { . $__siSad }
-$script:SIPnSteps = @('proof', 'subnets', 'peer-to-hub', 'registry-premium', 'private-endpoints', 'private-dns', 'private-environment', 'move-jobs', 'move-apps',
+$script:SIPnSteps = @('proof', 'subnets', 'peer-to-hub', 'return-route', 'registry-premium', 'private-endpoints', 'private-dns', 'private-environment', 'move-jobs', 'move-apps',
                       'sql-identity', 'support-sql', 'public-access-off', 'registry-agent-pool', 'registry-public-off')
 $names = Get-SIPrivateNetworkNames
 
@@ -227,6 +237,24 @@ if ($Rollback.Trim()) {
                     foreach ($l in @($b.linksCreated)) { $lines.Add((Remove-SIPnCreated -Id ([string]$l) -Api $script:SIPnDnsApi -Label 'DNS link')) }
                     foreach ($z in @($b.zonesCreated)) { $lines.Add((Remove-SIPnCreated -Id ([string]$z) -Api $script:SIPnDnsApi -Label 'DNS zone')) }
                 }
+                'return-route' {
+                    # what THIS run made: the table it created (detached first, then removed), else only the routes it added
+                    $rtId = [string]$b.routeTableId
+                    if ([string]$b.attached -and [string]$b.tableCreated) {
+                        $sp = '{0}?api-version={1}' -f [string]$b.attached, $script:SIPnNetApi
+                        $sb = Get-SISubnetBody -Subnet (& $A 'GET' $sp $null); $null = $sb.properties.Remove('routeTable')
+                        $null = & $A 'PUT' $sp $sb; $lines.Add(('subnet {0}: the route table is detached' -f ([string]$b.attached -split '/')[-1]))
+                    }
+                    if ([string]$b.tableCreated) { $lines.Add((Remove-SIPnCreated -Id ([string]$b.tableCreated) -Api $script:SIPnNetApi -Label 'route table')) }
+                    elseif ($rtId -and @($b.routesAdded).Count) {
+                        $rp = '{0}?api-version={1}' -f $rtId, $script:SIPnNetApi; $rt = & $A 'GET' $rp $null
+                        if ($rt) {
+                            $drop = @(@($b.routesAdded) | ForEach-Object { Get-SIReturnRouteName -Range ([string]$_) })
+                            $body = ConvertTo-SIPnHashtable $rt; $body.properties.routes = @(@($body.properties.routes) | Where-Object { $_ -and $drop -notcontains [string]$_.name })
+                            $null = & $A 'PUT' $rp $body; $lines.Add(('route table {0}: the routes this run added are removed ({1})' -f ($rtId -split '/')[-1], ($drop -join ', ')))
+                        }
+                    }
+                }
                 'peer-to-hub' { foreach ($pp in @($b.created)) { if ([string]$pp) { $lines.Add((Remove-SIPnCreated -Id ([string]$pp) -Api $script:SIPnNetApi -Label 'peering')) } } }
                 'private-endpoints' { foreach ($e in @($b.created)) { $lines.Add((Remove-SIPnCreated -Id ([string]$e) -Api $script:SIPnNetApi -Label 'private endpoint')) } }
                 'registry-premium' {
@@ -290,6 +318,7 @@ $currentEnvId = @($shape.Jobs | ForEach-Object { [string](Get-SIPnProp $_ @('pro
 $currentEnv = if ($currentEnvId) { & $A 'GET' ('{0}?api-version={1}' -f $currentEnvId, $script:SIPnAppApi) $null } else { $null }
 $location = if ($currentEnv) { [string]$currentEnv.location } else { [string](Get-SIPnProp @($shape.Jobs)[0] @('location')) }
 $tgt = Get-SIInstallPrivateNetworkTarget -Values ([ordered]@{ vnetId = $VnetId; appsSubnetName = $AppsSubnetName; appsSubnetPrefix = $AppsSubnetPrefix; endpointsSubnetName = $EndpointsSubnetName; endpointsSubnetPrefix = $EndpointsSubnetPrefix; privateDnsZonesResourceGroupId = $DnsZonesResourceGroupId; hubVnetId = $HubVnetId; linkZonesToHub = [bool]$LinkZonesToHub
+                                                            returnRouteRanges = @($ReturnRouteRanges); returnRouteNextHop = $ReturnRouteNextHop
                                                             vnetAddressPrefix = $VnetAddressPrefix; vnetName = $VnetName }) -ResourceGroupId $rgId
 $appsSubnetId = if ($tgt.VnetId) { '{0}/subnets/{1}' -f $tgt.VnetId, $tgt.AppsSubnetName } else { '' }
 $peSubnetId = if ($tgt.VnetId) { '{0}/subnets/{1}' -f $tgt.VnetId, $tgt.EndpointsSubnetName } else { '' }
@@ -323,6 +352,15 @@ $plan['peer-to-hub'] = if (-not $tgt.HubVnetId) { @{ Action = 'skip'; Reason = '
         $pst = Get-SIPeeringState -Arm $A -VnetId $tgt.VnetId -RemoteVnetId $tgt.HubVnetId
         if ($pst -eq 'Connected') { @{ Action = 'none'; Reason = 'the peering with the hub reads Connected' } }
         else { @{ Action = 'change'; Reason = ('the peering with {0}, BOTH directions -- only on the customer''s approval; the rights are read first (state now: {1})' -f ($tgt.HubVnetId -split '/')[-1], $(if ($pst) { $pst } else { 'not made' })) } }
+    }
+# #1095: the return route -- planned from a read (Set-SIReturnRoute -ReportOnly): SecurityInsight's own spoke with both answers
+$plan['return-route'] = if ($noVnet) { @{ Action = 'skip'; Reason = $noVnet } }
+    elseif (-not $vnet) { @{ Action = 'skip'; Reason = 'SecurityInsight''s network is made first (subnets); run return-route after it' } }
+    else {
+        $rrp = Set-SIReturnRoute -Arm $A -Target $tgt -Location ([string](Get-SIPnProp $vnet @('location'))) -ReportOnly
+        if (-not $rrp.Ok -or $rrp.HandOff) { @{ Action = 'skip'; Reason = ($rrp.Line -replace '^return route:?\s*', '') } }
+        elseif ($rrp.Line -like '*nothing to do*') { @{ Action = 'none'; Reason = ($rrp.Line -replace '^return route:?\s*', '') } }
+        else { @{ Action = 'change'; Reason = ($rrp.Line -replace '^return route WOULD be:\s*', '') } }
     }
 $plan['registry-premium'] = Get-SIRegistrySkuDecision -Registry $registry
 if ($plan['registry-premium'].Action -eq 'upgrade') { $plan['registry-premium'].Action = 'change' }
@@ -448,6 +486,16 @@ foreach ($k in $want) {
                 & $save
                 foreach ($l in $x.Lines) { $lines.Add($l) }; if (-not $x.Ok) { $okAll = $false; foreach ($l in $x.Lines) { $handOffLines.Add($l) } }
             }
+            'return-route' {
+                $bf['tableCreated'] = ''; $bf['routesAdded'] = @(); $bf['attached'] = ''; $bf['routeTableId'] = ''
+                $x = Set-SIReturnRoute -Arm $A -Target $tgt -Location ([string](Get-SIPnProp $vnet @('location'))) -Sleep $Sleep
+                $bf['routeTableId'] = [string]$x.RouteTableId
+                if ($x.Created) { $bf['tableCreated'] = [string]$x.RouteTableId }
+                $bf['routesAdded'] = @($x.AddedRanges)
+                if ($x.AttachedNow) { $bf['attached'] = $appsSubnetId }
+                & $save
+                foreach ($l in @($x.Lines)) { $lines.Add($l) }; if (-not $x.Ok) { $okAll = $false; $handOffLines.Add($x.Line) }
+            }
             'registry-premium' {
                 $bf['registryId'] = $ids.RegistryId; $bf['sku'] = [string]$plan['registry-premium'].Sku; & $save
                 $x = Set-SIRegistrySku -Arm $A -RegistryId $ids.RegistryId -Sku 'Premium' -Sleep $Sleep; $lines.Add($x.Line); if (-not $x.Ok) { $okAll = $false }
@@ -548,8 +596,11 @@ foreach ($k in $want) {
             }
             'registry-agent-pool' {
                 $bf['created'] = ''
-                $x = Set-SIAcrAgentPool -Arm $A -RegistryId $ids.RegistryId -Name $names.AgentPool -Location ([string](Get-SIPnProp $registry @('location'))) -SubnetId $peSubnetId -Sleep $Sleep
+                # #1087: the build subnet's outbound path is checked first (own spoke: given; a customer's network: never changed)
+                $x = Invoke-SIAcrAgentPoolStep -Arm $A -RegistryId $ids.RegistryId -Name $names.AgentPool -Location ([string](Get-SIPnProp $registry @('location'))) -SubnetId $peSubnetId -OwnNetwork ([bool]$tgt.CreateVnet) -ResourceGroupId $rgId -Sleep $Sleep
+                if ($x.Blocked) { throw $x.Line }
                 if ($x.Created) { $bf['created'] = $x.Id; & $save }
+                if ([string]$x.OutboundLine -and [string]$x.OutboundLine -ne [string]$x.Line) { $lines.Add([string]$x.OutboundLine) }
                 $lines.Add($x.Line); if (-not $x.Ok) { $okAll = $false }
             }
             { $_ -in 'public-access-off', 'registry-public-off' } {

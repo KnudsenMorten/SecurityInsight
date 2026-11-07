@@ -3,6 +3,10 @@
     Gives the customer's Invardia Support app the access only SecurityInsight can grant -- or takes it away (#227).
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the database part: the Invardia Support app's own database user (in the install's run, and a support repair, that names the Support app)
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     The Invardia Support app ("Invardia Support" -- framework 12.11c; an older one may still carry its earlier, longer name.
     Invardia names it; SecurityInsight finds it only by its client id, never by a name), one per
     tenant, created by the customer with Invardia's New-InvardiaSupportApp.ps1) is used for installs, upgrades and
@@ -67,6 +71,10 @@ $siRoot = Split-Path -Parent $PSScriptRoot
 # otherwise a person signs in here (Azure Cloud Shell, or the browser).
 if (-not (Get-Command -Name Get-SISetupAzureContext -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SetupAzure.ps1')) }
 if (-not (Get-SISetupAzureContext)) { $null = Connect-SISetupAzure }
+# #1092: a member added right after its group was made waits out Entra replication, then is read back;
+# #1093: the support grant's statements compile in a database without the consent table (both free files)
+. ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-GroupMemberAdd.ps1'))
+. ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SupportConsentSql.ps1'))
 if (-not $ConfigPath) { $ConfigPath = Join-Path $siRoot 'config\SecurityInsight.custom.ps1' }
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "config not found: $ConfigPath" }
 . $ConfigPath
@@ -184,8 +192,14 @@ if ($sqlServer -and $dbs.Count) {
             $should = -not $Remove
             if ($should -and -not $member) {
                 if ($PSCmdlet.ShouldProcess("group $($grp.displayName)", 'add member')) {
-                    try { Invoke-Graph Post "https://graph.microsoft.com/v1.0/groups/$($grp.id)/members/`$ref" @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($sp.id)" } | Out-Null; Show 'granted' "member of the SQL admin group $($grp.displayName)" }
-                    catch { $failed++; Show 'FAILED' "member of $($grp.displayName)"; $tasks.Add(("# Entra admin center: Groups -> {0} -> Members -> add '{1}'" -f $grp.displayName, $sp.displayName)) }
+                    # #1092: the group may have been made minutes ago (the install's database steps) -- a 404 on it is Entra
+                    # replication: waited for and tried again for up to 5 minutes (said in the log), then READ BACK
+                    $gmAdd = Invoke-SIGroupMemberAddRetry -What 'the Support app' -LimitSeconds 300 `
+                        -Add { Invoke-Graph Post "https://graph.microsoft.com/v1.0/groups/$($grp.id)/members/`$ref" @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($sp.id)" } | Out-Null } `
+                        -Test { @((Invoke-Graph Post "https://graph.microsoft.com/v1.0/directoryObjects/$($sp.id)/checkMemberGroups" @{ groupIds = @([string]$grp.id) }).value) -contains [string]$grp.id }
+                    if ($gmAdd.State -eq 'added') { Show 'granted' "member of the SQL admin group $($grp.displayName) (read back)" }
+                    elseif ($gmAdd.State -eq 'unchecked') { Show 'granted' ("member of the SQL admin group {0} -- {1}" -f $grp.displayName, $gmAdd.Detail) }
+                    else { $failed++; Show 'FAILED' ("member of {0} -- {1}" -f $grp.displayName, $gmAdd.Detail); $tasks.Add(("# Entra admin center: Groups -> {0} -> Members -> add '{1}'" -f $grp.displayName, $sp.displayName)) }
                 } else { Show 'plan' "add to the SQL admin group $($grp.displayName)" }
             } elseif ($Remove -and $member) {
                 if ($PSCmdlet.ShouldProcess("group $($grp.displayName)", 'remove member')) {
@@ -200,7 +214,7 @@ if ($sqlServer -and $dbs.Count) {
 # ---- 2b. THE JUST-IN-TIME SUPPORT GRANT (#1021; framework SECAUDIT-1a) ----
 # This script IS the customer's consent: its level is recorded in each product database (cfg.SupportConsent, Source
 # customer), with the Support app's standing READ-ONLY role and the signed procedures the support grant job opens and closes
-# its access through -- at most at this level, for at most 24 hours. Plus its two Azure roles for the support grant ONLY:
+# its access through -- at most at this level, for at most 8 hours. Plus its two Azure roles for the support grant ONLY:
 # Storage Queue Data Message Sender on the queue si-support-requests and Container Apps Jobs Operator on the job
 # caj-si-support-grant. Nothing of the access above is changed here. -Remove takes the consent and the two roles away.
 # Only where the database carries the support grant's tables (a Pro install the update has reached). The statements are
@@ -223,18 +237,14 @@ if ($sqlServer -and $dbs.Count) {
             continue
         }
         # the Support app in the standing READ-ONLY role where the database has it (the role and its rights -- metadata and health,
-        # no data -- are made by the support grant's own install step), and the consent at this level
-        $sgSql = @(
-            "DECLARE @n sysname = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K')), @s nvarchar(400);",
-            "IF @n IS NOT NULL AND DATABASE_PRINCIPAL_ID(N'si_support_read') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n)) BEGIN SET @s = N'ALTER ROLE [si_support_read] ADD MEMBER ' + QUOTENAME(@n) + N';'; EXEC (@s); END",
-            "IF OBJECT_ID(N'cfg.SupportConsent') IS NOT NULL BEGIN",
-            "  IF NOT EXISTS (SELECT 1 FROM cfg.SupportConsent WHERE Id = 1) INSERT cfg.SupportConsent (Id, AppId, [Level], Source, ConsentedBy) VALUES (1, CONVERT(uniqueidentifier, N'$AppId'), N'$Level', N'customer', N'Grant-SISupportAccess');",
-            "  ELSE UPDATE cfg.SupportConsent SET AppId = CONVERT(uniqueidentifier, N'$AppId'), [Level] = N'$Level', Source = N'customer', ConsentedBy = N'Grant-SISupportAccess', ConsentedUtc = SYSUTCDATETIME() WHERE Id = 1;",
-            "END",
-            "SELECT CASE WHEN OBJECT_ID(N'cfg.SupportConsent') IS NULL THEN N'no support grant here yet (the update brings it)' ELSE ISNULL((SELECT [Level] + N' (' + Source + N')' FROM cfg.SupportConsent WHERE Id = 1), N'') END;") -join "`n"
+        # no data -- are made by the support grant's own install step), and the consent at this level where the database
+        # carries cfg.SupportConsent. #1093: the consent's statements are dynamic SQL, so the batch compiles in a database that
+        # does not carry the table yet -- the identity ledger of a new install, whose support grant tables come right after
+        # this script (setup\_shared\SI-SupportConsentSql.ps1)
         if (-not $PSCmdlet.ShouldProcess("$db on $sqlServer", "the read-only role and the consent ($Level)")) { Show 'plan' ("{0}: the read-only role si_support_read and the consent to the support grant ({1})" -f $db, $Level); continue }
-        try { $v = & $sgRun $db $sgSql; Show 'ok' ("{0}: read-only role; consent {1}" -f $db, $v) }
-        catch { $failed++; Show 'FAILED' ("{0}: the read-only role / consent -- {1}" -f $db, $_.Exception.Message); $tasks.Add(("-- as the SQL Entra admin, in database {0}:`n{1}" -f $db, $sgSql)) }
+        $sgRes = Invoke-SISupportGrantDatabase -Run $sgRun -Database $db -Sid $sid -AppId $AppId -Level $Level
+        if ($sgRes.State -eq 'ok') { Show 'ok' $sgRes.Text }
+        else { $failed++; Show 'FAILED' $sgRes.Text; $tasks.Add(("-- as the SQL Entra admin, in database {0}:`n{1}" -f $db, $sgRes.Sql)) }
     }
     # the two Azure roles, each on its ONE resource
     $sgRg = [string]$global:SI_Bootstrap_ResourceGroupName

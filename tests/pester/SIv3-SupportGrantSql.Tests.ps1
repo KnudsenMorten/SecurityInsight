@@ -4,7 +4,7 @@
       * sql\si-pro-settings.sql carries the generated block WORD FOR WORD (one source), additive, one guarded statement per
         batch, the procedures created ONCE (never CREATE OR ALTER: that would drop the signature on every update);
       * the procedures: signed check first; the principal from cfg.SupportConsent, never a parameter; the LOWER level; at
-        most 24 h; only db_owner / db_datareader ever added or removed; the close never DROPs a user, never touches the
+        most 8 h (a support session, owner 2026-11-04); only db_owner / db_datareader ever added or removed; the close never DROPs a user, never touches the
         read-only role, removes only PreExisting = 0 markers; every value a parameter;
       * the admin steps ONLY ADD (no DROP USER / DROP MEMBER / REVOKE); the sign step compares the release's SHA-256 before
         signing, 2099, private key removed, signer in db_owner; DENY ALTER to the updater; derived never replaces customer;
@@ -55,14 +55,16 @@ Describe 'the procedures: the principal, the level, the time, what is removed' {
             $t.IndexOf('THROW 51801') | Should -BeLessThan $t.IndexOf('BEGIN TRANSACTION')
         }
     }
-    It 'OPEN: the principal is ALWAYS the consent''s app (no principal parameter); the lower level; at most 24 h; a reason; a GUID request id' {
+    It 'OPEN: the principal is ALWAYS the consent''s app (no principal parameter); the lower level; at most 8 h; a reason; a GUID request id' {
         $t = $script:Proc['Open']
         $t | Should -Match 'SELECT @app = AppId, @consent = \[Level\] FROM cfg\.SupportConsent WHERE Id = 1'
         $t | Should -Match 'DECLARE @sid varbinary\(85\) = CONVERT\(varbinary\(16\), @app\)'
         ($t -split "`n" | Select-Object -First 3) -join ' ' | Should -Not -Match '(?i)@(Sid|AppId|User|Principal|Role)\b'
         $t | Should -Match "WHEN @Level = N'setup' AND @consent = N'setup' THEN N'setup' ELSE N'troubleshoot'"
         $t | Should -Match "CASE @granted WHEN N'setup' THEN N'db_owner' ELSE N'db_datareader' END"
-        $t | Should -Match 'DATEADD\(MINUTE, 1442, @now\)'
+        $t | Should -Match 'DATEADD\(MINUTE, 482, @now\)' -Because 'a support session is at most 8 hours (+2 minutes for the clocks)'
+        $t | Should -Match 'in the next 8 hours'
+        $t | Should -Not -Match '1442|24 hours'
         $t | Should -Match 'THROW 51803'
         $t | Should -Match 'LEN\(@Reason\) > 200'
     }
@@ -94,7 +96,12 @@ Describe 'the procedures: the principal, the level, the time, what is removed' {
     It 'the consent trigger: the database owner, or the updater ONCE with a DERIVED consent into the empty table -- nobody else' {
         $script:Schema | Should -Match "IF ISNULL\(IS_ROLEMEMBER\(N''db_owner''\), 0\) = 1 RETURN;"
         $script:Schema | Should -Match "NOT EXISTS \(SELECT 1 FROM inserted WHERE Source <> N''derived''\)"
+        # the level set in the Invardia portal: the updater may write a row ONLY as ConsentedBy 'Invardia portal' (or remove it)
+        $script:Schema | Should -Match "AND NOT EXISTS \(SELECT 1 FROM inserted WHERE Source <> N''customer'' OR ConsentedBy <> N''Invardia portal''\) RETURN;"
         $script:Schema | Should -Match 'THROW 51806'
+        # nothing else gains a right: the engine's roles are named nowhere in the trigger
+        $tr = [regex]::Match($script:Schema, '(?s)CREATE OR ALTER TRIGGER cfg\.TR_SupportConsent_Owner.*?END''\);').Value
+        $tr | Should -Not -Match 'si_engine|si_heartbeat|db_datawriter'
     }
     It 'every call the job and the heartbeat send passes the values as PARAMETERS' {
         Get-SISupportGrantCallSql -Name Open | Should -Be 'EXEC cfg.SupportGrantOpen @RequestId = @RequestId, @Level = @Level, @MaxUntilUtc = @MaxUntilUtc, @Reason = @Reason, @Ticket = @Ticket, @StartedBy = @StartedBy;'
@@ -103,6 +110,25 @@ Describe 'the procedures: the principal, the level, the time, what is removed' {
 }
 
 Describe 'the admin steps ONLY ADD (4a) and sign only this release''s text' {
+    It 'an earlier release''s open procedure (24 h) reaches this release''s text through the admin steps ONLY: dropped by its exact SHA-256, created again, signed' {
+        # tests\fixtures\support-grant-open-24h.sql.txt: the open procedure exactly as the releases before the 8 h rule created it
+        $old = ([IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\fixtures\support-grant-open-24h.sql.txt')) -replace "`r", '').TrimEnd()
+        $old | Should -Match 'DATEADD\(MINUTE, 1442, @now\)'
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $oldHash = '0x' + (($sha.ComputeHash([Text.Encoding]::Unicode.GetBytes($old)) | ForEach-Object { $_.ToString('X2') }) -join '') } finally { $sha.Dispose() }
+        @((Get-SISupportGrantContract).Earlier['Open']) | Should -Contain $oldHash -Because 'the earlier text is known by its exact hash'
+        $oldHash | Should -Not -Be (Get-SISupportGrantProcedureSha256 -Name Open)
+        # the drop: in the admin schema step, BEFORE the create, only for the listed hash -- never in the file the updater runs
+        $renew = Get-SISupportGrantRenewSql
+        $renew | Should -Match ([regex]::Escape("IF OBJECT_ID(N'cfg.SupportGrantOpen') IS NOT NULL AND HASHBYTES('SHA2_256', REPLACE(OBJECT_DEFINITION(OBJECT_ID(N'cfg.SupportGrantOpen')), NCHAR(13), N'')) IN ($oldHash) DROP PROCEDURE cfg.SupportGrantOpen;"))
+        @([regex]::Matches($renew, 'DROP PROCEDURE')).Count | Should -Be 1 -Because 'only the open procedure has an earlier text'
+        $schemaStep = @($script:Steps | Where-Object Step -eq 'schema')[0].Sql
+        $schemaStep.IndexOf('DROP PROCEDURE cfg.SupportGrantOpen') | Should -BeLessThan $schemaStep.IndexOf("IF OBJECT_ID(N'cfg.SupportGrantOpen') IS NULL EXEC (N'CREATE PROCEDURE")
+        $script:Schema | Should -Not -Match 'DROP PROCEDURE' -Because 'the schema file (run by the updater) never drops a procedure'
+        $script:File | Should -Not -Match 'DROP PROCEDURE cfg\.SupportGrant'
+        # the sign step still signs only this release's text
+        @($script:Steps | Where-Object Step -eq 'sign')[0].Sql | Should -Not -Match ([regex]::Escape($oldHash))
+    }
     It 'in order: schema, user, consent, sign, grants -- and nothing removes a role, a user or a right' {
         $script:Steps.Step -join ';' | Should -Be 'schema;user;consent;sign;grants'
         foreach ($s in $script:Steps | Where-Object Step -ne 'schema') {

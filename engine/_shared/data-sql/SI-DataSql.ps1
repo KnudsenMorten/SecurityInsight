@@ -2041,10 +2041,11 @@ function Get-SIDataPurgeOrphansSql {
     param([Parameter(Mandatory)][ValidateSet('Run', 'AssetIdentifier', 'AssetTag', 'Asset', 'AssetEvidence', 'AssetConflict', 'AssetIdHistory')][string]$What)
     switch ($What) {
         # #299: correlation evidence and conflicts no load has carried since the cutoff; the id history of CIs that are
-        # gone (after the CI purge). Nothing on a database without the tables.
+        # gone (after the CI purge) -- never the history of a CI that is still in sidata.Ci (the CI build's CI->CI merge
+        # events name the replacement the CMDB reconciles to; a CI is never deleted). Nothing on a database without the tables.
         'AssetEvidence' { "IF OBJECT_ID('sidata.AssetEvidence') IS NULL BEGIN SELECT 0; RETURN; END; DELETE TOP (@Batch) e FROM sidata.AssetEvidence e WHERE e.LastSeen < CONVERT(datetime2(3), @Cutoff, 126); SELECT @@ROWCOUNT;" }
         'AssetConflict' { "IF OBJECT_ID('sidata.AssetConflict') IS NULL BEGIN SELECT 0; RETURN; END; DELETE TOP (@Batch) c FROM sidata.AssetConflict c WHERE c.LastSeen < CONVERT(datetime2(3), @Cutoff, 126); SELECT @@ROWCOUNT;" }
-        'AssetIdHistory' { "IF OBJECT_ID('sidata.AssetIdHistory') IS NULL BEGIN SELECT 0; RETURN; END; DELETE TOP (@Batch) h FROM sidata.AssetIdHistory h WHERE h.DetectedAt < CONVERT(datetime2(3), @Cutoff, 126) AND NOT EXISTS (SELECT 1 FROM sidata.Asset a WHERE a.AssetKey = h.AssetKey); SELECT @@ROWCOUNT;" }
+        'AssetIdHistory' { "IF OBJECT_ID('sidata.AssetIdHistory') IS NULL BEGIN SELECT 0; RETURN; END; DELETE TOP (@Batch) h FROM sidata.AssetIdHistory h WHERE h.DetectedAt < CONVERT(datetime2(3), @Cutoff, 126) AND NOT EXISTS (SELECT 1 FROM sidata.Asset a WHERE a.AssetKey = h.AssetKey) AND NOT EXISTS (SELECT 1 FROM sidata.Ci c WHERE c.CiId = h.AssetKey); SELECT @@ROWCOUNT;" }
         # the responsibility tags of a CI that is purged (#254); nothing on a database without the table
         'AssetTag' { "IF OBJECT_ID('sidata.AssetTag') IS NULL BEGIN SELECT 0; RETURN; END; DELETE TOP (@Batch) t FROM sidata.AssetTag t JOIN sidata.Asset a ON a.AssetKey = t.AssetKey WHERE a.LastSeen < CONVERT(datetime2(3), @Cutoff, 126) AND NOT EXISTS (SELECT 1 FROM sidata.Finding f WHERE f.AssetKey = a.AssetKey); SELECT @@ROWCOUNT;" }
         'Run' { "DELETE TOP (@Batch) r FROM sidata.Run r WHERE r.CollectionTime < CONVERT(datetime2(3), @Cutoff, 126) AND NOT EXISTS (SELECT 1 FROM sidata.Collection c WHERE c.RunId = r.RunId); SELECT @@ROWCOUNT;" }

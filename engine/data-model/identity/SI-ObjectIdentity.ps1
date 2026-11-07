@@ -332,6 +332,67 @@ function Get-SILedgerKeysOfId {
     foreach ($i in $pos) { $keys[$i] }
 }
 
+function Get-SISupersededRowValue {
+    <# PURE. One value of a row (a dictionary or an object), without case. #>
+    param($Row, [string]$Name)
+    if ($null -eq $Row) { return $null }
+    if ($Row -is [System.Collections.IDictionary]) { foreach ($k in $Row.Keys) { if ([string]$k -ieq $Name) { return $Row[$k] } }; return $null }
+    $p = $Row.PSObject.Properties[$Name]; if ($p) { return $p.Value }
+    $null
+}
+
+function ConvertTo-SISupersededMap {
+    <#
+        PURE. THE MERGED-AWAY IDS (owner 2026-11-05: "ci object must be the stable id"): rows { OldId; NewId; At } -> a
+        case-insensitive map old id -> the id it was merged into. Sources (the CI build reads them): the identity ledger's
+        si.ObjectIdentitySuperseded, sidata.AssetIdHistory's CI->CI 'merge' events (both ids are CIs) and every retired CI
+        that names si_merged_into.
+        ONE ANSWER PER OLD ID, deterministic: the NEWEST event (At) wins; equal times -> the ordinally lowest new id. A row
+        whose old and new id are the same is ignored.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @())
+    $map = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
+    $at = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $o = ([string](Get-SISupersededRowValue $r 'OldId')).Trim(); $n = ([string](Get-SISupersededRowValue $r 'NewId')).Trim()
+        if (-not $o -or -not $n -or $o -ieq $n) { continue }
+        $t = [datetime]::MinValue
+        $tv = Get-SISupersededRowValue $r 'At'
+        if ($tv -is [datetime]) { $t = ([datetime]$tv).ToUniversalTime() }
+        elseif ($tv) { $p = [datetime]::MinValue; if ([datetime]::TryParse([string]$tv, [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal), [ref]$p)) { $t = $p } }
+        if (-not $map.ContainsKey($o) -or $t -gt $at[$o] -or ($t -eq $at[$o] -and [string]::CompareOrdinal($n.ToLowerInvariant(), ([string]$map[$o]).ToLowerInvariant()) -lt 0)) {
+            $map[$o] = $n.ToLowerInvariant(); $at[$o] = $t
+        }
+    }
+    $map
+}
+
+function Resolve-SISupersededId {
+    <#
+        PURE. The id -Id stands for NOW: the merge chain followed to its end (a -> b -> c answers c). A merged-away id is
+        never an id of its own again. A cycle (a -> b -> a, two contradicting merges) ends on the ordinally lowest id of the
+        cycle, so every batch and every host answers the same. No map, or an id that was never merged: the id itself.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Id, [hashtable]$Map)
+    if (-not $Id -or $null -eq $Map -or $Map.Count -eq 0) { return $Id }
+    $cur = $Id
+    $path = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    while ($Map.ContainsKey($cur)) {
+        if (-not $seen.Add($cur)) {
+            # a cycle: the ordinally lowest id of the cycle
+            $start = $path.IndexOf(($path | Where-Object { $_ -ieq $cur } | Select-Object -First 1))
+            $low = $null
+            for ($i = $start; $i -lt $path.Count; $i++) { $c = $path[$i].ToLowerInvariant(); if ($null -eq $low -or [string]::CompareOrdinal($c, $low) -lt 0) { $low = $c } }
+            return $low
+        }
+        $path.Add($cur)
+        $cur = [string]$Map[$cur]
+    }
+    $cur
+}
+
 function Resolve-SIObjectIdentity {
     <#
         Decide each group's SI_CorrelationId against the existing ledger, and say what the ledger must
@@ -380,7 +441,12 @@ function Resolve-SIObjectIdentity {
         [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Groups,
         [Parameter()][hashtable]$Ledger,
         [Parameter()][datetime]$Now = ([datetime]'2000-01-01T00:00:00Z'),
-        [Parameter()][AllowNull()][hashtable]$AmbiguousIdKeys
+        [Parameter()][AllowNull()][hashtable]$AmbiguousIdKeys,
+        # THE MERGED-AWAY IDS (ConvertTo-SISupersededMap: old id -> the id it was merged into). An id the ledger still
+        # names for an identifier but that was merged away is NEVER used again: it resolves to the end of its merge chain
+        # (Resolve-SISupersededId) and EVERY anchor it still holds is re-pointed there (owner 2026-11-05, a ring 1 install:
+        # an old Exposure Graph node id of a VM still pointed at the merged twin, and the build brought the twin back)
+        [Parameter()][AllowNull()][hashtable]$MergedAway
     )
 
     if ($null -eq $Ledger) { $Ledger = @{} }
@@ -437,15 +503,19 @@ function Resolve-SIObjectIdentity {
 
         # Which existing ids do this group's identifiers already point at?
         $known = @{}
+        # every id the ledger names for these identifiers, as written (before the merge chain is followed)
+        $rawIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
         foreach ($id in $ids) {
             # (a value longer than the ledger's column is held under its short form -- Get-SILedgerEntryKey finds both)
             $k = Get-SILedgerEntryKey -Ledger $Ledger -Type $id.Type -Value $id.Value
             if ($null -ne $k) {
                 $e = $Ledger[$k]
                 $cid = [string]$e.CorrelationId
-                if (-not [string]::IsNullOrWhiteSpace($cid) -and -not $known.ContainsKey($cid)) {
-                    $known[$cid] = $e.FirstSeen
-                }
+                if ([string]::IsNullOrWhiteSpace($cid)) { continue }
+                [void]$rawIds.Add($cid)
+                # a merged-away id stands for the id it was merged into -- never for itself
+                $cid = Resolve-SISupersededId -Id $cid -Map $MergedAway
+                if (-not $known.ContainsKey($cid)) { $known[$cid] = $e.FirstSeen }
             }
         }
 
@@ -488,6 +558,31 @@ function Resolve-SIObjectIdentity {
             $k = Get-SILedgerEntryKey -Ledger $Ledger -Type $id.Type -Value $id.Value
             if ($null -eq $k -or [string]$Ledger[$k].CorrelationId -ne $cid) {
                 [void]$newIds.Add([pscustomobject]@{ Type = $id.Type; Value = $id.Value; CorrelationId = $cid })
+            }
+        }
+
+        # ON A MERGE (and on a merged-away id met again) EVERY ANCHOR OF THE OLD ID IS RE-POINTED to the survivor -- not
+        # only the anchors this group carries this run. An anchor left behind is how a merged-away id came back: at a ring 1
+        # install (2026-11-05) a VM's old Exposure Graph node id still pointed at the merged twin, and the next build that
+        # saw that node alone REUSED the twin. The old ids are recorded as superseded (never an id of their own again).
+        if ($action -ne 'mint') {
+            $oldIds = @(foreach ($r in $rawIds) { if ($r -ine $cid) { $r } })
+            if ($oldIds.Count -gt 0) {
+                if ($null -eq $keysById) { $keysById = Get-SILedgerKeysById -Ledger $Ledger }
+                $have = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                foreach ($n in $newIds) { [void]$have.Add((Get-SILedgerKey -Type ([string]$n.Type) -Value ([string]$n.Value))) }
+                foreach ($old in $oldIds) {
+                    foreach ($ok in @(Get-SILedgerKeysOfId -Index $keysById -Ledger $Ledger -CorrelationId $old)) {
+                        if ($hasAmbiguous -and $AmbiguousIdKeys.ContainsKey([string]$ok)) { continue }
+                        if (-not $have.Add([string]$ok)) { continue }
+                        $cut = ([string]$ok).IndexOf('|'); if ($cut -lt 1) { continue }
+                        [void]$newIds.Add([pscustomobject]@{ Type = (Get-SICanonicalIdType -Type ([string]$ok).Substring(0, $cut)); Value = ([string]$ok).Substring($cut + 1); CorrelationId = $cid })
+                    }
+                    if ($action -ne 'merge' -or $priors -notcontains $old) {
+                        [void]$superseded.Add([pscustomobject]@{ OldId = $old; NewId = $cid; At = $Now })
+                    }
+                }
+                if ($action -eq 'reuse') { $priors = @($oldIds) }
             }
         }
 

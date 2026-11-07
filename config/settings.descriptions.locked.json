@@ -3009,21 +3009,63 @@
       "group": "Collection scope & limits",
       "needs": "SI_DisabledAssets_Collect"
     },
+    "SI_Identity_SignInMethodsPerUser": {
+      "label": "Users' sign-in methods in full: which users are read",
+      "purpose": "Which users get their sign-in methods read in full: every method with its details (phone number and type, e-mail address, Microsoft Authenticator app and version, FIDO2 key or passkey model and attestation, Windows Hello key strength, Temporary Access Pass) and, for a Windows Hello or Microsoft Authenticator key, the device it lives on (name, operating system, compliant, managed) linked to that device's CI. It also decides whether a user has a password and signs in passwordless only. This needs one read per user, which Microsoft throttles, so it runs in the background: a slice every 15 minutes in its own job (caj-si-signin-methods), privileged users first, then users whose methods changed, then users never read, then the oldest. Collections never wait for it; each collection shows what was read, with the date it was read. The tenant-wide registration report (MFA registered and capable, passwordless capable, self-service password reset, the registered and preferred methods) is read for every user on every collection, whatever this setting is.",
+      "defaultText": "All: every member user is read in the background, privileged users first",
+      "effect": "All: every member user. At 150,000 users the first full read takes about 8-9 hours of reading, spread through the day (about 2,000 users per 15-minute slice); after that only users whose methods changed, and each user again after the maximum age. Until a user is read, its per-user facts (each method's details and device, password present, passwordless only) show as unknown, never as no. Privileged: only users with an Entra role (permanent or eligible, also through a group), an Azure role, or marked admin -- a few minutes on any tenant; every other user keeps those facts unknown. Off: no per-user read at all; only the registration report's facts, and the per-user facts are unknown for everyone. Changing it takes effect at the next 15-minute slice and the next collection.",
+      "whenToChange": "Choose privileged when you only need the full detail for your admins and want it filled quickly; choose off only when you do not want SecurityInsight to read each user's sign-in methods.",
+      "advanced": false,
+      "group": "Collection scope & limits",
+      "type": "enum",
+      "values": [
+        "all",
+        "privileged",
+        "off"
+      ],
+      "valueLabels": {
+        "all": "All member users (privileged first) -- the full detail, filled in the background",
+        "privileged": "Privileged users only -- fast; other users' per-user facts stay unknown",
+        "off": "Off -- the tenant-wide registration report only; per-user facts unknown"
+      }
+    },
+    "SI_Identity_SignInMethodsMaxAgeDays": {
+      "label": "Users' sign-in methods: read again after (days)",
+      "purpose": "How old a user's full sign-in method detail may get before the background read reads that user again, even when the registration report says nothing changed (it also catches changes the report does not show, such as a renamed device).",
+      "defaultText": "90 days",
+      "effect": "Lower: details are fresher, and more of each 15-minute slice goes to reading users again (at 150,000 users and 90 days, about 1,700 users a day). Higher: fewer reads. A user whose registered methods changed is read again at once, whatever this is.",
+      "whenToChange": "Lower it when you rely on the device names and app versions being recent; raise it on a very large tenant.",
+      "unit": "days",
+      "advanced": true,
+      "group": "Collection scope & limits",
+      "needs": "SI_Identity_SignInMethodsPerUser"
+    },
+    "SI_Identity_SignInMethodsFillMinutes": {
+      "label": "Users' sign-in methods: background reading per slice (minutes)",
+      "purpose": "How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background read of the users' sign-in methods may use.",
+      "defaultText": "8 minutes",
+      "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
+      "whenToChange": "Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.",
+      "unit": "minutes",
+      "advanced": true,
+      "group": "Collection scope & limits",
+      "needs": "SI_Identity_SignInMethodsPerUser"
+    },
     "SI_Identity_SkipNeverSyncedDisabledAd": {
       "label": "Exposure Graph: no asset for never-synced, disabled AD accounts",
       "purpose": "A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but that were never synced to Entra ID (no Entra object id). On, only the enabled or privileged ones become assets: privileged = an admin count, a critical or tier 0/1 AD group (Domain Admins, Enterprise Admins ...), an assigned role, a service account, a sensitive account or a Microsoft criticality level. The others are counted and get no asset.",
-      "defaultText": "Off: every on-premises AD account the Exposure Graph lists becomes an asset, as before",
+      "defaultText": "On: a never-synced on-premises AD account becomes an asset only while it is enabled or privileged",
       "effect": "Stages: the identity collection records no asset for a never-synced AD account that is disabled and not privileged; the run log and the Data health page show how many per run; the CI build retires the existing CI of such an account at once, with a reason naming this setting (its findings close as asset retired, never as fixed). Disabled = the account says so itself (accountEnabled false, or the disabled flag of userAccountControl); an account that does not say is kept. Accounts synced to Entra ID, groups, devices and findings are not affected. Off again, the next run records them again and their CIs come back.",
-      "whenToChange": "Only when your organisation chose it: its Exposure Graph lists very many old on-premises accounts that never reached Entra ID and are disabled, and they should not be assets.",
+      "whenToChange": "Turn it off only when your organisation wants every on-premises AD account the Exposure Graph lists as an asset, also the disabled ones that never reached Entra ID.",
       "advanced": true,
       "group": "Collection scope & limits"
     },
     "SI_Identity_SkipDeletedGroups": {
       "label": "Exposure Graph: no asset for groups Entra ID no longer has",
       "purpose": "A customer's choice for groups the Exposure Graph still lists although Entra ID no longer has them (neither active nor in its deleted items). On, only groups that still exist in Entra ID (active or recently deleted) become assets. The others are counted and get no asset.",
-      "defaultText": "Off: every group the Exposure Graph lists becomes an asset, as before",
+      "defaultText": "On: a group becomes an asset only while Entra ID still has it",
       "effect": "Stages: the identity collection reads the ids of Entra ID's groups and deleted groups once per run and records no asset for an Exposure Graph group with an Entra object id that Entra ID does not return; the run log and the Data health page show how many per run; the CI build retires the existing CI of such a group at once, with a reason naming this setting. A run whose Entra ID group read is not complete decides nothing: groups keep their last state. On-premises groups that were never synced, users, devices and findings are not affected. Off again, the next run records them again and their CIs come back.",
-      "whenToChange": "Only when your organisation chose it: its Exposure Graph lists very many groups deleted long ago, and they should not be assets.",
+      "whenToChange": "Turn it off only when your organisation wants every group the Exposure Graph lists as an asset, also groups Entra ID no longer has.",
       "advanced": true,
       "group": "Collection scope & limits"
     },
@@ -5607,10 +5649,20 @@
     {
       "name": "Exposure Graph identities without an asset",
       "category": "Collection scope & limits",
-      "description": "A customer's own choice, off by default: Exposure Graph identities that get no asset. What is left out is counted in each run's log and on the Data health page; existing CIs retire with a reason naming the setting.",
+      "description": "On by default (an install that chose a value keeps it): Exposure Graph identities that get no asset. What is left out is counted in each run's log and on the Data health page; existing CIs retire with a reason naming the setting.",
       "settings": [
         "SI_Identity_SkipNeverSyncedDisabledAd",
         "SI_Identity_SkipDeletedGroups"
+      ]
+    },
+    {
+      "name": "Users' sign-in methods in full",
+      "category": "Collection scope & limits",
+      "description": "Every sign-in method of each user with its details and the device a key lives on, read in the background (one read per user, Microsoft throttles: about 8-9 hours of reading at 150,000 users the first time, privileged users first). Collections never wait for it; not read yet shows as unknown, never as no.",
+      "settings": [
+        "SI_Identity_SignInMethodsPerUser",
+        "SI_Identity_SignInMethodsMaxAgeDays",
+        "SI_Identity_SignInMethodsFillMinutes"
       ]
     },
     {

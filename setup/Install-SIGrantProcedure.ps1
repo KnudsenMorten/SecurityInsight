@@ -6,6 +6,10 @@
     DOCS/REQUIREMENTS.md §12.23 SQL-ACCESS P4 / P8 / P9).
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the certificate-signed grant procedure (when the install uses it)
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     Run per environment by Invardia support, signed in through the Invardia Support app
     (. Connect-InvardiaSupport.ps1 -Environment <handle> -Reason ...). EVERY statement goes through Invardia's audited
     Invoke-InvardiaSupportSql (the audit row first: server, database, SHA-256, the purpose line). Without that function the

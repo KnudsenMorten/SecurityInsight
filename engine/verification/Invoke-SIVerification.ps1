@@ -166,4 +166,21 @@ try {
             $null = Invoke-SISnowChecks -Store (New-SIConnectorRegistryStore) -Trigger daily -Log $log
         } catch { & $log 'WARN' ('The ServiceNow check could not finish: {0} -- the verification results above are not affected.' -f $_.Exception.Message) }
     }
+    # #1096 THE PIPELINE CHECK (engine\_shared\SI-OutsidePipeline.ps1): while the jobs run as one pipeline, every execution of
+    # a pipeline step's job (a collect producer included) in the last 48 h belongs to a pipeline run or to a person's start --
+    # any other is said "ran outside the pipeline: <job> <execution> <start>", stored for the heartbeat (si-flow-1205).
+    # Reads only; warn-only; it never fails this job.
+    $opCheck = Join-Path $siRoot 'engine\_shared\SI-OutsidePipeline.ps1'
+    if (Test-Path -LiteralPath $opCheck) {
+        try {
+            . $opCheck
+            $opSub = "$([Environment]::GetEnvironmentVariable('SI_JOBS_SUBSCRIPTIONID'))".Trim(); $opRg = "$([Environment]::GetEnvironmentVariable('SI_JOBS_RESOURCEGROUP'))".Trim()
+            $opInvoke = $null
+            $opSrv = "$($global:SI_ProSqlServer)".Trim(); $opDb = "$($global:SI_ProSqlDatabase)".Trim()
+            if ($opSrv -and $opDb) { $opInvoke = if ($opSrv -eq $server -and $opDb -eq $database) { $invoke } else { New-SIDataSqlInvoke -Server $opSrv -Database $opDb -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint } }
+            # READ-ONLY: the check only lists jobs and their executions (GET); any other verb is refused here
+            $opArm = { param($Method, $Path, $Body) if ($Method -ne 'GET') { throw 'the pipeline check only reads' }; Invoke-SIArm -Path $Path -ApiVersion '2025-07-01' }
+            $null = Invoke-SIOutsidePipelineCheck -Invoke $opInvoke -Arm $opArm -Base $(if ($opSub -and $opRg) { '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $opSub, $opRg } else { '' }) -Log $log -DryRun:$DryRun
+        } catch { & $log 'WARN' ('The pipeline check could not finish: {0} -- the verification results above are not affected.' -f $_.Exception.Message) }
+    }
 }

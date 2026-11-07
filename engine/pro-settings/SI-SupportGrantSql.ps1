@@ -19,7 +19,7 @@
       * cfg.SupportGrant        the journal: every open, close and expiry, who asked, why, the outcome.
       * cfg.SupportGrantOpen    adds the role of the granted level (setup = db_owner, troubleshoot = db_datareader; ALWAYS
                                 the lower of the asked and the consented level) to the Support app's OWN user -- the SID
-                                comes from cfg.SupportConsent, never from a parameter -- with maxUntil at most 24 h ahead.
+                                comes from cfg.SupportConsent, never from a parameter -- with maxUntil at most 8 h ahead.
                                 A new open extends the open markers.
       * cfg.SupportGrantClose   removes what the open markers added (PreExisting = 0) and NOTHING ELSE: never removes a user,
                                 never the read-only role si_support_read, never another principal. The Support app's open
@@ -33,8 +33,11 @@
     -- the only way a caller without rights can add a member to a fixed role. EXPIRY 2099-12-31, a random password made
     inside SQL and never returned, the PRIVATE KEY REMOVED after signing: ALTERING a procedure drops its signature and nobody
     can sign it again but an admin. The schema file creates the procedures ONCE (IF OBJECT_ID ... IS NULL) and never alters
-    them -- a release that needs a changed procedure gives it a new name. The admin signs only a procedure whose text is
-    exactly this release's (SHA-256, line endings ignored).
+    them -- the updater cannot change a signed procedure (DENY ALTER), so a release's changed procedure reaches an existing
+    install ONLY through the admin steps: their schema step drops a procedure whose text is EXACTLY an earlier release's
+    (its SHA-256 listed in Earlier) and creates it again from this release's text; the sign step then signs it. Until an
+    admin runs them there, the earlier procedure stays signed and working. The admin signs only a procedure whose text is
+    exactly this release's (SHA-256, line endings ignored); a text changed by hand is never dropped and never signed.
     Tables and procedures are plain dbo-owned objects in cfg: the procedures write the tables through the ownership chain;
     the signature is needed only for the role change, the catalog reads of another principal and ending its sessions.
 
@@ -43,6 +46,15 @@
 
 $script:SISupportGrant = [ordered]@{
     Marker       = 'si-support-grant v1'
+    # a support session is at most this long (framework rule, owner 2026-11-04): the open procedure and the job both refuse more
+    MaxHours     = 8
+    # the SHA-256 (as the sign step computes it) of each procedure text an EARLIER release created -- exactly these, nothing
+    # else: the admin steps drop such a procedure and create it again from this release's text, then sign it. A text that
+    # is neither this release's nor listed here (changed by hand) is never dropped; the sign step refuses it.
+    Earlier      = [ordered]@{
+        # the open procedure as released 2026-11-01..2026-11-05: a session of up to 24 hours
+        Open = @('0x7EDB463124FA33DA4FA52CB12B19D7BA1B66ED4CF10A18492740A685DAE18C85')
+    }
     SignerPrefix = 'si_support_signer'
     ReadRole     = 'si_support_read'
     Procedures   = @('cfg.SupportGrantOpen', 'cfg.SupportGrantClose', 'cfg.SupportGrantSweep', 'cfg.SupportGrantStatus')
@@ -74,6 +86,8 @@ function Get-SISupportGrantProcedureText {
     $rr = $script:SISupportGrant.ReadRole
     $signed = Get-SISupportGrantSignedCheckSql
     $user = "type NOT IN ('R', 'A', 'C', 'K')"
+    $hours = [int]$script:SISupportGrant.MaxHours
+    $maxMinutes = $hours * 60 + 2   # two minutes for the clock difference between the job and SQL Server
     switch ($Name) {
         'Open' {
             $t = @"
@@ -82,13 +96,13 @@ CREATE PROCEDURE cfg.SupportGrantOpen
 AS
 BEGIN
     -- $m (SecurityInsight #1021): the Invardia Support app's just-in-time grant. The principal is ALWAYS the Support app of
-    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most 24 hours.
+    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most $hours hours.
     SET NOCOUNT ON; SET XACT_ABORT ON;
     $signed
     DECLARE @now datetime2(0) = SYSUTCDATETIME();
     DECLARE @until datetime2(0) = TRY_CONVERT(datetime2(0), REPLACE(REPLACE(@MaxUntilUtc, N'Z', N''), N'+00:00', N''), 126);
     IF @Level IS NULL OR @Level NOT IN (N'troubleshoot', N'setup') THROW 51802, N'the level must be troubleshoot or setup', 1;
-    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, 1442, @now) THROW 51802, N'maxUntil must be a UTC time in the next 24 hours', 1;
+    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, $maxMinutes, @now) THROW 51802, N'maxUntil must be a UTC time in the next $hours hours', 1;
     IF LEN(LTRIM(RTRIM(ISNULL(@Reason, N'')))) = 0 OR LEN(@Reason) > 200 THROW 51802, N'a reason of at most 200 characters is required', 1;
     IF TRY_CONVERT(uniqueidentifier, @RequestId) IS NULL THROW 51802, N'the request id must be a GUID', 1;
     DECLARE @app uniqueidentifier, @consent nvarchar(16);
@@ -305,6 +319,10 @@ BEGIN
     IF (NOT EXISTS (SELECT 1 FROM deleted)) AND NOT EXISTS (SELECT 1 FROM inserted WHERE Source <> N''derived'')
        AND (SELECT COUNT(*) FROM cfg.SupportConsent) = (SELECT COUNT(*) FROM inserted)
        AND (ISNULL(IS_ROLEMEMBER(N''si_updater''), 0) = 1 OR ISNULL(IS_ROLEMEMBER(N''db_ddladmin''), 0) = 1) RETURN;
+    -- the level the customer set in the Invardia portal, applied by the UPDATER from its own call to Invardia (framework
+    -- SUPPORT ACCESS point 2): it may write a row only as ConsentedBy N''Invardia portal'', or remove the row (level none)
+    IF (ISNULL(IS_ROLEMEMBER(N''si_updater''), 0) = 1 OR ISNULL(IS_ROLEMEMBER(N''db_ddladmin''), 0) = 1)
+       AND NOT EXISTS (SELECT 1 FROM inserted WHERE Source <> N''customer'' OR ConsentedBy <> N''Invardia portal'') RETURN;
     THROW 51806, N''cfg.SupportConsent: the consent is written by the customer admin (Grant-SISupportAccess) only'', 1;
 END');
 "@)
@@ -320,6 +338,23 @@ function Get-SISupportGrantSchemaFileBlock {
     <# PURE. The block as sql\si-pro-settings.sql carries it: the markers + Get-SISupportGrantSchemaSql. #>
     "-- >>> GENERATED SUPPORT GRANT (engine\pro-settings\SI-SupportGrantSql.ps1, Get-SISupportGrantSchemaSql) -- do not edit by hand`n`n" +
     (Get-SISupportGrantSchemaSql) + "`n`n-- <<< GENERATED SUPPORT GRANT"
+}
+
+function Get-SISupportGrantRenewSql {
+    <#
+        PURE. ADMIN STEPS ONLY (never in the schema file the updater runs): drops each procedure whose stored text is EXACTLY
+        an earlier release's (its SHA-256 in the contract's Earlier list, compared as the sign step compares), so the schema
+        that follows creates it from this release's text and the sign step signs it. A text that is this release's, or that
+        no release made (changed by hand), is left as it is. '' when no earlier text is listed.
+    #>
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($n in @($script:SISupportGrant.Earlier.Keys)) {
+        $hashes = @($script:SISupportGrant.Earlier[$n] | Where-Object { "$_" -match '^0x[0-9A-Fa-f]{64}$' })
+        if (-not $hashes.Count) { continue }
+        $p = 'cfg.SupportGrant' + $n
+        $out.Add(("-- {2}: an earlier release's {0}: replaced by this release's text below, then signed by the sign step`nIF OBJECT_ID(N'{0}') IS NOT NULL AND HASHBYTES('SHA2_256', REPLACE(OBJECT_DEFINITION(OBJECT_ID(N'{0}')), NCHAR(13), N'')) IN ({1}) DROP PROCEDURE {0};" -f $p, ($hashes -join ', '), $script:SISupportGrant.Marker))
+    }
+    ($out.ToArray() -join "`n`n")
 }
 
 function ConvertTo-SISupportGrantSid {
@@ -354,8 +389,8 @@ function Get-SISupportGrantAdminSteps {
     $byq = ([string]$By).Replace("'", "''"); if ($byq.Length -gt 200) { $byq = $byq.Substring(0, 200) }
     $rr = $c.ReadRole; $px = $c.SignerPrefix
     $steps = [System.Collections.Generic.List[object]]::new()
-    $steps.Add([pscustomobject]@{ Step = 'schema'; Purpose = 'the support grant tables, the consent trigger and the four procedures (created once, never altered)'
-        Sql = (Get-SISupportGrantSchemaSql) + "`nSELECT N'schema' AS Value;" })
+    $steps.Add([pscustomobject]@{ Step = 'schema'; Purpose = 'the support grant tables, the consent trigger and the four procedures (created once, never altered; an earlier release''s procedure is replaced by this release''s)'
+        Sql = (Get-SISupportGrantRenewSql) + "`n`n" + (Get-SISupportGrantSchemaSql) + "`nSELECT N'schema' AS Value;" })
     $steps.Add([pscustomobject]@{ Step = 'user'; Purpose = ('the Support app''s own database user and the standing READ-ONLY role {0} (metadata and health, no data)' -f $rr); Sql = @"
 DECLARE @s nvarchar(400);
 DECLARE @n sysname = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K'));

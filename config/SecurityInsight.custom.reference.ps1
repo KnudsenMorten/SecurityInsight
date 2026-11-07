@@ -520,8 +520,18 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   SI_Identity_SkipDeletedGroups: a group with an Entra object id becomes an asset only while Entra ID still has it
 #     (active or in its deleted items).
 
-# $global:SI_Identity_SkipNeverSyncedDisabledAd = $false   # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
-# $global:SI_Identity_SkipDeletedGroups         = $false   # groups: only those Entra ID still has (active or recently deleted) become assets
+# $global:SI_Identity_SkipNeverSyncedDisabledAd = $true    # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
+# $global:SI_Identity_SkipDeletedGroups         = $true    # groups: only those Entra ID still has (active or recently deleted) become assets
+
+# The users' sign-in methods in full -- every method with its details (phone, e-mail, Authenticator app, FIDO2 key, Windows
+# Hello ...) and the device a Windows Hello or Authenticator key lives on -- need one read per user, which Microsoft
+# throttles: about 8-9 hours at 150,000 users. The collections never wait for it: its own job (caj-si-signin-methods) reads users in the
+# background, privileged users first, a slice every 15 minutes, and the next collection shows what was read with its date.
+# Not read yet = unknown, never no. 'privileged' and 'off' are faster to fill but leave the other users' per-user facts
+# unknown; the tenant-wide registration report (MFA, SSPR, passwordless capable, registered methods) is read for everyone.
+# $global:SI_Identity_SignInMethodsPerUser     = 'all'   # all | privileged | off
+# $global:SI_Identity_SignInMethodsMaxAgeDays  = 90      # read again at the latest after this many days
+# $global:SI_Identity_SignInMethodsFillMinutes = 8       # minutes of background reading per 15-minute run
 
 # Retire at once on PROOF of deletion, per source. Off by default. On, an asset whose source proves it deleted (never merely
 # missing from a list -- that keeps the not-seen grace period) retires at once, and its open vulnerabilities close as
@@ -3749,6 +3759,43 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     matter for privilege.
 #   More info:        https://invardia.com/docs/si/settings/SI_AzureSubscriptionExcludePatterns/
 #
+# Users' sign-in methods in full: which users are read  [SI_Identity_SignInMethodsPerUser]
+#   What it is for:   Which users get their sign-in methods read in full: every method with its details (phone number
+#                     and type, e-mail address, Microsoft Authenticator app and version, FIDO2 key or passkey model
+#                     and attestation, Windows Hello key strength, Temporary Access Pass) and, for a Windows Hello or
+#                     Microsoft Authenticator key, the device it lives on (name, operating system, compliant, managed)
+#                     linked to that device's CI. It also decides whether a user has a password and signs in
+#                     passwordless only. This needs one read per user, which Microsoft throttles, so it runs in the
+#                     background: a slice every 15 minutes in its own job (caj-si-signin-methods), privileged users
+#                     first, then users whose methods changed, then users never read, then the oldest. Collections
+#                     never wait for it; each collection shows what was read, with the date it was read. The
+#                     tenant-wide registration report (MFA registered and capable, passwordless capable, self-service
+#                     password reset, the registered and preferred methods) is read for every user on every
+#                     collection, whatever this setting is.
+#   Choices:          'all' (All member users (privileged first) -- the full detail, filled in the background);
+#                     'privileged' (Privileged users only -- fast; other users' per-user facts stay unknown); 'off'
+#                     (Off -- the tenant-wide registration report only; per-user facts unknown)
+#   Default:          All: every member user is read in the background, privileged users first
+#   If you change it: All: every member user. At 150,000 users the first full read takes about 8-9 hours of reading,
+#                     spread through the day (about 2,000 users per 15-minute slice); after that only users whose
+#                     methods changed, and each user again after the maximum age. Until a user is read, its per-user
+#                     facts (each method's details and device, password present, passwordless only) show as unknown,
+#                     never as no. Privileged: only users with an Entra role (permanent or eligible, also through a
+#                     group), an Azure role, or marked admin -- a few minutes on any tenant; every other user keeps
+#                     those facts unknown. Off: no per-user read at all; only the registration report's facts, and the
+#                     per-user facts are unknown for everyone. Changing it takes effect at the next 15-minute slice
+#                     and the next collection.
+#   When to change:   Choose privileged when you only need the full detail for your admins and want it filled quickly;
+#                     choose off only when you do not want SecurityInsight to read each user's sign-in methods.
+#   Risk:             All reads every member user's sign-in methods one by one in the background: on a large tenant
+#                     the first full read takes 8-9 hours of reading spread over the day, and the users not read yet
+#                     show unknown, never no. Privileged and off leave every other user's per-user facts (each
+#                     method's details and device, password present, passwordless only) unknown, so reports cannot say
+#                     who still has a password or which devices hold sign-in keys. No collection waits for it either
+#                     way. Reversible: change it back; the next slices read again.
+#   Recommended:      All (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SignInMethodsPerUser/
+#
 # Asset fingerprint cache  [SI_FingerprintCache_Enabled]  (advanced)
 #   What it is for:   Remembers each asset between runs so incremental runs can skip assets that are not yet due for
 #                     re-processing.
@@ -3944,7 +3991,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   What it is for:   A customer's choice for groups the Exposure Graph still lists although Entra ID no longer has
 #                     them (neither active nor in its deleted items). On, only groups that still exist in Entra ID
 #                     (active or recently deleted) become assets. The others are counted and get no asset.
-#   Default:          Off: every group the Exposure Graph lists becomes an asset, as before
+#   Default:          On: a group becomes an asset only while Entra ID still has it
 #   If you change it: Stages: the identity collection reads the ids of Entra ID's groups and deleted groups once per
 #                     run and records no asset for an Exposure Graph group with an Entra object id that Entra ID does
 #                     not return; the run log and the Data health page show how many per run; the CI build retires the
@@ -3952,13 +3999,13 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     group read is not complete decides nothing: groups keep their last state. On-premises groups
 #                     that were never synced, users, devices and findings are not affected. Off again, the next run
 #                     records them again and their CIs come back.
-#   When to change:   Only when your organisation chose it: its Exposure Graph lists very many groups deleted long
-#                     ago, and they should not be assets.
+#   When to change:   Turn it off only when your organisation wants every group the Exposure Graph lists as an asset,
+#                     also groups Entra ID no longer has.
 #   Risk:             Groups the customer chose not to keep stop being assets from the next run and their CIs retire
 #                     (CMDB / ServiceNow closures follow the retired CIs). A run whose Entra ID group read is not
 #                     complete changes nothing. Reversible: turn it off and the next run records them again and their
 #                     CIs come back.
-#   Recommended:      Off, unless your organisation chose it.
+#   Recommended:      On (the default). Off only when your organisation wants these objects as assets.
 #   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipDeletedGroups/
 #
 # Exposure Graph: no asset for never-synced, disabled AD accounts  [SI_Identity_SkipNeverSyncedDisabledAd]  (advanced)
@@ -3967,7 +4014,8 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     become assets: privileged = an admin count, a critical or tier 0/1 AD group (Domain Admins,
 #                     Enterprise Admins ...), an assigned role, a service account, a sensitive account or a Microsoft
 #                     criticality level. The others are counted and get no asset.
-#   Default:          Off: every on-premises AD account the Exposure Graph lists becomes an asset, as before
+#   Default:          On: a never-synced on-premises AD account becomes an asset only while it is enabled or
+#                     privileged
 #   If you change it: Stages: the identity collection records no asset for a never-synced AD account that is disabled
 #                     and not privileged; the run log and the Data health page show how many per run; the CI build
 #                     retires the existing CI of such an account at once, with a reason naming this setting (its
@@ -3975,13 +4023,13 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     (accountEnabled false, or the disabled flag of userAccountControl); an account that does not say
 #                     is kept. Accounts synced to Entra ID, groups, devices and findings are not affected. Off again,
 #                     the next run records them again and their CIs come back.
-#   When to change:   Only when your organisation chose it: its Exposure Graph lists very many old on-premises
-#                     accounts that never reached Entra ID and are disabled, and they should not be assets.
+#   When to change:   Turn it off only when your organisation wants every on-premises AD account the Exposure Graph
+#                     lists as an asset, also the disabled ones that never reached Entra ID.
 #   Risk:             Objects the customer chose not to keep stop being assets from the next run and their CIs retire
 #                     (CMDB / ServiceNow closures follow the retired CIs). Accounts synced to Entra ID, groups,
 #                     devices and findings are not affected. Reversible: turn it off and the next run records them
 #                     again and their CIs come back.
-#   Recommended:      Off, unless your organisation chose it.
+#   Recommended:      On (the default). Off only when your organisation wants these objects as assets.
 #   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipNeverSyncedDisabledAd/
 #
 # Full run for all profilers  [SI_ForceFullRun]  (advanced)
@@ -4311,6 +4359,35 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     follow. Reversible: turn it off; the next run uses reviewed rules only.
 #   Recommended:      Off; review pending rules and approve the good ones instead.
 #   More info:        https://invardia.com/docs/si/settings/SI_LoadPendingRules/
+#
+# Users' sign-in methods: background reading per slice (minutes)  [SI_Identity_SignInMethodsFillMinutes]  (advanced, minutes)
+#   What it is for:   How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background
+#                     read of the users' sign-in methods may use.
+#   Default:          8 minutes
+#   If you change it: More minutes fill the detail sooner (about 250-300 users a minute, depending on how much
+#                     Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never
+#                     started twice.
+#   When to change:   Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.
+#   Risk:             More minutes make each run of the job caj-si-signin-methods longer (its limit is 30 minutes);
+#                     fewer fill the detail more slowly. Nothing collected is changed. Reversible at once.
+#   Recommended:      8 minutes (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SignInMethodsFillMinutes/
+#
+# Users' sign-in methods: read again after (days)  [SI_Identity_SignInMethodsMaxAgeDays]  (advanced, days)
+#   What it is for:   How old a user's full sign-in method detail may get before the background read reads that user
+#                     again, even when the registration report says nothing changed (it also catches changes the
+#                     report does not show, such as a renamed device).
+#   Default:          90 days
+#   If you change it: Lower: details are fresher, and more of each 15-minute slice goes to reading users again (at
+#                     150,000 users and 90 days, about 1,700 users a day). Higher: fewer reads. A user whose
+#                     registered methods changed is read again at once, whatever this is.
+#   When to change:   Lower it when you rely on the device names and app versions being recent; raise it on a very
+#                     large tenant.
+#   Risk:             A long age keeps details such as device names and app versions older; a short one spends more of
+#                     the background reading on users that did not change. No data is lost either way. Reversible at
+#                     once.
+#   Recommended:      90 days (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SignInMethodsMaxAgeDays/
 #
 # ----------------------------------------------------------------------------------------------------
 # Risk Analysis reports

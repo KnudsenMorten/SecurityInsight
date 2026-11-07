@@ -3,6 +3,10 @@
     SecurityInsight Pro: put ONE existing install's web app behind the shared sign-in front -- or take it back (-Off).
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the database part: the web identity's user, the schema signin and its CREATE TABLE right
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     CR7 (framework DOCS/REQUIREMENTS.md 12.11g). The web app's users sign in through the ONE sign-in front SecurityInsight
     and PIM share (FRAMEWORK/signin-front, the version pro-management\signin-front.pin.json pins): code flow + PKCE, the
     web app's managed identity as a federated credential on the SAME app registration (no secret, no certificate), an 8 h

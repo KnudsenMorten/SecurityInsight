@@ -46,12 +46,12 @@ The full table of the action per case is on [The SecurityInsight data contract](
 | `new` | `active` or `not-seen` | IRE matches a CI | Update the attributes SecurityInsight is authoritative for (tier, tier reason, exposure, last seen, source run, state); fill the others as the lowest-priority source |
 | `update` | `active` | A matched CI | Update as above. Skip the row when `u_row_hash` and `u_si_state` equal what you keep |
 | `update` | `not-seen` | A matched CI | Record the state (a flag, a field `u_si_state`). Do not retire or delete. Keep the last `u_last_seen` |
-| `close` | `retired` | A matched CI | Your lifecycle decision: a flag, a task for your CMDB team, or `install_status`. SecurityInsight never deletes it |
+| `close` | `retired` | A matched CI | Close it - `u_si_reason` says why (merged into another CI: use that CI; not seen for longer than its grace period; deleted in its source; every linked object gone; not in SecurityInsight's data any more). The row comes on every run. SecurityInsight never deletes it |
 | `close` | `retired` | No CI | Nothing |
 | `reopen` | `active` or `not-seen` | A matched CI | Clear the flag or reverse your retirement step; update as above |
 | `held` | any | A matched CI | Change nothing |
 | `out_of_scope` | any | A matched CI | Change nothing, or flag that SecurityInsight no longer sends it. Not a deletion, not a retirement |
-| any | any | `u_si_replaces` is set | Find the CI by the key in `u_si_replaces` and move it to the row's `u_si_correlation_id`, instead of creating a new CI |
+| any | any | `u_si_replaces` is set | The CI in `u_si_replaces` is the same machine (merged or re-keyed): reconcile it to this row's `u_si_correlation_id` instead of creating a new CI. The old CI's own row says `retired` / `close` and names this CI |
 
 In the hand-off database there is no `u_action`: the row's `u_si_state` is the state, and `u_changed_at` moves when it
 changes. An asset-keyed row there (`u_id_source` = `asset`) creates nothing: the key changes once when the identity

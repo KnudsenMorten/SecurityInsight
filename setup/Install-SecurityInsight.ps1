@@ -37,7 +37,7 @@
 .PARAMETER Location
     The Azure region (default westeurope).
 .PARAMETER ResourceGroup
-    The resource group, created when it does not exist (default rg-si-prod-community-ca).
+    The resource group, created when it does not exist (default rg-si; an install that already runs keeps its own).
 .PARAMETER Owner
     The resource group's 'owner' tag: a team or mailbox (default empty).
 .PARAMETER Hosting
@@ -49,7 +49,7 @@
 .PARAMETER WorkspaceMode
     new (default: a dedicated Log Analytics workspace) or existing (with -WorkspaceId).
 .PARAMETER WorkspaceName
-    The new workspace's name (default log-si-prod-community-ca).
+    The new workspace's name (default log-si).
 .PARAMETER WorkspaceId
     With -WorkspaceMode existing: the workspace's resource id.
 .PARAMETER SecurityWorkspaceId
@@ -130,6 +130,12 @@
     Switch: SecurityInsight links its web app's DNS zone to the hub itself (needs Network Contributor on the hub).
 .PARAMETER PeerToHub
     Switch: SecurityInsight peers its network with the hub in both directions (needs Network Contributor on both).
+.PARAMETER ReturnRouteRanges
+    With -HubVnetId: the address ranges your people browse from, e.g. '10.0.0.0/16,10.2.0.0/16' (optional). With
+    -ReturnRouteNextHop, SecurityInsight's own network gets the route table rt-si on its apps subnet (each range -> your
+    firewall) so replies find their way back; on your own network the route is on the network hand-off list.
+.PARAMETER ReturnRouteNextHop
+    With -ReturnRouteRanges: your hub firewall's private IP, e.g. 10.1.0.4 (the next hop of the return route).
 .PARAMETER CustomerManagedKeys
     Switch: encrypt the database, storage and (with -CmkLogAnalytics) Log Analytics with your own key.
 .PARAMETER CmkKeyVaultId
@@ -251,6 +257,8 @@ param(
     [string]$HubVnetId,
     [switch]$LinkZonesToHub,
     [switch]$PeerToHub,
+    [string]$ReturnRouteRanges,
+    [string]$ReturnRouteNextHop,
     [switch]$CustomerManagedKeys,
     [string]$CmkKeyVaultId,
     [string]$CmkKeyName,

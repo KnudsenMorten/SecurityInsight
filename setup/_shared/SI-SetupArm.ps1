@@ -264,6 +264,42 @@ function Test-SIAccessNotYetAnswer {
     [bool]("$Text" -match '(?i)HTTP Status: 403\b|HTTP 403\b|\(403\)|\bForbidden|ForbiddenByRbac|AuthorizationPermissionMismatch|not authorized|does not have secrets set permission')
 }
 
+function Test-SIAccessRefusedAnswer {
+    <#
+        PURE. Is this error text Azure's REFUSAL of the signed-in account (HTTP 401 / 403, AuthorizationFailed, Forbidden,
+        Authorization_RequestDenied)? Any other failure (a scope that is not there, a bad request, a timeout) is not.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    [bool]("$Text" -match '(?i)HTTP Status: 40[13]\b|HTTP 40[13]\b|\(40[13]\)|\bAuthorizationFailed\b|LinkedAuthorizationFailed|does not have authorization|\bForbidden\b|\bUnauthorized\b|Authorization_RequestDenied')
+}
+
+function Test-SIScopeInsideAny {
+    <# PURE. Is -Scope one of -Own, or below one of them (a resource in the install's resource group)? Case-insensitive. #>
+    param([AllowEmptyString()][string]$Scope, [AllowNull()][AllowEmptyCollection()][string[]]$Own = @())
+    $s = "$Scope".TrimEnd('/').ToLowerInvariant()
+    if (-not $s) { return $false }
+    foreach ($o in @($Own | Where-Object { "$_".Trim() })) {
+        $x = "$o".TrimEnd('/').ToLowerInvariant()
+        if ($s -eq $x -or $s.StartsWith($x + '/')) { return $true }
+    }
+    $false
+}
+
+function Get-SIGrantRefusalOutcome {
+    <#
+        PURE. GRANT-READ-1 (framework rule, 3.0.34): what a failed read (or write) of a role assignment means for the grants.
+        A refusal (401 / 403) at a scope OUTSIDE the install's own scopes (-OwnScopes: its resource group and the SI
+        resources it creates) = 'not-known': the grant is a customer task and the run continues. Anything else -- a refusal
+        INSIDE the install's own scopes, or a failure that is not a refusal -- = 'stop', as before.
+        (Live 2026-11-04, a private install: the tenant root management group's role assignments could not be read by the
+        installing admin, and that one read stopped the whole install.)
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Message, [AllowEmptyString()][string]$Scope, [AllowNull()][AllowEmptyCollection()][string[]]$OwnScopes = @())
+    if (-not (Test-SIAccessRefusedAnswer -Text $Message)) { return 'stop' }
+    if (Test-SIScopeInsideAny -Scope $Scope -Own $OwnScopes) { return 'stop' }
+    'not-known'
+}
+
 function Invoke-SIRetryNotThereYet {
     <#
         Runs -Action; when it throws the "not there yet" answer (-Test, default Test-SINotThereYetAnswer: 404,
@@ -1169,6 +1205,43 @@ function Remove-SISqlFirewallRule {
     $null = Invoke-SIArm -Method DELETE -Path ((Get-SISetupArmPath $sub $ResourceGroupName 'Microsoft.Sql/servers' $ServerName) + '/firewallRules/' + $Name) -ApiVersion $script:SISqlArmApi -AllowNotFound
 }
 
+function Get-SISqlServerNetworkShape {
+    <# #1091: how an Azure SQL server is reached, as ARM shows it -- for the end-of-install check of a PRIVATE install.
+       [pscustomobject]@{ PublicNetworkAccess = 'Enabled' | 'Disabled' | ''; PrivateEndpoints = @( @{ Id; Status } ) }
+       (Status = the connection's privateLinkServiceConnectionState, e.g. 'Approved'). $null when the server is not there;
+       a read that fails THROWS -- "could not read" is never "not private". #>
+    param([Parameter(Mandatory)][string]$ResourceGroupName, [Parameter(Mandatory)][string]$ServerName, [string]$SubscriptionId)
+    $sub = Get-SISetupSubscriptionId -SubscriptionId $SubscriptionId
+    $s = Invoke-SIArm -Path (Get-SISetupArmPath $sub $ResourceGroupName 'Microsoft.Sql/servers' $ServerName) -ApiVersion '2021-11-01' -AllowNotFound
+    if (-not $s) { return $null }
+    $pes = @(@(Get-SISetupArmProp $s @('properties', 'privateEndpointConnections')) | Where-Object { $_ } | ForEach-Object {
+            [pscustomobject]@{ Id = [string](Get-SISetupArmProp $_ @('properties', 'privateEndpoint', 'id'))
+                               Status = [string](Get-SISetupArmProp $_ @('properties', 'privateLinkServiceConnectionState', 'status')) } })
+    [pscustomobject]@{ PublicNetworkAccess = [string](Get-SISetupArmProp $s @('properties', 'publicNetworkAccess')); PrivateEndpoints = $pes }
+}
+
+function Test-SISqlServerPrivate {
+    <# #1099 (framework rule 11e): is this Azure SQL server a PRIVATE install's -- its public network access anything but
+       'Enabled' (Disabled; SecuredByPerimeter)? Support and ops tooling ask this BEFORE any firewall-rule write: on a
+       private install support never opens a resource to get in, not even for a moment. Reads the server (ARM GET, through
+       Get-SISqlServerNetworkShape). A server that is not there, or a read that fails, THROWS -- "could not read" is never
+       "public", so nothing is opened then either. #>
+    param([Parameter(Mandatory)][string]$ResourceGroupName, [Parameter(Mandatory)][string]$ServerName, [string]$SubscriptionId)
+    $shape = Get-SISqlServerNetworkShape -ResourceGroupName $ResourceGroupName -ServerName $ServerName -SubscriptionId $SubscriptionId
+    if ($null -eq $shape) { throw ('the database server {0} could not be found -- nothing was opened' -f $ServerName) }
+    $pna = ([string]$shape.PublicNetworkAccess).Trim()
+    # an empty value is a server made before the setting existed: public
+    -not ($pna -eq '' -or $pna -ieq 'Enabled')
+}
+
+function Get-SISqlPrivateNoOpenText {
+    <# PURE. #1099: the one sentence support / ops tooling says when it meets a private install's database (rule 11e).
+       -InNetwork names the install's own in-network way to do the same thing, when there is one. #>
+    param([Parameter(Mandatory)][string]$ServerName, [string]$InNetwork)
+    'this install is private: its database {0} is reached only from inside its network -- framework rule 11e; nothing was opened. Run this through the install''s own job / as a customer step{1}' -f `
+        $ServerName, $(if ($InNetwork) { ' (' + $InNetwork + ')' } else { '' })
+}
+
 function Test-SISqlDatabasePresent {
     <# Is this database on the server? $true / $false ("not found"). Any other failure of the read THROWS -- "could not
        read" is never "not there". (The end-of-install check.) #>
@@ -1245,7 +1318,11 @@ function Invoke-SIAcrRestBuild {
         uploads it to the registry's SAS without a bearer token, schedules the build, image names registry-relative) through
         the REST seam of setup\_shared\SI-UpdateRest.ps1 (New-SIUpdateRestSeam: every token from Get-SIAzureToken, i.e. the
         person / support session / app setup signed in as). Polls the run to its end unless -NoWait.
-        Returns @{ Ok; Status; RunId; Seconds; Bytes; Files; Images }.
+        Framework rule 11g: the build runs inside a build-pool session (setup\_shared\SI-AcrBuildPool.ps1) -- a private
+        install's agent pool is scaled up just before the build (read back) and back to 0 agents in a FINALLY, after a
+        success, a failed or a timed-out build (read back); a caller that holds a session already keeps the pool up across
+        its builds. A scale-down that fails is said (BuildPoolOk = $false, BuildPoolLine) and never changes Ok / Status.
+        Returns @{ Ok; Status; RunId; Seconds; Bytes; Files; Images; BuildPoolOk; BuildPoolLine }.
     #>
     param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$RegistryName,
           [Parameter(Mandatory)][string]$SourcePath, [Parameter(Mandatory)][string[]]$ImageNames, [Parameter(Mandatory)][string]$DockerFilePath,
@@ -1253,24 +1330,40 @@ function Invoke-SIAcrRestBuild {
           # framework installer rule 11b: the registry's agent pool in the network ('' = the registry decides, Resolve-SIAcrAgentPool)
           [string]$AgentPoolName = '')
     if (-not (Get-Command -Name Invoke-SIAcrQueueBuild -ErrorAction Ignore)) { . (Join-Path $PSScriptRoot 'SI-AcrBuild.ps1') }
+    if (-not (Get-Command -Name Open-SIBuildPoolSession -ErrorAction Ignore) -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'SI-AcrBuildPool.ps1'))) { . (Join-Path $PSScriptRoot 'SI-AcrBuildPool.ps1') }
     if (-not $Rest) { $Rest = New-SIUpdateRestSeam }
-    $started = Get-Date
-    $q = Invoke-SIAcrQueueBuild -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $RegistryName -ResourceGroup $ResourceGroup `
-            -ContextPath $SourcePath -Image (@($ImageNames)[0]) -DockerfilePath $DockerFilePath -TimeoutSeconds $TimeoutSeconds -AgentPoolName $AgentPoolName
-    if (-not $q.RunId) { throw ('The registry {0} accepted no build run for {1}.' -f $RegistryName, (@($ImageNames)[0])) }
-    $out = [ordered]@{ Ok = $true; Status = 'Queued'; RunId = [string]$q.RunId; Seconds = 0; Bytes = $q.Bytes; Files = $q.Files; Images = @($q.Image) }
-    if ($NoWait) { return [pscustomobject]$out }
-    $deadline = $started.AddSeconds($TimeoutSeconds)
-    $status = 'Queued'
-    while ((Get-Date) -lt $deadline) {
-        $s = Get-SIAcrRunStatus -Rest $Rest -Registry $q.Registry -RunId $q.RunId
-        if ($s) { $status = $s }
-        if ($OnPoll) { try { & $OnPoll $status } catch { } }
-        Send-SISetupWaitProgress -What ('the container image build in the registry {0}' -f $RegistryName) -State $status -SinceUtc $started.ToUniversalTime()   # #876: at most once a minute
-        if (@('Succeeded', 'Failed', 'Canceled', 'Cancelled', 'Error', 'Timeout') -contains $status) { break }
-        if ($Sleep) { & $Sleep $PollSeconds } else { Start-Sleep -Seconds $PollSeconds }
+    # -NoWait hands the run to the caller: the pool is left to the caller's own session (never scaled down under a queued build)
+    $pooled = (-not $NoWait) -and [bool](Get-Command -Name Open-SIBuildPoolSession -ErrorAction Ignore)
+    if ($pooled) { $null = Open-SIBuildPoolSession }
+    $out = $null; $pc = $null
+    try {
+        # rule 11g: a build on the agent pool scales it up first (Invoke-SIAcrQueueBuild); the build's own wait starts once it is queued
+        $q = Invoke-SIAcrQueueBuild -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $RegistryName -ResourceGroup $ResourceGroup `
+                -ContextPath $SourcePath -Image (@($ImageNames)[0]) -DockerfilePath $DockerFilePath -TimeoutSeconds $TimeoutSeconds -AgentPoolName $AgentPoolName
+        $started = Get-Date
+        if (-not $q.RunId) { throw ('The registry {0} accepted no build run for {1}.' -f $RegistryName, (@($ImageNames)[0])) }
+        $out = [ordered]@{ Ok = $true; Status = 'Queued'; RunId = [string]$q.RunId; Seconds = 0; Bytes = $q.Bytes; Files = $q.Files; Images = @($q.Image); BuildPoolOk = $true; BuildPoolLine = '' }
+        if (-not $NoWait) {
+            $deadline = $started.AddSeconds($TimeoutSeconds)
+            $status = 'Queued'
+            while ((Get-Date) -lt $deadline) {
+                $s = Get-SIAcrRunStatus -Rest $Rest -Registry $q.Registry -RunId $q.RunId
+                if ($s) { $status = $s }
+                if ($OnPoll) { try { & $OnPoll $status } catch { } }
+                Send-SISetupWaitProgress -What ('the container image build in the registry {0}' -f $RegistryName) -State $status -SinceUtc $started.ToUniversalTime()   # #876: at most once a minute
+                if (@('Succeeded', 'Failed', 'Canceled', 'Cancelled', 'Error', 'Timeout') -contains $status) { break }
+                if ($Sleep) { & $Sleep $PollSeconds } else { Start-Sleep -Seconds $PollSeconds }
+            }
+            $out.Status = $status; $out.Ok = ($status -eq 'Succeeded'); $out.Seconds = [int]((Get-Date) - $started).TotalSeconds
+        }
+    } finally {
+        # rule 11g: the pool back to 0 agents, read back -- after a success, a failed or timed-out build, or a throw
+        if ($pooled) {
+            $pc = Close-SIBuildPoolSession -Sleep $(if ($Sleep) { $Sleep } else { { param($x) Start-Sleep -Seconds $x } })
+            if ($pc.Line) { Write-Host ('       {0}{1}' -f $(if ($pc.Ok) { '' } else { 'WARNING: ' }), $pc.Line) }
+        }
     }
-    $out.Status = $status; $out.Ok = ($status -eq 'Succeeded'); $out.Seconds = [int]((Get-Date) - $started).TotalSeconds
+    if ($pc) { $out.BuildPoolOk = [bool]$pc.Ok; $out.BuildPoolLine = [string]$pc.Line }
     [pscustomobject]$out
 }
 

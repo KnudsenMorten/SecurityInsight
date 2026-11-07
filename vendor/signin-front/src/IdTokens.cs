@@ -58,8 +58,9 @@ public static class JwtExpiry
 /// <summary>
 /// 1.4.4: the token the front holds for a browser session is a PERSON's -- never an application's. Checked explicitly (each
 /// kind with its own reason) at sign-in and before anything is forwarded upstream, so an application's token is refused for
-/// what it is, not only because it happens to name no user. The bearer paths are NOT checked here: there the caller's own
-/// token is forwarded and the app decides which callers it accepts (some accept applications on purpose).
+/// what it is, not only because it happens to name no user. Bearer paths are validated elsewhere: FrontEndpoints.BearerAsync
+/// (Program.cs) with the JWT bearer scheme of FrontAuth.ConfigureBearer checks signature, issuer, audience and expiry before
+/// anything is forwarded, and the app then decides which validated callers it accepts (some accept applications on purpose).
 /// </summary>
 public static class PersonToken
 {

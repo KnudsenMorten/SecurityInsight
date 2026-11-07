@@ -128,6 +128,21 @@ Describe 'framework installer rule 11: the Key Vault network shape' {
             @($p.properties.networkAcls.ipRules).Count | Should -Be 1
             Get-SIKeyVaultRule11Patch -Vault (NewVault 'rg-si' 'kv' ([ordered]@{ defaultAction = 'Allow'; bypass = 'AzureServices' }) 'Enabled') | Should -BeNullOrEmpty
         }
+        It 'public: a vault open to all networks needs NO patch -- Azure keeps no bypass on a vault without a firewall, so it could never read back' {
+            $fresh = NewVault 'rg-si' 'kv' $null 'Enabled'
+            Get-SIKeyVaultRule11Patch -Vault $fresh | Should -BeNullOrEmpty
+            Test-SIKeyVaultRule11Shape -Vault $fresh | Should -BeTrue
+            Get-SIKeyVaultRule11Patch -Vault (NewVault 'rg-si' 'kv' ([ordered]@{ defaultAction = 'Allow' }) 'Enabled') | Should -BeNullOrEmpty
+            Get-SIKeyVaultRule11Patch -Vault (NewVault 'rg-si' 'kv' ([ordered]@{ defaultAction = 'Allow'; bypass = 'None' }) 'Enabled') | Should -BeNullOrEmpty
+            # a PRIVATE install still demands the full shape on a vault without a firewall
+            Test-SIKeyVaultRule11Shape -Vault $fresh -Private | Should -BeFalse
+        }
+        It 'the stop text names only the missing setting -- never "set the networking" (framework rule 17)' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\..\setup\_shared\SI-SetupAzure.ps1') -Raw
+            $src | Should -Not -Match 'set it in the Azure portal \(Key vaults > \{0\} > Networking\)'
+            $src | Should -Match "Networking > Exceptions\) tick only 'Allow trusted Microsoft services"
+            $src | Should -Match 'change nothing else there'
+        }
         It 'public: NEGATIVE -- a public install never opens a closed vault' {
             $v = NewVault 'rg-si' 'kv' ([ordered]@{ defaultAction = 'Deny'; bypass = 'None' }) 'Disabled'
             $p = Get-SIKeyVaultRule11Patch -Vault $v
@@ -187,12 +202,14 @@ Describe 'framework installer rule 11: the Key Vault network shape' {
             @(Patches).Count | Should -Be 0
             @($script:Calls | Where-Object { $_.Method -eq 'GET' -and $_.Uri -like '*/resourceGroups/rg-si/providers/Microsoft.KeyVault/vaults/kv-new?*' }).Count | Should -BeGreaterThan 0 -Because 'the shape is READ BACK, not assumed from the create'
         }
-        It 'MADE (public): created as before; the bypass is set explicitly and read back' {
+        It 'MADE (public): created as before, open to all networks -- nothing to PATCH, and it passes the read-back' {
+            # Live 2026-11-04: a new public vault reads back with no networkAcls at all (Azure keeps no bypass on a vault
+            # without a firewall), so PATCHing a bypass could never read back and stopped every new public install.
             $r = Initialize-SIKeyVault -VaultName 'kv-pub' -ResourceGroupName 'rg-si' -Location 'westeurope' -SubscriptionId $script:Sub -TenantId 'tid-1'
             $r.Action | Should -Be 'created'
             (BodyOf @($script:Calls | Where-Object { $_.Method -eq 'PUT' })[0]).properties.PSObject.Properties['publicNetworkAccess'] | Should -BeNullOrEmpty
-            $script:Vaults['kv-pub'].properties.networkAcls.bypass | Should -Be 'AzureServices'
-            $script:Vaults['kv-pub'].properties.networkAcls.defaultAction | Should -Be 'Allow'
+            @(Patches).Count | Should -Be 0
+            $r.Changed | Should -BeFalse
         }
         It 'NEGATIVE: another resource group''s deleted vault is not recovered -- the create fails with Azure''s own conflict, as before' {
             $script:Deleted['kv-si'] = NewVault 'rg-other' 'kv-si' $null 'Disabled'

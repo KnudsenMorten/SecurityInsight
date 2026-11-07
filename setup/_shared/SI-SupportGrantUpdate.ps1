@@ -44,7 +44,8 @@ function Get-SISupportGrantConsentReadSql {
     <# PURE. READ ONLY, one row: the recorded Support app, the consent row (if any) -- '' where the table is not there. #>
     @"
 SELECT CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN N'' ELSE ISNULL((SELECT Value FROM cfg.InstallState WHERE Name = N'SupportApp'), N'') END AS SupportApp,
-       CASE WHEN OBJECT_ID(N'cfg.SupportConsent') IS NULL THEN N'-' ELSE ISNULL((SELECT [Level] + N'|' + Source FROM cfg.SupportConsent WHERE Id = 1), N'') END AS Consent;
+       CASE WHEN OBJECT_ID(N'cfg.SupportConsent') IS NULL THEN N'-' ELSE ISNULL((SELECT [Level] + N'|' + Source FROM cfg.SupportConsent WHERE Id = 1), N'') END AS Consent,
+       CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN N'' ELSE ISNULL((SELECT Value FROM cfg.InstallState WHERE Name = N'SupportConsentPortal'), N'') END AS Portal;
 "@
 }
 
@@ -89,6 +90,9 @@ function Invoke-SISupportGrantDerivedConsent {
         $app = (& $val $row 'SupportApp').Trim(); $have = (& $val $row 'Consent').Trim()
         if ($have -eq '-') { return (& $out 'failed' '' 'support consent: the Pro database has no cfg.SupportConsent yet (its schema step runs first) -- the next update derives it') }
         if ($have) { return (& $out 'present' (($have -split '\|')[0]) '') }
+        # the level now comes from the Invardia portal (SI-SupportPortalConsent.ps1, applied by the updater): once Invardia has
+        # answered, nothing is derived any more -- a level the portal took away (none) must never come back from a Key Vault role
+        if ((& $val $row 'Portal').Trim()) { return (& $out 'none' '' '') }
         if ($app -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { return (& $out 'none' '' '') }   # no Support app on this install: nothing to derive, nothing said
         if (-not "$VaultName".Trim()) { return (& $out 'none' '' 'support consent: not derived -- the install names no Key Vault (SI_KeyVaultName); the customer''s admin records it with Grant-SISupportAccess') }
         $sp = Invoke-SIRestJson -Rest $Rest -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id" -f $app) -Resource 'https://graph.microsoft.com/' -What 'the Support app in this tenant'

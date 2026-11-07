@@ -438,9 +438,11 @@ function New-CiPerfBeforeWorld {
         $text = $fd.Extent.Text
         # #406 (CI build version 10): the current callers pass the lifecycle's inputs; the old function takes them and ignores
         # them (it decides the lifecycle as it did -- the comparison runs with a seen window no record's age reaches)
+        # CI build version 14 (2026-11-05): the merged-away ids -- the old identity resolution takes them and ignores them (the
+        # comparison runs with an empty ledger, so nothing is merged away)
         # #1054 (CI build version 12): the placeholder device names -- the old function takes them and ignores them (the fixture's
         # devices all have real names, so both builds name every CI the same)
-        $extra = @{ 'New-SICiDocument' = @('$Lifecycle', '$Previous', '[hashtable]$ScopeChangedAt', '[string[]]$PlaceholderNames', '[hashtable]$DeletionProof'); 'Invoke-SICiCore' = @('$Lifecycle', '[hashtable]$PreviousLifecycle', '[hashtable]$ScopeChangedAt') }[$fd.Name]
+        $extra = @{ 'New-SICiDocument' = @('$Lifecycle', '$Previous', '[hashtable]$ScopeChangedAt', '[string[]]$PlaceholderNames', '[hashtable]$DeletionProof'); 'Invoke-SICiCore' = @('$Lifecycle', '[hashtable]$PreviousLifecycle', '[hashtable]$ScopeChangedAt'); 'Resolve-SIObjectIdentity' = @('[hashtable]$MergedAway') }[$fd.Name]
         if ($extra -and $fd.Body.ParamBlock) {
             $have = @($fd.Body.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
             $add = @($extra | Where-Object { $have -notcontains (($_ -replace '^\[[^\]]+\]', '').TrimStart('$')) })

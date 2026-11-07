@@ -68,8 +68,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterFastRoll.ps1')
 # 2026-10-23: the run gate -- nothing changes the install while a pipeline run is going; the wait is handed to caj-si-flow
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRunGate.ps1')
-# #947 (owner 2026-10-29): a bound on the wait -- after 6 hours a run that started on an older version is cancelled and the update installed
-. (Join-Path $PSScriptRoot '_shared/SI-UpdaterWaitBound.ps1')
 # #750 (b): the roll steps both editions share (pre-roll, post-roll, self-retry, the state row, the running release)
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRollSteps.ps1')
 # Pro: the web app + MCP server roll (absent from the Community edition)
@@ -103,6 +101,11 @@ try { . (Join-Path $PSScriptRoot '_shared/SI-UpdaterTelemetry.ps1') } catch { }
 try { . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRunTrack.ps1') } catch { }
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-TelemetrySend.ps1')))) {
     try { . ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-TelemetrySend.ps1')) } catch { }
+}
+# NO FRESH BEAT = DEAD (engine/_shared/SI-ExecutionLiveness.ps1): this update's own sign of life from its first moment, and the
+# rule that an earlier update counts only while it shows one. A missing file = the old rule (every running one counts).
+if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ExecutionLiveness.ps1')))) {
+    try { . ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ExecutionLiveness.ps1')) } catch { }
 }
 # #308: the install's update ring, recorded in the Pro database whenever this run resolves one (engine/_shared/SI-InstallRing.ps1).
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-InstallRing.ps1')))) {
@@ -181,6 +184,17 @@ function Add-SIUpdaterFailureIf([string]$Step, [string]$Text, [string]$Code = ''
     # SUP-2026-00198: the failure's catalogue code (si-upd-0803 / 0804 / 0805) rides along where the recorder knows it
     if ("$Code".Trim() -and $c.Parameters.ContainsKey('Code')) { Add-SIUpdaterFailure -Step $Step -Text $Text -Code $Code } else { Add-SIUpdaterFailure -Step $Step -Text $Text }
 }
+# framework rule 11g: the run's build-pool session closed (the pool back to 0 agents, read back, when the run scaled it up). A
+# scale-down that fails is said and recorded as its own failure line ('build-pool'); the run's result is never changed by it.
+function Close-SIUpdaterBuildPool {
+    param([scriptblock]$Sleep, [scriptblock]$Now)
+    if (-not (Get-Command -Name Close-SIBuildPoolSession -ErrorAction SilentlyContinue)) { return $null }
+    $a = @{}; if ($Sleep) { $a['Sleep'] = $Sleep }; if ($Now) { $a['Now'] = $Now }
+    $pc = Close-SIBuildPoolSession @a
+    if ($pc.Line) { Write-UpdLog $(if ($pc.Ok) { [string]$pc.Line } else { 'WARNING: ' + [string]$pc.Line }) }
+    if ($pc.Closed -and $pc.Touched -and -not $pc.Ok) { Add-SIUpdaterFailureIf 'build-pool' ([string]$pc.Line) }
+    $pc
+}
 
 # ---- external calls: one small function each, so the run is testable end to end ---------------------
 # #521 NO az CLI: SecurityInsight's own REST token client (/si/setup/_shared/SI-UpdateRest.ps1). The image's own steps call
@@ -214,6 +228,40 @@ function Invoke-SIUpdaterArm {
     if ($List) { return @(Get-SIRestList -Rest $rest -Uri $uri) }
     $b = if ($null -ne $Body -and -not ($Body -is [string])) { ConvertTo-Json -InputObject $Body -Depth 60 -Compress } else { $Body }
     Invoke-SIRestJson -Rest $rest -Method $Method -Uri $uri -Body $b -AllowNotFound:$AllowNotFound -Headers @{ 'Content-Type' = 'application/json' }
+}
+
+function Invoke-SIUpdaterSupportQueue {
+    <#
+        THE SUPPORT REQUEST QUEUE (si-support-requests, every run; live 2026-11-04: missing at every install, so Invardia's
+        "open a support session" failed with QueueNotFound): only a person-run update used to make it; the Support app holds
+        its message-sender role on a queue that did not exist. The updater now makes it where the install has the support
+        grant job (caj-si-support-grant: its SI_STORAGE_ACCOUNT names the account), control plane only, READ BACK
+        (setup\_shared\SI-SupportGrantUpdate.ps1 Invoke-SISupportGrantQueueEnsure). No job = no support grant at this install,
+        nothing said. NEVER throws, never fails the run. -GetJob { param($Name) } / -Ensure { param($Account) }: test seams.
+        Returns @{ Action; Line } or $null.
+    #>
+    param([string]$SubscriptionId, [string]$ResourceGroup, [string]$SIRoot, [scriptblock]$GetJob, [scriptblock]$Ensure)
+    try {
+        if (-not $GetJob) { $GetJob = { param($Name) Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/jobs/' + $Name)) -AllowNotFound } }
+        $job = & $GetJob 'caj-si-support-grant'
+        if (-not $job) { return $null }
+        $acct = ''
+        foreach ($c in @($job.properties.template.containers)) { foreach ($e in @($c.env)) { if ($e -and "$($e.name)" -eq 'SI_STORAGE_ACCOUNT' -and "$($e.value)".Trim()) { $acct = "$($e.value)".Trim() } } }
+        $q = $null
+        if ($Ensure) { $q = & $Ensure $acct }
+        else {
+            # the library is dot-sourced HERE and its function called HERE, in this scope -- never from a .GetNewClosure()
+            # scriptblock: a closure runs in a module scope of its own and does not see a function this scope defined, so the
+            # call threw "Invoke-SISupportGrantQueueEnsure is not recognized" on every run (live 2026-11-05..06, internal)
+            $lib = Join-Path $SIRoot 'setup/_shared/SI-SupportGrantUpdate.ps1'
+            if (-not (Test-Path -LiteralPath $lib)) { return $null }
+            . $lib
+            $rest = Get-SIUpdaterRest
+            $q = Invoke-SISupportGrantQueueEnsure -Rest $rest -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Account $acct
+        }
+        if ($q -and $q.Line) { Write-UpdLog $(if ($q.Action -eq 'failed') { 'WARNING: ' + $q.Line } else { $q.Line }) }
+        $q
+    } catch { Write-UpdLog ('WARNING: support requests: the queue could not be checked ({0}) -- the next run tries again' -f $_.Exception.Message); $null }
 }
 
 function Get-SIUpdaterRgPath {
@@ -366,14 +414,18 @@ function New-SIUpdaterProStore {
         The Pro settings database as the updater's identity (an Entra token from the REST client), in the store shape the
         release's own pro-settings code takes: @{ Name; Invoke(sql, params, mode) }. A connection per call.
     #>
-    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$SubscriptionId)
+    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$SubscriptionId,
+          # NO FRESH BEAT = DEAD: the store the update's sign of life is beaten through asks for its token on EVERY call -- a
+          # long update outlives one token (60-90 minutes), and a beat that fails for that would make a working update look dead
+          [switch]$FreshToken)
     $token = Get-SIUpdaterSqlToken
     if (-not $token) { throw 'no access token for the Pro database' }
+    $tokenFn = if ($FreshToken) { ${function:Get-SIUpdaterSqlToken} } else { $null }
     $cs = 'Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $Server, $Database
     $invoke = {
         param([string]$sql, $p, [string]$mode)
         $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
-        $cn.AccessToken = $token
+        $cn.AccessToken = if ($tokenFn) { $t = [string](& $tokenFn); if ($t) { $t } else { $token } } else { $token }
         try {
             $cn.Open()
             $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = 0
@@ -392,8 +444,8 @@ function New-SIUpdaterProStore {
 
 function Invoke-SIUpdaterTemplateGate {
     <#
-        THE TEMPLATE GATE ON THE UPDATE PATH (adopted from PIM4EntraPS -- BUG-55: an image roll silently changed 217 of
-        325 policies; BUG-223: a path that bypassed the gate). For a Pro install (the Pro database is configured on the
+        THE TEMPLATE GATE ON THE UPDATE PATH (the same gate PIM4EntraPS uses: every update path, the image roll included,
+        goes through it, so a release never changes the templates in force unseen). For a Pro install (the Pro database is configured on the
         job) the approved release's OWN setup/Publish-SITemplates.ps1 plans its templates against the install's recorded
         template fingerprint. When the content in force would change, the update is HELD -- no image roll, no publish --
         until SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT names exactly the fingerprint printed here. The publish itself runs
@@ -685,6 +737,18 @@ function Invoke-SIUpdaterRoll {
     # Pro: THE DATABASE FIRST (#352, framework UPDATE-1.6 (j)) -- the release's own schema (additive, gated, one transaction
     # per file) and the grants its code needs, BEFORE the template gate, the build or any roll. Never new code on an old
     # schema: a failure here stops the update with nothing rolled. No Pro database (Community / VM) = skipped.
+    # framework SEC-08: the database setup job caj-si-dbinit FIRST (the database work that needs the SQL admin group, as the
+    # job's own identity): kept present on every update, run once its membership is proven -- a run that fails HOLDS the
+    # update (nothing rolled, the installed version keeps running); anything else is a warning and today's path goes on
+    if ($Store -and (Get-Command -Name Invoke-SIUpdaterDbJob -ErrorAction SilentlyContinue)) {
+        # (reported under the step 'database' -- the update's database stage, a step name Invardia's uplink already knows)
+        $global:SI_UpdaterStep = 'database'
+        $dj = Invoke-SIUpdaterDbJob -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
+        if (-not $dj.Ok) {
+            Add-SIUpdaterFailureIf 'database' ([string]$dj.Reason)
+            return [pscustomobject]@{ Code = 1; Held = $false; Reason = ("the database setup job failed, so nothing was rolled: {0}" -f $dj.Reason) }
+        }
+    }
     if ($Store -and (Get-Command -Name Invoke-SIUpdaterDatabase -ErrorAction SilentlyContinue)) {
         $global:SI_UpdaterStep = 'database'
         $db = Invoke-SIUpdaterDatabase -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
@@ -695,6 +759,8 @@ function Invoke-SIUpdaterRoll {
         }
     }
     $global:SI_UpdaterStep = 'templates'
+    # #1112: the lock says at once that the database step is over (the web app's notice ends with it)
+    if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'templates' -Force }
     # Pro: the template gate BEFORE anything changes (a Community install has no Pro database and no templates).
     # An install whose ring takes template packs from a template channel keeps the templates that channel released:
     # the code roll does not republish the release's own templates over them.
@@ -744,6 +810,11 @@ function Invoke-SIUpdaterRoll {
     Write-UpdLog $(if ($code -eq 0) { 'engine jobs are on the approved version' }
                    elseif ($notRestored.Count) { "the update FAILED (exit $code) -- $($notRestored.Count) job restore(s) failed: see the update log, restore them by hand" }
                    else { "the update FAILED (exit $code) -- every changed job was restored to its previous image" })
+    # framework rule 11g: a build pool the release could not bring back to 0 agents (or removed and could not make again) is
+    # reported as its own failure line ALSO when the update succeeded -- it never changes the update's result
+    if ($code -eq 0 -and $global:SI_UpdateFailures) {
+        foreach ($f in @(@($global:SI_UpdateFailures) | Where-Object { $_ -and "$($_.Step)" -eq 'build-pool' })) { Write-UpdLog ('WARNING: ' + [string]$f.Text); Add-SIUpdaterFailureIf 'build-pool' ([string]$f.Text) }
+    }
     if ($code -ne 0) {
         if ($recorded.Count) {
             foreach ($f in $recorded) { Add-SIUpdaterFailureIf ([string]$f.Step) ([string]$f.Text) ([string]$f.Code) }
@@ -968,6 +1039,15 @@ function Invoke-SIUpdaterCore {
     Write-UpdLog ("signed in as {0}" -f $who)
     # the nightly tick: on its zone's ticks only the start that is 18:30 (23:00 on a job not moved yet) in the region's zone goes on (SI-NightlySchedule.ps1)
     if (-not (Test-SIUpdaterRunNow -Env $Env -SubscriptionId $sub -ResourceGroup $rg)) { return 0 }
+    # The Pro settings database (Pro only), opened once: the customer's switches, the licence state mirror, the gates -- and
+    # (NO FRESH BEAT = DEAD) the lock rows that tell whether an earlier update still works. Opened before the overlap check.
+    $proSql = & $get 'SI_UPDATER_PRO_SQL_SERVER'; $proDb = & $get 'SI_UPDATER_PRO_SQL_DATABASE'
+    $proStore = $null; $proStoreError = ''
+    $global:SI_UpdaterStep = 'settings'
+    if ($proSql -and $proDb) {
+        try { $proStore = New-SIUpdaterProStore -Server $proSql -Database $proDb -SubscriptionId $sub }
+        catch { $proStoreError = $_.Exception.Message; Write-UpdLog ("WARNING: the Pro settings database could not be opened: {0}" -f $proStoreError) }
+    }
     # 2026-10-23: the second update (SI_UPDATER_MODE = second-pass, started by the update that installed the release) waits
     # for that update to end first -- two updates never change the install at once
     if ((& $get 'SI_UPDATER_MODE') -ieq 'second-pass') {
@@ -983,17 +1063,17 @@ function Invoke-SIUpdaterCore {
         try {
             $updJobName = Get-SIUpdaterInstallName -Role updater -Env $Env
             $execs = @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider ('Microsoft.App/jobs/{0}/executions' -f $updJobName)) -List)
-            $earlier = Select-SIUpdaterEarlierRunning -Executions $execs -Self (& $get 'CONTAINER_APP_JOB_EXECUTION_NAME') -NowUtc ([datetime]::UtcNow)
+            # NO FRESH BEAT = DEAD: an earlier execution counts only while it beats (a dead one is stopped, said, raised to
+            # Invardia, and this update goes on); without the lock rows every running one counts, as before
+            $earlier = Get-SIUpdaterEarlierLiveness -Executions $execs -Self (& $get 'CONTAINER_APP_JOB_EXECUTION_NAME') -NowUtc ([datetime]::UtcNow) -Store $proStore `
+                           -Stop { param($n) $null = Invoke-SIUpdaterArm -Method POST -Path (Get-SIExecutionStopPath -Base (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider 'Microsoft.App/jobs') -Job $updJobName -Execution $n) -Body @{} }
             if ($earlier) { Write-UpdLog (Get-SIUpdaterStepAsideText -Earlier $earlier); return 0 }
         } catch { Write-UpdLog ("WARNING: whether an earlier update still runs could not be read ({0}) -- this update goes on" -f $_.Exception.Message) }
     }
-    # The Pro settings database (Pro only), opened once: the customer's switches, the licence state mirror, the gates.
-    $proSql = & $get 'SI_UPDATER_PRO_SQL_SERVER'; $proDb = & $get 'SI_UPDATER_PRO_SQL_DATABASE'
-    $proStore = $null; $proStoreError = ''
-    $global:SI_UpdaterStep = 'settings'
-    if ($proSql -and $proDb) {
-        try { $proStore = New-SIUpdaterProStore -Server $proSql -Database $proDb -SubscriptionId $sub }
-        catch { $proStoreError = $_.Exception.Message; Write-UpdLog ("WARNING: the Pro settings database could not be opened: {0}" -f $proStoreError) }
+    # NO FRESH BEAT = DEAD (d): this update's own sign of life from here on -- its 'updater' lock row, beaten at once and with
+    # every log line (Invoke-SIUpdaterLockBeat), released at the end of the run
+    if ($proStore -and (Get-Command -Name Register-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue)) {
+        try { $null = Register-SIUpdaterExecutionBeat -Store (New-SIUpdaterProStore -Server $proSql -Database $proDb -SubscriptionId $sub -FreshToken) -Holder (Get-SIUpdaterRunGateHolder -Env $Env) } catch { }
     }
     $script:SIUpdaterProStore = $proStore   # #427: the telemetry switch on the Settings page, read when a failure is reported
     # CR5 step 1 (#655): the names this install runs with, recorded -- every lookup below reads them (Get-SIUpdaterInstallName)
@@ -1035,18 +1115,57 @@ function Invoke-SIUpdaterCore {
             }
         } catch { Write-UpdLog ('WARNING: web sign-in keys: {0}' -f $_.Exception.Message) }
     }
+    # THE SUPPORT LEVEL SET IN THE INVARDIA PORTAL (Pro, every run; framework SUPPORT ACCESS point 2): the updater -- never the
+    # engine -- reads it with its own call to Invardia (the install key) and applies it in the Pro database, read back
+    # (setup\_shared\SI-SupportPortalConsent.ps1). Invardia unreachable = the last level stays. Never a failed update.
+    if ($proStore -and $updMode -ne 'apply-settings') {
+        $pcLib = Join-Path $siAutoRoot 'setup/_shared/SI-SupportPortalConsent.ps1'
+        if (Test-Path -LiteralPath $pcLib) {
+            $global:SI_UpdaterStep = 'support-consent'
+            try {
+                . $pcLib
+                $pcKey = ''
+                if ((& $get 'SI_UPDATER_KEY_VAULT') -and -not (Get-Module -Name Pester)) { try { $pcKey = ([string](Get-SIKeyVaultSecretValue -VaultName (& $get 'SI_UPDATER_KEY_VAULT') -Name 'SI-Invardia-InstallKey')).Trim() } catch { $pcKey = '' } }
+                # the shared REST seam (engine/_shared/SI-AzRest.ps1, loaded with SI-UpdateRest.ps1): Invardia is no Azure audience,
+                # so it is exactly Invoke-RestMethod (-ErrorAction Stop) -- no direct call in this file (the raw-call ratchet)
+                $pcGet = { param([string]$Uri, [hashtable]$Headers) Invoke-SIRestMethod -Method Get -Uri $Uri -Headers $Headers -TimeoutSec 15 }
+                $pc = Invoke-SISupportPortalConsent -Get $pcGet -Sql $proStore.Invoke -InstallKey $pcKey -BaseUrl (& $get 'SI_UPDATER_INVARDIA_BASE_URL')
+                if ($pc.Line) { Write-UpdLog $(if ($pc.Action -eq 'failed') { 'WARNING: ' + $pc.Line } else { $pc.Line }) }
+                if ($pc.Change -and -not (Get-Command -Name Write-SIAuditEvent -ErrorAction SilentlyContinue)) {
+                    $auLib = Join-Path $siAutoRoot 'engine/pro-settings/SI-Audit.ps1'
+                    if (Test-Path -LiteralPath $auLib) { try { . $auLib } catch { } }
+                }
+                if ($pc.Change -and (Get-Command -Name Write-SIAuditEvent -ErrorAction SilentlyContinue)) {
+                    try {
+                        $null = Write-SIAuditEvent -Invoke $proStore.Invoke -Action 'support.consent.applied' -Actor 'caj-si-updater' -ActorSource 'job' -Target '/cfg/SupportConsent' `
+                            -Reason 'the level set in the Invardia portal' -OutcomeText ('support consent: {0} -> {1}' -f $pc.Change.From, $pc.Change.To) `
+                            -Before ([ordered]@{ level = $pc.Change.From }) -After ([ordered]@{ level = $pc.Change.To })
+                    } catch { Write-UpdLog ('support consent: the audit row could not be written ({0})' -f $_.Exception.Message) }
+                }
+                # #1021: the Pro database's consent MIRRORED into every other product database (the identity ledger, the data
+                # database: each support grant procedure checks its OWN database's consent), read back -- the list the database
+                # setup job recorded; the same server, the updater's own identity. Never written by the Support app.
+                if (Get-Command -Name Invoke-SISupportConsentMirror -ErrorAction SilentlyContinue) {
+                    $__siMirrorServer = $proSql; $__siMirrorSub = $sub
+                    $mr = Invoke-SISupportConsentMirror -ProSql $proStore.Invoke -Open { param([string]$Database) (New-SIUpdaterProStore -Server $__siMirrorServer -Database $Database -SubscriptionId $__siMirrorSub).Invoke }
+                    foreach ($l in @($mr.Lines)) { Write-UpdLog $l }
+                }
+            } catch { Write-UpdLog ('WARNING: support consent (Invardia portal): not applied ({0}) -- the next run tries again' -f $_.Exception.Message) }
+        }
+        # the queue Invardia puts a support request on (made when missing, read back; never fails the run)
+        $global:SI_UpdaterStep = 'support-queue'
+        $null = Invoke-SIUpdaterSupportQueue -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot
+        # #1111: the index build job caj-si-index-build (the indexes that did not fit an update, built in idle windows -- the
+        # updater itself never builds them outside its schema step) kept present, read back; never fails the run
+        if (Get-Command -Name Invoke-SIUpdaterIndexBuildJob -ErrorAction SilentlyContinue) {
+            $global:SI_UpdaterStep = 'index-build-job'
+            $null = Invoke-SIUpdaterIndexBuildJob -SIRoot $siAutoRoot -Store $proStore -SubscriptionId $sub -ResourceGroup $rg -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env)
+        }
+    }
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'
         return 0
-    }
-    # #1050: SI_UPDATER_MODE = index-build (started by the pipeline runner's wake-up in an idle window): ONE index that did not
-    # fit an update is built, under the install's lock -- no licence step, no update
-    if ($updMode -eq 'index-build') {
-        $global:SI_UpdaterStep = 'index-build'
-        if (-not (Get-Command -Name Invoke-SIUpdaterIndexWindow -ErrorAction SilentlyContinue)) { Write-UpdLog 'index build: this updater image cannot build indexes (no Pro database step) -- nothing done'; return 0 }
-        if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
-        return (Invoke-SIUpdaterIndexWindow -Store $proStore -SIRoot $siAutoRoot -SubscriptionId $sub -ResourceGroup $rg -Env $Env)
     }
     if ($edition -eq 'community') {
         # THE COMMUNITY EDITION (#750 (b)): no licence request to Invardia (a Community install holds no licence and must
@@ -1127,13 +1246,22 @@ if (-not $DefineOnly) {
     $global:SI_UpdaterRunStartedUtc = $updStarted   # #506: the 'check' stage of a tracked run starts here
     # #911 (e): the watch for a long silent step, for the whole run
     if (Get-Command -Name Start-SIUpdateWatch -ErrorAction SilentlyContinue) { try { $null = Start-SIUpdateWatch -QuietMinutes 20 } catch { } }
+    # framework rule 11g: ONE build-pool session for the whole run -- every image of the update (the queued web app / MCP /
+    # updater builds, the engine build of the release, the self-roll) scales the pool up lazily before its first build, and
+    # the pool goes back to 0 agents in the finally, read back; a run that builds nothing never touches it
+    $siPoolOwn = [bool](Get-Command -Name Open-SIBuildPoolSession -ErrorAction SilentlyContinue)
+    if ($siPoolOwn) { $null = Open-SIBuildPoolSession }
     try { $rc = Invoke-SIUpdater } catch {
         Write-UpdLog ("FAILED: {0}" -f $_.Exception.Message)
         Add-SIUpdaterFailureIf $(if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep" } else { 'updater' }) $_.Exception.Message
+    } finally {
+        if ($siPoolOwn) { try { $null = Close-SIUpdaterBuildPool } catch { } }
     }
     # #506: the tracked run's last stage (done / failed / rolled back / waiting); never changes the exit code
     try { if (Get-Command -Name Stop-SIUpdateTrack -ErrorAction SilentlyContinue) { $null = Stop-SIUpdateTrack -ExitCode $rc } } catch { }
     if (Get-Command -Name Stop-SIUpdateWatch -ErrorAction SilentlyContinue) { Stop-SIUpdateWatch }
     $null = Invoke-SIUpdaterFailureReport -ExitCode $rc -StartedAt $updStarted
+    # the update's own sign of life ends with it (a later update or the pipeline never waits 15 minutes for a finished one)
+    if (Get-Command -Name Unregister-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterExecutionBeat }
     exit $rc
 }

@@ -41,7 +41,9 @@ function Get-SIObjectLedgerProvider {
     if (-not [string]::IsNullOrWhiteSpace($SqlServer) -and -not [string]::IsNullOrWhiteSpace($SqlDatabase)) {
         $conn = Get-SIObjectLedgerConnection -Server $SqlServer -Database $SqlDatabase
         if ($null -eq $conn) { return $null }
-        return [pscustomobject]@{ Kind = 'sql'; Connection = $conn; Store = $null
+        # Server / Database: the CI build sends its ledger statements through the shared statement retry over them
+        # (New-SICiLedgerSqlInvoke, SI-CiBuildRun.ps1): a temporary Azure SQL answer runs the statement again on a new connection
+        return [pscustomobject]@{ Kind = 'sql'; Connection = $conn; Store = $null; Server = $SqlServer; Database = $SqlDatabase
             Description = ("Azure SQL {0}/{1}" -f $SqlServer, $SqlDatabase) }
     }
 

@@ -173,7 +173,6 @@ WHERE ra.CollectionId = {ThisCollection} AND ra.AssetRank <= @Top AND ra.FixRank
     /// "Riskiest first": the most critical tier, then the highest total risk -- every grouping's default order.
     private const string LeadSql = "(9 - ISNULL(CONVERT(float, s.BestTier), 4)) * 1000000000000000.0 + ISNULL(s.TotalRisk, 0)";
 
-    private static string Attr(string id) => $"JSON_VALUE(s.AttributesJson, '$.{id}')";
     private static string WordSort(string col, IReadOnlyList<string> words) =>
         "CASE g.[" + col + "] " + string.Join(" ", words.Select((w, i) => $"WHEN N'{w}' THEN {i + 1}")) + " ELSE 99 END";
 
@@ -194,24 +193,29 @@ WHERE ra.CollectionId = {ThisCollection} AND ra.AssetRank <= @Top AND ra.FixRank
         var report = g.Id == ReportGrouping;
         // the Summary report's columns: the row's stored attributes (data-model\summary-groupings.locked.json); the asset names
         // are the first ten in order, "+N more" says how many it leaves out; last seen = the run the row is from
-        var names = Attr("AssetNames");
-        var attrs = report ? $"""
+        // 2026-11-05 (owner: "every views must be fast"; the Summary view timed out at 90 s at a ring-0 install): the attributes
+        // are LATE (GridLate) -- the page is chosen, counted and sorted over the stored typed columns, and the JSON of the row's
+        // attributes is read for the page's rows alone (measured: 1.1-3.2 s -> 0.2 s for the report grouping's 12,345 rows),
+        // unless the request filters, sorts or searches on one of them. Over alias s in the source, alias sl in the late join.
+        IReadOnlyList<(string Key, Func<string, string> Sql)> attrDefs = report ? AttrColumns() : [];
+        string AttrSelect(IEnumerable<(string Key, Func<string, string> Sql)> cols, string alias) =>
+            string.Concat(cols.Select(c => ",\n       " + c.Sql(alias) + " AS " + c.Key));
+        var attrs = AttrSelect(attrDefs, "s");
+        var head = $"SELECT CONCAT(s.Key1, N'|', s.Key2, N'|', s.Key3) AS RowKey, {keys}{name}";
+        var tail = $"""
 ,
-       {Attr("Domain")} AS Domain, {Attr("Category")} AS Category, {Attr("Subcategory")} AS Subcategory,
-       {Attr("Severity")} AS Severity, {Attr("RiskRating")} AS RiskRating,
-       CASE WHEN {names} IS NULL THEN NULL WHEN s.Assets > LEN({names}) - LEN(REPLACE({names}, N';', N'')) + 1
-            THEN CONCAT({names}, N' +', s.Assets - (LEN({names}) - LEN(REPLACE({names}, N';', N'')) + 1), N' more') ELSE {names} END AS AssetNames,
-       TRY_CONVERT(date, {Attr("FirstSeen")}) AS FirstSeen, (SELECT CONVERT(date, c.CollectionTime) FROM sidata.Collection AS c WHERE c.CollectionId = s.CollectionId) AS LastSeen,
-       {Attr("Remediation")} AS Remediation
-""".TrimEnd() : "";
-        var source = $"""
-SELECT CONCAT(s.Key1, N'|', s.Key2, N'|', s.Key3) AS RowKey, {keys}{name}{attrs},
        s.Findings, s.Assets, s.Recommendations, s.MaxRisk, s.TotalRisk, {ProDataSql.TierExpr("s.BestTier")} AS Tier, s.Tier0Findings,
        s.CriticalFindings, s.HighFindings, s.RatedCriticalFindings, s.RatedHighFindings, s.RatedCriticalFindings + s.RatedHighFindings AS RatedCriticalOrHigh,
        s.ExploitedRecommendations, CASE WHEN s.ExploitedRecommendations > 0 THEN 1 ELSE 0 END AS HasExploit, {LeadSql} AS Lead
 FROM sidata.SummaryGroup AS s
 WHERE s.CollectionId = {ThisCollection} AND s.GroupingId = N'{g.Id}'
 """;
+        var source = head + attrs + tail;
+        string Narrow(IReadOnlyCollection<string> needed) => head + AttrSelect(attrDefs.Where(c => needed.Contains(c.Key)), "s") + tail;
+        // the page's row again by its stored key (one row per grouping and key -- the (CollectionId, GroupingId, Key1) index)
+        string K(int i) => i < g.Keys.Count ? $"g.[K{i + 1}]" : "N''";
+        var lateJoin = $"JOIN sidata.SummaryGroup AS sl ON sl.CollectionId = {ThisCollection} AND sl.GroupingId = N'{g.Id}' AND sl.Key1 = {K(0)} AND sl.Key2 = {K(1)} AND sl.Key3 = {K(2)}";
+        string? LateOf(string key) { foreach (var c in attrDefs) if (c.Key == key) return c.Sql("sl"); return null; }
         var cols = new List<GridColumn> { new("RowKey", "Row key", Hidden: true) };
         for (var i = 0; i < g.Keys.Count; i++)
             cols.Add(g.Keys[i] == "Tier"
@@ -221,17 +225,17 @@ WHERE s.CollectionId = {ThisCollection} AND s.GroupingId = N'{g.Id}'
         if (report)
             cols.AddRange(
             [
-                new("Domain", "Security domain", Filter: GridFilter.Values),
-                new("Category", "Category", Filter: GridFilter.Contains, Search: true),
-                new("Subcategory", "Subcategory", Filter: GridFilter.Contains, Search: true),
-                new("Severity", "Severity", Filter: GridFilter.Values, SortSql: WordSort("Severity", SeverityWords)),
-                new("RiskRating", "Risk rating", Filter: GridFilter.Values, SortSql: WordSort("RiskRating", RatingWords)),
+                new("Domain", "Security domain", Filter: GridFilter.Values, LateSql: LateOf("Domain")),
+                new("Category", "Category", Filter: GridFilter.Contains, Search: true, LateSql: LateOf("Category")),
+                new("Subcategory", "Subcategory", Filter: GridFilter.Contains, Search: true, LateSql: LateOf("Subcategory")),
+                new("Severity", "Severity", Filter: GridFilter.Values, SortSql: WordSort("Severity", SeverityWords), LateSql: LateOf("Severity")),
+                new("RiskRating", "Risk rating", Filter: GridFilter.Values, SortSql: WordSort("RiskRating", RatingWords), LateSql: LateOf("RiskRating")),
             ]);
         cols.AddRange(
         [
             new("Assets", "Affected assets", GridType.Number, GridFilter.Range),
         ]);
-        if (report) cols.Add(new("AssetNames", "Affected assets (names)", Filter: GridFilter.Contains, Search: true));
+        if (report) cols.Add(new("AssetNames", "Affected assets (names)", Filter: GridFilter.Contains, Search: true, LateSql: LateOf("AssetNames")));
         cols.AddRange(
         [
             new("Findings", "Findings", GridType.Number, GridFilter.Range),
@@ -252,13 +256,34 @@ WHERE s.CollectionId = {ThisCollection} AND s.GroupingId = N'{g.Id}'
         if (report)
             cols.AddRange(
             [
-                new("FirstSeen", "First seen", GridType.Date, GridFilter.Dates),
-                new("LastSeen", "Last seen", GridType.Date, GridFilter.Dates),
-                new("Remediation", "Remediation", Filter: GridFilter.Contains, Search: true),
+                new("FirstSeen", "First seen", GridType.Date, GridFilter.Dates, LateSql: LateOf("FirstSeen")),
+                new("LastSeen", "Last seen", GridType.Date, GridFilter.Dates, LateSql: LateOf("LastSeen")),
+                new("Remediation", "Remediation", Filter: GridFilter.Contains, Search: true, LateSql: LateOf("Remediation")),
             ]);
         cols.Add(new("Lead", "Most critical tier, then risk", GridType.Number, Hidden: true));
         return new GridSpec(g.Id == "recommendation" ? "summaryrecs" : "summary" + g.Id.Replace("-", "", StringComparison.Ordinal), "", source, cols,
-            "Lead", true, "RowKey", ["CollectionId"], Immutable: true);
+            "Lead", true, "RowKey", ["CollectionId"], Immutable: true, Late: report ? new GridLate(Narrow, lateJoin) : null);
+    }
+
+    /// The Summary report's attribute columns (key, expression over a row alias): the JSON of the stored attributes, and the
+    /// run the row is from. Read late -- for the page's rows only (<see cref="GridLate"/>).
+    private static IReadOnlyList<(string Key, Func<string, string> Sql)> AttrColumns()
+    {
+        static string A(string a, string id) => $"JSON_VALUE({a}.AttributesJson, '$.{id}')";
+        static string Names(string a)
+        {
+            var n = A(a, "AssetNames");
+            return $"CASE WHEN {n} IS NULL THEN NULL WHEN {a}.Assets > LEN({n}) - LEN(REPLACE({n}, N';', N'')) + 1\n" +
+                   $"            THEN CONCAT({n}, N' +', {a}.Assets - (LEN({n}) - LEN(REPLACE({n}, N';', N'')) + 1), N' more') ELSE {n} END";
+        }
+        return
+        [
+            ("Domain", a => A(a, "Domain")), ("Category", a => A(a, "Category")), ("Subcategory", a => A(a, "Subcategory")),
+            ("Severity", a => A(a, "Severity")), ("RiskRating", a => A(a, "RiskRating")), ("AssetNames", Names),
+            ("FirstSeen", a => $"TRY_CONVERT(date, {A(a, "FirstSeen")})"),
+            ("LastSeen", a => $"(SELECT CONVERT(date, c.CollectionTime) FROM sidata.Collection AS c WHERE c.CollectionId = {a}.CollectionId)"),
+            ("Remediation", a => A(a, "Remediation")),
+        ];
     }
 
     // ---- the key figures ----------------------------------------------------------------------------------------------

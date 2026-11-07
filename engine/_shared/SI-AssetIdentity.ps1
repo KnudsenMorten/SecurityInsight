@@ -13,7 +13,7 @@
       discovery    $sourcePriority       MDEDevice is THIRD
     And worse than the disagreement: the endpoint builder's chain ends in a HOSTNAME, a type this very
     codebase classifies as WEAK and forbids joining on. So the profiler used as its asset id precisely
-    the value the correlation engine says is too weak to key on -- one module's safety rule bypassed by
+    the value the correlation engine says is too weak to key on -- one module's joining rule not followed by
     another, silently, with nothing in any output looking wrong.
 
     🔑 THE SPLIT THAT SETTLES IT (operator, 2026-08-28: "correlation is to merge all records into one,

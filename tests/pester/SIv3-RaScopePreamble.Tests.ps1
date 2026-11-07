@@ -471,7 +471,10 @@ Describe 'The lint: no query re-implements a factor or hard-codes what a list, a
 
     It 'no query hard-codes a value a data-model values list owns, or the shipped exclusion tag' {
         $owned = New-Object System.Collections.Generic.List[string]
-        foreach ($l in @($script:Model['lists'].lists)) { if ([string]$l.type -eq 'values') { foreach ($v in @($l.values)) { if ($v -is [string] -and $v.Length -ge 6) { $owned.Add($v) } } } }
+        # reviewed exception (2026-11-04): generic_device_names (placeholder device names the correlation check never matches on,
+        # added 2026-11-02) is not a report-scope list -- its plain words ("computer", "default") mean something else in a query
+        # (a device CATEGORY, a tier claim's KIND), so they are not values a report could take from that list
+        foreach ($l in @($script:Model['lists'].lists)) { if ([string]$l.type -eq 'values' -and [string]$l.id -ne 'generic_device_names') { foreach ($v in @($l.values)) { if ($v -is [string] -and $v.Length -ge 6) { $owned.Add($v) } } } }
         $bad = New-Object System.Collections.Generic.List[string]
         foreach ($n in $script:Scoped) {
             $q = [regex]::Replace((script:QueryOf $n), '(?s)//__SI_SCOPE_BEGIN__.*?//__SI_SCOPE_END__', '')

@@ -14,9 +14,15 @@
       * estimate = pages / rate x a margin (the spread of the measured builds; 1.5 until three are measured);
       * an update builds a non-resumable index only when its estimate fits the update's minutes; otherwise the index WAITS
         (cfg.IndexBuild, one row per index, with the statement and why) and the release runs without it;
-      * a waiting index is built when the install is idle long enough: the pipeline runner's wake-up starts the updater
-        (SI_UPDATER_MODE = index-build) when no run, step, data sync or data out is going and the estimate ends before the
-        next scheduled run; the updater takes the install's lock, as an update does, and beats it while the index builds;
+      * a waiting index is built when the install is idle long enough: the pipeline runner's wake-up starts THE INDEX BUILD
+        JOB caj-si-index-build (#1111, owner 2026-11-05: "why not split this into 2 jobs" / "we cannot have env that doesnt
+        upd suddently") when no run, step, data sync, data out or update is going and the estimate ends before the next
+        scheduled run; the job takes the install's lock (a pipeline run waits for it) and beats it while the index builds;
+      * THE UPDATE ALWAYS GOES FIRST (#1111): the job never starts while an update waits (the updater's wait mark) or runs;
+        while it builds it checks both every CheckSeconds -- and whether it still holds the install's lock, which the
+        updater may take from it at once. Either = a resumable build is PAUSED (ALTER INDEX ... PAUSE; the row 'paused',
+        resumed in a later idle window), a filtered one (it cannot pause) is cancelled and waits again; the lock is freed
+        and the job ends. The updater never waits for an index build and no longer has an index-build mode;
       * NO INDEX WAITS FOR EVER (owner 2026-11-01): one that has waited 7 days without an idle window long enough is
         built at the next idle moment, once, said in plain words -- the next run waits for it.
     Every build that ran long enough to measure records its rate, so the next estimate is this database's own.
@@ -36,7 +42,11 @@ $script:SIIndexBuild = @{
     SayEveryMinutes = 5          # one line while it builds, this often
     WaitDays        = 7          # an index that has waited this long is built at the next idle moment (once)
     LeadMinutes     = 15         # a window build must end this long before the next run starts
-    Mode            = 'index-build'
+    ResumeMinutes   = 10         # a resumable build (new or paused) starts when the window has at least this many minutes
+    CheckSeconds    = 15         # while it builds, the job looks this often for an update (and beats the install's lock)
+    Job             = 'caj-si-index-build'   # #1111: the index build job (its own job; the updater only updates)
+    Role            = 'index-build'          # its SI_ROLE (container\Start-SIInContainer.ps1 hands it to its entry)
+    WaitTag         = 'si-update-waits'      # the updater's wait mark on its own job (the same tag the runner reads)
 }
 
 function Get-SIIndexBuildContract { $script:SIIndexBuild }
@@ -310,7 +320,7 @@ BEGIN
                RateSource = ISNULL(@Src, RateSource), Why = @Why,
                SinceUtc = CASE WHEN @State = N'waiting' AND State = N'built' THEN SYSUTCDATETIME() ELSE SinceUtc END,
                LastStartUtc = CASE WHEN @State = N'building' THEN SYSUTCDATETIME() ELSE LastStartUtc END,
-               LastEndUtc = CASE WHEN @State IN (N'built', N'failed') OR (@State = N'waiting' AND State = N'building') THEN SYSUTCDATETIME() ELSE LastEndUtc END,
+               LastEndUtc = CASE WHEN @State IN (N'built', N'failed', N'paused') OR (@State = N'waiting' AND State = N'building') THEN SYSUTCDATETIME() ELSE LastEndUtc END,
                ForcedUtc = CASE WHEN @Forced = 1 THEN SYSUTCDATETIME() WHEN @State = N'waiting' AND State = N'built' THEN NULL ELSE ForcedUtc END,
                UpdatedUtc = SYSUTCDATETIME(), UpdatedBy = @By
          WHERE TableName = @T AND IndexName = @I;
@@ -324,9 +334,10 @@ END
 }
 
 function Save-SIIndexBuildRow {
-    <# Records one index's state (waiting | building | built | failed). Never throws; $true when written. #>
+    <# Records one index's state (waiting | building | paused | built | failed). 'paused': a resumable build paused (an
+       update went first, or its window ended) -- resumed in a later idle window. Never throws; $true when written. #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index,
-          [Parameter(Mandatory)][ValidateSet('waiting', 'building', 'built', 'failed')][string]$State, [string]$Statement, $Pages, $EstMinutes,
+          [Parameter(Mandatory)][ValidateSet('waiting', 'building', 'paused', 'built', 'failed')][string]$State, [string]$Statement, $Pages, $EstMinutes,
           [string]$Source, [string]$Why = '', [switch]$Forced, [string]$By = 'caj-si-updater')
     $nz = { param($v) if ($null -eq $v -or "$v" -eq '') { [DBNull]::Value } else { $v } }
     $w = "$Why"; if ($w.Length -gt 1000) { $w = $w.Substring(0, 1000) }
@@ -355,11 +366,12 @@ function Read-SIIndexBuildRows {
 function Get-SIIndexBuildStatusLines {
     <# PURE. What the status says about the indexes that wait or build (none = no line). #>
     param([object[]]$Rows = @(), [datetime]$NowUtc = [datetime]::UtcNow)
-    @($Rows | Where-Object { $_ -and $_.State -in @('waiting', 'building', 'failed') } | Sort-Object SinceUtc | ForEach-Object {
+    @($Rows | Where-Object { $_ -and $_.State -in @('waiting', 'building', 'paused', 'failed') } | Sort-Object SinceUtc | ForEach-Object {
         $r = $_   # (inside switch, $_ is the switch's own value)
         $est = if ($r.EstMinutes) { 'about {0}' -f (Format-SIIndexDuration ([int]$r.EstMinutes)) } else { 'time not known' }
         switch ([string]$r.State) {
             'building' { 'index {0} on {1}: being built now ({2}, started {3:yyyy-MM-dd HH:mm}Z)' -f $r.Name, $r.Table, $est, $r.LastStartUtc }
+            'paused'   { 'index {0} on {1}: paused ({2}) -- it resumes in the next idle window; the release works without it' -f $r.Name, $r.Table, $(if ("$($r.Why)".Trim()) { $r.Why } else { 'an update went first' }) }
             'failed'   { 'index {0} on {1}: the build failed ({2}) -- the next update tries again' -f $r.Name, $r.Table, $r.Why }
             default    { 'index {0} on {1}: waits for an idle window of {2} (waiting since {3:yyyy-MM-dd HH:mm}Z); the release works without it' -f $r.Name, $r.Table, $est, $r.SinceUtc }
         }
@@ -369,40 +381,153 @@ function Get-SIIndexBuildStatusLines {
 # =====================================================================================================================
 #  The window -- PURE
 # =====================================================================================================================
+function Test-SIIndexBuildFiltered {
+    <# PURE. Is -Statement (a stored CREATE INDEX) a FILTERED index -- a WHERE after its column list? A filtered index cannot
+       be built resumably (SQL Server refuses RESUMABLE for it), so it cannot pause. The same rule as SI-ProSchema.ps1's
+       Test-SIProSchemaIndexFiltered, on the statement text alone. #>
+    param([AllowNull()][AllowEmptyString()][string]$Statement)
+    [bool]("$Statement" -match '(?is)^\s*CREATE\b.*?\bON\b.*?\)\s*(INCLUDE\s*\([^)]*\)\s*)?WHERE\b')
+}
+
 function Get-SIIndexBuildWindowDecision {
     <#
-        PURE. Does this wake-up start the updater to build a waiting index? -Rows (cfg.IndexBuild), -NowUtc, -NextRunUtc (the
-        next scheduled pipeline run; $null = none scheduled), -Busy (Get-SIDataHousekeepingBusy: Busy, Why), -UpdaterRunning
-        (text: an updater execution runs; '' = none), -RunDue (a run starts / runs / resumes at this wake-up).
-        Returns @{ Start; Force; Index (the row); Why }. One index per window: the one that has waited longest.
+        PURE. Does this wake-up start the index build job (caj-si-index-build) for a waiting or paused index? -Rows
+        (cfg.IndexBuild), -NowUtc, -NextRunUtc (the next scheduled pipeline run; $null = none scheduled), -Busy
+        (Get-SIDataHousekeepingBusy: Busy, Why), -UpdaterRunning (an updater execution runs; '' = none), -UpdateWaits (the
+        updater's wait mark is set: an update waits to install; '' = none), -IndexJobRunning (an execution of the index build
+        job runs; '' = none), -RunDue (a run starts / runs / resumes at this wake-up).
+        THE UPDATE GOES FIRST: never while an update waits or runs.
+        A resumable index (a paused build, or a statement without a filter) starts when the window has at least ResumeMinutes:
+        it builds for the window's minutes (MAX_DURATION) and pauses at its end. A filtered one starts only when its estimate
+        fits the window -- or, after WaitDays of waiting, ONCE whatever the window (the next run waits for it).
+        A row still 'building' while no index build job runs is a build that ended without an outcome: it is a candidate again.
+        Returns @{ Start; Force; Index (the row); Why; Minutes (the window, 0 = no run scheduled); Resumable }. One index per
+        window: the one that has waited longest.
     #>
-    param([object[]]$Rows = @(), [Parameter(Mandatory)][datetime]$NowUtc, $NextRunUtc, $Busy, [AllowEmptyString()][string]$UpdaterRunning = '', [bool]$RunDue = $false)
+    param([object[]]$Rows = @(), [Parameter(Mandatory)][datetime]$NowUtc, $NextRunUtc, $Busy, [AllowEmptyString()][string]$UpdaterRunning = '',
+          [AllowEmptyString()][string]$UpdateWaits = '', [AllowEmptyString()][string]$IndexJobRunning = '', [bool]$RunDue = $false)
     $S = $script:SIIndexBuild
-    $no = { param($why, $row) [pscustomobject]@{ Start = $false; Force = $false; Index = $row; Why = $why } }
+    $no = { param($why, $row) [pscustomobject]@{ Start = $false; Force = $false; Index = $row; Why = $why; Minutes = 0; Resumable = $false } }
     $now = $NowUtc.ToUniversalTime()
-    $building = @($Rows | Where-Object { $_ -and $_.State -eq 'building' })
-    $wait = @($Rows | Where-Object { $_ -and $_.State -eq 'waiting' } | Sort-Object { if ($_.SinceUtc) { ([datetime]$_.SinceUtc).ToUniversalTime() } else { [datetime]::MaxValue } })
-    if (-not $wait.Count) { return (& $no '' $null) }
-    $row = $wait[0]
+    $jobRuns = [bool]"$IndexJobRunning".Trim()
+    $states = @('waiting', 'paused'); if (-not $jobRuns) { $states += 'building' }
+    $cand = @($Rows | Where-Object { $_ -and $_.State -in $states -and "$($_.Statement)".Trim() } | Sort-Object { if ($_.SinceUtc) { ([datetime]$_.SinceUtc).ToUniversalTime() } else { [datetime]::MaxValue } })
+    if (-not $cand.Count) { return (& $no '' $null) }
+    $row = $cand[0]
     if ($RunDue) { return (& $no 'a pipeline run starts or runs now' $row) }
-    if ("$UpdaterRunning".Trim()) { return (& $no ('the updater runs ({0})' -f $UpdaterRunning) $row) }
-    if ($building.Count) { return (& $no ('index {0} is being built' -f $building[0].Name) $row) }
+    if ("$UpdateWaits".Trim()) { return (& $no ('an update waits ({0}) -- the update goes first' -f $UpdateWaits) $row) }
+    if ("$UpdaterRunning".Trim()) { return (& $no ('the updater runs ({0}) -- the update goes first' -f $UpdaterRunning) $row) }
+    if ($jobRuns) { return (& $no ('the index build job runs ({0})' -f $IndexJobRunning) $row) }
     if ($Busy -and $Busy.Busy) { return (& $no ('{0}' -f $Busy.Why) $row) }
     $since = if ($row.SinceUtc) { ([datetime]$row.SinceUtc).ToUniversalTime() } else { $now }
     $waitedDays = ($now - $since).TotalDays
     $est = if ($row.EstMinutes) { [int]$row.EstMinutes } else { 0 }
     $next = if ($NextRunUtc) { ([datetime]$NextRunUtc).ToUniversalTime() } else { $null }
     $room = if ($next) { ($next - $now).TotalMinutes - $S.LeadMinutes } else { [double]::MaxValue }
+    $win = if ($next) { [int][Math]::Max(0, [Math]::Floor($room)) } else { 0 }
+    $after = if ($row.State -eq 'building') { ' (its last build ended without an outcome)' } else { '' }
+    $resumable = ($row.State -eq 'paused') -or -not (Test-SIIndexBuildFiltered -Statement $row.Statement)
+    if ($resumable) {
+        if ($room -ge $S.ResumeMinutes) {
+            $how = if ($row.State -eq 'paused') { 'resumed' } else { 'built resumably' }
+            $why = if ($next) { '{0} for up to {1} (it pauses at the end of the window; the next run starts {2:yyyy-MM-dd HH:mm}Z){3}' -f $how, (Format-SIIndexDuration $win), $next, $after }
+                   else { '{0}, and no run is scheduled{1}' -f $how, $after }
+            return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $true }
+        }
+        return (& $no ('the window before the next run is shorter than {0} min' -f $S.ResumeMinutes) $row)
+    }
     if ($est -gt 0 -and $est -le $room) {
-        $why = if ($next) { 'about {0}, and the next run starts {1:yyyy-MM-dd HH:mm}Z' -f (Format-SIIndexDuration $est), $next } else { 'about {0}, and no run is scheduled' -f (Format-SIIndexDuration $est) }
-        return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why }
+        $why = if ($next) { 'about {0}, and the next run starts {1:yyyy-MM-dd HH:mm}Z{2}' -f (Format-SIIndexDuration $est), $next, $after } else { 'about {0}, and no run is scheduled{1}' -f (Format-SIIndexDuration $est), $after }
+        return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $false }
     }
     if ($waitedDays -ge $S.WaitDays -and -not $row.ForcedUtc) {
         $why = 'it has waited {0} days without an idle window long enough ({1}); it is built now, once, and the next run waits for it' -f [int][Math]::Floor($waitedDays), $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'its time is not known' })
-        return [pscustomobject]@{ Start = $true; Force = $true; Index = $row; Why = $why }
+        return [pscustomobject]@{ Start = $true; Force = $true; Index = $row; Why = $why; Minutes = $win; Resumable = $false }
     }
     $left = if ($next) { 'the next run starts in {0}' -f (Format-SIIndexDuration ([int][Math]::Max(0, ($next - $now).TotalMinutes))) } else { 'no run is scheduled' }
     & $no ('it needs {0}; {1}' -f $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'a time that is not known' }), $left) $row
+}
+
+# =====================================================================================================================
+#  #1111 THE INDEX BUILD JOB's statements -- PURE
+# =====================================================================================================================
+function Test-SIIndexBuildName {
+    <# PURE. -Table 'schema.table' and -Index a plain name (what Get-SIProSchemaIndexStatements ever records): $true when both
+       are safe to put into a statement. #>
+    param([string]$Table, [string]$Index)
+    ("$Table" -match '^[A-Za-z_]\w{0,127}\.[A-Za-z_]\w{0,127}$') -and ("$Index" -match '^[A-Za-z_]\w{0,127}$')
+}
+
+function Get-SIIndexBuildQuotedTable {
+    <# PURE. 'sidata.Finding' -> '[sidata].[Finding]' (callers check Test-SIIndexBuildName first). #>
+    param([Parameter(Mandatory)][string]$Table)
+    $p = $Table -split '\.', 2
+    '[{0}].[{1}]' -f $p[0], $p[1]
+}
+
+function Get-SIIndexBuildRunSql {
+    <#
+        PURE. What the index build job runs for one row: -ResumableState = the index's resumable operation now ('PAUSED',
+        'RUNNING' or ''), -Minutes = the window (MAX_DURATION; at least 1).
+          PAUSED                      -> ALTER INDEX [i] ON [s].[t] RESUME WITH (MAX_DURATION = n MINUTES)
+          a filtered index            -> its CREATE ... WITH (ONLINE = ON)   (it cannot pause: no RESUMABLE, no MAX_DURATION)
+          any other                   -> its CREATE ... WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = n MINUTES)
+        The stored statement's own trailing WITH (...) is replaced. Returns @{ Sql; Resumable; How }; Sql '' when the names
+        are not safe or the statement is not a CREATE INDEX of this index.
+    #>
+    param([Parameter(Mandatory)]$Row, [AllowEmptyString()][string]$ResumableState = '', [int]$Minutes = 60)
+    $m = [Math]::Max(1, $Minutes)
+    $none = [pscustomobject]@{ Sql = ''; Resumable = $false; How = '' }
+    if (-not (Test-SIIndexBuildName -Table ([string]$Row.Table) -Index ([string]$Row.Name))) { return $none }
+    $qt = Get-SIIndexBuildQuotedTable -Table ([string]$Row.Table)
+    if ($ResumableState -eq 'PAUSED') {
+        return [pscustomobject]@{ Sql = ('ALTER INDEX [{0}] ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f $Row.Name, $qt, $m); Resumable = $true; How = 'resumed (resumable: it pauses at the end of its window)' }
+    }
+    $base = ([string]$Row.Statement).Trim().TrimEnd(';').TrimEnd()
+    $base = ($base -replace '(?is)\s+WITH\s*\([^()]*\)\s*$', '').TrimEnd()
+    $head = '(?is)^CREATE\s+(?:UNIQUE\s+)?(?:NONCLUSTERED\s+)?INDEX\s+\[?' + [regex]::Escape([string]$Row.Name) + '\]?\s+ON\s+'
+    if ($base -notmatch $head -or $base -match ';') { return $none }
+    if (Test-SIIndexBuildFiltered -Statement $base) { return [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON)' -f $base); Resumable = $false; How = 'built online (a filtered index cannot pause)' } }
+    [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = {1} MINUTES)' -f $base, $m); Resumable = $true; How = 'built online, resumable (it pauses at the end of its window)' }
+}
+
+function Get-SIIndexBuildPauseSql {
+    <# PURE. The pause of a running resumable build (sent on a second connection while the build runs). '' = unsafe names. #>
+    param([Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index)
+    if (-not (Test-SIIndexBuildName -Table $Table -Index $Index)) { return '' }
+    'ALTER INDEX [{0}] ON {1} PAUSE' -f $Index, (Get-SIIndexBuildQuotedTable -Table $Table)
+}
+
+function Get-SIIndexResumableOpSql {
+    <# PURE. The one index's resumable operation (state, percent), where the view exists (one result set). #>
+    @'
+SET NOCOUNT ON;
+DECLARE @b TABLE (S nvarchar(60) NOT NULL, P float NOT NULL);
+IF OBJECT_ID(N'sys.index_resumable_operations') IS NOT NULL
+  INSERT @b (S, P) EXEC sp_executesql N'SELECT CONVERT(nvarchar(60), state_desc), CONVERT(float, ISNULL(percent_complete, 0)) FROM sys.index_resumable_operations WHERE object_id = OBJECT_ID(@T) AND name = @I', N'@T nvarchar(300), @I nvarchar(128)', @T = @T, @I = @I;
+SELECT S, P FROM @b;
+'@
+}
+
+function Read-SIIndexResumableOp {
+    <# The index's resumable operation: @{ State = PAUSED | RUNNING; Percent } or $null (none, or it cannot be read). Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index)
+    try {
+        $r = @(Get-SIIndexReaderRows (& $Invoke (Get-SIIndexResumableOpSql) ([ordered]@{ T = $Table; I = $Index }) 'reader'))
+        if (-not $r.Count) { return $null }
+        $s = [string](Get-SIIndexRowValue $r[0] 'S'); if (-not $s.Trim()) { return $null }
+        [pscustomobject]@{ State = $s.Trim().ToUpperInvariant(); Percent = [int][Math]::Floor([double](Get-SIIndexRowValue $r[0] 'P')) }
+    } catch { $null }
+}
+
+function Test-SIIndexExists {
+    <# Is the index there now? $true / $false; $null when it cannot be read. Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index)
+    try {
+        $n = @(Get-SIIndexReaderRows (& $Invoke "SET NOCOUNT ON; SELECT COUNT(*) AS N FROM sys.indexes WHERE name = @I AND object_id = OBJECT_ID(@T);" ([ordered]@{ I = $Index; T = $Table }) 'reader'))
+        if (-not $n.Count) { return $false }
+        [int](Get-SIIndexRowValue $n[0] 'N') -gt 0
+    } catch { $null }
 }
 
 # =====================================================================================================================
@@ -414,15 +539,34 @@ function Invoke-SIIndexBuildCommand {
         to its end or to its own MAX_DURATION), and calls -Beat { param($Minutes) } every BeatSeconds while it runs -- the
         install's lock and the progress line (a long build never leaves the lock looking abandoned). Throws the statement's
         own error. Returns the seconds it took.
+        #1111: -Interrupt { param($Minutes) } -> '' or a reason, asked at every beat (the index build job: an update waits or
+        runs, or the install's lock was taken). A reason = -OnInterrupt { param($Command, $Reason) } (a resumable build:
+        ALTER INDEX ... PAUSE on a second connection; a filtered one: the command cancelled), then the statement is waited for
+        (up to -DrainSeconds) and an OperationCanceledException is thrown whose Data['SIInterrupted'] is the reason.
     #>
-    param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string]$Sql, [scriptblock]$Beat, [int]$BeatSeconds = $script:SIIndexBuild.BeatSeconds)
+    param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string]$Sql, [scriptblock]$Beat, [int]$BeatSeconds = $script:SIIndexBuild.BeatSeconds,
+          [scriptblock]$Interrupt, [scriptblock]$OnInterrupt, [int]$DrainSeconds = 300)
     $cmd = $Connection.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 0
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $task = $cmd.ExecuteNonQueryAsync()
     try {
         while (-not $task.Wait([Math]::Max(1, $BeatSeconds) * 1000)) {
             if ($Beat) { try { $null = & $Beat ([int][Math]::Floor($sw.Elapsed.TotalMinutes)) } catch { } }
+            $why = ''
+            if ($Interrupt) { try { $why = [string](& $Interrupt ([int][Math]::Floor($sw.Elapsed.TotalMinutes))) } catch { $why = '' } }
+            if ("$why".Trim()) {
+                if ($OnInterrupt) { try { $null = & $OnInterrupt $cmd $why } catch { } } else { try { $cmd.Cancel() } catch { } }
+                try { $null = $task.Wait([Math]::Max(1, $DrainSeconds) * 1000) } catch { }
+                $x = New-Object System.OperationCanceledException ('the index build was interrupted: {0}' -f $why)
+                $x.Data['SIInterrupted'] = "$why"
+                throw $x
+            }
         }
+    } catch [System.OperationCanceledException] {
+        if ($_.Exception.Data.Contains('SIInterrupted')) { throw $_.Exception }
+        $e = $_.Exception
+        while (($e -is [System.Management.Automation.MethodInvocationException] -or $e -is [System.AggregateException]) -and $e.InnerException) { $e = $e.InnerException }
+        throw $e
     } catch {
         # PowerShell hands the task's failure as a MethodInvocationException around an AggregateException: the SQL error inside
         $e = $_.Exception

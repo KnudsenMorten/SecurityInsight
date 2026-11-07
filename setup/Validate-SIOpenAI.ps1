@@ -55,6 +55,12 @@ param(
     [ValidateSet("Enabled","Disabled")]
     [string]$PublicNetworkAccess,
 
+    # #1102 (framework rule 11): the install is PRIVATE (its private-network answer). Without it the install's database server
+    # is read: public network access off = private. A private install never gets an account with public access.
+    [switch]$PrivateNetwork,
+    # The install's resource group, where its database server is read (default: -ResourceGroupName).
+    [string]$InstallResourceGroupName,
+
     [switch]$WaitForAccountReady,
     [ValidateRange(2,120)]
     [int]$WaitIntervalSeconds = 5,
@@ -102,6 +108,9 @@ $ScriptRoot = if ($PSScriptRoot -and -not [string]::IsNullOrWhiteSpace($PSScript
 . ([IO.Path]::Combine($ScriptRoot, '_shared', 'SI-SetupAzure.ps1'))
 # A resource group this script creates gets the setup tags (product, ring, edition, hosting, tenant, owner, purpose).
 . (Join-Path $ScriptRoot '_shared\SI-SetupNaming.ps1')
+# #1102: a private install's account follows rule 11 (Test-SISqlServerPrivate, Get-SIOpenAIPrivatePlan)
+. (Join-Path $ScriptRoot '_shared\SI-SetupArm.ps1')
+. (Join-Path $ScriptRoot '_shared\SI-OpenAIPrivate.ps1')
 function Get-SISetupRgTag {
     $ring    = if (@('r0', 'r1', 'r2', 'prod') -contains "$($global:SI_Ring)".Trim()) { "$($global:SI_Ring)".Trim() } else { 'prod' }
     $hosting = if ("$($global:SI_Bootstrap_ResourceGroupName)".Trim()) { 'ca' } else { 'vm' }
@@ -519,11 +528,29 @@ function New-DeploymentWithSkuAndModelFallback {
 Write-Section "3) Azure Auth + Subscription"
 Initialize-SIOpenAIAzureSignIn
 
-Write-Section "4) Resource Group"
-Ensure-ResourceGroup
-
 $AccountId    = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.CognitiveServices/accounts/$AccountName"
 $DeploymentId = "${AccountId}/deployments/${DeploymentName}"
+
+# #1102 (framework rule 11; only logs / the data collection endpoint may stay public, rule 11f): on a PRIVATE install no
+# account is created with public access and none is switched to it. Decided BEFORE anything is created (the resource group
+# included); a read that fails stops the script with nothing created.
+Write-Section "3b) Private install?"
+$__priv = & {
+    Set-StrictMode -Off
+    Test-SIOpenAIInstallPrivate -PrivateNetwork ([bool]$PrivateNetwork) -SubscriptionId $SubscriptionId `
+        -ResourceGroupName $(if ($InstallResourceGroupName) { $InstallResourceGroupName } else { $ResourceGroupName })
+}
+$__plan = Get-SIOpenAIPrivatePlan -Private ([bool]$__priv.Private) -Account $(if ($__priv.Private) { Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion } else { $null }) -AccountName $AccountName
+if ($__priv.Private) { Write-Log INFO ("The install is private ({0})." -f $__priv.Why) } else { Write-Log INFO "The install is not private." }
+if ($__plan.Action -eq 'refuse') {
+    Write-Log WARN $__plan.Line
+    $global:BuildSummaryByAI = $false
+    return
+}
+if ($__plan.Action -in 'report', 'reuse') { Write-Log $(if ($__plan.Action -eq 'report') { 'WARN' } else { 'INFO' }) $__plan.Line }
+
+Write-Section "4) Resource Group"
+Ensure-ResourceGroup
 
 Write-Section "5) Azure OpenAI Account (PAYG)"
 Write-Log INFO "Account ResourceId: $AccountId"
@@ -534,6 +561,11 @@ if (-not $account) {
     if ($ValidateOnly) {
         Write-Log WARN "[ValidateOnly] Azure OpenAI account '$AccountName' NOT FOUND. Skipping create."
         $script:Status_Account = 'MISSING'
+    } elseif ($__priv.Private) {
+        # #1102: never reached in practice (the plan refused above) -- the create below always sends public access
+        Write-Log WARN $script:SIOpenAIPrivateRefusal
+        $global:BuildSummaryByAI = $false
+        return
     } else {
         Write-Log INFO "Account does not exist -> creating..."
         Invoke-Put -ResourceId $AccountId -ApiVersion $ApiVersion -Body @{

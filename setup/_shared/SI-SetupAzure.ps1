@@ -403,8 +403,10 @@ function Get-SIKeyVaultNetworkShape {
 function Get-SIKeyVaultRule11Patch {
     <# PURE. The PATCH body that brings -Vault to the rule-11 shape -- ONLY what differs -- or $null when it has it.
          -Private  publicNetworkAccess Disabled + networkAcls { Deny, AzureServices, no IP rules, no network rules }
-         public    networkAcls bypass AzureServices; its default action and rules are kept as they are (Allow when unset),
-                   publicNetworkAccess is not touched -- a public install never opens or closes a vault here. #>
+         public    a vault open to all networks (default action Allow, or no firewall at all) already lets trusted Microsoft
+                   services in: nothing to set -- Azure does not keep a bypass on a vault without a firewall, so asking for
+                   one can never read back. Only a vault whose firewall DENIES gets bypass AzureServices; its default action
+                   and rules are kept, publicNetworkAccess is not touched -- a public install never opens or closes a vault. #>
     param($Vault, [switch]$Private)
     $s = Get-SIKeyVaultNetworkShape -Vault $Vault
     $p = [ordered]@{}
@@ -413,8 +415,8 @@ function Get-SIKeyVaultRule11Patch {
         if ($s.DefaultAction -ne 'Deny' -or $s.Bypass -ne 'AzureServices' -or $s.IpRules.Count -or $s.VirtualNetworkRules.Count) {
             $p['networkAcls'] = [ordered]@{ defaultAction = 'Deny'; bypass = 'AzureServices'; ipRules = @(); virtualNetworkRules = @() }
         }
-    } elseif ($s.Bypass -ne 'AzureServices') {
-        $p['networkAcls'] = [ordered]@{ defaultAction = $(if ($s.DefaultAction) { $s.DefaultAction } else { 'Allow' }); bypass = 'AzureServices'
+    } elseif ($s.DefaultAction -eq 'Deny' -and $s.Bypass -ne 'AzureServices') {
+        $p['networkAcls'] = [ordered]@{ defaultAction = 'Deny'; bypass = 'AzureServices'
                                         ipRules = @($s.IpRules); virtualNetworkRules = @($s.VirtualNetworkRules) }
     }
     if (-not $p.Count) { return $null }
@@ -457,8 +459,11 @@ function Set-SIKeyVaultRule11 {
         }
     }
     if (-not (Test-SIKeyVaultRule11Shape -Vault $back -Private:$Private)) {
-        throw ("The Key Vault '{0}' does not read back in the shape it must have ({1}); it reads: {2}. Nothing writes a key or secret to it until it does -- run the same command again; if it stays like this, set it in the Azure portal (Key vaults > {0} > Networking) and run again." -f $VaultName,
-            $(if ($Private) { 'public access Disabled, firewall Deny, trusted Microsoft services allowed (bypass AzureServices), no IP or network rules' } else { 'trusted Microsoft services allowed (bypass AzureServices)' }), (Get-SIKeyVaultShapeText -Vault $back))
+        # Framework rule 17: the advice names ONLY the one setting that is missing -- never "set the networking", which on
+        # a public install invites "selected networks" and locks the jobs out of their own vault.
+        throw ("The Key Vault '{0}' does not read back in the shape it must have ({1}); it reads: {2}. Nothing writes a key or secret to it until it does -- run the same command again; if it stays like this, {3}, change nothing else there, and run again." -f $VaultName,
+            $(if ($Private) { 'public access Disabled, firewall Deny, trusted Microsoft services allowed (bypass AzureServices), no IP or network rules' } else { 'trusted Microsoft services allowed (bypass AzureServices)' }), (Get-SIKeyVaultShapeText -Vault $back),
+            $(if ($Private) { "in the Azure portal (Key vaults > $VaultName > Networking) choose 'Disable public access' and tick 'Allow trusted Microsoft services to bypass this firewall'" } else { "in the Azure portal (Key vaults > $VaultName > Networking > Exceptions) tick only 'Allow trusted Microsoft services to bypass this firewall'" }))
     }
     [pscustomobject]@{ Changed = [bool]$patch; Shape = (Get-SIKeyVaultShapeText -Vault $back); Vault = (ConvertTo-SIKeyVaultObject $back) }
 }

@@ -713,6 +713,12 @@ function Get-SIJobFloorChange {
     $cur = Get-SIJobCurrentSize -Job $Job
     $was = '{0} CPU / {1}, {2}' -f $cur.Cpu.ToString('0.0#', $inv), $cur.Memory, (Format-SIJobTimeout -Seconds $cur.ReplicaTimeout)
     $fCpu = 2.0; $fMem = 4.0
+    # OPEN-27 (owner 2026-11-04: "heavy jobs start 4/8"; 2026-11-04 night at a large private install whose every job ran
+    # 2 CPU / 4 GiB: "you should size bigger. that is too small"): the HEAVY jobs -- the collections, correlation, Risk
+    # Analysis and its workers, the data sync, vulnerabilities -- are raised to at least 4 CPU / 8 GiB on every update; the
+    # light ones (runner, heartbeat, mail, support, ...) keep 2 CPU / 4 GiB. Never lowers a job.
+    $heavy = ($null -ne (Get-SIJobSizingEngine -JobName $name)) -or ($name -match '(?i)^caj-si-raworker-')
+    if ($heavy) { $fCpu = 4.0; $fMem = 8.0 }
     if ($name -like '*-producer') {
         $single = @(@($AllJobs) | Where-Object { $_ -and [string]$_.name -eq ($name -replace '-producer$', '') }) | Select-Object -First 1
         if ($single) { $s = Get-SIJobCurrentSize -Job $single; $fCpu = [Math]::Max($fCpu, [double]$s.Cpu); $fMem = [Math]::Max($fMem, [double]$s.MemoryGi) }
@@ -722,13 +728,14 @@ function Get-SIJobFloorChange {
     $sizeUp = ($cur.Cpu -lt $fCpu -or $cur.MemoryGi -lt $fMem)
     if ($sizeUp) {
         if ($nMem -lt 2 * $nCpu) { $nMem = 2 * $nCpu }   # a consumption pair: memory = 2 x CPU
-        $reasons.Add('every job runs with at least 2 CPU / 4 GiB')
+        $reasons.Add($(if ($heavy) { 'a heavy job runs with at least 4 CPU / 8 GiB' } else { 'every job runs with at least 2 CPU / 4 GiB' }))
     }
     # the run limit
     $limit = [int](Get-SIJobRunLimit); $nTo = [int]$cur.ReplicaTimeout; $kept = ''
     # #718: the hourly status report (caj-si-heartbeat) keeps its own short run limit (Get-SIHeartbeatJobRunLimit) -- a
     # 7-day limit would let one hung tick keep every later hour from reporting
-    if ($name -notin @('caj-si-flow', 'caj-si-heartbeat') -and $cur.ReplicaTimeout -lt $limit) {
+    # (the users' sign-in methods read in the background, caj-si-signin-methods, keeps the same short limit: a run reads for its slice)
+    if ($name -notin @('caj-si-flow', 'caj-si-heartbeat', 'caj-si-signin-methods') -and $cur.ReplicaTimeout -lt $limit) {
         $key = (($name -replace '^(?i)caj-si-', '') -replace '-(producer|worker)$', '').ToLowerInvariant()
         $names = @($key); $step = @(@($Steps) | Where-Object { $_ -and [string]$_.Key -eq $key }) | Select-Object -First 1
         if ($step -and $step.Engine -and [string]$step.Engine -ne $key) { $names += [string]$step.Engine }

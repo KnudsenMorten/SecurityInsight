@@ -63,7 +63,8 @@ Describe 'report <Name>' -ForEach $script:Reports {
     }
     It 'drops MDE-excluded devices, as the graph rows do (else they re-enter because the graph lacks them)' {
         $tvm = [regex]::Match($script:B, '(?s)let _TvmOnly = .*?\| join kind=leftanti').Value
-        $tvm | Should -Match ([regex]::Escape('DeviceInfo | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId'))
+        # DeviceInfo is read as an OPTIONAL table (#1104: a tenant without it -- Defender for Business -- keeps every TVM row)
+        $tvm | Should -Match ([regex]::Escape('(union isfuzzy=true (datatable(DeviceId:string, Timestamp:datetime)[]), (DeviceInfo) | extend ExclusionReason = tostring(column_ifexists("ExclusionReason", "")) | summarize arg_max(Timestamp, ExclusionReason) by DeviceId'))
         $tvm | Should -Match '\| where isempty\(ExclusionReason\)'
         $script:B | Should -Match '\| where EG_IsExcluded == false' -Because 'the graph rows drop MDE-excluded devices'
     }

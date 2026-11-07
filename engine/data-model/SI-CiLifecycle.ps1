@@ -184,6 +184,18 @@ function Get-SIRecordSeenWindowDays {
     #>
     param($Record, [int]$SeenWithinDays = 8)
     if ($SeenWithinDays -le 0 -or $null -eq $Record) { return 0 }
+    # EXPOSURE GRAPH AGES OUT (owner 2026-11-05, "ci object must be the stable id"): an Exposure Graph record of ANY class
+    # gets the seen window. Exposure Graph keeps LISTING nodes long after the asset is gone (a ring 1 install, 2026-11-05: a
+    # VM's old node ids stayed in ExposureGraphNodes for weeks; 13 CIs were kept active by Exposure Graph alone, unseen
+    # 14+ days). Listed is not "exists" for Exposure Graph -- its node's own observation time is the evidence:
+    # si_source_last_seen = the mapping's timestamp node.NodeProperties.rawData.lastSeen (eg.locked.json). On a VM node
+    # (azure_resource) it is the asset's observation (the stale node of mail-host-03 carried 2026-10-06 while still listed
+    # on 2026-11-03); on a device node it follows Exposure Graph's own refresh (2026-11-03 on every listed device), which is
+    # why an Exposure Graph link never decides a CI that another source links (Get-SICiLifecycle). Azure Resource Graph
+    # (provider azure) keeps "listed = exists".
+    # NOT an identity: a dormant account is a risk to report, never an asset to retire (the design's identity rule) -- an
+    # account Exposure Graph alone lists keeps 'listed = exists'
+    if ([string](Get-SILifecycleValue $Record 'si_provider') -eq 'eg' -and [string](Get-SILifecycleValue $Record 'si_class') -ne 'identity') { return $SeenWithinDays }
     if ([string](Get-SILifecycleValue $Record 'si_class') -ne 'device') { return 0 }
     $lag = $script:SICiProviderSeenLagDays[[string](Get-SILifecycleValue $Record 'si_provider')]
     if ($lag -and [int]$lag -gt $SeenWithinDays) { return [int]$lag }
@@ -290,8 +302,19 @@ function Get-SICiLifecycle {
     $prevReason = [string](Get-SILifecycleValue $Previous 'Reason')
     $active = New-Object System.Collections.Generic.List[object]; $frozen = New-Object System.Collections.Generic.List[object]
     $notSeen = New-Object System.Collections.Generic.List[object]; $gone = New-Object System.Collections.Generic.List[object]
+    # EXPOSURE GRAPH NEVER OUTVOTES THE SOURCE IT MIRRORS (owner 2026-11-05): Exposure Graph re-lists what Defender, Azure
+    # and Entra hold, and on a device node its last seen is its own refresh time -- at a ring 1 install its links kept 202
+    # stale devices (Azure resource nodes) and 122 (device nodes) active after their own source had stopped seeing them.
+    # When the CI links any other source, the Exposure Graph links are left out of the decision; a CI that ONLY Exposure
+    # Graph links is decided by Exposure Graph, with the seen window on its node's own observation time
+    # (Get-SIRecordSeenWindowDays) -- not seen after the window, retired after its grace period. Absence is never
+    # remediation: a not seen / retired CI's findings are never counted as fixed (unchanged).
+    # (another source = one that observes the asset itself: a CMDB record says what the CMDB holds, not that the asset exists)
+    $hasOther = $false
+    foreach ($l in @($Links)) { if ($null -ne $l -and [string](Get-SILifecycleValue $l 'provider') -notin 'eg', 'cmdb', 'servicenow') { $hasOther = $true; break } }
     foreach ($l in @($Links)) {
         if ($null -eq $l) { continue }
+        if ($hasOther -and [string](Get-SILifecycleValue $l 'provider') -eq 'eg') { continue }
         switch ([string](Get-SILifecycleValue $l 'state')) { 'active' { $active.Add($l) } 'frozen' { $frozen.Add($l) } 'gone' { $gone.Add($l) } default { $notSeen.Add($l) } }
     }
     $newest = {

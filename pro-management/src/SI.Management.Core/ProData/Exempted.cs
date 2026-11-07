@@ -114,7 +114,15 @@ WHERE (@DepartmentId IS NULL OR v.DepartmentId = TRY_CONVERT(int, @DepartmentId)
     /// A statement as the current scope reads it (unchanged unless the scope leaves exempted findings out).
     public static SqlQuery Apply(SqlQuery q) => Excluding ? q with { Text = Exclude(q.Text) } : q;
     public static string Apply(string sql) => Excluding ? Exclude(sql) : sql;
-    public static GridSpec Apply(GridSpec spec) => Excluding ? spec with { Ctes = Exclude(spec.Ctes), Source = Exclude(spec.Source) } : spec;
+    /// A grid with a LATE projection (<see cref="GridLate"/>) has its narrow source and its late join rewritten the same way --
+    /// the page's rows and their late columns come from the same (counted) rows.
+    public static GridSpec Apply(GridSpec spec) => Excluding
+        ? spec with
+        {
+            Ctes = Exclude(spec.Ctes), Source = Exclude(spec.Source),
+            Late = spec.Late is { } late ? new GridLate(needed => Exclude(late.NarrowSource(needed)), Exclude(late.Join)) : null,
+        }
+        : spec;
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {

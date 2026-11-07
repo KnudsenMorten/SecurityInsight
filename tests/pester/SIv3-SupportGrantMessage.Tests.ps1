@@ -2,7 +2,7 @@
 <#
     #1021 -- THE SUPPORT GRANT JOB caj-si-support-grant, offline (engine\support-grant\SI-SupportGrant.ps1):
       * the request is a REQUEST: only the six agreed keys, raw JSON, every value checked (action, level, maxUntil within
-        24 h and in the future, reason 1-200, ticket / name lengths, no control characters); refused = bad-request (exit 4);
+        8 h and in the future, reason 1-200, ticket / name lengths, no control characters); refused = bad-request (exit 4);
       * the newest message not older than 15 minutes is the request; every message read is deleted;
       * the ONE log line Invardia reads, exactly; exit 0 ok / 2 could not / 3 no consent / 4 bad request;
       * the job (fake databases): the sweep FIRST; open on the Pro database first, then the others; one that fails ROLLS
@@ -69,6 +69,8 @@ Describe 'the request is a REQUEST: every value checked, nothing in it ever run'
         @{ Case = 'a level not in the list';   Over = @{ SI_SUPPORT_LEVEL = 'admin' }; Drop = @() }
         @{ Case = 'maxUntil in the past';      Over = @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T09:59:00Z' }; Drop = @() }
         @{ Case = 'maxUntil over 24 hours';    Over = @{ SI_SUPPORT_MAXUNTIL = '2026-11-02T10:01:00Z' }; Drop = @() }
+        @{ Case = 'maxUntil over 8 hours (a support session is at most 8 hours)'; Over = @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T18:03:00Z' }; Drop = @() }
+        @{ Case = 'a close with maxUntil over 8 hours'; Over = @{ SI_SUPPORT_ACTION = 'close'; SI_SUPPORT_MAXUNTIL = '2026-11-01T20:00:00Z' }; Drop = @() }
         @{ Case = 'maxUntil without UTC';      Over = @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T12:00:00' }; Drop = @() }
         @{ Case = 'maxUntil not a time';       Over = @{ SI_SUPPORT_MAXUNTIL = 'tomorrow' }; Drop = @() }
         @{ Case = 'no reason';                 Over = @{}; Drop = @('SI_SUPPORT_REASON') }
@@ -79,6 +81,16 @@ Describe 'the request is a REQUEST: every value checked, nothing in it ever run'
     ) {
         $r = ConvertFrom-SISupportGrantMessage -Text (& $script:Msg $Over $Drop) -NowUtc $script:Now
         $r.Ok | Should -BeFalse; $r.Why | Should -Not -BeNullOrEmpty
+    }
+    It 'a session of at most 8 hours: exactly 8 h ahead is read (with two minutes for the clocks), 8 h 3 min is refused and says 8 hours' {
+        (ConvertFrom-SISupportGrantMessage -Text (& $script:Msg @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T18:00:00Z' }) -NowUtc $script:Now).Ok | Should -BeTrue
+        (ConvertFrom-SISupportGrantMessage -Text (& $script:Msg @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T18:02:00Z' }) -NowUtc $script:Now).Ok | Should -BeTrue
+        $r = ConvertFrom-SISupportGrantMessage -Text (& $script:Msg @{ SI_SUPPORT_MAXUNTIL = '2026-11-01T18:03:00Z' }) -NowUtc $script:Now
+        $r.Ok | Should -BeFalse
+        $r.Why | Should -Be 'SI_SUPPORT_MAXUNTIL is more than 8 hours ahead'
+        # the job and the open procedure keep the same limit
+        . (Join-Path $script:SIRoot 'engine\pro-settings\SI-SupportGrantSql.ps1')
+        (Get-SISupportGrantContract).MaxHours | Should -Be 8
     }
     It 'refused: base64, not JSON, an array, empty, larger than 4 KB' {
         foreach ($t in @([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((& $script:Msg))), 'not json', '[1,2]', '', ('{"SI_SUPPORT_REASON":"' + ('x' * 5000) + '"}'))) {
@@ -200,6 +212,19 @@ Describe 'THE JOB (fake databases)' {
         $s = Get-SISupportGrantStatus -Databases ([ordered]@{ pro = $pro.Seam; ledger = $led.Seam }) -NowUtc $script:Now
         $s.Wire.readOnly | Should -BeTrue; $s.Wire.jitOpen | Should -BeTrue; $s.Wire.jitUntil | Should -Be '2026-11-01T12:00:00Z'
         $s.Text | Should -Match 'OVERDUE'; $s.Text | Should -Match 'holds db_owner outside a support grant'
+    }
+    It 'the status: a database WITHOUT the procedures beside one with them reads missing (readOnly false), not unknown' {
+        $pro = & $script:NewDb 'pro' @{ Status = @{ Database = 'pro'; Signed = 1; ReadOnlyHeld = 1; JitOpen = 0; JitUntilUtc = $null; JitLevel = $null; JitOverdue = 0; StandingOwner = 0 } }
+        $led = & $script:NewDb 'ledger' @{}
+        $s = Get-SISupportGrantStatus -Databases ([ordered]@{ pro = $pro.Seam; ledger = $led.Seam }) -NowUtc $script:Now
+        $s.Wire.readOnly | Should -BeFalse
+        $s.Text | Should -Match 'ledger: no support grant procedures yet'
+    }
+    It 'the status: readOnly is true only when the read role is held AND the procedures are signed (Invardia: the just-in-time model is in place)' {
+        $ok = @{ Database = 'pro'; Signed = 1; ReadOnlyHeld = 1; JitOpen = 0; JitUntilUtc = $null; JitLevel = $null; JitOverdue = 0; StandingOwner = 0 }
+        $unsigned = @{ Database = 'ledger'; Signed = 0; ReadOnlyHeld = 1; JitOpen = 0; JitUntilUtc = $null; JitLevel = $null; JitOverdue = 0; StandingOwner = 0 }
+        (Get-SISupportGrantStatus -Databases ([ordered]@{ pro = (& $script:NewDb 'pro' @{ Status = $ok }).Seam; ledger = (& $script:NewDb 'ledger' @{ Status = $unsigned }).Seam }) -NowUtc $script:Now).Wire.readOnly | Should -BeFalse -Because 'a role without signed procedures cannot open a session'
+        (Get-SISupportGrantStatus -Databases ([ordered]@{ pro = (& $script:NewDb 'pro' @{ Status = $ok }).Seam }) -NowUtc $script:Now).Wire.readOnly | Should -BeTrue
     }
     It 'the uplink events are OFF until Invardia agrees them (auto = no ring; on / a ring list turns them on)' {
         (Resolve-SIUplinkSupportGrantSwitch -Value $null -EnvValue '' -Ring 0).On | Should -BeFalse

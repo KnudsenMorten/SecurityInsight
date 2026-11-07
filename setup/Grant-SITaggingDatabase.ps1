@@ -8,6 +8,11 @@
     the Pro database at run start, so its identity needs a database user there with db_datareader -- nothing more. Installs
     made before this script lack that user, and their daily asset-tagging run stops at the settings check.
 
+    The product update now checks this access on every update and gives what it may by itself: through the product's grant
+    procedure (all of it), else the audit right for an existing user. Run this script only when the update's log says so
+    ("asset tagging's database access ... setup\Grant-SITaggingDatabase.ps1 -Apply"): that is an install whose update may
+    not create the user or give its read access.
+
     Shows the statements by default; -Apply runs them AS THE CALLER, who must be the SQL server's Entra admin (or a member
     of its admin group). The identity is found by name or given by -ClientId; its database user is found by SID, so an
     existing user is reused whatever its name. Idempotent.

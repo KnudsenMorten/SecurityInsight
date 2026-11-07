@@ -275,17 +275,7 @@ function Invoke-SIUpdaterFromCommunity {
         if ($gate.Result) { return $gate.Result }
         $r = & $askGate
         Write-UpdLog ("run gate: {0}" -f $r.Reason)
-        # #947 (b): a bound on the wait, as Pro (SI-UpdaterInvardia.ps1): after 6 hours a run that started on an OLDER version
-        # is cancelled and the update is installed. Seam (tests): CancelRun { param($RunId, $TargetVersion, $Reason) }.
-        if (-not $r.Go -and ($s['CancelRun'] -or ($real -and (Get-Command -Name Invoke-SIUpdaterCancelOldRun -ErrorAction SilentlyContinue))) -and (Get-Command -Name Invoke-SIUpdaterOverdueCancel -ErrorAction SilentlyContinue)) {
-            & $readTag
-            $odSince = if ($gate.Tag) { $gate.Tag.SinceUtc } else { $null }
-            $odTarget = if ($chk -and $chk.Version) { "$($chk.Version)".Trim() } else { '' }
-            $r = Invoke-SIUpdaterOverdueCancel -Gate $r -SinceUtc $odSince -NowUtc $now -TargetVersion $odTarget -GateAgain $askGate -Log { param($m) Write-UpdLog $m } `
-                     -Sleep $(if ($s['Sleep']) { $s['Sleep'] } else { { param($sec) Start-Sleep -Seconds $sec } }) `
-                     -Cancel { param($id, $ver, $why) if ($s['CancelRun']) { & $s.CancelRun $id $ver $why } else { Invoke-SIUpdaterCancelOldRun -Store $Store -RunId $id -TargetVersion $ver -Reason $why -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Holder $holder } }
-            if ($r.Go) { Write-UpdLog ("run gate: {0}" -f $r.Reason) }
-        }
+        # an update never cancels a running pipeline, as Pro (SI-UpdaterInvardia.ps1, owner 2026-11-05): it waits for the run
         $gate.Result = $r
         if ($r.Go) { & $readTag; if ($gate.Tag) { & $writeTag ''; $gate.Cleared = $true } }
         $r

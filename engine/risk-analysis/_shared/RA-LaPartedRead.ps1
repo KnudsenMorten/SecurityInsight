@@ -147,6 +147,42 @@ function Get-RALaPartQuery {
     return (($lines -join $nl) + $nl + ('| where abs(hash(tostring(pack_all())) % {0}) == {1}' -f $Parts, $Part))
 }
 
+function Get-RALaSourcePartition {
+    <#
+        PURE. #1107 (live 2026-11-04, a large install: the CI lookup _ciPeer ran Log Analytics out of memory --
+        E_LOW_MEMORY_CONDITION -- in 1 part and in 2, because Get-RALaPartQuery cuts a query's RESULT: every part built the
+        whole lookup before its filter, so more parts could not help). A CI block (RA-CiKql.ps1) can be cut at its SOURCE:
+        right after the core's `| where isnotempty(_ciId)` each part keeps only its share of the CIs, so it builds 1/N of
+        the lookup. The core keeps the CIs of the newest build only, so every CI has the same _ciBuild and the block's
+        last `arg_max(_ciBuild, *) by _ciKey` is a tie among them: a key two CIs share in different parts is kept ONCE
+        after the parts are merged (the first one), which is what the whole query keeps. Returns @{ Can; Anchor;
+        DedupeColumn } -- Can = $false for any other query (it keeps the result cut).
+    #>
+    param([AllowEmptyString()][string]$Query = '')
+    $anchor = '| where isnotempty(_ciId)'
+    $no = [pscustomobject]@{ Can = $false; Anchor = ''; DedupeColumn = '' }
+    if (-not "$Query".Contains($anchor)) { return $no }
+    # one CI core only (a query with two cores is not cut at the source -- each would need its own filter)
+    if (([regex]::Matches($Query, [regex]::Escape($anchor))).Count -ne 1) { return $no }
+    $dedupe = ''
+    if ($Query -match '\|\s*project\s+_peerKey\s*=\s*_ciKey\b') { $dedupe = '_peerKey' }
+    elseif ($Query -match '\|\s*project\s+_ciKey\s*,') { $dedupe = '_ciKey' }
+    elseif ($Query -match '\|\s*project\s+si_ci_id\s*=\s*_ciId\b') { $dedupe = 'si_ci_id' }
+    else { return $no }   # a CI core whose output key is not known here: the result cut, as before
+    [pscustomobject]@{ Can = $true; Anchor = $anchor; DedupeColumn = $dedupe }
+}
+
+function Get-RALaSourcePartQuery {
+    <# PURE. Part -Part of -Parts of a CI block cut at its SOURCE (Get-RALaSourcePartition): the filter on a hash of the
+       CI id goes right after the core's anchor line. Every CI is in exactly one part. #>
+    param([Parameter(Mandatory)][string]$Query, [Parameter(Mandatory)][int]$Parts, [Parameter(Mandatory)][int]$Part)
+    $anchor = '| where isnotempty(_ciId)'
+    $i = $Query.IndexOf($anchor)
+    if ($i -lt 0) { throw 'not a CI block: no source to cut' }
+    $end = $i + $anchor.Length
+    $Query.Substring(0, $end) + (' | where abs(hash(_ciId)) % {0} == {1}' -f $Parts, $Part) + $Query.Substring($end)
+}
+
 function New-RALaTooLargeError {
     <# si-ra-0302 (too-large): no number of parts makes the read fit. Marked like the "no slice count can make this report
        fit" error (Data SIRALookupTooLarge), so the bucket loop ends the report at once -- not complete, its findings
@@ -168,26 +204,65 @@ function Invoke-RALaPartedRead {
         Any other error is passed on as it is. -Read { param($Kql) rows } is the reader (and the seam for tests).
         Returns @{ Rows; Parts }.
     #>
-    param([Parameter(Mandatory)][string]$Query, [Parameter(Mandatory)][scriptblock]$Read, [string]$What = 'the query', [int]$Parts = 1)
+    param([Parameter(Mandatory)][string]$Query, [Parameter(Mandatory)][scriptblock]$Read, [string]$What = 'the query', [int]$Parts = 1,
+          # #1107: the wait before a part refused for the SERVICE's low memory is asked again (the seam for tests)
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
     $n = [Math]::Max(1, $Parts)
+    # #1107 (live 2026-11-04, a large install: the CI lookup refused with E_LOW_MEMORY_CONDITION during a run, and read
+    # whole in 6 s an hour later): Log Analytics' OWN low-memory condition is the service's state at that moment, not the
+    # size of the query -- the same part is asked again after a wait (30 s, 60 s, 120 s) before it counts as a refusal
+    $busyWaits = @(30, 60, 120)
+    $busyRx = '(?i)E_LOW_MEMORY_CONDITION|Low memory condition'
     $emptyRefusals = 0
+    # #1107: a CI block is cut at its SOURCE (each part builds 1/N of it, so more parts DO shrink the work); any other query
+    # keeps the result cut. The measured stop follows: a result cut repeats the whole work in every part, so two counts in a
+    # row refused with no rows end it; a source cut halves the work with every doubling, so it ends only after FOUR such
+    # doublings in a row -- the work then is not the CIs' (measured, never a cap on the parts)
+    $src = Get-RALaSourcePartition -Query $Query
+    $stopAfter = if ($src.Can) { 4 } else { 2 }
     while ($true) {
         $acc = New-Object System.Collections.Generic.List[object]
         $refused = $null
         for ($i = 0; $i -lt $n; $i++) {
-            $q = if ($n -eq 1) { $Query } else { Get-RALaPartQuery -Query $Query -Parts $n -Part $i }
-            try { $got = & $Read $q }
-            catch { if (Test-RALaLimitPartialError -Err $_) { $refused = $_; break }; throw }
+            $q = if ($n -eq 1) { $Query } elseif ($src.Can) { Get-RALaSourcePartQuery -Query $Query -Parts $n -Part $i } else { Get-RALaPartQuery -Query $Query -Parts $n -Part $i }
+            $got = $null; $busy = 0
+            while ($true) {
+                try { $got = & $Read $q; break }
+                catch {
+                    if (-not (Test-RALaLimitPartialError -Err $_)) { throw }
+                    if ("$($_.Exception.Message)" -match $busyRx -and $busy -lt $busyWaits.Count) {
+                        $w = $busyWaits[$busy]; $busy++
+                        if (Get-Command -Name Write-Info -ErrorAction SilentlyContinue) {
+                            Write-Info ("{0}: Log Analytics was short of memory for it -- asked again in {1} s ({2} of {3})" -f $What, $w, $busy, $busyWaits.Count)
+                        }
+                        & $Sleep $w
+                        continue
+                    }
+                    $refused = $_; break
+                }
+            }
+            if ($null -ne $refused) { break }
             foreach ($x in @($got)) { if ($null -eq $x) { continue }; if ($x -is [array]) { foreach ($y in $x) { if ($null -ne $y) { $acc.Add($y) } } } else { $acc.Add($x) } }
         }
         if ($null -eq $refused) {
+            # a source cut: a key two CIs share in different parts came back once from each -- kept ONCE (see the header of
+            # Get-RALaSourcePartition: those rows are a tie the whole query also resolves to one)
+            if ($n -gt 1 -and $src.Can -and $src.DedupeColumn) {
+                $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+                $kept = New-Object System.Collections.Generic.List[object]
+                foreach ($r in $acc) {
+                    $k = if ($r -is [System.Collections.IDictionary]) { [string]$r[$src.DedupeColumn] } elseif ($r.PSObject.Properties[$src.DedupeColumn]) { [string]$r.($src.DedupeColumn) } else { $null }
+                    if ($null -eq $k -or $seen.Add($k)) { $kept.Add($r) }
+                }
+                $acc = $kept
+            }
             if ($n -gt 1 -and (Get-Command -Name Write-Info -ErrorAction SilentlyContinue)) {
                 Write-Info ([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0} was read in {1} parts ({2:N0} row(s)) -- one answer could not carry it", $What, $n, $acc.Count))
             }
             return @{ Rows = $acc.ToArray(); Parts = $n }
         }
         if ((Get-RALaPartialRowCount -Err $refused) -le 0) { $emptyRefusals++ } else { $emptyRefusals = 0 }
-        if ($emptyRefusals -ge 2) {
+        if ($emptyRefusals -ge $stopAfter) {
             throw (New-RALaTooLargeError -Message ("{0} is more than Log Analytics can answer: read in {1} part(s), a part still stopped at the service's limit before it returned a row, so reading it in more parts cannot make it fit -- {2}" -f $What, $n, (($refused.Exception.Message -split "`n") | Select-Object -First 1)))
         }
         $n = $n * 2

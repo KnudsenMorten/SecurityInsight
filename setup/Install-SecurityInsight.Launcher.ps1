@@ -52,7 +52,7 @@
 .PARAMETER Location
     The Azure region (default westeurope).
 .PARAMETER ResourceGroup
-    The resource group, created when it does not exist (default rg-si-prod-community-ca).
+    The resource group, created when it does not exist (default rg-si; an install that already runs keeps its own).
 .PARAMETER Owner
     The resource group's 'owner' tag: a team or mailbox (default empty).
 .PARAMETER Hosting
@@ -64,7 +64,7 @@
 .PARAMETER WorkspaceMode
     new (default: a dedicated Log Analytics workspace) or existing (with -WorkspaceId).
 .PARAMETER WorkspaceName
-    The new workspace's name (default log-si-prod-community-ca).
+    The new workspace's name (default log-si).
 .PARAMETER WorkspaceId
     With -WorkspaceMode existing: the workspace's resource id.
 .PARAMETER SecurityWorkspaceId
@@ -146,6 +146,12 @@
     Switch: SecurityInsight links its web app's DNS zone to the hub itself (needs Network Contributor on the hub).
 .PARAMETER PeerToHub
     Switch: SecurityInsight peers its network with the hub in both directions (needs Network Contributor on both).
+.PARAMETER ReturnRouteRanges
+    With -HubVnetId: the address ranges your people browse from, e.g. '10.0.0.0/16,10.2.0.0/16' (optional). With
+    -ReturnRouteNextHop, SecurityInsight's own network gets the route table rt-si on its apps subnet (each range -> your
+    firewall) so replies find their way back; on your own network the route is on the network hand-off list.
+.PARAMETER ReturnRouteNextHop
+    With -ReturnRouteRanges: your hub firewall's private IP, e.g. 10.1.0.4 (the next hop of the return route).
 .PARAMETER CustomerManagedKeys
     Switch: encrypt the database, storage and (with -CmkLogAnalytics) Log Analytics with your own key.
 .PARAMETER CmkKeyVaultId
@@ -205,8 +211,8 @@
     ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -PreflightOnly
     # the checks only: the release is downloaded to the temp folder, nothing is created, changed or written in Azure
 .EXAMPLE
-    ./Install-SecurityInsight.ps1 -Resume
-    # continue an install that stopped, with the release and the answers of its first run
+    ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Resume
+    # continue an install that stopped, with the release and the answers of its first run (the same line 2 + -Resume)
 .EXAMPLE
     ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Version 3.0.21
     # install one named release instead of the latest
@@ -283,6 +289,8 @@ param(
     [string]$HubVnetId,
     [switch]$LinkZonesToHub,
     [switch]$PeerToHub,
+    [string]$ReturnRouteRanges,
+    [string]$ReturnRouteNextHop,
     [switch]$CustomerManagedKeys,
     [string]$CmkKeyVaultId,
     [string]$CmkKeyName,
@@ -398,20 +406,21 @@ function Find-SILauncherTree {
 function Test-SILauncherZip {
     <#
         The checks of a downloaded release zip, before anything is unpacked. Returns '' when it is good, else the reason in
-        plain words: empty, not the size or SHA-256 the release states, not a zip, no setup/Install-SecurityInsight.ps1, or
-        a VERSION that is not the release's version. -AllowBuildNumber (the Pro package): a release named
-        <VERSION>.<build number> carries the code of VERSION -- the rule SecurityInsight's updater applies.
+        plain words: empty, not the size or SHA-256 the release states, no SHA-256 stated at all, not a zip, no
+        setup/Install-SecurityInsight.ps1, or a VERSION that is not the release's version. -AllowBuildNumber (the Pro
+        package): a release named <VERSION>.<build number> carries the code of VERSION -- the rule SecurityInsight's
+        updater applies. A download is used only when its SHA-256 matches the one the release states.
     #>
     param([string]$Path, [string]$Version, [long]$Size = 0, [string]$Sha256 = '', [switch]$AllowBuildNumber)
     if (-not [IO.File]::Exists($Path)) { return 'the download did not complete (no file)' }
     $len = (New-Object IO.FileInfo($Path)).Length
     if ($len -le 0) { return 'the download is empty (0 bytes)' }
     if ($Size -gt 0 -and $len -ne $Size) { return ('the download has {0} bytes, the release states {1}' -f $len, $Size) }
-    if ("$Sha256".Trim()) {
-        $sha = [System.Security.Cryptography.SHA256]::Create(); $fs = [IO.File]::OpenRead($Path)
-        try { $got = -join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('x2') }) } finally { $fs.Dispose(); $sha.Dispose() }
-        if ($got -ne "$Sha256".Trim().ToLowerInvariant()) { return ('the download''s SHA-256 is {0}, the release states {1}' -f $got, "$Sha256".Trim().ToLowerInvariant()) }
-    }
+    $want = "$Sha256".Trim().ToLowerInvariant()
+    if ($want -notmatch '^[0-9a-f]{64}$') { return 'the release states no SHA-256 for the download, so it cannot be checked' }
+    $sha = [System.Security.Cryptography.SHA256]::Create(); $fs = [IO.File]::OpenRead($Path)
+    try { $got = -join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('x2') }) } finally { $fs.Dispose(); $sha.Dispose() }
+    if ($got -ne $want) { return ('the download''s SHA-256 is {0}, the release states {1}' -f $got, $want) }
     if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }
     $zip = $null
     try { $zip = [System.IO.Compression.ZipFile]::OpenRead($Path) } catch { return 'the download is not a zip that opens' }
@@ -792,6 +801,8 @@ do {
             $asset = @(@($rel.assets) | Where-Object { "$($_.name)" -eq $assetName }) | Select-Object -First 1
             if (-not $asset -or -not "$($asset.browser_download_url)".Trim()) { Write-Host ('The release {0} has no {1} to download. Nothing was installed.' -f $relVersion, $assetName) -ForegroundColor Red; $code = 3; break }
             $stated = if ("$($asset.digest)" -match '^(?i)sha256:([0-9a-f]{64})$') { $Matches[1].ToLowerInvariant() } else { '' }
+            # a download is used only when GitHub states its SHA-256: without one it cannot be checked, so it is not fetched
+            if (-not $stated) { Write-Host ('GitHub states no SHA-256 for {0} of release {1}, so the download cannot be checked. Nothing was downloaded or installed. Run the command again later, or give -Version for another release.' -f $assetName, $relVersion) -ForegroundColor Red; $code = 3; break }
             $statedSize = 0L; try { $statedSize = [long]$asset.size } catch { $statedSize = 0L }
 
             # ---- 3. download into a NEW, empty folder ----
@@ -815,7 +826,7 @@ do {
             try { [IO.Directory]::Delete($dir, $true) } catch { }
             $dir = ''; $code = 3; break
         }
-        Write-Host ('  {0}: not empty, opens, holds the installer, VERSION {1}{2}' -f $assetName, $relVersion, $(if ($stated) { $(if ($isPro) { ', SHA-256 as the signed manifest states' } else { ', SHA-256 as the release states' }) } else { '' }))
+        Write-Host ('  {0}: not empty, opens, holds the installer, VERSION {1}{2}' -f $assetName, $relVersion, $(if ($isPro) { ', SHA-256 as the signed manifest states' } else { ', SHA-256 as the release states' }))
         $unpack = [IO.Path]::Combine($dir, 'release')
         try { Expand-SILauncherZip -Path $zipPath -To $unpack } catch {
             Write-Host ('The release could not be unpacked: {0}. Nothing was installed; the folder is removed.' -f $_.Exception.Message) -ForegroundColor Red

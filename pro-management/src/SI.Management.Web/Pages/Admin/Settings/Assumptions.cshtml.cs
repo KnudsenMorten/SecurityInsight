@@ -87,6 +87,20 @@ public static class Assumptions
         "SI_IncludeFirstPartySpns", "SI_IncludeInactive_Identity", "SI_IncludeInactive_Endpoint",
     ];
 
+    /// The catalog group whose settings decide what is collected and what becomes an asset.
+    public const string ScopeGroup = "Collection scope & limits";
+
+    /// THE CONFIGURATION IN FORCE, NOT A HAND-KEPT LIST (owner 2026-11-05: "so people see actual config"): the settings named
+    /// above first, in their order, then EVERY other setting of the catalog's scope group (the identity scope switches, the
+    /// asset limits, and any scope setting a later release adds) -- so a new scope setting can never be missing here.
+    public static IReadOnlyList<string> ScopeSettings(SettingsCatalog catalog)
+    {
+        var names = new List<string>(InclusionSettings);
+        foreach (var s in catalog.All.Where(c => string.Equals(c.Group, ScopeGroup, StringComparison.Ordinal)).Select(c => c.Name).OrderBy(n => n, StringComparer.Ordinal))
+            if (!names.Contains(s, StringComparer.OrdinalIgnoreCase)) names.Add(s);
+        return names;
+    }
+
     public static string EditHref(string setting) => "/Admin/Settings/Edit?name=" + Uri.EscapeDataString(setting);
 
     private static Line Setting(Inputs i, string key, string name, string? what = null)
@@ -116,7 +130,7 @@ public static class Assumptions
         };
         foreach (var (gate, what) in DiscoveredDeviceGates)
             assets.Add(new("asset.gate." + gate, what + " (an automatic exclusion tag)", GatesFormModel.Flag(i.Gates, gate) ? "on" : "off", "/AssetTagging/Index", "Asset tagging"));
-        foreach (var s in InclusionSettings) assets.Add(Setting(i, "asset.setting." + s, s));
+        foreach (var s in ScopeSettings(i.Catalog)) assets.Add(Setting(i, "asset.setting." + s, s));
 
         var life = new List<Line>
         {

@@ -993,17 +993,50 @@ ORDER BY col.CollectionTime DESC;
 
     /// The close-loop's items of this CI: the key set (the CI key and every identifier it carries) is built ONCE and
     /// joined on the item's correlation id -- never an OR per item.
-    public const string AssetVulnItems = """
+    public const string AssetVulnItems = $"""
 WITH k AS (
     SELECT @AssetKey AS K
     UNION
     SELECT ai.IdentifierValue FROM sidata.AssetIdentifier AS ai WHERE ai.AssetKey = @AssetKey
 )
-SELECT TOP (500) i.Cve, i.Severity, i.State, i.FirstSeen, i.LastSeen, i.ClosedAt, i.CloseReason
-FROM vuln.VulnerabilityItem AS i
-JOIN k ON k.K = i.CorrelationId
-WHERE i.Source = @Source
-ORDER BY CASE WHEN i.State = N'Open' THEN 0 ELSE 1 END, i.Cve;
+, a AS (
+    SELECT i.Cve, i.Severity, i.State, i.FirstSeen, i.LastSeen, i.ClosedAt, i.CloseReason
+    FROM k JOIN vuln.VulnerabilityItem AS i ON i.CorrelationId = k.K
+    WHERE i.Source = @Source
+)
+-- the counts are over EVERY item of the asset, never over the rows shown (owner 2026-11-05: "500 open, 0 closed" was the cut)
+, c AS (
+    SELECT SUM(CASE WHEN a.State = N'Open' THEN 1 ELSE 0 END) AS OpenTotal, SUM(CASE WHEN a.State = N'Open' THEN 0 ELSE 1 END) AS ClosedTotal FROM a
+)
+-- the finding's readable name: this asset's findings in the PUBLISHED run, one title per key (a CVE, a recommendation id, a
+-- check) -- a keyed seek of the (CollectionId, AssetKey) index that carries the title; never a scan of every collection
+-- of the asset (2026-11-05: that read the findings table's documents, 72 s for one device).
+-- DRIVEN BY THE ASSET'S KEYS, NEVER BY THE ITEMS (2026-11-05, live: 82.7 s and 1.6 GB read for one device on stale statistics --
+-- the planner moved the items' join condition below the titles' grouping and sought the (CollectionId, ConfigurationId) index once per item, then
+-- looked each row up in the findings table for its asset key and title). The TOP of the inner read is a fence the planner
+-- cannot push a predicate through: the findings are read only by (CollectionId, AssetKey) -- the covering index of the views,
+-- one seek per key of k (the asset and its few identifiers) -- whatever the statistics say. Same rows as before: the asset's
+-- titled findings in the published run, one title per key. The LOOP join keeps the asset's keys OUTSIDE: one seek per key, never
+-- a scan of an index joined by hash (the plan guard's ten-million-row plan did that without it); a join hint fixes the written
+-- order for the whole statement, so every read starts from k (the items too: one seek of (Source, CorrelationId) per key), and
+-- the published collection is read BEFORE the findings (pub) -- written after them it could not be sought by.
+, pub AS (
+    SELECT {PublishedRun.DetailedId} AS CollectionId
+)
+, t AS (
+    SELECT x.ConfigurationId, MAX(x.Title) AS Title
+    FROM (
+        SELECT TOP (2147483647) f.ConfigurationId, f.Title
+        FROM pub CROSS JOIN k AS fk
+        INNER LOOP JOIN sidata.Finding AS f ON f.CollectionId = pub.CollectionId AND f.AssetKey = fk.K
+        WHERE f.Title IS NOT NULL
+    ) AS x
+    GROUP BY x.ConfigurationId
+)
+SELECT TOP (500) a.Cve, a.Severity, a.State, a.FirstSeen, a.LastSeen, a.ClosedAt, a.CloseReason, c.OpenTotal, c.ClosedTotal, t.Title
+FROM a CROSS JOIN c
+LEFT JOIN t ON t.ConfigurationId = a.Cve
+ORDER BY CASE WHEN a.State = N'Open' THEN 0 ELSE 1 END, a.Cve;
 """;
 
     // ---- (15) services: the CMDB business services, ranked by weighted risk (#255) ------------------------------------

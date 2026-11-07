@@ -4,6 +4,10 @@
     version its update ring approves (#160, operator ruling 2026-09-29: "Updater job").
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the database part of -GrantSql: the updater's database user and its rights
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     Shows what it would do by default; -Apply makes the changes. Idempotent -- re-running updates in place.
 
       1. builds the updater image (container/updater) in the customer's registry: si-updater:v<VERSION>;

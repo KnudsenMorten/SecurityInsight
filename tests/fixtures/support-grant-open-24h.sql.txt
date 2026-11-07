@@ -1,0 +1,45 @@
+CREATE PROCEDURE cfg.SupportGrantOpen
+    @RequestId nvarchar(64), @Level nvarchar(16), @MaxUntilUtc nvarchar(40), @Reason nvarchar(400), @Ticket nvarchar(128) = NULL, @StartedBy nvarchar(256) = NULL
+AS
+BEGIN
+    -- si-support-grant v1 (SecurityInsight #1021): the Invardia Support app's just-in-time grant. The principal is ALWAYS the Support app of
+    -- cfg.SupportConsent -- never a parameter; the level is the lower of the asked and the consented one; at most 24 hours.
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+    IF (NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = @@PROCID AND c.name LIKE N'si_support_signer%'))
+        THROW 51801, N'the support grant procedure is not signed -- Install-SISupportGrantProcedure has not run on this database', 1;
+    DECLARE @now datetime2(0) = SYSUTCDATETIME();
+    DECLARE @until datetime2(0) = TRY_CONVERT(datetime2(0), REPLACE(REPLACE(@MaxUntilUtc, N'Z', N''), N'+00:00', N''), 126);
+    IF @Level IS NULL OR @Level NOT IN (N'troubleshoot', N'setup') THROW 51802, N'the level must be troubleshoot or setup', 1;
+    IF @until IS NULL OR @until <= @now OR @until > DATEADD(MINUTE, 1442, @now) THROW 51802, N'maxUntil must be a UTC time in the next 24 hours', 1;
+    IF LEN(LTRIM(RTRIM(ISNULL(@Reason, N'')))) = 0 OR LEN(@Reason) > 200 THROW 51802, N'a reason of at most 200 characters is required', 1;
+    IF TRY_CONVERT(uniqueidentifier, @RequestId) IS NULL THROW 51802, N'the request id must be a GUID', 1;
+    DECLARE @app uniqueidentifier, @consent nvarchar(16);
+    SELECT @app = AppId, @consent = [Level] FROM cfg.SupportConsent WHERE Id = 1;
+    IF @app IS NULL THROW 51803, N'no consent: the customer has not granted the Invardia Support app access here (Grant-SISupportAccess)', 1;
+    DECLARE @sid varbinary(85) = CONVERT(varbinary(16), @app);
+    DECLARE @uid int, @user sysname;
+    SELECT TOP (1) @uid = principal_id, @user = name FROM sys.database_principals WHERE sid = @sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K');
+    IF @uid IS NULL THROW 51804, N'the Invardia Support app has no database user here -- Install-SISupportGrantProcedure makes it', 1;
+    DECLARE @granted nvarchar(16) = CASE WHEN @Level = N'setup' AND @consent = N'setup' THEN N'setup' ELSE N'troubleshoot' END;
+    DECLARE @role sysname = CASE @granted WHEN N'setup' THEN N'db_owner' ELSE N'db_datareader' END;
+    DECLARE @grant uniqueidentifier = CONVERT(uniqueidentifier, @RequestId), @pre bit, @s nvarchar(400), @lk int;
+    BEGIN TRANSACTION;
+    EXEC @lk = sys.sp_getapplock @Resource = N'si-support-grant', @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 60000;
+    IF @lk < 0 THROW 51805, N'another support grant holds the lock -- try again', 1;
+    -- a new open extends what is open
+    UPDATE cfg.SupportJitMarker SET ExpiresUtc = @until WHERE ClosedUtc IS NULL AND ExpiresUtc < @until;
+    IF (NOT EXISTS (SELECT 1 FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND RoleName = @role AND Sid = @sid))
+    BEGIN
+        SET @pre = CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role)) THEN 1 ELSE 0 END;
+        IF @pre = 0 BEGIN SET @s = N'ALTER ROLE ' + QUOTENAME(@role) + N' ADD MEMBER ' + QUOTENAME(@user) + N';'; EXEC (@s); END
+        INSERT cfg.SupportJitMarker (GrantId, RoleName, Sid, PreExisting, ExpiresUtc) VALUES (@grant, @role, @sid, @pre, @until);
+    END
+    INSERT cfg.SupportGrant (GrantId, Action, LevelAsked, LevelGranted, MaxUntilUtc, Reason, Ticket, StartedBy, Outcome)
+    VALUES (@grant, N'open', @Level, @granted, @until, LEFT(@Reason, 200), LEFT(@Ticket, 64), LEFT(@StartedBy, 256), N'granted');
+    COMMIT TRANSACTION;
+    -- THE READ-BACK, from the catalog (never from the request)
+    SELECT DB_NAME() AS [Database], @granted AS LevelGranted, @role AS RoleName,
+           CONVERT(nvarchar(19), (SELECT MAX(ExpiresUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL), 126) + N'Z' AS UntilUtc,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(@role)) THEN 1 ELSE 0 END AS RoleHeld,
+           CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read')) THEN 1 ELSE 0 END AS ReadOnlyHeld;
+END

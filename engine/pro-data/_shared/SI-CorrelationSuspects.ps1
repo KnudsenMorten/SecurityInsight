@@ -296,6 +296,32 @@ WHERE s.[Rule] = N'name' AND s.GroupKey IN (
     WHERE n.[Rule] = N'name'
     GROUP BY n.GroupKey, h.GroupKey
     HAVING COUNT(DISTINCT n.CiId) = (SELECT COUNT(*) FROM #s x WHERE x.GroupKey = n.GroupKey));
+-- 2b. A SAME NAME IS NO MERGE BETWEEN DIFFERENT AZURE OBJECTS (owner 2026-11-05): a VM's SQL Server IaaS registration
+--     (microsoft.sqlvirtualmachine/sqlvirtualmachines) carries the VM's name but is another object -- a linked CHILD of the
+--     VM's CI. A name group never holds a CI and its own child (a child_resource link of one names a record of the other),
+--     nor two different Azure resource types: of the Azure CIs of a group, only those of the type of its machine (else of the
+--     ordinally lowest type) stay; a group left with fewer than two CIs is no group.
+CREATE TABLE #az (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, AzType NVARCHAR(200) COLLATE DATABASE_DEFAULT NOT NULL, IsVm BIT NOT NULL);
+;WITH a AS (
+    SELECT l.CiId, LOWER(SUBSTRING(l.NativeId, LEN(l.NativeId) - CHARINDEX(N'/sredivorp/', REVERSE(l.NativeId)) + 2, 450)) AS Rest
+    FROM sidata.CiLink l JOIN #c x ON x.CiId = l.CiId
+    WHERE l.Provider IN (N'azure', N'mdc') AND ISNULL(l.RecordType, N'') <> N'child_resource' AND l.NativeId LIKE N'/subscriptions/%/providers/%/%/%'),
+t AS (
+    SELECT a.CiId, LEFT(a.Rest, CHARINDEX(N'/', a.Rest + N'/', CHARINDEX(N'/', a.Rest + N'/') + 1) - 1) AS AzType FROM a)
+INSERT #az (CiId, AzType, IsVm)
+SELECT t.CiId, MIN(t.AzType), MAX(CASE WHEN t.AzType IN (N'microsoft.compute/virtualmachines', N'microsoft.hybridcompute/machines') THEN 1 ELSE 0 END)
+FROM t WHERE t.AzType LIKE N'microsoft.%/%' GROUP BY t.CiId;
+DELETE s FROM #s s
+WHERE s.[Rule] = N'name' AND EXISTS (
+    SELECT 1 FROM #s p JOIN sidata.CiLink cl ON cl.CiId = p.CiId AND cl.RecordType = N'child_resource'
+    JOIN sidata.CiLink own ON own.CiId = s.CiId AND ISNULL(own.RecordType, N'') <> N'child_resource' AND own.NativeId = cl.NativeId
+    WHERE p.GroupKey = s.GroupKey AND p.CiId <> s.CiId) /* one-statement-ok: deletes from the check's own temp table #s only; sidata.CiLink is read */;
+;WITH keep AS (
+    SELECT s.GroupKey, ISNULL(MIN(CASE WHEN z.IsVm = 1 THEN z.AzType END), MIN(z.AzType)) AS AzType
+    FROM #s s JOIN #az z ON z.CiId = s.CiId WHERE s.[Rule] = N'name' GROUP BY s.GroupKey)
+DELETE s FROM #s s JOIN #az z ON z.CiId = s.CiId JOIN keep k ON k.GroupKey = s.GroupKey
+WHERE s.[Rule] = N'name' AND z.AzType <> k.AzType;
+DELETE s FROM #s s WHERE s.[Rule] = N'name' AND (SELECT COUNT(*) FROM #s x WHERE x.GroupKey = s.GroupKey) < 2;
 
 -- 3. PLACEHOLDER NAMES: one group per placeholder name, every active device that carries it -- and (#1054) every active machine
 --    the CI build NAMED because no linked source had a name for it (unnamed-device-<short id>), in the group of the placeholder
@@ -345,7 +371,7 @@ SELECT s.GroupKey, s.[Rule], s.Severity, s.GroupLabel, s.Evidence, s.CiId, x.Nam
        x.Weighted AS WeightedRiskScore, CONVERT(INT, x.Anchored) AS Anchored, x.ActiveLinks, s.[Role], CONVERT(INT, s.Dismissed) AS Dismissed, s.DecisionId
 FROM #s s JOIN #c x ON x.CiId = s.CiId
 ORDER BY CASE s.Severity WHEN N'high' THEN 0 WHEN N'medium' THEN 1 ELSE 2 END, s.[Rule], s.GroupKey, x.Tier, s.CiId;
-DROP TABLE #s; DROP TABLE #n; DROP TABLE #hv; DROP TABLE #i; DROP TABLE #c;
+DROP TABLE #s; DROP TABLE #n; DROP TABLE #hv; DROP TABLE #i; DROP TABLE #az; DROP TABLE #c;
 "@
 }
 

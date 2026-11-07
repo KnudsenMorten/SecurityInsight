@@ -94,7 +94,8 @@ Describe 'the private-network-registry step: ABSENT, FOUND as the stopped instal
         $reg.properties.networkRuleBypassOptions | Should -Be 'AzureServices'
         $reg.properties.adminUserEnabled | Should -BeFalse
         @(Writes | Where-Object { $_ -like "PUT $script:RegId" }).Count | Should -Be 1 -Because 'one create, already private: never a public moment'
-        @(Writes | Where-Object { $_ -like "PATCH $script:RegId*" }).Count | Should -Be 0
+        # the registry itself is never patched (its agent pool is: made at 1 agent, then scaled to 0 -- Azure refuses a pool made at 0)
+        @(Writes | Where-Object { $_ -like "PATCH $script:RegId*" -and $_ -notlike "*/agentPools/*" }).Count | Should -Be 0
         (Get-SIArmStoreItem "$script:Rg/providers/Microsoft.Network/privateEndpoints/pe-si-registry").properties.subnet.id | Should -Be $script:PeSubnet
         (Get-SIArmStoreItem "$script:Rg/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io/virtualNetworkLinks/vnet-si").properties.virtualNetwork.id | Should -Be $script:Vnet
         Get-SIArmStoreItem "$script:Rg/providers/Microsoft.Network/privateEndpoints/pe-si-registry/privateDnsZoneGroups/default" | Should -Not -BeNullOrEmpty
@@ -385,5 +386,115 @@ Describe 'console text: the product and its released version, no cost figure' {
         } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\_shared\SI-BuildInfo.ps1'))
         $src | Should -Match '(?s)function New-SIBuildArchiveArgs.{0,2500}if \(\$rel\) \{ \$info\.version = \$rel; \$info\.display = \$rel; \$info\.rc = \$null \}'
+    }
+}
+
+Describe 'the agent pool in the network: setup WAITS for Azure to make it (3.0.32)' {
+    # LIVE, a private install on 3.0.31: the registry private, its endpoint, zone and DNS check read back fine -- then the
+    # step FAILED with "the agent pool si-vnet-pool does not read back as ready (Azure shows: Creating)" while Azure was
+    # still making it (a pool in a network takes several minutes). Now: a bounded, said wait on the pool alone.
+    BeforeAll {
+        # a scripted ARM: GET of the pool answers the next state of -States (the last one repeats); every call is recorded
+        function script:New-PoolArm {
+            param([string[]]$States, [string]$Reason = '', [switch]$Exists)
+            $script:PoolCalls = New-Object System.Collections.Generic.List[string]
+            $script:PoolStates = New-Object System.Collections.Generic.Queue[string]
+            foreach ($s in $States) { $script:PoolStates.Enqueue($s) }
+            $script:PoolLast = ''; $script:PoolPut = [bool]$Exists; $script:PoolReason = $Reason
+            {
+                param($m, $p, $b)
+                $script:PoolCalls.Add(('{0} {1}' -f $m, ($p -replace '\?.*$', '')))
+                if ($m -eq 'PUT') { $script:PoolPut = $true; return $null }
+                if (-not $script:PoolPut) { return $null }
+                if ($script:PoolStates.Count) { $script:PoolLast = $script:PoolStates.Dequeue() }
+                $props = @{ provisioningState = $script:PoolLast; virtualNetworkSubnetResourceId = $script:PeSubnet }
+                if ($script:PoolLast -eq 'Failed' -and $script:PoolReason) { $props['error'] = [pscustomobject]@{ message = $script:PoolReason } }
+                [pscustomobject]@{ properties = [pscustomobject]$props }
+            }
+        }
+        # a fake clock: every pause moves it on by the seconds asked for -- nothing waits
+        function script:New-PoolClock { $script:PoolNow = [datetime]'2026-11-04T10:00:00Z'; $script:PoolSlept = 0 }
+        $script:PoolSleep = { param($s) $script:PoolSlept += [int]$s; $script:PoolNow = $script:PoolNow.AddSeconds([int]$s) }
+        $script:PoolNowSb = { $script:PoolNow }
+        $script:PoolSay = { param($t) $script:PoolSaid.Add([string]$t) }
+        function script:Invoke-Pool([scriptblock]$Arm) {
+            $script:PoolSaid = New-Object System.Collections.Generic.List[string]
+            Set-SIAcrAgentPool -Arm $Arm -RegistryId $script:RegId -Name 'si-vnet-pool' -Location 'westeurope' -SubnetId $script:PeSubnet -Sleep $script:PoolSleep -Now $script:PoolNowSb -Say $script:PoolSay
+        }
+    }
+
+    It 'the limit is 30 min -- twice the 15 min of read-backs that failed live' {
+        $script:SIAcrAgentPoolWaitMinutes | Should -Be 30
+    }
+
+    It 'Creating -> Creating -> Succeeded: it waits, says so with its limit, and continues as soon as Azure reads Succeeded' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States @('Creating', 'Creating', 'Succeeded'))
+        $r.Ok | Should -BeTrue
+        $r.State | Should -Be 'Succeeded'
+        $r.Created | Should -BeTrue
+        $r.Line | Should -Match 'image builds run inside it \(read back'
+        @($script:PoolCalls | Where-Object { $_ -like 'PUT *' }).Count | Should -Be 1
+        @($script:PoolCalls | Where-Object { $_ -like 'GET *' }).Count | Should -Be 4 -Because 'the first look, then Creating, Creating, Succeeded -- no read after Succeeded'
+        $script:PoolSaid[0] | Should -Be '  waiting for the build agent pool si-vnet-pool (Azure: Creating) -- up to 30 min; Azure takes several minutes to place it in the network'
+        $script:PoolSlept | Should -Be 30 -Because 'two pauses of 15 s: it stops waiting on Succeeded'
+    }
+
+    It 'a long Creating: one progress line about every minute, with the minutes and the limit' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States (@('Creating') * 25 + @('Succeeded')))
+        $r.Ok | Should -BeTrue
+        $prog = @($script:PoolSaid | Where-Object { $_ -like '  still waiting*' })
+        $prog.Count | Should -BeIn 5, 6 -Because '~6 min of 15 s pauses = one line a minute, never one per read'
+        $prog[0] | Should -Be '  still waiting for the build agent pool si-vnet-pool (Azure: Creating) -- 1 of up to 30 min'
+    }
+
+    It 'Failed: it stops at once, with Azure''s error text' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States @('Creating', 'Failed') -Reason 'The subnet has no free address for the agent.')
+        $r.Ok | Should -BeFalse
+        $r.TimedOut | Should -BeFalse
+        $r.State | Should -Be 'Failed'
+        $r.Line | Should -Be 'Azure could not make the agent pool si-vnet-pool (Azure shows: Failed: The subnet has no free address for the agent.)'
+        $script:PoolSlept | Should -Be 15
+    }
+
+    It 'Canceled without a reason on the pool: it stops, and says where the reason is' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States @('Canceled'))
+        $r.Ok | Should -BeFalse
+        $r.Line | Should -Match '^Azure could not make the agent pool si-vnet-pool \(Azure shows: Canceled; .*Activity log'
+    }
+
+    It 'a pool Azure left Failed on an earlier run is asked for again (a re-run is not a dead end)' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States @('Failed', 'Creating', 'Succeeded') -Exists)
+        $r.Ok | Should -BeTrue
+        @($script:PoolCalls | Where-Object { $_ -like 'PUT *' }).Count | Should -Be 1
+    }
+
+    It 'the limit passes while Azure still reads Creating: it stops, and the step says to run the install command again' {
+        New-PoolClock
+        $r = Invoke-Pool (New-PoolArm -States @('Creating'))
+        $r.Ok | Should -BeFalse
+        $r.TimedOut | Should -BeTrue
+        $r.Line | Should -Be 'the agent pool si-vnet-pool does not read back as ready after 30 min of waiting (Azure shows: Creating) -- Azure is still making it'
+        $script:PoolSlept | Should -BeGreaterOrEqual (30 * 60)
+        $script:PoolSlept | Should -BeLessOrEqual (30 * 60 + 15)
+        $gi = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\_shared\SI-GuidedInstall.ps1'))
+        $gi | Should -Match '(?s)-not \$r\.Value\.PoolOk\).{0,400}Run the install command again: it continues from this step'
+    }
+
+    It 'only the pool waits longer: the other read-backs keep their own bounds' {
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\_shared\SI-PrivateNetwork.ps1'))
+        $src | Should -Match '(?s)function Set-SIAcrAgentPool .{0,8000}Wait-SIAcrAgentPool -Arm'
+        $src | Should -Not -Match 'Read-SIPnBack[^\r\n]*-Tries 60 -PauseSeconds 15'
+        $src | Should -Match 'Read-SIPnBack -Arm \$Arm -Path \$path -Sleep \$Sleep -Tries 120 -PauseSeconds 15'
+    }
+
+    It 'the updater (step 1b) gets the same wait: it calls the same Set-SIAcrAgentPool (through the outbound check, #1087)' {
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\_shared\SI-PrivateNetwork.ps1'))
+        $src | Should -Match '(?s)function Invoke-SIUpdatePrivateRegistry .{0,20000}Invoke-SIAcrAgentPoolStep -Arm \$Arm'
+        $src | Should -Match '(?s)function Invoke-SIAcrAgentPoolStep .{0,4000}Set-SIAcrAgentPool -Arm \$Arm'
     }
 }

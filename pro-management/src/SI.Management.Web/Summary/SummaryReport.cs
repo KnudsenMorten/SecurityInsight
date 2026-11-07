@@ -137,8 +137,10 @@ WHERE Status = N'Complete' AND CollectionTime = {SI.Management.Core.ProData.Publ
 
     /// The filtered rows of one collection, each with its tier group. Every filter is a parameter (NULL = all): one or more
     /// values each, as an IN-list over a JSON array (the statement text never depends on how many were chosen).
-    private const string Filtered = """
-SELECT s.*, COALESCE(CONVERT(int, s.CriticalityTier), 99) AS TierGroup
+    /// 2026-11-05 (owner: "every views must be fast"): the short columns only -- never s.* (the long text columns are
+    /// documents; a page read them for every row of the collection). The export joins them for its own rows (RowsSql).
+    private static readonly string Filtered = "SELECT " + ShortColumns.Replace("f.TierGroup, ", "", StringComparison.Ordinal).Replace("f.", "s.", StringComparison.Ordinal).Trim()
+        + ", COALESCE(CONVERT(int, s.CriticalityTier), 99) AS TierGroup" + "\n" + """
 FROM sidata.SummaryRow AS s
 WHERE s.CollectionTime = CONVERT(datetime2(3), @At, 126)
   AND (@Tiers IS NULL OR COALESCE(CONVERT(int, s.CriticalityTier), 99) IN (SELECT TRY_CONVERT(int, tv.[value]) FROM OPENJSON(@Tiers) AS tv))
@@ -165,13 +167,18 @@ f.RowNo, f.TierGroup, f.SecurityDomain, f.Category, f.Subcategory, f.Configurati
 f.CriticalityTierLevel, f.RiskFactorConsequenceDetailed, f.RiskFactorConsequence, f.RiskFactorProbabilityDetailed, f.RiskFactorIds, f.RiskFactorProbability,
 f.RiskConsequenceScore, f.RiskProbabilityScore, f.RiskScoreTotal, f.RiskScoreWeightFactor, f.RiskScoreWeightDetailed, f.RiskScoreTotalWeighted, f.RiskRating,
 f.RatingRank, f.CmdbId, f.CmdbName, f.CmdbCriticality, f.CmdbDataSensitivity, f.ImpactedAssetCount, f.ReportName, f.MitreTactics, f.MitreTechniques, f.ComplianceTags,
-f.RiskAssetBase, f.RiskAssetFactors, f.RiskAssetDerived, f.RiskVulnBase, f.RiskVulnFactors, f.RiskVulnDerived
+f.RiskAssetBase, f.RiskAssetDerived, f.RiskVulnBase, f.RiskVulnDerived
 """;
     private const string LongColumns = ", f.ImpactedAssetsList, f.ImpactedAssetIds, f.MoreDetails";
+    /// The risk score's factor texts (long text too): read for the page's own rows, like the long columns.
+    private const string FactorColumns = ", l.RiskAssetFactors, l.RiskVulnFactors";
 
-    public static string RowsSql(bool full) => "WITH f AS (\n" + Filtered + "),\nr AS (SELECT " + ShortColumns + (full ? LongColumns : "")
+    public static string RowsSql(bool full) => "WITH f AS (\n" + Filtered + "),\nr AS (SELECT " + ShortColumns
         + ",\n  ROW_NUMBER() OVER (PARTITION BY f.TierGroup ORDER BY " + OrderInTier + ") AS Rn FROM f)\n"
-        + "SELECT r.* FROM r WHERE r.Rn > @Skip AND r.Rn <= @Skip + @Take ORDER BY r.TierGroup, r.Rn\nOPTION (RECOMPILE)";
+        + "SELECT r.*" + FactorColumns + (full ? LongColumns.Replace("f.", "l.", StringComparison.Ordinal) : "") + " FROM r"
+        // the long text columns of the page's own rows only (the factors; the lists for the export), by the row's key
+        + "\nJOIN sidata.SummaryRow AS l ON l.CollectionTime = CONVERT(datetime2(3), @At, 126) AND l.RowNo = r.RowNo"
+        + "\nWHERE r.Rn > @Skip AND r.Rn <= @Skip + @Take ORDER BY r.TierGroup, r.Rn\nOPTION (RECOMPILE)";
 
     public static readonly string HeadsSql = "WITH f AS (\n" + Filtered + """
 ),

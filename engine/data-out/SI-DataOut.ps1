@@ -186,10 +186,11 @@ function Get-SIDataOutItemKeyFull {
 }
 
 function Get-SIDataOutCiSql {
-    <# The CIs, a page at a time by key: the CI document plus the totals the data sync keeps on the row. #>
+    <# The CIs, a page at a time by key: the CI document plus the totals the data sync keeps on the row. FORCESEEK: every page
+       starts at @After on the key (a plan that filtered by the id read the table from its first row on every page). #>
     @'
 SELECT TOP (CONVERT(int, @Take)) c.CiId, c.Lifecycle, c.Tier, c.RiskScore, c.WeightedRiskScore, c.OpenFindings, c.LinkCount, c.DocJson
-FROM sidata.Ci AS c
+FROM sidata.Ci AS c WITH (FORCESEEK)
 WHERE c.CiId > @After AND c.DocJson IS NOT NULL
 ORDER BY c.CiId;
 '@
@@ -231,7 +232,7 @@ ORDER BY s.OwnerKey, s.FindingKey;
     if ($Part -eq 'open') {
         if (-not $WithState) {
             return @'
-SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
+SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson, CONVERT(nvarchar(30), f.CollectionTime, 127) AS SiCollectionTimeText,
        c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality,
        JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
        CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS datetime2(3)) AS FirstDetected, CAST(NULL AS datetime2(3)) AS LastSeen,
@@ -243,7 +244,7 @@ ORDER BY f.CiFindingId;
 '@
         }
         return @'
-SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson,
+SELECT TOP (CONVERT(int, @Take)) f.CiFindingId, f.CiId, f.AssetId, f.FindingKey, f.RiskScore, f.WeightedRiskScore, f.Tier, f.DocJson, CONVERT(nvarchar(30), f.CollectionTime, 127) AS SiCollectionTimeText,
        c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName, c.CmdbCriticality,
        JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
        s.State, s.FirstDetected, s.LastSeen, s.ClosedAt, s.CloseReason, s.AbsentRuns
@@ -804,6 +805,31 @@ function ConvertFrom-SIDataOutJson {
     return [pscustomobject]@{}
 }
 
+function Add-SIDataOutFindingRunTime {
+    <#
+        PURE. #1116 (owner 2026-11-05, "Remove it"): the run's time is no longer stored INSIDE a finding's source record
+        (sidata.CiFinding.DocJson, the database path) -- an unchanged finding's record is then never rewritten. What goes OUT
+        stays byte for byte as before: a database-path record ('"si_finding_source":"database"') without the field gets
+        "si_collection_time" back from the row's CollectionTime column (-Time: CONVERT(nvarchar(30), CollectionTime, 127) --
+        the same conversion the record carried), in the SAME place: right after "si_finding_rows" (always there: a count).
+        A record that still carries the field (written before this release, until its next run) and every other record (the
+        Log Analytics path, a closed finding without one) are returned as they are.
+    #>
+    param($Text, $Time)
+    if ($null -eq $Text -or $Text -is [System.DBNull]) { return $Text }
+    $s = [string]$Text
+    if ($null -eq $Time -or $Time -is [System.DBNull] -or -not [string]$Time) { return $s }
+    if ($s.IndexOf('"si_collection_time"', [StringComparison]::Ordinal) -ge 0) { return $s }
+    if ($s.IndexOf('"si_finding_source":"database"', [StringComparison]::Ordinal) -lt 0) { return $s }
+    $pair = '"si_collection_time":"' + [string]$Time + '"'
+    $m = [regex]::Match($s, '"si_finding_rows":-?\d+')
+    if ($m.Success) { return $s.Insert($m.Index + $m.Length, ',' + $pair) }
+    $end = $s.LastIndexOf('}')
+    if ($end -lt 0) { return $s }
+    $sep = if ($s.Substring(0, $end).Trim().EndsWith('{')) { '' } else { ',' }
+    return $s.Insert($end, $sep + $pair)
+}
+
 function Set-SIDataOutValue {
     <# Sets one property of an item (only when -IfMissing is off or the item has no value there). DBNull is $null. #>
     param($Item, [string]$Name, $Value, [switch]$IfMissing)
@@ -847,7 +873,8 @@ function ConvertFrom-SIDataOutFindingRow {
         a cmdlet per value was ~20 Add-Member calls per finding: most of the 7.7 s a 5,000-row page took to read).
     #>
     param([Parameter(Mandatory)]$Row)
-    $it = ConvertFrom-SIDataOutJson $Row['DocJson']
+    $rt = if ($Row -is [System.Collections.IDictionary] -and -not $Row.Contains('SiCollectionTimeText')) { $null } else { $Row['SiCollectionTimeText'] }
+    $it = ConvertFrom-SIDataOutJson (Add-SIDataOutFindingRunTime -Text $Row['DocJson'] -Time $rt)
     $props = $it.PSObject.Properties
     foreach ($f in $script:SIDataOutFindingRowSet) {
         $name = $f[0]
@@ -1985,7 +2012,11 @@ function ConvertTo-SIDataOutContractRow {
           [Parameter(Mandatory)][string]$Action, [string]$BatchId = '', [string]$Reason = '')
     $row = ConvertTo-SIDataOutOrderedRow @(Invoke-SIOutputMap -Map $Map -Items @($Item) -ValueMaps $ValueMaps -Context $Context)[0]
     foreach ($dk in @($row.Keys)) { $row[$dk] = ConvertTo-SIDataOutWireValue $row[$dk] }
+    # a CI row that is not active says its state in words, as the push does (Invoke-SIDataOutContractPage)
+    $lifeReason = ''
+    if (-not $Reason -and $Output -eq 'servicenow-ci' -and $Action -ne 'held' -and $Action -ne 'out_of_scope') { $lifeReason = Get-SIDataOutCiStateReason -Item $Item; $Reason = $lifeReason }
     $null = Set-SIDataOutEnvelope -Row $row -Output $Output -Action $Action -BatchId $BatchId -Reason $Reason
+    if ($lifeReason -and $row.Contains('u_row_hash')) { $row['u_row_hash'] = Add-SIDataOutReasonToHash -Hash ([string]$row['u_row_hash']) -Reason $lifeReason }
     $row
 }
 function Get-SIDataOutContractCiDelivered {
@@ -2104,13 +2135,22 @@ function Invoke-SIDataOutContractPage {
             $ar = [string](Get-SIItemValue $it 'absent_runs')
             $reason = ('absent {0} complete run(s) -- SecurityInsight closes a finding only after enough complete runs without it' -f $ar)
         }
+        # A CI ROW SAYS ITS STATE IN WORDS (owner 2026-11-05): every CI row that is not active carries its lifecycle reason
+        # (merged into <id> (<name>) / not seen since <date> / deleted in <source> / every linked object gone / ...) in
+        # u_si_reason, and the reason is part of the row's hash -- a retired CI first sent without one goes once more
+        $lifeReason = ''
+        if ($grain -eq 'ci' -and -not $reason -and $now -in 'live', 'closed') { $lifeReason = Get-SIDataOutCiStateReason -Item $it; $reason = $lifeReason }
         $rp = ''
         if ($oldKeys.ContainsKey($k)) {
             $om = Get-SIDataOutStateMeta -Prev $oldState[$oldKeys[$k]] -Grain $grain
-            if ($om.Present -and $om.Class -ne 'gone') { $rp = [string]$oldKeys[$k]; [void]$W.Replaced.Add($rp) }
+            if ($om.Present -and $om.Class -ne 'gone') {
+                $rp = [string]$oldKeys[$k]; [void]$W.Replaced.Add($rp)
+                if ($W.ContainsKey('ReplacedBy') -and $null -ne $W.ReplacedBy) { $W.ReplacedBy[$rp] = [string]$k }
+            }
         }
         $null = Set-SIDataOutEnvelope -Row $row -Output $out -Action $dec.Action -BatchId ([string]$W.BatchId) -Reason $reason -Replaces $rp
         if (-not [string]$row['u_row_hash']) { $row['u_row_hash'] = Get-SIDataOutRowHashText -Row $row }
+        if ($lifeReason) { $row['u_row_hash'] = Add-SIDataOutReasonToHash -Hash ([string]$row['u_row_hash']) -Reason $lifeReason }
         $rows.Add($row)
         Add-SIDataOutActionCount -Counts $counts -Action $dec.Action
         $hash = [string]$row['u_row_hash']
@@ -2137,7 +2177,10 @@ function Invoke-SIDataOutContractGonePage {
         #914 WHAT WAS SENT BEFORE AND IS NOT IN THIS RUN'S ITEMS, a page at a time (cfg.DataOutItem by key): a disabled
         account's record or one of a report the newest run could not complete is HELD with its last values (never "no
         longer sent"); a record that is no longer in SecurityInsight's data gets ONE held row and then none; an out-of-scope
-        record stays as it is. Returns @{ Rows; State; Gone (keys whose state row goes); Changes; Counts } or $null at the end.
+        record stays as it is. A CI (owner 2026-11-05, "never delete or stop sending") is never dropped: one the target has
+        that is no longer in the data, or whose key another CI replaced, is sent RETIRED (u_si_state retired, u_action close,
+        u_si_reason) on every run and its state row stays; only a CI row that was never delivered leaves the state.
+        Returns @{ Rows; State; Gone (keys whose state row goes); Changes; Counts } or $null at the end.
     #>
     param([Parameter(Mandatory)][hashtable]$W)
     if (-not $W.Store -or $W.PrevDone) { return $null }
@@ -2160,25 +2203,43 @@ function Invoke-SIDataOutContractGonePage {
         # its state row stays as it is, and it goes on the next run once the column is wider
         if ($W.ContainsKey('CutHeldKeys') -and $W.CutHeldKeys -and $W.CutHeldKeys.Contains($k)) { continue }
         $meta = Get-SIDataOutStateMeta -Prev ([pscustomobject]@{ Hash = [string]$r['RowHash']; Json = $(if ($r['RowJson'] -is [System.DBNull]) { '' } else { [string]$r['RowJson'] }) }) -Grain $W.Grain
-        # re-keyed: the new key's row carries u_si_replaces -- the old key gets no row of its own and leaves the state
-        if ($W.Replaced.Contains($k)) { $gone.Add($k); continue }
+        $isCi = ([string]$W.Grain -eq 'ci')
+        # re-keyed: the new key's row carries u_si_replaces. A vulnerable item's old key gets no row of its own and leaves
+        # the state. A CI's old key NEVER leaves (owner 2026-11-05: "never delete or stop sending"): it keeps its own row,
+        # retired, naming the CI that replaces it -- below.
+        if ($W.Replaced.Contains($k) -and -not $isCi) { $gone.Add($k); continue }
         $isCarry = $car.Contains($k)
         if (-not $isCarry) { foreach ($cp in $W.CarryPrefixes) { if ($k.StartsWith([string]$cp, [StringComparison]::Ordinal)) { $isCarry = $true; break } } }
         $now = 'gone'; $reason = 'not in SecurityInsight''s data any more -- the target keeps the record as it is; SecurityInsight sends no more rows for it'
+        $ciRetire = ''
         if ($frz.Contains($k)) { $now = 'held'; $reason = 'the account or device is disabled and left out by a setting -- the target keeps what it has' }
         elseif ($isCarry) { $now = 'held'; $reason = 'the report that found it could not complete in the newest run -- the target keeps what it has' }
+        elseif ($isCi -and $meta.Base -in 'live', 'closed', 'gone') {
+            # A CI THE TARGET HAS IS NEVER LEFT AT ITS LAST 'active' ROW (owner 2026-11-05: "otherwise they dont know the
+            # state"): a CI that is no longer in SecurityInsight's data -- or whose key another CI replaced -- is sent as
+            # RETIRED with action close and the reason, on every run, and its state row stays. (A CI that is still in
+            # sidata.Ci is an item of the run and never reaches here: it goes with its real state.)
+            $now = 'closed'
+            $by = ''; if ($W.Replaced.Contains($k) -and $W.ContainsKey('ReplacedBy') -and $null -ne $W.ReplacedBy -and $W.ReplacedBy.ContainsKey($k)) { $by = [string]$W.ReplacedBy[$k] }
+            $ciRetire = $(if ($by) { 'replaced by {0} -- the same machine; use that CI' -f $by } elseif ($W.Replaced.Contains($k)) { 'replaced by another CI -- the same machine; use the CI that names this one in u_si_replaces' } else { $script:SIDataOutCiGoneReason })
+            $reason = $ciRetire
+        }
         $dec = Get-SIDataOutContractAction -Now $now -Base $meta.Base
         if (-not $dec.Send) {
-            # told already (a delivered gone row), or never delivered: the state row goes; an out-of-scope record keeps its row
-            if (($meta.Class -eq 'gone' -and $meta.Delivered) -or ($meta.Base -eq 'none' -and $now -eq 'gone')) { $gone.Add($k) }
+            # NEVER DELIVERED (base none): SecurityInsight never sent it, so its state row goes -- the one delete that is
+            # left for a CI. A vulnerable item told already (a delivered gone row) leaves too; an out-of-scope record keeps its row.
+            if (($meta.Base -eq 'none' -and $now -eq 'gone') -or (-not $isCi -and $meta.Class -eq 'gone' -and $meta.Delivered)) { $gone.Add($k) }
             continue
         }
         $row = ConvertTo-SIDataOutOrderedRow $meta.Cells
+        if ($ciRetire) { if ($row.Contains($script:SIDataOutCiStateColumn)) { $row[$script:SIDataOutCiStateColumn] = 'retired' } }
         $null = Set-SIDataOutEnvelope -Row $row -Output $W.OutputId -Action $dec.Action -BatchId ([string]$W.BatchId) -Reason $reason
+        if ($ciRetire) { $row['u_row_hash'] = Add-SIDataOutReasonToHash -Hash (Get-SIDataOutRowHashText -Row $row) -Reason $ciRetire }
         $rows.Add($row); Add-SIDataOutActionCount -Counts $counts -Action $dec.Action
         $cells = [ordered]@{}; foreach ($ck2 in $row.Keys) { $cells[$ck2] = Get-SIDataOutRowText $row[$ck2] }
         $h = [string]$row['u_row_hash']; if (-not $h) { $h = Get-SIDataOutRowHashText -Row $row }
         $state.Add([ordered]@{ k = $k; h = $h; r = (ConvertTo-SIDataOutStateJson -Cells $cells -Class $dec.Class -Base $meta.Base -Action $dec.Action) })
+        if ($ciRetire -and $meta.Class -ne 'closed') { $chs.Add([pscustomobject]@{ At = [datetime]::UtcNow; Action = 'closed'; ObjectName = $(if ($W.NameCol -and $cells.Contains($W.NameCol)) { [string]$cells[$W.NameCol] } else { '' }); ObjectKey = $k; Finding = ''; TargetKey = $k; Fields = $null; Reason = $reason; Error = '' }) }
         if ($now -eq 'gone') { $chs.Add([pscustomobject]@{ At = [datetime]::UtcNow; Action = 'removed'; ObjectName = $(if ($W.NameCol -and $cells.Contains($W.NameCol)) { [string]$cells[$W.NameCol] } else { '' }); ObjectKey = $k; Finding = ''; TargetKey = $k; Fields = $null; Reason = $reason; Error = '' }) }
     }
     @{ Rows = $rows.ToArray(); State = $state.ToArray(); Gone = $gone.ToArray(); Changes = $chs.ToArray(); Counts = $counts }
@@ -2247,6 +2308,8 @@ function Invoke-SIDataOutSnowContract {
     $e = $W.Entry; $out = [string]$e.output
     if (-not $W.ContainsKey('CutHeldKeys') -or $null -eq $W.CutHeldKeys) { $W.CutHeldKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal) }
     if (-not $W.ContainsKey('Replaced') -or $null -eq $W.Replaced) { $W.Replaced = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal) }
+    # a re-keyed CI's old key -> the key that replaces it (its own retired row names it)
+    if (-not $W.ContainsKey('ReplacedBy') -or $null -eq $W.ReplacedBy) { $W.ReplacedBy = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal) }
     $spec = Get-SIDataOutContractSpec -Output $out
     # the contract's columns are always sent, whatever a customer's change to the map removed (they are checked against the
     # staging table like every other column: one that is missing there HOLDS the push)

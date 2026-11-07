@@ -10,12 +10,11 @@
           BodyHash (the raw body's SHA-256) stays what it was: the integrity check at run start.
       (b) An override whose BaseHash is not the current template's ContentHash is "UPGRADE AVAILABLE", shown with WHAT
           changed (a structured diff of the normalised bodies). Never merged automatically.
-      (c) A FINGERPRINT GATE (PIM BUG-55: an image roll silently changed 217 of 325 policies; BUG-223: a path that
-          bypassed the gate). Publishing templates compares the template-set fingerprint with the one recorded on the
+      (c) A FINGERPRINT GATE (the same gate PIM4EntraPS uses, on every update path, so a release never changes the
+          templates in force unseen). Publishing templates compares the template-set fingerprint with the one recorded on the
           install (cfg.InstallState 'TemplateFingerprint'); a moved fingerprint needs -AcceptTemplateChange, otherwise
           the run is a plan. The fingerprint is recorded only AFTER a publish is read back and verified.
-      (d) The approver is the identity of the session (Get-SIProSessionActor), never a parameter or a request field
-          (PIM BUG-180).
+      (d) The approver is the identity of the session (Get-SIProSessionActor), never a parameter or a request field.
       (e) A conformance view per item and per install: UpToDate / Overridden / Disabled / UpgradeAvailable / Own / Retired.
 
     Everything here except the store readers / writers is pure (rows in, objects out) and tested directly.
@@ -463,8 +462,7 @@ function Get-SIProTemplateGateDecision {
 function Get-SIProSessionActor {
     <#
         The identity this process runs as -- what cfg.ChangeLog records for a publish, an acceptance or an
-        acknowledgement. Never taken from a parameter, a file or a request (PIM BUG-180: an approver taken from input is
-        whatever the input says). In a container: the managed identity (its client id when the platform says) or the
+        acknowledgement. Never taken from a parameter, a file or a request: the record names who really acted. In a container: the managed identity (its client id when the platform says) or the
         engine application; on Windows: the signed-in Windows account; elsewhere: the operating-system user.
     #>
     if ($global:SI_UseManagedIdentity) {

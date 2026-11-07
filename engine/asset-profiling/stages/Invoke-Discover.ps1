@@ -439,6 +439,13 @@ function Invoke-SIDiscover {
         $partsWritten = Write-SIDiscoverParts -RunContext $RunContext -Assets @($assets) -ShardSize $shardSize
         if ($global:SI_CollectRunInfo) { $global:SI_CollectRunInfo.Parts = $partsWritten }
         Write-SIInfo ('{0} object(s) written into {1} part(s) for the workers' -f $assets.Count, $partsWritten)
+        # #1089: the tags every azure record inherits (resource group / subscription / management groups) -- read ONCE here
+        # for the whole collection and handed over beside the records; the merge attaches them (the workers hold none of
+        # discovery's records). Never fails the discovery: a failure is said.
+        if ($RunContext.Engine -eq 'azure') {
+            if (-not (Get-Command -Name Save-SIParentChainForParts -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\RuleIndexes.ps1') }
+            $null = Save-SIParentChainForParts -Engine 'azure' -RunId ([string]$RunContext.RunId) -RunContext $RunContext
+        }
     } else {
         for ($i = 0; $i -lt $assets.Count; $i += $shardSize) {
             $shardIdx = [int]($i / $shardSize)

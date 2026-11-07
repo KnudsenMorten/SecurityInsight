@@ -480,6 +480,43 @@ Describe 'setup\Grant-SIIdentity.ps1 inside a Support session, for a user-assign
         $global:SISupportTestWorld.TokenAsks.Count | Should -Be 0
         Should -Invoke Invoke-SIAzRestHttp -Times 0 -Exactly
     }
+    It 'GRANT-READ-1 (3.0.34): a 403 reading AND making the grant at the tenant root management group is UNKNOWN -- a customer task naming scope, role and identity -- and the script goes on' {
+        # live 2026-11-04 (a private install): this one read stopped the whole install
+        $mg = '/providers/Microsoft.Management/managementGroups/{0}' -f $script:Tid
+        $global:SISupportTestWorld.Override = {
+            param($Method, $Uri, $Body)
+            if (([uri]$Uri).AbsolutePath -match '^/providers/Microsoft\.Management/managementGroups/[^/]+/providers/Microsoft\.Authorization/roleAssignments') {
+                return [pscustomobject]@{ StatusCode = 403; Headers = @{}; Method = $Method
+                    Content = '{"error":{"code":"AuthorizationFailed","message":"The client does not have authorization to perform action Microsoft.Authorization/roleAssignments/read over that scope."}}' }
+            }
+            $null
+        }
+        $ws = "/subscriptions/$($script:Sub)/resourceGroups/rg-si/providers/Microsoft.OperationalInsights/workspaces/law-si"
+        $p = $script:Uami.Clone(); $p.WorkspaceResourceId = $ws; $p.ConfigPath = (Join-Path $TestDrive 'no-such-config.ps1'); $p.ReaderScopes = @($mg); $p.Apply = $true
+        $r = Invoke-Grant $p
+        $r.Text | Should -Match ('\[UNKNOWN\]\s+Reader\s+on {0}' -f [regex]::Escape($mg))
+        $r.Text | Should -BeLike ('*# Azure role "Reader" on "{0}" for the managed identity {1} -- Azure portal: *' -f $mg, $script:Principal)
+        $r.Text | Should -Match 'NOT KNOWN'
+        # the grants inside the resource group are made as before
+        $r.Text | Should -Match '\[granted\]\s+Monitoring Metrics Publisher\s+on /subscriptions/[0-9a-f-]+/resourceGroups/rg-si'
+        $r.Text | Should -Match '\[granted\]\s+Log Analytics Reader\s+on '
+        $r.ExitCode | Should -Be 1 -Because 'a grant is not known'
+        # the write was tried (a refused read can still be a write that works) and refused: no grant was recorded there
+        @(Get-Changes | Where-Object { $_.Method -eq 'PUT' -and $_.Path -like '/providers/Microsoft.Management/*' }).Count | Should -Be 1
+    }
+    It 'GRANT-READ-1: a 403 reading a grant INSIDE the install''s resource group still stops the script' {
+        $global:SISupportTestWorld.Override = {
+            param($Method, $Uri, $Body)
+            if ($Method -eq 'GET' -and ([uri]$Uri).AbsolutePath -match '/resourceGroups/rg-si/providers/Microsoft\.Authorization/roleAssignments$') {
+                return [pscustomobject]@{ StatusCode = 403; Headers = @{}; Method = $Method; Content = '{"error":{"code":"AuthorizationFailed","message":"no read"}}' }
+            }
+            $null
+        }
+        $ws = "/subscriptions/$($script:Sub)/resourceGroups/rg-si/providers/Microsoft.OperationalInsights/workspaces/law-si"
+        $p = $script:Uami.Clone(); $p.WorkspaceResourceId = $ws; $p.ConfigPath = (Join-Path $TestDrive 'no-such-config.ps1'); $p.Apply = $true
+        { Invoke-Grant $p } | Should -Throw '*HTTP Status: 403*'
+        @(Get-Changes | Where-Object { $_.Path -like '*/resourceGroups/rg-si/providers/Microsoft.Authorization/*' }).Count | Should -Be 0 -Because 'nothing inside is written after the refused read'
+    }
 }
 
 Describe 'the switches of setup\Grant-SIIdentity.ps1 (source pinned)' {

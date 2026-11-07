@@ -210,6 +210,8 @@ Describe 'no free file loads a Pro file' {
             'setup\Invoke-SIContainerUpdate.ps1|asset-cmdb'
             # #681: the private-networking cut-over loads the Support app's database access only after it finds the file (Pro)
             'setup\Set-SIPrivateNetworking.ps1|SI-SupportAppDatabase.ps1'
+            # framework SEC-08: the database setup job loads the Support app's database access only after Test-Path finds it (Pro)
+            'setup\_shared\SI-DbInitJob.ps1|SI-SupportAppDatabase.ps1'
             # #681: the private-networking option's no-module check reads the Pro support SQL job files only where they exist
             'tests\pester\SIv3-PrivateNetwork.Tests.ps1|SI-SupportSqlJob.ps1'
             'tests\pester\SIv3-PrivateNetwork.Tests.ps1|Invoke-SISupportSqlAccessJob.ps1'
@@ -230,6 +232,9 @@ Describe 'no free file loads a Pro file' {
             # package with the Pro update verifier; the Community copy never loads it (its channel is GitHub), and a repository
             # copy loads it only after it finds the file next to it
             'setup\Install-SecurityInsight.Launcher.ps1|SI-InvardiaUpdate.ps1'
+            # stop-the-run-then-update reads the version the ring serves with the Pro update client only after Test-Path finds it;
+            # the Community copy says "this copy carries no Invardia update client" and goes on
+            'setup\Stop-SIRunAndUpdate.ps1|SI-InvardiaUpdate.ps1'
             'tests\pester\SIv3-SqlTier.Tests.ps1|SI-UpdaterInvardia.ps1'        # #756: the Invardia update path is read only after Test-Path finds it (skipped without it)
             'tests\pester\SIv3-StepFailureCause.Tests.ps1|asset-correlation'     # a job NAME in fixture log lines -- a label, never loaded
             'tests\pester\SIv3-NoScriptSigningClaims.Tests.ps1|release\'         # the published product pages are read only after Test-Path finds the folder

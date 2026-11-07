@@ -142,6 +142,9 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'cfg.ServiceNowCheck';         Verbs = 'SELECT, INSERT' }
     # #757: the heartbeat's hourly load samples for Operations > Performance (written and pruned only through cfg.PerfSampleSave)
     @{ Object = 'cfg.PerfSample';              Verbs = 'SELECT' }
+    # framework 8.4: the uplink outbox -- a run report not taken is kept at job end (INSERT), the heartbeat job sends it again
+    # and deletes it once Invardia took it (SELECT, UPDATE its attempt, DELETE), the bound drops the oldest (DELETE)
+    @{ Object = 'cfg.UplinkOutbox';            Verbs = 'SELECT, INSERT, UPDATE, DELETE' }
     # #1021: the support grant job and the heartbeat -- ONLY through the four signed procedures (they write their own tables
     # through the ownership chain; the engine never names a principal or a level -- the customer's consent record does)
     @{ Object = 'cfg.SupportGrantOpen';        Verbs = 'EXECUTE' }
@@ -165,6 +168,7 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'sidata.PublishedRunSet';            Verbs = 'EXECUTE' }        # one trusted run: the pipeline runner moves the published-run pointer (the run's own data checked inside)
     @{ Object = 'sidata.PublishedCopyCatchUp';       Verbs = 'EXECUTE' }        # the shown run's copies of the merged assets caught up when older than it (gated inside)
     @{ Object = 'sidata.PublishedCopyRefreshRange';  Verbs = 'EXECUTE' }        # #881 one key range of one copy -- the driver runs the ranges at once (gated inside)
+    @{ Object = 'sidata.StatisticsRefresh';          Verbs = 'EXECUTE' }        # the stale statistics of one table refreshed at the end of a run, and the database's background-statistics setting (gated inside; changes no row)
     # ---- deletes inside the owned schemas that the schema grant does not give ----
     @{ Object = 'cmdbsync.SyncStage';          Verbs = 'DELETE' }
     @{ Object = 'snowstage.BatchCi';           Verbs = 'DELETE' }
@@ -202,13 +206,18 @@ $script:SIEngineNeverGranted = @(
 # named here and called from an engine job would make the static test's real-rights run fail, not pass quietly.
 $script:SIEngineNotEngine = @(
     @{ File = 'engine/pro-settings/SI-ProSchema.ps1';           Function = '*';  Why = 'the schema + updater access: the updater and setup' }
-    # #1050: the rows of the indexes that wait for an idle window and the measured build rate are written by the updater only
-    # (its schema step and its index-build run); the engine's wake-up only READS cfg.IndexBuild (granted below)
-    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildSaveSql';       Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
-    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Save-SIIndexBuildRow';          Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
-    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Add-SIIndexBuildRateSample';    Why = 'the updater (caj-si-updater: the schema step and SI_UPDATER_MODE = index-build)' }
-    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Invoke-SIIndexBuildCommand';    Why = 'the updater (caj-si-updater): the index build itself' }
+    # #1050 / #1111: the rows of the indexes that wait for an idle window and the measured build rate are written by the
+    # updater's schema step and by the index build job caj-si-index-build -- which runs as the UPDATER's identity (its rights:
+    # no new grant); the engine's wake-up only READS cfg.IndexBuild (granted below) and starts that job
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildSaveSql';       Why = 'the updater''s identity (caj-si-updater: the schema step; caj-si-index-build: the idle-window build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Save-SIIndexBuildRow';          Why = 'the updater''s identity (caj-si-updater: the schema step; caj-si-index-build: the idle-window build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Add-SIIndexBuildRateSample';    Why = 'the updater''s identity (caj-si-updater: the schema step; caj-si-index-build: the idle-window build)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Invoke-SIIndexBuildCommand';    Why = 'the updater''s identity (caj-si-updater and caj-si-index-build): the index build itself' }
     @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Measure-SIIndexReadRate';       Why = 'the updater''s schema step: a timed sample read' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildRunSql';        Why = 'caj-si-index-build (the updater''s identity): the index build''s statement' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildPauseSql';      Why = 'caj-si-index-build (the updater''s identity): the pause of its build' }
+    @{ File = 'engine/index-build/SI-IndexBuildJob.ps1';        Function = '*';  Why = 'caj-si-index-build: runs as the updater''s identity (the install''s lock, cfg.IndexBuild, the index DDL)' }
+    @{ File = 'engine/index-build/Invoke-SIIndexBuildJob.ps1';  Function = '*';  Why = 'caj-si-index-build: runs as the updater''s identity' }
     @{ File = 'engine/pro-settings/SI-EngineGrants.ps1';        Function = '*';  Why = 'this file: setup, the cut-over script and the updater''s check' }
     @{ File = 'engine/pro-settings/SI-GrantProcedure.ps1';      Function = '*';  Why = 'the signed grant procedure: the admin run (setup, the cut-over) and the updater' }
     @{ File = 'engine/pro-settings/SI-ProOverrideMigration.ps1'; Function = '*'; Why = 'setup\Publish-SITemplates.ps1' }
@@ -234,6 +243,7 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantProcedureSha256'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantSchemaSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantSchemaFileBlock'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantRenewSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'ConvertTo-SISupportGrantSid'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantAdminSteps'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantStateSql'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }

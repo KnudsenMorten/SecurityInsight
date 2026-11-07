@@ -5,6 +5,10 @@
     database to its least-privilege role si_engine (framework DOCS/REQUIREMENTS.md §12.23 SQL-ACCESS P8).
 
 .DESCRIPTION
+    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the engine's role si_engine, its grants and the engine user's membership (removing the broad roles stays this script's later step)
+    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
+    script stays as a fallback: run it only when Invardia support asks for it.
+
     Run per environment by Invardia support inside the environment's Support session
     (. Connect-InvardiaSupport.ps1 -Environment <handle> -Reason ...). The pattern is setup\_shared\SI-SupportCutover.ps1:
     EVERY statement goes through Invardia's audited Invoke-InvardiaSupportSql (the audit row first: server, database, the

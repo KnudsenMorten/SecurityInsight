@@ -247,6 +247,23 @@ function Get-DefenderTableOwner {
     }
 }
 
+function Get-AdvancedHuntingTableError {
+    <#
+        SUP-2026-00425 (#1125). One Defender table asked for on its own (`<table> | take 0`): $null when advanced hunting
+        answers, else its error text. A PROBE: its failure is the expected answer, so it is asked with -AsResult (nothing
+        reaches the transcript) -- the same rule as Test-AdvancedHuntingHasTable. Used by Resolve-RAUnnamedSourceError.
+    #>
+    param([Parameter(Mandatory)][string]$TableName)
+    try {
+        Ensure-GraphAuth
+        $probe = Invoke-SIHuntingQueryRest -Query ("{0} | take 0" -f $TableName) -Token $script:GraphAccessToken -TimeoutSec 120 -AsResult
+        if ($probe.Ok) { return $null }
+        return [string]$probe.Error
+    } catch {
+        return [string]$_.Exception.Message
+    }
+}
+
 function Test-AdvancedHuntingHasTable {
     [CmdletBinding()]
     param(

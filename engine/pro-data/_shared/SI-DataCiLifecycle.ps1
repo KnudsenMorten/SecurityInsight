@@ -352,10 +352,15 @@ END
     $out = $sql.Replace('/*SI_DISABLED_OWNERS*/', $fill).Replace('/*SI_FROZEN_REPORTS*/', $frFill).Replace('/*SI_EQUIVALENCE_DECL*/', $eqDecl).Replace('/*SI_EQUIVALENCE*/', $eqStep)
     $out = Convert-SIDataFindingStateRangeText -Sql $out -Ranged:$Ranged
     if ($FromStage) {
+        # 2026-11-07: NO forced seek on the staged rows (review): an install without the key index (Kind, OwnerKey) would then
+        # FAIL the data sync (error 8622) instead of running slower -- stability first. The large fixed cost per range was the
+        # read of every retired CI (fixed in Convert-SIDataFindingStateRangeText); a range the planner guesses large may still
+        # scan the staging table once in a while.
+        $hint = ''
         $out = $out.Replace('OPENJSON(@j) WITH (OwnerKey NVARCHAR(MAX), FindingKey NVARCHAR(MAX), CiId NVARCHAR(64), Severity NVARCHAR(16), DetectedBy NVARCHAR(MAX), ExemptionId NVARCHAR(64)) x',
-                            "(SELECT OwnerKey, FindingKey, CiId, Severity, DetectedBy, ExemptionId FROM sidata.CiFindingLifecycleStage WHERE Kind = N'f') x")
+                            "(SELECT OwnerKey, FindingKey, CiId, Severity, DetectedBy, ExemptionId FROM sidata.CiFindingLifecycleStage$hint WHERE Kind = N'f') x")
         $out = $out.Replace("OPENJSON(ISNULL(@equivalence, N'[]')) WITH (o NVARCHAR(MAX), a NVARCHAR(MAX), c NVARCHAR(MAX)) x",
-                            "(SELECT OwnerKey AS o, FindingKey AS a, Canonical AS c FROM sidata.CiFindingLifecycleStage WHERE Kind = N'a') x")
+                            "(SELECT OwnerKey AS o, FindingKey AS a, Canonical AS c FROM sidata.CiFindingLifecycleStage$hint WHERE Kind = N'a') x")
     }
     $out
 }
@@ -399,6 +404,15 @@ ELSE
     $join = 'JOIN #lcf f ON f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey'
     if ($out.IndexOf($join) -lt 0) { throw 'the lifecycle statement is not in the shape its ranges are cut from' }
     $out = $out.Replace($join, "JOIN sidata.CiFindingLifecycleStage f ON f.Kind = N'f' AND f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey")
+    # 2026-11-07 THE RETIRED CIs OF THIS RANGE ONLY. The list of retired CIs (@ret, with the reason read from each CI's
+    # document) was read in full by EVERY range: a scan of sidata.Ci and three JSON reads of every retired CI's document,
+    # whatever the range's size -- at a large install about 8 s per range, 1,000+ ranges of one owner each. Every use of @ret
+    # asks for the CI of a row of this range (a lifecycle row in the range, or a staged finding of #lcf, which holds only this
+    # range), so the CIs those rows name are the whole answer: a seek per CI instead of the whole table.
+    $ret = "    FROM sidata.Ci c WHERE c.Lifecycle = N'retired';"
+    if ($out.IndexOf($ret) -lt 0) { throw 'the lifecycle statement is not in the shape its ranges are cut from' }
+    $out = $out.Replace($ret, ("    FROM sidata.Ci c WHERE c.Lifecycle = N'retired'`n" +
+        "      AND c.CiId IN (SELECT s.CiId FROM sidata.CiFindingState s WHERE s.CiId IS NOT NULL/*R:s.OwnerKey*/ UNION SELECT f.CiId FROM #lcf f WHERE f.CiId IS NOT NULL);"))
     $out.Replace('/*RSKIP*/', $skip).Replace('/*ABS*/', ' AND s.LastSnapshot < @t')
 }
 
@@ -1038,6 +1052,10 @@ function Invoke-SIDataFindingStateRanged {
     }
     if ($Invoke.PSObject.Properties['SIRangeFirstTake'] -and [long]$Invoke.SIRangeFirstTake -gt 0) { $FirstTake = [long]$Invoke.SIRangeFirstTake }
     $take = [Math]::Max(1L, $FirstTake); $i = 0; $lastMs = 0L
+    # 2026-11-07 the fixed cost per range, learned from the ranges of a tiny size (Update-SIDataFixedCostMs): the next size is
+    # worked out on the part of the time that grows with it (a large install: ~8 s per range whatever its size kept every
+    # range at one owner for 1,000+ ranges)
+    $fixedMs = 0L
     $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)
     $val = { param($row, $n) if ($null -eq $row) { $null } elseif ($row -is [System.Collections.IDictionary]) { $v = $row[$n]; if ($v -is [System.DBNull]) { $null } else { $v } } else { $p = $row.PSObject.Properties[$n]; if ($p) { $v = $p.Value; if ($v -is [System.DBNull]) { $null } else { $v } } else { $null } } }
     while ($true) {
@@ -1064,7 +1082,8 @@ function Invoke-SIDataFindingStateRanged {
         if ($last) { break }
         if ($StopAfterRanges -gt 0 -and $i -ge $StopAfterRanges) { throw ('stopped after {0} range(s) (a test of a run that ends part-way)' -f $i) }
         $hasLo = $true; $lo = [string]$hi
-        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 }
+        if (Get-Command -Name Update-SIDataFixedCostMs -ErrorAction SilentlyContinue) { $fixedMs = Update-SIDataFixedCostMs -FixedMs $fixedMs -Size $take -ElapsedMs $lastMs }
+        if (Get-Command -Name Get-SIDataNextSize -ErrorAction SilentlyContinue) { $take = Get-SIDataNextSize -Current $take -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1 -FixedMs $fixedMs }
     }
     $o = [ordered]@{}; foreach ($k in $sum.Keys) { $o[$k] = [int]$sum[$k] }
     $o['Skipped'] = $skipped; $o['Note'] = $note

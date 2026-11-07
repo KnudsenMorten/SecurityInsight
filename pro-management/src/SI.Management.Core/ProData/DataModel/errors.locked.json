@@ -1074,6 +1074,31 @@
     "since": null
   },
   {
+    "code": "si-flow-1205",
+    "title": "A job of the pipeline ran outside the pipeline",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The jobs of this installation run as one pipeline, but a job of the pipeline also ran on its own -- not started by a pipeline run and not by a person. Such a run collects or writes the same data a second time and belongs to no run. Nothing is lost; the next update takes such a job off its own timer.",
+    "internalNote": "#1096 (found live 2026-11-04: a collect producer caj-si-<engine>-producer kept its own daily cron beside the pipeline -- every install collected twice a day, the extra collection belonged to no run). The verification job's pipeline check (engine/_shared/SI-OutsidePipeline.ps1 Invoke-SIOutsidePipelineCheck) reads, in pipeline mode only, every execution of a pipeline step's job (caj-si-<key>, or the producer of a collection in parts; workers count through their producer) of the last 48 h from ARM and compares them with the step records of the runs (cfg.FlowStepRun.Execution, or a start inside that step's window -- an attempt started again) and the people's starts (cfg.JobTriggerRequest.ExecutionName). Any other execution = 'ran outside the pipeline: <job> <execution> <start>' in the job's log; cfg.InstallState 'OutsidePipeline' { checkedUtc, count, firstUtc, sample } within 30 h raises this warning. since = the first such execution. Warning only; the producer's own timer is taken away by the update (Invoke-SICollectProducerTrigger) and a scheduled producer execution in pipeline mode is skipped by the collection gate.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the verification job's log (the 'ran outside the pipeline' lines name the job, the execution and its start). A job with its own timer in pipeline mode: let the next update take it off, or take it off on Operations > Jobs. A start by hand in the Azure portal: none needed."
+      }
+    ],
+    "lesson": "A job that is a step of the pipeline must have no other way to start by itself -- and an install should prove it every day, not trust it.",
+    "since": null
+  },
+  {
     "code": "si-snow-1301",
     "title": "A ServiceNow output's check failed",
     "causeClass": "settings-unreachable",

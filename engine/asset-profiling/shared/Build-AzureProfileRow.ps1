@@ -21,7 +21,7 @@
                          arm.<resource>.tags.<X>        -> AZ_Tags (parsed) walk
                          arm.<resource>.properties.<dotted.path>
                            -> walk AZ_PropertiesJson (which IS the .properties subtree)
-                         arm.<resource>.identity.<X>    -> not in PropertiesJson; null today (TODO)
+                         arm.<resource>.identity.<X>    -> not in PropertiesJson; null today
       exposureGraph -- EG-discovered fields
                        sourcePath patterns:
                          eg.node.NodeId                                 -> AZ_NodeId

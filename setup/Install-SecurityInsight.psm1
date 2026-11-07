@@ -72,6 +72,8 @@ function Install-SecurityInsight {
         [string]$HubVnetId,
         [switch]$LinkZonesToHub,
         [switch]$PeerToHub,
+        [string]$ReturnRouteRanges,
+        [string]$ReturnRouteNextHop,
         [switch]$CustomerManagedKeys,
         [string]$CmkKeyVaultId,
         [string]$CmkKeyName,

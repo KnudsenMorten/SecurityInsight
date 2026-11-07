@@ -23,6 +23,11 @@
       3. the server's Entra admin = the group (Entra-only authentication stays on)
       4. the server records that admin AS A GROUP (a server made with a person or an application as its admin keeps that
          kind otherwise, and the group's members are then not let in) -- set when it is not, and read back
+      5. framework §4.5 G3a -- a MOVE from another admin group (-ReplaceCurrentAdminGroup) at an install that has the
+         database setup job: its identity is made a member of the new group too, and right after the move a run of the
+         job must sign in THROUGH the new group (a managed identity's token keeps its old group claims for up to 24 hours;
+         the run is started again after 5 and 10 minutes). It does not -> the server's administrator is put back as it
+         was (read back) and the run stops, saying so. A membership of the new group 24 hours old needs no proof.
     Members are only ever ADDED here; nothing takes a member out of the group.
     Existing database users (the engine identity, the identity ledger's users) are untouched.
 
@@ -78,6 +83,19 @@ function Graph([string]$Method, [string]$Url, $Body) {
 }
 # #695: a new Entra admin is waited for until Azure has FINISHED the write (setup\_shared\SI-SqlAdminReady.ps1)
 . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SqlAdminReady.ps1'))
+# #1092: a member added right after the group was made waits out Entra replication, then is read back
+. ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-GroupMemberAdd.ps1'))
+# framework §4.5 G3a: a move from one admin GROUP to another is proven by the database setup job (setup\_shared\SI-DbInitJob.ps1)
+. ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-DbInitJob.ps1'))
+$siArm = {
+    param([string]$Method, [string]$Path, $Body)
+    $a = @{ Method = $Method; Path = $Path }
+    if ($null -ne $Body) { $a.Payload = ($Body | ConvertTo-Json -Depth 30 -Compress) }
+    $r = Invoke-SIAzRestMethod @a
+    if ($Method -eq 'GET' -and [int]$r.StatusCode -eq 404) { return $null }
+    if ([int]$r.StatusCode -ge 300) { throw ('{0} {1} failed ({2}): {3}' -f $Method, ($Path -replace '\?.*$', ''), $r.StatusCode, $r.Content) }
+    if ("$($r.Content)".Trim()) { $r.Content | ConvertFrom-Json }
+}
 $siAdminRest = { param([string]$Method, [string]$Path) Invoke-SIAzRestMethod -Method $Method -Path $Path }
 $siAdminPrint = { param([string]$Text) Write-Host $Text -ForegroundColor DarkYellow }
 $serverPath = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Sql/servers/{2}' -f $SubscriptionId, $ResourceGroupName, $SqlServerName
@@ -150,6 +168,18 @@ if ($curSid -and (-not $grp -or $curSid -ne [string]$grp.id)) {
         }
         if (@($MemberObjectIds | Where-Object { $_ }).Count -eq 0) { throw '-ReplaceCurrentAdminGroup needs -MemberObjectIds: the members that keep administering the database.' }
         Write-Host ('  [replace ] the current admin group {0} -- its members come from -MemberObjectIds' -f $cur.properties.login)
+        # framework §4.5 G3a: the database setup job signs in through the admin group -- its identity becomes a member of the
+        # new group too, and the move is proven by a run of it (below)
+        $dbn = Get-SIDbInitNames
+        $jobMi = $null; try { $jobMi = & $siArm 'GET' ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{2}?api-version={3}' -f $SubscriptionId, $ResourceGroupName, $dbn.Identity, $dbn.MiApi) $null } catch { $jobMi = $null }
+        $jobPid = [string](Get-SIDbInitProp $jobMi @('properties', 'principalId'))
+        if ($jobPid) {
+            $siMoveJob = $null; try { $siMoveJob = & $siArm 'GET' ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}?api-version={3}' -f $SubscriptionId, $ResourceGroupName, $dbn.Job, $dbn.AppApi) $null } catch { $siMoveJob = $null }
+            $siMovePid = $jobPid
+            if (-not $MemberObjectIds -or @($MemberObjectIds) -notcontains $jobPid) { $MemberObjectIds = @($MemberObjectIds) + @($jobPid) }
+            Write-Host ('  [member  ] the database setup job''s identity {0} ({1}) is made a member of {2} too' -f $dbn.Identity, $jobPid, $GroupName)
+        }
+        $siMoveFrom = 'group'
     } elseif ($curObj) { $want.Add([string]$curObj) }
     else { Write-Warning "the current admin ($($cur.properties.login)) could not be resolved -- add it to the group by hand before switching" }
 }
@@ -163,26 +193,32 @@ foreach ($m in $want) {
     if ($grp -and $grp.id -and $PSCmdlet.ShouldProcess($m, "add to $GroupName")) {
         # A group (or a member) created seconds ago answers "not found" for a moment: ONLY that answer is waited for and
         # the add tried again HERE -- never by running the whole script again, whose look-up by name could miss the new
-        # group and create a second one. A refusal stops at once, with its reason.
-        $memberAdded = $false; $memberError = $null
-        foreach ($memberWait in 0, 5, 10, 20, 30, 30) {
-            if ($memberWait) { Start-Sleep -Seconds $memberWait }
-            try {
-                Graph Post "https://graph.microsoft.com/v1.0/groups/$($grp.id)/members/`$ref" @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$m" } | Out-Null
-                $memberAdded = $true; break
-            } catch {
-                $memberError = $_
-                $memberText = '{0} {1}' -f [string]$_.Exception.Message, $(if ($_.ErrorDetails) { [string]$_.ErrorDetails.Message } else { '' })
-                if ($memberText -match '(?i)already exist') { $memberAdded = $true; break }
-                if ($memberText -match '(?i)\b403\b|Authorization_RequestDenied|Insufficient privileges' -or $memberText -notmatch '(?i)\b404\b|Request_ResourceNotFound|does not exist|not found') {
-                    throw ("adding {0} to the group '{1}' was refused: {2}" -f $m, $GroupName, $memberText.Trim())
-                }
-                Write-Host ('  [waiting ] the directory does not know the new group or member yet -- trying again') -ForegroundColor DarkGray
-            }
+        # group and create a second one. A refusal stops at once, with its reason. #1092: the wait grows up to a stated
+        # limit (5 minutes, said in the log line), and the membership is READ BACK from the member's side.
+        $memberAdd = Invoke-SIGroupMemberAddRetry -What ('member ' + $m) -LimitSeconds 300 `
+            -Add { Graph Post "https://graph.microsoft.com/v1.0/groups/$($grp.id)/members/`$ref" @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$m" } | Out-Null } `
+            -Test { @((Graph Post "https://graph.microsoft.com/v1.0/directoryObjects/$m/checkMemberGroups" @{ groupIds = @([string]$grp.id) }).value) -contains [string]$grp.id }
+        switch ($memberAdd.State) {
+            'refused' { throw ("adding {0} to the group '{1}' was refused: {2}" -f $m, $GroupName, $memberAdd.Error) }
+            'notfound' { throw ("adding {0} to the group '{1}' failed: {2} -- run the same command again in a few minutes." -f $m, $GroupName, $memberAdd.Detail) }
+            'unchecked' { Write-Host ('  [added   ] member {0} -- {1}' -f $m, $memberAdd.Detail) -ForegroundColor Yellow }
+            default { Write-Host ('  [added   ] member {0} (read back{1})' -f $m, $(if ($memberAdd.WaitedSeconds) { ', after {0} s of Entra replication' -f $memberAdd.WaitedSeconds } else { '' })) }
         }
-        if (-not $memberAdded) { throw ("adding {0} to the group '{1}' failed: the directory still answers not found (404) -- run the same command again in a minute. {2}" -f $m, $GroupName, [string]$memberError.Exception.Message) }
-        Write-Host ('  [added   ] member {0}' -f $m)
     } else { Write-Host ('  [plan    ] add member {0}' -f $m) }
+}
+
+# ---- G3a: is this a move the database setup job must prove? (the server's administrators block kept for a rollback) ----
+$siMovePlan = $null; $siMovePrev = $null
+if ($grp -and $grp.id -and $siMoveFrom) {
+    $since = $null
+    if ($siMovePid) { try { $pa = Get-SIDbInitPimAssignment -Graph { param($m, $u, $b) Graph $m $u $b } -PrincipalId $siMovePid -GroupId ([string]$grp.id); if ($pa.Found -and $pa.Start) { $since = $pa.Start } } catch { } }
+    $siMovePlan = Get-SISqlAdminMovePlan -CurrentSid $curSid -CurrentKind $siMoveFrom -NewGroupId ([string]$grp.id) -JobExists ([bool]$siMoveJob) -MemberSince $since
+    Write-Host ('  [move    ] {0}' -f $siMovePlan.Detail)
+    if ($siMovePlan.Action -eq 'verify') {
+        $siSrv = $null; try { $siSrv = & $siArm 'GET' ($serverPath + '?api-version=2021-11-01') $null } catch { $siSrv = $null }
+        $siMovePrev = Get-SIDbInitProp $siSrv @('properties', 'administrators')
+        if (-not $siMovePrev) { throw 'the server''s administrator before the move could not be read, so the move could not be undone if the database setup job cannot sign in through the new group -- nothing was moved; run this again' }
+    }
 }
 
 # ---- 3. the server's Entra admin = the group ----
@@ -238,4 +274,18 @@ if ($grp -and $grp.id) {
         Write-Host ('  [set     ] {0} now records its Entra admin as a group (was "{1}")' -f $SqlServerName, $admKind)
     } else { Write-Host ('  [plan    ] record the Entra admin of {0} as a group (it is "{1}")' -f $SqlServerName, $admKind) }
 }
+
+# ---- G3a: the move PROVEN -- the database setup job signs in through the new group, else the move is rolled back ----
+if ($siMovePlan -and $siMovePlan.Action -eq 'verify') {
+    if ($WhatIfPreference) { Write-Host '  [plan    ] a run of the database setup job proves the move (else it is rolled back)' }
+    else {
+        $proof = Test-SISqlAdminMoveSignIn -Arm $siArm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroupName
+        if ($proof.Ok) { Write-Host ('  [proven  ] {0}' -f $proof.Detail) }
+        else {
+            Write-Host ('  [rollback] {0} -- the server''s administrator is put back' -f $proof.Detail) -ForegroundColor Yellow
+            $back = Restore-SISqlAdminBlock -Arm $siArm -ServerPath $serverPath -Previous $siMovePrev
+            throw ('The move of the Entra admin of {0} to {1} was ROLLED BACK: {2}; {3}. The database setup job''s token still carries only the old group (it keeps group claims for up to 24 hours): run this again later (after 24 hours it needs no proof).' -f $SqlServerName, $GroupName, $proof.Detail, $back.Detail)
+        }
+    }
+} elseif ($siMovePlan -and $siMovePlan.Action -eq 'settled') { Write-Host ('  [proven  ] {0}' -f $siMovePlan.Detail) }
 } finally { Stop-SIScriptRun -Run $siRun }

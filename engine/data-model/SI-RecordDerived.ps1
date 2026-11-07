@@ -133,7 +133,7 @@ function Get-SIAzureDerived {
 #                                                        read through the customer's TAG-KEY MAP: the lists tag_keys_* of
 #                                                        data-model/lists name which tag keys mean environment, cost
 #                                                        center, application and owner (customer-editable like every list)
-#      tagsInherited / tagsAll                           the resource group's and subscription's tags the resource does not
+#      tagsInherited / tagsAll                           the resource group's, subscription's and management groups' tags the resource does not
 #                                                        set itself, each with the container it came from (part
 #                                                        'parentTagScopes'), and own + inherited in one list
 #                                                        (Get-SIAzureInheritedTagDerived)
@@ -255,7 +255,8 @@ function Get-SIAzureInheritedTagDerived {
         PURE. The tags an Azure resource INHERITS, next to the ones it sets itself:
           tagsInherited  each tag of its resource group / subscription (part 'parentTagScopes', nearest container already
                          chosen) whose name the resource does NOT set itself -- Azure tag names compare case-insensitively --
-                         as { source = 'azure'; name; value; scope = 'resourceGroup' | 'subscription'; from = <container name> }
+                         as { source = 'azure'; name; value; scope = 'resourceGroup' | 'subscription' | 'managementGroup';
+                         from = <container name> } -- of the per-container entries only the 'effective' one (the nearest)
                          (-> si_tags_inherited)
           tagsAll        the resource's own tags first ({ source = 'azure'; name; value }, as si_tags holds them), then every
                          inherited one (-> si_tags_all: the one field a connector column takes)
@@ -281,11 +282,17 @@ function Get-SIAzureInheritedTagDerived {
         }
     }
     $inh = New-Object System.Collections.Generic.List[object]
+    $inhNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($e in @($Scopes)) {
         if ($null -eq $e) { continue }
+        # parentTagScopes lists a tag once per container (every level); only the one the resource inherits counts here --
+        # 'effective' (an older record without it: the first of the name, the list being nearest first)
+        $eff = Get-SIDerivedValue $e 'effective'
+        if ($null -ne $eff -and -not [bool]$eff) { continue }
         $n = ([string](Get-SIDerivedValue $e 'name')).Trim()
         $v = [string](Get-SIDerivedValue $e 'value')
         if (-not $n -or [string]::IsNullOrWhiteSpace($v) -or $ownNames.Contains($n)) { continue }
+        if (-not $inhNames.Add($n)) { continue }
         $scope = [string](Get-SIDerivedValue $e 'scope')
         $from = ([string](Get-SIDerivedValue $e 'from')).Trim()
         if (-not $from -and $scope -eq 'subscription') { if ($SubscriptionName) { $from = $SubscriptionName } else { $from = $SubscriptionId } }

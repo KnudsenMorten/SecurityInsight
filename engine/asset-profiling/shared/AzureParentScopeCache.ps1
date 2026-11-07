@@ -47,6 +47,8 @@ if (-not (Get-Variable -Name _SIAzureParentScope -Scope Script -ErrorAction Sile
         Mgs                  = @{}    # mgName (lowercased) -> @{ DisplayName; Parent = <parentMgName lowercased or $null>; Tags = @{...} }
         SubMgChain           = @{}    # subId (lowercased) -> @( displayName1, displayName2, ... )  root-first
         SubMgMergedTags      = @{}    # subId (lowercased) -> @{ tagName = tagValue; ... }   deepest wins
+        SubMgChainNames      = @{}    # subId (lowercased) -> @( mgName1, mgName2, ... )        root-first (the Mgs keys)
+        ReadErrors           = @{}    # 'subscription' | 'managementGroup' -> the ARG error of a read that failed
     }
 }
 
@@ -60,6 +62,8 @@ function Reset-SIAzureParentScopeCache {
         Mgs                  = @{}
         SubMgChain           = @{}
         SubMgMergedTags      = @{}
+        SubMgChainNames      = @{}
+        ReadErrors           = @{}
     }
 }
 
@@ -68,7 +72,10 @@ function _Invoke-SIAzGraphQuerySafe {
        Returns @() on failure (so init paths can fall back to empty caches). #>
     param(
         [Parameter(Mandatory)][string]$Kql,
-        [int]$PageSize = 1000
+        [int]$PageSize = 1000,
+        # the level this read is for ('subscription' / 'managementGroup'): a failure is kept under it (ReadErrors), so
+        # the caller can say WHICH level's tags could not be read -- never a silent empty
+        [string]$Level = ''
     )
     $rows = New-Object System.Collections.ArrayList
     $skipToken = $null
@@ -79,6 +86,10 @@ function _Invoke-SIAzGraphQuerySafe {
             $page = Search-SIAzGraph @params
         } catch {
             Write-Warning ('AzureParentScopeCache: ARG query failed -- {0}. Returning partial ({1} rows).' -f $_.Exception.Message, $rows.Count)
+            if ($Level) {
+                if ($null -eq $script:_SIAzureParentScope['ReadErrors']) { $script:_SIAzureParentScope['ReadErrors'] = @{} }
+                $script:_SIAzureParentScope['ReadErrors'][$Level] = [string]$_.Exception.Message
+            }
             return $rows.ToArray()
         }
         foreach ($r in $page) { [void]$rows.Add($r) }
@@ -108,7 +119,7 @@ resourcecontainers
 | project subscriptionId, name, tags
 | order by subscriptionId asc
 '@
-    $rows = _Invoke-SIAzGraphQuerySafe -Kql $kql
+    $rows = _Invoke-SIAzGraphQuerySafe -Kql $kql -Level 'subscription'
     foreach ($r in $rows) {
         $subId = [string]$r.subscriptionId
         if ([string]::IsNullOrWhiteSpace($subId)) { continue }
@@ -162,7 +173,7 @@ resourcecontainers
 | project name, tags, parentName = tostring(properties.details.parent.name), displayName = tostring(properties.displayName)
 | order by name asc
 '@
-    $mgRows = _Invoke-SIAzGraphQuerySafe -Kql $kqlMgs
+    $mgRows = _Invoke-SIAzGraphQuerySafe -Kql $kqlMgs -Level 'managementGroup'
     foreach ($r in $mgRows) {
         $mgName = [string]$r.name
         if ([string]::IsNullOrWhiteSpace($mgName)) { continue }
@@ -192,12 +203,13 @@ resourcecontainers
 | project subscriptionId, ancestors = properties.managementGroupAncestorsChain, parentMg = tostring(properties.parent.name)
 | order by subscriptionId asc
 '@
-    $subChainRows = _Invoke-SIAzGraphQuerySafe -Kql $kqlSubChain
+    $subChainRows = _Invoke-SIAzGraphQuerySafe -Kql $kqlSubChain -Level 'managementGroup'
     foreach ($r in $subChainRows) {
         $subId = [string]$r.subscriptionId
         if ([string]::IsNullOrWhiteSpace($subId)) { continue }
 
         $chain = New-Object System.Collections.Generic.List[string]    # root-first display names
+        $chainNames = New-Object System.Collections.Generic.List[string]   # root-first MG names (the Mgs keys)
         $merged = @{}                                                  # deepest wins
 
         # Prefer the explicit ancestors array; fall back to walking via .parent
@@ -220,6 +232,7 @@ resourcecontainers
                             $display = [string]$node.displayName
                         }
                         [void]$chain.Add($display)
+                        [void]$chainNames.Add($name.ToLowerInvariant())
                         # Merge tags root-first so deeper (later) overrides earlier.
                         if ($mgEntry -and $mgEntry.Tags) {
                             foreach ($k in $mgEntry.Tags.Keys) { $merged[$k] = $mgEntry.Tags[$k] }
@@ -237,12 +250,14 @@ resourcecontainers
             # in the cache (shouldn't happen, but be defensive) never spins.
             $current = [string]$r.parentMg
             $stack = New-Object System.Collections.Generic.List[string]
+            $stackNames = New-Object System.Collections.Generic.List[string]
             $hop = 0
             while ($current -and $hop -lt 10) {
                 $key = $current.ToLowerInvariant()
                 $mgEntry = $script:_SIAzureParentScope.Mgs[$key]
                 if (-not $mgEntry) { break }
                 [void]$stack.Add($mgEntry.DisplayName)
+                [void]$stackNames.Add($key)
                 $current = $mgEntry.Parent
                 $hop++
             }
@@ -250,11 +265,9 @@ resourcecontainers
             for ($i = $stack.Count - 1; $i -ge 0; $i--) {
                 $disp = $stack[$i]
                 [void]$chain.Add($disp)
-                # Re-resolve and merge tags
-                $entry = $null
-                foreach ($k in $script:_SIAzureParentScope.Mgs.Keys) {
-                    if ($script:_SIAzureParentScope.Mgs[$k].DisplayName -eq $disp) { $entry = $script:_SIAzureParentScope.Mgs[$k]; break }
-                }
+                [void]$chainNames.Add($stackNames[$i])
+                # merge tags -- resolved by the MG's name (two MGs may share a display name)
+                $entry = $script:_SIAzureParentScope.Mgs[$stackNames[$i]]
                 if ($entry -and $entry.Tags) {
                     foreach ($t in $entry.Tags.Keys) { $merged[$t] = $entry.Tags[$t] }
                 }
@@ -263,6 +276,7 @@ resourcecontainers
 
         $script:_SIAzureParentScope.SubMgChain[$subId.ToLowerInvariant()]      = $chain.ToArray()
         $script:_SIAzureParentScope.SubMgMergedTags[$subId.ToLowerInvariant()] = $merged
+        $script:_SIAzureParentScope.SubMgChainNames[$subId.ToLowerInvariant()] = $chainNames.ToArray()
     }
     Write-Verbose ('AzureParentScopeCache: {0} MG(s), {1} sub->MG chains cached.' -f `
         $script:_SIAzureParentScope.Mgs.Count, $script:_SIAzureParentScope.SubMgChain.Count)
@@ -310,6 +324,47 @@ function Get-SIAzureManagementGroupChain {
         ChainDisplayNames = if ($chain) { @($chain) } else { @() }
         MergedTags        = if ($merged) { $merged } else { @{} }
     }
+}
+
+function Get-SIAzureManagementGroupTagLevels {
+    <#
+        The management groups above a subscription, NEAREST FIRST (the subscription's own parent, then up to the root),
+        each with its own tags: @( @{ Name; DisplayName; Tags = @{...} } ... ). Empty when no MG data is cached for the
+        subscription. Read by the parent-chain index (RuleIndexes.ps1 Build-SIParentResourceChainIndex): one entry per
+        tag per management group, level 'managementGroup', from = the display name.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$SubscriptionId)
+    $out = New-Object System.Collections.Generic.List[object]
+    if ([string]::IsNullOrWhiteSpace($SubscriptionId)) { return , $out.ToArray() }
+    if (-not $script:_SIAzureParentScope.MgInitialized) { Initialize-SIAzureManagementGroupCache }
+    $names = $script:_SIAzureParentScope.SubMgChainNames[$SubscriptionId.ToLowerInvariant()]
+    if (-not $names) { return , $out.ToArray() }
+    $arr = @($names)
+    for ($i = $arr.Count - 1; $i -ge 0; $i--) {           # root-first in the cache -> nearest first here
+        $n = [string]$arr[$i]
+        $e = $script:_SIAzureParentScope.Mgs[$n]
+        if ($e) { $out.Add(@{ Name = $n; DisplayName = [string]$e.DisplayName; Tags = $e.Tags }) }
+        else    { $out.Add(@{ Name = $n; DisplayName = $n; Tags = @{} }) }
+    }
+    return , $out.ToArray()
+}
+
+function Get-SIAzureManagementGroupSubscriptionIds {
+    <# The subscription ids the management-group walk placed (lower case). #>
+    [CmdletBinding()]
+    param()
+    if (-not $script:_SIAzureParentScope.MgInitialized) { Initialize-SIAzureManagementGroupCache }
+    return , @($script:_SIAzureParentScope.SubMgChainNames.Keys)
+}
+
+function Get-SIAzureParentScopeReadError {
+    <# The ARG error of a parent-scope read that failed, for a level ('subscription' / 'managementGroup'); '' when it read. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Level)
+    $e = $script:_SIAzureParentScope['ReadErrors']
+    if ($e -and $e.ContainsKey($Level)) { return [string]$e[$Level] }
+    return ''
 }
 
 function Get-SIAzureParentScopeStats {

@@ -15,7 +15,7 @@
       $script:SIRuleIndexes = @{
           tvmSoftware  = @{ <deviceId-lower> = @( '<vendor>/<name>', ... ) }
           GroupMembership = @{ <userObjectId-or-sid> = @( 'group-name', ... ) }
-          parentChain  = @{ <resourceId-lower>   = @( @{ tag='cmdbId'; value='1' }, ... ) }
+          parentChain  = @{ <resourceId-lower>   = @( @{ tag='cmdbId'; value='1'; level='resourceGroup|subscription|managementGroup|resource'; from='<name>' }, ... ) }   (nearest first)
           kustoSets    = @{ <ruleId> = <Set[string] of matching EntityIds> }
           BuildStats   = @{ <kind> = @{ Built=<bool>; Rows=<int>; Ms=<int> } }
       }
@@ -28,6 +28,8 @@
 
 # Azure access: plain REST, no PowerShell modules (engine/_shared/SI-AzRest.ps1).
 if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-AzRest.ps1') }
+# the management-group hierarchy + tags (one walker for the engine: the parent-chain index and the profile row share it)
+if (-not (Get-Command -Name Get-SIAzureManagementGroupTagLevels -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'AzureParentScopeCache.ps1') }
 
 if (-not (Get-Variable -Name SIRuleIndexes -Scope Script -ErrorAction SilentlyContinue)) {
     $script:SIRuleIndexes = @{
@@ -205,8 +207,9 @@ function Build-SIGroupMembershipIndex {
 function Get-SIArgPaged {
     <# Search-AzGraph paginated wrapper. Search-AzGraph -First caps
        at 1000; large tenants need SkipToken pagination. Returns the FULL set
-       across all pages. Defensive against missing SkipToken on legacy
-       Az.ResourceGraph builds (loops at most 100 pages = 100K rows). #>
+       across all pages -- no page cap (a large tenant is read whole); the
+       loop ends when Resource Graph hands no further token, or hands the
+       SAME token again (a service fault -- said, never looped on). #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Query, [int]$PageSize = 1000)
     $out = New-Object System.Collections.ArrayList
@@ -217,13 +220,15 @@ function Get-SIArgPaged {
         if ($skipToken) { $params['SkipToken'] = $skipToken }
         $batch = Search-SIAzGraph @params
         if ($batch) { foreach ($row in $batch) { [void]$out.Add($row) } }
+        $prevToken = $skipToken
         $skipToken = $null
         if ($batch -and ($batch.PSObject.Properties['SkipToken']) -and $batch.SkipToken) { $skipToken = [string]$batch.SkipToken }
         $pages++
-    } while ($skipToken -and $pages -lt 100)
-    if ($pages -ge 100 -and $skipToken) {
-        Write-Warning ("Get-SIArgPaged: hit 100-page safety cap ({0} rows) -- truncating. Increase if you legitimately have >100K rows." -f $out.Count)
-    }
+        if ($skipToken -and $skipToken -eq $prevToken) {
+            Write-Warning ("Get-SIArgPaged: Resource Graph handed the same page token twice after {0} page(s) ({1} rows) -- the read stops here and is INCOMPLETE." -f $pages, $out.Count)
+            break
+        }
+    } while ($skipToken)
     return $out.ToArray()
 }
 
@@ -265,41 +270,79 @@ function ConvertTo-SITagPairs {
 
 function Build-SIParentResourceChainIndex {
     <#
-        ARG bulk-fetch: every Azure subscription + RG + RESOURCE + their tags.
+        ARG bulk-fetch: every Azure management group + subscription + resource group (+ optionally every RESOURCE) and
+        their tags, TENANT-WIDE (every subscription the engine's identity can read; never only the install's own).
         Build map:
-            <resource-id-lower> -> @( @{ tag='<key>'; value='<val>'; level='<subscription|resourceGroup|resource>'; from='<container name>' }, ... )
-            (from: the subscription's / resource group's name; a resource's own tags carry none)
+            <container-or-resource-id-lower> -> @( @{ tag='<key>'; value='<val>'; level='<resource|resourceGroup|subscription|managementGroup>'; from='<container name>' }, ... )
+            ORDER = NEAREST FIRST: resource -> resource group -> subscription -> management groups (the subscription's
+            own parent first, the root last). from: the resource group's / subscription's name, the management group's
+            DISPLAY name; a resource's own tags carry none.
 
-        Used by: hasAzureTagDirectOrParent handler.
+        Used by: the azure engine's record capture (SI-RecordCapture.ps1 Add-SIRecordPartsFromRuleIndexes -> parts
+        parentTags / parentTagScopes: parent tags are DATA on the CI, so the azure engine builds this on EVERY run,
+        whatever its rules say -- Build-SIRuleIndexes), and the rule kinds hasAzureTagDirectOrParent / hasTag.
 
-        now ALSO indexes resource-level tags (was sub + RG only).
-        User feedback: "remember it must go up the chain of the resource to read
-        from the subscription or management group or the actual resource itself"
-        + "consider to enum through ARG as it is fast" -> single Resources ARG
-        query for every resource's own tags. Cheap: tens of thousands of rows
-        in one round-trip vs per-asset ARM REST calls.
+        Each RG entry carries its subscription's entries (which carry the subscription's management-group entries),
+        each resource entry its RG's -- so a single lookup gives the FULL chain, flattened, nearest first.
 
-        Each resource entry inherits its RG's tags (which already include sub
-        tags), so the handler can do a single-level lookup against the resource
-        id and get the FULL chain (resource -> RG -> sub) flattened in one array.
-
-        TODO: management-group level tags. Requires a separate
-        ResourceContainers query for MGs + sub->MG mapping (not in ARG directly).
+        One paged ARG read per level (management groups + the subscription->MG chain via AzureParentScopeCache.ps1,
+        subscriptions, resource groups, and -- -IncludeResources, only a tag rule needs them -- resources); no
+        per-resource call; no cap. A level whose read fails is SAID (a warning that names the level) and the other
+        levels are still indexed -- never a silent empty.
     #>
     [CmdletBinding()]
-    param([Parameter()]$RunContext)
+    param([Parameter()]$RunContext,
+          # every resource's OWN tags too (one more paged ARG read over every tagged resource): a tag RULE needs them
+          # (a tag set on the resource itself); a record's own tags come with the record, so the record parts do not
+          [switch]$IncludeResources)
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $idx = @{}
+    $levels = [ordered]@{ managementGroup = $true; subscription = $true; resourceGroup = $true }
     try {
-        # ---- Subscriptions + their tags ----
+        # ---- Management groups: the hierarchy + each MG's tags (AzureParentScopeCache.ps1 -- the one MG walker) ----
+        # reset first: this run's hierarchy, never a previous run's (a container session runs several engines)
+        $mgSubs = @()
+        try {
+            Reset-SIAzureParentScopeCache
+            Initialize-SIAzureManagementGroupCache
+            $mgErr = Get-SIAzureParentScopeReadError -Level 'managementGroup'
+            if ($mgErr) { throw $mgErr }
+            # assigned, never @(...): the function hands its list back as ONE value (@() would make it a list of one list)
+            $mgSubs = Get-SIAzureManagementGroupSubscriptionIds
+            if ($null -eq $mgSubs) { $mgSubs = @() }
+        } catch {
+            $levels['managementGroup'] = $false
+            Write-Warning ('management group tags could not be read: {0} -- the subscription and resource group tags are still attached' -f $_.Exception.Message)
+        }
+        $mgEntries = {
+            param([string]$SubId)
+            $list = New-Object System.Collections.ArrayList
+            if (-not $levels['managementGroup'] -or -not $SubId) { return , $list }
+            $mgLevels = Get-SIAzureManagementGroupTagLevels -SubscriptionId $SubId     # assigned: one value, the list
+            foreach ($mg in $mgLevels) {       # nearest first
+                if ($null -eq $mg -or $null -eq $mg.Tags) { continue }
+                foreach ($k in @($mg.Tags.Keys)) {
+                    if ([string]::IsNullOrWhiteSpace([string]$k)) { continue }
+                    [void]$list.Add(@{ tag = [string]$k; value = [string]$mg.Tags[$k]; level = 'managementGroup'; from = [string]$mg.DisplayName })
+                }
+            }
+            return , $list
+        }
+
+        # ---- Subscriptions + their tags (then their management groups' tags) ----
         $subKql = @"
 ResourceContainers
 | where type =~ 'microsoft.resources/subscriptions'
 | project subscriptionId, name, tags
 | order by subscriptionId asc
 "@
-        $subs = @(Get-SIArgPaged -Query $subKql)
+        $subs = @()
+        try { $subs = @(Get-SIArgPaged -Query $subKql) }
+        catch {
+            $levels['subscription'] = $false
+            Write-Warning ('subscription tags could not be read: {0} -- the resource group and management group tags are still attached' -f $_.Exception.Message)
+        }
         foreach ($s in $subs) {
             if ($null -eq $s) { continue }
             $tagsArr = New-Object System.Collections.ArrayList
@@ -309,19 +352,34 @@ ResourceContainers
             }
             $subId = [string]$s.subscriptionId
             if (-not [string]::IsNullOrWhiteSpace($subId)) {
+                foreach ($t in (& $mgEntries $subId)) { [void]$tagsArr.Add($t) }
                 $idx[('/subscriptions/{0}' -f $subId).ToLower()] = $tagsArr.ToArray()
             }
         }
+        # a subscription the management-group walk knows but the subscription read did not return (that read failed):
+        # still its management groups' tags
+        foreach ($sid in $mgSubs) {
+            if ([string]::IsNullOrWhiteSpace([string]$sid)) { continue }
+            $k = ('/subscriptions/' + [string]$sid).ToLower()
+            if ($idx.ContainsKey($k)) { continue }
+            $mgOnly = (& $mgEntries ([string]$sid)).ToArray()
+            if ($mgOnly.Count -gt 0) { $idx[$k] = $mgOnly }
+        }
         $subCount = $idx.Count
 
-        # ---- RGs + their tags (inherit subscription tags) ----
+        # ---- RGs + their tags (then the subscription's entries: its own tags, then its management groups') ----
         $rgKql = @"
 ResourceContainers
 | where type =~ 'microsoft.resources/subscriptions/resourcegroups'
 | project id, name, tags, subscriptionId
 | order by id asc
 "@
-        $rgs = @(Get-SIArgPaged -Query $rgKql)
+        $rgs = @()
+        try { $rgs = @(Get-SIArgPaged -Query $rgKql) }
+        catch {
+            $levels['resourceGroup'] = $false
+            Write-Warning ('resource group tags could not be read: {0} -- the subscription and management group tags are still attached' -f $_.Exception.Message)
+        }
         foreach ($r in $rgs) {
             if ($null -eq $r) { continue }
             $tagsArr = New-Object System.Collections.ArrayList
@@ -342,7 +400,7 @@ ResourceContainers
         }
         $rgCount = $idx.Count - $subCount
 
-        # ---- Resources + their tags (inherit RG + sub tags via parent lookup) ----
+        # ---- Resources + their tags (inherit RG + sub + MG tags via parent lookup) -- a tag RULE's need only ----
         # bulk-fetch every resource's own tags. The single ARG query
         # is fast (one round-trip) and lets the handler match `kind:
         # hasAzureTagDirectOrParent` rules where the tag is set on the resource
@@ -354,39 +412,78 @@ Resources
 | order by id asc
 "@
         $resCount = 0
-        try {
-            $resPage = @(Get-SIArgPaged -Query $resKql)
-            foreach ($r in $resPage) {
-                if ($null -eq $r) { continue }
-                $tagsArr = New-Object System.Collections.ArrayList
-                foreach ($p in (ConvertTo-SITagPairs $r.tags)) {
-                    [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'resource' })
-                }
-                # Inherit RG tags (which already include sub tags from above pass)
-                $subId = [string]$r.subscriptionId
-                $rgName = [string]$r.resourceGroup
-                if (-not [string]::IsNullOrWhiteSpace($subId) -and -not [string]::IsNullOrWhiteSpace($rgName)) {
-                    $rgKey = ('/subscriptions/{0}/resourcegroups/{1}' -f $subId, $rgName).ToLower()
-                    if ($idx.ContainsKey($rgKey)) {
-                        foreach ($t in $idx[$rgKey]) { [void]$tagsArr.Add($t) }
+        if ($IncludeResources) {
+            try {
+                $resPage = @(Get-SIArgPaged -Query $resKql)
+                foreach ($r in $resPage) {
+                    if ($null -eq $r) { continue }
+                    $tagsArr = New-Object System.Collections.ArrayList
+                    foreach ($p in (ConvertTo-SITagPairs $r.tags)) {
+                        [void]$tagsArr.Add(@{ tag = $p.Key; value = $p.Value; level = 'resource' })
+                    }
+                    # Inherit RG tags (which already include sub + MG tags from above passes)
+                    $subId = [string]$r.subscriptionId
+                    $rgName = [string]$r.resourceGroup
+                    if (-not [string]::IsNullOrWhiteSpace($subId) -and -not [string]::IsNullOrWhiteSpace($rgName)) {
+                        $rgKey = ('/subscriptions/{0}/resourcegroups/{1}' -f $subId, $rgName).ToLower()
+                        if ($idx.ContainsKey($rgKey)) {
+                            foreach ($t in $idx[$rgKey]) { [void]$tagsArr.Add($t) }
+                        }
+                    }
+                    $rid = [string]$r.id
+                    if (-not [string]::IsNullOrWhiteSpace($rid) -and $tagsArr.Count -gt 0) {
+                        $idx[$rid.ToLower()] = $tagsArr.ToArray()
+                        $resCount++
                     }
                 }
-                $rid = [string]$r.id
-                if (-not [string]::IsNullOrWhiteSpace($rid) -and $tagsArr.Count -gt 0) {
-                    $idx[$rid.ToLower()] = $tagsArr.ToArray()
-                    $resCount++
-                }
+            } catch {
+                Write-Warning ('resource tags could not be read (the resource group, subscription and management group tags are still indexed): {0}' -f $_.Exception.Message)
             }
-        } catch {
-            Write-Warning ('Build-SIParentResourceChainIndex: Resources tag bulk-fetch failed (continuing with sub+RG only): {0}' -f $_.Exception.Message)
         }
 
         $script:SIRuleIndexes.parentChain = $idx
-        $script:SIRuleIndexes.BuildStats['parentChain'] = @{ Built=$true; Rows=$idx.Count; Ms=$sw.ElapsedMilliseconds }
-        Write-Verbose ('Build-SIParentResourceChainIndex: subs={0} rgs={1} resources={2} total={3} in {4} ms' -f $subCount, $rgCount, $resCount, $idx.Count, $sw.ElapsedMilliseconds)
+        $mgCount = 0
+        if ($levels['managementGroup']) { try { $mgCount = [int](Get-SIAzureParentScopeStats).Mgs } catch { $mgCount = 0 } }
+        $subRead = @($subs | Where-Object { $null -ne $_ }).Count; $rgRead = @($rgs | Where-Object { $null -ne $_ }).Count
+        $script:SIRuleIndexes.BuildStats['parentChain'] = @{ Built=$true; Rows=$idx.Count; Ms=$sw.ElapsedMilliseconds; Levels=$levels
+                                                              ManagementGroups=$mgCount; Subscriptions=$subRead; ResourceGroups=$rgRead }
+        # ONE line per collection, so a live run proves the read without a database read
+        $line = 'inherited tags: {0} management group(s), {1} subscription(s), {2} resource group(s) read (tenant-wide)' -f $mgCount, $subRead, $rgRead
+        if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $line } else { Write-Host ('[INFO] ' + $line) }
+        Write-Verbose ('Build-SIParentResourceChainIndex: subs={0} rgs={1} resources={2} total={3} mg-read={4} in {5} ms' -f $subCount, $rgCount, $resCount, $idx.Count, $levels['managementGroup'], $sw.ElapsedMilliseconds)
     } catch {
         Write-Warning ('Build-SIParentResourceChainIndex failed: {0}' -f $_.Exception.Message)
         $script:SIRuleIndexes.BuildStats['parentChain'] = @{ Built=$false; Error=$_.Exception.Message }
+    }
+}
+
+function Save-SIParentChainForParts {
+    <#
+        THE PRODUCER of an azure run collected in parts (#1089, Invoke-Discover's discover phase): the parent chain is read
+        ONCE for the whole collection (Build-SIParentResourceChainIndex: tenant-wide, one paged read per level) and handed
+        over in the state store beside the records (SI-CollectParts.ps1 Save-SIParentChainHandover) -- the process that
+        merges the records attaches it to every azure record (Publish-SIRecordHandover). Live 3.0.35: the workers held none
+        of discovery's records and the merge had no index, so not one record of a run in parts carried an inherited tag.
+        Never throws: a failure is SAID (the merge then says the records carry no inherited tags). Returns the entries kept.
+        -Store (tests): the state store; default = the install's (New-SICollectBlobStore).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RunId, $Store, $RunContext)
+    try {
+        if (-not (Get-Command -Name Save-SIParentChainHandover -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-CollectParts.ps1') }
+        Reset-SIRuleIndexes
+        Build-SIParentResourceChainIndex -RunContext $RunContext
+        $st = $script:SIRuleIndexes.BuildStats['parentChain']
+        if (-not ($st -and $st.Built)) { throw ('the parent chain was not read: {0}' -f $(if ($st) { [string]$st.Error } else { 'not built' })) }
+        if ($null -eq $Store) { $Store = New-SICollectBlobStore -Account ([string]$global:SI_StorageAccount) }
+        $stats = [ordered]@{ ManagementGroups = $st.ManagementGroups; Subscriptions = $st.Subscriptions; ResourceGroups = $st.ResourceGroups }
+        $n = Save-SIParentChainHandover -Store $Store -Engine $Engine -RunId $RunId -Index $script:SIRuleIndexes.parentChain -Stats $stats
+        $line = 'inherited tags: {0} subscription / resource group entr(ies) handed to the parts (attached when the records are merged)' -f $n
+        if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $line } else { Write-Host ('[INFO] ' + $line) }
+        return $n
+    } catch {
+        Write-Warning ('inherited tags could not be handed to the parts: {0} -- the azure records of this run carry no inherited tags (resource group / subscription / management group)' -f $_.Exception.Message)
+        return 0
     }
 }
 
@@ -484,12 +581,16 @@ function Build-SIRuleIndexes {
     <#
         Top-level entry point called by Stage Profile at run start. Builds
         only the indexes that the supplied rule set actually needs (saves
-        on bulk fetches when an engine doesn't use a particular kind).
+        on bulk fetches when an engine doesn't use a particular kind) --
+        EXCEPT the parent chain on the azure engine: the tags a resource
+        inherits from its resource group, subscription and management groups
+        are DATA on its CI (parts parentTags / parentTagScopes), not only rule
+        input, so the azure engine builds it on every run, whatever the rules.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Engine,
-        [Parameter(Mandatory)]$Rules,
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()]$Rules,
         [Parameter()]$Assets,
         [Parameter()]$RunContext
     )
@@ -498,7 +599,8 @@ function Build-SIRuleIndexes {
 
     # Inventory which kinds the rule set actually uses
     $kinds = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($r in $Rules) {
+    foreach ($r in @($Rules)) {
+        if ($null -eq $r) { continue }
         foreach ($d in $r.Detections) {
             $list = if ($d.Detect.any) { $d.Detect.any } elseif ($d.Detect.all) { $d.Detect.all } else { @() }
             foreach ($spec in $list) { if ($spec.kind) { [void]$kinds.Add([string]$spec.kind) } }
@@ -511,8 +613,15 @@ function Build-SIRuleIndexes {
     # hasTag also walks the ARM parent chain when the asset
     # has AZ_ResourceId / MDE_AzureResourceId, so build the index when EITHER
     # kind is in use.
-    if ($kinds.Contains('hasAzureTagDirectOrParent') -or $kinds.Contains('hasTag')) {
-        Build-SIParentResourceChainIndex -RunContext $RunContext
+    # The azure engine ALWAYS builds it (its records carry the inherited tags -- SI-RecordCapture.ps1
+    # Add-SIRecordPartsFromRuleIndexes); the resources' own tags are read only when a tag rule needs them.
+    # A WORKER of a run collected in parts (SI_COLLECT_PHASE = parts) holds none of discovery's records: the producer read the
+    # parent chain once for the whole collection and the merge attaches it (Save-SIParentChainForParts) -- a worker reads it
+    # only for a tag rule of its own.
+    $tagRule = ($kinds.Contains('hasAzureTagDirectOrParent') -or $kinds.Contains('hasTag'))
+    $inParts = ([string][Environment]::GetEnvironmentVariable('SI_COLLECT_PHASE') -eq 'parts')
+    if (($Engine -eq 'azure' -and -not $inParts) -or $tagRule) {
+        Build-SIParentResourceChainIndex -RunContext $RunContext -IncludeResources:$tagRule
     }
     if ($kinds.Contains('egKustoQuery')) {
         # Compute the set of OS classes actually represented in this run's

@@ -27,7 +27,7 @@
     }
   ],
 
-  "_deploy_comment": "Same flow as PIM4EntraPS's deploy hook: after a sync that changed SecurityInsight, the sync engine runs setup/Invoke-SIContainerUpdate.ps1 -Apply. It reads the customer's OWN hosting values (SI_Bootstrap_ResourceGroupName, SI_Bootstrap_AcrName, optional SI_Bootstrap_SubscriptionId) from config\\SecurityInsight.custom.ps1 and has NO shipped defaults, so a customer who configured none targets nothing (PIM BUG-28). Idempotent: an unchanged tree maps to the same image tag and every job already on it is left alone. It does NOT create jobs for a brand-new engine -- that is still setup's job.",
+  "_deploy_comment": "Same flow as PIM4EntraPS's deploy hook: after a sync that changed SecurityInsight, the sync engine runs setup/Invoke-SIContainerUpdate.ps1 -Apply. It reads the customer's OWN hosting values (SI_Bootstrap_ResourceGroupName, SI_Bootstrap_AcrName, optional SI_Bootstrap_SubscriptionId) from config\\SecurityInsight.custom.ps1 and has NO shipped defaults, so a customer who configured none targets nothing. Idempotent: an unchanged tree maps to the same image tag and every job already on it is left alone. It does NOT create jobs for a brand-new engine -- that is still setup's job.",
   "deploy": {
     "script": "setup/Invoke-SIContainerUpdate.ps1",
     "defaultArgs": [ "-Apply" ],

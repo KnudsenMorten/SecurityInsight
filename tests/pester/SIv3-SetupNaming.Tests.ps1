@@ -207,13 +207,13 @@ Describe 'the setup defaults follow the pattern' {
         $c | Should -Match "if \(\`$rgDefaulted\)\s+\{ _CfgSet \`$cfg\.Resources 'ResourceGroupName'"
         $c | Should -Match "\('st' \+ \(\(\`$cfg\.Resources\.ResourceGroupName -replace '\[\^a-z0-9\]',''\) \+ 'si'\)\)"
     }
-    It 'the guided install defaults to the Community container name, and names the Pro one' {
+    It 'the guided install defaults to the framework section 5.5 names for both editions (rg-si, log-si; SIv3-NewInstallNames)' {
         $j = Read-SI 'setup\install-parameters.json' | ConvertFrom-Json
         $rg = @($j.parameters | Where-Object key -eq 'resourceGroup')[0]
-        $rg.default | Should -BeExactly 'rg-si-prod-community-ca'
-        $rg.defaultByEdition.pro | Should -BeExactly 'rg-si-prod-pro-ca'
+        $rg.default | Should -BeExactly 'rg-si'
+        $rg.PSObject.Properties['defaultByEdition'] | Should -BeNullOrEmpty
         $ws = @($j.parameters | Where-Object key -eq 'workspaceName')[0]
-        $ws.default | Should -BeExactly 'log-si-prod-community-ca'
+        $ws.default | Should -BeExactly 'log-si'
         @($j.parameters | Where-Object key -eq 'owner')[0].default | Should -BeExactly ''
         $j.naming.sqlAdminGroup | Should -BeExactly 'grp-si-sql-admins'
         foreach ($p in $j.parameters) { if ($p.PSObject.Properties['default'] -and $p.default -is [string]) { $p.default | Should -Not -Match $script:BadInDefault -Because $p.key } }

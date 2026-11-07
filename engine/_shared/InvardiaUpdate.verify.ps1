@@ -85,7 +85,8 @@ function Test-InvardiaManifest {
         ok=$true, hold=$true  verified, but the release asks for a manual step or a newer starting version -- nothing moves
     #>
     # -Ring (framework UPDATE-1.7, 2026-10-06: the solution decides the ring, Invardia relays): the ring this environment
-    # asked for. A manifest for another ring, or one that names no ring, is refused. -1 = not checked (legacy callers only).
+    # asked for (0-3; every product caller passes the installation's own ring). A manifest for another ring, or one that names
+    # no ring, is refused. -1 = the caller names no ring.
     param([Parameter(Mandatory)][object]$Response, [object[]]$TrustedKeys = $script:InvardiaUpdateTrustedKeys,
           [string]$Kind = 'code', [int]$AppliedSequence = 0, [string]$RunningVersion = '', [Parameter(Mandatory)][string]$Product, [int]$Ring = -1)
     $no = { param($why) @{ ok = $false; hold = $false; reason = $why; version = ''; sequence = 0; sha256 = ''; size = 0; downloadUrl = ''; manifest = $null } }

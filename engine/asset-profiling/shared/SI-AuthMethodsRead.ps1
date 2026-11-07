@@ -227,8 +227,10 @@ function Get-SIEntraPasswordlessByUser {
     <#
     .SYNOPSIS
         Reads GET /users/{id}/authentication/methods for the given users through Graph $batch (20 per request) and
-        returns @{ <userId> = [pscustomobject]@{ ReadComplete; PasswordlessOnly; MethodTypes } } for every user whose
-        list came back whole. A user not in the map was not read: unknown.
+        returns @{ <userId> = [pscustomobject]@{ ReadComplete; PasswordlessOnly; MethodTypes; Methods (every property of
+        every method, ConvertTo-SIAuthMethodRaw, with its device after -ReadDevices); DevicesRead } } for every user whose
+        list came back whole, and writes each such user's record part 'authenticationMethods' (New-SIAuthMethodsPart).
+        A user not in the map was not read: unknown.
     .NOTES
         Never throws. Accumulates into the run state (Get-SIEntraAuthMethodsState) so a discovery that streams page by
         page calls it once per page; after a refusal it reads nothing more this run.
@@ -249,7 +251,10 @@ function Get-SIEntraPasswordlessByUser {
         # (no longer used: a request that did not come back is asked again in the next round, with the others -- kept so a
         # caller that passes it still runs)
         [int]$MaxAttempts = 4,
-        [int]$MaxDelaySeconds = 60
+        [int]$MaxDelaySeconds = 60,
+        # read the device behind each Windows Hello for Business / Microsoft Authenticator method too ($expand=device). The
+        # identity discovery always asks for it; off only keeps the method read on its own (the read's own tests).
+        [switch]$ReadDevices
     )
     $result = @{}
     if (-not $script:_SICache.ContainsKey('AuthMethodsState') -or $null -eq $script:_SICache['AuthMethodsState']) {
@@ -368,14 +373,12 @@ function Get-SIEntraPasswordlessByUser {
                     $u = $byId[$key]
                     $types = @(Get-SIAuthMethodTypes -Methods $methods)
                     $verdict = Get-SIPasswordlessOnlyVerdict -Methods $types -ReadComplete $true -User $u
-                    $result[[string]$u.id] = [pscustomobject]@{ ReadComplete = $true; PasswordlessOnly = $verdict; MethodTypes = $types }
+                    # every property Graph returned per method is kept (ConvertTo-SIAuthMethodRaw); the device behind a Windows
+                    # Hello / Authenticator method is added by the device read below, then the record part is written
+                    $raw = @(foreach ($mo in $methods) { if ($null -ne $mo) { ConvertTo-SIAuthMethodRaw -Method $mo } })
+                    $result[[string]$u.id] = [pscustomobject]@{ ReadComplete = $true; PasswordlessOnly = $verdict; MethodTypes = $types; Methods = $raw; DevicesRead = $true }
                     $state.Read++
                     if ($verdict -eq $true) { $state.PasswordlessOnly++ }
-                    if (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue) {
-                        $part = [ordered]@{ readComplete = $true; methodTypes = $types }
-                        if ($null -ne $verdict) { $part['passwordlessOnly'] = [bool]$verdict }
-                        try { Add-SIRecordPart -Provider 'entra' -RecordType 'user' -Key ([string]$u.id) -Part 'authenticationMethods' -Object ([pscustomobject]$part) } catch { }
-                    }
                 } elseif ($status -in 401, 403) {
                     $refused = $true; $lastError = ('HTTP {0}' -f $status)
                 } elseif ($status -in 429, 502, 503, 504) {
@@ -422,7 +425,276 @@ function Get-SIEntraPasswordlessByUser {
     if ($unread -gt 0) { $state.Complete = $false }
     if ($refused) { $state.Refused = $true; $state.Complete = $false }
     if ($lastError -and -not $state.Error) { $state.Error = $lastError }
+
+    # the devices behind the Windows Hello for Business and Microsoft Authenticator methods ($expand=device): only for the
+    # users read whole that hold such a method; a device not read leaves that user's devices unknown (DevicesRead $false)
+    if ($ReadDevices -and $result.Count -gt 0 -and -not $refused) {
+        $null = Add-SIAuthMethodDevices -Result $result -PostMany $PostMany -Sleep $Sleep -MaxRounds $MaxRounds -MaxDelaySeconds $MaxDelaySeconds -State $state
+    }
+    # the record part of each user read whole -- the full detail of every method (Add-SIAuthMethodsRecordPart)
+    $readAt = [datetime]::UtcNow
+    foreach ($k in @($result.Keys)) { Add-SIAuthMethodsRecordPart -User $byId[([string]$k).ToLowerInvariant()] -Result $result[$k] -ReadAt $readAt }
     return $result
+}
+
+# ---- THE FULL DETAIL OF EVERY METHOD (owner 2026-11-05: "but i need all these details that per user covers" / "including
+# device info" / "it must be covered all in si") ------------------------------------------------------------------------
+# The per-user read keeps EVERY property Graph returns per method object (only the @odata.context / @odata.id / navigation
+# links are left out); for a Windows Hello for Business and a Microsoft Authenticator method the device it lives on is read
+# with $expand=device and kept on the method (the fields below). The record part 'authenticationMethods' carries the raw
+# methods AND the SI-shaped items the data model maps to si_auth_methods (one object per method, generic names).
+
+$script:SIAuthMethodDeviceFields = @('id', 'deviceId', 'displayName', 'operatingSystem', 'operatingSystemVersion', 'isCompliant', 'isManaged', 'trustType', 'approximateLastSignInDateTime')
+# the method kinds whose device is read, and the endpoint that expands it (Microsoft Graph v1.0)
+$script:SIAuthMethodDeviceKinds = [ordered]@{
+    '#microsoft.graph.windowshelloforbusinessauthenticationmethod' = 'windowsHelloForBusinessMethods'
+    '#microsoft.graph.microsoftauthenticatorauthenticationmethod'  = 'microsoftAuthenticatorMethods'
+}
+
+function Get-SIAuthMethodValue {
+    <# PURE. A named value of a dictionary or an object ($null when it has none). #>
+    param([AllowNull()]$Bag, [string]$Name)
+    if ($null -eq $Bag) { return $null }
+    if ($Bag -is [System.Collections.IDictionary]) { if ($Bag.Contains($Name)) { return $Bag[$Name] }; return $null }
+    $p = $Bag.PSObject.Properties[$Name]; if ($p) { return $p.Value }
+    $null
+}
+
+function ConvertTo-SIAuthMethodTime {
+    <# PURE. A time as ONE fixed text whatever way it came (a [datetime] -- PowerShell 7 reads ISO dates from JSON as dates --
+       or ISO text): UTC, 'yyyy-MM-ddTHH:mm:ss[.fffffff]Z' (no trailing zeros). Anything else is returned as it is. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return $null }
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [datetime]) {
+        $d = $Value; if ($d.Kind -eq [DateTimeKind]::Unspecified) { $d = [datetime]::SpecifyKind($d, [DateTimeKind]::Utc) }
+        return $d.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.FFFFFFFZ', $inv).Replace('.Z', 'Z')
+    }
+    if ($Value -is [DateTimeOffset]) { return $Value.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ss.FFFFFFFZ', $inv).Replace('.Z', 'Z') }
+    if ($Value -is [string] -and $Value -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$') {
+        $o = [DateTimeOffset]::MinValue
+        if ([DateTimeOffset]::TryParse($Value, $inv, [Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$o)) { return $o.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ss.FFFFFFFZ', $inv).Replace('.Z', 'Z') }
+    }
+    $Value
+}
+
+function ConvertTo-SIAuthMethodDevice {
+    <# PURE. The device of a method, reduced to the fields SI keeps ($null when there is none). #>
+    param([AllowNull()]$Device)
+    if ($null -eq $Device) { return $null }
+    $o = [ordered]@{}
+    foreach ($f in $script:SIAuthMethodDeviceFields) { $v = Get-SIAuthMethodValue $Device $f; if ($null -ne $v) { $o[$f] = (ConvertTo-SIAuthMethodTime $v) } }
+    if ($o.Count -eq 0) { return $null }
+    $o
+}
+
+function ConvertTo-SIAuthMethodRaw {
+    <#
+        PURE. One method object as Graph returned it -> an ordered dictionary of EVERY property (dates as ISO text), less the
+        OData bookkeeping (@odata.context / @odata.id / *@odata.navigationLink). A 'device' it carries is reduced to the device
+        fields SI keeps. The same object round-trips through the saved results unchanged.
+    #>
+    param([AllowNull()]$Method)
+    $o = [ordered]@{}
+    if ($null -eq $Method) { return $o }
+    $props = if ($Method -is [System.Collections.IDictionary]) { @(foreach ($k in $Method.Keys) { [pscustomobject]@{ Name = [string]$k; Value = $Method[$k] } }) } else { @($Method.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } }) }
+    foreach ($p in $props) {
+        $n = [string]$p.Name
+        if ($n -in '@odata.context', '@odata.id' -or $n -like '*@odata.navigationLink' -or $n -like '*@odata.associationLink') { continue }
+        $v = $p.Value
+        if ($n -eq 'device') { $v = ConvertTo-SIAuthMethodDevice $v; if ($null -eq $v) { continue } }
+        else { $v = ConvertTo-SIAuthMethodTime $v }
+        $o[$n] = $v
+    }
+    $o
+}
+
+function Get-SIAuthMethodShortType {
+    <# PURE. '#microsoft.graph.fido2AuthenticationMethod' -> 'fido2' (a type SI does not know keeps its own name). #>
+    param([AllowNull()][string]$Type)
+    $t = ([string]$Type).Trim()
+    if (-not $t) { return '' }
+    $t = $t -replace '^#?microsoft\.graph\.', ''
+    $t = $t -replace 'AuthenticationMethod$', ''
+    if (-not $t) { return '' }
+    $t.Substring(0, 1).ToLowerInvariant() + $t.Substring(1)
+}
+
+function ConvertTo-SIAuthMethodItem {
+    <#
+        PURE. One kept method (ConvertTo-SIAuthMethodRaw) -> the si_auth_methods entry: generic names, only the facts the
+        method has. type (short), id, displayName, created; phone: phoneNumber, phoneType, smsSignInState; email: emailAddress;
+        Authenticator: deviceTag, appVersion; FIDO2: model, aaGuid, attestationLevel, attestationCertificateCount; Windows
+        Hello: keyStrength; Temporary Access Pass: lifetimeMinutes, isUsable, isUsableOnce, startDateTime; platform
+        credential: platform, keyStrength; and the device (Windows Hello / Authenticator): deviceName, deviceOs,
+        deviceOsVersion, deviceCompliant, deviceManaged, deviceTrustType, deviceId (Entra device id: the device CI),
+        deviceObjectId, deviceLastSignIn. Phone numbers and addresses are kept as Graph returns them (personal data, like
+        the user's mail: the field is marked pii).
+    #>
+    param([AllowNull()]$Method)
+    $i = [ordered]@{}
+    if ($null -eq $Method) { return $i }
+    $i['type'] = Get-SIAuthMethodShortType ([string](Get-SIAuthMethodValue $Method '@odata.type'))
+    $pairs = @(
+        @('id', 'id'), @('displayName', 'displayName'), @('created', 'createdDateTime'),
+        @('phoneNumber', 'phoneNumber'), @('phoneType', 'phoneType'), @('smsSignInState', 'smsSignInState'),
+        @('emailAddress', 'emailAddress'),
+        @('deviceTag', 'deviceTag'), @('appVersion', 'phoneAppVersion'),
+        @('model', 'model'), @('aaGuid', 'aaGuid'), @('attestationLevel', 'attestationLevel'),
+        @('keyStrength', 'keyStrength'), @('platform', 'platform'),
+        @('lifetimeMinutes', 'lifetimeInMinutes'), @('isUsable', 'isUsable'), @('isUsableOnce', 'isUsableOnce'), @('startDateTime', 'startDateTime'),
+        @('methodUsabilityReason', 'methodUsabilityReason')
+    )
+    foreach ($pr in $pairs) {
+        $v = Get-SIAuthMethodValue $Method $pr[1]
+        if ($null -eq $v -or ($v -is [string] -and -not $v.Trim())) { continue }
+        $v = ConvertTo-SIAuthMethodTime $v
+        $i[$pr[0]] = $v
+    }
+    $certs = Get-SIAuthMethodValue $Method 'attestationCertificates'
+    if ($null -ne $certs) { $i['attestationCertificateCount'] = @($certs | Where-Object { $null -ne $_ }).Count }
+    $d = Get-SIAuthMethodValue $Method 'device'
+    if ($null -ne $d) {
+        foreach ($pr in @(@('deviceName', 'displayName'), @('deviceOs', 'operatingSystem'), @('deviceOsVersion', 'operatingSystemVersion'), @('deviceCompliant', 'isCompliant'),
+                          @('deviceManaged', 'isManaged'), @('deviceTrustType', 'trustType'), @('deviceId', 'deviceId'), @('deviceObjectId', 'id'), @('deviceLastSignIn', 'approximateLastSignInDateTime'))) {
+            $v = Get-SIAuthMethodValue $d $pr[1]
+            if ($null -eq $v -or ($v -is [string] -and -not $v.Trim())) { continue }
+            if ($pr[0] -in 'deviceId', 'deviceObjectId') { $v = ([string]$v).ToLowerInvariant() }
+            $i[$pr[0]] = $v
+        }
+    }
+    $i
+}
+
+function New-SIAuthMethodsPart {
+    <#
+        PURE. The 'authenticationMethods' part of one user read whole (fresh, or from the saved results -- the same input gives
+        the same part): readComplete, methodTypes (Graph types, lower case), types (short), hasPassword, passwordlessOnly (only
+        when decided), items (si_auth_methods), methods (every property Graph returned), devicesRead, readAt.
+    #>
+    param([AllowNull()]$User, [AllowNull()][object[]]$Methods, [bool]$DevicesRead = $true, [datetime]$ReadAt = [datetime]::UtcNow)
+    $ms = @(@($Methods) | Where-Object { $null -ne $_ })
+    $types = @(Get-SIAuthMethodTypes -Methods $ms)
+    $verdict = Get-SIPasswordlessOnlyVerdict -Methods $types -ReadComplete $true -User $User
+    $part = [ordered]@{ readComplete = $true; methodTypes = $types }
+    if ($null -ne $verdict) { $part['passwordlessOnly'] = [bool]$verdict }
+    $part['hasPassword'] = [bool]($types -contains $script:SIAuthMethodPasswordType)
+    $items = @(foreach ($m in $ms) { [pscustomobject](ConvertTo-SIAuthMethodItem -Method $m) })
+    $part['types'] = @($items | ForEach-Object { [string]$_.type } | Where-Object { $_ } | Sort-Object -Unique)
+    $part['items'] = $items
+    $part['methods'] = @(foreach ($m in $ms) { [pscustomobject]$m })
+    $part['devicesRead'] = [bool]$DevicesRead
+    $part['readAt'] = $ReadAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)
+    [pscustomobject]$part
+}
+
+function Add-SIAuthMethodsRecordPart {
+    <# Writes one user's part (New-SIAuthMethodsPart) to its Entra record. Never throws. #>
+    param([AllowNull()]$User, [AllowNull()]$Result, [datetime]$ReadAt = [datetime]::UtcNow)
+    if ($null -eq $User -or $null -eq $Result -or -not [bool]$Result.ReadComplete) { return }
+    if (-not (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) { return }
+    $ms = @(); if ($Result.PSObject.Properties['Methods']) { $ms = @($Result.Methods) }
+    $dr = $true; if ($Result.PSObject.Properties['DevicesRead']) { $dr = [bool]$Result.DevicesRead }
+    try { Add-SIRecordPart -Provider 'entra' -RecordType 'user' -Key ([string]$User.id) -Part 'authenticationMethods' -Object (New-SIAuthMethodsPart -User $User -Methods $ms -DevicesRead $dr -ReadAt $ReadAt) } catch { }
+}
+
+function Add-SIAuthMethodDevices {
+    <#
+        Reads the device behind each Windows Hello for Business / Microsoft Authenticator method of the users in -Result
+        (GET /users/{id}/authentication/<kind>?$expand=device, Graph $batch, 20 requests each, the same waves, Retry-After and
+        refusal rules as the method read) and puts it on the method ('device'). A user whose device read did not complete
+        gets DevicesRead = $false (its devices are unknown -- never "no device"). Answers how many requests were sent.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][scriptblock]$PostMany, [Parameter(Mandatory)][scriptblock]$Sleep,
+          [int]$MaxRounds = 5, [int]$MaxDelaySeconds = 60, $State)
+    $reqs = New-Object System.Collections.Generic.List[object]
+    foreach ($uid in @($Result.Keys)) {
+        $r = $Result[$uid]; if ($null -eq $r -or -not [bool]$r.ReadComplete) { continue }
+        foreach ($kind in $script:SIAuthMethodDeviceKinds.Keys) {
+            if (@($r.MethodTypes) -contains $kind) { $reqs.Add([pscustomobject]@{ User = [string]$uid; Url = ('/users/{0}/authentication/{1}?$expand=device' -f $uid, $script:SIAuthMethodDeviceKinds[$kind]) }) }
+        }
+    }
+    if ($reqs.Count -eq 0) { return 0 }
+    $byUser = @{}
+    foreach ($q in $reqs) { $byUser[$q.User] = $true }
+    $done = @{}
+    $sent = 0
+    $pending = $reqs
+    $stopped = $false
+    for ($round = 1; $round -le $MaxRounds -and $pending.Count -gt 0 -and -not $stopped; $round++) {
+        $retry = New-Object System.Collections.Generic.List[object]
+        $wait = 0
+        $bodies = New-Object System.Collections.Generic.List[string]
+        $chunks = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $pending.Count; $i += $script:SIAuthMethodBatchSize) {
+            $chunk = @($pending.GetRange($i, [Math]::Min($script:SIAuthMethodBatchSize, $pending.Count - $i)))
+            $chunks.Add($chunk)
+            $rq = for ($j = 0; $j -lt $chunk.Count; $j++) { @{ id = [string]($j + 1); method = 'GET'; url = $chunk[$j].Url } }
+            $bodies.Add((ConvertTo-Json -InputObject @{ requests = @($rq) } -Depth 5 -Compress))
+        }
+        # in waves, as many at once as the method read last measured Microsoft takes (halved after a throttled wave)
+        $outcomes = New-Object System.Collections.Generic.List[object]
+        $next = 0
+        while ($next -lt $bodies.Count) {
+            $width = 1; if ($State -and $State.PSObject.Properties['Concurrency']) { $width = [Math]::Max(1, [int]$State.Concurrency) }
+            $width = [Math]::Min($width, $bodies.Count - $next)
+            $wave = @(& $PostMany @($bodies.GetRange($next, $width).ToArray()))
+            for ($x = 0; $x -lt $width; $x++) { if ($x -lt $wave.Count) { $outcomes.Add($wave[$x]) } else { $outcomes.Add($null) } }
+            $next += $width
+            $thr = @($wave | Where-Object { $null -ne $_ -and ([int]$_.Status -eq 429 -or ($null -ne $_.Response -and @($_.Response.responses | Where-Object { $null -ne $_ -and [int]$_.status -eq 429 }).Count -gt 0)) }).Count -gt 0
+            if ($State -and $State.PSObject.Properties['Concurrency']) { $null = Update-SIAuthMethodConcurrency -State $State -Throttled $thr }
+            if ($thr -and $next -lt $bodies.Count) { $d = [Math]::Max(1, [Math]::Min($MaxDelaySeconds, $wait)); & $Sleep $d }
+        }
+        $sent += $bodies.Count
+        if ($State -and $State.PSObject.Properties['Requests']) { $State.Requests = [int]$State.Requests + $bodies.Count }
+        for ($w = 0; $w -lt $chunks.Count; $w++) {
+            $chunk = @($chunks[$w]); $o = $null; if ($w -lt $outcomes.Count) { $o = $outcomes[$w] }
+            if ($null -eq $o -or [int]$o.Status -ne 200 -or $null -eq $o.Response) {
+                $st = 0; if ($o) { $st = [int]$o.Status }
+                if ($st -in 401, 403) { $stopped = $true; break }
+                if ($o -and $null -ne $o.RetryAfter -and [int]$o.RetryAfter -gt $wait) { $wait = [int]$o.RetryAfter }
+                foreach ($q in $chunk) { $retry.Add($q) }
+                continue
+            }
+            $answered = @{}
+            foreach ($item in @($o.Response.responses)) {
+                if ($null -eq $item) { continue }
+                $n = 0; if (-not [int]::TryParse([string]$item.id, [ref]$n) -or $n -lt 1 -or $n -gt $chunk.Count) { continue }
+                $q = $chunk[$n - 1]; $answered[$n] = $true
+                $status = [int]$item.status
+                if ($status -eq 200) {
+                    $b = $item.body
+                    if ($b -and $b.PSObject.Properties['@odata.nextLink'] -and $b.'@odata.nextLink') { continue }   # not read whole: unknown
+                    $dev = @{}
+                    foreach ($m in @($b.value)) { if ($null -ne $m -and $m.PSObject.Properties['id'] -and $m.PSObject.Properties['device'] -and $null -ne $m.device) { $dev[([string]$m.id).ToLowerInvariant()] = ConvertTo-SIAuthMethodDevice $m.device } }
+                    foreach ($km in @($Result[$q.User].Methods)) {
+                        $mid = ([string](Get-SIAuthMethodValue $km 'id')).ToLowerInvariant()
+                        if ($mid -and $dev.ContainsKey($mid) -and $null -ne $dev[$mid]) { $km['device'] = $dev[$mid] }
+                    }
+                    $done[$q.Url] = $true
+                } elseif ($status -in 401, 403) { $stopped = $true }
+                elseif ($status -in 429, 502, 503, 504) {
+                    $ra = Get-SIAuthMethodItemRetryAfter -Item $item
+                    if ($null -ne $ra -and $ra -gt $wait) { $wait = $ra }
+                    $retry.Add($q)
+                }
+            }
+            for ($n = 1; $n -le $chunk.Count; $n++) { if (-not $answered.ContainsKey($n)) { $retry.Add($chunk[$n - 1]) } }
+        }
+        $pending = $retry
+        if ($pending.Count -gt 0 -and -not $stopped -and $round -lt $MaxRounds) {
+            $d = if ($wait -gt 0) { $wait } else { [int][Math]::Pow(2, $round - 1) }
+            if ($d -gt $MaxDelaySeconds) { $d = $MaxDelaySeconds }
+            & $Sleep $d
+            if ($State -and $State.PSObject.Properties['SleptSeconds']) { $State.SleptSeconds = [double]$State.SleptSeconds + [double]$d }
+        }
+    }
+    foreach ($q in $reqs) { if (-not $done.ContainsKey($q.Url)) { $Result[$q.User].DevicesRead = $false } }
+    if ($State) {
+        if (-not $State.PSObject.Properties['DevicesUnread']) { $State | Add-Member -NotePropertyName DevicesUnread -NotePropertyValue 0 }
+        $State.DevicesUnread = [int]$State.DevicesUnread + @($Result.Keys | Where-Object { $byUser.ContainsKey([string]$_) -and -not [bool]$Result[$_].DevicesRead }).Count
+    }
+    $sent
 }
 
 function Write-SIEntraAuthMethodsOutcome {

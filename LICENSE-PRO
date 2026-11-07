@@ -96,6 +96,7 @@ These paths are delivered only to licensed customers through the private Automat
   setup/_shared/SI-SupportAppDatabase.ps1
   setup/Invoke-SISupportSqlAccessJob.ps1
   setup/Install-SISupportGrantProcedure.ps1
+  setup/Remove-SISupportStandingAccess.ps1
   setup/_shared/SI-SupportSqlJob.ps1
   setup/Invoke-SISupportReadJob.ps1
   setup/_shared/SI-SupportReadJob.ps1
@@ -107,10 +108,12 @@ These paths are delivered only to licensed customers through the private Automat
   ops/support-worker
   ops/report-certification
   ops/context-discovery
+  ops/identity-move
   setup/_shared/SI-InvardiaPublisher.ps1
   setup/Import-SICmdbCsv.ps1
   setup/New-SIServiceNowTestPack.ps1
   setup/Clear-SIGuardEvents.ps1
+  setup/Set-SICiCutoff.ps1
   setup/Invoke-SIGuardAcceptEverywhere.ps1
   setup/Compare-SISummaryGroupings.ps1
   setup/Get-SIFindingFoldPreview.ps1

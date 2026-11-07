@@ -170,7 +170,7 @@ public static class JobFlow
         ["publicip"] = "15 5 * * *", ["asset-correlation"] = "30 5 * * *", ["asset-cmdb-sql"] = "55 5 * * *", ["asset-cmdb"] = "0 7 * * *",
         ["risk-analysis"] = "0 6 * * *", ["risk-analysis-detailed"] = "0 8 * * *", ["asset-trend"] = "0 9 * * *", ["asset-vulnerabilities"] = "0 10 * * *",
         ["asset-vulns-servicenow"] = "15 10 * * *", ["asset-datasync"] = "30 10 * * *", ["close-loop-mail"] = "45 10 * * *", ["verification"] = "0 11 * * *", ["asset-tagging"] = "50 5 * * *",
-        ["schema"] = "0 3 * * 0", ["flow"] = TickCron, ["config-backup"] = "0 18 * * *", ["heartbeat"] = "7,22,37,52 * * * *",
+        ["schema"] = "0 3 * * 0", ["flow"] = TickCron, ["config-backup"] = "0 18 * * *", ["heartbeat"] = "7,22,37,52 * * * *", ["signin-methods"] = "3,18,33,48 * * * *",
     };
 
     public static readonly IReadOnlyDictionary<string, int> DefaultTimeout = new Dictionary<string, int> { ["ptc"] = 180 };
@@ -179,7 +179,7 @@ public static class JobFlow
     /// on its own daily schedule -- OwnSchedule), the daily configuration backup (#404: its own timer, after the working day,
     /// before the pipeline), the hourly status report to Invardia (#718: its own timer, whether or not a pipeline runs) and
     /// a retired job (Retired).
-    public static bool NeverInFlow(string key) => key is "templates" or "schema" or "schema-discovery" or "flow" or "config-backup" or "heartbeat" or "data-out" or "support-grant" || OwnSchedule(key) || Retired(key);
+    public static bool NeverInFlow(string key) => key is "templates" or "schema" or "schema-discovery" or "flow" or "config-backup" or "heartbeat" or "signin-methods" or "data-out" or "support-grant" || OwnSchedule(key) || Retired(key);
 
     /// #412 (operator 2026-10-06, "we dont pull in the same data twice"): asset-properties does nothing any more -- the
     /// endpoint, identity and azure profilers read each source once and publish the full asset metadata themselves. Never a
@@ -265,6 +265,22 @@ public static class JobFlow
     public static bool ManualInFlowMode(string key) => JobSchedule.Key(key) == "asset-trend";
 
     public static string JobName(string key) => "caj-si-" + key;
+
+    /// #1096: the pipeline STEP a job belongs to -- the same rule as Get-SIJobFlowStepKey (SI-JobFlow.ps1) and the runner: a
+    /// collection in parts' two jobs, caj-si-&lt;engine&gt;-producer (the runner starts it for that step) and caj-si-&lt;engine&gt;-worker
+    /// (it works the producer's parts), are the step &lt;engine&gt;; every other job is its key. Found live: JobSchedule.Key made
+    /// caj-si-endpoint-producer 'endpoint-producer', so the default pipeline the page showed (and saved) had no endpoint,
+    /// identity or azure step, and the producers were listed under "Other jobs" with their own timers.
+    public static string StepKey(string jobName)
+    {
+        var k = JobSchedule.Key(jobName);
+        if (k.EndsWith("-producer", StringComparison.Ordinal) && k.Length > "-producer".Length) return k[..^"-producer".Length];
+        if (k.EndsWith("-worker", StringComparison.Ordinal) && k.Length > "-worker".Length) return k[..^"-worker".Length];
+        return k;
+    }
+
+    /// #1096: is this job one half of a collection in parts (its producer or its worker)?
+    public static bool IsPartsJob(string jobName) => StepKey(jobName) != JobSchedule.Key(jobName);
 
     /// #576: a progress record older than this is shown greyed ("no update for n min") -- the engine writes at most every 15 s.
     public const int ProgressStaleMinutes = 15;
@@ -356,7 +372,8 @@ public static class JobFlow
 
     public static FlowDefinition Default(IEnumerable<string> installedJobs, string? startTime = null, string? timeZone = null)
     {
-        var have = installedJobs.Select(JobSchedule.Key).ToHashSet(StringComparer.Ordinal);
+        // #1096: a collection in parts (producer + worker) is installed as its engine's step
+        var have = installedJobs.Select(StepKey).ToHashSet(StringComparer.Ordinal);
         var steps = DefaultStages.SelectMany(st => st.Jobs.Where(have.Contains)
             .Select(k => new FlowStep(k, Enabled: !DefaultOff.Contains(k), WithPrevious: TogetherWithShippedAbove(st.Stage, k, have.Contains),
                 OnFailure: StageOnFailure(st.Stage), TimeoutMinutes: DefaultTimeout.TryGetValue(k, out var t) ? t : 240, Stage: st.Stage))).ToList();
@@ -682,7 +699,7 @@ public static class JobFlow
     /// before it there), else last in that stage.
     public static FlowDefinition Include(FlowDefinition d, string job)
     {
-        var key = JobSchedule.Key(job);
+        var key = StepKey(job);
         if (OwnSchedule(key)) throw new ArgumentException($"{JobSchedule.Label(key)} is never part of the pipeline -- {OwnScheduleWhy} (03:00 UTC)");
         if (Retired(key)) throw new ArgumentException($"{JobSchedule.Label(key)} is never part of the pipeline -- {RetiredWhy}");
         if (NeverInFlow(key)) throw new ArgumentException($"{JobSchedule.Label(key)} is never part of the pipeline (it is started on demand)");
@@ -707,7 +724,7 @@ public static class JobFlow
     public static FlowDefinition Remove(FlowDefinition d, string job)
     {
         if (Required(job)) throw new ArgumentException($"{JobSchedule.Label(JobSchedule.Key(job))} is not removed from the pipeline -- {RequiredWhy}");
-        var steps = d.Steps.Where(s => s.Job != JobSchedule.Key(job)).ToList();
+        var steps = d.Steps.Where(s => s.Job != StepKey(job)).ToList();
         return d with { Steps = FixGroups(steps), Stages = d.StageList };
     }
 
@@ -956,7 +973,8 @@ public static class JobFlow
         var rows = new List<FlowSwitchRow>();
         foreach (var j in jobs.OrderBy(x => x.Name, StringComparer.Ordinal))
         {
-            var k = JobSchedule.Key(j.Name);
+            // #1096: a producer is its engine's step (the runner starts it for that step) -- in the pipeline it has no timer
+            var k = JobSchedule.Key(j.Name).EndsWith("-producer", StringComparison.Ordinal) ? StepKey(j.Name) : JobSchedule.Key(j.Name);
             if (j.TriggerType.Equals("Event", StringComparison.OrdinalIgnoreCase)) { rows.Add(new(j.Name, "keep", null, "event-triggered (scaled by its queue)")); continue; }
             if (k == "flow")
             {

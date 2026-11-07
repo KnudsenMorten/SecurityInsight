@@ -206,6 +206,7 @@ $publishSql = $null
 if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase -and -not $housekeepingOnly) {
     try {
         . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataPublishedRun.ps1')
+        . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataStatistics.ps1')
         if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/data-model/SI-RecordSql.ps1') }
         $pubSrv = if ([string]$global:SI_Pro_DataSqlServer) { [string]$global:SI_Pro_DataSqlServer } else { [string]$global:SI_ProSqlServer }
         $pubDb = if ([string]$global:SI_Pro_DataSqlDatabase) { [string]$global:SI_Pro_DataSqlDatabase } else { [string]$global:SI_ProSqlDatabase }
@@ -216,10 +217,28 @@ if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase -and 
 # published once, here, by the first wake-up after it -- the newest complete collection, its CI and asset copies filled.
 # Every later wake-up only reads that a run is published. (The schema apply cannot: it runs as the updater, without EXECUTE.)
 if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -Source update -SolutionVersion $siVersion -Log $say }
+# 2026-11-05 (owner: "Fix code + refresh now"): the pages never wait for a statistic -- the database updates a stale one in the
+# background (engine/_shared/data-sql/SI-DataStatistics.ps1). One read when it is on already; set where the database's procedure
+# may change the database (made by setup's admin), left as it is where it may not (made by the updater). Says nothing.
+$statsOn = [bool](Get-Command -Name Invoke-SIDataStatisticsRefresh -ErrorAction SilentlyContinue)
+if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -AsyncOnly -Log $say }
 # #816 (owner 2026-10-20): a run that failed or was cancelled leaves its Detailed collection 'Loading' with all its rows, and
 # the collections' retention runs only at the end of a SUCCESSFUL data sync. So every wake-up while NO pipeline run is running
 # removes stopped runs' collections (and the older ones retention would), inside a time budget -- the published run's
 # collection and a result waiting for the data sync are never touched. Says only what it removed or what went wrong.
+# NO FRESH BEAT = DEAD: a clean-up pass (a wake-up during a run) beats its OWN lock -- taken by the container entry as its first
+# act, beaten here at once and with the clean-up's lines (at most once a minute), released at its end. A hung pass stops
+# beating, and the next wake-up stops it (engine\_shared\SI-ExecutionLiveness.ps1). Function blocks, not names: the beat runs
+# inside the clean-up's closures, which cannot see the functions this script dot-sourced.
+$hkLockStore = $null; $hkHolder = [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME
+$hkBeatFn = ${function:Update-SIExecutionLockBeat}; $hkBeatState = @{ Last = [datetime]::MinValue }
+if ($housekeepingOnly -and $HostKind -eq 'Container' -and $hkHolder -and $hkBeatFn) {
+    try {
+        if ($proStore) { $hkLockStore = New-SIExecutionLockStore -Invoke $proStore.Invoke }
+        elseif ([string]$global:SI_StorageAccount) { $hkLockStore = New-SIExecutionLockStore -Docs (New-SIExecutionLockBlobDocs -Account ([string]$global:SI_StorageAccount)) }
+        if ($hkLockStore) { $null = & $hkBeatFn -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder -What 'clean-up of old data'; $hkBeatState.Last = [datetime]::UtcNow }
+    } catch { $hkLockStore = $null }
+}
 if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
     try {
         if (-not (Get-Command -Name Invoke-SIDataStoppedRunCleanup -ErrorAction SilentlyContinue)) {
@@ -230,7 +249,9 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
         $cleanDb = if ([string]$global:SI_Pro_DataSqlDatabase) { [string]$global:SI_Pro_DataSqlDatabase } else { [string]$global:SI_ProSqlDatabase }
         $cleanSql = New-SIDataSqlInvoke -Server $cleanSrv -Database $cleanDb -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint
         # the pacing's own line ('pacing: ...', one a minute at most) goes through: the log shows when the clean-up waits
-        $cleanLog = { param([string]$level, [string]$msg) if ($level -ne 'INFO' -or $msg -match 'still loading' -or $msg -match '^pacing:') { & $say $(if ($level -eq 'OK') { 'INFO' } else { $level }) $msg } }.GetNewClosure()
+        $cleanLog = { param([string]$level, [string]$msg)
+            if ($hkLockStore -and ([datetime]::UtcNow - $hkBeatState.Last).TotalSeconds -ge 60) { try { $null = & $hkBeatFn -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder -What 'clean-up of old data'; $hkBeatState.Last = [datetime]::UtcNow } catch { } }
+            if ($level -ne 'INFO' -or $msg -match 'still loading' -or $msg -match '^pacing:') { & $say $(if ($level -eq 'OK') { 'INFO' } else { $level }) $msg } }.GetNewClosure()
         # on its own schedules a job runs without a pipeline run record, so "no run is running" proves nothing: the idle rule is off
         $idleHours = if ($pipeDefinition.Mode -eq 'schedules') { 0 } else { 24 }
         # #882: while a run is going, the 'Loading' collections no live run owns are marked at once -- which run owns which is
@@ -249,13 +270,17 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
 }
 # #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) has done its one job -- the housekeeping above; it starts nothing
 if ($housekeepingOnly) {
+    if ($hkLockStore) { Exit-SIExecutionLock -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder }
     & $say 'INFO' 'a wake-up during a run: the housekeeping is done for this wake-up; it starts nothing -- the running run goes on'
     exit 0
 }
 if ($pipeDefinition.Mode -eq 'schedules' -and -not $pipeRequest -and -not $Cancel) {
     & $say 'INFO' 'this install runs its jobs on their own schedules (Operations > Jobs: Schedules) -- the pipeline does nothing.'
     # no pipeline run judges the data here: the web app moves to the newest complete collection newer than the one it shows
-    if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -Source schedules -SolutionVersion $siVersion -Log $say }
+    $schedPub = $null
+    if ($publishSql) { $schedPub = Invoke-SIDataPublishRun -Invoke $publishSql -Source schedules -SolutionVersion $siVersion -Log $say }
+    # a newer collection is shown: its statistics (and the copies' just refreshed) brought up to date -- never fails the wake-up
+    if ($publishSql -and $statsOn -and $schedPub -and $schedPub.Published) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the newest collection was shown' -Log $say }
     exit 0
 }
 
@@ -475,8 +500,25 @@ $pipeRunOne = {
     # 2026-10-24: the run's publish copy can take 15-50 minutes -- its progress keeps THIS runner's lock alive (same holder,
     # the expiry moves), so the next wake-up never starts a run beside it; a copy that dies stops beating and the lock
     # lapses after its 15 minutes, as before
-    $pipeBeat = { $null = $control.HeartbeatLock($lockHolder, [string]$pipeResult.FlowRunId, ('publishing run {0}' -f $pipeResult.FlowRunId)) }.GetNewClosure()
+    # #1129 (live 2026-11-05): built by New-SIPipelineLockBeat -- the closure made here saw $null for $control / $lockHolder
+    # (they live in this script's scope, not in this block's), so no beat ever renewed the lock and a failing beat was silent
+    $pipeBeat = New-SIPipelineLockBeat -Control $control -Holder $lockHolder -FlowRunId ([string]$pipeResult.FlowRunId) -What ('publishing run {0}' -f $pipeResult.FlowRunId) -Log $say
     if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -State $pipeResult -Map (Get-SIJobFlowMap) -Previous $PipePrev -SolutionVersion $siVersion -Log $say -Beat $pipeBeat }
+    # 2026-11-05 STATISTICS KEPT FRESH (engine/_shared/data-sql/SI-DataStatistics.ps1): ONE refresh, ONLY AFTER the publish
+    # (Invardia, framework owner: measured live, a refresh before the publish took 640 s at an S2 database and held the pages back
+    # -- they move to a run only at the publish). After it, every step that writes has finished and the published copies were
+    # just refreshed, so one refresh covers the source tables and the copies. Any run (a run that is not shown wrote rows all the
+    # same). Table by table, the lock beaten between them; never fails the run (a failure is one warning: a page is slower, never
+    # wrong). #1129 (live 2026-11-05): an update that waits for THIS run goes first -- the refresh (maintenance, not data) is left
+    # to the next run's end; the publish always runs. The mark is read once, after the publish; a mark that cannot be read
+    # changes nothing.
+    $pipeStats = [bool]($publishSql -and $statsOn)
+    if ($pipeStats -and $updateWaits) {
+        $pipeUpdFirst = ''
+        try { $pipeUpdFirst = Get-SIPipelineEndOfRunUpdateFirst -Waits (& $updateWaits) } catch { $pipeUpdFirst = '' }
+        if ($pipeUpdFirst) { & $say 'INFO' $pipeUpdFirst; $pipeStats = $false }
+    }
+    if ($pipeStats) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'at the end of the run, after the pages moved to it' -Log $say -Beat $pipeBeat }
     # #277: the run's guards (a missed scheduled start, skipped / interrupted steps) mail and report themselves. A start that
     # was late ONLY because the previous run was still going is not one of them: the run's note says it, no guard event
     if (Get-Command -Name Invoke-SIGuardCalls -ErrorAction SilentlyContinue) { $null = Invoke-SIGuardCalls -Calls @(Get-SIGuardCallsForFlow -Result $pipeResult) -Common @{ Engine = 'flow'; RunId = [string]$pipeResult.FlowRunId; Invoke = $(if ($proStore) { $proStore.Invoke } else { $null }) } }
@@ -577,12 +619,29 @@ $updateRunning = if ($HostKind -eq 'Container') {
     # CR5 step 1 (#655): the updater job's name from the install record (cfg.InstallState 'InstallNames'), else today's name
     . (Join-Path $siRoot 'engine/_shared/SI-InstallNames.ps1')
     $updaterJobName = Get-SIInstallName -Role updater -Record (Read-SIInstallNamesRecord -Store $proStore)
+    # NO FRESH BEAT = DEAD (engine\_shared\SI-ExecutionLiveness.ps1): an updater execution counts only while it beats the
+    # install lock or its own row in the Pro database -- read here; an install without one keeps the old rule (no beats to read)
+    $updLockStore = if ($proStore) { New-SIExecutionLockStore -Invoke $proStore.Invoke } else { $null }
+    if ($null -eq $global:SI_ExecutionStopped) { $global:SI_ExecutionStopped = @{} }
     {
         # $armSeams, never $seams: with a producer job $seams is the collect-in-parts wrapper, whose Arm is $null -- the check
         # then failed on every wake-up ("The expression after '&' ...") and the pipeline could start under an update
         try { $r = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $updaterJobName) $null }
         catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { return '' } else { throw } }
-        Get-SIPipelineUpdateRunning -Executions @($r.value)
+        $updLocks = @(); $updKnown = $false
+        if ($updLockStore -and @($r.value | Where-Object { Test-SIExecutionRunning $_ }).Count) {
+            try { $lr = Read-SIExecutionLocks -Store $updLockStore; $updLocks = @($lr.Rows); $updKnown = [bool]$lr.Known }
+            catch { & $say 'WARN' ('whether the update still works could not be read ({0}) -- a running update is waited for as before' -f $_.Exception.Message) }
+        }
+        $upd = Get-SIPipelineUpdateLiveness -Executions @($r.value) -Locks $updLocks -LocksKnown $updKnown -Stopped $global:SI_ExecutionStopped
+        if (@($upd.Dead).Count) {
+            # a dead update is STOPPED, said, and raised to Invardia; the waiting work goes on in this wake-up
+            $updStop = Invoke-SIExecutionDeadStop -Dead @($upd.Dead) -OthersLive ([bool]$upd.Running) -Stopped $global:SI_ExecutionStopped -Log $say `
+                -Stop { param($n) $null = & $armSeams.Arm 'POST' (Get-SIExecutionStopPath -Base $armSeams.Base -Job $updaterJobName -Execution $n) @{} } `
+                -Alert { param($ev) $null = Send-SIExecutionStoppedAlert -Event $ev -Log $say }
+            if (@($updStop.Blocking).Count -and -not $upd.Running) { return ('caj-si-updater execution {0} (it could not be stopped)' -f @($updStop.Blocking)[0].Name) }
+        }
+        [string]$upd.Running
     }
 } else {
     { Get-SIPipelineUpdateRunning -Processes @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction Stop | ForEach-Object { [string]$_.CommandLine }) }
@@ -604,12 +663,14 @@ if ($HostKind -eq 'Container' -and $updaterJobName) {
         ConvertFrom-SIPipelineUpdateWaitsTag -Value ([string]$j.tags.'si-update-waits')
     }
     $startUpdate = {
-        param($W)
+        param($W, $BeforeStart)
         $ex = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $updaterJobName) $null
         $may = Get-SIPipelineUpdateStart -Waits $W -Executions @($ex.value)
         if ($may.Running) { return [pscustomobject]@{ Started = $true; Text = $may.Text } }
         if (-not $may.Start) { return [pscustomobject]@{ Started = $false; Text = $may.Text } }
         $job = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $updaterJobName) $null
+        # #1129: the install's lock is released right before the start -- the update's run gate then finds the install free
+        if ($BeforeStart) { & $BeforeStart }
         $r = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $updaterJobName) (New-SIUpdateNowStartTemplate -Job $job -Mode 'pending-update')
         [pscustomobject]@{ Started = $true; Text = ('{0} execution {1}' -f $updaterJobName, $(if ($r -and $r.PSObject.Properties['name']) { [string]$r.name } else { '(started)' })) }
     }
@@ -628,17 +689,20 @@ if ($HostKind -eq 'Container' -and "$env:CONTAINER_APP_JOB_NAME".Trim()) {
     if ($flowStartImage) { $codeCurrent = { Test-SIPipelineCodeCurrent -StartImage $flowStartImage -NowImage (& $readFlowImage) } }
 }
 
-# ---- #1050 (owner 2026-11-01): AN INDEX THAT DID NOT FIT AN UPDATE is built in an idle window. A filtered index cannot pause,
-# so an update whose estimate said it would not fit left it waiting (cfg.IndexBuild). When nothing is going (no run, no open
-# step, no data sync, no data out, no updater) and the index's estimate ends before the next scheduled run -- or it has waited
-# 7 days, once -- this wake-up starts the updater (SI_UPDATER_MODE = index-build: it takes the install's lock, as an update
-# does, and beats it while the index builds). One plain line when it starts; nothing said while it waits (the update's own
-# log and the index's row say why). Never stops the wake-up.
+# ---- #1050 (owner 2026-11-01): AN INDEX THAT DID NOT FIT AN UPDATE is built in an idle window (cfg.IndexBuild).
+# #1111 (owner 2026-11-05: "why not split this into 2 jobs" / "we cannot have env that doesnt upd suddently"): by THE INDEX
+# BUILD JOB caj-si-index-build -- never by the updater (it has no index-build mode; anything that asks "is the updater
+# running" sees only updates). When nothing is going (no run, no open step, no data sync, no data out) and NO UPDATE waits
+# (the updater's wait mark) or runs, and the index's window fits (a resumable one: the window's minutes, it pauses at its
+# end; a filtered one: its estimate -- or once after 7 days), this wake-up starts that job with the index and the window.
+# The job takes the install's lock (a run waits for it) and gives it up -- pausing its build -- the moment an update wants
+# to go. One plain line when it starts; nothing said while it waits. A job that is not there yet (an install the next update
+# brings it to) is said once per wake-up as a warning. Never stops the wake-up.
 if ($HostKind -eq 'Container' -and $updaterJobName -and $proStore -and $runStore -and $updateRunning) {
     try {
         if (-not (Get-Command -Name Get-SIIndexBuildWindowDecision -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-IndexBuild.ps1') }
         $ixRows = @(Read-SIIndexBuildRows -Invoke $proStore.Invoke)
-        if (@($ixRows | Where-Object { $_.State -eq 'waiting' }).Count) {
+        if (@($ixRows | Where-Object { $_.State -in @('waiting', 'paused', 'building') }).Count) {
             if (-not (Get-Command -Name Get-SIDataHousekeepingBusy -ErrorAction SilentlyContinue)) {
                 . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
                 . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataSql.ps1')
@@ -650,12 +714,21 @@ if ($HostKind -eq 'Container' -and $updaterJobName -and $proStore -and $runStore
             $ixNow = [datetime]::UtcNow
             $ixDue = Get-SIJobFlowDue -Definition $pipeDefinition -Previous $runStore.Load() -NowUtc $ixNow
             $ixUpd = ''; try { $ixUpd = [string](& $updateRunning) } catch { $ixUpd = 'whether the updater runs could not be read' }
-            $ixDec = Get-SIIndexBuildWindowDecision -Rows $ixRows -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -RunDue ([string]$ixDue.Action -in @('Start', 'Resume', 'Busy') -or [bool]$pipeRequest)
-            if ($ixDec.Start) {
-                if (-not (Get-Command -Name New-SIUpdateNowStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
-                $ixJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $updaterJobName) $null
-                $ixR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $updaterJobName) (New-SIUpdateNowStartTemplate -Job $ixJob -Mode (Get-SIIndexBuildContract).Mode)
-                & $say 'INFO' ('index {0} on {1}: the updater builds it now ({2}) -- execution {3}' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixDec.Why, $(if ($ixR -and $ixR.PSObject.Properties['name']) { [string]$ixR.name } else { '(started)' }))
+            # the updater's wait mark (an update waits to install): the update goes first -- unreadable = it may wait
+            $ixWaits = ''; if ($updateWaits) { try { $ixW = & $updateWaits; if ($ixW) { $ixWaits = $(if ([string]$ixW.Reason) { [string]$ixW.Reason } else { 'the updater''s wait mark is set' }) } } catch { $ixWaits = 'whether an update waits could not be read' } }
+            if (-not (Get-Command -Name New-SIJobStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
+            $ixJobName = (Get-SIIndexBuildContract).Job
+            $ixJobRunning = ''; $ixJobThere = $true
+            try { $ixEx = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $ixJobName) $null; $ixJobRunning = [string](Test-SIUpdateNowUpdaterRunning -Executions @($ixEx.value) -NowUtc $ixNow -RunLimitSeconds 86400) }
+            catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { $ixJobThere = $false } else { $ixJobRunning = 'whether the index build job runs could not be read' } }
+            $ixDec = Get-SIIndexBuildWindowDecision -Rows $ixRows -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -UpdateWaits $ixWaits -IndexJobRunning $ixJobRunning -RunDue ([string]$ixDue.Action -in @('Start', 'Resume', 'Busy') -or [bool]$pipeRequest)
+            if ($ixDec.Start -and -not $ixJobThere) {
+                & $say 'WARN' ('index {0} on {1} waits: the index build job {2} is not there yet -- the next update makes it' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixJobName)
+            } elseif ($ixDec.Start) {
+                $ixJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $ixJobName) $null
+                $ixEnv = [ordered]@{ SI_INDEXBUILD_TABLE = [string]$ixDec.Index.Table; SI_INDEXBUILD_INDEX = [string]$ixDec.Index.Name; SI_INDEXBUILD_MINUTES = [string][int]$ixDec.Minutes; SI_INDEXBUILD_FORCE = $(if ($ixDec.Force) { '1' } else { '0' }) }
+                $ixR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $ixJobName) (New-SIJobStartTemplate -Job $ixJob -Env $ixEnv -What 'the index build job')
+                & $say 'INFO' ('index {0} on {1}: the index build job builds it now ({2}) -- execution {3}' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixDec.Why, $(if ($ixR -and $ixR.PSObject.Properties['name']) { [string]$ixR.name } else { '(started)' }))
             }
         }
     } catch { & $say 'WARN' ('an index waiting for an idle window was not looked at by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
@@ -733,25 +806,8 @@ if ($HostKind -eq 'Container' -and $armSeams -and $armSeams.PSObject.Methods['Ex
     } catch { & $say 'WARN' ('whether the running steps'' executions have ended could not be checked this time: {0}' -f $_.Exception.Message) }
 }
 
-# ---- #947 (b) (owner 2026-10-29: busy installs never got their update) -- A BOUND ON THE WAIT: an update that has waited 6
-# hours or more for the pipeline is started from EVERY wake-up, also a busy one (at most once an hour); the updater then
-# cancels the run that started on an older version and installs (container/updater/_shared/SI-UpdaterWaitBound.ps1). A run that
-# started on the version being installed is never cancelled. A mark that cannot be read, or a start that fails, is said and
-# changes nothing.
-if ($HostKind -eq 'Container' -and $updateWaits -and $updaterJobName -and -not $Cancel) {
-    try {
-        $owWaits = & $updateWaits
-        if ($owWaits) {
-            $owEx = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $updaterJobName) $null
-            $owGo = Get-SIPipelineUpdateOverdueStart -Waits $owWaits -Executions @($owEx.value) -NowUtc ([datetime]::UtcNow)
-            if ($owGo.Start) {
-                $owJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $updaterJobName) $null
-                $owR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $updaterJobName) (New-SIUpdateNowStartTemplate -Job $owJob -Mode 'pending-update')
-                & $say 'WARN' ('{0} ({1} execution {2})' -f $owGo.Text, $updaterJobName, $(if ($owR -and $owR.PSObject.Properties['name']) { [string]$owR.name } else { '(started)' }))
-            }
-        }
-    } catch { & $say 'WARN' ('whether a long-waiting update must be started could not be checked this time: {0}' -f $_.Exception.Message) }
-}
+# (owner 2026-11-05: "it must not auto cancel a running job due to missing upd") -- no update is started on a busy wake-up to
+# cancel the running run any more: a waiting update is installed between two runs (the wait mark, Invoke-SIPipelineDrain).
 
 $drain = $null
 try {

@@ -310,11 +310,13 @@ ORDER BY c.CiId;
 }
 
 function Get-RACiSqlPageSql {
-    <# One page of every current CI (keyset on the CI id): after @After, @N of them, in id order. #>
+    <# One page of every current CI (keyset on the CI id): after @After, @N of them, in id order. FORCESEEK (2026-11-05, live
+       at internal: the plan read the CI table from its FIRST row on every page -- the id was a filter, not where the read
+       starts -- and 66 pages read 14.5 GB): every page starts at @After on the key. #>
     @'
 SET NOCOUNT ON;
 SELECT TOP (CONVERT(int, @N)) c.CiId, c.DocJson, CASE WHEN c.LastSeen IS NOT NULL AND c.LastSeen < DATEADD(day, -CONVERT(int, @StaleDays), SYSUTCDATETIME()) THEN 1 ELSE 0 END AS Stale
-FROM sidata.Ci c
+FROM sidata.Ci c WITH (FORCESEEK)
 WHERE ISNULL(c.Lifecycle, '') <> 'retired' AND c.DocJson IS NOT NULL AND c.CiId > @After
 ORDER BY c.CiId;
 '@

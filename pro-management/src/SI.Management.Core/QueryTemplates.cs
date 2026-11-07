@@ -261,13 +261,18 @@ ORDER BY s.Name, s.Scope
 
     /// settings_read, history (SQL, parameters @name, @since, @limit). Newest first. A Key Vault reference in a
     /// value ('keyvault:<name>') is redacted in SQL before it leaves the database.
+    // 2026-11-05 (the view plan guard): the newest changes' keys first (a narrow index), then the values of those rows only
     public const string SettingsHistory = """
-SELECT TOP (@limit) c.ChangeId, c.Name, c.Scope, c.Action,
+WITH k AS (
+    SELECT TOP (@limit) n.ChangeId FROM cfg.ChangeLog AS n
+    WHERE (@name IS NULL OR n.Name = @name) AND n.ChangedAt >= @since
+    ORDER BY n.ChangeId DESC
+)
+SELECT c.ChangeId, c.Name, c.Scope, c.Action,
        CASE WHEN c.OldValue LIKE 'keyvault:%' THEN '(Key Vault reference)' ELSE c.OldValue END AS OldValue,
        CASE WHEN c.NewValue LIKE 'keyvault:%' THEN '(Key Vault reference)' ELSE c.NewValue END AS NewValue,
        c.ChangedAt, c.ChangedBy, c.Reason
-FROM cfg.ChangeLog c
-WHERE (@name IS NULL OR c.Name = @name) AND c.ChangedAt >= @since
+FROM k JOIN cfg.ChangeLog c ON c.ChangeId = k.ChangeId
 ORDER BY c.ChangeId DESC
 """;
 }

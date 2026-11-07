@@ -314,19 +314,31 @@ if (string.IsNullOrWhiteSpace(chat.Endpoint) || string.IsNullOrWhiteSpace(chat.D
 }
 // ONE TRUSTED RUN FOR THE CIs (owner 2026-10-19): every read of the CIs and the assets is of their published copies once
 // one is published -- the CI build of the run in progress is never shown (DataAccess/PublishedCopyExecutor.cs)
+// #1112: THE UPDATE WINDOW -- while an update changes the database, every page answers at once "SecurityInsight is being
+// updated" instead of waiting behind the schema step's locks (Updating/UpdateWindow.cs): the lock row read with a short
+// timeout, the one SQL seam guarded for the requests the middleware guards.
+builder.Services.Configure<SI.Management.Web.Updating.UpdateWindowOptions>(builder.Configuration.GetSection(SI.Management.Web.Updating.UpdateWindowOptions.Section));
 if (AzureSqlExecutor.IsConfigured(estate))
 {
     builder.Services.AddSingleton<AzureSqlExecutor>();
-    builder.Services.AddSingleton<ISqlExecutor>(sp => new PublishedCopyExecutor(sp.GetRequiredService<AzureSqlExecutor>()));
+    builder.Services.AddSingleton<SI.Management.Web.Updating.IUpdateWindowProbe, SI.Management.Web.Updating.SqlUpdateWindowProbe>();
+    // every read of 2 s or longer is said in the log by its statement's name (DataAccess/SlowReadExecutor.cs, owner 2026-11-05),
+    // outermost; behind it the update window's guard (#1112) and the published copies
+    builder.Services.AddSingleton<ISqlExecutor>(sp => new SlowReadExecutor(new SI.Management.Web.Updating.UpdateWindowSqlExecutor(
+        new PublishedCopyExecutor(sp.GetRequiredService<AzureSqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Updating.UpdateWindowState>()),
+        sp.GetRequiredService<ILogger<SlowReadExecutor>>()));
 }
 else builder.Services.AddSingleton<ISqlExecutor, NotConfiguredSqlExecutor>();
+builder.Services.TryAddSingleton<SI.Management.Web.Updating.IUpdateWindowProbe, SI.Management.Web.Updating.NoUpdateWindowProbe>();
+builder.Services.AddSingleton<SI.Management.Web.Updating.UpdateWindowState>();
 // #345: the sign-in cookie's and the forms' antiforgery keys are SHARED in the Pro database (cfg.WebKeyRing) -- on the
 // container's disk every new revision (and the second replica) had its own, so a deploy signed every open page out and
 // refused its next save. One application name, so every revision reads the same keys. No database: the default (in memory).
 builder.Services.AddDataProtection().SetApplicationName("SecurityInsight Pro");
 if (AzureSqlExecutor.IsConfigured(estate))
     builder.Services.AddOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>()
-        .Configure<ISqlExecutor, ILoggerFactory>((o, sql, lf) => o.XmlRepository = new SqlKeyRing(sql, lf.CreateLogger<SqlKeyRing>()));
+        // #1112: the key ring reads past the update window's guard (a sign-in cookie is still read while the notice shows)
+        .Configure<AzureSqlExecutor, ILoggerFactory>((o, sql, lf) => o.XmlRepository = new SqlKeyRing(sql, lf.CreateLogger<SqlKeyRing>()));
 // The stored keys are ENCRYPTED with a Key Vault key only the web app's identity may use (Auth/KeyRingProtection.cs; the
 // updater creates the key, grants it and sets DataProtection__KeyVaultKeyId). Not set = the keys are stored as before.
 var keyRingKeyId = builder.Configuration["DataProtection:KeyVaultKeyId"];
@@ -667,6 +679,9 @@ app.Use(async (ctx, next) =>
     SI.Management.Web.Collection.SourceNoteScope.Current = ctx.RequestServices.GetService<SI.Management.Web.Collection.ISourceNotes>();
     await next();
 });
+// #1112: while an update changes the database: the notice at once, before the sign-in or any page reads the database
+// (the health probe, /about, the sign-in's own paths and the static files pass)
+app.UseMiddleware<SI.Management.Web.Updating.UpdateWindowMiddleware>();
 // "What does this script do?" next to every SecurityInsight script a page names (framework section 12.7 SCRIPT-DOC-1)
 SI.Management.Web.Links.ScriptDocLinkExtensions.UseScriptDocLinks(app);
 

@@ -32,6 +32,8 @@
 if (-not (Get-Command -Name Get-SIContentHash -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-RecordSql.ps1') }
 # #406 the asset lifecycle's settings and day thresholds (Get-SICiTimeThresholds)
 if (-not (Get-Command -Name Get-SICiLifecycleSettings -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CiLifecycle.ps1') }
+# #1100 the one-time CI cut-off (hidden; cfg.InstallState 'CiCutoff')
+if (-not (Get-Command -Name Get-SICiCutoffRetireSql -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CiCutoff.ps1') }
 
 # #534 THE BUILD VERSION -- part of the build fingerprint. Bump it ONLY when a change alters what a CI looks like (every CI is
 # then rebuilt once); a release that does not is incremental. SICiBuildLogicHash is the logic it was set for
@@ -85,7 +87,15 @@ if (-not (Get-Command -Name Get-SICiLifecycleSettings -ErrorAction SilentlyConti
 # it came from (si_tags_inherited; the resource group's tag wins over the subscription's, the resource's own tag over both),
 # and every CI with tags carries them all in one list (si_tags_all: own first, then inherited) -- CIs change, so every CI is
 # rebuilt once on the first build after the update.
-$script:SICiBuildVersion = 13
+# Version 14 (2026-11-05, owner: "ci object must be the stable id"): (1) a CI id that was merged away is never used again --
+# a record whose identifier the ledger still names under a merged id resolves to the end of the merge chain (the ledger's
+# superseded table, sidata.AssetIdHistory CI->CI merges, a retired CI's si_merged_into) and EVERY anchor of the old id is
+# re-pointed to the survivor; (2) Exposure Graph ages out -- an Exposure Graph link never decides a CI another source links,
+# and an Exposure Graph-only CI gets the seen window on its node's own observation time; (3) a machine CI no record names gets
+# a generated name. CIs come out different, so every CI is rebuilt once -- that rebuild moves the records of a resurrected
+# twin to its survivor, and the merged-retire pass after it retires the twin (one-time repair; it also gives every merged
+# twin its plain-words reason and the id history its CI->CI merge event).
+$script:SICiBuildVersion = 14
 # The three context lanes merged on si-v3 (2026-10-11): the logic hash is set once for the combined code.
 # 2026-10-12: the build's last write fills the columns the CI views read (Pro) -- no CI comes out different, so the hash is
 # re-baselined and the version stays 7. (Same day: a failure of that step is said at INFO, never as a warning of the build.)
@@ -141,7 +151,13 @@ $script:SICiBuildVersion = 13
 # the placeholder name resolution of the CI's name) -- re-baselined together when both were merged for the next release.
 # 2026-11-03 (version 13): the inherited Azure tags and every tag in one list (si_tags_inherited / si_tags_all), and a tag
 # list read as 'name = value' text (SI-Conditions.ps1) -- re-baselined with the version bump.
-$script:SICiBuildLogicHash = '157fac6dfad44911a36ebe3717d1947fc59590c45218d302a25d564b388e1ccc'
+# 2026-11-04 (#1100, the one-time CI cut-off; SI-CiCutoff.ps1 joins the build logic): hidden and OFF unless a cut-off row
+# is set (cfg.InstallState 'CiCutoff') -- without one, no CI comes out different: re-baselined, version 13.
+# 2026-11-05 (version 14): the stable CI id (merged-away ids, every anchor re-pointed, the merged-retire pass's history repair
+# and plain-words reason), Exposure Graph ageing out, the generated name of a nameless machine CI -- re-baselined with the bump.
+# 2026-11-06 (#1135): the identity ledger's statements go through the shared statement retry (New-SICiLedgerSqlInvoke) --
+# the same statements and rows, no CI comes out different: re-baselined, version 14.
+$script:SICiBuildLogicHash = 'c94e300a7172ab951fd3a82e5d4d2faafd10e0272db7ae298b7270bcfc04b558'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -197,6 +213,11 @@ $script:SICiPostFields = @('si_ci_id', 'si_class', 'si_asset_name', 'si_tier', '
     'si_manager_upn', 'si_manager_id', 'si_manager_name', 'si_sponsors', 'si_owners', 'si_owner_upns', 'si_owner_ids',
     'si_last_interactive_sign_in', 'si_last_non_interactive_sign_in', 'si_last_app_sign_in', 'si_last_delegated_sign_in',
     'si_mfa_strength', 'si_mfa_default_method', 'si_ca_mfa_enforced', 'si_ca_policy_count', 'si_ca_mfa_policies', 'si_ca_excluded_policies',
+    # the user's sign-in methods in full (the per-user read, filled in the background, with its read date) and the tenant-wide
+    # registration report's facts (every user, every collection)
+    'si_auth_methods', 'si_auth_method_types', 'si_has_password', 'si_auth_methods_read', 'si_auth_methods_changed',
+    'si_passwordless_capable', 'si_mfa_capable', 'si_sspr_registered', 'si_sspr_capable', 'si_sspr_enabled',
+    'si_preferred_mfa_method', 'si_system_preferred_mfa_methods',
     'si_entra_risk_level', 'si_entra_risk_state', 'si_entra_risk_detail', 'si_entra_risk_updated', 'si_risk_detections_30d', 'si_risk_detection_types_30d',
     'si_entra_role_scopes', 'si_role_paths', 'si_pim_activation_requires', 'si_controls_privileged_objects',
     'si_last_access_review', 'si_last_access_review_date', 'si_not_licensed',
@@ -318,10 +339,20 @@ function Get-SICiGroupingStepSql {
           batches   the batch number of every group, ~-BatchCis CIs a batch, in ordinal group order
           stats     Records, Groups, Largest, Batches, Unkeyable
         Labels compare in a binary collation: the smallest label is the same on every host.
+        #1100 -CutoffUtc (the one-time CI cut-off in force, SI-CiCutoff.ps1; $null = none): the look-back's lower bound
+        is MAX(now - LookbackDays, cut-off) for the records of a feed collected again since the cut-off -- its older records
+        are not current; stats answers CutIgnored, how many records of the look-back that left out.
     #>
-    param([Parameter(Mandatory)][ValidateSet('prepare', 'edges', 'round', 'batches', 'stats')][string]$Step, [int]$LookbackDays = 30, [int]$BatchCis = 2000)
+    param([Parameter(Mandatory)][ValidateSet('prepare', 'edges', 'round', 'batches', 'stats')][string]$Step, [int]$LookbackDays = 30, [int]$BatchCis = 2000,
+          [AllowNull()]$CutoffUtc = $null)
     $since = "DECLARE @since DATETIME2(3) = DATEADD(day, -$LookbackDays, SYSUTCDATETIME());"
-    $current = "r.CollectionTime >= @since AND ISNULL(r.RecordType, N'') <> N'cmdb_ci' AND EXISTS (SELECT 1 FROM sidata.RecordIdentifier ri WHERE ri.RecordKey = r.RecordKey)"
+    $cutKeep = ''; $cutIgnored = 'CAST(0 AS INT)'
+    if ($null -ne $CutoffUtc) {
+        $since = $since + "`r`n" + (Get-SICiCutoffFeedSql -CutoffUtc $CutoffUtc)
+        $cutKeep = Get-SICiCutoffKeepClause -CutoffUtc $CutoffUtc -Alias 'r'
+        $cutIgnored = "(SELECT COUNT(*) FROM sidata.CiRecord r WHERE r.CollectionTime >= @since AND r.CollectionTime < @cut AND ISNULL(r.RecordType, N'') <> N'cmdb_ci' AND EXISTS (SELECT 1 FROM @cutFeeds cf WHERE cf.Provider = r.Provider AND cf.RecordType = ISNULL(r.RecordType, N'')))"
+    }
+    $current = "r.CollectionTime >= @since AND ISNULL(r.RecordType, N'') <> N'cmdb_ci' AND EXISTS (SELECT 1 FROM sidata.RecordIdentifier ri WHERE ri.RecordKey = r.RecordKey)$cutKeep"
     switch ($Step) {
         'prepare' {
             @"
@@ -397,7 +428,8 @@ SELECT (SELECT COUNT(*) FROM sidata.CiGroupMember) AS Records,
        ISNULL((SELECT MAX(c) FROM (SELECT COUNT(*) AS c FROM sidata.CiGroupMember GROUP BY GroupKey COLLATE Latin1_General_BIN2) x), 0) AS Largest,
        ISNULL((SELECT MAX(BatchNo) FROM sidata.CiGroupMember), 0) AS Batches,
        (SELECT COUNT(*) FROM sidata.CiRecord r WHERE r.CollectionTime >= @since AND ISNULL(r.RecordType, N'') <> N'cmdb_ci'
-            AND NOT EXISTS (SELECT 1 FROM sidata.RecordIdentifier ri WHERE ri.RecordKey = r.RecordKey)) AS Unkeyable;
+            AND NOT EXISTS (SELECT 1 FROM sidata.RecordIdentifier ri WHERE ri.RecordKey = r.RecordKey)$cutKeep) AS Unkeyable,
+       $cutIgnored AS CutIgnored;
 "@
         }
     }
@@ -425,6 +457,53 @@ ELSE
     JOIN sidata.RecordIdentifier ri ON ri.RecordKey = x.RecordKey
     WHERE d.Verdict = N'same' AND d.Removed = 1 AND d.SplitFromCiId IS NOT NULL;
 '@
+}
+
+function Get-SICiSupersededSql {
+    <#
+        THE MERGED-AWAY CI IDS the data database knows (owner 2026-11-05: "ci object must be the stable id") -- OldId, NewId,
+        At, Kind (merge | split): sidata.AssetIdHistory's 'merge' events from one CI to ANOTHER CI (both ids are in sidata.Ci;
+        an older row from a CI id to a Defender device id is not a CI merge and is left out), and every retired CI that
+        names si_merged_into. Kind 'split': a "same machine" decision a person removed (#1053) -- that pair is NOT a merge
+        any more, and the build drops it from the map (also when the identity ledger's superseded table holds it).
+        A database without a table answers the rest.
+    #>
+    @'
+SET NOCOUNT ON;
+DECLARE @r TABLE (OldId NVARCHAR(400), NewId NVARCHAR(400), At DATETIME2(3), Kind NVARCHAR(8));
+IF OBJECT_ID(N'sidata.AssetIdHistory') IS NOT NULL
+    INSERT @r SELECT h.PreviousId, h.CurrentId, h.DetectedAt, N'merge' FROM sidata.AssetIdHistory h
+    WHERE h.EventType = N'merge' AND h.PreviousId <> h.CurrentId
+      AND EXISTS (SELECT 1 FROM sidata.Ci a WHERE a.CiId = h.PreviousId) AND EXISTS (SELECT 1 FROM sidata.Ci b WHERE b.CiId = h.CurrentId);
+INSERT @r SELECT c.CiId, JSON_VALUE(c.DocJson, '$.si_merged_into'), c.UpdatedAt, N'merge' FROM sidata.Ci c
+WHERE c.Lifecycle = N'retired' AND ISJSON(c.DocJson) = 1 AND NULLIF(JSON_VALUE(c.DocJson, '$.si_merged_into'), N'') IS NOT NULL;
+IF OBJECT_ID(N'sidata.CiSuspectDecision') IS NOT NULL AND OBJECT_ID(N'sidata.CiSuspectDecisionRecord') IS NOT NULL
+    INSERT @r SELECT DISTINCT x.CiId, d.SplitFromCiId, NULL, N'split' FROM sidata.CiSuspectDecision d
+    JOIN sidata.CiSuspectDecisionRecord x ON x.DecisionId = d.DecisionId AND x.CiId IS NOT NULL AND x.CiId <> d.SplitFromCiId
+    WHERE d.Verdict = N'same' AND d.Removed = 1 AND d.SplitFromCiId IS NOT NULL;
+SELECT OldId, NewId, At, Kind FROM @r WHERE OldId IS NOT NULL AND NewId IS NOT NULL;
+'@
+}
+
+function ConvertTo-SICiSupersededRows {
+    <#
+        PURE. The merged-away ids for ConvertTo-SISupersededMap: -DataRows (Get-SICiSupersededSql) and -LedgerRows (the
+        identity ledger's si.ObjectIdentitySuperseded: OldId, NewId, SupersededAt) -> [{ OldId; NewId; At }], WITHOUT any
+        pair a person split again (Kind 'split', either direction).
+    #>
+    param([AllowEmptyCollection()][object[]]$DataRows = @(), [AllowEmptyCollection()][object[]]$LedgerRows = @())
+    $split = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in @($DataRows)) { if ($r -and [string](Get-SIItemValue $r 'Kind') -eq 'split') { [void]$split.Add(([string](Get-SIItemValue $r 'OldId')) + '>' + ([string](Get-SIItemValue $r 'NewId'))) } }
+    $out = New-Object System.Collections.Generic.List[object]
+    $add = {
+        param($o, $n, $t)
+        if (-not $o -or -not $n) { return }
+        if ($split.Contains($o + '>' + $n) -or $split.Contains($n + '>' + $o)) { return }
+        $out.Add([pscustomobject]@{ OldId = $o; NewId = $n; At = $t })
+    }
+    foreach ($r in @($DataRows)) { if ($r -and [string](Get-SIItemValue $r 'Kind') -ne 'split') { & $add ([string](Get-SIItemValue $r 'OldId')) ([string](Get-SIItemValue $r 'NewId')) (Get-SIItemValue $r 'At') } }
+    foreach ($r in @($LedgerRows)) { if ($r) { & $add ([string](Get-SIItemValue $r 'OldId')) ([string](Get-SIItemValue $r 'NewId')) (Get-SIItemValue $r 'SupersededAt') } }
+    , $out.ToArray()
 }
 
 function ConvertTo-SICiSplitLedgerKeys {
@@ -476,14 +555,16 @@ function Invoke-SICiGrouping {
         the default); -BudgetSeconds is accepted and ignored, for callers that still pass it.
     #>
     param([Parameter(Mandatory)][scriptblock]$Sql, [int]$LookbackDays = 30, [int]$BatchCis = 2000, [int]$MaxRounds = 0,
-          [int]$BudgetSeconds = 0, [scriptblock]$Log)
+          [int]$BudgetSeconds = 0, [scriptblock]$Log,
+          # #1100 the one-time CI cut-off in force ($null = none): Get-SICiGroupingStepSql -CutoffUtc
+          [AllowNull()]$CutoffUtc = $null)
     if (-not $Log) { $Log = { param($l, $m) } }
     $all = [System.Diagnostics.Stopwatch]::StartNew(); $sw = [System.Diagnostics.Stopwatch]::new()
     $step = {
         param($name)
         $sw.Restart()
         $global:SISqlLastRead = $null
-        $got = @(& $Sql (Get-SICiGroupingStepSql -Step $name -LookbackDays $LookbackDays -BatchCis $BatchCis) @{} 'rows')
+        $got = @(& $Sql (Get-SICiGroupingStepSql -Step $name -LookbackDays $LookbackDays -BatchCis $BatchCis -CutoffUtc $CutoffUtc) @{} 'rows')
         $row = $got | Select-Object -First 1
         if ($null -eq $row) { throw ("the grouping step '{0}' answered no result ({1})" -f $name, (Get-SISqlLastReadText -Answered $got.Count)) }
         $row
@@ -505,7 +586,8 @@ function Invoke-SICiGrouping {
     & $Log 'INFO' ("CIs: grouping -- {0} batch(es), {1} record(s) moved batch in {2:N1} s" -f (Get-SIItemValue $b 'Batches'), (Get-SIItemValue $b 'Changed'), $sw.Elapsed.TotalSeconds)
     $s = & $step 'stats'
     [pscustomobject]@{ Records = [int](Get-SIItemValue $s 'Records'); Groups = [int](Get-SIItemValue $s 'Groups'); Largest = [int](Get-SIItemValue $s 'Largest')
-        Batches = [int](Get-SIItemValue $s 'Batches'); Unkeyable = [int](Get-SIItemValue $s 'Unkeyable'); Rounds = $rounds; Seconds = [Math]::Round($all.Elapsed.TotalSeconds, 1) }
+        Batches = [int](Get-SIItemValue $s 'Batches'); Unkeyable = [int](Get-SIItemValue $s 'Unkeyable'); Rounds = $rounds; Seconds = [Math]::Round($all.Elapsed.TotalSeconds, 1)
+        CutIgnored = [int](Get-SIItemValue $s 'CutIgnored') }
 }
 
 function Get-SICiFeedLatestSql {
@@ -1601,21 +1683,54 @@ INSERT @r (CiId, OldLifecycle, IntoCiId, Provider, NativeId, Targets)
 SELECT p.CiId, p.Lifecycle, p.IntoCiId, p.Provider, p.NativeId,
        (SELECT COUNT(DISTINCT m2.IntoCiId) FROM mv m2 WHERE m2.CiId = p.CiId)
 FROM pick p WHERE p.rn = 1;
+-- THE HISTORY SAYS IT WAS MERGED (owner 2026-11-05, the one-time repair): a CI no current record builds that
+-- sidata.AssetIdHistory records as merged into ANOTHER CI (a CI->CI 'merge', both ids CIs) that is active and built by a
+-- current record, is retired as merged into it -- also when no linked record of it leads there any more. The newest event
+-- decides (ties: the ordinally lowest survivor); a pair a person split again (#1053) is left out.
+DECLARE @sp TABLE (A NVARCHAR(64) NOT NULL, B NVARCHAR(64) NOT NULL);
+IF OBJECT_ID('sidata.CiSuspectDecision') IS NOT NULL AND OBJECT_ID('sidata.CiSuspectDecisionRecord') IS NOT NULL
+    INSERT @sp (A, B) SELECT DISTINCT sx.CiId, sd.SplitFromCiId FROM sidata.CiSuspectDecision sd
+    JOIN sidata.CiSuspectDecisionRecord sx ON sx.DecisionId = sd.DecisionId
+    WHERE sd.Verdict = N'same' AND sd.Removed = 1 AND sd.SplitFromCiId IS NOT NULL AND sx.CiId IS NOT NULL;
+IF OBJECT_ID('sidata.AssetIdHistory') IS NOT NULL
+    INSERT @r (CiId, OldLifecycle, IntoCiId, Provider, NativeId, Targets)
+    SELECT z.CiId, z.Lifecycle, z.IntoCiId, N'history', z.PreviousId, 1 FROM (
+        SELECT c.CiId, c.Lifecycle, h.CurrentId AS IntoCiId, h.PreviousId,
+               ROW_NUMBER() OVER (PARTITION BY c.CiId ORDER BY h.DetectedAt DESC, h.CurrentId COLLATE Latin1_General_BIN2) AS rn
+        FROM sidata.Ci c
+        JOIN sidata.AssetIdHistory h ON h.PreviousId = c.CiId AND h.EventType = N'merge' AND h.CurrentId <> c.CiId
+        JOIN sidata.Ci d ON d.CiId = h.CurrentId AND ISNULL(d.Lifecycle, N'') <> N'retired'
+        WHERE ISNULL(c.Lifecycle, N'') <> N'retired'
+          AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m JOIN sidata.CiRecord r ON r.RecordKey = m.RecordKey WHERE r.CiId = c.CiId)
+          AND EXISTS (SELECT 1 FROM sidata.CiGroupMember m JOIN sidata.CiRecord r ON r.RecordKey = m.RecordKey WHERE r.CiId = d.CiId)
+          AND NOT EXISTS (SELECT 1 FROM @r q WHERE q.CiId = c.CiId)
+          AND NOT EXISTS (SELECT 1 FROM @sp p WHERE (p.A = c.CiId AND p.B = h.CurrentId) OR (p.A = h.CurrentId AND p.B = c.CiId))
+    ) z WHERE z.rn = 1;
+-- the survivor's name, for the reason the CMDB reads
+DECLARE @n TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY, IntoName NVARCHAR(400) NULL);
+INSERT @n SELECT x.CiId, NULLIF(JSON_VALUE(s.DocJson, '$.si_asset_name'), N'') FROM @r x LEFT JOIN sidata.Ci s ON s.CiId = x.IntoCiId AND ISJSON(s.DocJson) = 1;
 BEGIN TRANSACTION;
 IF OBJECT_ID('sidata.CiChange') IS NOT NULL
     INSERT sidata.CiChange (CiId, Field, OldValue, NewValue, Source, Reason, RunId)
     SELECT x.CiId, N'si_lifecycle', x.OldLifecycle, N'retired', N'ci_build',
-           LEFT(N'merged into CI ' + x.IntoCiId + N': its ' + ISNULL(x.Provider, N'') + N' record ' + ISNULL(x.NativeId, N'') + N' builds that CI now', 512),
+           LEFT(N'merged into CI ' + x.IntoCiId + CASE WHEN x.Provider = N'history' THEN N': the id history records the merge'
+                ELSE N': its ' + ISNULL(x.Provider, N'') + N' record ' + ISNULL(x.NativeId, N'') + N' builds that CI now' END, 512),
            LEFT(@run, 64)
     FROM @r x;
+-- THE REASON IN PLAIN WORDS (owner 2026-11-05: "the servicenow team knows what to do with it and can close it")
 UPDATE c SET Lifecycle = N'retired', ContentHash = NULL, UpdatedAt = SYSUTCDATETIME(),
        DocJson = CASE WHEN ISJSON(c.DocJson) = 1 THEN JSON_MODIFY(JSON_MODIFY(JSON_MODIFY(c.DocJson, '$.si_lifecycle', N'retired'),
                       '$.si_lifecycle_since', CONVERT(NVARCHAR(30), SYSUTCDATETIME(), 127) + N'Z'),
-                      '$.si_lifecycle_reason', LEFT(N'retired at once: merged into CI ' + x.IntoCiId
-                          + CASE WHEN x.Targets > 1 THEN N' (and ' + CAST(x.Targets - 1 AS NVARCHAR(12)) + N' more)' ELSE N'' END
-                          + N' -- its ' + ISNULL(x.Provider, N'') + N' record ' + ISNULL(x.NativeId, N'') + N' builds that CI now; one hard id, one active CI', 1000))
+                      '$.si_lifecycle_reason', LEFT(N'merged into ' + x.IntoCiId + ISNULL(N' (' + n.IntoName + N')', N'')
+                          + N' -- the same machine; use that CI', 1000))
                  ELSE c.DocJson END
-FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId LEFT JOIN @n n ON n.CiId = x.CiId /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+-- THE ID HISTORY NAMES THE REPLACEMENT: one CI->CI 'merge' event per twin (PreviousId the twin, CurrentId the survivor), so
+-- the CMDB export's survivor row carries u_si_replaces = the twin
+IF OBJECT_ID('sidata.AssetIdHistory') IS NOT NULL
+    INSERT sidata.AssetIdHistory (AssetKey, EventType, PreviousId, CurrentId, ViaType, ViaValue, DetectedAt, LoadId)
+    SELECT x.IntoCiId, N'merge', x.CiId, x.IntoCiId, LEFT(ISNULL(x.Provider, N'ci_build'), 64), LEFT(x.NativeId, 256), SYSUTCDATETIME(), 0
+    FROM @r x WHERE NOT EXISTS (SELECT 1 FROM sidata.AssetIdHistory t WHERE t.AssetKey = x.IntoCiId AND t.EventType = N'merge' AND t.PreviousId = x.CiId);
 -- the survivor is named on the twin, and a CI an earlier merge pointed at the twin now points at the survivor
 UPDATE c SET DocJson = JSON_MODIFY(c.DocJson, '$.si_merged_into', x.IntoCiId)
 FROM sidata.Ci c JOIN @r x ON x.CiId = c.CiId WHERE ISJSON(c.DocJson) = 1 /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
@@ -1623,6 +1738,22 @@ IF EXISTS (SELECT 1 FROM @r)
     UPDATE o SET DocJson = JSON_MODIFY(o.DocJson, '$.si_merged_into', x.IntoCiId)
     FROM sidata.Ci o JOIN @r x ON JSON_VALUE(o.DocJson, '$.si_merged_into') = x.CiId
     WHERE ISNULL(o.Lifecycle, N'') = N'retired' AND ISJSON(o.DocJson) = 1 /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+-- EVERY MERGED TWIN SAYS IT IN PLAIN WORDS, also one an earlier build retired (owner 2026-11-05: merged twins went to the
+-- CMDB as retired with no reason): a retired CI that names si_merged_into carries the reason "merged into <id> (<name>) --
+-- the same machine; use that CI", and the id history has its 'merge' event (u_si_replaces on the survivor). Only the rows
+-- that differ are touched, so after the first build nothing is rewritten.
+DECLARE @tw TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY, IntoCiId NVARCHAR(64) NOT NULL, Reason NVARCHAR(1000) NOT NULL);
+INSERT @tw SELECT o.CiId, z.IntoCiId, LEFT(N'merged into ' + z.IntoCiId + ISNULL(N' (' + NULLIF(JSON_VALUE(s.DocJson, '$.si_asset_name'), N'') + N')', N'') + N' -- the same machine; use that CI', 1000)
+FROM sidata.Ci o CROSS APPLY (SELECT CAST(JSON_VALUE(o.DocJson, '$.si_merged_into') AS NVARCHAR(64)) AS IntoCiId) z
+LEFT JOIN sidata.Ci s ON s.CiId = z.IntoCiId AND ISJSON(s.DocJson) = 1
+WHERE o.Lifecycle = N'retired' AND ISJSON(o.DocJson) = 1 AND NULLIF(z.IntoCiId, N'') IS NOT NULL;
+UPDATE o SET DocJson = JSON_MODIFY(o.DocJson, '$.si_lifecycle_reason', t.Reason), UpdatedAt = SYSUTCDATETIME()
+FROM sidata.Ci o JOIN @tw t ON t.CiId = o.CiId
+WHERE ISNULL(JSON_VALUE(o.DocJson, '$.si_lifecycle_reason'), N'') <> t.Reason /* one-statement-ok: only the retired merged twins whose reason differs */;
+IF OBJECT_ID('sidata.AssetIdHistory') IS NOT NULL
+    INSERT sidata.AssetIdHistory (AssetKey, EventType, PreviousId, CurrentId, ViaType, ViaValue, DetectedAt, LoadId)
+    SELECT t.IntoCiId, N'merge', t.CiId, t.IntoCiId, N'ci_build', NULL, SYSUTCDATETIME(), 0
+    FROM @tw t WHERE NOT EXISTS (SELECT 1 FROM sidata.AssetIdHistory h WHERE h.AssetKey = t.IntoCiId AND h.EventType = N'merge' AND h.PreviousId = t.CiId);
 -- THE FINDINGS FOLLOW: the twin's stored findings and their lifecycle rows move to the survivor (one row per finding)
 DECLARE @fm INT = 0, @sm INT = 0;
 IF OBJECT_ID('sidata.CiFinding') IS NOT NULL
@@ -1847,7 +1978,7 @@ function ConvertTo-SICiCanonicalText {
 
 function Get-SICiBuildLogicFiles {
     <# PURE. The scripts a CI is made by (relative to engine\data-model) -- what Get-SICiBuildLogicHash hashes, in order. #>
-    @('SI-CiBuild.ps1', 'SI-CiBuildRun.ps1', 'SI-CiBuildSql.ps1', 'SI-CiEnrich.ps1', 'SI-CiRules.ps1', 'SI-FieldResolution.ps1', 'SI-Conditions.ps1', 'SI-CiGraph.ps1', 'identity\SI-ObjectIdentity.ps1', 'SI-Classification.ps1', 'SI-CiLifecycle.ps1')
+    @('SI-CiBuild.ps1', 'SI-CiBuildRun.ps1', 'SI-CiBuildSql.ps1', 'SI-CiEnrich.ps1', 'SI-CiRules.ps1', 'SI-FieldResolution.ps1', 'SI-Conditions.ps1', 'SI-CiGraph.ps1', 'identity\SI-ObjectIdentity.ps1', 'SI-Classification.ps1', 'SI-CiLifecycle.ps1', 'SI-CiCutoff.ps1')
 }
 
 function Get-SICiBuildLogicHash {

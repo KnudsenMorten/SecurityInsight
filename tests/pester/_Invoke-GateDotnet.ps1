@@ -64,7 +64,8 @@ try {
                 if ($names.Count) { $sum = ($(if ($sum) { $sum } else { '' }) + ' | ' + ($names -join ' | ')).Trim(' ', '|') }
                 if ($tc -eq 0 -or ($o -match '(Passed|Failed|Skipped)!\s+-')) { break }
                 $note = "attempt $attempt produced no test result (exit $tc): " + (@($o | Where-Object { $_.Trim() } | Select-Object -Last 4) -join ' / ')
-                $sum = $note
+                # the failed tests' names stay in the summary (they were dropped here, so a red run never said which tests)
+                $sum = $note + $(if ($names.Count) { ' | ' + ($names -join ' | ') } else { '' })
             }
             if ($note -and $tc -eq 0) { $sum = "$sum (passed on the re-run; first: $note)" }
             $out.Projects += [ordered]@{ Project = [string]$pj.Name; Ok = ($tc -eq 0); Summary = $(if ("$($pj.Filter)") { "[filtered] $sum" } else { $sum }); Seconds = [int]$sw.Elapsed.TotalSeconds; Filtered = [bool]"$($pj.Filter)" }

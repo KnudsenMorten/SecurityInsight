@@ -77,6 +77,87 @@ function Test-RANoDataSource {
     return ((Test-RAHuntingNotProvisioned -Message $Message) -or ([string]$Message -match "Failed to resolve table (?:or column )?expression named 'SI_[A-Za-z0-9_]+_CL'") -or ([string]$Message -match "Failed to resolve table (?:or column )?expression named 'DeviceTvm[A-Za-z]+'"))
 }
 
+function Test-RAUnnamedSourceError {
+    <#
+        PURE. Advanced hunting's answer when a statement's SOURCE cannot be resolved but the service does not say which
+        name: "Operator source expression should be table or column". Measured 2026-11-05 (a tenant without Defender
+        vulnerability management): `let _src = DeviceTvmSoftwareInventory | ...; let D = union isfuzzy=true (...), (DeviceInfo)
+        | ...; _src | join (D) ...` answers THIS text, while the same query without the fuzzy union answers "Failed to resolve
+        table or column expression named 'DeviceTvmSoftwareInventory'". The text carries the generic "Fix semantic errors"
+        tail, so without a closer look a missing licensed table read as a query defect.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Message)
+    return ([string]$Message -match 'Operator source expression should be table or column')
+}
+
+function Get-RAHuntingSourceTables {
+    <#
+        PURE. The Defender tables a query reads at a TABLE position (start of a statement, after a pipe, '(', ',', '=',
+        union / join) and needs: a name the query binds itself (let X = ...) is not a table, and a table read ONLY as a leg
+        of a `union isfuzzy=true` is optional (the service drops a leg it cannot resolve), so it is not listed. Comments
+        and string literals are ignored. In order of first use.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Query)
+    if ([string]::IsNullOrWhiteSpace($Query)) { return @() }
+    $s = [regex]::Replace($Query, '//[^\r\n]*', '')
+    $s = [regex]::Replace($s, '@?"(?:[^"\\\r\n]|\\.)*"', '""')
+    $s = [regex]::Replace($s, "@?'(?:[^'\\\r\n]|\\.)*'", "''")
+    $lets = @{}
+    foreach ($m in [regex]::Matches($s, '(?m)\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*=')) { $lets[$m.Groups[1].Value] = $true }
+    # exact Defender table names, never a prefix: a column such as DeviceId (tostring(DeviceId)) is not a table
+    $tables = '(?:DeviceInfo|DeviceNetworkInfo|DeviceLogonEvents|DeviceProcessEvents|DeviceNetworkEvents|DeviceFileEvents|DeviceRegistryEvents|DeviceEvents|DeviceImageLoadEvents|DeviceFileCertificateInfo|DeviceTvm[A-Za-z]+|DeviceBaselineCompliance[A-Za-z]+|IdentityInfo|IdentityLogonEvents|IdentityQueryEvents|IdentityDirectoryEvents|IdentityAccountInfo|AlertInfo|AlertEvidence|CloudAppEvents|BehaviorInfo|BehaviorEntities|ExposureGraphNodes|ExposureGraphEdges|EmailEvents|EmailAttachmentInfo|EmailUrlInfo|EmailPostDeliveryEvents|UrlClickEvents)'
+    $rx = '(?m)(?:^|\||\(|,|=|\bunion\b|\bjoin\b(?:\s+kind\s*=\s*\w+)?)\s*(?<t>' + $tables + ')\b'
+    $need = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($s -split "`r?`n")) {
+        $fuzzy = $line -match '\bunion\s+isfuzzy\s*=\s*true\b'
+        foreach ($m in [regex]::Matches($line, $rx)) {
+            $t = $m.Groups['t'].Value
+            if ($lets.ContainsKey($t)) { continue }
+            # a leg of a fuzzy union: `(Table)` or `, Table` on the union's own line
+            if ($fuzzy) { continue }
+            if (-not $need.Contains($t)) { $need.Add($t) }
+        }
+    }
+    # written to the pipeline: callers wrap it in @() (a `, array` return would nest inside that @())
+    return $need.ToArray()
+}
+
+function Resolve-RAUnnamedSourceError {
+    <#
+        SUP-2026-00425. When advanced hunting answers "Operator source expression should be table or column" (it names no
+        table), each Defender table the query needs is asked for on its own (`<table> | take 0`, remembered for the run).
+        The first one the service answers "Failed to resolve table ... named '<table>'" for is the cause: the message is
+        returned in the service's NAMED form, so every classifier reads it exactly as it reads the plain missing-table
+        answer -- a Defender vulnerability management table that is not in the tenant is "not applicable here" (no
+        licence), any other missing table is still a query defect. Nothing found, or a probe that answers anything else
+        (throttle, timeout): $null, and the original message stands -- a real defect still fails on attempt 1.
+        -Probe: a seam for tests -- param($table) returns $null when the table answers, else the error text.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Query, [AllowNull()][AllowEmptyString()][string]$Message, [scriptblock]$Probe)
+    if (-not (Test-RAUnnamedSourceError -Message $Message)) { return $null }
+    if ($null -eq $script:_RAHuntingTableAnswer) { $script:_RAHuntingTableAnswer = @{} }
+    # the probe itself lives with the other advanced-hunting probe (RA-LogAnalyticsQuery.ps1, Get-AdvancedHuntingTableError);
+    # without it (a file loaded on its own) nothing is asked and the original answer stands
+    if (-not $Probe) {
+        if (-not (Get-Command -Name Get-AdvancedHuntingTableError -ErrorAction SilentlyContinue)) { return $null }
+        $Probe = { param($t) Get-AdvancedHuntingTableError -TableName $t }
+    }
+    foreach ($t in @(Get-RAHuntingSourceTables -Query $Query)) {
+        if (-not $script:_RAHuntingTableAnswer.ContainsKey($t)) {
+            $e = & $Probe $t
+            # only a definite answer is remembered: a throttle or timeout is asked again next time
+            if ([string]::IsNullOrWhiteSpace([string]$e)) { $script:_RAHuntingTableAnswer[$t] = 'present' }
+            elseif ([string]$e -match ("Failed to resolve table (?:or column )?expression named '{0}'" -f [regex]::Escape($t))) { $script:_RAHuntingTableAnswer[$t] = 'missing' }
+            else { continue }
+        }
+        if ($script:_RAHuntingTableAnswer[$t] -eq 'missing') {
+            $named = "Failed to resolve table or column expression named '{0}'" -f $t
+            return ([string]$Message -replace 'Operator source expression should be table or column', $named)
+        }
+    }
+    return $null
+}
+
 function Get-RAHuntingNotProvisionedMessage {
     'SI-RA: advanced hunting is not provisioned in this tenant (no Microsoft Defender XDR) -- this query has no data source here'
 }
@@ -874,6 +955,18 @@ function Invoke-GraphHuntingQuery {
                 $looksSchemaError = $true
                 $missingTable     = $matches[1]
             }
+            # SUP-2026-00425: the service's UNNAMED form of a missing source ("Operator source expression should be table
+            # or column") -- the table the query needs is asked for on its own, and a missing one is said by name, so it is
+            # classified exactly as the named answer (a missing Defender vulnerability management table: not applicable)
+            $namedSourceError = $null
+            if (-not $looksSchemaError -and (Test-RAUnnamedSourceError -Message $msg)) {
+                $namedSourceError = Resolve-RAUnnamedSourceError -Query $Query -Message $msg
+                if ($namedSourceError -and $namedSourceError -match "Failed to resolve (?:table or column )?expression named '([^']+)'") {
+                    $looksSchemaError = $true
+                    $missingTable     = $matches[1]
+                    $msg              = $namedSourceError
+                }
+            }
 
             # No Defender XDR in this tenant: permanent for the whole run, never retried, never a reconnect.
             if (Test-RAHuntingNotProvisioned -Message $msg) {
@@ -936,6 +1029,7 @@ if ($looksAuth) {
                 $owner = Get-DefenderTableOwner -TableName $missingTable
                 Write-Warn2 ("Table '{0}' not present in this tenant's advanced hunting schema. {1}" -f $missingTable, $owner)
                 Write-Warn2 "Not retrying (deterministic schema failure -- retries cannot conjure a missing table)."
+                if ($namedSourceError) { throw $msg }
                 throw
             }
 

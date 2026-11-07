@@ -145,6 +145,18 @@ function Get-SIJobFlowKey {
     $k
 }
 
+function Get-SIJobFlowStepKey {
+    <#
+        PURE (#1096). The pipeline STEP a job belongs to: 'caj-si-endpoint' -> 'endpoint', and a collection in parts' two jobs
+        -- 'caj-si-endpoint-producer' / 'caj-si-endpoint-worker' -> 'endpoint' (the runner starts the producer for that step,
+        Add-SIJobFlowCollectParts; the worker works the producer's parts). Every other name is its plain key.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    $k = Get-SIJobFlowKey $Name
+    if ($k -match '^(.+)-(producer|worker)$') { return $Matches[1] }
+    $k
+}
+
 function Get-SIJobFlowJobName { param([Parameter(Mandatory)][string]$Key) 'caj-si-' + $Key }
 
 function Get-SIJobFlowWorkerJobs {
@@ -2184,9 +2196,14 @@ function Invoke-SIJobFlow {
     # the merged assets ($fd, the data sync) runs AT ONCE, on what is stored. Its record says so BEFORE it is started, so
     # the data sync holds every output (nothing goes to ServiceNow or a file from a run that is not complete). Then the
     # step goes back to waiting and runs again at its own place. (dot-sourced: it reads and sets this function's variables)
+    # IT RUNS BESIDE THE REST OF THE RUN, NEVER IN FRONT OF IT (seen live 2026-11-05 at a large install's first collection:
+    # the delivery at once was waited for in place, so Risk Analysis and every later step stood still for 6 hours behind
+    # it). It is started here and followed by the run's own loop ($pollFirstDelivery); while it runs the step shows
+    # Running, so nothing that needs it starts and it cannot start a second time at its own place.
     $firstDelivered = $false
+    $fdSide = $null
     $deliverFirst = {
-        $fdKeep = [string]$fd.RetryReason; $fdOk = $false
+        $fdKeep = [string]$fd.RetryReason
         try {
             $fdWhy = Get-SIPipelineFirstRunText -Kind DeliveryWhy -Job ([string]$fd.Job)
             $fd.RetryReason = (@($fdKeep, $fdWhy) | Where-Object { $_ }) -join ' | '
@@ -2195,27 +2212,41 @@ function Invoke-SIJobFlow {
             $fdExec = [string](& $Start $fd.Job)
             $fd.Execution = $fdExec; $fd.State = 'Running'
             & $Log 'WARN' ('step {0} {1}: {2} ({3})' -f $fd.Order, $fd.Job, $fdWhy, $fdExec)
+            $fdSide = [pscustomobject]@{ Step = $fd; Build = $st; Exec = $fdExec; Keep = $fdKeep }
             & $saveNow
-            while ($true) {
-                $fdStatus = ''
-                try {
-                    $fdPr = & $Poll $fd.Job $fdExec
-                    if ($null -ne $fdPr -and $fdPr -isnot [string] -and $fdPr.PSObject.Properties['Status']) { $fdStatus = [string]$fdPr.Status } else { $fdStatus = [string]$fdPr }
-                } catch { & $Log 'WARN' ('step {0} {1}: its status could not be read ({2}) -- trying again' -f $fd.Order, $fd.Job, $_.Exception.Message) }
-                if ($fdStatus -match '^(?i)succeeded$') { $fdOk = $true; break }
-                if ($fdStatus -match '^(?i)(failed|stopped|degraded|cancelled|canceled)$') { break }
-                & $saveNow
-                & $Sleep $PollSeconds
-            }
-        } catch { & $Log 'WARN' ('first collection: {0} could not be run at once after the asset build ({1})' -f $fd.Job, $_.Exception.Message) }
-        $fd.State = 'Waiting'; $fd.Execution = ''; $fd.StartedUtc = $null; $fd.EndedUtc = $null; $fd.ErrorClass = ''; $fd.Error = ''; $fd.RetryReason = $fdKeep
-        $fdSaid = Get-SIPipelineFirstRunText -Kind $(if ($fdOk) { 'Delivered' } else { 'NotDelivered' }) -Job ([string]$fd.Job)
-        & $Log $(if ($fdOk) { 'INFO' } else { 'WARN' }) $fdSaid
-        $st.RetryReason = (@([string]$st.RetryReason, $fdSaid) | Where-Object { $_ }) -join ' | '
+        } catch {
+            & $Log 'WARN' ('first collection: {0} could not be run at once after the asset build ({1})' -f $fd.Job, $_.Exception.Message)
+            $fdSide = [pscustomobject]@{ Step = $fd; Build = $st; Exec = ''; Keep = $fdKeep }
+            . $endFirstDelivery $false
+        }
+    }
+    # the delivery at once has ended ($ok): the step goes back to waiting (it runs again at its own place), said in the
+    # asset build's record and the run's note
+    $endFirstDelivery = {
+        param([bool]$ok)
+        $fd = $fdSide.Step
+        $fd.State = 'Waiting'; $fd.Execution = ''; $fd.StartedUtc = $null; $fd.EndedUtc = $null; $fd.ErrorClass = ''; $fd.Error = ''; $fd.RetryReason = $fdSide.Keep
+        $fdSaid = Get-SIPipelineFirstRunText -Kind $(if ($ok) { 'Delivered' } else { 'NotDelivered' }) -Job ([string]$fd.Job)
+        & $Log $(if ($ok) { 'INFO' } else { 'WARN' }) $fdSaid
+        $fdSide.Build.RetryReason = (@([string]$fdSide.Build.RetryReason, $fdSaid) | Where-Object { $_ }) -join ' | '
         $state.Note = ('{0} {1}' -f $fdSaid, ([string]$state.Note).Replace((Get-SIPipelineFirstRunText -Kind Running), '').Trim()).Trim()
         if ($state.Note.Length -gt 400) { $state.Note = $state.Note.Substring(0, 400) }
+        $fdSide = $null
         & $saveNow
     }
+    # one look at the delivery at once, from the run's loop: never waits
+    $pollFirstDelivery = {
+        if ($fdSide -and [string]$fdSide.Step.State -eq 'Running') {
+            $fdStatus = ''
+            try {
+                $fdPr = & $Poll $fdSide.Step.Job $fdSide.Exec
+                if ($null -ne $fdPr -and $fdPr -isnot [string] -and $fdPr.PSObject.Properties['Status']) { $fdStatus = [string]$fdPr.Status } else { $fdStatus = [string]$fdPr }
+            } catch { & $Log 'WARN' ('step {0} {1}: its status could not be read ({2}) -- trying again' -f $fdSide.Step.Order, $fdSide.Step.Job, $_.Exception.Message) }
+            if ($fdStatus -match '^(?i)succeeded$') { . $endFirstDelivery $true }
+            elseif ($fdStatus -match '^(?i)(failed|stopped|degraded|cancelled|canceled)$') { . $endFirstDelivery $false }
+        } elseif ($fdSide) { $fdSide = $null }   # the run's own handling took the step over (a cancel): nothing more to follow
+    }
+    $isFirstDelivery = { param($x) [bool]($fdSide -and [object]::ReferenceEquals($x, $fdSide.Step)) }
     # a first collection says so from its start (the pipeline page shows the run's note): nothing is shown yet, and why
     if ($FirstRun -and $decision -ne 'Resume' -and [string]$state.Scope -eq 'pipeline' -and -not [string]$state.FromStep) {
         . $askFirstRun
@@ -2632,7 +2663,18 @@ function Invoke-SIJobFlow {
             continue
         }
         # (not $running: the -Running seam is a parameter of this function)
-        $runningNow = @(@($state.Steps) | Where-Object { [string]$_.State -eq 'Running' })
+        # the delivery at once of a first collection is followed here, beside the steps -- it never holds them
+        $fdWas = [bool]$fdSide
+        . $pollFirstDelivery
+        # it has just ended: its step waits again -- judge the run anew (it may start now), never "not reached"
+        if ($fdWas -and -not $fdSide) { continue }
+        $runningNow =@(@($state.Steps) | Where-Object { [string]$_.State -eq 'Running' -and -not (& $isFirstDelivery $_) })
+        if (-not $runningNow.Count -and $fdSide) {
+            # only the delivery at once still runs: wait for it (its step then goes back to waiting and runs at its place)
+            & $saveNow
+            & $Sleep $PollSeconds
+            continue
+        }
         if (-not $runningNow.Count) {
             $left = @(@($state.Steps) | Where-Object { [string]$_.State -eq 'Waiting' })
             if (-not $left.Count) { break }
@@ -3486,13 +3528,17 @@ function Get-SIJobOrchestrationSwitchPlan {
     #>
     param([AllowEmptyCollection()][object[]]$Jobs = @(), [Parameter(Mandatory)][ValidateSet('flow', 'schedules')][string]$Mode, $Definition, $Map)
     if (-not $Map) { $Map = Get-SIJobFlowMap }
-    $names = @($Jobs | Where-Object { $_ } | ForEach-Object { [string]$_.Name })
+    # #1096: a collection in parts (producer + worker) is installed as its engine's step -- the default pipeline has it
+    $names = @($Jobs | Where-Object { $_ } | ForEach-Object { Get-SIJobFlowStepKey ([string]$_.Name) } | Select-Object -Unique)
     if (-not $Definition) { $Definition = New-SIDefaultJobFlow -Installed $names -Map $Map }
     if (@(@($Definition.Steps) | Where-Object { $_ -and ((Test-SIJobFlowOwnSchedule -Job ([string]$_.Job) -Map $Map) -or (Test-SIJobFlowRetired -Job ([string]$_.Job) -Map $Map)) }).Count) { $Definition = Remove-SIJobFlowOwnScheduleStep -Definition $Definition -Map $Map }
     $inFlow = @(@($Definition.Steps) | ForEach-Object { [string]$_.Job })
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($j in @($Jobs | Where-Object { $_ })) {
         $k = Get-SIJobFlowKey $j.Name; $tt = [string]$j.TriggerType
+        # #1096: a PRODUCER is its engine's step (the runner starts it for that step): in the pipeline it has no timer of its
+        # own -- its own daily timer was a second collection that belonged to no run (found live). Its worker is event-triggered.
+        if ($k -match '-producer$') { $k = Get-SIJobFlowStepKey $k }
         $row = { param($a, $c, $w) $out.Add([pscustomobject]@{ Job = [string]$j.Name; Action = $a; Cron = $c; Why = $w }) }
         if ($tt -eq 'Event') { & $row 'keep' '' 'event-triggered (scaled by its queue)'; continue }
         if ($k -eq 'flow') {
@@ -3621,6 +3667,82 @@ function Invoke-SIJobOrchestrationRepair {
     } catch {
         & $Log 'WARN' ('pipeline schedule: not checked ({0}) -- the next update tries again' -f $_.Exception.Message)
         & $out 'unchecked' "$($_.Exception.Message)" @() @()
+    }
+}
+
+function Get-SICollectProducerTriggerPlan {
+    <#
+        PURE (#1096). Which collect PRODUCERS (caj-si-<engine>-producer) lose their own timer: in PIPELINE mode a producer whose
+        engine is a step of the pipeline (-Definition: the stored one; none = the default over the installed jobs) is started
+        only by the pipeline -> to-manual (its cron remembered in si-disabled-cron, exactly as every other step). A producer
+        whose engine is NOT a step of the stored pipeline keeps its timer (it is then that engine's only collection) and is
+        named. SCHEDULES mode: nothing changes. -Jobs: ConvertTo-SIJobFlowTriggerList. Returns @(@{ Job; Action = to-manual |
+        keep; Cron; Why }) -- one row per producer.
+    #>
+    param([AllowEmptyCollection()][object[]]$Jobs = @(), [Parameter(Mandatory)][ValidateSet('flow', 'schedules')][string]$Mode, $Definition, $Map)
+    if (-not $Map) { $Map = Get-SIJobFlowMap }
+    $list = @($Jobs | Where-Object { $_ })
+    $prods = @($list | Where-Object { [string]$_.Name -match '^caj-si-.+-producer$' -and [string]$_.TriggerType -ne 'Event' })
+    if (-not $prods.Count) { return }
+    $plan = Get-SIJobOrchestrationSwitchPlan -Jobs $list -Mode flow -Definition $Definition -Map $Map
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($p in $prods) {
+        $row = @($plan | Where-Object { [string]$_.Job -eq [string]$p.Name })[0]
+        $step = Get-SIJobFlowStepKey ([string]$p.Name)
+        if ($Mode -ne 'flow') { $out.Add([pscustomobject]@{ Job = [string]$p.Name; Action = 'keep'; Cron = [string]$p.Cron; Why = 'the jobs run on their own timers -- the producer keeps its timer' }); continue }
+        if ($row -and $row.Action -eq 'to-manual') { $out.Add([pscustomobject]@{ Job = [string]$p.Name; Action = 'to-manual'; Cron = [string]$p.Cron; Why = ('the {0} step of the pipeline starts it -- its own timer "{1}" is remembered' -f $step, $p.Cron) }); continue }
+        if ([string]$p.TriggerType -eq 'Manual') { $out.Add([pscustomobject]@{ Job = [string]$p.Name; Action = 'keep'; Cron = ''; Why = ('started by the {0} step of the pipeline' -f $step) }); continue }
+        $out.Add([pscustomobject]@{ Job = [string]$p.Name; Action = 'keep'; Cron = [string]$p.Cron; Why = ('{0} is not a step of the stored pipeline -- the producer keeps its own timer (its only collection); add {0} to the pipeline on Operations > Jobs' -f $step) })
+    }
+    $out.ToArray()
+}
+
+function Invoke-SICollectProducerTrigger {
+    <#
+        #1096, EVERY UPDATE (existing installs reach the new-install state): in pipeline mode each collect producer whose engine
+        is a step of the pipeline goes MANUAL (Get-SICollectProducerTriggerPlan) -- the same PATCH as every switch
+        (ConvertTo-SIArmJobTrigger: the trigger and the tags only, the cron remembered in si-disabled-cron), then READ BACK
+        until the trigger is Manual. A producer already Manual is not touched (idempotent). -Jobs: the jobs as ARM lists them;
+        -Arm { param($Method, $Path, $Body) } (Path = the job's resource id); -Mode flow | schedules; -Definition: the stored
+        pipeline ($null = the default); -WhatIf: the plan only. NEVER THROWS. Returns @{ State = ok | converged | would-converge
+        | failed | unchecked; Lines; Changed; Plan }.
+    #>
+    param([AllowEmptyCollection()][object[]]$Jobs = @(), [Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][ValidateSet('flow', 'schedules')][string]$Mode,
+          $Definition, $Map, [switch]$WhatIf, [int]$PollSeconds = 5, [int]$PollMax = 12)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $out = { param($s, $c, $p) [pscustomobject]@{ State = $s; Lines = $lines.ToArray(); Changed = @($c); Plan = @($p) } }
+    try {
+        $plan = @(Get-SICollectProducerTriggerPlan -Jobs (ConvertTo-SIJobFlowTriggerList -ArmJobs $Jobs) -Mode $Mode -Definition $Definition -Map $Map)
+        foreach ($k in @($plan | Where-Object { $_.Action -eq 'keep' -and $_.Why -match 'not a step of the stored pipeline' })) { $lines.Add(('collect producer: {0} -- {1}' -f $k.Job, $k.Why)) }
+        $todo = @($plan | Where-Object { $_.Action -eq 'to-manual' })
+        if (-not $todo.Count) { if (@($plan).Count) { $lines.Add(('collect producers: {0}' -f $(if ($Mode -eq 'flow') { 'started only by the pipeline' } else { 'on their own timers (the jobs run on their own timers)' }))) }; return (& $out 'ok' @() $plan) }
+        if ($WhatIf) { foreach ($t in $todo) { $lines.Add(('collect producer: {0} would lose its own timer -- {1} (re-run with -Apply)' -f $t.Job, $t.Why)) }; return (& $out 'would-converge' @() $plan) }
+        $done = New-Object System.Collections.Generic.List[string]; $bad = 0
+        foreach ($t in $todo) {
+            try {
+                $raw = @($Jobs | Where-Object { [string]$_.name -eq [string]$t.Job }) | Select-Object -First 1
+                $id = [string]$raw.id
+                $job = & $Arm 'GET' $id $null
+                if ([string]$job.properties.configuration.triggerType -ne 'Manual') {
+                    $null = & $Arm 'PATCH' $id (ConvertTo-SIArmJobTrigger -Job $job -Action 'to-manual')
+                }
+                # read back (ARM may apply a PATCH asynchronously)
+                $tt = ''
+                for ($i = 1; $i -le [Math]::Max(1, $PollMax); $i++) {
+                    $b = & $Arm 'GET' $id $null
+                    $tt = [string]$b.properties.configuration.triggerType
+                    if ($tt -eq 'Manual') { break }
+                    if ($i -lt $PollMax -and $PollSeconds -gt 0) { Start-Sleep -Seconds $PollSeconds }
+                }
+                if ($tt -ne 'Manual') { throw ('read back: trigger {0}' -f $(if ($tt) { $tt } else { 'unknown' })) }
+                $done.Add([string]$t.Job)
+                $lines.Add(('collect producer: {0} -- {1}; now started only by the pipeline (read back)' -f $t.Job, $t.Why))
+            } catch { $bad++; $lines.Add(('collect producer: {0} was NOT taken off its own timer ({1}) -- the update goes on; the next update tries again' -f $t.Job, $_.Exception.Message)) }
+        }
+        & $out $(if ($bad) { 'failed' } else { 'converged' }) $done.ToArray() $plan
+    } catch {
+        $lines.Add(('collect producers: not checked ({0}) -- the update goes on; the next update tries again' -f $_.Exception.Message))
+        & $out 'unchecked' @() @()
     }
 }
 

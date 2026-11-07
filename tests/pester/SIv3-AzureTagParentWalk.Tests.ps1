@@ -42,8 +42,11 @@ BeforeAll {
         }
         @()
     }
+    # the management-group reads (AzureParentScopeCache.ps1): none in this tenant
+    function Search-SIAzGraph { param($Query, $First, $Skip, $Subscription, $ManagementGroup, $SkipToken) , (New-SIAzGraphPage -Rows @()) }
     Reset-SIRuleIndexes
-    Build-SIParentResourceChainIndex
+    # -IncludeResources: a tag RULE's index reads every resource's own tags too (the direct case below)
+    Build-SIParentResourceChainIndex -IncludeResources
     $script:Asset = { param([string]$Id) @{ AZ_ResourceId = $Id } }
     $script:Hit = { param([string]$Id, [hashtable]$RuleArgs) Test-SIKind_hasAzureTagDirectOrParent -Asset (& $script:Asset $Id) -Args $RuleArgs }
     $script:InA = "/subscriptions/$($script:SubA)/resourceGroups/rg-untagged/providers/Microsoft.Storage/storageAccounts/stnotags"

@@ -73,6 +73,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             SI_AssetProperties_RetentionDays = @{ min = 1 }; SI_AssetProperties_ChangeGuardPercent = @{ min = 1; max = 100 }
             # #528: how long the privilege tier catalog is kept while its inputs are unchanged (0 = rebuild every run)
             SI_PrivilegeTierClassifier_RefreshDays = @{ min = 0; max = 365 }
+            # the users' sign-in methods read in the background (Get-SISignInMethodsChoice takes these ranges; anything else = the default)
+            SI_Identity_SignInMethodsMaxAgeDays = @{ min = 1; max = 365 }; SI_Identity_SignInMethodsFillMinutes = @{ min = 1; max = 25 }
             # #534: how often the CI build rebuilds every CI while nothing it is made from changed (0 = every run)
             SI_CiBuild_FullReconcileDays = @{ min = 0; max = 365 }
             # the seconds the rules of one asset may take in the CI build before it goes on with the next (0 = no limit)

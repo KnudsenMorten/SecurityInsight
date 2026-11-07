@@ -93,6 +93,86 @@ SELECT @n AS UserName, IS_ROLEMEMBER(N'db_datareader', @n) AS DataReader;
 "@
 }
 
+function Get-SITaggingDatabaseStateSql {
+    <#
+        PURE. READ-ONLY, one row: what asset tagging's identity holds in the Pro database today -- its user (found by SID, the
+        client id; NULL = none), read access (db_datareader, or the component role si_tagging), whether cfg.AuditEvent is
+        there and whether the identity may INSERT into it (a grant to the user or to one of its roles, on the table or on
+        the cfg schema, or db_datawriter). The product updater reads it on every update (no person needed; framework
+        SEC-08) and gives what is missing (Get-SITaggingDatabaseUpdatePlan).
+    #>
+    param([Parameter(Mandatory)][string]$ClientId)
+    $sid = '0x' + ((([guid]$ClientId).ToByteArray() | ForEach-Object { $_.ToString('X2') }) -join '')
+    @"
+DECLARE @n sysname, @pid int;
+SELECT @n = name, @pid = principal_id FROM sys.database_principals WHERE sid = $sid;
+SELECT @n AS UserName,
+       CASE WHEN @n IS NULL THEN 0 ELSE ISNULL(IS_ROLEMEMBER(N'db_owner', @n), 0) END AS DbOwner,
+       CASE WHEN @n IS NULL THEN 0 ELSE ISNULL(IS_ROLEMEMBER(N'db_datareader', @n), 0) END AS DataReader,
+       CASE WHEN @n IS NULL OR DATABASE_PRINCIPAL_ID(N'si_tagging') IS NULL THEN 0 ELSE ISNULL(IS_ROLEMEMBER(N'si_tagging', @n), 0) END AS TaggingRole,
+       CASE WHEN OBJECT_ID(N'cfg.AuditEvent') IS NULL THEN 0 ELSE 1 END AS AuditTable,
+       CASE WHEN @n IS NULL THEN 0
+            WHEN ISNULL(IS_ROLEMEMBER(N'db_datawriter', @n), 0) = 1 THEN 1
+            WHEN EXISTS (SELECT 1 FROM sys.database_permissions AS dp
+                         WHERE dp.permission_name = N'INSERT' AND dp.[state] IN ('G', 'W')
+                           AND ((dp.class = 1 AND dp.major_id = OBJECT_ID(N'cfg.AuditEvent') AND dp.minor_id = 0) OR (dp.class = 3 AND dp.major_id = SCHEMA_ID(N'cfg')))
+                           AND (dp.grantee_principal_id = @pid
+                                OR dp.grantee_principal_id IN (SELECT m.role_principal_id FROM sys.database_role_members AS m WHERE m.member_principal_id = @pid))) THEN 1
+            ELSE 0 END AS AuditInsert;
+"@
+}
+
+function Get-SITaggingDatabaseUpdatePlan {
+    <#
+        PURE. What the product updater does about asset tagging's database access on THIS update -- the same end state
+        setup\Grant-SITaggingDatabase.ps1 gives (a user, read access, INSERT on cfg.AuditEvent), made by the product instead
+        of a person who is the SQL server's admin (framework SEC-08: existing installs reach the new-install state through
+        the update). -State: the row of Get-SITaggingDatabaseStateSql ($null = it could not be read). Returns
+        @{ Action; Missing; Sql; Rows; Line }, Action one of:
+          unknown    the state could not be read -- nothing is done, said in one line;
+          current    everything is there -- nothing is done, nothing is said;
+          procedure  the install has the signed grant procedure (-Procedure): ONE call gives all of it -- the identity's
+                     contained user by its client id into its component role si_tagging (USER row), SELECT on the product
+                     schemas, INSERT on cfg.AuditEvent and a DENY of SELECT on the sign-in key ring, all to si_tagging;
+          grant      today's grant path (the updater holds db_securityadmin, never ALTER ANY USER or a fixed role): the
+                     user and its read access are there and only the INSERT on cfg.AuditEvent is missing -- one GRANT;
+          task       what is missing needs the server's admin on this install (no user, or no read access, and no grant
+                     procedure): one plain warning naming the one-time customer action. The update goes on.
+        -Schemas: the product schemas the role may read (default: the grant procedure's list).
+    #>
+    param($State, [Parameter(Mandatory)][string]$UserName, [Parameter(Mandatory)][string]$ClientId, [switch]$Procedure,
+          [string[]]$Schemas = @('sidata', 'cfg', 'vuln', 'cmdbsync', 'snowstage'))
+    $out = { param($a, $missing = @(), $sql = '', $rows = @(), $line = '') [pscustomobject]@{ Action = $a; Missing = @($missing); Sql = $sql; Rows = @($rows); Line = $line } }
+    if ($null -eq $State) { return (& $out 'unknown' @() '' @() "asset tagging's database access could not be read -- it is checked again at the next update") }
+    $get = { param($k) $v = if ($State -is [System.Collections.IDictionary]) { $State[$k] } elseif ($State -is [System.Data.DataRow]) { $State[$k] } elseif ($State.PSObject.Properties[$k]) { $State.$k } else { $null }
+             if ($null -eq $v -or $v -is [System.DBNull]) { '' } else { [string]$v } }
+    $on = { param($k) (& $get $k) -in '1', 'True' }
+    $user = (& $get 'UserName').Trim()
+    if ($user -and (& $on 'DbOwner')) { return (& $out 'current') }   # an owner holds every right (and is never handled by the procedure)
+    $missing = New-Object System.Collections.Generic.List[string]
+    if (-not $user) { $missing.Add('its database user') }
+    if (-not $user -or -not ((& $on 'DataReader') -or (& $on 'TaggingRole'))) { $missing.Add('read access to its settings') }
+    if ((& $on 'AuditTable') -and -not (& $on 'AuditInsert')) { $missing.Add('writing its audit rows (INSERT on cfg.AuditEvent)') }
+    if (-not $missing.Count) { return (& $out 'current') }
+    $what = $missing -join ', '
+    if ($Procedure) {
+        # the existing user's own name when the procedure accepts it (a safe name); else the identity's name (the procedure
+        # finds the user by SID anyway and never renames it)
+        $n = if ($user -and $user -match '^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$') { $user } else { $UserName }
+        $rows = New-Object System.Collections.Generic.List[object]
+        $rows.Add([pscustomobject]@{ action = 'USER'; component = 'tagging'; user = $n; appId = ([guid]$ClientId).ToString() })
+        foreach ($s in $Schemas) { $rows.Add([pscustomobject]@{ action = 'GRANT'; permission = 'SELECT'; on = ('SCHEMA::' + $s); to = 'si_tagging' }) }
+        $rows.Add([pscustomobject]@{ action = 'GRANT'; permission = 'INSERT'; on = 'cfg.AuditEvent'; to = 'si_tagging' })
+        $rows.Add([pscustomobject]@{ action = 'DENY'; permission = 'SELECT'; on = 'cfg.WebKeyRing'; to = 'si_tagging' })
+        return (& $out 'procedure' $missing.ToArray() '' $rows.ToArray() ("asset tagging's database access: {0} -- given by this update through the product's grant procedure" -f $what))
+    }
+    if ($user -and $missing.Count -eq 1 -and $missing[0] -like 'writing its audit rows*') {
+        $q = $user.Replace(']', ']]')
+        return (& $out 'grant' $missing.ToArray() ("IF OBJECT_ID(N'cfg.AuditEvent') IS NOT NULL GRANT INSERT ON OBJECT::cfg.AuditEvent TO [{0}];" -f $q) @() ("asset tagging's database access: {0} -- given by this update" -f $what))
+    }
+    & $out 'task' $missing.ToArray() '' @() ("WARNING: asset tagging's database access: {0} -- this update may not give it on this install, so the asset tagging run stops at its settings check. One time, as the SQL server's admin (or through the Support app): setup\Grant-SITaggingDatabase.ps1 -Apply" -f $what)
+}
+
 function Get-SIProSchemaFileList {
     <# The Pro schema files, in the order setup applies them. Split: 'whole' (one batch) or 'blank' (a batch per blank-line block). #>
     @(
@@ -124,10 +204,12 @@ function Split-SIProSchemaBatches {
 # #1050 (live 2026-11-01, a ring 2 install: a FILTERED index on 17.2 M rows ran over two hours inside an update that said
 # "up to 10 min"): a filtered index cannot be resumable, so it cannot pause at the budget. It is started in an update ONLY
 # when its estimate (the table's pages at this database's measured rate, engine\_shared\SI-IndexBuild.ps1) fits the minutes
-# left; otherwise it WAITS (cfg.IndexBuild) and is built in an idle window by the updater (SI_UPDATER_MODE = index-build).
+# left; otherwise it WAITS (cfg.IndexBuild) and is built in an idle window by the index build job caj-si-index-build (#1111).
 # Every build runs on its own connection with the install's lock beaten while it runs (-Beat).
 $script:SIProSchemaLargeTableRows = 1000000
 $script:SIProSchemaIndexBudgetMinutes = @{ Applied = 10; Current = 40 }
+# #1112: how long a deferred build's table locks wait behind the readers before they queue as before (Azure SQL only)
+$script:SIProSchemaLowPriorityMinutes = 5
 $siIxBuildFile = [IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-IndexBuild.ps1')
 if (Test-Path -LiteralPath $siIxBuildFile) { . $siIxBuildFile }
 
@@ -192,6 +274,65 @@ function Get-SIProSchemaIndexStatements {
     $out | Sort-Object Start
 }
 
+# ---- CODE OBJECTS THAT ARE ALREADY CURRENT ARE NOT RE-CREATED (#1112, live 2026-11-05) ----------------------------------
+# Every file runs in ONE transaction, and a schema file re-creates its procedures, functions and triggers with an unconditional
+# CREATE OR ALTER on every applied update. An ALTER takes a schema-modification lock that is held to the END of the file's
+# transaction -- and a trigger's lock is on its TABLE: cfg.TR_AccessAssignment_Journal locked cfg.AccessAssignment (read at
+# every sign-in), cfg.TR_Setting_Journal cfg.Setting, cfg.TR_Template_Journal cfg.Template ... for as long as the settings
+# file's 308 batches ran. At internal the web app's probes and a sign-in waited behind them (45 s). So, at run time (the file
+# and its fingerprint are unchanged): an EXEC (N'CREATE OR ALTER PROCEDURE | TRIGGER | scalar FUNCTION <name> ...') runs only
+# when the object's stored text differs from the file's -- compared byte for byte (a binary collation: a change in case is a
+# change). A new object, a changed one, or a text that cannot be read (no right to see it: NULL) is created exactly as
+# before. VIEWS and table-valued functions are always re-created: their stored column list is refreshed only by the ALTER.
+function Add-SIProSchemaModuleGuards {
+    <#
+        PURE. -Sql with every EXEC ('CREATE OR ALTER PROCEDURE|PROC|TRIGGER|FUNCTION <schema>.<name> ...') -- a single string
+        literal, outside comments and other strings, a function only when it returns a scalar -- preceded by
+        IF ISNULL(SUBSTRING(OBJECT_DEFINITION(<name>), CHARINDEX(N'<name>', <that text>), ...), N'') COLLATE Latin1_General_BIN2
+           <> N'<the file's text from the name on>' COLLATE Latin1_General_BIN2
+        so the EXEC runs only when the object is missing or different. Everything else is returned as it was.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Sql)
+    $n = $Sql.Length; $mask = New-Object 'bool[]' ($n + 1); $i = 0
+    $strStart = New-Object System.Collections.Generic.List[int]; $strEnd = New-Object System.Collections.Generic.List[int]
+    while ($i -lt $n) {
+        $c = $Sql[$i]
+        if ($c -eq '-' -and $i + 1 -lt $n -and $Sql[$i + 1] -eq '-') { while ($i -lt $n -and $Sql[$i] -ne "`n") { $mask[$i] = $true; $i++ }; continue }
+        if ($c -eq '/' -and $i + 1 -lt $n -and $Sql[$i + 1] -eq '*') { $e = $Sql.IndexOf('*/', $i + 2); if ($e -lt 0) { $e = $n - 2 }; for ($k = $i; $k -le $e + 1 -and $k -lt $n; $k++) { $mask[$k] = $true }; $i = $e + 2; continue }
+        if ($c -eq "'") {
+            $s = $i; $i++
+            while ($i -lt $n) { if ($Sql[$i] -eq "'") { if ($i + 1 -lt $n -and $Sql[$i + 1] -eq "'") { $i += 2; continue }; break }; $i++ }
+            for ($k = $s; $k -le $i -and $k -lt $n; $k++) { $mask[$k] = $true }
+            $strStart.Add($s); $strEnd.Add($i); $i++; continue
+        }
+        $i++
+    }
+    $rx = "(?i)\bEXEC(?:UTE)?\s*\(\s*(N?)'(\s*CREATE\s+OR\s+ALTER\s+(PROCEDURE|PROC|TRIGGER|FUNCTION)\s+((?:\[[^\]']+\]|\w+)\.(?:\[[^\]']+\]|\w+)))"
+    $hits = New-Object System.Collections.Generic.List[object]
+    foreach ($m in [regex]::Matches($Sql, $rx)) {
+        if ($mask[$m.Index]) { continue }                  # inside a comment or a string: not a statement
+        $q = $m.Groups[2].Index - 1                        # the opening quote
+        $at = $strStart.IndexOf($q); if ($at -lt 0) { continue }
+        $close = $strEnd[$at]
+        if ($close -ge $n -or $Sql[$close] -ne "'") { continue }
+        $after = $Sql.Substring($close + 1, [Math]::Min(20, $n - $close - 1))
+        if ($after -notmatch '^\s*\)') { continue }       # EXEC ('...' + ...) or anything but one literal: left as it is
+        $literal = $Sql.Substring($q + 1, $close - $q - 1)
+        if ($m.Groups[3].Value -match '(?i)^FUNCTION$' -and $literal -match '(?is)\bRETURNS\s+(?:@\w+\s+)?TABLE\b') { continue }
+        # compared FROM THE NAME ON: SQL Server stores a CREATE OR ALTER's text with "OR ALTER" blanked out (the REAL SQL test
+        # of SIv3-WebDuringUpdate found it), so the head is never compared -- the kind cannot change under the same name anyway
+        $tail = $Sql.Substring($m.Groups[4].Index, $close - $m.Groups[4].Index)
+        $hits.Add([pscustomobject]@{ At = $m.Index; Name = $m.Groups[4].Value; Tail = $tail })    }
+    if (-not $hits.Count) { return $Sql }
+    $sb = New-Object System.Text.StringBuilder $Sql
+    foreach ($h in @($hits | Sort-Object At -Descending)) {
+        $def = "OBJECT_DEFINITION(OBJECT_ID(N'{0}'))" -f $h.Name
+        $guard = "IF ISNULL(SUBSTRING({0}, CHARINDEX(N'{1}' COLLATE Latin1_General_BIN2, {0}), 2147483647), N'') COLLATE Latin1_General_BIN2 <> N'{2}' COLLATE Latin1_General_BIN2`n" -f $def, $h.Name, $h.Tail
+        [void]$sb.Insert($h.At, $guard)
+    }
+    $sb.ToString()
+}
+
 function Get-SIProSchemaIndexState {
     <#
         The database's side of the deferral, ONE read: the edition (resumable index builds: Azure SQL Database 5, Managed
@@ -210,6 +351,9 @@ IF OBJECT_ID(N'sys.index_resumable_operations') IS NOT NULL
 -- catalog names carry the server's catalog collation: every one is read in the database's (one UNION, no conflict)
 SELECT N'edition' AS K, CONVERT(nvarchar(300), SERVERPROPERTY('EngineEdition')) COLLATE DATABASE_DEFAULT AS A, CONVERT(nvarchar(300), N'') AS B, CONVERT(bigint, 0) AS N
 UNION ALL
+-- #1112: CREATE INDEX ... WAIT_AT_LOW_PRIORITY -- Azure SQL Database (5) and Managed Instance (8)
+SELECT N'lowpriority', CONVERT(nvarchar(300), CASE WHEN CONVERT(int, SERVERPROPERTY('EngineEdition')) IN (5, 8) THEN N'1' ELSE N'0' END) COLLATE DATABASE_DEFAULT, N'', CONVERT(bigint, 0)
+UNION ALL
 SELECT N'build', A, B, N FROM @b
 UNION ALL
 SELECT N'large', s.name COLLATE DATABASE_DEFAULT + N'.' + t.name COLLATE DATABASE_DEFAULT, N'', SUM(p.rows) FROM sys.tables AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id
@@ -219,12 +363,13 @@ SELECT N'index', s.name COLLATE DATABASE_DEFAULT + N'.' + t.name COLLATE DATABAS
   JOIN sys.schemas AS s ON s.schema_id = t.schema_id WHERE i.name IS NOT NULL;
 "@
     $rows = @(& $Invoke $sql @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
-    $st = [pscustomobject]@{ Resumable = $false; Large = @{}; Indexes = @{}; Builds = @{} }
+    $st = [pscustomobject]@{ Resumable = $false; Large = @{}; Indexes = @{}; Builds = @{}; LowPriority = $false }
     foreach ($r in $rows) {
         $get = { param($k) if ($r -is [System.Collections.IDictionary]) { $r[$k] } else { $r.$k } }
         $k = [string](& $get 'K'); $a = [string](& $get 'A'); $b = [string](& $get 'B')
         switch ($k) {
             'edition' { $st.Resumable = @('3', '5', '8') -contains $a }
+            'lowpriority' { $st.LowPriority = ($a -eq '1') }
             'large'   { $st.Large[$a.ToLowerInvariant()] = $true }
             'index'   { $st.Indexes[('{0}|{1}' -f $a, $b).ToLowerInvariant()] = $true }
             'build'   { $nm, $state = $b -split '\|', 2; $st.Builds[('{0}|{1}' -f $a, $nm).ToLowerInvariant()] = [pscustomobject]@{ State = $state; Percent = [int](& $get 'N') } }
@@ -264,12 +409,29 @@ function Get-SIProSchemaIndexBuildSql {
        is not supported for creating a filtered index", seen 2026-10-29 on a Developer edition, the same engine as Azure SQL),
        and MAX_DURATION needs RESUMABLE -- with both, such an index was never built and stayed pending on every update. It
        still runs outside the schema's transaction and keeps the table readable and writable while it builds. #>
-    param([Parameter(Mandatory)]$Index, [string]$BuildState = '', [Parameter(Mandatory)][int]$Minutes)
+    param([Parameter(Mandatory)]$Index, [string]$BuildState = '', [Parameter(Mandatory)][int]$Minutes, [switch]$LowPriority)
     $m = [Math]::Max(1, $Minutes)
-    if ($BuildState -eq 'PAUSED') { return ('ALTER INDEX {0} ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f $Index.Name, $Index.Table, $m) }
+    # #1112 (live 2026-11-05: the web app's requests queued behind the update's locks): -LowPriority (Azure SQL Database /
+    # Managed Instance, where CREATE INDEX takes it) -- the build's short table locks at its start and its end wait BEHIND the
+    # web app's and the engine's queries for up to $script:SIProSchemaLowPriorityMinutes, then as before (ABORT_AFTER_WAIT =
+    # NONE: never a lost build). Without it a build waiting for its lock queued every new reader of the table behind it.
+    $lp = 'WAIT_AT_LOW_PRIORITY (MAX_DURATION = {0} MINUTES, ABORT_AFTER_WAIT = NONE)' -f [int]$script:SIProSchemaLowPriorityMinutes
+    if ($BuildState -eq 'PAUSED') {
+        if ($LowPriority) { return ('ALTER INDEX {0} ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES, {3})' -f $Index.Name, $Index.Table, $m, $lp) }
+        return ('ALTER INDEX {0} ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f $Index.Name, $Index.Table, $m)
+    }
     $stmt = $Index.Statement.TrimEnd(';').TrimEnd()
-    if (Test-SIProSchemaIndexFiltered -Index $Index) { return ('{0} WITH (ONLINE = ON)' -f $stmt) }
-    '{0} WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = {1} MINUTES)' -f $stmt, $m
+    $online = if ($LowPriority) { 'ONLINE = ON ({0})' -f $lp } else { 'ONLINE = ON' }
+    if (Test-SIProSchemaIndexFiltered -Index $Index) { return ('{0} WITH ({1})' -f $stmt, $online) }
+    '{0} WITH ({1}, RESUMABLE = ON, MAX_DURATION = {2} MINUTES)' -f $stmt, $online, $m
+}
+
+function Test-SIProSchemaLowPriority {
+    <# PURE. Does this database take WAIT_AT_LOW_PRIORITY on CREATE INDEX (Get-SIProSchemaIndexState's 'lowpriority' row)?
+       Azure SQL Database (engine edition 5) and Managed Instance (8) -- a boxed Enterprise / Developer (3) may be a version
+       before SQL Server 2022 and is left as before; a state without the row (an older reader) = no. #>
+    param($State)
+    [bool]($State -and $State.PSObject.Properties['LowPriority'] -and $State.LowPriority)
 }
 
 function Test-SIProSchemaIndexFiltered {
@@ -320,7 +482,7 @@ function Invoke-SIProSchemaIndexStep {
                 continue
             }
         }
-        $sql = Get-SIProSchemaIndexBuildSql -Index $d -BuildState $(if ($b) { $b.State } else { '' }) -Minutes $left
+        $sql = Get-SIProSchemaIndexBuildSql -Index $d -BuildState $(if ($b) { $b.State } else { '' }) -Minutes $left -LowPriority:(Test-SIProSchemaLowPriority -State $st)
         $how = if ($b) { "resumed at $($b.Percent)%" }
                elseif ($filtered -and $est -and $est.Known) { 'built online (a filtered index cannot pause: about {0} at this database''s rate, {1})' -f (Format-SIIndexDuration ([int]$est.Minutes)), $est.Source }
                elseif ($filtered) { 'built online (a filtered index cannot pause: its time is not known -- built now, once)' }
@@ -342,11 +504,17 @@ function Invoke-SIProSchemaIndexStep {
             $built.Add($d.Name); & $Log ('  index {0}: built ({1:N0} s)' -f $d.Name, $sw.Elapsed.TotalSeconds)
             # a create that ran from start to end measures this database's rate (a resumed one does not: part of it ran before)
             if (-not $b -and $sw.Elapsed.TotalSeconds -ge 60) { & $rec 'rate' $d ([pscustomobject]@{ Seconds = $sw.Elapsed.TotalSeconds }) }
-            if ($filtered) { & $rec 'built' $d $null }
+            if ($filtered -or $b) { & $rec 'built' $d $null }
             continue
         }
         $pb = if ($after) { $after.Builds[$key] } else { $null }
-        if ($pb) { $pending.Add($d.Name); & $Log ('  index {0}: paused at {1}% -- the next update resumes it' -f $d.Name, $pb.Percent); continue }
+        if ($pb) {
+            # #1111: a resumable build paused at the update's time is RECORDED 'paused' -- the index build job resumes it in the
+            # next idle window (the next update still resumes it too, within its own time)
+            $pending.Add($d.Name); & $Log ('  index {0}: paused at {1}% -- it resumes in the next idle window (or the next update)' -f $d.Name, $pb.Percent)
+            & $rec 'paused' $d ([pscustomobject]@{ Statement = (Get-SIProSchemaIndexBuildSql -Index $d -Minutes $left); Why = ('paused at {0}% at the end of the update''s index time' -f $pb.Percent) })
+            continue
+        }
         $pending.Add($d.Name)
         $w = '{0} on {1} was not built ({2}) -- the next update tries again; the release works without it' -f $d.Name, $d.Table, $(if ($err) { $err } else { 'no error, not there' })
         $warn.Add($w)
@@ -655,7 +823,11 @@ function Invoke-SIProSchemaApply {
           [int]$RunningWaitMinutes = $script:SIProSchemaRunningWaitMinutes, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
           # #1050: -Beat { param($What) } while an index builds (the updater: the install's lock); -IndexEstimate / -IndexRecord:
           # seams for the estimate of a filtered index and the record of one that waits (default: the real database)
-          [scriptblock]$Beat, [scriptblock]$IndexEstimate, [scriptblock]$IndexRecord)
+          [scriptblock]$Beat, [scriptblock]$IndexEstimate, [scriptblock]$IndexRecord,
+          # #1112: -Window { param([bool]$On) } -- told when the files' transactions start ($true) and when they have all ended
+          # ($false; also on a failure): the updater marks the install's lock so the web app answers "being updated" meanwhile.
+          # Never around a no-op, never around the deferred index builds (they run ONLINE, outside the transactions).
+          [scriptblock]$Window)
     if (-not $Log) { $Log = { param([string]$m) Write-Host $m } }
     $plan = Get-SIProSchemaPlan -SIRoot $SIRoot -Names $Names -ExtraFingerprint $ExtraFingerprint
     $names = @($plan.Files | ForEach-Object { $_.Name })
@@ -674,7 +846,9 @@ function Invoke-SIProSchemaApply {
         foreach ($b in @($f.Batches)) {
             $d = if ($ixState) { @(Get-SIProSchemaDeferredIndexes -Statements @(Get-SIProSchemaIndexStatements -Sql $b) -State $ixState) } else { @() }
             foreach ($x in $d) { $deferred.Add($x) }
-            $bs.Add($(if ($d.Count) { Remove-SIProSchemaDeferredIndexes -Sql $b -Deferred $d } else { $b }))
+            $one = if ($d.Count) { Remove-SIProSchemaDeferredIndexes -Sql $b -Deferred $d } else { $b }
+            # #1112: a procedure / trigger / scalar function that is already current is not re-created (no table lock held to commit)
+            $bs.Add((Add-SIProSchemaModuleGuards -Sql $one))
         }
         $batchesOf[$f.Name] = $bs.ToArray()
     }
@@ -711,6 +885,10 @@ function Invoke-SIProSchemaApply {
         }
     }
     $done = New-Object System.Collections.Generic.List[string]
+    # #1112: the window in which the files' transactions run (the web app answers "being updated"); always closed again
+    $win = { param([bool]$on) if ($Window) { try { $null = & $Window $on } catch { & $Log ('  (the update window could not be marked: {0})' -f $_.Exception.Message) } } }
+    & $win $true
+    try {
     foreach ($f in $plan.Files) {
         $batches = @($batchesOf[$f.Name])
         if (-not $batches.Count) { $done.Add($f.Name); continue }
@@ -745,6 +923,7 @@ function Invoke-SIProSchemaApply {
         $done.Add($f.Name)
         & $Log ('  schema {0} applied ({1} batch(es), {2})' -f $f.File, $batches.Count, $f.Sha256.Substring(0, 12))
     }
+    } finally { & $win $false }
     # the deferred indexes, after the files are committed (their columns are there now) -- never a failed update
     $ix = & $ixStep $false
     $o = & $out 'applied' ('{0} schema file(s) applied: {1}{2}' -f $done.Count, ($done -join ', '), (& $ixText $ix)) $done.ToArray() '' @()

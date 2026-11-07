@@ -124,9 +124,12 @@ IF OBJECT_ID(N'cfg.PipelineLock') IS NULL OR OBJECT_ID(N'cfg.FlowRun') IS NULL O
 BEGIN
     SELECT CONVERT(bit, 0) AS HasStore, CAST(NULL AS nvarchar(128)) AS Holder, CAST(NULL AS nvarchar(64)) AS FlowRunId, CAST(NULL AS int) AS LockAgeSeconds,
            CAST(NULL AS nvarchar(16)) AS RunState, CAST(NULL AS datetime2(0)) AS RunStartedUtc, CAST(NULL AS nvarchar(16)) AS StepState,
-           CAST(NULL AS nvarchar(128)) AS StepExecution, 0 AS StepRows;
+           CAST(NULL AS nvarchar(128)) AS StepExecution, 0 AS StepRows, CAST(NULL AS nvarchar(16)) AS FlowMode, CAST(NULL AS nvarchar(max)) AS FlowJson;
     RETURN;
 END
+-- #1096: how the jobs run (cfg.JobFlow: the stored mode and pipeline; none stored = the job's caller says)
+DECLARE @fm nvarchar(16), @fj nvarchar(max);
+IF OBJECT_ID(N'cfg.JobFlow') IS NOT NULL SELECT TOP (1) @fm = Mode, @fj = DefinitionJson FROM cfg.JobFlow WHERE FlowId = N'daily';
 DECLARE @holder nvarchar(128), @fr nvarchar(64), @hb datetime2(0);
 SELECT @holder = Holder, @fr = FlowRunId, @hb = HeartbeatUtc FROM cfg.PipelineLock WHERE LockId = N'install';
 DECLARE @rs nvarchar(16), @rst datetime2(0);
@@ -142,8 +145,37 @@ BEGIN
 END
 SELECT CONVERT(bit, 1) AS HasStore, @holder AS Holder, @fr AS FlowRunId,
        CASE WHEN @hb IS NULL THEN NULL ELSE DATEDIFF(second, @hb, SYSUTCDATETIME()) END AS LockAgeSeconds,
-       @rs AS RunState, @rst AS RunStartedUtc, @ss AS StepState, @se AS StepExecution, @n AS StepRows;
+       @rs AS RunState, @rst AS RunStartedUtc, @ss AS StepState, @se AS StepExecution, @n AS StepRows, @fm AS FlowMode, @fj AS FlowJson;
 '@
+}
+
+function Get-SICollectionRunGateTimerSkip {
+    <#
+        PURE (#1096, defence in depth -- found live: a producer's own daily timer fired outside any pipeline run and collected
+        everything again). A collection that the gate would let RUN, but which is NOT the pipeline's own step, is skipped
+        when ALL of these hold:
+          * the jobs run as one pipeline (-Row FlowMode, cfg.JobFlow; none stored = -PipelineMode, caj-si-flow on its timer);
+          * the job has a timer of its own (-JobTrigger Schedule) -- so this execution is the timer's (a Manual job's
+            execution was started by the pipeline or by a person, and runs);
+          * its engine (-Job) is a step of the pipeline (the stored pipeline's steps; none stored = the default, which has
+            every collect engine). An engine that is no step keeps its timer: that is its only collection.
+        Returns the plain reason, or '' (no skip). Nothing read ($null row) = '' (the gate never blocks on its own failure).
+    #>
+    param($Row, [string]$Job = '', [string]$JobTrigger = '', [string]$PipelineMode = '')
+    if ($null -eq $Row) { return '' }
+    $v = { param($n)
+        $x = if ($Row -is [System.Collections.IDictionary]) { if ($Row.Contains($n)) { $Row[$n] } else { $null } } elseif ($Row.PSObject.Properties[$n]) { $Row.$n } else { $null }
+        if ($x -is [System.DBNull]) { $null } else { $x } }
+    $mode = ([string](& $v 'FlowMode')).Trim().ToLowerInvariant()
+    if ($mode -notin @('flow', 'schedules')) { $mode = ([string]$PipelineMode).Trim().ToLowerInvariant() }
+    if ($mode -ne 'flow' -or [string]$JobTrigger -ne 'Schedule' -or -not "$Job".Trim()) { return '' }
+    $json = [string](& $v 'FlowJson')
+    if ($json.Trim()) {
+        $steps = @()
+        try { $d = $json | ConvertFrom-Json; $steps = @(@($d.steps) + @(@($d.stages) | ForEach-Object { @($_.steps) }) | Where-Object { $_ } | ForEach-Object { ([string]$_.job).Trim().ToLowerInvariant() -replace '^caj-si-', '' }) } catch { return '' }
+        if ($steps -notcontains $Job.ToLowerInvariant()) { return '' }
+    }
+    ('the jobs run as one pipeline and {0} is a step of it: only the pipeline starts its collection -- this execution came from the job''s own timer (a second collection that belongs to no run), so it collected nothing. The next update takes the job off its timer.' -f $Job)
 }
 
 function Get-SICollectionRunGateDecision {
@@ -232,8 +264,11 @@ function Invoke-SICollectionRunGate {
           [int]$PollSeconds = $script:SICollectionRunGate.PollSeconds, [int]$SayEverySeconds = $script:SICollectionRunGate.SayEverySeconds,
           # #947: { } -> the updater's wait mark (parsed, ConvertFrom-SICollectionUpdateWaitsTag) or $null. Read once; a mark
           # that cannot be read holds nothing.
-          [scriptblock]$UpdateWaits)
-    $res = { param($a, $why, $run, $w) [pscustomobject]@{ Action = $a; Reason = $why; RunId = [string]$run; WaitedSeconds = [int]$w } }
+          [scriptblock]$UpdateWaits,
+          # #1096: the job's trigger as Azure has it (Schedule = it has a timer of its own) and how the jobs run when no
+          # pipeline is stored (caj-si-flow on its timer = 'flow') -- Get-SICollectionRunGateTimerSkip
+          [string]$JobTrigger = '', [string]$PipelineMode = '')
+    $res ={ param($a, $why, $run, $w) [pscustomobject]@{ Action = $a; Reason = $why; RunId = [string]$run; WaitedSeconds = [int]$w } }
     $updateHold = ''
     if ($UpdateWaits) {
         $uw = $null
@@ -266,6 +301,15 @@ function Invoke-SICollectionRunGate {
             return (& $res 'Skip' $updateHold $d.RunId $waited)
         }
         if ($d.Action -eq 'Run') {
+            # #1096: the job's OWN TIMER fired while the jobs run as one pipeline and it is a step of it -- skipped, one line
+            if (-not ($d.PSObject.Properties['Own'] -and $d.Own)) {
+                $ts = Get-SICollectionRunGateTimerSkip -Row $row -Job $Job -JobTrigger $JobTrigger -PipelineMode $PipelineMode
+                if ($ts) {
+                    & $Log 'INFO' ('[no-overlap] ' + $ts)
+                    try { & $Record 'skipped' $d.RunId } catch { }
+                    return (& $res 'Skip' $ts $d.RunId $waited)
+                }
+            }
             if ($waiting) {
                 $why = '{0} -- the scheduled collection waited {1} min and runs now' -f $d.Reason, [int][Math]::Ceiling($waited / 60)
                 & $Log 'INFO' ('[no-overlap] ' + $why)

@@ -35,6 +35,8 @@
 #>
 
 if (-not (Get-Command -Name Invoke-SIRestJson -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-UpdateRest.ps1')) }
+# framework rule 11g: a private install's build pool is at 0 agents between builds -- scaled up just before a build on it
+if (-not (Get-Command -Name Request-SIBuildPoolUp -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath ([IO.Path]::Combine($PSScriptRoot, 'SI-AcrBuildPool.ps1')))) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-AcrBuildPool.ps1')) }
 
 $script:SIAcrTasksApi = '2019-06-01-preview'
 $script:SIAcrRegistryApi = '2023-07-01'
@@ -305,13 +307,22 @@ function Invoke-SIAcrQueueBuild {
         Packs -ContextPath, uploads it and SCHEDULES the build of -Image (registry-relative) from -DockerfilePath (relative to the
         context, or a file outside it -- then packed as .si-build/<name>). Does not wait. Returns @{ RunId; Image; Bytes; Files;
         Writer; Registry }. Throws when a call fails.
+        Framework rule 11g: a build on an agent pool asks for the pool's scale-up FIRST (Request-SIBuildPoolUp, inside the
+        build-pool session the caller holds -- it scales the pool back to 0 when its builds are done); a pool that cannot be
+        scaled up stops the build here (it would wait in the queue for agents that never come).
     #>
     param([Parameter(Mandatory)][scriptblock]$Rest, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$ContextPath, [Parameter(Mandatory)][string]$Image, [Parameter(Mandatory)][string]$DockerfilePath,
           [string]$ResourceGroup, [int]$TimeoutSeconds = 3600, [string]$WorkDir,
           # framework installer rule 11b: a private install's builds run on its agent pool in the network from the FIRST build
-          [string]$AgentPoolName = '')
+          [string]$AgentPoolName = '', [scriptblock]$Say = { param($t) Write-Host $t })
     $reg = Get-SIAcrRegistry -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $AcrName -ResourceGroup $ResourceGroup
+    $pool = if ("$AgentPoolName".Trim()) { "$AgentPoolName".Trim() } else { Resolve-SIAcrAgentPool -Rest $Rest -Registry $reg }
+    if ($pool -and (Get-Command -Name Request-SIBuildPoolUp -ErrorAction SilentlyContinue)) {
+        $up = Request-SIBuildPoolUp -Rest $Rest -RegistryId ([string]$reg.Id) -Pool $pool
+        if ($up.Line) { try { & $Say $up.Line } catch { } }
+        if (-not $up.Ok) { throw $up.Line }
+    }
     $ctx = [IO.Path]::GetFullPath($ContextPath).TrimEnd('\', '/')
     $extra = @{}; $dfRel = ($DockerfilePath -replace '\\', '/')
     $dfFull = if ([IO.Path]::IsPathRooted($DockerfilePath)) { [IO.Path]::GetFullPath($DockerfilePath) } else { [IO.Path]::GetFullPath([IO.Path]::Combine($ctx, $DockerfilePath)) }
@@ -327,7 +338,6 @@ function Invoke-SIAcrQueueBuild {
         $slot = Invoke-SIRestJson -Rest $Rest -Method POST -Uri (Get-SIArmUri -Path ($reg.Id + '/listBuildSourceUploadUrl') -ApiVersion $script:SIAcrTasksApi) -What 'the build upload slot'
         if (-not $slot -or -not "$($slot.uploadUrl)".Trim()) { throw ("registry '{0}' returned no upload URL" -f $AcrName) }
         $bytes = Send-SIAcrBuildContext -Rest $Rest -UploadUrl ([string]$slot.uploadUrl) -Path $tgz
-        $pool = if ("$AgentPoolName".Trim()) { "$AgentPoolName".Trim() } else { Resolve-SIAcrAgentPool -Rest $Rest -Registry $reg }
         $body = New-SIAcrDockerBuildRequest -SourceLocation ([string]$slot.relativePath) -Image $Image -DockerfilePath $dfRel -LoginServer $reg.LoginServer -TimeoutSeconds $TimeoutSeconds -AgentPoolName $pool
         $run = Invoke-SIRestJson -Rest $Rest -Method POST -Uri (Get-SIArmUri -Path ($reg.Id + '/scheduleRun') -ApiVersion $script:SIAcrTasksApi) -Body (ConvertTo-Json -InputObject $body -Depth 10 -Compress) -What ('the build of {0}' -f $Image)
         [pscustomobject]@{ RunId = (Get-SIAcrRunId -Run $run); Image = $body.imageNames[0]; Bytes = $bytes; Files = @($pack.Files).Count; Writer = $pack.Writer; Registry = $reg }

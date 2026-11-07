@@ -166,8 +166,11 @@ WITH x AS (
 SELECT SUM(x.InScope) AS Findings,
        COUNT(DISTINCT CASE WHEN x.InScope = 1 THEN x.AssetKey END) AS Assets,
        COUNT_BIG(*) AS TotalFindings, COUNT(DISTINCT x.AssetKey) AS TotalAssets, @t AS CollectionTime
-FROM x;
+FROM x
+OPTION (RECOMPILE);
 """;
+    // RECOMPILE (2026-11-05): @c is a variable -- without it the plan cannot know the collection and read every collection's
+    // findings (402 MB, 28 s at a ring-0 install); with it the plan seeks the published collection's rows.
 
     /// The finding columns the count may read (when the database has them).
     public static readonly IReadOnlyList<string> OptionalColumns = ScopeFilters.Fields.Select(f => f.FindingColumn).Where(c => c is not null).Select(c => c!).Distinct().ToList();

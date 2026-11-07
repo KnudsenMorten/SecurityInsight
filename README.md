@@ -150,7 +150,8 @@ Azure virtual machine and its Defender device become one asset, with one tier, c
 The SecurityInsight web app shows every finding of a run, most critical asset first: filter, sort, search and export
 to Excel or CSV. Management views show the risk score, the risk per domain, the top risks, new versus fixed, and
 Tier-0 exposure. A wall board refreshes itself for the SOC screen. Every setting says in plain words what it is for
-and what its default really does.
+and what its default really does. Pages are fast by default: every view reads stored, indexed columns, and the
+database's statistics are brought up to date after every run, so a page never waits for them.
 
 <p align="center">
   <img src="docs/images/screenshots/top-risks.png" alt="Top risks: the assets carrying the most weighted risk, with tier, findings and domains" width="820">
@@ -240,7 +241,9 @@ the same read-only tools, protected by Entra tokens.
 One daily pipeline runs Collect, Correlate and Deliver at the time you choose; each step starts as soon as the steps
 it needs have finished. Only what changed is rebuilt, large reports split themselves to stay inside Defender's limits,
 and the Detailed reports run side by side on several workers, so large estates finish. A run that did not publish
-everything says so.
+everything says so. An update never stops a running pipeline: it waits for the run to end and installs between two
+runs. A database setup job creates every database user and right SecurityInsight needs and reads each one back, so no
+person needs database admin rights.
 
 <p align="center">
   <img src="pro-management/src/SI.Management.Web/ProductDocs/images/pipeline-stages.png" alt="The daily pipeline: Collect, Correlate and Deliver, and what happens when a step fails" width="820">
@@ -357,15 +360,9 @@ switch to the command you used.
 
 ### Pro trial
 
-Take the trial at [invardia.com/trial](https://invardia.com/trial/), then run the same two lines as SecurityInsight
-Pro. Line 1 downloads the Pro copy from invardia.com instead of GitHub; line 2 is the same, with the same parameters
-as the samples above. No licence or key goes on the line: Pro and the trial install the same way, and only the licence
-differs.
-
-```powershell
-Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
-./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>'
-```
+SecurityInsight Pro and the Pro trial install from invardia.com, never from GitHub: start at
+[invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines (line 1
+downloads the Pro copy from invardia.com, line 2 is the same line 2 as above).
 
 ### Every setting
 
@@ -390,26 +387,36 @@ configuration and nothing is sent.
 
 **Community is "see your risk". Pro is "work on it."** Everything that finds, scores and shows your risk is free.
 
-| | Community | Pro |
-|---|:---:|:---:|
-| Four profilers: devices, identities, Azure resources, public IPs (Shodan) | ✅ | ✅ |
-| Defender vulnerabilities and recommendations, Exposure Graph attack paths | ✅ | ✅ |
-| Tiers from real rights, privilege tier catalog, optional AI role classification | ✅ | ✅ |
-| One object across every source (correlation) | ✅ | ✅ |
-| 138 Risk Analysis reports, risk score and weighted risk score | ✅ | ✅ |
-| CMDB from a CSV file | ✅ | ✅ |
-| Excel, summary mail with optional AI summary, Log Analytics tables, JSON | ✅ | ✅ |
-| Web app: findings, management views, trends, wall board, Excel export | ✅ | ✅ |
-| Asset tagging with a dry run first | ✅ | ✅ |
-| Signed updates from the Community channel | ✅ | |
-| Departments, governed exemptions, follow-up tasks and governance mails | | ✅ |
-| CMDB in SecurityInsight, business services ranked by weighted risk | | ✅ |
-| ServiceNow CMDB and the vulnerability close-loop (ServiceNow, SQL, REST) | | ✅ |
-| Alert mails and management summary mails | | ✅ |
-| Roles and scopes for people and groups, audit trail | | ✅ |
-| Template releases by update ring, conformance and deviations | | ✅ |
-| Ask SecurityInsight (AI chat) and the MCP server | | ✅ |
-| Updates from Invardia by update ring, licence, support from Invardia | | ✅ |
+Pro comes as **Pro Business** and **Pro Enterprise**. Both have every Pro feature; Pro Business carries a device limit
+in its signed licence, Pro Enterprise has none.
+
+| | Community | Pro Business | Pro Enterprise |
+|---|:---:|:---:|:---:|
+| Runs in your own Azure as Container Apps jobs, with its own database, on managed identities | ✅ | ✅ | ✅ |
+| Install in two lines: no PowerShell modules, no Azure CLI, no client secret | ✅ | ✅ | ✅ |
+| Four profilers: devices, identities, Azure resources, public IPs (Shodan) | ✅ | ✅ | ✅ |
+| Defender vulnerabilities and recommendations, Exposure Graph attack paths | ✅ | ✅ | ✅ |
+| Tiers from real rights, privilege tier catalog, optional AI role classification | ✅ | ✅ | ✅ |
+| One object across every source (correlation) | ✅ | ✅ | ✅ |
+| 138 Risk Analysis reports, risk score and weighted risk score | ✅ | ✅ | ✅ |
+| CMDB from a CSV file | ✅ | ✅ | ✅ |
+| Excel, summary mail with optional AI summary, Log Analytics tables, JSON | ✅ | ✅ | ✅ |
+| Web app: findings, management views, trends, wall board, Excel export | ✅ | ✅ | ✅ |
+| Fast pages: every view reads stored, indexed columns, kept current after every run | ✅ | ✅ | ✅ |
+| One daily pipeline; an update waits for a running pipeline and never stops it | ✅ | ✅ | ✅ |
+| A database setup job: no person needs database admin rights | ✅ | ✅ | ✅ |
+| Asset tagging with a dry run first | ✅ | ✅ | ✅ |
+| Signed updates from the Community channel | ✅ | | |
+| Departments, governed exemptions, follow-up tasks and governance mails | | ✅ | ✅ |
+| CMDB in SecurityInsight, business services ranked by weighted risk | | ✅ | ✅ |
+| ServiceNow CMDB and the vulnerability close-loop (ServiceNow, SQL, REST) | | ✅ | ✅ |
+| Alert mails and management summary mails | | ✅ | ✅ |
+| Roles and scopes for people and groups, audit trail | | ✅ | ✅ |
+| Template releases by update ring, conformance and deviations | | ✅ | ✅ |
+| Ask SecurityInsight (AI chat), the MCP server and management presentations | | ✅ | ✅ |
+| Updates from Invardia by update ring and a signed licence | | ✅ | ✅ |
+| Support from Invardia (support service, Support app, just-in-time database access - each optional) | Community help on GitHub; Support app optional | ✅ | ✅ |
+| Number of devices | No limit | The limit in your licence | No limit |
 
 Move from Community to Pro without reinstalling.
 
@@ -440,7 +447,9 @@ Everything about SecurityInsight is at **[invardia.com/docs/securityinsight](htt
 SecurityInsight Pro (Pro Business and Pro Enterprise) adds the ServiceNow CMDB connector, a CMDB with business
 services and its connectors, the vulnerability close-loop to ServiceNow, a SQL table or a REST system, departments
 and governed exemptions with governance mails and follow-up tasks, Ask SecurityInsight and the MCP server, managed
-updates from Invardia and support from Invardia.
+updates from Invardia and support from Invardia. Support works only through an Invardia Support app you create, at
+the level you set in the Invardia portal, and gets database access only while a support session you allow is open.
+Pro Business and Pro Enterprise have the same features; Pro Business carries a device limit in its signed licence.
 
 - Product page and editions: [invardia.com/products/securityinsight](https://invardia.com/products/securityinsight/)
 - Pricing: [invardia.com/pricing](https://invardia.com/pricing/) · 60-day Pro trial: [invardia.com/trial](https://invardia.com/trial/)

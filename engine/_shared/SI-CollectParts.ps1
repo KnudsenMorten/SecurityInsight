@@ -25,6 +25,69 @@
 # parts put 100,000 objects in a part at 50 million objects -- ten times the memory the part was sized for.)
 $script:SICollectParts = @{ ObjectsPerPart = 10000; ReferenceBytesPerObject = 8KB }
 
+# =====================================================================================================================
+#  THE AZURE PARENT TAGS IN A RUN COLLECTED IN PARTS (#1089). The tags a resource inherits (resource group, subscription,
+#  management groups) are read ONCE per collection, by the PRODUCER (its discover phase -- RuleIndexes.ps1
+#  Save-SIParentChainForParts), and handed over in the state store next to the records (the parts design's way of sharing
+#  a run's data: the records and the full asset metadata go the same way). The process that MERGES the records reads it
+#  back (SI-RecordHandover.ps1 Publish-SIRecordHandover) and attaches the parts parentTags / parentTagScopes to every
+#  merged azure record -- the workers hold none of discovery's records, so they cannot attach them, and they never
+#  re-read the tenant.
+# =====================================================================================================================
+
+function Get-SIParentChainHandoverPath {
+    <# PURE. Where a run's parent chain is kept (beside its records, never matched as a record bucket). #>
+    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RunId)
+    'collect/{0}/{1}/parent-chain.json' -f $Engine.ToLowerInvariant(), $RunId
+}
+
+function ConvertTo-SIParentChainHandover {
+    <# PURE. The parent-chain index -> what is handed over: every subscription's entry whole (its own tags, then its management
+       groups'), a resource group's own tags only (the subscription's are read from the subscription's entry), no resource's.
+       Get-SIParentTagScopes reads the two entries together, so nothing is lost. #>
+    param($Index, $Stats)
+    $chain = [ordered]@{}
+    if ($null -ne $Index) {
+        foreach ($k in @($Index.Keys)) {
+            $key = [string]$k
+            if ($key -match '^/subscriptions/[^/]+$') { $chain[$key] = @($Index[$k]); continue }
+            if ($key -match '^/subscriptions/[^/]+/resourcegroups/[^/]+$') {
+                $own = @(@($Index[$k]) | Where-Object { $null -ne $_ -and [string]$_.level -eq 'resourceGroup' })
+                if ($own.Count -gt 0) { $chain[$key] = $own }
+            }
+        }
+    }
+    [ordered]@{ Schema = 1; Stats = $Stats; Chain = $chain }
+}
+
+function Save-SIParentChainHandover {
+    <# The run's parent chain -> the state store. Throws on a failed write (the caller says it). Returns the entries kept. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RunId, $Index, $Stats)
+    $doc = ConvertTo-SIParentChainHandover -Index $Index -Stats $Stats
+    & $Store.Write (Get-SIParentChainHandoverPath -Engine $Engine -RunId $RunId) (ConvertTo-Json -InputObject $doc -Compress -Depth 6)
+    $doc.Chain.Count
+}
+
+function Read-SIParentChainHandover {
+    <# The run's parent chain from the state store -> the index (lower-case id -> entries), or $null when the producer kept none. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RunId)
+    $txt = & $Store.Read (Get-SIParentChainHandoverPath -Engine $Engine -RunId $RunId)
+    if (-not $txt) { return $null }
+    $doc = ConvertFrom-Json -InputObject ([string]$txt)
+    $idx = @{}
+    if ($doc.Chain) {
+        foreach ($p in $doc.Chain.PSObject.Properties) {
+            $list = New-Object System.Collections.Generic.List[object]
+            foreach ($e in @($p.Value)) {
+                if ($null -eq $e) { continue }
+                $list.Add(@{ tag = [string]$e.tag; value = [string]$e.value; level = [string]$e.level; from = [string]$e.from })
+            }
+            $idx[([string]$p.Name).ToLowerInvariant()] = $list.ToArray()
+        }
+    }
+    $idx
+}
+
 function Get-SICollectPartIndex {
     <# PURE. The part an object belongs to: the first 8 hex digits of SHA-256(lower-case key) mod Parts -- the same hash the
        engines already shard by (Invoke-Discover), so one object is always in one part. #>

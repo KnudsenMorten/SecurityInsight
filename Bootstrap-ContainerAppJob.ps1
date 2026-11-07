@@ -83,6 +83,9 @@ param(
     # install reports every hour whether or not a pipeline runs (a long report no longer looks like a stopped install).
     # #723: every 15 minutes -- each tick asks Invardia for the "update now" signal; the full report still goes once an hour
     [Parameter()][string]$ScheduleHeartbeat           = '7,22,37,52 * * * *',     # every 15 minutes, from 7 past the hour
+    # the users' sign-in methods read in the background (caj-si-signin-methods) -- its OWN timer, never a step of the pipeline:
+    # each run reads per user for its slice (SI_Identity_SignInMethodsFillMinutes) and the next run carries on
+    [Parameter()][string]$ScheduleSignInMethods       = '3,18,33,48 * * * *',     # every 15 minutes, from 3 past the hour
     # #685: the verification service (caj-si-verification) -- the last step of the Deliver stage; in flow mode the job has no
     # timer (Manual, this one remembered), in schedules mode it runs on it: after the data sync and the daily mail.
     [Parameter()][string]$ScheduleVerification        = '0 11 * * *',    # 11:00 UTC -- the map's defaultCron (config\job-flow.locked.json)
@@ -316,6 +319,14 @@ if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-Pro
 if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-ProSettings.ps1')) -and
     (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/heartbeat/Invoke-SIHeartbeat.ps1')) -and @($Engines) -notcontains 'heartbeat') {
     $Engines = @($Engines) + @('heartbeat')
+}
+# The users' sign-in methods read in the background (caj-si-signin-methods: every property of every method and the device of a
+# Windows Hello / Authenticator key, per user, privileged first) is INFRASTRUCTURE like the status report: every install with its
+# code gets it whatever the engine list -- its OWN timer, never a step, never the pipeline's or the updater's lock. Its setting
+# SI_Identity_SignInMethodsPerUser 'off' makes each run end at once. An existing install gets it from the update
+# (setup\_shared\SI-MissingJobs.ps1).
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/signin-methods/Invoke-SISignInMethods.ps1')) -and @($Engines) -notcontains 'signin-methods') {
+    $Engines = @($Engines) + @('signin-methods')
 }
 # #1038 (1): the data-out job (caj-si-data-out: the ServiceNow hand-off and the other outputs, started by the data sync the
 # moment it has stored the findings per CI, and by a person to resend) is INFRASTRUCTURE like the template job: every install
@@ -1149,6 +1160,7 @@ foreach ($engine in $Engines) {
         'config-backup'           { $ScheduleConfigBackup }
         'verification'            { $ScheduleVerification }
         'heartbeat'               { $ScheduleHeartbeat }
+        'signin-methods'          { $ScheduleSignInMethods }
         default                  { if ($raJob) { $raJob.Cron } else { $ScheduleEndpoint } }
     }
     $parallelism = switch ($engine) {
@@ -1161,6 +1173,8 @@ foreach ($engine in $Engines) {
         'verification'     { 1 }
         # #718: one status report per hour -- never sharded
         'heartbeat'        { 1 }
+        # one background read at a time -- never sharded
+        'signin-methods'   { 1 }
         default           { $ParallelismEndpoint }
     }
     # (Note: $isRiskAnalysis was computed at the top of the loop body so
@@ -1549,7 +1563,15 @@ foreach ($engine in $Engines) {
     # of the default entrypoint. Pushes N shard messages onto the queue;
     # KEDA then scales the worker job to drain.
     if ($effectiveUseKEDA) {
-        Write-Host ('       Ensuring producer job {0} (cron: "{1}") ...' -f $producerName, $schedule)
+        # #1096 (found live: the producer's own daily timer was a second, full collection beside the pipeline that belonged to
+        # no run): a NEW producer follows its engine's trigger plan -- in pipeline mode the engine is a step, so the producer
+        # is created Manual with its timer remembered (si-disabled-cron) and only the pipeline starts it; schedules mode keeps
+        # the cron. An existing producer's trigger is the update's to converge (Invoke-SICollectProducerTrigger); a producer
+        # that is Manual is never given its timer back here.
+        $producerPlan = Get-SIBootstrapProducerTriggerPlan -TriggerPlan $trigPlan -Cron $schedule
+        $producerExistingPeek = Get-SIContainerAppJob -ResourceGroupName $ResourceGroupName -Name $producerName -SubscriptionId $subId
+        $producerManual = ($producerExistingPeek -and [string]$producerExistingPeek.properties.configuration.triggerType -eq 'Manual')
+        Write-Host ('       Ensuring producer job {0} ({1}) ...' -f $producerName, $(if ($producerManual) { 'manual trigger kept -- started by the pipeline' } elseif (-not $producerExistingPeek -and $producerPlan.Trigger -eq 'Manual') { 'started by the pipeline (timer "{0}" remembered)' -f $schedule } else { 'cron: "{0}"' -f $schedule }))
 
         # #475: the producer DISCOVERS once into parts (SI_PRODUCER_DISCOVERS=1), writes the manifest and one message per
         # part, and hands discovery's records over -- it runs the engine, so it carries the worker's whole environment and
@@ -1558,11 +1580,12 @@ foreach ($engine in $Engines) {
         $producerEnvArgs = @(Get-SIKedaProducerEnvArgs -EnvArgs $envArgs -Parallelism $parallelism)
         $producerSecretArgs = @($secretArgs)
 
-        $producerExisting = Get-SIContainerAppJob -ResourceGroupName $ResourceGroupName -Name $producerName -SubscriptionId $subId
+        $producerExisting = $producerExistingPeek
         $producerVerb = if ($producerExisting) { 'update' } else { 'create' }
 
         $producerCreateArgs = @(Get-SIKedaProducerCreateArgs -Name $producerName -ResourceGroup $ResourceGroupName -Environment $EnvName `
             -Cron $schedule -Image $image -LoginServer $acr.loginServer -Cpu ([string]$jobRes.Cpu) -Memory ([string]$jobRes.Memory) -ReplicaTimeout ([int]$jobRes.ReplicaTimeout))
+        if ($producerPlan.Trigger -eq 'Manual') { $producerCreateArgs = ConvertTo-SIManualCreateArgs -CreateArgs $producerCreateArgs -RememberCron $producerPlan.RememberCron }
         $producerCreateArgs += @('--tags', $siBuildTag) + $siSizeTags
         $producerCreateArgs += $registryAuthArgs
         if ($jobAuth.IdentityResourceId) { $producerCreateArgs += @('--mi-user-assigned',$jobAuth.IdentityResourceId) }
@@ -1575,8 +1598,10 @@ foreach ($engine in $Engines) {
             } else {
                 # the producer update mirrors the worker's: READ-MODIFY-WRITE, the command / args kept as they are
                 $pupd = @{ ResourceGroupName = $ResourceGroupName; Name = $producerName; SubscriptionId = $subId; Job = $producerExisting
-                           Image = $image; Cron = $schedule; Env = @($producerEnvArgs); Tags = @($siBuildTag) + $siSizeTags
+                           Image = $image; Env = @($producerEnvArgs); Tags = @($siBuildTag) + $siSizeTags
                            RemoveSecrets = @(Get-SIRetiredJobSecretNames -Job $producerExisting | ForEach-Object { [string]$_ }) }
+                # #1096: a producer the pipeline starts (Manual) keeps no timer -- never put back on one by setup
+                if (-not $producerManual) { $pupd['Cron'] = $schedule }
                 if ($jobAuth.IdentityResourceId) { $pupd['AddIdentity'] = [string]$jobAuth.IdentityResourceId }
                 # #209: a producer moving to the certificate needs its Key Vault reference set (secret mode keeps the
                 # update exactly as it was).

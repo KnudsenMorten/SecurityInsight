@@ -25,7 +25,7 @@ if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Jo
 # 🔑 THE VOCABULARY IS SHARED, AND THIS FILE MUST NOT DECLARE A FOURTH COPY OF IT.
 # `engine/_shared/SI-AssetIdentity.ps1` exists because three files independently ranked identifiers
 # for one question and disagreed -- and worse, the endpoint builder's chain ended in a HOSTNAME, a
-# type this codebase classifies as WEAK and forbids joining on. One module's safety rule was bypassed
+# type this codebase classifies as WEAK and forbids joining on. One module's joining rule was not followed
 # by another, silently, with nothing in any output looking wrong.
 # 📌 What is shared is the VOCABULARY (which types exist, which are joinable, which spellings are the
 # same fact). What is NOT shared is the ORDER -- correlation asks "which id best names this GROUP",

@@ -276,11 +276,12 @@ Describe 'sign-in methods: several $batch requests at once, adapted to what Micr
         $st = Get-SIEntraAuthMethodsState
         ($st.Read, $st.Complete) | Should -Be @(200, $true)
     }
-    It 'WIRING: a sign-in-method read that stops part-way is never reported complete (the discovery marks it and warns)' {
+    It 'WIRING: the identity collection makes NO per-user sign-in-method read -- it takes the detail saved by its own job (owner 2026-11-05)' {
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\discovery\Get-DiscoveryFromEntraUsers.ps1'))
-        $src | Should -Match ([regex]::Escape('try { $got = Get-SIEntraPasswordlessByUser -Token $token -Users $sel }'))
-        $src | Should -Match ([regex]::Escape('if ($st) { $st.Complete = $false; $st.Error = [string]$_.Exception.Message }'))
-        $src | Should -Match 'Write-SIWarn \(''\[perms\] the sign-in-method read stopped part-way'
+        $code = ($src -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        $code | Should -Not -Match 'Get-SIEntraPasswordlessByUser' -Because 'the per-user read runs in caj-si-signin-methods, never in the collection'
+        $code | Should -Match ([regex]::Escape('Invoke-SISignInMethodsPage -Users $sel'))
+        $code | Should -Match 'Write-SISignInMethodsSummary'
     }
     It 'WIRING: without a seam the requests of a wave are all sent before any answer is awaited (REST / .NET only)' {
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\shared\SI-AuthMethodsRead.ps1'))

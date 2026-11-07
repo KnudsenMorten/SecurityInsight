@@ -210,7 +210,22 @@
     },
     {
       "type": "microsoft.sqlvirtualmachine/sqlvirtualmachines",
-      "group": "database"
+      "group": "database",
+      "rollUpInto": {
+        "keepOwnCi": true,
+        "parentTypes": [
+          "microsoft.compute/virtualmachines"
+        ],
+        "parentBy": [
+          "properties.virtualMachineResourceId"
+        ],
+        "shape": {
+          "name": "name",
+          "sql_image_offer": "properties.sqlImageOffer",
+          "sql_image_sku": "properties.sqlImageSku",
+          "sql_license_type": "properties.sqlServerLicenseType"
+        }
+      }
     },
     {
       "type": "microsoft.dbforpostgresql/servers",

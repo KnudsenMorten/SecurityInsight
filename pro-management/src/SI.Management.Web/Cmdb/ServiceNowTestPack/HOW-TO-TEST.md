@@ -71,7 +71,7 @@ SecurityInsight writes nothing in ServiceNow by default. It delivers rows to sta
 - [ ] An asset-keyed row (u_id_source = asset: no ledger id yet) does not create a CI.
 - [ ] Proposed CIs (vProposedCi) are a report: nothing is created from them unless your rules allow creation for that class.
 - [ ] Key-values and relations with u_state = removed are removed or flagged, never left as present.
-- [ ] A CI with u_si_state = not-seen or retired is handled by your rules (a flag, a task, install_status) -- never deleted because SecurityInsight no longer sees it.
+- [ ] SecurityInsight tells every CI's state in its own fields and never deletes a CI: u_si_state = active | not-seen | retired, u_si_reason in plain words, u_action = close on a retired CI, u_si_replaces on the CI that replaces a merged one. A retired or not-seen CI is sent on every run. Your team decides what to do with it -- a retired CI is closed, a merged one is reconciled to the CI it names.
 - [ ] Vulnerable items coalesce on u_source_record_id when present, else on u_si_correlation_id + u_vulnerability, so a re-sent or re-keyed row never creates a second item.
 - [ ] A finding that is not a CVE (u_finding_type other than cve) maps to a third-party entry with u_vulnerability as its id and u_title as its name.
 - [ ] Only u_close_reason = Remediated closes as fixed; Out of scope, Duplicate, AssetRetired and NoLongerMonitored map to non-fix close codes.

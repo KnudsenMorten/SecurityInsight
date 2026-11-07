@@ -143,16 +143,41 @@ function Get-SIDataNextSize {
         PURE. The next chunk / batch size from the last one's measured time: aim for -TargetMs per call, shrink at once
         when slower, grow at most double per call. A measurement, not a ceiling (working rule 5).
     #>
-    param([Parameter(Mandatory)][long]$Current, [Parameter(Mandatory)][long]$ElapsedMs, [long]$TargetMs = 5000, [long]$Minimum = 1)
+    param([Parameter(Mandatory)][long]$Current, [Parameter(Mandatory)][long]$ElapsedMs, [long]$TargetMs = 5000, [long]$Minimum = 1,
+          # OPT-IN (2026-11-07): the part of each call's time that does not grow with its size (Update-SIDataFixedCostMs). The
+          # size is then worked out on the rest (measured - fixed, at least 1 ms): a call whose fixed cost alone is over the
+          # target no longer halves the size down to the minimum and stays there. 0 = exactly the proportional rule of before.
+          [long]$FixedMs = 0)
     if ($Current -lt $Minimum) { $Current = $Minimum }
     # worked out in [double] and held to double the current size BEFORE it becomes a whole number: a fast call on a large
     # size must never overflow (live 2026-10-13: "Cannot convert value 4.294967296E+19 to type System.Int64" failed 20+
     # Risk Analysis reports -- the size had doubled on every call of the run)
     $limit = [double][Math]::Min([double]([long]::MaxValue / 2), 2.0 * [double]$Current)
-    $want = if ($ElapsedMs -le 0) { $limit } else { [Math]::Min($limit, [Math]::Floor([double]$Current * ([double]$TargetMs / [double]$ElapsedMs))) }
+    $grows = $ElapsedMs
+    if ($FixedMs -gt 0 -and $ElapsedMs -gt 0) { $grows = [Math]::Max(1L, $ElapsedMs - $FixedMs) }
+    $want = if ($grows -le 0) { $limit } else { [Math]::Min($limit, [Math]::Floor([double]$Current * ([double]$TargetMs / [double]$grows))) }
     $want = [long]$want
     if ($want -lt $Minimum) { $want = $Minimum }
     $want
+}
+
+function Update-SIDataFixedCostMs {
+    <#
+        PURE. A loop's learned fixed cost per call (for Get-SIDataNextSize -FixedMs), after one more call of -Size that took
+        -ElapsedMs. LEARNED only from a call at a tiny size (-Size <= -TinySize, default 2): the smallest such time -- a large
+        call's time is mostly the part that grows with its size and never sets it. Any call's time is still an upper bound (no
+        call is faster than its fixed cost), so a faster call of any size lowers it. 0 = not learned yet (the rule of before).
+        Live 2026-11-06 (a large install, the finding lifecycle): every range cost about 8 s whatever its size; the
+        proportional rule halved the size to 1 and kept it there for 1,000+ ranges.
+    #>
+    param([long]$FixedMs = 0, [Parameter(Mandatory)][long]$Size, [Parameter(Mandatory)][long]$ElapsedMs, [long]$TinySize = 2)
+    if ($ElapsedMs -le 0) { return [Math]::Max(0L, $FixedMs) }
+    if ($Size -le $TinySize) {
+        if ($FixedMs -le 0) { return $ElapsedMs }
+        return [Math]::Min($FixedMs, $ElapsedMs)
+    }
+    if ($FixedMs -gt 0 -and $ElapsedMs -lt $FixedMs) { return $ElapsedMs }
+    [Math]::Max(0L, $FixedMs)
 }
 
 function Get-SIDataPartitionCount {

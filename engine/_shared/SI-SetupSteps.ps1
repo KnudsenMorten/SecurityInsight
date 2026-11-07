@@ -23,6 +23,15 @@
                          heartbeat's read of cfg.SupportGrantStatus (Get-SISupportGrantStatus)
       mail-send-right    sending is restricted to the shared mailbox -- cfg.InstallState 'MailRestriction' (+ an
                          administrator's attestation); left out while mail is not set up
+      identity-names     every identity follows id-si-<role> (framework 12.11c THE IDENTITY MOVE, checklist NAM-03) --
+                         cfg.InstallState 'IdentityNames' { checkedUtc, roles: { <role>: { state ok | missing | unknown,
+                         name, kind, objectId, standard } } }, written by the identity move's report step (the Invardia
+                         Support app, ops\identity-move); ok only when every role is ok
+      db-job             the database setup job caj-si-dbinit (framework SEC-08) -- cfg.InstallState 'DbJob', its own
+                         result row { state ok | failed, at, run, by, n, why }; 'waiting' (written by the updater) = its
+                         identity is not yet proven a member of the SQL admin group; left out while there is no row.
+                         Framework §4.5 G4: the updater's own row 'DbJobMembership' { state ok | renewal-failed | gone |
+                         missing, at, end } -- gone = missing (updates are held); renewal-failed keeps ok, said in the detail
     The Invardia Support app's own database access is NOT a step here: Invardia checks it itself from the heartbeat's
     supportSqlAccess (its step support-arm).
 
@@ -44,9 +53,11 @@ function Get-SISetupStepsContract {
             'updater-database'  = @{ Title = 'The updater may change the SecurityInsight database'; How = 'customer' }
             'support-grant-jit' = @{ Title = 'Invardia support: read-only database role and the just-in-time grant'; How = 'support-app' }
             'mail-send-right'   = @{ Title = 'Mail sending is restricted to the shared mailbox'; How = 'customer' }
+            'identity-names'    = @{ Title = 'Every SecurityInsight identity has its standard name (id-si-<role>)'; How = 'support-app' }
+            'db-job'            = @{ Title = 'The database setup job runs as its own identity'; How = 'support-app' }
         }
         # the cfg.InstallState rows the checks read
-        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation')
+        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership')
         # an update error that names the updater's database rights (the same words Get-SIHeartbeatWarnings reads as si-upd-0802)
         DbRightsRx = '(?i)db_ddladmin|db_securityadmin|permission was denied|permission denied in database|CREATE TABLE permission|ALTER permission|not have permission'
         # a detail that looks like something to run is never sent (Invardia drops it too)
@@ -152,7 +163,7 @@ function Get-SISetupSteps {
             if ($wire) {
                 $ro = if ($wire -is [System.Collections.IDictionary]) { $wire['readOnly'] } else { $wire.readOnly }
                 if ($ro -eq $true) { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'ok' -CheckedAt $at -Detail 'Installed in every database; the read-only role is held.') }
-                elseif ($ro -eq $false) { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'missing' -CheckedAt $at -Detail 'The read-only support role is missing in at least one database.') }
+                elseif ($ro -eq $false) { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'missing' -CheckedAt $at -Detail 'The read-only support role or the just-in-time grant is missing in at least one database.') }
                 else { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'unknown' -CheckedAt $at -Detail 'At least one database could not be read.') }
             } elseif ($text -match 'no support grant procedures yet') {
                 & $add (New-SISetupStep -Key 'support-grant-jit' -State 'missing' -CheckedAt $at -Detail 'The just-in-time support grant is not installed yet (one Invardia support session).')
@@ -177,6 +188,52 @@ function Get-SISetupSteps {
                 'not-granted'  { & $add (New-SISetupStep -Key 'mail-send-right' -State 'missing' -CheckedAt $at -Detail 'SecurityInsight may not send as the shared mailbox yet.') }
                 'error'        { & $add (New-SISetupStep -Key 'mail-send-right' -State 'unknown' -CheckedAt $at -Detail 'The restriction check failed; it runs again with the mail setup.') }
             }
+        }
+    } catch { }
+    try {
+        # identity-names: the identity move's own check of every role (name, kind, object id per role in the row)
+        $idn = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'IdentityNames'))
+        $roles = if ($idn -and $idn.PSObject.Properties['roles']) { $idn.roles } else { $null }
+        if ($roles) {
+            $parts = New-Object System.Collections.Generic.List[string]; $states = New-Object System.Collections.Generic.List[string]
+            foreach ($p in @($roles.PSObject.Properties)) {
+                $st = if ($p.Value -and $p.Value.PSObject.Properties['state']) { "$($p.Value.state)".Trim().ToLowerInvariant() } else { 'unknown' }
+                if ($st -notin 'ok', 'missing', 'unknown') { $st = 'unknown' }
+                $states.Add($st)
+                $nm = if ($p.Value -and $p.Value.PSObject.Properties['name']) { "$($p.Value.name)".Trim() } else { '' }
+                $parts.Add($(if ($st -eq 'ok' -or -not $nm) { '{0} {1}' -f $p.Name, $st } else { '{0} {1} ({2})' -f $p.Name, $st, $nm }))
+            }
+            if ($states.Count) {
+                $all = if ($states -contains 'missing') { 'missing' } elseif ($states -contains 'unknown') { 'unknown' } else { 'ok' }
+                $at = ConvertTo-SISetupStepUtc $(if ($idn.PSObject.Properties['checkedUtc']) { $idn.checkedUtc } else { Get-SISetupStepRowValue $StateRows 'IdentityNames' 'UpdatedAt' })
+                & $add (New-SISetupStep -Key 'identity-names' -State $all -CheckedAt $at -Detail ('Identities: ' + ($parts -join ', ') + '.'))
+            }
+        }
+    } catch { }
+    try {
+        # db-job (framework SEC-08, Invardia DESIGN ch 12 point 5): the database setup job caj-si-dbinit's own result row
+        # (written by the job; 'waiting' by the updater while the job's identity is not proven a member of the admin group)
+        $dj = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'DbJob'))
+        if ($dj -and $dj.PSObject.Properties['state']) {
+            $at = ConvertTo-SISetupStepUtc $(if ($dj.PSObject.Properties['at']) { $dj.at } else { Get-SISetupStepRowValue $StateRows 'DbJob' 'UpdatedAt' })
+            $since = ConvertTo-SISetupStepUtc (Get-SISetupStepRowValue $StateRows 'DbJob' 'UpdatedAt')
+            $why = if ($dj.PSObject.Properties['why']) { "$($dj.why)".Trim() } else { '' }
+            # framework §4.5 SQL-ADMIN-GROUP G4: the updater's own check of the job identity's membership (its own row)
+            $mb = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'DbJobMembership'))
+            $mbState = if ($mb -and $mb.PSObject.Properties['state']) { "$($mb.state)".Trim().ToLowerInvariant() } else { '' }
+            $mbEnd = if ($mb -and $mb.PSObject.Properties['end']) { ConvertTo-SISetupStepUtc $mb.end } else { '' }
+            $mbAt = if ($mb -and $mb.PSObject.Properties['at']) { ConvertTo-SISetupStepUtc $mb.at } else { '' }
+            if ($mbState -eq 'gone') {
+                & $add (New-SISetupStep -Key 'db-job' -State 'missing' -CheckedAt $(if ($mbAt) { $mbAt } else { $at }) -Since $since -Detail 'Its identity is no longer a member of the SQL admin group; updates are held until it is again.')
+            }
+            else { switch ("$($dj.state)".Trim().ToLowerInvariant()) {
+                'ok'      {
+                    if ($mbState -eq 'renewal-failed') { & $add (New-SISetupStep -Key 'db-job' -State 'ok' -CheckedAt $at -Since $since -Detail ('Its last run read back every database user. Its SQL admin group membership{0} could not be renewed yet; the updater tries again.' -f $(if ($mbEnd) { ' ends ' + $mbEnd.Substring(0, 10) + ' and' } else { '' }))) }
+                    else { & $add (New-SISetupStep -Key 'db-job' -State 'ok' -CheckedAt $at -Since $since -Detail 'Its last run read back every database user of the install.') }
+                }
+                'failed'  { & $add (New-SISetupStep -Key 'db-job' -State 'missing' -CheckedAt $at -Since $since -Detail ('Its last run failed' + $(if ($why) { ': ' + $why } else { '.' }))) }
+                'waiting' { & $add (New-SISetupStep -Key 'db-job' -State 'missing' -CheckedAt $at -Since $since -Detail 'Not run yet: its identity must be added once to the SQL admin group.') }
+            } }
         }
     } catch { }
     $out.ToArray()

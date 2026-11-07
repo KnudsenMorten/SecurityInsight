@@ -268,7 +268,7 @@ function Get-SISubnetDecision {
                 foreach ($x in $sp) { if (Test-SICidrOverlap $p $x) { return @{ Action = 'fail'; Reason = ('{0} for {1} overlaps the subnet {2} ({3}) of the virtual network -- give a free range' -f $p, $Name, [string](Get-SIPnProp $s @('name')), $x) } } }
             }
         }
-        return @{ Action = 'create'; Reason = ('the subnet {0} ({1}) is created{2}' -f $Name, $p, $(if ($Delegate) { ', delegated to Container Apps' } else { ' for the private endpoints' })) }
+        return @{ Action = 'create'; Reason = ('the subnet {0} ({1}) is created{2}' -f $Name, $p, $(if ($Delegate) { ', delegated to Container Apps' } else { ' for the private endpoints and the build agent pool, with default outbound access (outbound only)' })) }
     }
     $have = "$(Get-SIPnProp $Subnet @('properties', 'addressPrefix'))".Trim()
     if (-not $have) { $have = (@(Get-SIPnProp $Subnet @('properties', 'addressPrefixes')) | Where-Object { $_ } | Select-Object -First 1) }
@@ -296,7 +296,14 @@ function Get-SISubnetBody {
         }
     } else {
         $props['addressPrefix'] = "$Prefix".Trim()
-        if (-not $Delegate) { $props['privateEndpointNetworkPolicies'] = 'Disabled' }
+        if (-not $Delegate) {
+            $props['privateEndpointNetworkPolicies'] = 'Disabled'
+            # #1087: the endpoints subnet is also where the registry's build agent pool runs (PIM's design: the pool in the
+            # PE subnet). Azure makes NEW subnets private (defaultOutboundAccess false) since late 2025 -- without NAT or a
+            # route the pool's machines have no way out and Azure's own pool deployment fails. Outbound only: nothing here
+            # becomes reachable from outside; the endpoints, vault, storage, SQL and registry stay private.
+            $props['defaultOutboundAccess'] = $true
+        }
     }
     if ($Delegate) {
         $d = @(@($props['delegations']) | Where-Object { $_ })
@@ -316,8 +323,14 @@ function Set-SISubnet {
     $d = Get-SISubnetDecision -Subnet $have -Prefix $Prefix -Name $Name -Delegate:$Delegate -Vnet $Vnet
     if ($d.Action -eq 'fail') { throw ('Private network: {0}. Nothing was changed.' -f $d.Reason) }
     if ($d.Action -eq 'none') { return @{ Ok = $true; Action = 'none'; Line = $d.Reason; Id = [string](Get-SIPnProp $have @('id')); Before = $have } }
-    $null = & $Arm 'PUT' $path (Get-SISubnetBody -Subnet $have -Prefix $Prefix -Delegate:$Delegate)
-    $back = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Test { param($o) (Test-SIPnSucceeded $o) -and (-not $Delegate -or (@(Get-SIPnProp $o @('properties', 'delegations') | ForEach-Object { [string](Get-SIPnProp $_ @('properties', 'serviceName')) }) -contains $script:SIPnAppsDelegation)) }
+    $body = Get-SISubnetBody -Subnet $have -Prefix $Prefix -Delegate:$Delegate
+    # #1087 / framework rule 11b: a subnet created with defaultOutboundAccess = true must READ BACK true
+    $wantOut = [bool](Test-SISubnetOutboundSet $body)
+    $null = & $Arm 'PUT' $path $body
+    $back = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Test { param($o) (Test-SIPnSucceeded $o) -and (-not $wantOut -or (Test-SISubnetOutboundSet $o)) -and (-not $Delegate -or (@(Get-SIPnProp $o @('properties', 'delegations') | ForEach-Object { [string](Get-SIPnProp $_ @('properties', 'serviceName')) }) -contains $script:SIPnAppsDelegation)) }
+    if ($wantOut -and (Test-SIPnSucceeded $back) -and -not (Test-SISubnetOutboundSet $back)) {
+        throw ('Private network: the subnet {0} was created with default outbound access, but it does not read back true (Azure shows: {1}). The registry''s build agent pool needs it. Run the install again: it checks the subnet again before the pool is made.' -f $Name, $(if ($null -eq (Get-SIPnProp $back @('properties', 'defaultOutboundAccess'))) { 'not set' } else { [string](Get-SIPnProp $back @('properties', 'defaultOutboundAccess')) }))
+    }
     $ok = [bool](Test-SIPnSucceeded $back)
     @{ Ok = $ok; Action = $d.Action; Id = $(if ($back) { [string](Get-SIPnProp $back @('id')) } else { $id }); Before = $have
        Line = $(if ($ok) { $d.Reason + ' (read back)' } else { ('the subnet {0} does not read back as ready after the change (Azure shows: {1})' -f $Name, [string](Get-SIPnProp $back @('properties', 'provisioningState'))) }) }
@@ -724,9 +737,12 @@ function Set-SIRegistrySku {
 
 function Get-SIAcrAgentPoolBody {
     <# PURE. The registry's agent pool in -SubnetId: image builds run there, inside the network, so the registry's public
-       endpoint can be closed (Azure's shared build agents are refused by a closed registry). One S1 agent, Linux. #>
+       endpoint can be closed (Azure's shared build agents are refused by a closed registry). Framework rule 11g: tier S2,
+       0 agents -- the pool is scaled to 2 only while images are built (setup\_shared\SI-AcrBuildPool.ps1), Linux. #>
     param([Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$SubnetId)
-    [ordered]@{ location = $Location; properties = [ordered]@{ count = 1; tier = 'S1'; os = 'Linux'; virtualNetworkSubnetResourceId = $SubnetId } }
+    # HOTFIX 2026-11-05: Azure refuses to CREATE a pool at count 0 (AgentPoolInvalidCount: at least 1) -- made at 1, then scaled to 0
+    # and read back by Set-SIAcrAgentPool once Azure reads it Succeeded
+    [ordered]@{ location = $Location; properties = [ordered]@{ count = 1; tier = 'S2'; os = 'Linux'; virtualNetworkSubnetResourceId = $SubnetId } }
 }
 
 function Test-SIAcrAgentPoolInNetwork {
@@ -739,24 +755,477 @@ function Test-SIAcrAgentPoolInNetwork {
     $s.ToLowerInvariant().StartsWith($VnetId.TrimEnd('/').ToLowerInvariant() + '/subnets/')
 }
 
+# How long setup / the updater wait for Azure to make the registry's agent pool in the network. Azure documents the creation
+# of a pool in a virtual network in MINUTES (the agents are deployed into the subnet); a live private install (3.0.31) read
+# 'Creating' after the earlier 15 min of read-backs and failed the step although Azure was still at work. 30 min: twice what
+# was seen not to be enough, and still a bound that is said in the output -- a pool still 'Creating' after it is a re-run.
+$script:SIAcrAgentPoolWaitMinutes = 30
+
+function Get-SIAcrAgentPoolError {
+    <# PURE. Azure's words for why -Pool did not provision ('' = none on the resource). #>
+    param($Pool)
+    foreach ($p in @(@('properties', 'error', 'message'), @('properties', 'provisioningError', 'message'), @('error', 'message'), @('properties', 'statusMessage'))) {
+        $m = [string](Get-SIPnProp $Pool $p); if ($m.Trim()) { return $m.Trim() }
+    }
+    ''
+}
+
+function Wait-SIAcrAgentPool {
+    <# Waits for the agent pool at -Path until Azure reads it Succeeded / Failed / Canceled, or -LimitMinutes pass (the clock
+       is -Now, so tests do not wait). Says what it waits for and how long at most, then one progress line every
+       -ProgressSeconds. Reuses Read-SIPnBack (the read-back of every other resource) with the pool's own, longer bound.
+       Returns @{ Pool = <last read>; State; TimedOut; Minutes }. #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name,
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [scriptblock]$Now = { [datetime]::UtcNow },
+          [scriptblock]$Say = { param($t) Write-Host $t }, [int]$LimitMinutes = $script:SIAcrAgentPoolWaitMinutes,
+          [int]$PauseSeconds = 15, [int]$ProgressSeconds = 60, [string]$FirstState = '')
+    $start = [datetime](& $Now); $deadline = $start.AddMinutes($LimitMinutes)
+    $st = @{ Said = $start; Announced = $false; TimedOut = $false }
+    $first = $(if ($FirstState) { $FirstState } else { 'Creating' })
+    & $Say ('  waiting for the build agent pool {0} (Azure: {1}) -- up to {2} min; Azure takes several minutes to place it in the network' -f $Name, $first, $LimitMinutes)
+    $tries = [int][math]::Ceiling(($LimitMinutes * 60) / [math]::Max(1, $PauseSeconds)) + 1
+    $back = Read-SIPnBack -Arm $Arm -Path $Path -Sleep $Sleep -Tries $tries -PauseSeconds $PauseSeconds -Test {
+        param($o)
+        $s = [string](Get-SIPnProp $o @('properties', 'provisioningState'))
+        if ($s -in 'Succeeded', 'Failed', 'Canceled') { return $true }
+        $t = [datetime](& $Now)
+        if ($t -ge $deadline) { $st.TimedOut = $true; return $true }
+        if (($t - $st.Said).TotalSeconds -ge $ProgressSeconds) {
+            $st.Said = $t
+            & $Say ('  still waiting for the build agent pool {0} (Azure: {1}) -- {2} of up to {3} min' -f $Name, $(if ($s) { $s } else { 'not readable yet' }), [int][math]::Floor(($t - $start).TotalMinutes), $LimitMinutes)
+        }
+        $false
+    }
+    $state = [string](Get-SIPnProp $back @('properties', 'provisioningState'))
+    if ($state -notin 'Succeeded', 'Failed', 'Canceled' -and -not $st.TimedOut) { $st.TimedOut = $true }   # the tries ran out first
+    @{ Pool = $back; State = $state; TimedOut = [bool]$st.TimedOut; Minutes = [int][math]::Floor((([datetime](& $Now)) - $start).TotalMinutes) }
+}
+
 function Set-SIAcrAgentPool {
-    <# The registry's agent pool -Name in -SubnetId, idempotent, READ BACK (Azure takes some minutes). A pool of that name
-       in another network is never changed (said). Returns @{ Ok; Line; Id; Created }. #>
+    <# The registry's agent pool -Name in -SubnetId, idempotent, READ BACK -- Azure takes several minutes to make a pool in a
+       network, so it WAITS for it (Wait-SIAcrAgentPool, up to $script:SIAcrAgentPoolWaitMinutes, said in the output). A pool
+       Azure left Failed / Canceled is asked for again. A pool of that name in another network is never changed (said).
+       Returns @{ Ok; Line; Id; Created; State; TimedOut }. #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$RegistryId, [Parameter(Mandatory)][string]$Name,
-          [Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$SubnetId, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+          [Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$SubnetId, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          [scriptblock]$Now = { [datetime]::UtcNow }, [scriptblock]$Say = { param($t) Write-Host $t }, [int]$LimitMinutes = $script:SIAcrAgentPoolWaitMinutes)
     $id = '{0}/agentPools/{1}' -f $RegistryId.TrimEnd('/'), $Name
     $path = '{0}?api-version={1}' -f $id, $script:SIPnAcrTasksApi
     $have = & $Arm 'GET' $path $null
+    $haveState = [string](Get-SIPnProp $have @('properties', 'provisioningState'))
     if ($have) {
         if (-not (Test-SIPnSameId ([string](Get-SIPnProp $have @('properties', 'virtualNetworkSubnetResourceId'))) $SubnetId)) {
-            return @{ Ok = $false; Created = $false; Id = $id; Line = ('the agent pool {0} exists in another subnet -- it is not changed' -f $Name) }
+            return @{ Ok = $false; Created = $false; Id = $id; State = $haveState; TimedOut = $false; Line = ('the agent pool {0} exists in another subnet -- it is not changed' -f $Name) }
         }
-        if (Test-SIPnSucceeded $have) { return @{ Ok = $true; Created = $false; Id = $id; Line = ('the registry''s agent pool {0} runs in the network' -f $Name) } }
-    } else { $null = & $Arm 'PUT' $path (Get-SIAcrAgentPoolBody -Location $Location -SubnetId $SubnetId) }
-    $back = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Tries 60 -PauseSeconds 15 -Test { param($o) [string](Get-SIPnProp $o @('properties', 'provisioningState')) -in 'Succeeded', 'Failed', 'Canceled' }
-    $ok = Test-SIPnSucceeded $back
-    @{ Ok = [bool]$ok; Created = (-not $have); Id = $id
-       Line = $(if ($ok) { 'the registry''s agent pool {0} in the network: image builds run inside it (read back)' -f $Name } else { 'the agent pool {0} does not read back as ready (Azure shows: {1})' -f $Name, [string](Get-SIPnProp $back @('properties', 'provisioningState')) }) }
+        if (Test-SIPnSucceeded $have) { return @{ Ok = $true; Created = $false; Id = $id; State = $haveState; TimedOut = $false; Line = ('the registry''s agent pool {0} runs in the network' -f $Name) } }
+        # Azure gave up on it earlier: ask again (the same body; a PUT of the same pool is idempotent)
+        if ($haveState -in 'Failed', 'Canceled') { $null = & $Arm 'PUT' $path (Get-SIAcrAgentPoolBody -Location $Location -SubnetId $SubnetId); $haveState = 'Creating' }
+    } else { $null = & $Arm 'PUT' $path (Get-SIAcrAgentPoolBody -Location $Location -SubnetId $SubnetId); $haveState = 'Creating' }
+    $w = Wait-SIAcrAgentPool -Arm $Arm -Path $path -Name $Name -Sleep $Sleep -Now $Now -Say $Say -LimitMinutes $LimitMinutes -FirstState $haveState
+    $ok = $w.State -eq 'Succeeded'
+    # HOTFIX 2026-11-05 (rule 11g: 0 agents between builds): a pool made or made again here starts at 1 agent (Azure's least
+    # at creation) -- scaled to 0 now and read back; a pool that cannot be scaled stays at 1 (it works; it costs one agent) and that is said
+    $scaleNote = ''
+    if ($ok -and [int](Get-SIPnProp $w.Pool @('properties', 'count')) -gt 0) {
+        try {
+            $null = & $Arm 'PATCH' $path ([ordered]@{ properties = [ordered]@{ count = 0 } })
+            $zb = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Tries 40 -PauseSeconds 15 -Test { param($o) [string](Get-SIPnProp $o @('properties', 'provisioningState')) -eq 'Succeeded' -and [int](Get-SIPnProp $o @('properties', 'count')) -eq 0 }
+            $scaleNote = if ([int](Get-SIPnProp $zb @('properties', 'count')) -eq 0) { '; scaled to 0 agents between builds (read back)' } else { '; it still has 1 agent -- the next update scales it to 0' }
+        } catch { $scaleNote = ('; it still has 1 agent (the scale to 0 was refused: {0}) -- the next update scales it to 0' -f $_.Exception.Message) }
+    }
+    $line = if ($ok) { 'the registry''s agent pool {0} in the network: image builds run inside it (read back, after {1} min){2}' -f $Name, $w.Minutes, $scaleNote }
+            elseif ($w.State -in 'Failed', 'Canceled') {
+                $err = Get-SIAcrAgentPoolError $w.Pool
+                'Azure could not make the agent pool {0} (Azure shows: {1}{2})' -f $Name, $w.State, $(if ($err) { ': ' + $err } else { '; Azure gives no reason on the pool -- the registry''s Activity log has it' })
+            }
+            else { 'the agent pool {0} does not read back as ready after {1} min of waiting (Azure shows: {2}) -- Azure is still making it' -f $Name, $LimitMinutes, $(if ($w.State) { $w.State } else { 'not readable' }) }
+    @{ Ok = [bool]$ok; Created = (-not $have); Id = $id; State = $w.State; TimedOut = [bool]$w.TimedOut; Line = $line }
+}
+
+# #1087 (3.0.33): a live private install's agent pool FAILED twice inside Azure's own deployment -- the endpoints subnet SI
+# made read defaultOutboundAccess = false (Azure's default for NEW subnets since late 2025), with no NAT gateway and no
+# route table, so the pool's machines had no way out. PIM's working pool at the same customer sits in its older PE subnet
+# (defaultOutboundAccess unset = implicit outbound). The design stays PIM's (the pool in the PE subnet); the subnet must
+# have an outbound path. Never a pool that is certain to fail.
+
+function Get-SISubnetOutboundPath {
+    <# PURE. The outbound path of -Subnet (as ARM returns it): 'default' (defaultOutboundAccess true, or unset = the
+       implicit outbound of an older subnet), 'nat' (a NAT gateway), 'route' (-RouteTable, the route table the subnet
+       names, has a 0.0.0.0/0 route to a next hop other than None), '' = none. #>
+    param($Subnet, $RouteTable = $null)
+    if (-not $Subnet) { return '' }
+    $doa = Get-SIPnProp $Subnet @('properties', 'defaultOutboundAccess')
+    if ($null -eq $doa -or "$doa" -eq '' -or "$doa" -eq 'True') { return 'default' }
+    if ([string](Get-SIPnProp $Subnet @('properties', 'natGateway', 'id'))) { return 'nat' }
+    foreach ($r in @(Get-SIPnProp $RouteTable @('properties', 'routes') | Where-Object { $_ })) {
+        if ([string](Get-SIPnProp $r @('properties', 'addressPrefix')) -eq '0.0.0.0/0' -and [string](Get-SIPnProp $r @('properties', 'nextHopType')) -ne 'None') { return 'route' }
+    }
+    ''
+}
+
+function Test-SISubnetOutboundSet { <# PURE. Does -Subnet read defaultOutboundAccess = true (explicitly)? #> param($Subnet) "$(Get-SIPnProp $Subnet @('properties', 'defaultOutboundAccess'))" -eq 'True' }
+
+function Test-SIOwnSpokeVnet {
+    <# PURE. Is -Vnet (as ARM returns it) SecurityInsight's OWN spoke network -- the one Set-SIVnet makes from vnetAddressPrefix:
+       in the install's resource group -ResourceGroupId AND tagged purpose = securityinsight-private-network? A customer's
+       network (vnetId given) is never this. #>
+    param($Vnet, [string]$ResourceGroupId = '')
+    if (-not $Vnet -or -not "$ResourceGroupId".Trim()) { return $false }
+    $id = [string](Get-SIPnProp $Vnet @('id'))
+    $inRg = $id -and $id.TrimEnd('/').StartsWith($ResourceGroupId.TrimEnd('/') + '/providers/', [System.StringComparison]::OrdinalIgnoreCase)
+    [bool]($inRg -and [string](Get-SIPnProp $Vnet @('tags', 'purpose')) -eq 'securityinsight-private-network')
+}
+
+function Get-SIBuildSubnetOutboundStep {
+    <# PURE. The one customer step when the build subnet of a CUSTOMER'S network has no outbound path. #>
+    param([Parameter(Mandatory)][string]$SubnetName)
+    'the build subnet {0} has no outbound path; give it outbound access (defaultOutboundAccess, a NAT gateway or a route to your firewall that allows the Azure services an ACR agent pool needs), then run the install again' -f $SubnetName
+}
+
+function Set-SIBuildSubnetOutbound {
+    <#
+        #1087. READS the subnet -SubnetId the registry's agent pool goes in, BEFORE the pool is made. An outbound path
+        (Get-SISubnetOutboundPath) = fine, nothing written. None:
+          SecurityInsight's own spoke (-OwnNetwork, or the network reads as its own: Test-SIOwnSpokeVnet)
+              defaultOutboundAccess set true (the subnet PUT keeps everything else it has), READ BACK;
+          a customer's network
+              NOTHING is changed: Blocked, with the one customer step (Get-SIBuildSubnetOutboundStep).
+        A subnet that cannot be read is not guessed at: said, not blocked (the pool step reports what Azure does).
+        -ReportOnly (the updater's -WhatIf): the plan, nothing written.
+        Returns @{ Ok; Blocked; Fixed; Path; Own; Line; Step }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubnetId, [bool]$OwnNetwork = $false,
+          [string]$ResourceGroupId = '', [switch]$ReportOnly, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $name = ($SubnetId.TrimEnd('/') -split '/')[-1]
+    $path = '{0}?api-version={1}' -f $SubnetId.TrimEnd('/'), $script:SIPnNetApi
+    $sn = & $Arm 'GET' $path $null
+    if (-not $sn) { return @{ Ok = $true; Blocked = $false; Fixed = $false; Path = ''; Own = $OwnNetwork; Step = ''; Line = ('the build subnet {0} could not be read, so its outbound path is not checked' -f $name) } }
+    $rtId = [string](Get-SIPnProp $sn @('properties', 'routeTable', 'id'))
+    $rt = if ($rtId) { & $Arm 'GET' ('{0}?api-version={1}' -f $rtId.TrimEnd('/'), $script:SIPnNetApi) $null } else { $null }
+    $via = Get-SISubnetOutboundPath -Subnet $sn -RouteTable $rt
+    $what = @{ default = 'default outbound access'; nat = 'a NAT gateway'; route = 'a route table with a 0.0.0.0/0 route' }
+    if ($via) { return @{ Ok = $true; Blocked = $false; Fixed = $false; Path = $via; Own = $OwnNetwork; Step = ''; Line = ('the build subnet {0} has an outbound path ({1})' -f $name, $what[$via]) } }
+    $own = [bool]$OwnNetwork
+    if (-not $own) {
+        $vnet = & $Arm 'GET' ('{0}?api-version={1}' -f ($SubnetId.TrimEnd('/') -replace '(?i)/subnets/[^/]+$', ''), $script:SIPnNetApi) $null
+        $own = Test-SIOwnSpokeVnet -Vnet $vnet -ResourceGroupId $ResourceGroupId
+    }
+    if (-not $own) {
+        $step = Get-SIBuildSubnetOutboundStep -SubnetName $name
+        return @{ Ok = $false; Blocked = $true; Fixed = $false; Path = ''; Own = $false; Step = $step
+                  Line = ('the build subnet {0} is in your network and has no outbound path (no default outbound access, no NAT gateway, no 0.0.0.0/0 route) -- the agent pool is NOT made (it would fail); SecurityInsight does not change your network: {1}' -f $name, $step) }
+    }
+    if ($ReportOnly) { return @{ Ok = $true; Blocked = $false; Fixed = $false; Path = ''; Own = $true; Step = ''; Line = ('the build subnet {0} would get default outbound access (SecurityInsight''s own network; outbound only)' -f $name) } }
+    $body = Get-SISubnetBody -Subnet $sn
+    $body.properties['defaultOutboundAccess'] = $true
+    $null = & $Arm 'PUT' $path $body
+    # read back EXPLICITLY true (framework rule 11b, the build-pool outbound rule) -- unset is not what was written
+    $back = Read-SIPnBack -Arm $Arm -Path $path -Sleep $Sleep -Tries 12 -Test { param($o) (Test-SIPnSucceeded $o) -and (Test-SISubnetOutboundSet $o) }
+    $ok = [bool]((Test-SIPnSucceeded $back) -and (Test-SISubnetOutboundSet $back))
+    @{ Ok = $ok; Blocked = (-not $ok); Fixed = $ok; Path = $(if ($ok) { 'default' } else { '' }); Own = $true
+       Step = $(if ($ok) { '' } else { 'run the install again: SecurityInsight sets default outbound access on its own build subnet {0} and reads it back' -f $name })
+       Line = $(if ($ok) { 'the build subnet {0} (SecurityInsight''s own network) had no outbound path: default outbound access turned on (outbound only; read back)' -f $name }
+                else { 'the build subnet {0} (SecurityInsight''s own network) does not read back with default outbound access after the change -- the agent pool is NOT made' -f $name }) }
+}
+
+function Invoke-SIAcrAgentPoolStep {
+    <# #1087. The registry's agent pool -Name in -SubnetId, never one that is certain to fail: a pool that already runs there
+       is kept as it is; otherwise the subnet's outbound path is checked first (Set-SIBuildSubnetOutbound) and the pool is
+       made (Set-SIAcrAgentPool: a Failed / Canceled one is asked for again) only when there is one. Returns
+       Set-SIAcrAgentPool's hashtable plus Blocked, Step and OutboundLine. #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$RegistryId, [Parameter(Mandatory)][string]$Name,
+          [Parameter(Mandatory)][string]$Location, [Parameter(Mandatory)][string]$SubnetId, [bool]$OwnNetwork = $false, [string]$ResourceGroupId = '',
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [scriptblock]$Now = { [datetime]::UtcNow }, [scriptblock]$Say = { param($t) Write-Host $t })
+    $id = '{0}/agentPools/{1}' -f $RegistryId.TrimEnd('/'), $Name
+    $have = & $Arm 'GET' ('{0}?api-version={1}' -f $id, $script:SIPnAcrTasksApi) $null
+    $runs = $have -and (Test-SIPnSucceeded $have) -and (Test-SIPnSameId ([string](Get-SIPnProp $have @('properties', 'virtualNetworkSubnetResourceId'))) $SubnetId)
+    $o = @{ Ok = $true; Line = ''; Step = '' }
+    if (-not $runs) {
+        $o = Set-SIBuildSubnetOutbound -Arm $Arm -SubnetId $SubnetId -OwnNetwork $OwnNetwork -ResourceGroupId $ResourceGroupId -Sleep $Sleep
+        if ($o.Blocked) { return @{ Ok = $false; Blocked = $true; Created = $false; Id = $id; State = [string](Get-SIPnProp $have @('properties', 'provisioningState')); TimedOut = $false; Line = $o.Line; Step = $o.Step; OutboundLine = $o.Line } }
+    }
+    $p = Set-SIAcrAgentPool -Arm $Arm -RegistryId $RegistryId -Name $Name -Location $Location -SubnetId $SubnetId -Sleep $Sleep -Now $Now -Say $Say
+    $p['Blocked'] = $false; $p['Step'] = ''; $p['OutboundLine'] = [string]$o.Line
+    $p
+}
+
+# ============================================================================================================== RETURN ROUTE (#1095)
+# LIVE 2026-11-04 (a private install in a hub-and-spoke network with a firewall in the hub): DNS resolved, the peering read
+# Connected, and the browser on the customer's internal network still timed out. The requests reached the web app through
+# the hub's firewall, but the apps subnet had NO route table: the replies to the customer's own address ranges took Azure's
+# default route and were dropped. The cure (made by hand that day, and it worked) is a route table on the apps subnet: each
+# range the customer's people browse from -> the hub firewall's private IP as VirtualAppliance, BGP route propagation off.
+#   * Made ONLY on SecurityInsight's OWN spoke (the network it creates) and ONLY from the customer's own answers
+#     (returnRouteRanges + returnRouteNextHop) -- the next hop is a customer value SecurityInsight can never guess.
+#   * A CUSTOMER-PROVIDED network is never changed: the network hand-off carries the item for the customer's network team.
+#   * Framework rule 11d (Invardia 301d9d81): the table is rt-si in the install's resource group. A table already attached
+#     to the apps subnet (an earlier hand-made one) is REUSED as it is -- never a second table, never renamed -- and routes
+#     SecurityInsight did not make are kept, never removed.
+#   * NOT on the endpoints subnet, on purpose: the private endpoints are reached by SecurityInsight's own jobs and web app
+#     inside its network, and Azure answers a private endpoint's traffic symmetrically without a user route (its network
+#     policies are Disabled, so a route table there would not even apply to them). The registry's build pool in that subnet
+#     needs a way OUT (rule 11b, Set-SIBuildSubnetOutbound), not a way back to the customer's ranges.
+
+function Get-SIReturnRouteTableName { <# PURE. The name of the route table SecurityInsight makes (framework rule 11d). #> 'rt-si' }
+
+function Get-SIReturnRouteName {
+    <# PURE. The name SecurityInsight gives the route for -Range: si-return-<range with / as ->, e.g. si-return-10.0.0.0-16. #>
+    param([Parameter(Mandatory)][string]$Range)
+    'si-return-' + ($Range.Trim() -replace '/', '-')
+}
+
+function ConvertTo-SIReturnRouteRanges {
+    <# PURE. The answer returnRouteRanges -- text ("10.0.0.0/16, 10.2.0.0/16") or a list -- as @{ Ranges; Bad }: each range in
+       its network form (10.0.0.5/16 -> 10.0.0.0/16), each once, in the order given; Bad = what is not an IPv4 range. #>
+    param([AllowNull()]$Value)
+    $ranges = New-Object System.Collections.Generic.List[string]; $bad = New-Object System.Collections.Generic.List[string]
+    foreach ($v in @($Value)) {
+        foreach ($p in ("$v" -split '[,;\s]+')) {
+            $x = $p.Trim(); if (-not $x) { continue }
+            $r = ConvertTo-SICidrRange $x
+            if ($r) { $n = ConvertFrom-SICidrStart -Start $r.Start -Bits $r.Bits; if (-not $ranges.Contains($n)) { $ranges.Add($n) } } else { $bad.Add($x) }
+        }
+    }
+    @{ Ranges = $ranges.ToArray(); Bad = $bad.ToArray() }
+}
+
+function Test-SIIpv4Address {
+    <# PURE. Is -Ip one IPv4 address (a.b.c.d, each 0-255)? #>
+    param([AllowNull()][string]$Ip)
+    $m = [regex]::Match("$Ip".Trim(), '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$')
+    [bool]($m.Success -and -not @(1..4 | Where-Object { [int]$m.Groups[$_].Value -gt 255 }).Count)
+}
+
+function Get-SIReturnRouteCoverage {
+    <# PURE. Does -RouteTable (as ARM returns it) send every one of -Ranges to -NextHop as VirtualAppliance? With no
+       -NextHop, any VirtualAppliance next hop counts. @{ Ok; Missing (ranges without such a route); Conflicts (ranges whose
+       prefix a route sends elsewhere -- 'range -> hop (route name)') }. #>
+    param($RouteTable, [string[]]$Ranges = @(), [string]$NextHop = '')
+    $routes = @(Get-SIPnProp $RouteTable @('properties', 'routes') | Where-Object { $_ })
+    $missing = New-Object System.Collections.Generic.List[string]; $conflicts = New-Object System.Collections.Generic.List[string]
+    foreach ($rg in @($Ranges | Where-Object { $_ })) {
+        $same = @($routes | Where-Object { [string](Get-SIPnProp $_ @('properties', 'addressPrefix')) -eq $rg })
+        $good = @($same | Where-Object { [string](Get-SIPnProp $_ @('properties', 'nextHopType')) -eq 'VirtualAppliance' -and (-not $NextHop -or [string](Get-SIPnProp $_ @('properties', 'nextHopIpAddress')) -eq $NextHop) })
+        if ($good.Count) { continue }
+        $missing.Add($rg)
+        foreach ($s in $same) { $conflicts.Add(('{0} -> {1} {2} ({3})' -f $rg, [string](Get-SIPnProp $s @('properties', 'nextHopType')), [string](Get-SIPnProp $s @('properties', 'nextHopIpAddress')), [string](Get-SIPnProp $s @('name')))) }
+    }
+    @{ Ok = ($missing.Count -eq 0); Missing = $missing.ToArray(); Conflicts = $conflicts.ToArray() }
+}
+
+function Get-SIReturnRouteTableBody {
+    <#
+        PURE. The PUT body of the route table that sends each of -Ranges to -NextHop (VirtualAppliance), BGP route
+        propagation off. -Existing: the table as ARM returns it ($null = a new table, made in -Location, tagged as
+        SecurityInsight's). A route table PUT REPLACES its routes, so EVERY route that is there is carried over unchanged --
+        a route SecurityInsight did not make is never removed or changed. Per range: a route that already sends it to the next
+        hop is kept; SecurityInsight's own route (si-return-<range>) with another next hop is corrected; a range a FOREIGN route
+        sends elsewhere is NOT overwritten (Azure takes one route per prefix) -- it is a Conflict, said, for the customer.
+        @{ Body; Added; Updated; Kept (foreign routes carried over); Conflicts; Changed }.
+    #>
+    param($Existing, [Parameter(Mandatory)][string[]]$Ranges, [Parameter(Mandatory)][string]$NextHop, [string]$Location = '')
+    $routes = New-Object System.Collections.Generic.List[object]
+    $added = New-Object System.Collections.Generic.List[string]; $updated = New-Object System.Collections.Generic.List[string]
+    $kept = New-Object System.Collections.Generic.List[string]; $conflicts = New-Object System.Collections.Generic.List[string]
+    $conflictRanges = New-Object System.Collections.Generic.List[string]
+    $own = @{}; foreach ($rg in $Ranges) { $own[(Get-SIReturnRouteName -Range $rg)] = $rg }
+    foreach ($r in @(Get-SIPnProp $Existing @('properties', 'routes') | Where-Object { $_ })) {
+        $nm = [string](Get-SIPnProp $r @('name'))
+        $p = [ordered]@{ addressPrefix = [string](Get-SIPnProp $r @('properties', 'addressPrefix')); nextHopType = [string](Get-SIPnProp $r @('properties', 'nextHopType')) }
+        $hop = [string](Get-SIPnProp $r @('properties', 'nextHopIpAddress')); if ($hop) { $p['nextHopIpAddress'] = $hop }
+        if ($own.ContainsKey($nm) -and $p.addressPrefix -eq $own[$nm] -and -not ($p.nextHopType -eq 'VirtualAppliance' -and $hop -eq $NextHop)) {
+            $p = [ordered]@{ addressPrefix = $own[$nm]; nextHopType = 'VirtualAppliance'; nextHopIpAddress = $NextHop }; $updated.Add($own[$nm])
+        } elseif (-not $own.ContainsKey($nm)) { $kept.Add($nm) }
+        $routes.Add([ordered]@{ name = $nm; properties = $p })
+    }
+    foreach ($rg in $Ranges) {
+        $same = @($routes | Where-Object { [string]$_.properties.addressPrefix -eq $rg })
+        if ($same.Count) {
+            $ok = @($same | Where-Object { $_.properties.nextHopType -eq 'VirtualAppliance' -and [string]$_.properties.nextHopIpAddress -eq $NextHop })
+            if (-not $ok.Count) { $conflictRanges.Add($rg); foreach ($s in $same) { $conflicts.Add(('{0} -> {1} {2} (route {3}, not SecurityInsight''s: kept)' -f $rg, $s.properties.nextHopType, [string]$s.properties.nextHopIpAddress, $s.name)) } }
+            continue
+        }
+        $routes.Add([ordered]@{ name = (Get-SIReturnRouteName -Range $rg); properties = [ordered]@{ addressPrefix = $rg; nextHopType = 'VirtualAppliance'; nextHopIpAddress = $NextHop } }); $added.Add($rg)
+    }
+    $bgpOff = "$(Get-SIPnProp $Existing @('properties', 'disableBgpRoutePropagation'))" -eq 'True'
+    $body = [ordered]@{}
+    if ($Existing) {
+        $body['location'] = [string](Get-SIPnProp $Existing @('location'))
+        $tags = Get-SIPnProp $Existing @('tags'); if ($null -ne $tags) { $body['tags'] = ConvertTo-SIPnHashtable $tags }
+    } else { $body['location'] = $Location; $body['tags'] = [ordered]@{ purpose = 'securityinsight-private-network' } }
+    $body['properties'] = [ordered]@{ disableBgpRoutePropagation = $true; routes = @($routes.ToArray()) }
+    @{ Body = $body; Added = $added.ToArray(); Updated = $updated.ToArray(); Kept = $kept.ToArray(); Conflicts = $conflicts.ToArray(); ConflictRanges = $conflictRanges.ToArray()
+       Changed = [bool](-not $Existing -or $added.Count -or $updated.Count -or -not $bgpOff) }
+}
+
+function Get-SIReturnRouteFacts {
+    <# READ ONLY. The return route of -Target's apps subnet: its answers (returnRouteRanges / returnRouteNextHop), whether
+       the network is SecurityInsight's own, the route table attached to the apps subnet and whether it covers the ranges.
+       @{ SubnetName; SubnetId; SubnetRead; Own; Ranges; Bad; NextHop; Answers; RouteTableId; RouteTableName; Covered; Missing;
+          Conflicts; HasApplianceRoute; ResourceGroup; VnetId }. Never writes, never throws for a read that fails. #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][System.Collections.IDictionary]$Target)
+    $vnetId = ([string]$Target['VnetId']).TrimEnd('/'); $snName = [string]$Target['AppsSubnetName']; if (-not $snName) { $snName = (Get-SIPrivateNetworkNames).AppsSubnet }
+    $rr = ConvertTo-SIReturnRouteRanges $Target['ReturnRouteRanges']; $hop = ([string]$Target['ReturnRouteNextHop']).Trim()
+    $rgId = ([string]$Target['ResourceGroupId']).TrimEnd('/')
+    $f = [ordered]@{ SubnetName = $snName; SubnetId = $(if ($vnetId) { '{0}/subnets/{1}' -f $vnetId, $snName } else { '' }); SubnetRead = $false; Own = [bool]$Target['CreateVnet']
+                     Ranges = @($rr.Ranges); Bad = @($rr.Bad); NextHop = $hop; Answers = [bool](@($rr.Ranges).Count -and (Test-SIIpv4Address $hop))
+                     RouteTableId = ''; RouteTableName = ''; Covered = $false; Missing = @($rr.Ranges); Conflicts = @(); HasApplianceRoute = $false
+                     ResourceGroup = $(if ($rgId) { ($rgId -split '/')[-1] } else { '' }); VnetId = $vnetId }
+    if (-not $vnetId) { return $f }
+    try {
+        if (-not $f.Own) { $f.Own = [bool](Test-SIOwnSpokeVnet -Vnet (& $Arm 'GET' ('{0}?api-version={1}' -f $vnetId, $script:SIPnNetApi) $null) -ResourceGroupId $rgId) }
+        $sn = & $Arm 'GET' ('{0}?api-version={1}' -f $f.SubnetId, $script:SIPnNetApi) $null
+        if (-not $sn) { return $f }
+        $f.SubnetRead = $true
+        $f.RouteTableId = [string](Get-SIPnProp $sn @('properties', 'routeTable', 'id'))
+        if (-not $f.RouteTableId) { return $f }
+        $f.RouteTableName = ($f.RouteTableId.TrimEnd('/') -split '/')[-1]
+        $rt = & $Arm 'GET' ('{0}?api-version={1}' -f $f.RouteTableId.TrimEnd('/'), $script:SIPnNetApi) $null
+        $f.HasApplianceRoute = [bool]@(Get-SIPnProp $rt @('properties', 'routes') | Where-Object { $_ } | Where-Object { [string](Get-SIPnProp $_ @('properties', 'nextHopType')) -eq 'VirtualAppliance' -or [string](Get-SIPnProp $_ @('properties', 'addressPrefix')) -eq '0.0.0.0/0' }).Count
+        if (@($f.Ranges).Count) { $c = Get-SIReturnRouteCoverage -RouteTable $rt -Ranges @($f.Ranges) -NextHop $(if (Test-SIIpv4Address $hop) { $hop } else { '' }); $f.Covered = [bool]$c.Ok; $f.Missing = @($c.Missing); $f.Conflicts = @($c.Conflicts) }
+    } catch { }
+    $f
+}
+
+function Get-SIReturnRouteHandOff {
+    <# PURE. The network hand-off's RETURN ROUTE item from -Facts (Get-SIReturnRouteFacts; $null = not read: the item is
+       said in general). -Number: its number in the list. @{ Open (it counts as an open item); Done; Lines }. Open when the apps
+       subnet reads WITHOUT a route table, or a table that misses one of the ranges given; not counted when it was not read,
+       or a table is attached and no ranges are known (it is then a check for the network team). #>
+    param($Facts, [string]$Number = '6')
+    $L = New-Object System.Collections.Generic.List[string]
+    $sn = if ($Facts -and [string]$Facts['SubnetName']) { [string]$Facts['SubnetName'] } else { (Get-SIPrivateNetworkNames).AppsSubnet }
+    $ranges = if ($Facts) { @($Facts['Ranges'] | Where-Object { $_ }) } else { @() }; $hop = if ($Facts -and (Test-SIIpv4Address ([string]$Facts['NextHop']))) { [string]$Facts['NextHop'] } else { '' }
+    if ($Facts -and [bool]$Facts['SubnetRead'] -and [string]$Facts['RouteTableId'] -and $ranges.Count -and [bool]$Facts['Covered']) {
+        $L.Add(('{0}. RETURN ROUTE: done -- route table {1} on the apps subnet {2} sends {3} to {4} (VirtualAppliance).' -f $Number, $Facts['RouteTableName'], $sn, ($ranges -join ', '), $(if ($hop) { $hop } else { 'your firewall' })))
+        return @{ Open = $false; Done = $true; Lines = $L.ToArray() }
+    }
+    $r1 = if ($ranges.Count) { $ranges[0] } else { '<a range your people browse from>' }
+    $h1 = if ($hop) { $hop } else { '<its private IP>' }
+    $L.Add(('{0}. RETURN ROUTE: the apps subnet {1} needs a route for each range your people browse from (e.g. a route table: {2} -> your firewall {3} as VirtualAppliance), or replies time out.' -f $Number, $sn, $r1, $h1))
+    if ($ranges.Count) { foreach ($x in $ranges) { $L.Add(('        {0,-20} -> VirtualAppliance {1}' -f $x, $h1)) } }
+    if ($Facts -and [string]$Facts['RouteTableId']) {
+        $L.Add(('   the apps subnet has the route table {0}{1}' -f $Facts['RouteTableName'], $(if ($ranges.Count) { ' -- it has no such route for: ' + (@($Facts['Missing']) -join ', ') } else { ': check that it has these routes' })))
+        foreach ($c in @($Facts['Conflicts'] | Where-Object { $_ })) { $L.Add(('   a route there sends {0} -- your team decides which way it goes' -f $c)) }
+    } elseif ($Facts -and [bool]$Facts['SubnetRead']) { $L.Add('   the apps subnet has NO route table now: replies to your own ranges take Azure''s default route and are dropped by your firewall.') }
+    if ($Facts -and [bool]$Facts['Own'] -and -not [bool]$Facts['Answers']) {
+        $L.Add('   This is SecurityInsight''s own network: SecurityInsight makes the route table itself once it has the two answers. Give them and run again:')
+        $L.Add(('     the install command with -ReturnRouteRanges ''{0}'' -ReturnRouteNextHop ''{1}'' -Resume, or' -f $(if ($ranges.Count) { $ranges -join ',' } else { '<range>[,<range>]' }), $(if ($hop) { $hop } else { '<firewall private IP>' })))
+        $L.Add(('     ./setup/Set-SIPrivateNetworking.ps1 -ResourceGroup {0} -VnetId {1} -ReturnRouteRanges <range>[,<range>] -ReturnRouteNextHop <firewall private IP> -Apply -Steps return-route' -f $(if ([string]$Facts['ResourceGroup']) { $Facts['ResourceGroup'] } else { '<resource group>' }), $(if ([string]$Facts['VnetId']) { $Facts['VnetId'] } else { '<vnet id>' })))
+    }
+    $open = [bool]($Facts -and [bool]$Facts['SubnetRead'] -and (-not [string]$Facts['RouteTableId'] -or ($ranges.Count -and -not [bool]$Facts['Covered'])))
+    @{ Open = $open; Done = $false; Lines = $L.ToArray() }
+}
+
+function Set-SIReturnRoute {
+    <#
+        #1095. The return route of SecurityInsight's OWN spoke: with both answers given, the route table (the one attached to
+        the apps subnet, else rt-si in the install's resource group) sends each range to the next hop as VirtualAppliance, BGP
+        route propagation off; attached to the apps subnet. Every change READ BACK (the routes AND the attachment).
+        Idempotent: a table that is right is not written; routes SecurityInsight did not make are kept.
+        Changes NOTHING when the network is the customer's, or an answer is missing -- the hand-off item instead (HandOff).
+        -ReportOnly: the plan, nothing written.
+        Returns @{ Ok; Own; HandOff; Changed; Created; Attached; AttachedNow (attached by THIS call); RouteTableId; AddedRanges; Conflicts; Line; Lines }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][System.Collections.IDictionary]$Target, [string]$Location = '',
+          [switch]$ReportOnly, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $f = Get-SIReturnRouteFacts -Arm $Arm -Target $Target
+    $out = { param($ok, $line, $extra) $h = @{ Ok = [bool]$ok; Own = [bool]$f.Own; HandOff = $false; Changed = $false; Created = $false; Attached = $false; RouteTableId = [string]$f.RouteTableId; AddedRanges = @(); Conflicts = @(); Line = $line; Lines = @($line) }; if ($extra) { foreach ($k in $extra.Keys) { $h[$k] = $extra[$k] } }; $h }
+    $sn = $f.SubnetName
+    if (-not $f.VnetId) { return (& $out $true 'return route: no network is named -- nothing to do' @{ HandOff = $true }) }
+    if (-not $f.Own) { return (& $out $true ('return route: the apps subnet {0} is in YOUR network -- SecurityInsight changes nothing there; the route is on the network hand-off (RETURN ROUTE)' -f $sn) @{ HandOff = $true }) }
+    if (@($f.Bad).Count) { return (& $out $false ('return route: returnRouteRanges holds what is not an address range ({0}) -- nothing was changed' -f (@($f.Bad) -join ', ')) $null) }
+    if (-not @($f.Ranges).Count -or -not "$($f.NextHop)") { return (& $out $true ('return route: not made -- the answers returnRouteRanges and returnRouteNextHop are not both given; it is on the network hand-off (RETURN ROUTE) with how to give them') @{ HandOff = $true }) }
+    if (-not (Test-SIIpv4Address $f.NextHop)) { return (& $out $false ('return route: returnRouteNextHop {0} is not an IPv4 address -- nothing was changed' -f $f.NextHop) $null) }
+    if (-not $f.SubnetRead) { return (& $out $false ('return route: the apps subnet {0} was not found -- nothing was changed (the subnets step makes it first)' -f $sn) $null) }
+    $rgId = ([string]$Target['ResourceGroupId']).TrimEnd('/')
+    # framework rule 11d: the table ATTACHED to the apps subnet is the one (never a second, never renamed); else rt-si
+    $rtId = if ($f.RouteTableId) { $f.RouteTableId.TrimEnd('/') } else { '{0}/providers/Microsoft.Network/routeTables/{1}' -f $rgId, (Get-SIReturnRouteTableName) }
+    $rtName = ($rtId -split '/')[-1]
+    $rtPath = '{0}?api-version={1}' -f $rtId, $script:SIPnNetApi
+    $have = & $Arm 'GET' $rtPath $null
+    $loc = $Location; if (-not $loc) { $loc = [string](Get-SIPnProp (& $Arm 'GET' ('{0}?api-version={1}' -f $f.VnetId, $script:SIPnNetApi) $null) @('location')) }
+    $b = Get-SIReturnRouteTableBody -Existing $have -Ranges @($f.Ranges) -NextHop $f.NextHop -Location $loc
+    $attached = [bool]$f.RouteTableId
+    $routeText = ((@($f.Ranges) | ForEach-Object { '{0} -> {1}' -f $_, $f.NextHop }) -join ', ')
+    if ($ReportOnly) {
+        $plan = @(); if ($b.Changed) { $plan += $(if ($have) { 'route table {0}: {1} (VirtualAppliance), BGP route propagation off' -f $rtName, $routeText } else { 'route table {0} made: {1} (VirtualAppliance), BGP route propagation off' -f $rtName, $routeText }) }
+        if (-not $attached) { $plan += ('attached to {0}' -f $sn) }
+        return (& $out $true $(if ($plan.Count) { 'return route WOULD be: ' + ($plan -join '; ') } else { 'return route: route table {0} on {1} sends {2} (VirtualAppliance) -- nothing to do' -f $rtName, $sn, $routeText }) @{ RouteTableId = $rtId; Conflicts = @($b.Conflicts) })
+    }
+    if (-not $loc) { return (& $out $false 'return route: the region of the network could not be read -- nothing was changed' $null) }
+    # the ranges SecurityInsight may route: a range a foreign route sends elsewhere stays the customer's (a Conflict, said)
+    $want = @(@($f.Ranges) | Where-Object { @($b.ConflictRanges) -notcontains $_ })
+    $isRight = { param($o) [bool]((Test-SIPnSucceeded $o) -and "$(Get-SIPnProp $o @('properties', 'disableBgpRoutePropagation'))" -eq 'True' -and (Get-SIReturnRouteCoverage -RouteTable $o -Ranges $want -NextHop $f.NextHop).Ok) }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $ok = $true; $rtOk = $true
+    if ($b.Changed) {
+        $null = & $Arm 'PUT' $rtPath $b.Body
+        $back = Read-SIPnBack -Arm $Arm -Path $rtPath -Sleep $Sleep -Tries 12 -Test $isRight
+        $rtOk = [bool](& $isRight $back)
+        if ($rtOk) {
+            $lines.Add(('route table {0} {1}: {2} (VirtualAppliance), BGP route propagation off{3} (read back)' -f $rtName, $(if ($have) { 'converged' } else { 'made in the install''s resource group' }),
+                ((@($want) | ForEach-Object { '{0} -> {1}' -f $_, $f.NextHop }) -join ', '), $(if (@($b.Kept).Count) { '; routes it did not make kept: ' + (@($b.Kept) -join ', ') } else { '' })))
+        } else { $ok = $false; $lines.Add(('route table {0} does not read back with the routes {1} and BGP route propagation off after the change' -f $rtName, $routeText)) }
+    } else { $lines.Add(('route table {0} sends {1} (VirtualAppliance), BGP route propagation off -- nothing to change' -f $rtName, ((@($want) | ForEach-Object { '{0} -> {1}' -f $_, $f.NextHop }) -join ', '))) }
+    foreach ($c in @($b.Conflicts)) { $ok = $false; $lines.Add(('return route: a route that SecurityInsight did not make sends {0} -- not changed; your team decides which way it goes' -f $c)) }
+    $didAttach = $false
+    # attached once the table reads back right (a Conflict on one range does not keep the others from working)
+    if ($rtOk -and -not $attached) {
+        $snPath = '{0}?api-version={1}' -f $f.SubnetId, $script:SIPnNetApi
+        $snNow = & $Arm 'GET' $snPath $null
+        # a subnet PUT REPLACES the subnet: everything it has is carried over (its delegation, NSG, ...), the table added
+        $sb = Get-SISubnetBody -Subnet $snNow
+        $sb.properties['routeTable'] = [ordered]@{ id = $rtId }
+        $null = & $Arm 'PUT' $snPath $sb
+        $snBack = Read-SIPnBack -Arm $Arm -Path $snPath -Sleep $Sleep -Tries 12 -Test { param($o) (Test-SIPnSucceeded $o) -and (Test-SIPnSameId ([string](Get-SIPnProp $o @('properties', 'routeTable', 'id'))) $rtId) }
+        if ((Test-SIPnSucceeded $snBack) -and (Test-SIPnSameId ([string](Get-SIPnProp $snBack @('properties', 'routeTable', 'id'))) $rtId)) { $didAttach = $true; $lines.Add(('route table {0} attached to the apps subnet {1} (read back)' -f $rtName, $sn)) }
+        else { $ok = $false; $lines.Add(('route table {0} is NOT attached to the apps subnet {1} after the change -- run again' -f $rtName, $sn)) }
+    } elseif ($attached) { $lines.Add(('route table {0} is the one attached to the apps subnet {1} (reused as it is, never a second one)' -f $rtName, $sn)) }
+    $line = if ($ok) { 'return route: {0}' -f ($lines -join '; ') } else { 'return route NOT complete: {0}' -f ($lines -join '; ') }
+    @{ Ok = $ok; Own = $true; HandOff = (-not $ok); Changed = [bool]($b.Changed -or $didAttach); Created = [bool](-not $have); Attached = [bool]($attached -or $didAttach); AttachedNow = $didAttach
+       RouteTableId = $rtId; AddedRanges = @($b.Added); Conflicts = @($b.Conflicts); Line = $line; Lines = $lines.ToArray() }
+}
+
+function Invoke-SIPrivateNetworkReturnRoute {
+    <# Setup's call (#1095, the guided install's private-network step, every run until it is done): Set-SIReturnRoute over
+       setup's own ARM sign-in (Invoke-SIArm unless -Arm is given). Never throws for what it cannot do: said in the answer. #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Target, [string]$Location = '', [scriptblock]$Arm, [scriptblock]$Sleep, [string]$SubscriptionId)
+    if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIArm -Path $Path -AllowNotFound } else { Invoke-SIArm -Method $Method -Path $Path -Body $Body } } }
+    if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
+    try { Set-SIReturnRoute -Arm $Arm -Target $Target -Location $Location -Sleep $Sleep }
+    catch { @{ Ok = $false; Own = $true; HandOff = $true; Changed = $false; Created = $false; Attached = $false; RouteTableId = ''; AddedRanges = @(); Conflicts = @(); Line = ('return route: {0} -- run again' -f $_.Exception.Message); Lines = @(('return route: {0}' -f $_.Exception.Message)) } }
+}
+
+function Get-SIPrivateNetworkReturnRouteCheck {
+    <# READ ONLY (#1095, the install's end check): on a private install WITH the answers, is the route table attached to the
+       apps subnet and does it send every range to the next hop? @{ Checked; Ok; Line; Fix }. Not read = not checked (never
+       reported as missing). #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Target, [scriptblock]$Arm, [string]$SubscriptionId)
+    if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIArm -Path $Path -AllowNotFound } else { Invoke-SIArm -Method $Method -Path $Path -Body $Body } } }
+    $f = Get-SIReturnRouteFacts -Arm $Arm -Target $Target
+    if (-not $f.Answers -or -not $f.SubnetRead) { return @{ Checked = $false; Ok = $true; Line = ''; Fix = '' } }
+    if ($f.RouteTableId -and $f.Covered) { return @{ Checked = $true; Ok = $true; Line = ('the return route is in place: route table {0} on {1} sends {2} to {3}' -f $f.RouteTableName, $f.SubnetName, (@($f.Ranges) -join ', '), $f.NextHop); Fix = '' } }
+    $what = if (-not $f.RouteTableId) { 'the apps subnet {0} has no route table' -f $f.SubnetName } else { 'the route table {0} on {1} has no route to {2} for {3}' -f $f.RouteTableName, $f.SubnetName, $f.NextHop, (@($f.Missing) -join ', ') }
+    $fix = if ($f.Own) { './setup/Set-SIPrivateNetworking.ps1 -ResourceGroup {0} -VnetId {1} -ReturnRouteRanges {2} -ReturnRouteNextHop {3} -Apply -Steps return-route' -f $f.ResourceGroup, $f.VnetId, (@($f.Ranges) -join ','), $f.NextHop }
+           else { 'your network team: the RETURN ROUTE item of the network hand-off (a route table on {0}: each range -> {1} as VirtualAppliance)' -f $f.SubnetName, $f.NextHop }
+    @{ Checked = $true; Ok = $false; Line = ('{0} -- replies to your people''s ranges time out' -f $what); Fix = $fix }
+}
+
+function Get-SIUpdateReturnRouteReport {
+    <# THE UPDATER'S CALL (#1095), REPORT ONLY: a PRIVATE install (Get-SIInstallPrivateState) whose apps subnet has no route
+       table, or a table with neither a 0.0.0.0/0 route nor a VirtualAppliance route, is said as a warning -- NEVER made: the
+       next hop is a customer value the updater cannot know. @{ Private; Warn; Line }. Never writes; never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$ResourceGroupId)
+    try {
+        $st = Get-SIInstallPrivateState -Arm $Arm -ResourceGroupId $ResourceGroupId
+        if (-not $st.Private -or -not $st.SubnetId) { return @{ Private = [bool]$st.Private; Warn = $false; Line = '' } }
+        $f = Get-SIReturnRouteFacts -Arm $Arm -Target ([ordered]@{ VnetId = $st.VnetId; AppsSubnetName = (($st.SubnetId -split '/')[-1]); ResourceGroupId = $ResourceGroupId })
+        if (-not $f.SubnetRead) { return @{ Private = $true; Warn = $false; Line = ('return route: the apps subnet {0} could not be read -- not checked' -f $f.SubnetName) } }
+        if ($f.RouteTableId -and $f.HasApplianceRoute) { return @{ Private = $true; Warn = $false; Line = ('return route: the apps subnet {0} has the route table {1}' -f $f.SubnetName, $f.RouteTableName) } }
+        $why = if ($f.RouteTableId) { 'its route table {0} has no 0.0.0.0/0 or VirtualAppliance route' -f $f.RouteTableName } else { 'it has no route table' }
+        @{ Private = $true; Warn = $true; Line = ('return route: the apps subnet {0} of this private install: {1}. Behind a firewall in a hub, replies to your people''s ranges time out. NOT changed by the updater (the firewall''s IP is yours): give the ranges and the firewall IP -- ./setup/Set-SIPrivateNetworking.ps1 -ReturnRouteRanges <range>[,<range>] -ReturnRouteNextHop <firewall private IP> -Apply -Steps return-route (SecurityInsight''s own network), or your network team adds the route (your network)' -f $f.SubnetName, $why) }
+    } catch { @{ Private = $false; Warn = $false; Line = ('return route: not checked ({0})' -f $_.Exception.Message) } }
 }
 
 function Get-SIRegistryCloseProblem {
@@ -915,10 +1384,13 @@ function Invoke-SIPrivateNetworkRegistry {
     if ($netOk) { $ep = Set-SIPrivateEndpointsWithDns -Arm $Arm -Target $Target -Location $Location -EndpointsSubnetId $EndpointsSubnetId -RegistryId $RegistryId -Sleep $Sleep }
     foreach ($x in @($ep.Lines)) { $lines.Add($x) }; foreach ($x in @($ep.HandOff)) { $handOff.Add($x) }
     $poolName = (Get-SIPrivateNetworkNames).AgentPool
-    $pool = @{ Ok = [bool]$SkipAgentPool; Line = '' }
+    $pool = @{ Ok = [bool]$SkipAgentPool; Line = ''; Blocked = $false; Step = '' }
     if ($netOk -and -not $SkipAgentPool) {
-        try { $pool = Set-SIAcrAgentPool -Arm $Arm -RegistryId $RegistryId -Name $poolName -Location $regLoc -SubnetId $EndpointsSubnetId -Sleep $Sleep }
-        catch { $pool = @{ Ok = $false; Line = ('the registry''s agent pool {0} could not be made in the network: {1}' -f $poolName, $_.Exception.Message) } }
+        # #1087: the build subnet's outbound path first -- SecurityInsight's own spoke (vnetAddressPrefix, no vnetId: CreateVnet)
+        # gets it, a customer's network is never changed (the one customer step); never a pool that is certain to fail
+        try { $pool = Invoke-SIAcrAgentPoolStep -Arm $Arm -RegistryId $RegistryId -Name $poolName -Location $regLoc -SubnetId $EndpointsSubnetId -OwnNetwork ([bool]$Target['CreateVnet']) -ResourceGroupId $rg -Sleep $Sleep }
+        catch { $pool = @{ Ok = $false; Blocked = $false; Step = ''; Line = ('the registry''s agent pool {0} could not be made in the network: {1}' -f $poolName, $_.Exception.Message) } }
+        if ([string]$pool.OutboundLine -and [string]$pool.OutboundLine -ne [string]$pool.Line) { $lines.Add([string]$pool.OutboundLine) }
         $lines.Add($pool.Line)
     }
     $gate = @{ Ok = $true; Lines = @(); Failed = @(); Records = @(); Names = @() }
@@ -927,7 +1399,8 @@ function Invoke-SIPrivateNetworkRegistry {
         foreach ($x in @($gate.Lines)) { $lines.Add($x) }
     }
     @{ Ok = [bool]($netOk -and $ep.Ok -and $pool.Ok -and $gate.Ok); Lines = $lines.ToArray(); HandOff = $handOff.ToArray(); Gate = $gate
-       RegistryOk = $regOk; NetworkShapeOk = [bool]$netOk; EndpointsOk = [bool]$ep.Ok; PoolOk = [bool]$pool.Ok; AgentPool = $(if ($pool.Ok -and -not $SkipAgentPool) { $poolName } else { '' })
+       RegistryOk = $regOk; NetworkShapeOk = [bool]$netOk; EndpointsOk = [bool]$ep.Ok; PoolOk = [bool]$pool.Ok
+       PoolBlocked = [bool]$pool.Blocked; OutboundStep = [string]$pool.Step; AgentPool = $(if ($pool.Ok -and -not $SkipAgentPool) { $poolName } else { '' })
        LoginServer = [string](Get-SIPnProp $r.Registry @('properties', 'loginServer')); PasswordUsers = $users }
 }
 
@@ -974,7 +1447,10 @@ function Invoke-SIUpdatePrivateRegistry {
     $name = ($RegistryId.TrimEnd('/') -split '/')[-1]
     if (-not $reg) { return @{ Private = $true; Ok = $false; Lines = @(('container registry {0} was not found' -f $name)); Closed = $false; Changed = @() } }
     $gap = @(Get-SIRegistryPrivateGap $reg)
-    if (-not $gap.Count) { return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} is private (Premium, public access Disabled, trusted Azure services allowed, admin user off)' -f $name)); Closed = $true; Changed = @() } }
+    # #1087: a private registry whose agent pool does not run (Azure left it Failed -- e.g. a build subnet without an
+    # outbound path) is not done: it goes on to the pool step (the outbound check first), so the next build has its pool
+    $poolNow = & $Arm 'GET' ('{0}/agentPools/{1}?api-version={2}' -f $RegistryId.TrimEnd('/'), (Get-SIPrivateNetworkNames).AgentPool, $script:SIPnAcrTasksApi) $null
+    if (-not $gap.Count -and (Test-SIPnSucceeded $poolNow)) { return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} is private (Premium, public access Disabled, trusted Azure services allowed, admin user off)' -f $name)); Closed = $true; Changed = @() } }
     $pulls = @()
     foreach ($t in 'Microsoft.App/jobs', 'Microsoft.App/containerApps') { $pulls += @(Get-SIPnArmList -Arm $Arm -Path ('{0}/providers/{1}?api-version={2}' -f $rgId, $t, $script:SIPnAppApi)) }
     $users = @(Get-SIRegistryPasswordUsers -Apps $pulls -LoginServer ([string](Get-SIPnProp $reg @('properties', 'loginServer'))))
@@ -989,6 +1465,7 @@ function Invoke-SIUpdatePrivateRegistry {
         if ($gap -contains 'sku') { $plan += 'Premium' }
         if ($gap -contains 'admin') { $plan += $(if ($users.Count) { 'admin user stays on ({0} pull with its password)' -f ($users -join ', ') } else { 'admin user off' }) }
         if (-not $regPe) { $plan += 'its private endpoint' }
+        if ($peSubnet) { $ob = Set-SIBuildSubnetOutbound -Arm $Arm -SubnetId $peSubnet -ResourceGroupId $rgId -ReportOnly; if (-not $ob.Path -and ($ob.Blocked -or $ob.Line -match 'would get')) { $plan += $ob.Line } }
         $plan += 'its agent pool in the network'
         if ($gap -contains 'public' -or $gap -contains 'bypass') { $plan += 'public access closed once its names resolve to private addresses inside' }
         return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} would be made private: {1}' -f $name, ($plan -join '; '))); Closed = $false; Changed = @() }
@@ -1019,7 +1496,10 @@ function Invoke-SIUpdatePrivateRegistry {
             if ($ep.Ok) { $changed.Add('private endpoint') } else { $ok = $false }
             $regPe = & $peOf 'registry'
         }
-        $pool = Set-SIAcrAgentPool -Arm $Arm -RegistryId $RegistryId -Name (Get-SIPrivateNetworkNames).AgentPool -Location $regLoc -SubnetId $peSubnet -Sleep $Sleep
+        # #1087: the same outbound check as setup before the pool (own spoke = read from the network: in this resource
+        # group, tagged by SecurityInsight); a customer's subnet without a path is REPORTED, the update goes on
+        $pool = Invoke-SIAcrAgentPoolStep -Arm $Arm -RegistryId $RegistryId -Name (Get-SIPrivateNetworkNames).AgentPool -Location $regLoc -SubnetId $peSubnet -ResourceGroupId $rgId -Sleep $Sleep
+        if ([string]$pool.OutboundLine -and [string]$pool.OutboundLine -ne [string]$pool.Line) { $lines.Add([string]$pool.OutboundLine); if ($pool.OutboundLine -match 'turned on') { $changed.Add('build subnet outbound') } }
         $lines.Add($pool.Line); if ($pool.Created -and $pool.Ok) { $changed.Add('agent pool') }; if (-not $pool.Ok) { $ok = $false }
         $closed = $false
         if ($gap -contains 'public' -or $gap -contains 'bypass') {
@@ -1734,6 +2214,8 @@ function Get-SINetworkHandOffFacts {
         PrivateLinkRecords = @(Get-SIPrivateLinkRecords -Arm $Arm -ResourceGroupId ([string]$Target['ResourceGroupId']))
         InsideNames = @($InsideNames | Where-Object { $_ }); Notes = @($Notes | Where-Object { $_ })
         CloseCommand = ''
+        # #1095: the apps subnet's return route (its route table, the answers returnRouteRanges / returnRouteNextHop)
+        ReturnRoute = (Get-SIReturnRouteFacts -Arm $Arm -Target $Target)
     }
     if ($spokeId -and $hubId) {
         $f.SpokeSide = Get-SIPeeringState -Arm $Arm -VnetId $spokeId -RemoteVnetId $hubId
@@ -1822,8 +2304,12 @@ function Get-SINetworkHandOff {
     else { $L.Add('4. SecurityInsight''s network uses Azure''s DNS: its own jobs resolve these names already (its zones are linked to it).') }
     # 5. the rights, if SecurityInsight should do the hub side itself
     $L.Add(('5. Only if SecurityInsight should do 1 and 2a itself (answers peerToHub / linkZonesToHub, with your approval): the installing identity needs Network Contributor on {0}; for records in your zones, Private DNS Zone Contributor on their resource group.' -f $hubName))
-    # 6. the test
-    $L.Add('6. CHECK from a machine in your network (each must answer with the private address shown):')
+    # 6. the return route (#1095): replies from the apps subnet to your people's ranges go back through your firewall
+    $rr = Get-SIReturnRouteHandOff -Facts $Facts['ReturnRoute'] -Number '6'
+    foreach ($x in @($rr.Lines)) { $L.Add($x) }
+    if ($rr.Open) { $open++; $items.Add(@{ Kind = 'return-route'; Done = $false }) }
+    # 7. the test
+    $L.Add('7. CHECK from a machine in your network (each must answer with the private address shown):')
     foreach ($n in @($Facts['InsideNames'] | Where-Object { $_ })) {
         $exp = @($recs | Where-Object { $_.Fqdn -eq $n } | ForEach-Object { $_.Ip })[0]
         if (-not $exp -and $Facts['EnvZone'] -and $n.EndsWith('.' + [string]$Facts['EnvZone'])) { $exp = [string]$Facts['EnvIp'] }
@@ -1832,7 +2318,7 @@ function Get-SINetworkHandOff {
     $web = @($Facts['InsideNames'] | Where-Object { $Facts['EnvZone'] -and $_.EndsWith('.' + [string]$Facts['EnvZone']) })[0]
     if ($web) { $L.Add(('        Test-NetConnection {0} -Port 443' -f $web)) }
     foreach ($nt in @($Facts['Notes'])) { $L.Add(('NOTE: {0}' -f $nt)) }
-    if ([string]$Facts['CloseCommand']) { $L.Add(('7. THEN close the public endpoints: {0}' -f $Facts['CloseCommand'])) }
+    if ([string]$Facts['CloseCommand']) { $L.Add(('8. THEN close the public endpoints: {0}' -f $Facts['CloseCommand'])) }
     @{ Open = $open; Lines = $L.ToArray(); Items = $items.ToArray(); Text = ($L.ToArray() -join "`n") }
 }
 
@@ -2074,6 +2560,11 @@ function Get-SIInstallPrivateNetworkTarget {
         EndpointsSubnetPrefix = $(if ("$($Values['endpointsSubnetPrefix'])".Trim()) { "$($Values['endpointsSubnetPrefix'])".Trim() } else { [string]$split.Endpoints })
         DnsResourceGroupId = $(if ($dns) { $dns } else { $ResourceGroupId })
         ResourceGroupId = $ResourceGroupId
+        # #1095: the return route of the apps subnet -- the ranges the customer's people browse from and the hub firewall's
+        # private IP (both the customer's answers; SecurityInsight makes the route only on its own spoke)
+        # (as given, one item per range; Get-SIReturnRouteFacts normalises them and names what is not a range)
+        ReturnRouteRanges = @(@($Values['returnRouteRanges']) | Where-Object { $_ } | ForEach-Object { "$_" -split '[,;\s]+' } | Where-Object { $_ })
+        ReturnRouteNextHop = "$($Values['returnRouteNextHop'])".Trim()
     }
 }
 

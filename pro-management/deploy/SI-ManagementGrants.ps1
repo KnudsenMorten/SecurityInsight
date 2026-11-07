@@ -76,6 +76,8 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.WebKeyRing';              Verbs = 'INSERT' }
     @{ Object = 'sidata.Collection';           Verbs = 'UPDATE' }
     @{ Object = 'sidata.CiOverride';           Verbs = 'INSERT, UPDATE' }   # #462: an Admin's manual CI override (a removal is soft: an UPDATE)
+    @{ Object = 'sidata.CiSuspectDecision';    Verbs = 'INSERT, UPDATE' }   # a person's merge / split decision on a correlation suspect (a removal is soft: an UPDATE)
+    @{ Object = 'sidata.CiSuspectDecisionRecord'; Verbs = 'INSERT' }        # the CIs and records a decision covers
     @{ Object = 'cmdbsync.AssetLifecycle';      Verbs = 'UPDATE' }   # #406: an Admin retires an asset in its grace period early (Not seen anymore)
     @{ Object = 'cmdbsync.AssetLifecycleEvent'; Verbs = 'INSERT' }   # #406: ... with who and why
 )

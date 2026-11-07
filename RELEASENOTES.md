@@ -13,6 +13,13 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.61 — Merge and split decisions on correlation suspects are saved again
+
+### Web app
+
+- Saving a merge or split decision on the correlation suspects page failed: the web app was not given the right to
+  write those decisions to the database. The update now gives it that right, so decisions are saved and can be undone.
+
 ## v3.0.60 — The fresh start of the data empties every table the quick way
 
 ### Data

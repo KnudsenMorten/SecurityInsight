@@ -19,7 +19,7 @@
 #>
 
 BeforeDiscovery {
-    try { $script:HasSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
+    try { $script:HasSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
 }
 
 BeforeAll {
@@ -233,9 +233,9 @@ Describe '#1050 the idle window' {
 Describe '#1050 REAL SQL: the build command beats the lock while it runs; the row store; the pages; the sample read' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:Db = 'si_test_ixwin_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:Db]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cs = "Server=.\SQLEXPRESS;Database=$script:Db;Integrated Security=SSPI;Connection Timeout=30"
+        $script:Cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$script:Db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $cs = $script:Cs
         $script:Q = {
             param([string]$sql, $p, [string]$mode)
@@ -264,7 +264,7 @@ FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_object
     }
     AfterAll {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:Db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:Db]"; [void]$c.ExecuteNonQuery() } catch { } finally { $m.Dispose() }
     }
     It 'the build command calls the beat WHILE the statement runs, and returns its seconds' {
@@ -341,9 +341,9 @@ Describe '#1050 SCALE: a filtered index on ~20 M rows -- the estimate against th
     # SQL Express: no ONLINE builds and a 1.4 GB buffer pool -- the build reads its pages from storage, as the live one did.
     BeforeAll {
         $script:SDb = 'si_test_ixscale_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:SDb]; ALTER DATABASE [$script:SDb] SET RECOVERY SIMPLE;"; $c.CommandTimeout = 600; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $cs = "Server=.\SQLEXPRESS;Database=$script:SDb;Integrated Security=SSPI;Connection Timeout=30"
+        $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$script:SDb;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $script:SCs = $cs
         $script:SQ = {
             param([string]$sql, $p, [string]$mode)
@@ -372,7 +372,7 @@ FROM (SELECT TOP (1000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM 
     }
     AfterAll {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 600; $c.CommandText = "ALTER DATABASE [$script:SDb] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:SDb]"; [void]$c.ExecuteNonQuery() } catch { } finally { $m.Dispose() }
     }
     It 'measures: rows, pages, the sample-read estimate, the real filtered build, and the measured rate (written to the log)' {

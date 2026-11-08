@@ -244,12 +244,12 @@ function Write-CiPerfTenant {
 function New-CiPerfDatabase {
     <# A fresh database with the schema, and two open connections: AdminConn (the owner) and Conn (the engine's identity:
        db_datareader + db_datawriter, no DDL -- as setup grants it). Answers @{ Name; AdminConn; Conn; Seam; NewEngineConn }. #>
-    param([Parameter(Mandatory)][string]$SIRoot, [string]$Prefix = 'si_test_ciperf_', [string]$Server = '.\SQLEXPRESS')
+    param([Parameter(Mandatory)][string]$SIRoot, [string]$Prefix = 'si_test_ciperf_', [string]$Server = $env:SI_TEST_LOCALSQL)
     $name = $Prefix + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $m = New-Object System.Data.SqlClient.SqlConnection "Server=$Server;Database=master;Integrated Security=SSPI;Connection Timeout=30"
+    $m = New-Object System.Data.SqlClient.SqlConnection "Server=$Server;Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
     $m.Open()
     try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$name]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-    $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$Server;Database=$name;Integrated Security=SSPI;Connection Timeout=30")
+    $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$Server;Database=$name;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
     $cn.Open()
     foreach ($f in 'sql\si-data-schema.sql', 'sql\si-identity-schema.sql') {
         $c = $cn.CreateCommand(); $c.CommandTimeout = 600; $c.CommandText = [IO.File]::ReadAllText((Join-Path $SIRoot $f)); [void]$c.ExecuteNonQuery()
@@ -289,7 +289,7 @@ function Remove-CiPerfDatabase {
     try { $Db.AdminConn.Dispose() } catch { }
     [System.Data.SqlClient.SqlConnection]::ClearAllPools()
     try {
-        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($Db.Server);Database=master;Integrated Security=SSPI;Connection Timeout=30"
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($Db.Server);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open()
         try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$($Db.Name)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($Db.Name)]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     } catch { Write-Warning ("the test database {0} could not be dropped: {1}" -f $Db.Name, $_.Exception.Message) }

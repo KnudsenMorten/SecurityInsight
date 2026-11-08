@@ -1,8 +1,8 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     ONE shard of the release gate (#416): runs the Pester suites listed in -ListFile in THIS process and writes the result
-    as JSON to -ResultFile. Started by tests\Invoke-FastGate.ps1 -- one per worker process, PowerShell 5.1 and 7 alike.
+    as JSON to -ResultFile. Started by tests\Invoke-FastGate.ps1 -- one per worker process, PowerShell 7 only (framework 12.1 rule 2).
 
 .DESCRIPTION
     The list travels in a FILE, not as an array parameter: `pwsh -File x.ps1 -Names a,b` passes ONE string, and an array
@@ -21,6 +21,11 @@ param(
 $ErrorActionPreference = 'Stop'
 # #918: a test run never reports to Invardia -- this process and every engine child process it starts (SI_TEST_GATE: the gate's marker; in a Pester session the suites test the sender with their own stub)
 $env:SI_TELEMETRY_ENABLED = 'false'; $env:SI_TEST_GATE = '1'
+# the Linux test runner is itself a Container Apps Job: its CONTAINER_APP_* variables would make SI's code believe it runs as
+# one of SI's own job executions (step progress written, a job's run limit read) -- they are the runner's, never a test's
+foreach ($v in @([Environment]::GetEnvironmentVariables().Keys | Where-Object { "$_" -like 'CONTAINER_APP_*' })) { [Environment]::SetEnvironmentVariable([string]$v, $null) }
+# the tests' SQL Server and sign-in (the Linux runner's TEST_SQL_* login, or .\SQLEXPRESS on the Windows VM) -- framework 12.1 rule 1
+. ([IO.Path]::Combine($PSScriptRoot, '_SITestSql.ps1')); $null = Initialize-SITestSqlEnv
 $files = @([IO.File]::ReadAllLines($ListFile) | Where-Object { $_.Trim() })
 $out = [ordered]@{ Runtime = $PSVersionTable.PSVersion.ToString(); Edition = $PSVersionTable.PSEdition; Files = $files.Count
                    Passed = 0; Failed = 0; Skipped = 0; Total = 0; Seconds = 0; Containers = @(); Failures = @(); LoadFailures = @(); Error = ''

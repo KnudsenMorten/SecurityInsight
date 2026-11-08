@@ -22,7 +22,7 @@
 #>
 
 BeforeDiscovery {
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
 BeforeAll {
@@ -269,10 +269,10 @@ Describe '#642 the repair in a real database: an install''s wrong merge is split
                 if (-not (Test-Path -LiteralPath (Join-Path $script:SIRoot $f))) { throw "the Pro database schema ($f) is not in this copy" }
             }
             $name = 'si_test_ciwm_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-            $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+            $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
             $m.Open()
             try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$name]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-            $script:AdminConn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$name;Integrated Security=SSPI;Connection Timeout=30")
+            $script:AdminConn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$name;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
             $script:AdminConn.Open()
             foreach ($f in 'sql\si-data-schema.sql', 'sql\si-identity-schema.sql') {
                 $c = $script:AdminConn.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot $f)); [void]$c.ExecuteNonQuery()
@@ -327,7 +327,7 @@ Describe '#642 the repair in a real database: an install''s wrong merge is split
             try { $script:Conn.Dispose() } catch { }
             try { $script:AdminConn.Dispose() } catch { }
             [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-            $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+            $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
             $m.Open()
             try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$($script:Db)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($script:Db)]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
         }

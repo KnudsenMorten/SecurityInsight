@@ -25,7 +25,7 @@
 
 BeforeDiscovery {
     $script:HasSql = $false
-    try { $script:HasSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
+    try { $script:HasSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
 }
 
 BeforeAll {
@@ -287,9 +287,9 @@ Describe 'a device no source names gets the generated name (no active CI is name
 Describe 'real SQL: the one-time repair, the merge event, the plain-words reason (local SQL Server Express)' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:DbName = 'si_test_stableid_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:DbName]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$script:DbName;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$script:DbName;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $script:Cn.Open()
         $c = $script:Cn.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'sql\si-data-schema.sql')); [void]$c.ExecuteNonQuery()
         $c = $script:Cn.CreateCommand(); $c.CommandText = "CREATE USER si_engine WITHOUT LOGIN; ALTER ROLE db_datareader ADD MEMBER si_engine; ALTER ROLE db_datawriter ADD MEMBER si_engine; EXECUTE AS USER = N'si_engine';"; [void]$c.ExecuteNonQuery()
@@ -305,7 +305,7 @@ Describe 'real SQL: the one-time repair, the merge event, the plain-words reason
     AfterAll {
         if ($script:Cn) { try { $script:Cn.Dispose() } catch { } }
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:DbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:DbName]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     It 'sql-host-05: the active twin the history says was merged is retired into the survivor (named), the merge event is written, an earlier twin gets its reason; nothing deleted' {

@@ -311,10 +311,10 @@ Describe 'the safety suites are complete and never silently empty' {
 }
 
 Describe 'WIRING: v3 gates PowerShell 7 only by default (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday")' {
-    It 'the default -Runtime is pwsh; ps51 / both stay available as an explicit opt-in' {
+    It '-Runtime is pwsh ONLY -- no 5.1 opt-in is left (owner 2026-11-08, framework 12.1 rule 2)' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $g | Should -Match "\[ValidateSet\('both', 'pwsh', 'ps51'\)\]\[string\]\`$Runtime = 'pwsh'"
-        $g | Should -Not -Match "\`$Runtime = 'both'"
+        $g | Should -Match "\[ValidateSet\('pwsh'\)\]\[string\]\`$Runtime = 'pwsh'"
+        $g | Should -Match "\`$qExe = @\{ pwsh = 'pwsh' \}"
     }
     It 'the measured durations carry the PowerShell 7 timings in use and no 5.1 section' {
         $d = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\pester\suite-durations.json')) | ConvertFrom-Json
@@ -329,13 +329,11 @@ Describe 'WIRING: the gate runs each suite in its own process, and only ever sto
         $w | Should -Match '\[string\]\$ListFile'
         $w | Should -Match 'ReadAllLines\(\$ListFile\)'
     }
-    It 'a PowerShell 5.1 worker (the opt-in) gets the 5.1 module path; processes are stopped by their own id, never by name' {
+    It 'every worker is pwsh (no 5.1 module path, no powershell.exe); processes are stopped by their own id, never by name' {
         $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        $g | Should -Match 'WindowsPowerShell\\v1\.0\\Modules'
+        $g | Should -Not -Match "WindowsPowerShell\\v1\.0\\Modules|'powershell\.exe'|'pwsh\.exe'"
         $g | Should -Match 'Stop-SIGateProcessTree -Process \$r\.Process'
         $g | Should -Not -Match 'Stop-Process -Name'
-        $g | Should -Match "'powershell\.exe'"
-        $g | Should -Match "'pwsh\.exe'"
         (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateDotnet.ps1')).Contains('''test'', [string]$pj.Path, ''-c'', ''Release'', ''--no-build''') | Should -BeTrue -Because 'dotnet test runs --no-build after the one build'
     }
     It 'only the dev fast gate leaves out tests tagged Nightly; a full run (only on the owner''s words) and the quick gate (a selected suite runs whole) run them; every suite is a fresh process from a queue' {
@@ -347,24 +345,6 @@ Describe 'WIRING: the gate runs each suite in its own process, and only ever sto
         Get-SIFastGateExcludeTags -Scope PublicCopy | Should -Be 'PrivateRepo,Nightly,Scale,Live,CertStore'
         $g | Should -Match 'Enqueue'
         (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\pester\_Invoke-GateShard.ps1')) | Should -Match 'Filter\.ExcludeTag'
-    }
-    It 'a PowerShell 7 gate leaves out the 5.1 parity probes by tag (Ps51: "not run", never a skip that turns a suite not green); the 5.1 opt-in runs them' {
-        Add-SIFastGatePs51Tag -Exclude 'Nightly,Scale' -Runtime 'pwsh' | Should -Be 'Nightly,Scale,Ps51'
-        Add-SIFastGatePs51Tag -Exclude '' -Runtime 'pwsh' | Should -Be 'Ps51'
-        Add-SIFastGatePs51Tag -Exclude 'Scale' -Runtime 'ps51' | Should -Be 'Scale'
-        Add-SIFastGatePs51Tag -Exclude 'Scale' -Runtime 'both' | Should -Be 'Scale'
-        Add-SIFastGatePs51Tag -Exclude 'Scale,Ps51' -Runtime 'pwsh' | Should -Be 'Scale,Ps51'
-        $g = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
-        ([regex]::Matches($g, '(?m)^\s*\$exclude = Add-SIFastGatePs51Tag -Exclude \$exclude -Runtime \$Runtime\s*$')).Count | Should -Be 1 -Because 'the one run engine (quick gate and full run alike) applies it'
-        # every 5.1 parity probe that skips itself on a PowerShell 7 gate carries the tag
-        foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'tests\pester') -Filter '*.Tests.ps1' | Where-Object { $_.Name -ne 'SIv3-FastGate.Tests.ps1' })) {
-            $lines = @(Get-Content -LiteralPath $f.FullName)
-            for ($i = 0; $i -lt $lines.Count; $i++) {
-                if ($lines[$i] -notmatch "SI_GATE_PS51 -ne '1'") { continue }
-                $it = $null; for ($k = $i; $k -ge 0; $k--) { if ($lines[$k] -match '^\s*It\s') { $it = $lines[$k]; break } }
-                $it | Should -Match "-Tag 'Ps51'" -Because ('{0} line {1}: a 5.1 parity probe' -f $f.Name, ($i + 1))
-            }
-        }
     }
     It 'EVERY gate leaves out the scale benchmarks (tag Scale); the hotfix and full gates run the other Nightly tests; Scale runs only when asked for (owner 2026-10-11: "dont run that 100000 test")' {
         $h = @((Get-SIFastGateExcludeTags -Hotfix) -split ',')
@@ -531,7 +511,7 @@ Describe 'ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13: "no boddy can trig
         # the refusal comes before the re-run under pwsh, before the tests are found and before Pester is started
         $i = $script:PrePublishText.IndexOf('exit 6')
         $i | Should -BeGreaterThan 0
-        $i | Should -BeLessThan $script:PrePublishText.IndexOf("PSEdition -ne 'Core' -and")
+        $i | Should -BeLessThan $script:PrePublishText.IndexOf("PSEdition -ne 'Core')")
         $i | Should -BeLessThan $script:PrePublishText.IndexOf('Get-ChildItem -Path $TestsFolder')
         $i | Should -BeLessThan $script:PrePublishText.IndexOf('Invoke-Pester -Configuration')
         # a 5.1 start hands the words on to its pwsh re-run
@@ -749,7 +729,7 @@ Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is e
         $script:Fake = Join-Path $TestDrive 'fake'; New-Item -ItemType Directory -Force -Path $script:Fake | Out-Null
         $script:ChildPidFile = Join-Path $script:Fake 'child.pid'
         [IO.File]::WriteAllText((Join-Path $script:Fake 'Quick-Fake.Tests.ps1'), "Describe 'quick' { It 'passes' { 1 | Should -Be 1 } }")
-        [IO.File]::WriteAllText((Join-Path $script:Fake 'Silent-Fake.Tests.ps1'), ("Describe 'silent' {{ It 'says nothing' {{ `$c = Start-Process -FilePath '{0}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 300' -PassThru -WindowStyle Hidden; [IO.File]::WriteAllText('{1}', [string]`$c.Id); Start-Sleep -Seconds 300 }} }}" -f $script:Pw, $script:ChildPidFile))
+        [IO.File]::WriteAllText((Join-Path $script:Fake 'Silent-Fake.Tests.ps1'), ("Describe 'silent' {{ It 'says nothing' {{ `$c = Start-Process -FilePath '{0}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 300' -PassThru{2}; [IO.File]::WriteAllText('{1}', [string]`$c.Id); Start-Sleep -Seconds 300 }} }}" -f $script:Pw, $script:ChildPidFile, $(if ($IsWindows) { ' -WindowStyle Hidden' } else { '' })))   # -WindowStyle throws on Linux
         [IO.File]::WriteAllText((Join-Path $script:Fake 'Talker-Fake.Tests.ps1'), "Describe 'talker' { It 'works long and says so' { foreach (`$i in 1..18) { Write-Host ('tick {0}' -f `$i); Start-Sleep -Seconds 2 }; 1 | Should -Be 1 } }")
         $script:Item = {
             param([string]$Name, [string]$Work)
@@ -821,8 +801,9 @@ Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is e
         $g | Should -Match '\$runRes = @\(Invoke-SIQuickGateRun -Items \$items\.ToArray\(\) -Work \$work -Throttle \$qThrottle -HangSeconds \$qHang -ProgressSeconds \$ProgressSeconds -OnFinish \$describe -HangOverride \$qHangBy\)'
         $g | Should -Match '\$qHang = if \(\$HangSeconds -gt 0\) \{ \$HangSeconds \} else \{ \$map\.Quick\.HangSeconds \}'
         $g | Should -Match 'Stop-SIGateProcessTree -Process \$r\.Process'
-        $g | Should -Match "Kill', \[type\[\]\]@\(\[bool\]\)"
-        $g | Should -Match 'taskkill\.exe /T /F /PID \$Process\.Id'
+        # framework 12.1 rule 3: the tree through .NET (the same on the Linux runner), never CIM / taskkill
+        $g | Should -Match '\$Process\.Kill\(\$true\)'
+        $g | Should -Not -Match '& taskkill|Get-CimInstance -ClassName'
         $g | Should -Not -Match 'Stop-Process -Name'
         $g | Should -Match '-RedirectStandardInput \$noInput'
         $g | Should -Match 'still running \(\{1\}\)'

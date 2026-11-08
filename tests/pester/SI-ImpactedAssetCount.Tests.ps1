@@ -354,12 +354,6 @@ Describe 'audit #25 -- the FOURTH shape: a make_set list arrives in two differen
     }
 }
 
-# DISCOVERY-TIME. `-Skip:` is evaluated during discovery, so this cannot live in a BeforeAll -- put it
-# there and every 5.1 test silently SKIPS on a runner that has PowerShell 5.1, which is the one place
-# they must run. Verified by counting: skipped=2 before this moved out, skipped=0 after.
-$script:Ps51Path  = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$script:HasPs51   = Test-Path -LiteralPath $script:Ps51Path
-
 Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the host the ENGINE runs on' {
 <#
     v2.2.440. The fourth-shape fix (v2.2.438) was correct, tested, green -- and INERT in production
@@ -375,8 +369,9 @@ Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the h
     collapsing to a single element beside a KQL count of 69.
 
     THE GENERAL LESSON, which is bigger than this column: a suite that runs on a different host from
-    the product cannot see host-sensitive defects. These tests re-run the SAME extracted block in a
-    real PS 5.1 child process, so the assertion is made where the engine actually lives.
+    the product cannot see host-sensitive defects. v3 engines run PowerShell 7 in containers, and no test
+    spends time on Windows PowerShell 5.1 (owner 2026-11-08): the 5.1 child-process runs are gone; the
+    static guard below still holds the shape that bit (never pipe into ConvertFrom-Json).
 #>
 
     BeforeAll {
@@ -391,12 +386,6 @@ Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the h
             $n -is [System.Management.Automation.Language.IfStatementAst] -and
             $n.Clauses[0].Item1.Extent.Text -match '\$existingImpacted -is \[string\]'
         }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`n"
-
-        # Re-resolved for the RUN phase. The copy above the Describe is what -Skip reads at DISCOVERY
-        # time; discovery-scope variables are not visible inside It blocks, so both are needed and
-        # neither is redundant.
-        $script:Ps51Path = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-
     }
 
     It 'the extraction still matches (absence must not read as success)' {
@@ -408,48 +397,5 @@ Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the h
         # to a variable and wrap that; never `@($s | ConvertFrom-Json)`.
         $script:Norm51 | Should -Not -Match '\|\s*ConvertFrom-Json'
         $script:Norm51 | Should -Match 'ConvertFrom-Json\s+-InputObject'
-    }
-
-    It 'a JSON array normalizes to 17 items under REAL PowerShell 5.1, not 1' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
-        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
-        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
-        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
-        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
-        $json = ((1..17 | ForEach-Object { "asset$_" }) | ConvertTo-Json -Compress)
-        $probe = @"
-`$existingImpacted = '$json'
-$script:Norm51
-Write-Output @(`$existingImpacted).Count
-"@
-        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
-        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
-        try {
-            $out = & $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f
-            [int](@($out)[-1]) | Should -Be 17
-        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
-    }
-
-    It 'and the two hosts AGREE -- the property that was silently untrue' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
-        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
-        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
-        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
-        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
-        $json = '["a","b","c","d"]'
-        $existingImpacted = $json
-        . ([scriptblock]::Create($script:Norm51))
-        $here = @($existingImpacted).Count
-
-        $probe = @"
-`$existingImpacted = '$json'
-$script:Norm51
-Write-Output @(`$existingImpacted).Count
-"@
-        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
-        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
-        try {
-            $there = [int](@(& $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f)[-1])
-            $there | Should -Be $here
-            $here  | Should -Be 4
-        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
     }
 }

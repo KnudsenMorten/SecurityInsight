@@ -24,7 +24,7 @@
     OFFLINE: an in-process HTTP handler stands in for advanced hunting -- no network, no tenant.
 #>
 
-$script:HasSql = [bool](Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running')
+$script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 $script:HasSql = $script:HasSql -and (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-data-schema.sql')))
 $script:HasSql = $script:HasSql -and (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-identity-schema.sql')))
 
@@ -174,9 +174,9 @@ public class SiFakeHuntingHandler : HttpMessageHandler {
     # ---- the local SQL Server (test VM), as SIv3-RaStreamToSql: a fresh database, the engine's seam over one connection
     function script:Open-TestDb {
         $name = 'si_test_raparts_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$name]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$name;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$name;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $cn.Open()
         foreach ($f in 'sql\si-data-schema.sql', 'sql\si-identity-schema.sql') { $c = $cn.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot $f)); [void]$c.ExecuteNonQuery() }
         $c = $cn.CreateCommand(); $c.CommandText = 'CREATE USER si_engine WITHOUT LOGIN; ALTER ROLE db_datareader ADD MEMBER si_engine; ALTER ROLE db_datawriter ADD MEMBER si_engine;'; [void]$c.ExecuteNonQuery()
@@ -187,7 +187,7 @@ public class SiFakeHuntingHandler : HttpMessageHandler {
     function script:Close-TestDb([string]$Name) {
         if ($script:Conn) { try { $script:Conn.Dispose() } catch { }; $script:Conn = $null }
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$Name] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$Name]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     $script:Seam = {

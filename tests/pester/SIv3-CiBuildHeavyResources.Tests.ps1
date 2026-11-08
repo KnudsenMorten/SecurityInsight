@@ -395,7 +395,7 @@ try {
         $q = { param($s) '"' + [string]$s + '"' }
         $argList = @('-NoProfile', '-NonInteractive', '-File', (& $q $script:BootFile), '-SIRoot', (& $q $script:SIRoot), '-HarnessFile', (& $q $script:HarnessFile), '-Heavy', $Heavy, '-InScope', [int]$InScope, '-Devices', $Devices, '-Out', (& $q $out), '-Trace', (& $q $trace))
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $argList -PassThru -WindowStyle Hidden
+        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $argList -PassThru -NoNewWindow
         $timedOut = -not $p.WaitForExit($TimeoutSeconds * 1000)
         if ($timedOut) { try { $p.Kill($true) } catch { }; try { $null = $p.WaitForExit(15000) } catch { } }
         $res = $null

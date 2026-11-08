@@ -192,9 +192,9 @@ $db = $null; $sqlSec = 0.0
 if ($Source -eq 'Sql') {
     $sqlClock = [System.Diagnostics.Stopwatch]::StartNew()
     $db = 'si_laupload_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+    $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
     $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$db]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-    $cs = "Server=.\SQLEXPRESS;Database=$db;Integrated Security=SSPI;Connection Timeout=30"
+    $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
     $cn = [System.Data.SqlClient.SqlConnection]::new($cs); $cn.Open()
     try {
         $c = $cn.CreateCommand(); $c.CommandTimeout = 600; $c.CommandText = [IO.File]::ReadAllText((Join-Path $SchemaRoot 'sql\si-data-schema.sql')); [void]$c.ExecuteNonQuery()
@@ -278,7 +278,7 @@ if ($pager.State -and $pager.State.ContainsKey('FetchSec')) { $timing['PagerFetc
 $totalSec = $all.Elapsed.TotalSeconds
 if ($db) {
     [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-    $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+    $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
     $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$db]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
 }
 

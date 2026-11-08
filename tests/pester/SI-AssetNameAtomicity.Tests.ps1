@@ -26,9 +26,6 @@
     No real customer names appear here; all fixtures are invented.
 #>
 
-$script:Ps51Path = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$script:HasPs51  = Test-Path -LiteralPath $script:Ps51Path
-
 BeforeAll {
     $script:SIRoot = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '..') ''
     $raShared  = Join-Path (Join-Path (Join-Path $script:SIRoot 'engine') 'risk-analysis') '_shared'
@@ -109,52 +106,6 @@ Describe 'the LIST column still splits -- the fix must not disable splitting eve
         $out  = @(Resolve-AssetNamesForRow -Row ([pscustomobject]@{ AssetName = 'ignored.example.test' }) -AssetsText $json)
         $out.Count | Should -Be 2
         $out | Should -Not -Contain 'ignored.example.test'
-    }
-}
-
-Describe 'HOST-1 -- the list path decodes JSON, so it must agree on the host the ENGINE runs on' {
-<#
-    Framework finding HOST-1 (DOCS/REQUIREMENTS.md): the suites run pwsh 7, every engine runs Windows
-    PowerShell 5.1, and ConvertFrom-Json does not behave identically across them. Split-ImpactedAssets
-    decodes JSON, so it is in exactly that risk class -- assert it there rather than assume.
-#>
-
-    BeforeAll {
-        $script:Ps51 = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    }
-
-    It 'a 3-element JSON list resolves to 3 under real PowerShell 5.1' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
-        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
-        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
-        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
-        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
-        $probe = @"
-`$ErrorActionPreference = 'Stop'
-$script:SplitText
-`$out = @(Split-ImpactedAssets -AssetsText '["a.example.test","b.example.test","c.example.test"]')
-Write-Output `$out.Count
-"@
-        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si-atom-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
-        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
-        try { [int](@(& $script:Ps51 -NoProfile -ExecutionPolicy Bypass -File $f)[-1]) | Should -Be 3 }
-        finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
-    }
-
-    It 'and a comma inside an element survives on PowerShell 5.1 too' -Tag 'Ps51' -Skip:(-not $script:HasPs51) {
-        # v3 gates PowerShell 7 only (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). This probe proves
-        # 5.1 PARITY, so it runs only on the 5.1 opt-in (tests\Invoke-FastGate.ps1 -Runtime ps51 / both sets SI_GATE_PS51=1)
-        # and on v2.2 (main). Removing the 5.1 product code itself is #480.
-        if ($env:SI_GATE_PS51 -ne '1') { Set-ItResult -Skipped -Because 'v3 gates PowerShell 7 only (2026-10-09): 5.1 parity runs on the -Runtime ps51 opt-in and on v2.2'; return }
-        $probe = @"
-`$ErrorActionPreference = 'Stop'
-$script:SplitText
-`$out = @(Split-ImpactedAssets -AssetsText '["a.example.test","SVC (Admin, Cloud, ID)"]')
-Write-Output `$out.Count
-"@
-        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si-atom-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
-        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
-        try { [int](@(& $script:Ps51 -NoProfile -ExecutionPolicy Bypass -File $f)[-1]) | Should -Be 2 }
-        finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
     }
 }
 

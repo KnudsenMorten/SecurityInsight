@@ -18,7 +18,7 @@ param(
     [double]$Scale = 1.0,
     [Parameter(Mandatory)][string]$OutFile,
     [string]$LedgerFile,
-    [string]$Server = '.\SQLEXPRESS'
+    [string]$Server = $env:SI_TEST_LOCALSQL
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $SIRoot 'engine\data-model\SI-RecordCapture.ps1')

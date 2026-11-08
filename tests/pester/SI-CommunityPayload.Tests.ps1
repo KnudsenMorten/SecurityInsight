@@ -73,7 +73,7 @@ Describe 'every Pro component is excluded from the public payload' {
         $gated = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'engine') -Recurse -File -Filter '*.ps1' |
             Where-Object { $_.Name -ne 'SI-FeatureCatalog.ps1' } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match "(Assert-SIFeatureOrSkip|Test-SIFeatureAvailable)\s+-Feature\s+'(servicenow-connector|governance|cmdb-connectors)'" } |
-            ForEach-Object { $_.FullName.Substring($script:SIRoot.Length + 1) })
+            ForEach-Object { $_.FullName.Substring($script:SIRoot.Length + 1).Replace('/', '\') })
         $gated | Should -Not -BeNullOrEmpty
         # SHIPPED on purpose, each with its reason: verification (Community since 2026-10-27, #750 (8)) asks the gate only to
         # SKIP its ServiceNow output check (after Test-Path finds the Pro helper) -- it gates nothing of its own
@@ -429,7 +429,7 @@ Describe 'no free file loads a Pro file' {
         $offenders = New-Object System.Collections.Generic.List[string]
         # -Include is silently ignored next to -LiteralPath on PS 5.1, so filter on the extension.
         Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | ForEach-Object {
-            $rel = $_.FullName.Substring($script:SIRoot.Length + 1)
+            $rel = $_.FullName.Substring($script:SIRoot.Length + 1).Replace('/', '\')
             if (Test-SIExcluded $rel) { return }
             if ($_.FullName -match $skipDirs) { return }
             if ($rel -ieq 'tests\pester\SI-CommunityPayload.Tests.ps1') { return }

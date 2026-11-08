@@ -33,10 +33,13 @@ $log = { param($lines) if ($LogFile) { Add-Content -LiteralPath $LogFile -Value 
 & $save
 try {
     $built = $true
+    # SPEED (framework 12.1 rule 10 (c)): this is the TEST build -- the .NET analyzers are off here only; the release build
+    # (the image build) keeps them, so a rule an analyzer enforces is still enforced where the product is built
+    $fastBuild = @('-p:RunAnalyzers=false', '-p:EnableNETAnalyzers=false', '-p:RunAnalyzersDuringBuild=false')
     foreach ($pj in $plan) {
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE
-        if ($bc -and ($b -match 'MSB4166')) { & $log $b; $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE }
+        $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false @fastBuild 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE
+        if ($bc -and ($b -match 'MSB4166')) { & $log $b; $b = @(& dotnet build ([string]$pj.Path) -c Release --nologo -v minimal -nodeReuse:false @fastBuild 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $bc = $LASTEXITCODE }
         & $log $b
         $errs = @($b | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match ':\s*error\s+[A-Z]+\d+' } | Select-Object -Unique -First 8)
         $out.Build += [ordered]@{ Project = [string]$pj.Name; Ok = ($bc -eq 0); Summary = $(if ($bc) { 'dotnet build FAILED' + $(if ($errs.Count) { ': ' + ($errs -join ' | ') } else { '' }) } else { 'built' }); Seconds = [int]$sw.Elapsed.TotalSeconds }
@@ -53,6 +56,7 @@ try {
                 $o = @(& dotnet @ta 2>&1 | ForEach-Object { $l = "$_"; [Console]::Out.WriteLine($l); $l }); $tc = $LASTEXITCODE
                 & $log $o
                 $sum = @($o | Where-Object { $_ -match '(Passed|Failed|Skipped)!\s+-' } | ForEach-Object { $_.Trim() }) -join ' '
+                if (-not $sum) { $sum = @($o | Where-Object { $_ -match '^\s*(Total tests|Passed|Failed|Skipped):\s*\d' } | ForEach-Object { $_.Trim() }) -join ' / ' }   # the 'Total tests: N' form
                 $names = @(for ($k = 0; $k -lt $o.Count; $k++) {
                     if ($o[$k] -notmatch '^\s+Failed\s+\S') { continue }
                     $why = ''
@@ -62,7 +66,9 @@ try {
                     $o[$k].Trim() + $(if ($why) { ' -- ' + $(if ($why.Length -gt 700) { $why.Substring(0, 700) } else { $why }) } else { '' })
                 }) | Select-Object -First 15
                 if ($names.Count) { $sum = ($(if ($sum) { $sum } else { '' }) + ' | ' + ($names -join ' | ')).Trim(' ', '|') }
-                if ($tc -eq 0 -or ($o -match '(Passed|Failed|Skipped)!\s+-')) { break }
+                # a run that REPORTED its tests (either summary form: 'Failed!  - ...' or 'Total tests: N') is a result, not a
+                # crash: a red result is not re-run (the re-run doubled a red web run's time and said nothing new)
+                if ($tc -eq 0 -or ($o -match '(Passed|Failed|Skipped)!\s+-') -or ($o -match '^\s*Total tests:\s*\d')) { break }
                 $note = "attempt $attempt produced no test result (exit $tc): " + (@($o | Where-Object { $_.Trim() } | Select-Object -Last 4) -join ' / ')
                 # the failed tests' names stay in the summary (they were dropped here, so a red run never said which tests)
                 $sum = $note + $(if ($names.Count) { ' | ' + ($names -join ' | ') } else { '' })

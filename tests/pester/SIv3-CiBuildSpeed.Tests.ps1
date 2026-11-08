@@ -25,7 +25,7 @@
 
 BeforeDiscovery {
     $script:IsPwsh = $PSVersionTable.PSVersion.Major -ge 7
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
 BeforeAll {

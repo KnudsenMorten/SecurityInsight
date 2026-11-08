@@ -19,7 +19,7 @@
 #>
 
 BeforeDiscovery {
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
 BeforeAll {
@@ -307,9 +307,9 @@ Describe '#1052 one hard id, one active CI' {
 Describe '#1052 real SQL: the merged twin is retired, the survivor and an unrelated CI are not (local SQL Server Express)' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:DbName = 'si_test_1052_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:DbName]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$script:DbName;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$script:DbName;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $script:Cn.Open()
         $c = $script:Cn.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'sql\si-data-schema.sql')); [void]$c.ExecuteNonQuery()
         # the ENGINE's rights only (db_datareader + db_datawriter), as setup grants them
@@ -326,7 +326,7 @@ Describe '#1052 real SQL: the merged twin is retired, the survivor and an unrela
     AfterAll {
         if ($script:Cn) { try { $script:Cn.Dispose() } catch { } }
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:DbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:DbName]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     It 'sql-host-05: the twin (same Defender / Azure / Defender for Cloud ids, no current record) and the old graph-node CI are retired naming the survivor; the survivor, a current CI and a lone orphan inside the brake are untouched' {

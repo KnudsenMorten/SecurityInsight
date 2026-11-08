@@ -73,6 +73,8 @@ Describe 'SI''s uplink client is the framework''s, byte for byte' {
         if ($git -and (Test-Path -LiteralPath (Join-Path $script:RepoRoot '.git'))) {
             $want = (& git -C $script:RepoRoot rev-parse --verify -q 'origin/main:sync/_AitUplink.ps1' 2>$null)
         }
+        # the Linux test runner's clone holds the tested commit only: the gate hands main's blob id in (Invoke-GateOnTestVm)
+        if (-not $want -and "$env:SI_TEST_MAIN_AITUPLINK_BLOB" -match '^[0-9a-f]{40}$') { $want = $env:SI_TEST_MAIN_AITUPLINK_BLOB }
         if (-not $want) { Set-ItResult -Skipped -Because 'no Schema 2 sync/_AitUplink.ps1 in this checkout and origin/main is not available (customer tree / shallow clone)'; return }
         $have = (& git -C $script:RepoRoot hash-object --path=sync/_AitUplink.ps1 $copy)
         $have | Should -Be $want -Because 'the copy must be the framework client exactly -- re-copy it with: git cat-file --filters origin/main:sync/_AitUplink.ps1'
@@ -215,7 +217,7 @@ Describe 'the anonymous run report (Community)' {
         foreach ($p in $script:Posts) {
             $p.Json | Should -Not -Match ([regex]::Escape($script:Tenant))
             $p.Json | Should -Not -Match ([regex]::Escape($script:HostX))
-            $p.Json | Should -Not -Match ([regex]::Escape([string]$env:COMPUTERNAME))
+            $p.Json | Should -Not -Match ([regex]::Escape([Environment]::MachineName))   # $env:COMPUTERNAME is empty on Linux (an empty pattern matches everything)
             $p.Json | Should -Not -Match 'SuperSecretValue|Forbidden|Authorization_RequestDenied|graph\.microsoft'
             $names = @($p.Record.PSObject.Properties.Name)
             foreach ($n in 'ClaimedTenantId', 'Host', 'ErrorText') { $names | Should -Not -Contain $n }

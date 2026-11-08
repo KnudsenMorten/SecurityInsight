@@ -20,7 +20,7 @@
 #>
 
 BeforeDiscovery {
-    try { $LocalSqlD = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $LocalSqlD = $false }
+    try { $LocalSqlD = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $LocalSqlD = $false }
 }
 
 BeforeAll {
@@ -30,7 +30,7 @@ BeforeAll {
     . (Join-Path $script:Root 'engine\_shared\data-sql\SI-DataSql.ps1')
     $script:Schema = Get-Content -Raw -LiteralPath (Join-Path $script:Root 'sql\si-data-schema.sql')
     $script:Fill = Get-SIDataRiskPartsSql
-    try { $script:LocalSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
+    try { $script:LocalSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
 
     # a fake database: -Answers maps a regex of the statement to its answer (a value or a block over the parameters)
     function script:New-FakeDb {
@@ -201,9 +201,9 @@ Describe 'on a local SQL Server: exactly what the explained score read from each
     BeforeAll {
         if (-not $script:LocalSql) { return }
         $script:Db = 'si_parts_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+        $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:Db]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cn = [System.Data.SqlClient.SqlConnection]::new("Server=.\SQLEXPRESS;Database=$script:Db;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $script:Cn = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=$script:Db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $script:Cn.Open()
         function script:Sql([string]$Text, [hashtable]$P = @{}, [string]$Mode = 'nonquery') {
             $c = $script:Cn.CreateCommand(); $c.CommandText = $Text; $c.CommandTimeout = 600
@@ -257,7 +257,7 @@ Describe 'on a local SQL Server: exactly what the explained score read from each
         if (-not $script:LocalSql) { return }
         if ($script:Cn) { $script:Cn.Dispose() }
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+        $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "ALTER DATABASE [$script:Db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:Db]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     It 'the backfill fills every row, stamps the collection, and every stored part equals the explained score''s reading of the row' -Skip:(-not $LocalSqlD) {

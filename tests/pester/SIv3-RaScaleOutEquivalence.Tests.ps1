@@ -23,7 +23,7 @@
     THE MEASUREMENT (tag Scale -- on demand only, never in a gate): 100,000 rows, one worker against four, wall time.
 #>
 
-$script:HasSql = [bool](Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running')
+$script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 $script:HasSql = $script:HasSql -and (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-data-schema.sql')))
 $script:HasSql = $script:HasSql -and (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-identity-schema.sql')))
 
@@ -48,7 +48,7 @@ $script:Index = New-RiskIndex -CsvRows @(Import-Csv -LiteralPath (Join-Path $SIR
 $script:Tiers = @('Critical - tier 0', 'High - tier 1', 'Medium - tier 2', 'Low - tier 3')
 $script:CT = [datetime]::SpecifyKind([datetime]'2026-10-17T06:00:00', 'Utc')
 function New-Seam([string]$Db) {
-    $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$Db;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+    $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$Db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
     $cn.Open()
     $c = $cn
     { param($Sql, $Params, $Mode)
@@ -230,15 +230,15 @@ function Invoke-TestWorker([string]$Db, $Ctx, [string]$Queue, $Store, $Lock, [st
 
     function script:New-Db([string]$Tag) {
         $name = 'si_test_raso_{0}_{1}' -f $Tag, [guid]::NewGuid().ToString('N').Substring(0, 6)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$name]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$name;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$name;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $cn.Open(); try { foreach ($f in 'sql\si-data-schema.sql', 'sql\si-identity-schema.sql') { $c = $cn.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot $f)); [void]$c.ExecuteNonQuery() } } finally { $cn.Dispose() }
         $name
     }
     function script:Remove-Db([string]$Name) {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$Name] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$Name]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     function script:Q([string]$Db, [string]$Sql) { $s = New-Seam -Db $Db; @(& $s $Sql @{} 'reader') | ForEach-Object { $_ } }

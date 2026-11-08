@@ -23,8 +23,8 @@ BeforeAll {
     Mock Invoke-RestMethod { $script:RealHttp.Add([string]$Uri); throw 'no network in tests' }
 
     function script:B64Url([byte[]]$b) { [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
-    $script:Rsa = New-Object System.Security.Cryptography.RSACng 2048
-    $script:Other = New-Object System.Security.Cryptography.RSACng 2048
+    $script:Rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    $script:Other = [System.Security.Cryptography.RSA]::Create(2048)
     $pub = $script:Rsa.ExportParameters($false)
     $script:Keys = @(@{ keyId = 'test-update-key'; n = (B64Url $pub.Modulus); e = (B64Url $pub.Exponent) })
     $script:Host1 = 'https://github.com/KnudsenMorten/SecurityInsight/releases/download/'

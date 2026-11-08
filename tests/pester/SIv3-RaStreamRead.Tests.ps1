@@ -219,12 +219,6 @@ Describe 'who reads as it arrives: Risk Analysis'' Log Analytics reads, nothing 
     }
 }
 
-Describe 'Windows PowerShell keeps the lean read' -Tag 'Ps51' -Skip:($PSVersionTable.PSEdition -eq 'Core') {
-    It 'the reader is not offered, so nothing changes there' {
-        Get-SILaStreamReaderType | Should -BeNullOrEmpty
-    }
-}
-
 Describe 'the inline text of a lookup: made once, the same characters; never built whole only to learn it does not fit' {
     BeforeAll {
         $script:Rows = @(

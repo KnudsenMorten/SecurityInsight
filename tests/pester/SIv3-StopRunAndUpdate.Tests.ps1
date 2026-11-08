@@ -476,3 +476,75 @@ Describe 'the script (setup\Stop-SIRunAndUpdate.ps1) with its seams' {
         $r2.Summary | Should -Match 'updated 3\.0\.40 -> 3\.0\.41'
     }
 }
+
+Describe 'the audit rows where vendor support holds no standing database admin (the support grant, just in time)' {
+    # live 2026-11-08 at the vendor's own install: after the Support app's standing admin was taken away it kept only the
+    # read-only role, and the audit row job.execution.start "could not be written". Each row now opens the support grant
+    # first (Invardia's Open-InvardiaSupportGrant), is written, and the grant is closed again.
+    BeforeAll {
+        $script:G = @{ Owner = $false; Opens = 0; Closes = 0; Refuse = $false }
+        $script:SqlRO = {
+            param([string]$Query, $Params, [string]$Mode)
+            if ($Query -match 'AS IsReadOnly') { return , @(@{ UserName = 'Invardia Support'; IsOwner = [int]$script:G.Owner; IsReader = 0; IsReadOnly = 1 }) }
+            if ($Query -match 'INSERT cfg\.AuditEvent' -and -not $script:G.Owner) { throw 'The INSERT permission was denied on the object ''AuditEvent''.' }
+            & $script:Sql $Query $Params $Mode
+        }
+        $script:GrantSeam = @{
+            Open = { param($Level, $Reason) $script:G.Opens++; if ($script:G.Refuse) { throw 'The grant job caj-si-support-grant execution x ended ''Failed'' (exit 3 = no consent on record in the product).' }; $script:G.Owner = $true; [pscustomobject]@{ Level = $Level; MaxUntil = '2026-11-04T11:00:00Z' } }
+            Close = { param($Reason) $script:G.Closes++; $script:G.Owner = $false }
+            Sleep = { param($s) }; ReadBackTries = 2; ReadBackSeconds = 0
+        }
+        function script:Invoke-GrantRun {
+            $script:Said = New-Object System.Collections.Generic.List[string]
+            Invoke-SIStopRunAndUpdate -Arm $script:Arm -SubscriptionId $script:Sub -ResourceGroup $script:Rg -Reason 'the run hangs on the old release' -Apply -TimeoutMinutes 30 -PollSeconds 30 `
+                -By 'Invardia support (test)' -Sql $script:SqlRO -ReadUpdateState $script:ReadState -Sleep $script:Sleep -Now $script:Now -Say { param($l, $c) $script:Said.Add($l) } -SupportGrant $script:GrantSeam
+        }
+        function script:Reset-Grant([bool]$Owner, [bool]$Refuse) { $script:G.Owner = $Owner; $script:G.Opens = 0; $script:G.Closes = 0; $script:G.Refuse = $Refuse }
+    }
+    It 'read-only: each of the two rows opens the grant, is written, and closes it -- said in the run''s own lines' {
+        New-TestWorld -Running $true
+        Reset-Grant $false $false
+        $r = Invoke-GrantRun
+        $r.Outcome | Should -Be 'updated'
+        @($script:W.Audit) | Should -Be @('job.flowrun.cancel', 'job.execution.start')
+        $script:G.Opens | Should -Be 2; $script:G.Closes | Should -Be 2
+        $script:G.Owner | Should -BeFalse -Because 'NEGATIVE: the grant never stays open after the run'
+        $txt = $script:Said -join "`n"
+        $txt | Should -Match 'opening the support grant \(setup, at most 1 h\) for: the audit row job\.flowrun\.cancel'
+        $txt | Should -Match 'opening the support grant \(setup, at most 1 h\) for: the audit row job\.execution\.start'
+        $txt | Should -Match 'support grant closed again'
+        $txt | Should -Match '1\. CANCEL: .*audit: job\.flowrun\.cancel written'
+        $txt | Should -Match '3\. START: .*audit: job\.execution\.start written'
+    }
+    It 'the grant refused: each row NOT written, said as a WARNING -- the stop and the update go on' {
+        New-TestWorld -Running $true
+        Reset-Grant $false $true
+        $r = Invoke-GrantRun
+        $r.Outcome | Should -Be 'updated' -Because 'an audit row that cannot be written never stops the main action'
+        $script:W.Audit.Count | Should -Be 0
+        $script:G.Closes | Should -Be 0
+        $txt = $script:Said -join "`n"
+        $txt | Should -Match 'audit: job\.flowrun\.cancel NOT written -- WARNING: the audit row job\.flowrun\.cancel was not made: the support grant could not be opened \(.*no consent on record'
+        $txt | Should -Match 'audit: job\.execution\.start NOT written -- WARNING: '
+        @(Get-StartCalls).Count | Should -Be 2 -Because 'the cancel and the update start were made all the same'
+    }
+    It 'a standing right: written as before, no grant asked' {
+        New-TestWorld -Running $true
+        Reset-Grant $true $false
+        $null = Invoke-GrantRun
+        @($script:W.Audit) | Should -Be @('job.flowrun.cancel', 'job.execution.start')
+        $script:G.Opens | Should -Be 0 -Because 'NEGATIVE: never a grant where the right is there'
+        $script:G.Closes | Should -Be 0
+        ($script:Said -join "`n") | Should -Not -Match 'support grant'
+    }
+    It 'NEGATIVE: no -SupportGrant (not a Support session) -- no probe is sent, the rows as before' {
+        New-TestWorld -Running $true
+        $null = Invoke-TestRun -Apply
+        @($script:W.Audit) | Should -Be @('job.flowrun.cancel', 'job.execution.start')
+    }
+    It 'the script wires the support grant only in a Support session over Invardia''s SQL call' {
+        $t = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'setup', 'Stop-SIRunAndUpdate.ps1'))
+        $t | Should -Match ([regex]::Escape('if ($support -and -not $SupportGrant -and (Get-Command -Name Invoke-InvardiaSupportSql -ErrorAction SilentlyContinue))'))
+        $t | Should -Match ([regex]::Escape('$SupportGrant = New-SISupportGrantSeams -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroupName'))
+    }
+}

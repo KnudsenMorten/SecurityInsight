@@ -21,7 +21,7 @@
 #>
 
 BeforeDiscovery {
-    try { $script:HasSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
+    try { $script:HasSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
 }
 
 BeforeAll {
@@ -199,9 +199,9 @@ Describe 'REAL SQL: the setting, a stale statistic, no row changed, the gate, th
     BeforeAll {
         . (Join-Path $script:SIRoot 'engine\pro-settings\SI-ProSchema.ps1')
         $script:DbName = 'si_test_stats_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:DbName]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$script:DbName;Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$script:DbName;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $script:Cn.Open()
         $script:Admin = {
             param($Sql, $Params, $Mode)
@@ -256,7 +256,7 @@ WHERE s.object_id = OBJECT_ID(N'sidata.Finding') AND s.name = N'PK_Finding'
     AfterAll {
         if ($script:Cn) { try { $script:Cn.Dispose() } catch { } }
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:DbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:DbName]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     It 'the engine''s user holds no ALTER on the findings table and none on the database (the refresh needs no right it does not have)' {

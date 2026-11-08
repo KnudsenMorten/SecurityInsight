@@ -8,7 +8,14 @@
     app does not offer yet). The value is validated by the same rules the engines read it with (Set-SIProSetting in
     engine\pro-settings\SI-ProSettings.ps1: the catalog's type, limits, choices); the write and its cfg.ChangeLog row
     are one transaction, and -Reason is recorded with it. No PowerShell module; the Pro database is reached with the
-    install's own identity (or -AppId / -TenantId / -CertThumbprint).
+    install's own identity (or -AppId / -TenantId / -CertThumbprint), or with -SupportSql through the Invardia Support
+    app's audited Invoke-InvardiaSupportSql (open the install's Support session first).
+
+    SUPPORT WITHOUT STANDING ADMIN: where the Support app holds only its read-only role in the database (just-in-time
+    support access), -SupportSql -Apply opens the support grant (setup level, at most 1 hour) first, waits until it reads
+    back, writes the setting and closes the grant again -- each said in one line. When the grant cannot be opened (no
+    consent, or the customer consented only to troubleshoot) the setting is NOT written and the script fails, saying why
+    and what to do. Where the Support app still holds the right, nothing changes: no grant is asked.
 
 .EXAMPLE
     .\setup\Set-SIProSetting.ps1 -Name SI_Guard_RaOutputRowDrop_Enabled -Value false -Reason 'a smaller report must not stop the demo data'
@@ -18,6 +25,9 @@
     .\setup\Set-SIProSetting.ps1 -Name SI_Guard_RaOutputRowDrop_Enabled -Reset -Reason 'back to the default' -Apply
 .EXAMPLE
     .\setup\Set-SIProSetting.ps1 -Name Mail_CloseLoop_Daily_To -Value 'one@example.com' -Reason 'one recipient for the daily mail' -Apply
+.EXAMPLE
+    . Connect-InvardiaSupport.ps1 -Environment <handle> -Reason 'SI support: one setting'
+    .\setup\Set-SIProSetting.ps1 -SupportSql -SqlServer <server> -Database <db> -ResourceGroupName <rg> -Name SI_Guard_RaOutputRowDrop_Enabled -Value false -Reason '...' -Apply
 
 .LINK
     https://invardia.com/docs/si/scripts/Set-SIProSetting/
@@ -40,9 +50,16 @@ param(
     [string]$AppId = [string]$global:SI_SPN_AppId,
     [string]$TenantId = [string]$global:SI_SPN_TenantId,
     [string]$CertThumbprint = [string]$global:SI_SPN_CertThumbprint,
+    # Reach the database through the Invardia Support app's audited SQL (Invoke-InvardiaSupportSql; open the session first).
+    [switch]$SupportSql,
+    # With -SupportSql: where the install is, for the support grant (else the Support session finds it).
+    [string]$SubscriptionId = '',
+    [string]$ResourceGroupName = '',
     # The database, already open (New-SIProSettingsStore -Invoke ...): a test's fake, or a caller's store.
     $Store,
-    [switch]$PassThru
+    [switch]$PassThru,
+    # TEST SEAM: the support grant's open / close (with -SupportSql the Support session's Open- / Close-InvardiaSupportGrant)
+    [Parameter(DontShow)][System.Collections.IDictionary]$SupportGrant
 )
 
 #Requires -Version 5.1   # after the help and the param block: before the help, it hides the help from Get-Help
@@ -57,6 +74,7 @@ $why = ([string]$Reason).Trim()
 if ($why.Length -lt 10) { throw 'say why the setting is changed (-Reason, at least 10 characters): it is kept in the change log' }
 
 . ([IO.Path]::Combine($siRoot, 'engine', 'pro-settings', 'SI-ProSettings.ps1'))
+. ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SupportWrite.ps1'))
 $catalog = @((Get-Content -Raw -LiteralPath ([IO.Path]::Combine($siRoot, 'config', 'settings.catalog.locked.json')) | ConvertFrom-Json).settings)
 $s = $catalog | Where-Object { $_.name -eq $Name } | Select-Object -First 1
 if (-not $s) { throw "'$Name' is not a SecurityInsight setting (config\settings.catalog.locked.json)" }
@@ -93,9 +111,25 @@ if (-not $Apply) { Write-Host 'Plan only -- run again with -Apply to write.' -Fo
 
 if (-not $Store) {
     if (-not $SqlServer -or -not $Database) { throw 'the Pro database is not configured: give -SqlServer and -Database (or load config\SecurityInsight.custom.ps1: SI_ProSqlServer / SI_ProSqlDatabase)' }
-    $Store = New-SIProSettingsStore -Server $SqlServer -Database $Database -AppId $AppId -TenantId $TenantId -CertThumbprint $CertThumbprint
+    if ($SupportSql) {
+        if (-not (Get-Command -Name Invoke-InvardiaSupportSql -ErrorAction SilentlyContinue)) { throw '-SupportSql needs the Invardia Support session (Connect-InvardiaSupport.ps1) open in this shell: Invoke-InvardiaSupportSql was not found. Nothing was written.' }
+        $Store = New-SIProSettingSupportStore -Server $SqlServer -Database $Database -Reason ('SecurityInsight setting {0}: {1}' -f $Name, $why)
+    } else {
+        $Store = New-SIProSettingsStore -Server $SqlServer -Database $Database -AppId $AppId -TenantId $TenantId -CertThumbprint $CertThumbprint
+    }
 }
-Set-SIProSetting -Store $Store -Catalog $catalog -Name $Name -Scope $Scope -Action $action -Value $typed -KeyVaultSecretName $KeyVaultSecretName -ChangedBy $by -Reason $why
+$write = { Set-SIProSetting -Store $Store -Catalog $catalog -Name $Name -Scope $Scope -Action $action -Value $typed -KeyVaultSecretName $KeyVaultSecretName -ChangedBy $by -Reason $why }
+if ($SupportSql -and -not $SupportGrant) { $SupportGrant = New-SISupportGrantSeams -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroupName }
+if ($SupportGrant) {
+    # the Support session: where the Support app is read-only in the database, the support grant is opened for this write
+    # and closed again; a grant that cannot be opened FAILS the script (a setting asked for and not written is no success)
+    $ga = Get-SISupportGrantArgs -SupportGrant $SupportGrant
+    $ga['Purpose'] = ('the setting {0}' -f $Name); $ga['Tool'] = 'Set-SIProSetting'; $ga['GrantLevel'] = 'setup'; $ga['WriteKind'] = 'setting'
+    $ga['Do'] = $write; $ga['Probe'] = { & $Store.Invoke (Get-SISupportAccessProbeSql) @{} 'reader' }
+    $null = Invoke-SISupportWithGrant @ga
+} else {
+    & $write
+}
 $result.Applied = $true
 Write-Host ('Written: {0} ({1}) -- applies from the next run.' -f $Name, $Scope) -ForegroundColor Green
 if ($PassThru) { return $result }

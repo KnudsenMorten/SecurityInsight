@@ -8,8 +8,10 @@
     do a full run ... remove these limits"): NO TIME LIMIT ENDS A RUN -- only a suite that prints NOTHING for 5 minutes
     (-HangSeconds) is ended, red, by name; 10 minutes is a TARGET, said with what to split next, never a stop.
     -Full = every suite, the SAME way (the same runner, the same hang rule), ONLY on the owner's own words (below).
-    v3 gates PowerShell 7 ONLY (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"). -Runtime ps51 or
-    -Runtime both still runs Windows PowerShell 5.1, as an explicit opt-in; v2.2 on main keeps its own 5.1 gate.
+    v3 gates PowerShell 7 ONLY (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"; owner 2026-11-08: no
+    test spends time on Windows PowerShell 5.1 -- the 5.1 opt-in is gone). It runs on the Windows test VM and on Invardia's
+    Linux test runner alike (framework 12.1 HARNESS CONTRACT): pwsh, child processes ended through .NET, SQL from
+    tests\pester\_SITestSql.ps1 (the runner's TEST_SQL_* login). v2.2 on main keeps its own 5.1 gate.
 
 .DESCRIPTION
     Before (measured 2026-10-13): naming 5 suites ran 88 of 466, because the selector added every suite covering a changed
@@ -106,8 +108,9 @@ param(
     [double]$HotfixSuiteMaxSeconds = 120,
     # extra suites by file name, ';'-separated (a string, never an array: `-File` passes arrays as one value)
     [string]$Suites = '',
-    # v3 = PowerShell 7 only (2026-10-09); ps51 / both add Windows PowerShell 5.1 -- an explicit opt-in, never the default
-    [ValidateSet('both', 'pwsh', 'ps51')][string]$Runtime = 'pwsh',
+    # PowerShell 7 ONLY, on the Windows VM and the Linux runner alike (owner 2026-11-08, framework 12.1 rule 2: no test spends
+    # time on Windows PowerShell 5.1); kept as a parameter so callers that pass -Runtime pwsh keep working
+    [ValidateSet('pwsh')][string]$Runtime = 'pwsh',
     [int]$Workers = 0,
     [switch]$NoDotnet,
     [switch]$NoSafety,
@@ -118,6 +121,9 @@ param(
     # TEST-FAST: a test-VM LANE's share of the selection (';'-separated suite names): of the suites selected, only these run
     # here -- tests\Invoke-GateOnTestVm.ps1 splits a large selection over SI's 4 lanes and merges the results into one
     [string]$Only = '',
+    # SPEED (framework 12.1 rule 10): the web app's run of a runner gate -- its build + tests only, no Pester suite here (the
+    # suites run in the gate's other runs)
+    [switch]$NoPester,
     [switch]$ListOnly,
     # the selection as JSON (Full, Base, Changed, Suites, Dotnet, Unmapped, OverBudget, AllSuites, MeasuredSeconds,
     # LongestSeconds) -- setup\Release-SI.ps1 reads it (-ListOnly)
@@ -671,17 +677,6 @@ function Get-SIFastGateExcludeTags {
     $t += 'CertStore'
     $t -join ','
 }
-function Add-SIFastGatePs51Tag {
-    <#
-        PURE. The tag list (-Exclude, comma-separated) with 'Ps51' added when the gate runs PowerShell 7 only (-Runtime pwsh):
-        the Windows PowerShell 5.1 parity probes (tag Ps51) run only on the 5.1 opt-in (-Runtime ps51 / both; operator
-        2026-10-09: v3 gates PowerShell 7 only). Left out by tag they are said "not run (Ps51)", never a skip in a suite
-        that then reads as not green (owner 2026-10-25: a skip is not a pass).
-    #>
-    param([AllowEmptyString()][string]$Exclude = '', [string]$Runtime = 'pwsh')
-    if ($Runtime -ne 'pwsh') { return $Exclude }
-    @(@($Exclude -split ',' | Where-Object { $_ }) + 'Ps51' | Select-Object -Unique) -join ','
-}
 function Get-SIFastGateDotnetFilter {
     <#
         PURE. Which test classes of ONE test project cover the change (#416, 2026-10-09: the whole web suite -- ~4,000
@@ -834,53 +829,19 @@ function Get-SIFastGateBudget {
     [pscustomobject]@{ Target = $b; Seconds = [int]$Seconds; Met = $met; SplitNext = $next; Text = $text }
 }
 
-function Get-SIGateProcessTree {
-    <#
-        The live descendants of ONE process the gate started (by its process id, through CIM Win32_Process
-        ParentProcessId; a child counts only when it was created after its parent -- process ids are reused). Never by name:
-        other lanes run on the same test VM. Returns @{ Id; ParentId; Name } (the root first); @() when CIM cannot be read.
-    #>
-    param([Parameter(Mandatory)][int]$RootId)
-    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name -ErrorAction Stop) } catch { return @() }
-    $byId = @{}; $kids = @{}
-    foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p; $pp = [int]$p.ParentProcessId; if (-not $kids.ContainsKey($pp)) { $kids[$pp] = New-Object System.Collections.Generic.List[object] }; $kids[$pp].Add($p) }
-    if (-not $byId.ContainsKey($RootId)) { return @() }
-    $out = New-Object System.Collections.Generic.List[object]
-    $out.Add([pscustomobject]@{ Id = $RootId; ParentId = 0; Name = [string]$byId[$RootId].Name })
-    $queue = New-Object System.Collections.Generic.Queue[int]; $queue.Enqueue($RootId)
-    while ($queue.Count) {
-        $id = $queue.Dequeue()
-        if (-not $kids.ContainsKey($id)) { continue }
-        foreach ($c in $kids[$id]) {
-            $cid = [int]$c.ProcessId
-            if ($cid -eq $id -or $cid -eq $PID -or @($out | Where-Object Id -eq $cid).Count) { continue }
-            if ($null -ne $c.CreationDate -and $null -ne $byId[$id].CreationDate -and $c.CreationDate -lt $byId[$id].CreationDate) { continue }
-            $out.Add([pscustomobject]@{ Id = $cid; ParentId = $id; Name = [string]$c.Name }); $queue.Enqueue($cid)
-        }
-    }
-    $out.ToArray()
-}
-
 function Stop-SIGateProcessTree {
     <#
         Ends a process the gate started AND every process it started (dotnet, MSBuild, a test host, a child pwsh) -- by the
-        root's process id, never by name. PowerShell 7: the runtime's own tree kill (Process.Kill($true)); Windows
-        PowerShell 5.1: taskkill /T /F /PID <root>. Then any descendant still alive (found by Get-SIGateProcessTree before
-        the kill) by its own id. Returns the processes that were ended ("name (pid)"). Never throws.
+        root's process id, never by name: the .NET runtime's own tree kill, Process.Kill($true), the same on Windows and on
+        the Linux runner (framework 12.1 rule 3: child processes through .NET, never CIM / taskkill). Returns the process that
+        was ended ("name (pid)"). Never throws.
     #>
     param([Parameter(Mandatory)][System.Diagnostics.Process]$Process)
-    $tree = @()
-    try { $tree = @(Get-SIGateProcessTree -RootId $Process.Id) } catch { }
-    try {
-        if (-not $Process.HasExited) {
-            if ($Process.GetType().GetMethod('Kill', [type[]]@([bool]))) { $Process.Kill($true) }
-            else { $null = & taskkill.exe /T /F /PID $Process.Id 2>&1 }
-        }
-    } catch { try { $null = & taskkill.exe /T /F /PID $Process.Id 2>&1 } catch { } }
-    foreach ($m in @($tree | Where-Object { $_.Id -ne $Process.Id })) { try { Stop-Process -Id $m.Id -Force -ErrorAction SilentlyContinue } catch { } }
+    $name = ''; try { $name = [string]$Process.ProcessName } catch { }
+    try { if (-not $Process.HasExited) { $Process.Kill($true) } } catch { }
     try { [void]$Process.WaitForExit(10000) } catch { }
     $global:LASTEXITCODE = 0
-    @($(if ($tree.Count) { $tree } else { @([pscustomobject]@{ Id = $Process.Id; ParentId = 0; Name = '' }) }) | ForEach-Object { '{0} ({1})' -f $(if ($_.Name) { $_.Name } else { 'process' }), $_.Id })
+    @('{0} ({1})' -f $(if ($name) { $name } else { 'process' }), $Process.Id)
 }
 
 function Invoke-SIQuickGateRun {
@@ -994,12 +955,15 @@ function Wait-SIQuickGateSql {
         (-GetStatus / -Start / -Probe / -Sleep) for the gate's own tests. Returns @{ Ready; Server; Tries; Started; Text }.
     #>
     param([string]$Server = '.\SQLEXPRESS', [string]$ServiceName = 'MSSQL$SQLEXPRESS', [int]$TimeoutSeconds = 180, [int]$EverySeconds = 5,
-          [scriptblock]$GetStatus, [scriptblock]$Start, [scriptblock]$Probe, [scriptblock]$Sleep)
+          [scriptblock]$GetStatus, [scriptblock]$Start, [scriptblock]$Probe, [scriptblock]$Sleep,
+          # the sign-in part of the connection: the runner's SQL login (tests\pester\_SITestSql.ps1) -- no Windows sign-in
+          [string]$Auth = "$env:SI_TEST_SQL_AUTH".Trim())
+    # the service is only looked at for a LOCAL SQL Express on Windows (the Linux runner's SQL is a sidecar: probed only)
     if (-not $GetStatus) { $GetStatus = { $s = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue; if ($s) { [string]$s.Status } else { '' } } }
     if (-not $Start) { $Start = { Start-Service -Name $ServiceName -ErrorAction Stop } }
     if (-not $Probe) {
         $Probe = {
-            $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$Server;Database=master;Integrated Security=SSPI;Connection Timeout=10;Pooling=false")
+            $cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$Server;Database=master;$Auth;Connection Timeout=10;Pooling=false")
             try { $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = 'SELECT 1'; [int]$cmd.ExecuteScalar() -eq 1 } finally { $cn.Dispose() }
         }
     }
@@ -1104,7 +1068,7 @@ function Get-SIQuickGateItemOutcome {
         $o.Ok = $clean -and -not $o.SkipCount
         $o.NotGreen = $clean -and [bool]$o.SkipCount
         $o.ScaleOnly = $o.Ok -and $o.ScaleNotRun -gt 0 -and $ran -eq 0
-        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Ps51') { ', the 5.1 opt-in' } elseif ($_ -eq 'Live') { ', needs a real run on its host' } elseif ($_ -eq 'CertStore') { ', needs the Windows certificate store' } else { '' }) })) -join '; '
+        $tagText = (@($o.NotRunByTag.Keys | ForEach-Object { '{0} not run ({1}{2})' -f $o.NotRunByTag[$_], $_, $(if ($_ -eq 'Scale') { ', on demand' } elseif ($_ -eq 'Windows') { ', Windows only: the Windows VM' } elseif ($_ -eq 'Live') { ', needs a real run on its host' } elseif ($_ -eq 'CertStore') { ', needs the Windows certificate store' } else { '' }) })) -join '; '
         $skipText = if ($o.SkipCount) {
             $why = @(@($o.Skips | ForEach-Object { [string]$_.Because }) + @($o.NotRunUnexplained | ForEach-Object { 'did not run (no excluded tag)' }) | Group-Object | Sort-Object Count -Descending | ForEach-Object { if ($_.Count -gt 1) { '{0} x {1}' -f $_.Count, $_.Name } else { $_.Name } })
             ' ({0} skipped -- a skip is not a pass: {1})' -f $o.SkipCount, (($why | Select-Object -First 3) -join '; ')
@@ -1339,6 +1303,7 @@ if ($onlyList.Count) {
     foreach ($k in @($reasons.Keys)) { if ($onlyList -notcontains $k) { $reasons.Remove($k) } }
     foreach ($n in $onlyList) { if (-not $reasons.Contains($n) -and @($allSuites | Where-Object Name -eq $n).Count) { $reasons[$n] = 'this lane''s share (-Only)' } }
 }
+if ($NoPester) { foreach ($k in @($reasons.Keys)) { $reasons.Remove($k) } }
 # a selection handed in read no suite's text: the suites that run here are read now (the run asks which of them need SQL)
 foreach ($k in @($reasons.Keys)) { if (-not $suiteText.ContainsKey($k)) { $sp = Join-Path $pesterDir $k; if (Test-Path -LiteralPath $sp) { $suiteText[$k] = [IO.File]::ReadAllText($sp) } } }
 # the web app's test classes that cover the change (fast-gate.map.json dotnetFilter) -- decided here, so -ListOnly shows it
@@ -1407,8 +1372,9 @@ if ($ListOnly) { exit 0 }
 # ---- 4. THE RUN: every selected suite in its own process, in parallel -- the quick gate AND a full run, the same way ------
 # TEST-FAST (owner 2026-11-02: "redesign the tests so all do it the same way and we remove these limits"): no clock ends a
 # suite or the gate; a suite that prints NOTHING for -HangSeconds (5 min) is ended, red, by name; the others carry on
-$qRuntimes = @(switch ($Runtime) { 'both' { 'pwsh', 'ps51' } 'pwsh' { 'pwsh' } 'ps51' { 'ps51' } })
-$qExe = @{ pwsh = 'pwsh.exe'; ps51 = 'powershell.exe' }
+$qRuntimes = @('pwsh')
+# 'pwsh' resolves to pwsh.exe on Windows and pwsh on Linux (framework 12.1 rule 2)
+$qExe = @{ pwsh = 'pwsh' }
 foreach ($rt in $qRuntimes) { if (-not (Get-Command $qExe[$rt] -ErrorAction SilentlyContinue)) { Write-Host "  FATAL: $($qExe[$rt]) not found" -ForegroundColor Red; exit 2 } }
 # the old time limits are inert (deprecated): said, never applied
 if ($TimeoutMinutes -gt 0 -or $SuiteLimitSeconds -gt 0 -or $GateLimitSeconds -gt 0) { Write-Host '  NOTE -TimeoutMinutes / -SuiteLimitSeconds / -GateLimitSeconds are deprecated and do nothing: no time limit ends a run (TEST-FAST, owner 2026-11-02); only a suite silent for 5 minutes is ended' -ForegroundColor DarkYellow }
@@ -1425,17 +1391,32 @@ $shardScript = Join-Path $pesterDir '_Invoke-GateShard.ps1'
 # a public copy leaves the private-repository checks out; EVERY gate leaves out the scale benchmarks (tag Scale); a
 # selected suite runs whole otherwise (its Nightly-tagged tests too: there is no nightly run) -- a full run the same
 $exclude = Get-SIFastGateExcludeTags -Scope $scope -Full:$Full -Hotfix:(-not $Full) -Scale:$Scale
-$exclude = Add-SIFastGatePs51Tag -Exclude $exclude -Runtime $Runtime
+# framework 12.1 rule 6: a test tagged Windows (the certificate store / Authenticode, the registry, DPAPI, a Windows service,
+# an NTFS junction) runs only on the Windows VM -- on the Linux runner it is left out by tag and said "not run (Windows)"
+if (-not $IsWindows) { $exclude = (@(@($exclude -split ',' | Where-Object { $_ }) + 'Windows') | Select-Object -Unique) -join ',' }
 # THE GATE WAITS FOR SQL (owner 2026-10-25): a selected suite with real-SQL tests skips them without a local SQL
 # Server, and a skip is not a pass -- so SQL Express is started and probed first, and SI_TEST_LOCALSQL is set for
 # every suite. SQL that never answers = NOT TESTED, at once.
 $sqlEnv = $null
+# the Linux test runner is itself a Container Apps Job: its CONTAINER_APP_* variables are the runner's, never a test's -- left
+# set, SI's code believes it runs as one of SI's own job executions (step progress written, a job's run limit read)
+foreach ($v in @([Environment]::GetEnvironmentVariables().Keys | Where-Object { "$_" -like 'CONTAINER_APP_*' })) { [Environment]::SetEnvironmentVariable([string]$v, $null) }
+# framework 12.1 rule 1: a SQL login from the Linux runner's TEST_SQL_* ONLY -- one code path, no Windows sign-in fallback
+# (tests\pester\_SITestSql.ps1); set in THIS process for every item it starts (the web app's tests read the same variables).
+# TEST_SQL_* not set while SQL suites or the web app's tests are selected = NOT TESTED at once, never a quiet skip.
+. (Join-Path $pesterDir '_SITestSql.ps1')
+$sqlSettings = Initialize-SITestSqlEnv
 $sqlSuites = @(Get-SIQuickGateSqlSuites -Names @($reasons.Keys) -SuiteText $suiteText)
-if ($sqlSuites.Count) {
+$needsSql = $sqlSuites.Count -or (-not $NoDotnet -and @($dotnetPlan).Count)
+if ($needsSql) {
     $sqlSw = [Diagnostics.Stopwatch]::StartNew()
-    $sqlServer = if ("$env:SI_TEST_LOCALSQL".Trim()) { "$env:SI_TEST_LOCALSQL".Trim() } else { '.\SQLEXPRESS' }
-    Write-Host ('  SQL: {0} selected suite(s) run tests on a real SQL Server -- waiting for {1} (SELECT 1, up to 180 s)' -f $sqlSuites.Count, $sqlServer) -ForegroundColor DarkGray
-    $sqlWait = Wait-SIQuickGateSql -Server $sqlServer
+    $sqlServer = $sqlSettings.Server
+    if ($sqlSettings.Source -ne 'TEST_SQL') {
+        $sqlWait = [pscustomobject]@{ Ready = $false; Server = ''; Tries = 0; Started = $false; Text = 'TEST_SQL_* not set -- the SQL suites and the web app''s tests run on the Linux test runner (TEST_SQL_SERVER / _PORT / _USER / _PASSWORD, or TEST_SQL_CONNECTION_STRING); the gate is NOT TESTED' }
+    } else {
+        Write-Host ('  SQL: {0} selected suite(s) run tests on a real SQL Server -- waiting for {1} (SELECT 1, up to 180 s)' -f $sqlSuites.Count, $sqlServer) -ForegroundColor DarkGray
+        $sqlWait = Wait-SIQuickGateSql -Server $sqlServer -Auth $sqlSettings.Auth
+    }
     $phase['sql'] = [Math]::Round($sqlSw.Elapsed.TotalSeconds, 1)
     if (-not $sqlWait.Ready) {
         Write-Host ('  ' + $sqlWait.Text) -ForegroundColor Red
@@ -1451,9 +1432,8 @@ if ($sqlSuites.Count) {
     }
     Write-Host ('  SQL: ' + $sqlWait.Text + ' -- SI_TEST_LOCALSQL=' + $sqlServer + ' for every suite') -ForegroundColor DarkGray
     if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) { Write-Host '  SQL NOTE: sqlcmd is not on this machine -- a suite that calls it skips, and a skip is not a pass' -ForegroundColor Yellow }
-    $sqlEnv = @{ SI_TEST_LOCALSQL = $sqlServer }
+    $sqlEnv = @{ SI_TEST_LOCALSQL = $sqlServer; SI_TEST_SQL_AUTH = $sqlSettings.Auth }
 }
-$ps51Path = (@((Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'), (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'), (Join-Path $env:SystemRoot 'system32\WindowsPowerShell\v1.0\Modules')) -join ';')
 $items = New-Object System.Collections.Generic.List[object]
 # the web app first (its build is the longest item): only when a web app file changed (dotnetPlan), never the whole project
 if (-not $NoDotnet -and $dotnetPlan.Count -and (Get-Command dotnet -ErrorAction SilentlyContinue)) {
@@ -1473,8 +1453,8 @@ foreach ($rt in $qRuntimes) {
         [IO.File]::WriteAllLines($list, [string[]]@(Join-Path $pesterDir $s))
         $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $shardScript, '-ListFile', $list, '-ResultFile', $res)
         if ($exclude) { $a += @('-ExcludeTag', $exclude) }
-        $envFor = if ($rt -eq 'ps51') { @{ PSModulePath = $ps51Path; SI_GATE_PS51 = '1' } } elseif ($qRuntimes -contains 'ps51') { @{ SI_GATE_PS51 = '1' } } else { $null }
-        # SI_TEST_LOCALSQL for EVERY suite (owner 2026-10-25), in the item's own environment -- set and restored around its start
+        $envFor = $null
+        # SI_TEST_LOCALSQL + SI_TEST_SQL_AUTH for EVERY suite (owner 2026-10-25), in the item's own environment -- set and restored around its start
         if ($sqlEnv) { if (-not $envFor) { $envFor = @{} }; foreach ($ek in $sqlEnv.Keys) { $envFor[$ek] = $sqlEnv[$ek] } }
         $items.Add([pscustomobject]@{ Name = $(if ($qRuntimes.Count -gt 1) { "$s [$rt]" } else { $s }); Suite = $s; Runtime = $rt; Kind = 'pester'; Exe = $qExe[$rt]; Args = $a; ResultFile = $res; Env = $envFor })
     }

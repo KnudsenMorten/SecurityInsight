@@ -34,6 +34,10 @@
       -Sql   { param([string]$Query, $Params, [string]$Mode) } the Pro database ($null = cannot be read from here, -SqlWhy)
       -ReadUpdateState { } -> the updater's state JSON (SI-Update-State); throws when it cannot be read
       -Sleep { param($Seconds) }, -Now { } -> [datetime] UTC, -Say { param([string]$Line, [string]$Color) }
+      -SupportGrant @{ Open; Close } (New-SISupportGrantSeams) -- only from a Support session: where the Support app is
+             read-only in the database (just-in-time support access), each audit row opens the support grant first, is
+             written, and the grant is closed again (each said in one line). A grant that cannot be opened leaves the row
+             unwritten with a WARNING; the stop and the update go on. Where the Support app holds the right, no grant.
     PS 5.1 safe; no module.
 #>
 
@@ -45,6 +49,11 @@ if (-not (Get-Command -Name New-SIJobFlowSqlStore -ErrorAction SilentlyContinue)
 }
 if (-not (Get-Command -Name Write-SIAuditEvent -ErrorAction SilentlyContinue)) {
     . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'pro-settings', 'SI-Audit.ps1'))
+}
+# the audit rows from a Support session at an install where support is read-only: the support grant opened just for the
+# write and closed again (setup\_shared\SI-SupportWrite.ps1)
+if (-not (Get-Command -Name Invoke-SISupportWithGrant -ErrorAction SilentlyContinue)) {
+    . ([IO.Path]::Combine($PSScriptRoot, 'SI-SupportWrite.ps1'))
 }
 
 $script:SIStopRun = [ordered]@{
@@ -464,6 +473,8 @@ function Invoke-SIStopRunAndUpdate {
         [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
         [scriptblock]$Now = { [datetime]::UtcNow },
         [scriptblock]$Say = { param([string]$Line, [string]$Color) if ($Color) { Write-Host $Line -ForegroundColor $Color } else { Write-Host $Line } },
+        # the Support session's open / close of the support grant (only for the audit rows; see the header)
+        [System.Collections.IDictionary]$SupportGrant,
         # #1150: how near the next scheduled run makes the plan warn, and how long the start waits for a wake-up of the runner
         [int]$SlotWarnMinutes = 10,
         [int]$WakeWaitMinutes = 5
@@ -476,6 +487,9 @@ function Invoke-SIStopRunAndUpdate {
     $lines = New-Object System.Collections.Generic.List[string]
     $started = New-Object System.Collections.Generic.List[object]
     $emit = { param([string]$t, [string]$col = '') $lines.Add($t); & $Say $t $col }
+    # the support grant's lines (an audit row from a read-only Support app): a CLOSURE over $lines / $Say -- called from inside
+    # Invoke-SISupportWithGrant, whose own -Say would otherwise be found first
+    $sayGrant = { param([string]$t, [string]$col = '') $lines.Add('   ' + $t); & $Say ('   ' + $t) $col }.GetNewClosure()
     $nowU = { ([datetime](& $Now)).ToUniversalTime() }
     $readState = {
         if (-not $ReadUpdateState) { return [pscustomobject]@{ Json = ''; Why = 'the update state is not read in this run' } }
@@ -554,7 +568,7 @@ function Invoke-SIStopRunAndUpdate {
         $started.Add([pscustomobject]@{ Job = $c.FlowJob; Execution = $cancelExec; What = 'cancel' })
         $seen = @(@((Read-SIStopRunExecutions -Arm $Arm -Base $inst.Base -JobNames @($c.FlowJob)).Map[$c.FlowJob]) | Where-Object { $_ -and $_.Name -eq $cancelExec })[0]
         $ok = Write-SIStopRunAudit -Sql $Sql -SqlWhy $SqlWhy -Action 'job.flowrun.cancel' -By $by -Target ('flow/{0}' -f $(if ($targetId) { $targetId } else { 'running' })) -Reason $why `
-                 -OutcomeText ('Stop-SIRunAndUpdate: {0} started once with SI_FLOW_CANCEL=1 (execution {1})' -f $c.FlowJob, $cancelExec) -After ([ordered]@{ flowRunId = $targetId; execution = $cancelExec; by = $by; reason = $why })
+                 -OutcomeText ('Stop-SIRunAndUpdate: {0} started once with SI_FLOW_CANCEL=1 (execution {1})' -f $c.FlowJob, $cancelExec) -After ([ordered]@{ flowRunId = $targetId; execution = $cancelExec; by = $by; reason = $why }) -SupportGrant $SupportGrant -Say $sayGrant
         & $emit ('1. CANCEL: {0} started once with SI_FLOW_CANCEL=1{1} -- execution {2} (read back: {3}); audit: {4}' -f $c.FlowJob, $(if ($targetId) { ' for run ' + $targetId } else { '' }), $cancelExec, $(if ($seen) { $seen.Status } else { 'not listed yet' }), $ok) 'Green'
 
         # ---- 2. WAIT until the stop is confirmed ----
@@ -648,7 +662,7 @@ function Invoke-SIStopRunAndUpdate {
         $started.Add([pscustomobject]@{ Job = $updName; Execution = $updExec; What = 'update' })
         $seenU = @(@((Read-SIStopRunExecutions -Arm $Arm -Base $inst.Base -JobNames @($updName)).Map[$updName]) | Where-Object { $_ -and $_.Name -eq $updExec })[0]
         $okU = Write-SIStopRunAudit -Sql $Sql -SqlWhy $SqlWhy -Action 'job.execution.start' -By $by -Target ('job/{0}' -f $updName) -Reason $why `
-                 -OutcomeText ('Stop-SIRunAndUpdate: {0} started once (update now, execution {1}) after the stop was confirmed' -f $updName, $updExec) -After ([ordered]@{ job = $updName; execution = $updExec; mode = 'update-now'; by = $by })
+                 -OutcomeText ('Stop-SIRunAndUpdate: {0} started once (update now, execution {1}) after the stop was confirmed' -f $updName, $updExec) -After ([ordered]@{ job = $updName; execution = $updExec; mode = 'update-now'; by = $by }) -SupportGrant $SupportGrant -Say $sayGrant
         & $emit ('3. START: {0} started once (update now) -- execution {1} (read back: {2}); audit: {3}' -f $updName, $updExec, $(if ($seenU) { $seenU.Status } else { 'not listed yet' }), $okU) 'Green'
     }
 
@@ -680,11 +694,23 @@ function Invoke-SIStopRunAndUpdate {
 
 function Write-SIStopRunAudit {
     <# One row on the install's audit trail (Write-SIAuditEvent, actor source setup). Returns the line to say: 'written',
-       or why not -- never throws, never stops the run. #>
-    param([scriptblock]$Sql, [string]$SqlWhy, [Parameter(Mandatory)][string]$Action, [string]$By, [string]$Target, [string]$Reason, [string]$OutcomeText, $After)
+       or why not -- never throws, never stops the run. With -SupportGrant (a Support session) the row goes through
+       Invoke-SISupportWithGrant: where the Support app is read-only in the database, the support grant is opened for the
+       write and closed again; a grant that cannot be opened = the row NOT written, a WARNING (-Say gets each line). #>
+    param([scriptblock]$Sql, [string]$SqlWhy, [Parameter(Mandatory)][string]$Action, [string]$By, [string]$Target, [string]$Reason, [string]$OutcomeText, $After,
+          [System.Collections.IDictionary]$SupportGrant, [scriptblock]$Say)
     if (-not $Sql) { return ('not written from here ({0}){1}' -f $(if ($SqlWhy) { $SqlWhy } else { 'the install''s database is not reachable' }), $(if ($Action -eq 'job.flowrun.cancel') { ' -- the cancel execution writes job.flowrun.stop itself' } else { '' })) }
     $warn = New-Object System.Collections.Generic.List[string]
-    $ok = Write-SIAuditEvent -Invoke $Sql -Action $Action -Actor $By -ActorSource 'setup' -Target $Target -Reason $Reason -OutcomeText $OutcomeText -After $After -Log { param($l, $m) $warn.Add($m) }.GetNewClosure()
+    $write = { Write-SIAuditEvent -Invoke $Sql -Action $Action -Actor $By -ActorSource 'setup' -Target $Target -Reason $Reason -OutcomeText $OutcomeText -After $After -Log { param($l, $m) $warn.Add($m) }.GetNewClosure() }
+    if (-not $SupportGrant) { $ok = & $write }
+    else {
+        $ga = Get-SISupportGrantArgs -SupportGrant $SupportGrant -Say $Say
+        $ga['Purpose'] = ('the audit row {0}' -f $Action); $ga['Tool'] = 'Stop-SIRunAndUpdate'; $ga['GrantLevel'] = 'setup'; $ga['WriteKind'] = 'audit'
+        $ga['Do'] = $write; $ga['Probe'] = { & $Sql (Get-SISupportAccessProbeSql) @{} 'reader' }
+        $g = Invoke-SISupportWithGrant @ga
+        if (-not $g.Done) { return ('{0} NOT written -- WARNING: {1}' -f $Action, $(if ($g.Why) { $g.Why } else { 'not written' })) }
+        $ok = $g.Value
+    }
     if ($ok) { return ('{0} written' -f $Action) }
     ('{0} NOT written ({1})' -f $Action, ($warn -join '; '))
 }

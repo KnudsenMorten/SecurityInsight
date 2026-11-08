@@ -424,7 +424,7 @@ function Invoke-SISettingsPlan {
         $r = Read-SISettingsText -Path $path
         $ed = Edit-SIPs1Settings -Text $r.Text -Changes $perFile[$key].ToArray()
         foreach ($x in $ed.Refused) { $refused.Add([pscustomobject]@{ name = $x.Name; reason = $x.Reason }) }
-        $rel = $path.Substring($SIRoot.Length).TrimStart('\')
+        $rel = $path.Substring($SIRoot.Length).TrimStart('\', '/').Replace('/', '\')
         [pscustomobject]@{
             key = $key; path = $rel; exists = $r.Exists; hash = (Get-SIFileHash -Path $path)
             diff = (Get-SITextDiff -Old $r.Text -New $ed.Text -Label $rel)
@@ -465,7 +465,7 @@ function Invoke-SISettingsWrite {
             }
             [System.IO.File]::AppendAllText($log, (($line | ConvertTo-Json -Compress) + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
         }
-        $written.Add([pscustomobject]@{ key = $f.key; path = $f.path; backup = $(if ($w.Backup) { $w.Backup.Substring($SIRoot.Length).TrimStart('\') } else { $null }); hash = $w.Hash })
+        $written.Add([pscustomobject]@{ key = $f.key; path = $f.path; backup = $(if ($w.Backup) { $w.Backup.Substring($SIRoot.Length).TrimStart('\', '/').Replace('/', '\') } else { $null }); hash = $w.Hash })
     }
     [pscustomobject]@{ written = $written.ToArray(); refused = @(); error = $null }
 }
@@ -699,7 +699,7 @@ function Invoke-SIJsonSettingsPlan {
         $r = Read-SISettingsText -Path $path
         try { $new = Edit-SIJsonSettings -Key $key -Text $r.Text -Changes $perFile[$key].Changes.ToArray() }
         catch { $refused.Add([pscustomobject]@{ name = $key; reason = ('the current file could not be read: {0}' -f $_.Exception.Message) }); continue }
-        $rel = $path.Substring($SIRoot.Length).TrimStart('\')
+        $rel = $path.Substring($SIRoot.Length).TrimStart('\', '/').Replace('/', '\')
         [pscustomobject]@{ key = $key; path = $rel; exists = $r.Exists; hash = (Get-SIFileHash -Path $path)
             diff = (Get-SITextDiff -Old $r.Text -New $new -Label $rel); applied = @($perFile[$key].Changes | ForEach-Object { [pscustomobject]@{ property = $_.property } })
             NewText = $new; OldText = $r.Text }
@@ -727,7 +727,7 @@ function Invoke-SIJsonSettingsWrite {
             $line = [ordered]@{ time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); user = $User; file = $f.path; setting = $a.property; action = 'Set' }
             [System.IO.File]::AppendAllText($log, (($line | ConvertTo-Json -Compress) + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
         }
-        $written.Add([pscustomobject]@{ key = $f.key; path = $f.path; backup = $(if ($w.Backup) { $w.Backup.Substring($SIRoot.Length).TrimStart('\') } else { $null }); hash = $w.Hash })
+        $written.Add([pscustomobject]@{ key = $f.key; path = $f.path; backup = $(if ($w.Backup) { $w.Backup.Substring($SIRoot.Length).TrimStart('\', '/').Replace('/', '\') } else { $null }); hash = $w.Hash })
     }
     [pscustomobject]@{ written = $written.ToArray(); refused = @(); error = $null }
 }
@@ -772,7 +772,7 @@ function Get-SIRuleView {
     $tree = Join-Path $SIRoot 'asset-profiling-enrichment'
     $byId = [ordered]@{}
     function _add($file, $base, $where) {
-        $rel = $file.FullName.Substring($base.Length).TrimStart('\')
+        $rel = $file.FullName.Substring($base.Length).TrimStart('\', '/').Replace('/', '\')
         $parts = $rel -split '\\'
         $engine = $parts[0].ToLowerInvariant()
         if ($script:SIRuleEngines -notcontains $engine) { return }
@@ -965,7 +965,7 @@ function Invoke-SIRulePlan {
             $why = @(Test-SIRuleText -Text $new -Id $id -Kinds $kinds)
             if ($why.Count) { $refused.Add([pscustomobject]@{ name = $name; reason = ($why -join '; ') }); continue }
         }
-        $label = if ($OverlayRoot -and $path.StartsWith($OverlayRoot, [StringComparison]::OrdinalIgnoreCase)) { 'overlay:' + $path.Substring($OverlayRoot.Length).TrimStart('\') } else { $path.Substring($SIRoot.Length).TrimStart('\') }
+        $label = if ($OverlayRoot -and $path.StartsWith($OverlayRoot, [StringComparison]::OrdinalIgnoreCase)) { 'overlay:' + $path.Substring($OverlayRoot.Length).TrimStart('\', '/').Replace('/', '\') } else { $path.Substring($SIRoot.Length).TrimStart('\', '/').Replace('/', '\') }
         $files.Add([pscustomobject]@{ key = $name; action = $action; path = $label; exists = (Test-Path -LiteralPath $path); hash = (Get-SIFileHash -Path $path)
             diff = (Get-SITextDiff -Old $old -New $new -Label $label); FullPath = $path; NewText = $new })
     }
@@ -1015,7 +1015,7 @@ function Invoke-SIRuleOverlayPlan {
     if ($full.StartsWith([System.IO.Path]::GetFullPath($SIRoot), [StringComparison]::OrdinalIgnoreCase)) { throw 'the rules folder must be outside the SecurityInsight folder -- an update replaces that folder' }
     $tree = Join-Path $SIRoot 'asset-profiling-enrichment'
     $moves = foreach ($f in @(Get-ChildItem -LiteralPath $tree -Recurse -File -Filter '*.custom.yaml' -ErrorAction SilentlyContinue)) {
-        $rel = $f.FullName.Substring($tree.Length).TrimStart('\')
+        $rel = $f.FullName.Substring($tree.Length).TrimStart('\', '/').Replace('/', '\')
         [pscustomobject]@{ from = 'asset-profiling-enrichment\' + $rel; to = $rel; FromFull = $f.FullName; ToFull = (Join-Path $full $rel)
             exists = (Test-Path -LiteralPath (Join-Path $full $rel)); hash = (Get-SIFileHash -Path $f.FullName) }
     }

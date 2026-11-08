@@ -1,6 +1,8 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 <#
-    THE v3 GATE RUNS POWERSHELL 7 (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday").
+    THE v3 GATE RUNS POWERSHELL 7 (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday"), AND NO TEST RUNS
+    WINDOWS POWERSHELL 5.1 AT ALL (owner 2026-11-08, framework 12.1 rule 2): the -Runtime ps51 / both and -WindowsPowerShell
+    opt-ins and the Ps51-tagged parity probes are gone (the paragraph below is the history).
 
     Every v3 gate defaults to PowerShell 7 only: the fast gate and its -Full run (the full suite of a feature release) (tests\Invoke-FastGate.ps1),
     the same gate on Invardia's test VM (tests\Invoke-GateOnTestVm.ps1), the release (setup\Release-SI.ps1) and the
@@ -21,7 +23,9 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:PrePublish = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Invoke-PrePublishGate.ps1')
-    $script:FastGate = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1')
+    $script:FastGate = Get-Content -Raw -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'tests', 'Invoke-FastGate.ps1'))
+    # (the gate on the test VM / runner is a vendor tool, not in the Community edition: its pwsh-only default is pinned in its
+    # own suite, SIv3-GateOnTestVm.Tests.ps1 -- never read here)
 
 }
 
@@ -29,13 +33,20 @@ Describe 'the v3 gate runs PowerShell 7' {
     It 'the fast gate (and its -Full run, the full suite) defaults to -Runtime pwsh' {
         $script:FastGate | Should -Match "\[string\]\`$Runtime = 'pwsh'"
     }
-    It 'the fast gate never defaults to both runtimes or to 5.1' {
-        $script:FastGate | Should -Not -Match "\`$Runtime = '(both|ps51)'"
+    It 'NO 5.1 opt-in is left (owner 2026-11-08: no test spends time on Windows PowerShell 5.1): -Runtime takes pwsh only' {
+        $script:FastGate | Should -Match "\[ValidateSet\('pwsh'\)\]\[string\]\`$Runtime = 'pwsh'"
+        $script:FastGate | Should -Not -Match "'ps51'\s*\{|powershell\.exe|SI_GATE_PS51|Add-SIFastGatePs51Tag"
+        $script:PrePublish | Should -Not -Match '\[switch\]\$WindowsPowerShell'
     }
-    It 'the pre-publish gate re-runs itself under pwsh when started on Windows PowerShell, unless -WindowsPowerShell' {
-        $script:PrePublish | Should -Match '\[switch\]\$WindowsPowerShell'
-        $script:PrePublish | Should -Match "PSEdition -ne 'Core' -and -not \`$WindowsPowerShell"
-        $script:PrePublish | Should -Match 'Get-Command pwsh\.exe'
+    It 'NO suite starts Windows PowerShell 5.1 (a scheduled-task fixture string naming powershell.exe is data, not a run)' {
+        $starts = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File | Where-Object { $_.Name -ne 'SIv3-GatePwshOnly.Tests.ps1' } | ForEach-Object {
+            $t = [IO.File]::ReadAllText($_.FullName)
+            if ($t -match '(?i)WindowsPowerShell\\v1\.0\\powershell\.exe|SI_GATE_PS51|-Tag ''Ps51''') { $_.Name } })
+        $starts | Should -BeNullOrEmpty
+    }
+    It 'the pre-publish gate re-runs itself under pwsh when started on Windows PowerShell' {
+        $script:PrePublish | Should -Match "PSEdition -ne 'Core'\) \{"
+        $script:PrePublish | Should -Match 'Get-Command pwsh '
         $script:PrePublish | Should -Match 'exit \$LASTEXITCODE'
         # the re-run comes before anything is discovered or run
         $script:PrePublish.IndexOf("PSEdition -ne 'Core'") | Should -BeLessThan $script:PrePublish.IndexOf('Invoke-Pester -Configuration')

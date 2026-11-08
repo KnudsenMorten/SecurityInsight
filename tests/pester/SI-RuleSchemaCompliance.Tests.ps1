@@ -62,7 +62,7 @@ BeforeAll {
     # for 5.1), red on the runner. Locally this still resolves to 5.1 -- the
     # real engine runtime -- which is where the #37 defect actually lives.
     $script:HostExe = (Get-Process -Id $PID).Path
-    if ([string]::IsNullOrWhiteSpace($script:HostExe)) { $script:HostExe = 'powershell.exe' }
+    if ([string]::IsNullOrWhiteSpace($script:HostExe)) { $script:HostExe = 'pwsh' }
     $script:LockedOnDisk = @(Get-ChildItem -Path $script:EnrichRoot -Filter '*.locked.yaml' -Recurse -File -ErrorAction SilentlyContinue |
                              Where-Object { $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' })
 }

@@ -22,9 +22,7 @@
 BeforeDiscovery {
     $script:LocalSql = $false
     try {
-        $svc = Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop
-        if ($svc.Status -ne 'Running' -and [string]$svc.StartType -ne 'Disabled') { try { $svc.WaitForStatus('Running', [TimeSpan]::FromMinutes(5)) } catch { }; $svc.Refresh() }
-        $script:LocalSql = $svc.Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type])
+        $script:LocalSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type])
     } catch { $script:LocalSql = $false }
 }
 
@@ -487,7 +485,7 @@ Describe '#1063 (3.0.30): a flow wake-up DURING a run (FlowBusy) reaches the cle
 Describe 'on a real SQL Server' {
     BeforeAll {
         function script:New-LocalInvoke([string]$Db) {
-            $cs = "Server=.\SQLEXPRESS;Database=$Db;Integrated Security=True;TrustServerCertificate=True"
+            $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$Db;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
             {
                 param([string]$sql, $p, [string]$mode)
                 $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()

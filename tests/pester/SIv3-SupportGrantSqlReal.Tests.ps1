@@ -17,7 +17,7 @@
 #>
 
 BeforeDiscovery {
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
 BeforeAll {
@@ -27,7 +27,7 @@ BeforeAll {
     # the updater's one write, from the update step's own file (the same text the update sends)
     . (Join-Path $script:SIRoot 'setup\_shared\SI-SupportGrantUpdate.ps1')
     function script:Master([string]$Sql) {
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = $Sql; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     function script:NewInvoke($Cn) {
@@ -60,7 +60,7 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
             $sid = ConvertTo-SISupportGrantSid -ClientId $script:App
             Master "CREATE DATABASE [$($script:DbName)]"
             Master ("CREATE LOGIN [{0}] WITH PASSWORD = N'{1}', SID = {2}, CHECK_POLICY = OFF" -f $script:Login, ('P' + [guid]::NewGuid().ToString('N') + '!a1'), $sid)
-            $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$($script:DbName);Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+            $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$($script:DbName);$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
             $script:Cn.Open()
             $script:A = NewInvoke $script:Cn
             # the product's roles, an engine user with only si_engine, the updater with DDL + data (as before its cut-over), the

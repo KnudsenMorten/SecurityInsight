@@ -23,7 +23,7 @@
 
 BeforeDiscovery {
     $script:LocalSql = $false
-    try { $script:LocalSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
+    try { $script:LocalSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
     # the Pro data schema is read only after Test-Path finds it (the Community copy has no Pro database): skipped without it
     $script:HasSchema = Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-data-schema.sql'))
     $script:LocalSql = $script:LocalSql -and $script:HasSchema
@@ -114,7 +114,9 @@ Describe '(a) keeping once the findings two query slices both returned -- in pag
         $after[0] | Should -BeNullOrEmpty
         $sorted = [string[]]$after.Clone(); [Array]::Sort($sorted, [StringComparer]::Ordinal)
         ($after -join ',') | Should -Be ($sorted -join ',')
-        @($after | Select-Object -Unique).Count | Should -Be $after.Count
+        # none asked twice -- compared ORDINALLY (Select-Object -Unique compares by culture, and on Linux's ICU two different keys
+        # can compare equal)
+        ([Collections.Generic.HashSet[string]]::new([string[]]$after, [StringComparer]::Ordinal)).Count | Should -Be $after.Count -Because ('the pages asked after: [' + ($after -join '] [') + '] with sizes ' + ((@($db.Calls | ForEach-Object { [string]$_.P['Page'] })) -join ','))
     }
 
     It 'a key whose rows span a page boundary keeps its first row (every row of the last key is in the page)' {
@@ -351,7 +353,7 @@ Describe '(a) on a real SQL Server: the pages remove exactly what the one statem
         $db = 'sidedup_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
         $mk = {
             param([string]$Name)
-            $cs = "Server=.\SQLEXPRESS;Database=$Name;Integrated Security=True;TrustServerCertificate=True"
+            $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$Name;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
             {
                 param([string]$sql, $p, [string]$mode)
                 $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()
@@ -398,7 +400,7 @@ SELECT CONVERT(int, @C), CONCAT(N'c', i), N'R', N'High', 1, 5, N'{}', 1, N'1/1',
             $a.Count | Should -Be (700 + 200 + 50)
             $b | Should -Be $a -Because 'the same rows kept: the first written of every key, report 2 and the rows without a key untouched'
             # the page reads the index made for it
-            $cn = New-Object System.Data.SqlClient.SqlConnection("Server=.\SQLEXPRESS;Database=$db;Integrated Security=True;TrustServerCertificate=True"); $cn.Open()
+            $cn = New-Object System.Data.SqlClient.SqlConnection("Server=$($env:SI_TEST_LOCALSQL);Database=$db;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"); $cn.Open()
             try {
                 $c = $cn.CreateCommand(); $c.CommandText = 'SET SHOWPLAN_XML ON'; [void]$c.ExecuteNonQuery()
                 $c = $cn.CreateCommand(); $c.CommandText = "DECLARE @CollectionId nvarchar(20) = N'3', @Report nvarchar(20) = N'1', @Page nvarchar(20) = N'50000', @After nvarchar(40) = N'';`n" + (Get-RAStreamDedupPageSql -Grain Detailed)

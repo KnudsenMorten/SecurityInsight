@@ -110,12 +110,10 @@ foreach (`$r in `$recs) {
     '<ROW>' + (ConvertTo-Json -Compress -Depth 8 -InputObject `$row)
 }
 "@
-        # the child runs the gate's own PowerShell (v3 gates PowerShell 7 only, 2026-10-09; 5.1 on the opt-in)
+        # the child runs the gate's own PowerShell 7 (no test runs Windows PowerShell 5.1, owner 2026-11-08)
         $exe = (Get-Process -Id $PID).Path
-        $env51 = $env:PSModulePath
-        if ($exe -match '(?i)\\WindowsPowerShell\\v1\.0\\powershell\.exe$') { $env:PSModulePath = 'C:\Program Files\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules' }
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-        try { $out = & $exe -NoProfile -NonInteractive -EncodedCommand $enc 2>&1 } finally { $env:PSModulePath = $env51; Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+        try { $out = & $exe -NoProfile -NonInteractive -EncodedCommand $enc 2>&1 } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
         $rows = @(@($out) | Where-Object { "$_" -like '<ROW>*' } | ForEach-Object { ([string]$_) -replace '^<ROW>', '' })
         if ($rows.Count -ne @($Records).Count) { throw ("the builder produced {0} row(s) for {1} record(s); output was: {2}" -f $rows.Count, @($Records).Count, (($out | Select-Object -Last 6) -join ' | ')) }
         $rows

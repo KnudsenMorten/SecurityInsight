@@ -13,6 +13,18 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.75 — Support tools work where vendor support has only temporary database access
+
+### Fixes
+
+- Where vendor support holds only its read-only database access, support tools that change something now first open the
+  temporary support access you agreed to, wait until it is in place, make the change and close it again, saying each
+  step. This covers the audit trail of "stop the running run, then update", setting one Pro setting from a support
+  session, and the support-access setup steps.
+- If the temporary access cannot be opened, a setting is not changed and the tool says why; an audit entry that cannot be
+  written is shown as a warning, and the stop and the update still go ahead.
+- Installs where support still has its earlier access work exactly as before.
+
 ## v3.0.74 — The install reports that vendor support's database access is temporary only
 
 ### Fixes

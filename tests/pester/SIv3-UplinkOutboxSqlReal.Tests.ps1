@@ -12,7 +12,7 @@
 #>
 
 BeforeDiscovery {
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
 BeforeAll {
@@ -21,7 +21,7 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\pro-settings\SI-EngineGrants.ps1')
     $script:Now = [datetime]::SpecifyKind([datetime]'2026-11-05T10:00:00', [DateTimeKind]::Utc)
     function script:Master([string]$Sql) {
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = $Sql; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     # the Pro store's own seam shape: (sql, params, mode) -> 'reader' = ONE array of hashtables; typed parameters
@@ -56,7 +56,7 @@ Describe 'REAL SQL: the uplink outbox (framework 8.4)' -Skip:(-not $script:HasSq
         $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
         $script:DbName = 'si_test_outbox_' + $tag
         Master "CREATE DATABASE [$($script:DbName)]"
-        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$($script:DbName);Integrated Security=SSPI;Connection Timeout=30;Pooling=false")
+        $script:Cn = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$($script:DbName);$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false")
         $script:Cn.Open()
         $script:A = NewInvoke $script:Cn
         & $script:A 'CREATE SCHEMA cfg;' @{} 'nonquery'

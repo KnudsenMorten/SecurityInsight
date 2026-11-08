@@ -27,7 +27,7 @@ param(
     [switch]$Again,
     [string]$DigestFile,
     [Parameter(Mandatory)][string]$OutFile,
-    [string]$Server = '.\SQLEXPRESS',
+    [string]$Server = $env:SI_TEST_LOCALSQL,
     # the profile's batches also time these functions (inclusive, every call; a recursive one counts each level)
     [string]$FunctionProfile = '',
     # the records' times are made from this time (ISO-8601, UTC); two runs to be compared CI for CI start from the same one,

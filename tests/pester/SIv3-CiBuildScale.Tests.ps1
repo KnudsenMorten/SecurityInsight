@@ -15,7 +15,7 @@
 #>
 
 BeforeDiscovery {
-    $script:HasSql = [bool]((Get-Command sqlcmd -ErrorAction SilentlyContinue) -and (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'))
+    $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
     # the real-SQL block builds its database from the Pro schemas: Test-Path first -- a Community copy skips that block
     $discRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $script:HasProSchema = (Test-Path -LiteralPath (Join-Path $discRoot 'sql\si-data-schema.sql')) -and (Test-Path -LiteralPath (Join-Path $discRoot 'sql\si-identity-schema.sql'))
@@ -142,9 +142,9 @@ Describe 'The staged build equals the whole-set build (real SQL Server)' -Skip:(
     BeforeAll {
         function script:New-Db([switch]$NoStage) {
             $name = 'si_test_ciscale_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-            $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+            $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
             $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "CREATE DATABASE [$name]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-            $a = New-Object System.Data.SqlClient.SqlConnection ("Server=.\SQLEXPRESS;Database=$name;Integrated Security=SSPI;Connection Timeout=30"); $a.Open()
+            $a = New-Object System.Data.SqlClient.SqlConnection ("Server=$($env:SI_TEST_LOCALSQL);Database=$name;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"); $a.Open()
             foreach ($f in 'sql\si-data-schema.sql', 'sql\si-identity-schema.sql') { $c = $a.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot $f)); [void]$c.ExecuteNonQuery() }
             # a database from before the stage: the build keeps the whole-set path of before
             if ($NoStage) { $c = $a.CreateCommand(); $c.CommandText = 'DROP TABLE sidata.CiBuildStage'; [void]$c.ExecuteNonQuery() }
@@ -172,7 +172,7 @@ Describe 'The staged build equals the whole-set build (real SQL Server)' -Skip:(
         function script:Drop-Db($Db) {
             foreach ($x in $script:Conns[$Db.Name], $Db.Admin) { try { $x.Dispose() } catch { } }
             [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-            $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+            $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
             $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$($Db.Name)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($Db.Name)]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
         }
         function script:Rec([string]$p, [string]$rt, [string]$cls, [string]$key, [hashtable]$f, [datetime]$coll) {

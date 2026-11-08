@@ -16,8 +16,8 @@
        2 = setup failure (Pester missing, test file missing, pwsh missing, etc.)
 
     v3 GATES POWERSHELL 7 ONLY (operator 2026-10-09: "yes drop ps 5.1 for v3. i told that yesterday").
-    Started from Windows PowerShell 5.1, the gate re-runs itself under pwsh and returns pwsh's exit code;
-    -WindowsPowerShell keeps it on 5.1 -- an explicit opt-in. v2.2 on main keeps its own 5.1 gate.
+    Started from Windows PowerShell 5.1, the gate re-runs itself under pwsh and returns pwsh's exit code; no test runs
+    on 5.1 (owner 2026-11-08, framework 12.1 rule 2 -- the -WindowsPowerShell opt-in is gone). v2.2 on main keeps its own 5.1 gate.
 
     ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13: "full suite is not night either. it can only be triggered when i
     say so. no boddy can trigger full test, newer ! only me can start that"). This script runs EVERY *.Tests.ps1 in the
@@ -36,9 +36,7 @@ param(
     # ONLY THE OWNER STARTS A FULL RUN (owner 2026-10-13): his own sentence for THIS run. No default -- and never read from
     # a file, an environment variable or a configuration. Without it nothing runs.
     [string]$OwnerWords,
-    [switch]$Detailed,
-    # v3 = PowerShell 7 only: on 5.1 the gate re-runs itself under pwsh unless this is given
-    [switch]$WindowsPowerShell
+    [switch]$Detailed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,10 +55,10 @@ if (-not $ownerWordsGiven) {
 Write-Host ('  a FULL run, started on the owner''s own words for this run: "{0}"' -f $ownerWordsGiven) -ForegroundColor Yellow
 
 # --- v3: PowerShell 7 only ------------------------------------------------------
-if ($PSVersionTable.PSEdition -ne 'Core' -and -not $WindowsPowerShell) {
-    $pw = Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $pw = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $pw) {
-        Write-Host 'FATAL: v3 gates PowerShell 7 only and pwsh.exe is not on this machine (-WindowsPowerShell runs it on 5.1 instead)' -ForegroundColor Red
+        Write-Host 'FATAL: v3 gates PowerShell 7 only and pwsh is not on this machine' -ForegroundColor Red
         exit 2
     }
     Write-Host '  v3 gates PowerShell 7 only -- re-running the gate under pwsh' -ForegroundColor DarkGray
@@ -81,7 +79,7 @@ if ($PSVersionTable.PSEdition -ne 'Core' -and -not $WindowsPowerShell) {
 #     FATAL: no *.Tests.ps1 files in:
 # i.e. the pre-publish gate could not run on 5.1 in exactly the way its own .EXAMPLE documents
 # (`powershell.exe -NoProfile -File ./Invoke-PrePublishGate.ps1`). v3 now gates PowerShell 7 only,
-# but the body default stays: the -WindowsPowerShell opt-in and v2.2 still run it on 5.1.
+# but the body default stays: v2.2 still runs it on 5.1.
 # 📌 This is the same shape as audit #70: a gate that is not running looks a lot like a gate that
 # has nothing to complain about. Measured 2026-08-30 on 5.1.20348.3932 vs 7.6.3.
 if ([string]::IsNullOrWhiteSpace($TestsFolder)) { $TestsFolder = $PSScriptRoot }

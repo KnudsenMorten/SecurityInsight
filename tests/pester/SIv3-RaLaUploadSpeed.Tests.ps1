@@ -23,7 +23,7 @@
     NO EMOJI IN THIS FILE.
 #>
 
-$script:HasSql = [bool](Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running')
+$script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 $script:HasSql = $script:HasSql -and (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-data-schema.sql')))
 
 BeforeAll {
@@ -390,9 +390,9 @@ Describe 'THE PAGE READ -- a seekable keyset, and the next page read ahead' {
 Describe 'THE PAGE READ ahead on real SQL (test VM)' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:Db = 'si_test_laupload_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+        $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$($script:Db)]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cs = "Server=.\SQLEXPRESS;Database=$($script:Db);Integrated Security=SSPI;Connection Timeout=30"
+        $script:Cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$($script:Db);$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $cn = [System.Data.SqlClient.SqlConnection]::new($script:Cs); $cn.Open()
         try {
             $c = $cn.CreateCommand(); $c.CommandTimeout = 600; $c.CommandText = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'sql\si-data-schema.sql')); [void]$c.ExecuteNonQuery()
@@ -423,7 +423,7 @@ Describe 'THE PAGE READ ahead on real SQL (test VM)' -Skip:(-not $script:HasSql)
     }
     AfterAll {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = [System.Data.SqlClient.SqlConnection]::new('Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30')
+        $m = [System.Data.SqlClient.SqlConnection]::new("Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30")
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$($script:Db)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($script:Db)]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
 
@@ -446,7 +446,7 @@ Describe 'THE PAGE READ ahead on real SQL (test VM)' -Skip:(-not $script:HasSql)
     It 'a read-ahead that fails is read again in line: no row lost' {
         $good = $script:Seam
         $bad = { param($Sql, $Params, $Mode) & $good $Sql $Params $Mode }.GetNewClosure()
-        $bad | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue ({ @{ ConnectionString = 'Server=tcp:127.0.0.1,1;Database=x;Integrated Security=SSPI;Connection Timeout=2'; AccessToken = $null; CommandTimeout = 5 } })
+        $bad | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue ({ @{ ConnectionString = "Server=tcp:127.0.0.1,1;Database=x;$($env:SI_TEST_SQL_AUTH);Connection Timeout=2"; AccessToken = $null; CommandTimeout = 5 } })
         $st = $script:Stream.Clone(); $st.Invoke = $bad
         $pg = New-RARowPager -Stream $st -Source All -TargetChars 60000 -ReadAhead
         $rows = Read-All $pg

@@ -1,12 +1,12 @@
 #Requires -Version 7.0
-param([string]$Server = '.\SQLEXPRESS', [int]$Rows = 300000, [int]$JsonChars = 3000, [string]$Database = 'si_bucket_delete_bench', [switch]$Keep)
+param([string]$Server = $env:SI_TEST_LOCALSQL, [int]$Rows = 300000, [int]$JsonChars = 3000, [string]$Database = 'si_bucket_delete_bench', [switch]$Keep)
 # Vendor bench (not a test; run it on the test VM, which has SQL Express): how the statement that removes what one query
 # slice stored before (Get-RAStreamDeleteBucketSql, Detailed) reads sidata.Finding when the current run already holds
 # -Rows rows of the report. The table carries the same key and the same Risk Analysis indexes as si-data-schema.sql; the
 # statement is run as the engine runs it (parameters), once AS IT WAS and once as it is now, with the pages it read.
 $ErrorActionPreference = 'Stop'
 . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'engine\risk-analysis\_shared\RA-SqlStream.ps1')
-$cs0 = "Server=$Server;Database=master;Integrated Security=True;TrustServerCertificate=True"
+$cs0 = "Server=$Server;Database=master;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
 function Invoke-Q([string]$Cs, [string]$Sql, [hashtable]$P = @{}, [int]$Timeout = 1800) {
     $c = [System.Data.SqlClient.SqlConnection]::new($Cs); $c.Open()
     $msgs = [System.Collections.Generic.List[string]]::new()
@@ -16,7 +16,7 @@ function Invoke-Q([string]$Cs, [string]$Sql, [hashtable]$P = @{}, [int]$Timeout 
         $r = $cmd.ExecuteScalar(); [pscustomobject]@{ Result = $r; Messages = $msgs.ToArray() } } finally { $c.Dispose() }
 }
 $null = Invoke-Q $cs0 "IF DB_ID('$Database') IS NOT NULL BEGIN ALTER DATABASE [$Database] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$Database]; END; CREATE DATABASE [$Database]; ALTER DATABASE [$Database] SET RECOVERY SIMPLE;"
-$cs = "Server=$Server;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
+$cs = "Server=$Server;Database=$Database;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
 $null = Invoke-Q $cs @"
 CREATE SCHEMA sidata;
 "@

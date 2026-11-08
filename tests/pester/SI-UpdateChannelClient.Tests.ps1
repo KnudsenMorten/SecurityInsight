@@ -15,8 +15,8 @@ BeforeAll {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 
     function script:B64Url([byte[]]$b) { [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
-    $script:Rsa = New-Object System.Security.Cryptography.RSACng 2048       # (5.1: RSA.Create()'s KeySize is read-only)
-    $script:Other = New-Object System.Security.Cryptography.RSACng 2048
+    $script:Rsa = [System.Security.Cryptography.RSA]::Create(2048)       
+    $script:Other = [System.Security.Cryptography.RSA]::Create(2048)
     $pub = $script:Rsa.ExportParameters($false)
     $script:Keys = @(@{ keyId = 'test-update-key'; n = (B64Url $pub.Modulus); e = (B64Url $pub.Exponent) })
     $script:Host1 = 'https://github.com/KnudsenMorten/SecurityInsight/releases/download/'
@@ -24,8 +24,11 @@ BeforeAll {
 
     function script:Hash([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash }
     function script:Snapshot([string]$root) {
-        $h = @{}; $base = (Get-Item -LiteralPath $root).FullName.TrimEnd('\')
-        Get-ChildItem -LiteralPath $root -Recurse -File -Force | Where-Object { $_.FullName -notlike "$base\.si-update\*" } | ForEach-Object { $h[$_.FullName.Substring($base.Length + 1)] = (Hash $_.FullName) }
+        # the client's own work folder is left out -- by the OS's separator (a hard-coded '\' let it in on Linux)
+        $sep = [IO.Path]::DirectorySeparatorChar
+        $h = @{}; $base = (Get-Item -LiteralPath $root).FullName.TrimEnd($sep)
+        $work = [IO.Path]::Combine($base, '.si-update') + $sep
+        Get-ChildItem -LiteralPath $root -Recurse -File -Force | Where-Object { -not $_.FullName.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $h[$_.FullName.Substring($base.Length + 1).Replace('/', '\')] = (Hash $_.FullName) }
         $h
     }
     function script:Same($a, $b) { if ($a.Count -ne $b.Count) { return $false }; foreach ($k in $a.Keys) { if ($b[$k] -ne $a[$k]) { return $false } }; $true }
@@ -433,7 +436,8 @@ Describe 'scope and no git' {
         $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         $prev = $env:PATH
         try {
-            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;$(Split-Path -Parent $exe)"
+            # no git on PATH: only the OS folders (Windows) and pwsh's own folder -- the same on the Linux runner
+            $env:PATH = (@($(if ($env:SystemRoot) { (Join-Path $env:SystemRoot 'System32'), $env:SystemRoot }) + (Split-Path -Parent $exe)) -join [IO.Path]::PathSeparator)
             (Get-Command git -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
             $out = & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'Update-SecurityInsight.ps1') -BaseUrl $ch 2>&1
             $code = $LASTEXITCODE

@@ -21,7 +21,7 @@
 #>
 
 BeforeDiscovery {
-    try { $script:HasSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
+    try { $script:HasSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:HasSql = $false }
 }
 
 BeforeAll {
@@ -411,9 +411,9 @@ Describe '#1111 the wiring: the container, the runner, the grants list, the rele
 Describe '#1111 REAL SQL: the updater takes the index build job''s lock at once; the job sees it is gone' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:Db = 'si_test_ixjob_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$script:Db]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $cs = "Server=.\SQLEXPRESS;Database=$script:Db;Integrated Security=SSPI;Connection Timeout=30"
+        $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$script:Db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $script:Q = {
             param([string]$sql, $p, [string]$mode)
             $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
@@ -439,7 +439,7 @@ Describe '#1111 REAL SQL: the updater takes the index build job''s lock at once;
     }
     AfterAll {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$script:Db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$script:Db]"; [void]$c.ExecuteNonQuery() } catch { } finally { $m.Dispose() }
     }
     It 'the job takes the free lock; a second job does NOT take it from the first; the updater DOES, at once; the job''s beat then answers 0 and its release leaves the updater''s lock alone' {

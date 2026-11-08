@@ -215,7 +215,7 @@ Describe 'Declared table names resolve to real tables -- audit #59.3 N3/N4' {
             $skipDirs = @('logs', 'output', 'staging', 'preview', 'demo', '.git', 'tests')
             $bad = @()
             foreach ($f in Get-ChildItem $script:SIRoot -Recurse -File -Include '*.ps1','*.psm1','*.json','*.yaml','*.yml','*.cs') {
-                $rel = $f.FullName.Substring($script:SIRoot.Length).TrimStart('\')
+                $rel = $f.FullName.Substring($script:SIRoot.Length).TrimStart('\', '/').Replace('/', '\')   # this file's convention on every OS
                 if ($skipDirs | Where-Object { $rel -like "$_\*" }) { continue }
                 # HISTORY, named one by one: the 2.2.460 defaults the first 3.0 run compares a customer's settings with
                 # (#276). It records what 2.2 set -- the retired name included -- and is never loaded as configuration.

@@ -32,14 +32,12 @@ BeforeAll {
 `$row = $Function -Record `$rec -RunContext `$rc
 '<ATTR>' + (ConvertTo-Json -Compress -InputObject ([ordered]@{ SetBy = [string]`$row.SI_TierSetBy; Reason = [string]`$row.SI_TierReason; Claims = [string]`$row.SI_TierClaims; Tier = [string]`$row.Tier; Has = [bool](`$row.PSObject.Properties['SI_TierSetBy']) }))
 "@
-        # the child runs the gate's own PowerShell (v3 gates PowerShell 7 only, 2026-10-09; 5.1 on the opt-in)
+        # the child runs the gate's own PowerShell 7 (no test runs Windows PowerShell 5.1, owner 2026-11-08)
         $exe = (Get-Process -Id $PID).Path
-        $env51 = $env:PSModulePath
-        if ($exe -match '(?i)\\WindowsPowerShell\\v1\.0\\powershell\.exe$') { $env:PSModulePath = 'C:\Program Files\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules' }
-        # -EncodedCommand: the record carries JSON, and Windows PowerShell 5.1 strips the inner quotes of a plain
-        # -Command argument -- the child would read mangled JSON and every row would honestly say 'default'.
+        # -EncodedCommand: the record carries JSON, and a plain -Command argument can lose its inner quotes -- the child
+        # would read mangled JSON and every row would honestly say 'default'.
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-        try { $out = & $exe -NoProfile -NonInteractive -EncodedCommand $enc 2>&1 } finally { $env:PSModulePath = $env51 }
+        $out = & $exe -NoProfile -NonInteractive -EncodedCommand $enc 2>&1
         $line = @($out) | Where-Object { "$_" -like '<ATTR>*' } | Select-Object -Last 1
         if (-not $line) { throw ("the builder produced no row; output was: {0}" -f (($out | Select-Object -Last 6) -join ' | ')) }
         ConvertFrom-Json -InputObject (([string]$line) -replace '^<ATTR>', '')

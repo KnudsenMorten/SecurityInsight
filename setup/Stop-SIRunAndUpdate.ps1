@@ -22,7 +22,10 @@
     It never starts a pipeline run or a step and never touches a run that is not running; when none is running, steps 1-2
     are skipped and it says so. -SkipUpdate stops after step 2. The cancel and the update start are written to the
     install's audit trail when its database can be reached from where this runs (a private install's database is never
-    opened for it; the cancel execution writes its own audit row from inside the install).
+    opened for it; the cancel execution writes its own audit row from inside the install). In an Invardia Support session
+    at an install where support holds no standing database admin, each of those two rows opens the support grant first
+    (just in time), is written, and the grant is closed again -- each said in one line; when the grant cannot be opened
+    the row is not written, said as a warning, and the stop and the update go on.
 
     Runs from a customer admin's PowerShell 7 (browser sign-in, or Azure Cloud Shell) and inside an Invardia Support session
     (every request through the session's recorder). No PowerShell module. Plan by default; -Apply acts.
@@ -64,7 +67,9 @@ param(
     [Parameter(DontShow)][scriptblock]$ReadUpdateState,
     [Parameter(DontShow)][scriptblock]$Sleep,
     [Parameter(DontShow)][scriptblock]$Now,
-    [Parameter(DontShow)][string]$By = ''
+    [Parameter(DontShow)][string]$By = '',
+    # TEST SEAM: the support grant's open / close (a Support session passes Invardia's Open- / Close-InvardiaSupportGrant)
+    [Parameter(DontShow)][System.Collections.IDictionary]$SupportGrant
 )
 
 #Requires -Version 7.0   # after the help and the param block: before the help, it hides the help from Get-Help
@@ -119,6 +124,11 @@ if (-not $Arm) {
                 }
                 $null = & $cand 'SELECT 1 AS Ready;' @{} 'reader'
                 $Sql = $cand
+                # where the Support app is read-only in the database (just-in-time support access), each audit row opens
+                # the support grant first and closes it again (Invardia's Open- / Close-InvardiaSupportGrant)
+                if ($support -and -not $SupportGrant -and (Get-Command -Name Invoke-InvardiaSupportSql -ErrorAction SilentlyContinue)) {
+                    $SupportGrant = New-SISupportGrantSeams -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroupName
+                }
             } catch { $sqlWhy = ('the database {0} does not answer from here ({1}) -- it is not opened for this' -f $db.Server, ($_.Exception.Message -split "`n")[0]) }
         }
     }
@@ -138,6 +148,7 @@ if ($Sql) { $a.Sql = $Sql }
 if ($ReadUpdateState) { $a.ReadUpdateState = $ReadUpdateState }
 if ($Sleep) { $a.Sleep = $Sleep }
 if ($Now) { $a.Now = $Now }
+if ($SupportGrant) { $a.SupportGrant = $SupportGrant }
 $r = Invoke-SIStopRunAndUpdate @a
 $global:LASTEXITCODE = $r.ExitCode
 $r

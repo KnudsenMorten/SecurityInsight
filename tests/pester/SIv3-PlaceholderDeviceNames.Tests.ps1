@@ -21,7 +21,7 @@
 
 BeforeDiscovery {
     $script:LocalSql = $false
-    try { $script:LocalSql = (Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction Stop).Status -eq 'Running' -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
+    try { $script:LocalSql = [bool]$env:SI_TEST_LOCALSQL -and $null -ne ('System.Data.SqlClient.SqlConnection' -as [type]) } catch { $script:LocalSql = $false }
 }
 
 BeforeAll {
@@ -162,7 +162,7 @@ Describe 'the data-quality flag: the correlation check lists a CI the build name
         $db = 'siph_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
         $mk = {
             param([string]$Db)
-            $cs = "Server=.\SQLEXPRESS;Database=$Db;Integrated Security=True;TrustServerCertificate=True"
+            $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$Db;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
             {
                 param([string]$sql, $p, [string]$mode)
                 $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()

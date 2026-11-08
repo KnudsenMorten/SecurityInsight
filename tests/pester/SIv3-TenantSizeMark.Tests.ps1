@@ -99,13 +99,13 @@ Describe 'WIRING: the collections record what they count; no identity gets a new
     }
 }
 
-Describe 'REAL SQL (test VM, SQL Express): the shipped statement against the shipped cfg.InstallState' -Skip:(-not [bool](Get-Service -Name 'MSSQL$SQLEXPRESS' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running') -or
+Describe 'REAL SQL (test VM, SQL Express): the shipped statement against the shipped cfg.InstallState' -Skip:(-not [bool]($env:SI_TEST_LOCALSQL) -or
         -not (Test-Path -LiteralPath ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'sql', 'si-pro-settings.sql')))) {
     BeforeAll {
         $script:DbName = 'si_test_ts_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'
+        $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandText = "CREATE DATABASE [$($script:DbName)]"; $c.CommandTimeout = 300; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
-        $script:Cs = "Server=.\SQLEXPRESS;Database=$($script:DbName);Integrated Security=SSPI;Connection Timeout=30;Pooling=false"
+        $script:Cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$($script:DbName);$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false"
         $pro = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'sql\si-pro-settings.sql'))
         $blk = [regex]::Match($pro, "(?s)IF OBJECT_ID\('cfg\.InstallState'\) IS NULL\s+CREATE TABLE cfg\.InstallState \(.*?\n\);").Value
         $blk | Should -Not -BeNullOrEmpty
@@ -129,7 +129,7 @@ Describe 'REAL SQL (test VM, SQL Express): the shipped statement against the shi
     }
     AfterAll {
         [System.Data.SqlClient.SqlConnection]::ClearAllPools()
-        try { $m = New-Object System.Data.SqlClient.SqlConnection 'Server=.\SQLEXPRESS;Database=master;Integrated Security=SSPI;Connection Timeout=30'; $m.Open(); $c = $m.CreateCommand(); $c.CommandText = "ALTER DATABASE [$($script:DbName)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($script:DbName)]"; [void]$c.ExecuteNonQuery(); $m.Dispose() } catch { }
+        try { $m = New-Object System.Data.SqlClient.SqlConnection "Server=$($env:SI_TEST_LOCALSQL);Database=master;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30"; $m.Open(); $c = $m.CreateCommand(); $c.CommandText = "ALTER DATABASE [$($script:DbName)] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$($script:DbName)]"; [void]$c.ExecuteNonQuery(); $m.Dispose() } catch { }
     }
     It 'nothing recorded: the updater reads nothing; identity then endpoint: both halves kept; a new identity count replaces only its own half' {
         ReadMark | Should -BeNullOrEmpty

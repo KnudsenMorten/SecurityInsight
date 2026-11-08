@@ -20,18 +20,27 @@
       updater-database   the updater may change the database -- cfg.InstallState 'UpdateState': its last run named no
                          database-rights error (missing when it did)
       support-grant-jit  Invardia support's read-only database role and the just-in-time grant are installed -- this
-                         heartbeat's read of cfg.SupportGrantStatus (Get-SISupportGrantStatus)
+                         heartbeat's read of cfg.SupportGrantStatus (Get-SISupportGrantStatus) -- AND (#1151 SEC-01) no STANDING
+                         support admin is left: the updater's row 'SupportStanding' { state ok | missing | unknown, dbOwner,
+                         group, checkedUtc, why } (setup\_shared\SI-SupportStandingUpdate.ps1). While it says standing db_owner
+                         or SQL admin group membership is still there, the step reads 'missing'; no row yet = the grant alone
       mail-send-right    sending is restricted to the shared mailbox -- cfg.InstallState 'MailRestriction' (+ an
                          administrator's attestation); left out while mail is not set up
       identity-names     every identity follows id-si-<role> (framework 12.11c THE IDENTITY MOVE, checklist NAM-03) --
                          cfg.InstallState 'IdentityNames' { checkedUtc, roles: { <role>: { state ok | missing | unknown,
-                         name, kind, objectId, standard } } }, written by the identity move's report step (the Invardia
-                         Support app, ops\identity-move); ok only when every role is ok
+                         name, kind, objectId, standard } } }, written by the updater on EVERY update (its step
+                         identity-names, setup\_shared\SI-IdentityNamesStep.ps1: the identity in use per role) and by the
+                         identity move's Support-app route; ok only when every role is ok
       db-job             the database setup job caj-si-dbinit (framework SEC-08) -- cfg.InstallState 'DbJob', its own
                          result row { state ok | failed, at, run, by, n, why }; 'waiting' (written by the updater) = its
                          identity is not yet proven a member of the SQL admin group; left out while there is no row.
                          Framework §4.5 G4: the updater's own row 'DbJobMembership' { state ok | renewal-failed | gone |
                          missing, at, end } -- gone = missing (updates are held); renewal-failed keeps ok, said in the detail
+      signin-app-owner   the web sign-in app owned by the updater (framework SECAUDIT-1a item 2) -- cfg.InstallState
+                         'SignInAppOwner' { state, app, why?, checkedUtc }, written by the updater's owner step every update
+      web-app-name       the web app under its standard name ca-si-web -- cfg.InstallState 'WebAppName' { state, from, to,
+                         why?, checkedUtc }, written by the updater's move step; 'awaiting-signin-proof' = waiting for the
+                         first sign-in on the new web app (the old one redirects there until then)
     The Invardia Support app's own database access is NOT a step here: Invardia checks it itself from the heartbeat's
     supportSqlAccess (its step support-arm).
 
@@ -55,9 +64,11 @@ function Get-SISetupStepsContract {
             'mail-send-right'   = @{ Title = 'Mail sending is restricted to the shared mailbox'; How = 'customer' }
             'identity-names'    = @{ Title = 'Every SecurityInsight identity has its standard name (id-si-<role>)'; How = 'support-app' }
             'db-job'            = @{ Title = 'The database setup job runs as its own identity'; How = 'support-app' }
+            'signin-app-owner'  = @{ Title = 'The web sign-in app is owned by the install''s updater'; How = 'support-app' }
+            'web-app-name'      = @{ Title = 'The web app runs under its standard name (ca-si-web)'; How = 'updater' }
         }
         # the cfg.InstallState rows the checks read
-        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership')
+        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership', 'SignInAppOwner', 'WebAppName', 'SupportStanding')
         # an update error that names the updater's database rights (the same words Get-SIHeartbeatWarnings reads as si-upd-0802)
         DbRightsRx = '(?i)db_ddladmin|db_securityadmin|permission was denied|permission denied in database|CREATE TABLE permission|ALTER permission|not have permission'
         # a detail that looks like something to run is never sent (Invardia drops it too)
@@ -162,7 +173,16 @@ function Get-SISetupSteps {
             $at = ConvertTo-SISetupStepUtc $NowUtc
             if ($wire) {
                 $ro = if ($wire -is [System.Collections.IDictionary]) { $wire['readOnly'] } else { $wire.readOnly }
-                if ($ro -eq $true) { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'ok' -CheckedAt $at -Detail 'Installed in every database; the read-only role is held.') }
+                if ($ro -eq $true) {
+                    # #1151 SEC-01: installed is not enough -- the standing admin must be gone too (the updater's row)
+                    $ss = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'SupportStanding'))
+                    $ssState = if ($ss -and $ss.PSObject.Properties['state']) { "$($ss.state)".Trim().ToLowerInvariant() } else { '' }
+                    $ssWhy = if ($ss -and $ss.PSObject.Properties['why']) { "$($ss.why)".Trim() } else { '' }
+                    if ($ssState -eq 'missing') { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'missing' -CheckedAt $at -Detail ('Installed, but ' + $(if ($ssWhy) { $ssWhy.Substring(0, 1).ToLowerInvariant() + $ssWhy.Substring(1) } else { 'standing support admin remains.' }))) }
+                    elseif ($ssState -eq 'unknown') { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'unknown' -CheckedAt $at -Detail 'Installed; whether standing support admin remains could not be read.') }
+                    elseif ($ssState -eq 'ok') { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'ok' -CheckedAt $at -Detail 'Installed in every database; the read-only role is held; no standing admin.') }
+                    else { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'ok' -CheckedAt $at -Detail 'Installed in every database; the read-only role is held.') }
+                }
                 elseif ($ro -eq $false) { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'missing' -CheckedAt $at -Detail 'The read-only support role or the just-in-time grant is missing in at least one database.') }
                 else { & $add (New-SISetupStep -Key 'support-grant-jit' -State 'unknown' -CheckedAt $at -Detail 'At least one database could not be read.') }
             } elseif ($text -match 'no support grant procedures yet') {
@@ -234,6 +254,38 @@ function Get-SISetupSteps {
                 'failed'  { & $add (New-SISetupStep -Key 'db-job' -State 'missing' -CheckedAt $at -Since $since -Detail ('Its last run failed' + $(if ($why) { ': ' + $why } else { '.' }))) }
                 'waiting' { & $add (New-SISetupStep -Key 'db-job' -State 'missing' -CheckedAt $at -Since $since -Detail 'Not run yet: its identity must be added once to the SQL admin group.') }
             } }
+        }
+    } catch { }
+    try {
+        # signin-app-owner: the updater's owner step (SignInAppOwner) -- owned, or which Support-app step it waits for
+        $so = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'SignInAppOwner'))
+        if ($so -and $so.PSObject.Properties['state']) {
+            $at = ConvertTo-SISetupStepUtc $(if ($so.PSObject.Properties['checkedUtc']) { $so.checkedUtc } else { Get-SISetupStepRowValue $StateRows 'SignInAppOwner' 'UpdatedAt' })
+            switch ("$($so.state)".Trim().ToLowerInvariant()) {
+                'owned'              { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'ok' -CheckedAt $at -Detail 'Owned by the updater, which proved it may change it; the Support app is no longer an owner.') }
+                'owned-support-kept' { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'ok' -CheckedAt $at -Detail 'Owned by the updater; the Support app is still an owner (the updater tries again).') }
+                'needs-support-step' { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'missing' -CheckedAt $at -Detail 'Waiting for a Support-app step that adds the updater as an owner.') }
+                'needs-permission'   { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'missing' -CheckedAt $at -Detail 'Waiting for a Support-app step that grants the updater Application.ReadWrite.OwnedBy.') }
+                'proof-failed'       { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'missing' -CheckedAt $at -Detail 'The updater owns it but could not prove it may change it; it tries again.') }
+                'unknown'            { & $add (New-SISetupStep -Key 'signin-app-owner' -State 'unknown' -CheckedAt $at -Detail 'The updater could not check who owns it.') }
+            }
+        }
+    } catch { }
+    try {
+        # web-app-name: the updater's move step (WebAppName); 'awaiting-signin-proof' = waiting for the first sign-in
+        $wn = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'WebAppName'))
+        if ($wn -and $wn.PSObject.Properties['state']) {
+            $at = ConvertTo-SISetupStepUtc $(if ($wn.PSObject.Properties['checkedUtc']) { $wn.checkedUtc } else { Get-SISetupStepRowValue $StateRows 'WebAppName' 'UpdatedAt' })
+            $st = "$($wn.state)".Trim().ToLowerInvariant()
+            $detail = switch ($st) {
+                'moved'                 { 'The web app runs as ca-si-web.' }
+                'awaiting-signin-proof' { 'Waiting for first sign-in on ca-si-web; the old web app sends people there and is removed after it.' }
+                'waiting-owner'         { 'Waiting for the updater to own the web sign-in app; the web app keeps serving as it is.' }
+                'custom-domain'         { 'ca-si-web is ready; the custom domain on the old web app is moved by a Support-app step first.' }
+                'public-address'        { 'ca-si-web is ready; the public address setting names a custom host, so the old web app stays until it is changed.' }
+                default                 { 'Not moved yet (' + $st + '); the old web app keeps serving and the next update tries again.' }
+            }
+            & $add (New-SISetupStep -Key 'web-app-name' -State $(if ($st -eq 'moved') { 'ok' } else { 'missing' }) -CheckedAt $at -Detail $detail)
         }
     } catch { }
     $out.ToArray()

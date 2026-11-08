@@ -35,6 +35,10 @@ public sealed class FrontSettings
     /// </summary>
     public string UpstreamScope { get; init; } = "";
     public bool ForwardsAccessToken => UpstreamScope.Length > 0;
+    /// <summary>1.5.0 SIGNIN_FRONT_MOVED_TO (MovedTo.cs): the app's new address; null = unset or invalid (no redirect).</summary>
+    public MovedTo? MovedTo { get; init; }
+    /// <summary>1.5.0: why SIGNIN_FRONT_MOVED_TO was ignored ("" = unset or valid) -- logged once at start.</summary>
+    public string MovedToIgnored { get; init; } = "";
     /// <summary>The scope requested at sign-in and refreshed silently: the upstream scope in access mode, else the refresh scope.</summary>
     public string TokenScope => ForwardsAccessToken ? UpstreamScope : RefreshScope;
 
@@ -126,12 +130,15 @@ public sealed class FrontSettings
             upstreamScope = $"api://{client}/{m.Groups[2].Value}";
         }
 
+        // 1.5.0: opt-in, and an invalid value never stops the container -- it is ignored (the front behaves as without it)
+        var moved = MovedTo.Parse(c[MovedTo.SettingName], out var movedWhy);
+
         return new FrontSettings
         {
             TenantId = tenant, ClientId = client, FicManagedIdentityClientId = mi, UpstreamPort = port, SessionHours = hours,
             BearerPaths = paths, BearerAudiences = auds, RefreshScope = scope, AnonymousPaths = open,
             SqlServer = sqlServer, SqlDatabase = sqlDb, KeyVaultKeyId = kvKey, StateManagedIdentityClientId = stateMi,
-            UpstreamScope = upstreamScope,
+            UpstreamScope = upstreamScope, MovedTo = moved, MovedToIgnored = movedWhy,
         };
     }
 

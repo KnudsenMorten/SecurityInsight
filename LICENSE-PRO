@@ -86,6 +86,7 @@ These paths are delivered only to licensed customers through the private Automat
   engine/_shared/SI-HeartbeatFields.ps1
   engine/_shared/SI-PerfSample.ps1
   engine/_shared/SI-UpdateNowSignal.ps1
+  engine/_shared/SI-InvardiaEnvironment.ps1
   setup/_shared/SI-GuidedInstallPro.ps1
   config/connector-risk-register.sample.json
   config/connector-jira-issues.sample.json

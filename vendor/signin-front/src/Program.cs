@@ -86,10 +86,36 @@ var fwd = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XFor
 fwd.KnownNetworks.Clear();
 fwd.KnownProxies.Clear();
 app.UseForwardedHeaders(fwd);
+// 2b. 1.5.0 SIGNIN_FRONT_MOVED_TO (MovedTo.cs): the app has moved -- EVERY request (but /healthz) is redirected to the new
+//     address BEFORE any sign-in, path and query kept, only to a host in the same parent domain (never an open redirect).
+//     Unset or invalid = nothing here runs.
+var frontLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SigninFront");
+if (settings.MovedToIgnored.Length > 0)
+    frontLog.LogWarning("signin-front: {Setting} is ignored ({Why}) -- no redirect", MovedTo.SettingName, settings.MovedToIgnored);
+if (settings.MovedTo is { } moved)
+{
+    var movedLog = new MovedToLog(app.Services.GetRequiredService<TimeProvider>(), m => frontLog.LogInformation("{Line}", m));
+    var foreignWarned = 0;
+    app.Use((ctx, next) =>
+    {
+        if (MovedTo.IsExempt(ctx.Request.Path)) return next();
+        var host = ctx.Request.Host.Host;
+        if (!moved.AllowedFrom(host))
+        {
+            if (Interlocked.Exchange(ref foreignWarned, 1) == 0)
+                frontLog.LogWarning("signin-front: {Setting} {Base} is not in the parent domain of {Host} -- not redirected", MovedTo.SettingName, moved.Base, host);
+            return next();
+        }
+        movedLog.Record(host, moved.Base);
+        ctx.Response.StatusCode = MovedTo.StatusFor(ctx.Request.Method);
+        ctx.Response.Headers.Location = moved.Target(ctx.Request);
+        ctx.Response.Headers.CacheControl = "no-store";
+        return Task.CompletedTask;
+    });
+}
 // 3. 1.2.0: warn on a Cookie header over 8 KB; remove 1.1.0 chunk cookies and piled-up correlation / nonce cookies.
 //    1.3.0: also Easy Auth leftovers; over 16 KB the clear-and-retry page answers instead of the app.
-var hygieneLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SigninFront");
-app.Use((ctx, next) => CookieHygiene.InvokeAsync(ctx, next, hygieneLog));
+app.Use((ctx, next) => CookieHygiene.InvokeAsync(ctx, next, frontLog));
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();

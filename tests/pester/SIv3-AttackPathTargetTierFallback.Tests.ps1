@@ -48,11 +48,14 @@ BeforeAll {
     $script:Vault = "/subscriptions/$($script:Sub)/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"
     $script:Peer = @{ $script:Vault = 1 }                                   # the vault has a CI (tier 1); its secret has none
     $script:SubTier = @{ $script:Sub = 0 }                                  # the subscription's most critical CI is tier 0
+    # a graph node id only (no CI): on its own line, the shape the repository's secret scan knows as a node id
+    $TargetCiKey = '9b1c0d6e5f4a3b2c1d0e9f8a7b6c5d4e'
+    $script:NodeOnly = $TargetCiKey
     $script:Rows = @(
         [pscustomobject]@{ T = 'ci';     TargetCiKey = $script:Vault }                                           # the target has a CI
         [pscustomobject]@{ T = 'parent'; TargetCiKey = "$($script:Vault)/secrets/app-secret" }                   # child resource
         [pscustomobject]@{ T = 'sub';    TargetCiKey = "/subscriptions/$($script:Sub)/resourcegroups/rg-data/providers/microsoft.storage/storageaccounts/stdata" }
-        [pscustomobject]@{ T = 'none';   TargetCiKey = '9b1c0d6e5f4a3b2c1d0e9f8a7b6c5d4e' }                       # a graph node id only
+        [pscustomobject]@{ T = 'none';   TargetCiKey = $script:NodeOnly }                                        # a graph node id only
     )
     function script:Get-OldTier($Row) { $t = $script:Peer[$Row.TargetCiKey]; if ($null -ne $t) { [int]$t } else { $null } }
     function script:Get-NewTier($Row) {

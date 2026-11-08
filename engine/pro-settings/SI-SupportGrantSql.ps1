@@ -515,6 +515,82 @@ function ConvertFrom-SISupportGrantState {
     [pscustomobject]$o
 }
 
+function Get-SISupportStandingOffSql {
+    <#
+        PURE. #1151 (1) SEC-01 / OPEN-01 -- THE SUPPORT APP'S STANDING db_owner TAKEN OFF, IN ONE DATABASE, ONLY WHEN THE
+        JUST-IN-TIME PATH READS BACK IN THAT SAME DATABASE, IN THE SAME BATCH. Run by the database setup job (caj-si-dbinit,
+        a member of the SQL admin group) when the updater names the Support app (SI_DBINIT_SUPPORT_STANDING_OFF).
+        The read-back that must hold before anything is changed -- every item, in this database:
+          * the Support app's own user (by the SID of its client id) is in the read-only role si_support_read;
+          * the four support grant procedures are there, THIS release's text, signed (signer certificate to 2099, private key
+            removed) and the signer's user is in db_owner;
+          * the engine (si_engine) may EXECUTE all four; the customer's consent is recorded (cfg.SupportConsent);
+          * no just-in-time grant is open right now (an open grant's db_owner is never taken here).
+        Only then: ONE transaction that takes the Support app's own user out of db_owner -- nothing else. The user and
+        its read-only role stay; no other principal, no group, no server administrator is ever touched (the break-glass
+        Entra admin of the server is the admin GROUP, outside any database: this batch cannot reach it).
+        Never THROWS for "not ready": it answers. ONE row: State (off = taken off now and read back | none = it holds no
+        db_owner | absent = it has no user here | kept = not ready, nothing changed), Roles (its roles after), Why (kept: the
+        items that do not hold).
+    #>
+    param([Parameter(Mandatory)][string]$ClientId)
+    $c = $script:SISupportGrant
+    $sid = ConvertTo-SISupportGrantSid -ClientId $ClientId
+    $px = $c.SignerPrefix; $rr = $c.ReadRole
+    $hashes = foreach ($n in 'Open', 'Close', 'Sweep', 'Status') { "(N'cfg.SupportGrant$n', $(Get-SISupportGrantProcedureSha256 -Name $n))" }
+    @"
+SET XACT_ABORT ON;
+DECLARE @want TABLE (Name sysname PRIMARY KEY, Sha varbinary(32));
+INSERT @want (Name, Sha) VALUES $($hashes -join ', ');
+DECLARE @uid int = (SELECT TOP (1) principal_id FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K'));
+DECLARE @state nvarchar(10) = N'kept', @why nvarchar(1000) = N'', @s nvarchar(400), @consent int = 0, @open int = 0;
+IF @uid IS NULL SET @state = N'absent';
+ELSE IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'db_owner')) SET @state = N'none';
+ELSE
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'$rr')) SET @why += N'not in the read-only role $rr; ';
+    IF (SELECT COUNT(*) FROM @want AS w WHERE HASHBYTES('SHA2_256', REPLACE(OBJECT_DEFINITION(OBJECT_ID(w.Name)), NCHAR(13), N'')) = w.Sha) < 4 SET @why += N'the 4 support grant procedures are not all this release''s text; ';
+    IF (SELECT COUNT(*) FROM @want AS w WHERE EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint
+           WHERE cp.major_id = OBJECT_ID(w.Name) AND c.name LIKE N'$px%' AND c.pvt_key_encryption_type = 'NA' AND c.expiry_date >= '20991231')) < 4 SET @why += N'the 4 procedures are not all signed; ';
+    IF NOT EXISTS (SELECT 1 FROM sys.certificates AS c JOIN sys.database_principals AS u ON u.sid = c.sid
+                   JOIN sys.database_role_members AS m ON m.member_principal_id = u.principal_id AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'db_owner')
+                   WHERE c.name LIKE N'$px%') SET @why += N'the signer is not in db_owner; ';
+    IF (SELECT COUNT(*) FROM @want AS w JOIN sys.database_permissions AS dp ON dp.class = 1 AND dp.major_id = OBJECT_ID(w.Name)
+        WHERE dp.grantee_principal_id = DATABASE_PRINCIPAL_ID(N'si_engine') AND dp.permission_name = N'EXECUTE' AND dp.[state] IN ('G', 'W')) < 4 SET @why += N'the engine may not run all 4 procedures; ';
+    IF OBJECT_ID(N'cfg.SupportConsent') IS NOT NULL EXEC sys.sp_executesql N'SELECT @o = COUNT(*) FROM cfg.SupportConsent WHERE Id = 1;', N'@o int OUTPUT', @o = @consent OUTPUT;
+    IF @consent = 0 SET @why += N'no consent is recorded; ';
+    IF OBJECT_ID(N'cfg.SupportJitMarker') IS NOT NULL EXEC sys.sp_executesql N'SELECT @o = COUNT(*) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL AND ExpiresUtc > SYSUTCDATETIME();', N'@o int OUTPUT', @o = @open OUTPUT;
+    IF @open > 0 SET @why += N'a just-in-time grant is open now; ';
+    IF @why = N''
+    BEGIN
+        BEGIN TRANSACTION;
+        SET @s = N'ALTER ROLE db_owner DROP MEMBER ' + QUOTENAME(USER_NAME(@uid)) + N';'; EXEC (@s);
+        COMMIT TRANSACTION;
+        IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'db_owner')) SET @state = N'off';
+        ELSE SET @why = N'db_owner is still read back after the change; ';
+    END
+END
+SELECT @state AS State,
+       ISNULL((SELECT STRING_AGG(CONVERT(nvarchar(max), r.name), N',') FROM sys.database_role_members AS m
+               JOIN sys.database_principals AS r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = @uid), N'') AS Roles,
+       LEFT(@why, 400) AS Why;
+"@
+}
+
+function ConvertFrom-SISupportStandingOffRow {
+    <# PURE. The row of Get-SISupportStandingOffSql -> @{ State (off | none | absent | kept); Roles[]; Why }. Anything that is not
+       one of the four words is 'kept' (never read as "taken off"). #>
+    param($Row)
+    $get = { param($k) if ($null -eq $Row) { '' } elseif ($Row -is [System.Collections.IDictionary]) { [string]$Row[$k] } elseif ($Row -is [System.Data.DataRow]) { $v = $Row[$k]; if ($v -is [System.DBNull]) { '' } else { [string]$v } } elseif ($Row.PSObject.Properties[$k]) { [string]$Row.$k } else { '' } }
+    $st = (& $get 'State').Trim().ToLowerInvariant()
+    if ($st -notin 'off', 'none', 'absent', 'kept') { $st = 'kept' }
+    $roles = @((& $get 'Roles') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $why = (& $get 'Why').Trim().TrimEnd(';').Trim()
+    if ($st -eq 'kept' -and -not $why) { $why = 'no answer from the database' }
+    if ($st -eq 'off' -and $roles -contains 'db_owner') { $st = 'kept'; $why = 'db_owner is still read back after the change' }
+    [pscustomobject]@{ State = $st; Roles = $roles; Why = $why }
+}
+
 function Get-SISupportGrantCallSql {
     <# PURE. The one statement the job / the heartbeat / the web app sends: parameters only (never a value in the text). #>
     param([Parameter(Mandatory)][ValidateSet('Open', 'Close', 'Sweep', 'Status')][string]$Name)

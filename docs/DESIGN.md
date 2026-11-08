@@ -1367,6 +1367,17 @@ dropped: the databases, every user, role, grant and the signed grant procedure s
   another system.
 - **How:** TRUNCATE where no foreign key points at the table, else DELETE in batches whose size is measured and adapted;
   identity values continue where they were, so a kept record that names an old id never meets a new row.
+- **Few statements, retried on a passing answer (#1148).** The quick empties go first, as few statements: up to 25 tables
+  per statement (`TruncateBatch`: the paused resumable index builds of those tables aborted first, outside the transaction,
+  then one transaction with each TRUNCATE and its reseed, `XACT_ABORT`), so one audited Support action covers a batch, not a
+  table. The per-table rows stay in the log, the result and the audit row; the read-back is unchanged. The delete tables
+  follow one by one in the plan's order (no table of the set points at a quick-empty table, so the order holds). Every
+  statement -- the lock's claim, beat and release included -- is sent again after 5, 15, 30, 60 and 120 s while its answer is
+  a passing one (`Test-SIDataResetRetryable`: the Support app's 429, its audit log that could not record the action, a
+  gateway / network answer, a transient Azure SQL answer, a deadlock victim). Only the database's own refusal by a foreign
+  key sends a batch's tables one by one (each with its own fallback to batched deletes); any other answer stops the reset,
+  and a second run goes on where it stopped. (Live: a 429 stopped a reset after 63 of 171 tables and the release met the same
+  429, so the install lock stayed held 15 minutes.)
 - **When:** PLAN by default (rows and MB per table, what is kept). `-Apply` refuses while a run, an update, the clean-up or
   the index build shows a fresh beat on its lock row (the liveness rule), while the newest pipeline run is not ended, or
   while data-out holds its lease; it then holds the install lock for the whole reset. It refuses when a live ServiceNow /
@@ -6079,6 +6090,32 @@ The steps are `private-network-subnets` (before the container setup) and `privat
 run); they are in the plan only when the option is chosen. Both are safe to run again. After the install, run setup
 commands from a machine in that network (for example Azure Cloud Shell in your virtual network).
 
+**The network preflight -- every prerequisite before the first resource (#1151 (2), INS-06 / INS-08, framework installer
+rule 8).** A private install has one more check before anything is created: `preflight-network` (in the plan only with
+`privateNetwork`, after `preflight-quota`, before `resource-group` -- the first write). It reads, with the installing
+account's own ARM rights and nothing else (`Get-SIPrivateNetworkPreflight` in `setup\_shared\SI-PrivateNetwork.ps1`, GET
+only, plus a Resource Graph query), everything the private steps will need, and lists **everything missing at once**, each
+with what to create or grant; then the install stops (exit 2) with nothing created. A part that could not be read (403, a
+throttled call) is said as **not checked** and does not stop the install -- each step checks again when it makes its part.
+
+| Checked | Missing (stops) | Note (never stops) |
+|---|---|---|
+| The network | no `vnetId` / `vnetAddressPrefix`; `vnetId` not found (or not readable); `vnetAddressPrefix` smaller than /25 | |
+| The subnets (`snet-si-apps`, `snet-si-endpoints`) | not there and no range given; too small (apps under /27); delegated elsewhere; in use (apps); a range outside the network's address space, overlapping a subnet, or the two new ranges overlapping each other | |
+| The private DNS zones | from the SAME list the endpoints are made from (database, vault, blob, queue, table, registry): with `privateDnsZonesResourceGroupId`, a zone that is not in that group (SecurityInsight never makes a zone there -- "or leave the central group empty and the install uses its own zones"); a zone that is not SecurityInsight's own (central, or one the network is already linked to) on which the installing account may not write the endpoints' records (`privateDnsZones/join/action`) or the link (`virtualNetworkLinks/write`) | a central zone not linked to the hub |
+| The rights on your network | `subnets/join/action` (always), `subnets/write` (a subnet to create or delegate), `virtualNetworks/join/action` (a zone to link) -- from ARM's permissions answer; never on SecurityInsight's own spoke | |
+| The outbound path of the build subnet | an existing endpoints subnet in your network with no default outbound access, no NAT gateway and no 0.0.0.0/0 route (the registry's build agent pool cannot run there) -- a subnet the install creates, or its own spoke, gets default outbound access | |
+| The hub | | not peered yet (hand-off list), `peerToHub` / `linkZonesToHub` without the rights on the hub (the install goes on without them) |
+| The DNS path | | the network resolves through its own DNS servers and the zones are SecurityInsight's own: the install will pause at its DNS check until the records are added or the privatelink zones are forwarded |
+
+**The plan form:** `-PreflightOnly` (and `-WhatIf`, which means the same) runs the checks only, this one included: the
+same list, nothing created. **The update** that adds a private resource to an existing private install (the updater's
+registry step: its private endpoint + `privatelink.azurecr.io`) reads the zone's prerequisites the same way before its
+first change and holds the whole change on a real missing item (said; the next update checks again); `-WhatIf` says the
+same. **The cut-over** (`setup\Set-SIPrivateNetworking.ps1`) prints the preflight with its plan and refuses an `-Apply`
+of `subnets`, `private-endpoints`, `private-dns`, `private-environment` or `registry-agent-pool` on a missing item, before
+any change. Tests: `SIv3-NetworkPreflight.Tests.ps1`.
+
 **An existing install** moves with `setup\Set-SIPrivateNetworking.ps1`, run by Invardia support through the Support app,
 one environment at a time. It shows the plan first (nothing changes); `-Apply -Steps <list>` makes exactly those steps,
 each idempotent and read back: `subnets` (with `-VnetAddressPrefix`: its own network first), `peer-to-hub` (only when you name it -- that is your approval -- with `-HubVnetId`), `registry-premium`, `private-endpoints`, `private-dns`, `private-environment`,
@@ -9047,6 +9084,58 @@ for the engine jobs -- ring 1 installs the release's templates directly (#405) -
 the web app and its MCP server (image built from the release, app rolled, healthy revision + `/healthz` 200 awaited,
 previous image restored on failure; a failure = exit 1); then the record, the updater itself (last), and the run's state.
 
+**The web sign-in app owned by the updater, then the web app under its framework name `ca-si-web`** (framework
+SECAUDIT-1a item 2 and the framework's name table; `_shared/SI-UpdaterWebApp.ps1`, `Invoke-SIUpdaterWebAppSteps`). Two
+idempotent steps at the END of every update that did not fail (Invardia and Community paths alike,
+`Invoke-SIUpdaterWebAppStepsAfter` in `Start-SIUpdater.ps1`), ON unless the updater job says `SI_UPDATER_WEB_APP_MOVE=off`.
+Neither ever throws or fails the update; each says one plain line per outcome and records its state in `cfg.InstallState`
+(`SignInAppOwner`, `WebAppName`: `{state, ..., why, checkedUtc}`).
+1. **Owner** (`Invoke-SIUpdaterSignInAppOwner`) -- the sign-in app is the application registration of the web app's
+   `AzureAd__ClientId`. Is the updater's identity (`SI_UPDATER_CLIENT_ID`) an owner? If not it adds itself (possible only
+   when it already holds the right); a refusal is ONE line that a Support-app step adds it -- never a customer action --
+   and nothing else happens (a registration it may not even read = the same line). Read back. Who the updater is and
+   what it holds come from its own Graph token (`oid`, `roles`), else from the directory: no
+   `Application.ReadWrite.OwnedBy` = one line, a Support-app step grants it (not readable = the proof decides). Then the PROOF, when anything is to change (the web app
+   still has to move, or the Support app is an owner): a harmless change of the registration's `notes` as its owner (one
+   line of its own; the customer's notes are never cut), read back. Only after the proof: every owner that is the
+   Invardia Support app -- the client id the install records in `cfg.InstallState 'SupportApp'` -- is removed and read
+   back. A person or any other identity is never removed, and no removal may leave the updater out (never ownerless).
+   States: `owned`, `owned-support-kept`, `needs-support-step`, `needs-permission`, `proof-failed`, `unknown`.
+2. **Name** (`Invoke-SIUpdaterWebAppMove`) -- from the web app the install runs (record / `SI_UPDATER_WEB_APP` /
+   `ca-si-management`) to `ca-si-web`; resumable, and any failure leaves the old app serving for the next update.
+   `ca-si-web` runs and the old one does not = done (the install named after it when it is not yet). Otherwise, only once
+   step 1 says the updater owns the sign-in app: `ca-si-web` made from the old app's spec (`New-SIUpdaterWebAppCopyBody`:
+   the same image, the SAME user-assigned identity -- a system-assigned one refuses the copy --, environment, workload
+   profile, settings, every secret re-read through ARM `listSecrets` (value or Key Vault reference), registries, scale,
+   ingress without its address and custom domains, all traffic on the latest revision) and waited for -- made again from
+   the old app on every update until the switch, so it never falls behind; its redirect URI `https://<fqdn>/signin-oidc`
+   added BESIDE the old one, as the owner, read back; `/healthz` 200 and an anonymous request sent to
+   `login.microsoftonline.com` with the new `redirect_uri`. It STOPS (old app serving, one line) when the old app has a
+   custom domain (never moved by the update: a Support-app step moves it), when the public address setting
+   (`SIWeb_PublicBaseUrl`, the links in mails) names a custom host (`Get-SIUpdaterPublicAddressPlan`: anything but empty,
+   the new address, or exactly the old app's default address `https://<old fqdn>`). Then the public address, when it is
+   exactly the old default address, is rewritten to `https://<new fqdn>` with its change-log row, guarded on the old
+   value and read back (`Set-SIUpdaterPublicAddress`), and the switch (`Set-SIUpdaterWebAppName`, below). From the switch
+   on **the old web app sends people to the new one** (`Updating/WebAppSignedIn.cs`, `OldWebAppRedirect`, right after the
+   forwarded headers): when the install record (`InstallNames`, read at most once a minute) names another web app than
+   its own `CONTAINER_APP_NAME`, every request -- except `/healthz` and the sign-in callbacks -- is redirected to the same
+   path and query on `https://<new app>.<same environment domain>` (302; 307 for a form post); the new app never
+   redirects to itself, a custom host is left alone. The old app is removed -- no timer -- only after the first sign-in on
+   `ca-si-web` is recorded, and **each web app records its own** (`WebAppSignedInRecorder`): on the first request of its
+   process that passed an Entra sign-in (never `/healthz`, an anonymous request or a link session) it calls
+   `cfg.WebAppSignedInRecord` once, in the background, never failing or slowing a request; the procedure writes the app's
+   OWN row `cfg.InstallState 'WebAppSignedIn:<app>'` = `{"app":"<app>","at":"<utc>"}` only when it has none (one row per
+   app name, never overwritten, nothing ever deleted -- the old app's row is harmless; EXECUTE through the shipped grant
+   list `SI-ManagementGrants.ps1`, the role check `si_audit_writer`; a container app name is at most 32 characters, so
+   the key fits). The heartbeat's setupSteps carry `web-app-name` (`missing`, "Waiting for first sign-in on ca-si-web
+   ..." while it waits) and `signin-app-owner`. The switch: the updater job's
+   own `SI_UPDATER_WEB_APP` (read before the install record, so it must change too), the install record
+   (`InstallNames`), and the heartbeat's links (`Endpoints`), each read back; the heartbeat reads the record for the web
+   app's name. Only then the old app is deleted (waited for) and its redirect URI and sign-out address removed from the
+   sign-in app, read back. After the switch the new app is never made again from the old one. States: `moved`,
+   `waiting-owner`, `create-failed`, `redirect-failed`, `signin-failed`, `custom-domain`, `public-address`,
+   `awaiting-signin-proof`, `switch-failed`, `delete-failed`.
+
 **The database first (#352, framework UPDATE-1.6 (j)) -- never new code on an old schema.** The update (Invardia, the only
 source) rolls through `Invoke-SIUpdaterRoll`, and on a Pro install (the Pro database is
 configured on the job) its FIRST step -- before the template gate, before any image is built or any job / app is rolled --
@@ -9194,6 +9283,87 @@ The database work that needs the SQL server's admin group is done by the install
   `Set-SISigninFront`, `Install-SIUpdaterJob -GrantSql`, `Deploy-SIManagement -GrantSql`); their help says the product does
   it now. `Initialize-SIDataSql` and `Initialize-SIVulnTargetSql` are not needed for the Pro database: the install and every
   update apply those schema files.
+- **Never beside a running update (#1146).** A support start of the job (`Start-SIDbInitJob.ps1`, also with
+  `-Steps grants`) and `Grant-SISupportAppDatabase.ps1 -Apply` (which sends the same kind of grants itself) REFUSE while the
+  updater runs and say to start them after the update: a running execution of the updater job (ARM, both scripts; a
+  Running execution older than the job's run limit + 15 minutes is a leftover) or an updater lock row in `cfg.PipelineLock`
+  with a beat younger than 15 minutes (`Get-SIDbInitUpdaterLockSql`, read only; the scripts that open the database). A part
+  that cannot be read is said and never blocks. `Start-SIDbInitRun -By support` checks once more right before the start
+  (`Status = Refused`). The updater's and the guided install's own starts are never checked. (Live: a support setup started
+  the job 2 s after the update did; both wrote the one result row and the update was held.)
+- **Each caller's own result row (#1146).** The job writes its result to `DbJob` (as before: the heartbeat, the membership
+  proof) AND to the row of its caller -- `DbJobUpdater`, `DbJobSupport`, `DbJobInstaller` (`Get-SIDbInitCallerRecordName`).
+  The updater counts a run only with ITS run id, read from `DbJobUpdater` first, then `DbJob`; another run's row is never
+  taken -- the hold then names that run. The job runs the INSTALLED engine image, so the caller rows appear from the run after
+  the release that carries them; until then the refusal above keeps support runs away from an update.
+- **A deadlock victim is sent again (#1146).** A statement SQL chose as a deadlock victim (1205: rolled back, nothing of it
+  stayed) is sent again after 2, 5 and 10 s, each said in the job's lines; any other error, or the fourth deadlock, fails the
+  run as before. The grants are idempotent, so a second send converges.
+
+#### Every identity to its standard name -- the updater step `identity-names` (framework §5.5; #1145)
+
+Every SecurityInsight identity carries its standard name at every install: `id-si-engine`, `id-si-web`, `id-si-mcp`,
+`id-si-updater`, `id-si-tagging` (and `id-si-dbinit`). A user-assigned managed identity cannot be renamed, so an install that
+runs an older name MOVES the role to a new identity. That move is an UPDATER STEP, not a script a person runs: the updater
+runs on every install on a schedule, already holds the install's ARM rights and the database setup job, and can be resumed
+on its next run -- a setup script would need a person per install. One library, `setup/_shared/SI-IdentityMove.ps1`, serves
+two callers that write the same state rows (`cfg.InstallState 'IdentityMove.<role>'`, at most 400 characters each), so either
+carries on where the other stopped: the updater (`setup/_shared/SI-IdentityNamesStep.ps1`, from
+`container/updater/Start-SIUpdater.ps1`, every run, both editions) and the vendor's Support-app command for what only the
+Support app may do.
+- **Per role, in order** -- engine, web, MCP, tagging, then the updater itself: inventory (the identity in use and every right
+  it holds) -> ensure (`id-si-<role>` in the install's resource group, read back) -> copy-rights (Azure role assignments at
+  the same scopes, Graph app roles, the sign-in app's federated credential for the web identity, Key Vault access policies,
+  and the database users, roles and grants) -> switch (the identity attached, every client id / resource id reference
+  re-pointed: environment variables such as `SI_UAMI_ClientId`, `AzureAd__ClientCredentials__0__ManagedIdentityClientId`,
+  `SI_UPDATER_CLIENT_ID`, Key Vault secret references and the registry pull identity; never while a pipeline run or an
+  execution of that job is going; the old identity stays attached) -> prove (the next real run of each job, a healthy
+  revision of each app) -> clean-up (only when EVERY role at the install is proven: the old rights removed, the old identity
+  detached and deleted) -> the report (`cfg.InstallState 'IdentityNames'`, the heartbeat's setup step `identity-names`).
+  Each run carries every role as far as it can; a step that is not done ends that role for this run, and the old identity
+  keeps every right until its clean-up.
+- **The database side is the database setup job's** (it is the SQL admin; the updater's own identity may not make users): one
+  grants-only run per role with `SI_DBINIT_MOVES` copies the old user's roles and explicit permissions to the new identity's
+  user in EVERY product database (the Pro database, the identity ledger, every other) and reads them back; the job records
+  `cfg.InstallState 'DbJobMoves'`. The clean-up's `SI_DBINIT_DROPS` drops an old user only where a read made just before
+  shows the new user holding every role and permission of it (`Test-SIIdentityMoveSqlCovered`,
+  `setup/_shared/SI-IdentityMoveSql.ps1`), and the job refuses to drop its own identity, the Invardia Support app, or any
+  identity an app or job of the install still signs in as. The server's Entra administrator is never touched.
+- **The updater moves last.** Its rights are copied with the others, but its job is switched only when every other role is
+  proven; the next update runs as the new identity and proves it with its own token (it signed in and read Azure and the
+  state database); only an update that runs AS the new identity removes the old one.
+- **What the updater may not do is a support step**, never a customer action: a right it may not read (a scope above its
+  resource group, Entra roles) or grant (role assignments, Graph app roles, Exchange) waits for the same move run through the
+  Invardia Support app, which reads and grants everything and records `rightsUtc`; the update then trusts that copy for the
+  parts it cannot read itself. An old identity that may still hold such rights is detached but not deleted until the
+  Support-app clean-up has removed them.
+- **Asset tagging**: an install without tagging's own identity gets `id-si-tagging` only when asset tagging is on
+  (`SI_AssetTagging_Enabled`); its rights are `Grant-SIIdentity -Tagging` (a support step).
+- **The names report, on every update** (plan, apply, off, and after a move that stopped): a read-only check written to
+  `cfg.InstallState 'IdentityNames'` (`{ checkedUtc, roles: { <role>: { state, name, ... } } }`, at most 400 characters),
+  which the heartbeat sends as the setup step `identity-names`. Per role -- engine, web, mcp, updater, tagging, the
+  database setup job, and the in-network SQL identity where the install has one -- the identity the role's apps / jobs
+  SIGN IN AS decides the name (the client id in `AZURE_CLIENT_ID` first, then the one their settings name, then the one
+  attached alone). A role is `ok` ONLY when it runs as `id-si-<role>` AND the old identity holds no rights any more -- the
+  move record's `rightsClearedUtc`, written by a clean-up that could read every right (the bundled Support-app run where the
+  updater cannot); no record = `missing`, note "clean-up pending". An old identity with no rights left that still exists is
+  `ok`, said in the note. An updater that signs in with a certificate is `missing` with that reason (moving it to its managed
+  identity is its own step of the plan). The entry `sql-admin-group` is `ok` when the group and the SQL server's admin login
+  carry the standard name, and `ok` with the note "customer's own group" when the admin is a group of the customer's own
+  choosing (framework DEPLOY-2). A NEW install creates the group under its standard name from the start
+  (`setup/_shared/SI-SetupNaming.ps1`). So an install on the old names shows `missing` per role instead of no step at all.
+- **The SQL admin group, renamed IN PLACE** (framework §12.11c: groups keep their object): the group the SQL server's Entra
+  admin names (by its sid) -- "SecurityInsight SQL admins" -> `grp-si-sql-admins`, "SecurityInsight Community SQL admins"
+  -> `grp-si-community-sql-admins`; its mailNickname only where it differs -- read back, then the server admin's LOGIN TEXT
+  (ARM `administrators/ActiveDirectory`, the same sid and tenant), read back. Never a member added or removed, never the admin
+  object removed or replaced, never a group of the customer's own. A refusal is one support step (`Move-SIIdentity -Step
+  sql-admin-group`). The display-names step no longer renames the group to a display name (it would undo this).
+- **The Support app's runs are recorded and bundled per install** (Invardia ruling 2026-11-07; no new right for the updater):
+  ONE `Move-SIIdentity -Step copy-rights -AllRoles -Apply` before the update switches anything (inventory, ensure and
+  copy-rights for every role; it records `rightsUtc`), ONE `Move-SIIdentity -Step clean-up -AllRoles -Apply` after the proof.
+- **Plan first, per install**: without the row `cfg.InstallState 'IdentityMoveMode'` the step PLANS -- the per-install plan in
+  the update's log and the report row, nothing changed. `apply` (set and read back through the Support app once the
+  install's plan is approved) lets the update act; `off` skips the step.
 #### Support-app cut-overs -- the shared pattern (framework §12.23 P8)
 
 `setup/_shared/SI-SupportCutover.ps1`, used by `Set-SISecurityBaseline.ps1` and `Move-SIEngineToLeastPrivilege.ps1` (the
@@ -9238,6 +9408,110 @@ above (plan by default; `-Apply`; `-Rollback <record> -Apply`), one install at a
   just in time (not a member, the read-only role in every database) and a membership read after it is named "standing
   admin is back". The heartbeat's four fields keep their meaning: `group` = a member (as read), `dbUser` = its own user
   with the state's role in every database.
+#### No standing support admin by default -- the update takes it away once the just-in-time grant reads back (#1151 (1) SEC-01 / OPEN-01)
+
+Framework SECAUDIT-1a: the Invardia Support app keeps ONLY its read-only role standing; db_owner comes just in time through
+the signed support grant procedures (at most the consented level, at most 8 hours). Three parts, one model:
+- **`setup/Grant-SISupportAccess.ps1`, the default** -- the Key Vault role of its level, then in each product database the
+  support grant's own admin steps (`Get-SISupportGrantAdminSteps`: schema, the Support app's own user WITHOUT db_owner in
+  `si_support_read`, sign, grants -- the steps the database setup job and the guided install run), the consent, and the
+  READ-BACK (`Get-SISupportGrantStateSql`); the two Azure roles of the support grant. It adds NO db_owner, NO SQL admin group
+  membership, NO app ownership; a standing membership or ownership still there from an earlier release is SAID. The earlier
+  model only with `-LegacyStandingAccess` (off). `-Remove` unchanged. A group member or app owner changes only with `-Remove`
+  / the legacy switch: Privileged Role Administrator (the group is role-assignable), Application Administrator.
+- **The database setup job** (`caj-si-dbinit`, a member of the SQL admin group) -- when the updater names the recorded Support
+  app (`SI_DBINIT_SUPPORT_STANDING_OFF`), per product database ONE batch (`Get-SISupportStandingOffSql`): the read-back
+  (read-only role held, the four procedures this release's text and signed with the key removed, signer in db_owner, the
+  engine may run them, consent recorded, no grant open) and ONLY if every item holds, `ALTER ROLE db_owner DROP MEMBER` of the
+  Support app's own user in one transaction, read back. A database that is not ready keeps db_owner. Its row
+  `DbJobSupportStanding` { state off | kept | unknown, run, dbs, why }; never part of the job's verdict.
+- **The updater** (`setup/_shared/SI-SupportStandingUpdate.ps1`, called from `Invoke-SIUpdaterDbJob`) -- names the Support app
+  recorded on the install, never after a ROLLBACK record (standing access put back on purpose stays); after a run that read
+  back ok it reads the job's row (this run's only), the Support app's membership of the server's admin group from the
+  MEMBER's side (its read-only Graph rights, §4.5 G5), and writes `cfg.InstallState 'SupportStanding'` { state ok | missing |
+  unknown, dbOwner, group, checkedUtc, why } and ADDS to the cut-over record `SupportStandingAccess` what is now read back as
+  gone (`db-owner`, `admin-group`; the heartbeat's supportSqlAccess then expects the just-in-time state). The update NEVER
+  removes a member (it holds no right to change a role-assignable group) and never touches the server's Entra admin: while
+  the Support app is still a member, ONE log line names `setup/Remove-SISupportStandingAccess.ps1`, which refuses unless the
+  group stays the server's admin with another member (never lose SQL access).
+- **Heartbeat** -- setup step `support-grant-jit` is ok only when the grant is installed AND `SupportStanding` says no
+  standing admin; 'missing' while db_owner or the membership is still there; no row yet = the grant alone (as before).
+#### The support grant job is started by its own queue; the Support app holds no right on any job (#1154, framework §5.5)
+
+`Microsoft.App/jobs/start/action` ALONE accepts a container override, so the earlier design (the Support app held Container
+Apps Jobs Operator on `caj-si-support-grant` and started it with an empty body) let it run a command of its own as the
+ENGINE identity. Now:
+- **The trigger** -- `caj-si-support-grant` is EVENT-triggered: the azure-queue scale rule `si-support-requests` on the queue
+  of that name in the install's own storage account (`queueLength=1`), signed in as the ENGINE identity (the rule's
+  `identity`; no connection string, no key -- shared-key access is off, #307), at most one execution, polled every 10 s.
+  ONE definition: `Get-SISupportGrantTriggerArgs` / `ConvertTo-SISupportGrantEventCreateArgs`
+  (`container/_shared/SI-ContainerConfig.ps1`) for Bootstrap (a new install) and the update's missing-jobs step
+  (`Get-SIMissingJobSpec`, the donor's identity whose client id is its `SI_UAMI_CLIENTID`);
+  `Get-SISupportGrantEventTriggerConfig` (`setup/_shared/SI-SupportGrantUpdate.ps1`) for the update's PATCH -- a test holds
+  the two equal. Without the managed identity or a storage account the job stays manual and the update says why.
+- **The Support app's ONLY right** -- Storage Queue Data Message Sender on that one queue (`Install-SISupportGrantProcedure
+  -Steps roles`, `Grant-SISupportAccess`). Neither grants anything on a job any more.
+- **Existing installs, through the update** (`Invoke-SISupportGrantQueueTrigger`; the updater on every run after the queue
+  step -- `Invoke-SIUpdaterSupportTrigger` -- and the person-run update's support step): (a) the job to the event trigger --
+  ONE JSON merge PATCH of the trigger only (triggerType, its run and retry limit as they are, `eventTriggerConfig` with its
+  rules array whole; no secret, template or identity sent), READ BACK up to 12 times 10 s apart (Event on the queue AND the
+  job's change finished -- provisioningState Succeeded); (b) ONLY when it reads back
+  as Event: every role assignment the Support app (the one recorded in `cfg.InstallState 'SupportApp'`, its service
+  principal from Graph) holds AT a `caj-si-*` job is deleted, whatever its role, and the list read again until they are
+  gone. A right on something broader that also starts jobs (Owner / Contributor / a custom role with a matching action on the
+  resource group, the subscription) is SAID, never changed. The updater holds Contributor, which may not delete a role
+  assignment: the line then names who can (the Support-session step, which runs the same function with its own seams, or
+  the customer's admin), and the next run checks again. `Grant-SISupportAccess` removes Container Apps Jobs Operator on the
+  job only once the job's trigger reads Event (`-Remove` always). Idempotent; a second run sends nothing and says nothing;
+  never a failed update.
+- **The job** -- reads the queue exactly as before (sweep, every message read and deleted, the newest one not older than 15
+  minutes, the request never an instruction, the consent cap, the SUPPORT-GRANT line). One change: an EMPTY queue (the
+  scaler may start a second execution while the first reads) is no request -- exit 0 and NO SUPPORT-GRANT line, so the only
+  line Invardia reads is the one answering its request. Only stale or bad messages still answer `result=no-request` /
+  `bad-request` (exit 4).
+
+#### Invardia alignment (#1151 (5)-(7)): the head call, the environment name, purge protection at existing installs, the updater's rights in the security pack
+
+- **(5) UPD-03 -- the head call ("Update now" / expedite; framework §8.18, Invardia DESIGN "The head call").** SI polls on the
+  heartbeat job's 15-minute tick (the updater itself runs once a day, so the poll lives where §8.18 puts SI's: the heartbeat
+  job starts `caj-si-updater`). `Invoke-SIUpdateNowCheck` (`engine/_shared/SI-UpdateNowSignal.ps1`) asks
+  `POST <Invardia>/api/updates/securityinsight/head` FIRST -- `X-Invardia-Install-Key` (+ `X-Invardia-Install-Id` when the
+  install has its lasting id), body `{ kind: "code", licence, ring }` (the manifest pull's body) -- and honours `expedite`:
+  `now` + `until` still ahead on the install's UTC clock + a version newer than the running one -> the updater is started
+  exactly as for a signal (claimed once per mark in `cfg.InstallState 'UpdateSignal'`, the mark keyed on `until - 24 h`, the
+  raise time the contract defines; never while the updater runs; the run gate still installs between two pipeline runs);
+  `window` -> never now: the release goes in at the install's own agreed time (the daily update, or the #985 check before
+  the next run), one line per hour; no mark / `until` past -> nothing, and the older `GET .../signal` is NOT asked (its
+  `updateNow` does not apply the customer rule); 404 -> an older Invardia, silently, and the signal decides as before; any
+  other answer, no answer or a wrong shape -> nothing this tick (the contract), one line per hour. No licence text -> the
+  head call is not asked (it would be refused) and the signal decides. The mark's reason is never printed. One HttpClient
+  call serves the signal, the head call and the environment read (`Invoke-SIUpdateNowHttp`; the raw-call ratchet stays 1).
+- **(5) NAM-02 -- Invardia is the master of the environment name (framework §8.14).** On the full heartbeat (once per half
+  hour) `Invoke-SIInvardiaEnvironmentRead` (`engine/_shared/SI-InvardiaEnvironment.ps1`) does
+  `GET <Invardia>/api/enrollments/environment` with the install key and keeps the LAST GOOD value in
+  `cfg.InstallState 'InvardiaEnvironment'` = `{ name, id, kind, readUtc }` (<= 400 characters). A failed read -- 404, 5xx,
+  no answer, a wrong shape, an empty name -- never writes, so it never blanks the kept name (one line; WARN except for the
+  404 of a route not live yet). Anonymous installs ask nothing. Nothing of it is sent to Invardia (closed wire contract).
+  Not yet: the web app's header and the mails still show the "Environment name" setting -- showing the kept name there
+  changes who owns that setting (a customer-visible decision); `Get-SIInvardiaEnvironmentName` is the read for that step.
+- **(6) SEC-03 -- Key Vault purge protection at existing installs.** `Invoke-SIKeyVaultPurgeConverge`
+  (`setup/_shared/SI-SecurityBaseline.ps1`): per vault read; on = nothing; off = ONE PATCH
+  `{ properties: { enablePurgeProtection: true } }` and a read-back with retries (10 x 6 s); a refused PATCH, an unreadable
+  vault or a read-back still off is ONE line, never a throw; every line that turns it on says it cannot be turned off
+  again. The updater runs it on EVERY run, both editions, not in an apply-settings run, for the vault `SI_UPDATER_KEY_VAULT`
+  names in the install's own resource group (`Invoke-SIUpdaterKeyVaultPurgeStep`, `container/updater/Start-SIUpdater.ps1`;
+  Contributor on the resource group covers the PATCH). It changes no table, job or image, so it does not wait for the run
+  gate, and never fails or holds the update (no failure record: Invardia's step list is closed). New installs: the vault is
+  created with it (unchanged), and `Initialize-SIInfra.ps1` now runs the same converge for a vault it recovered or found
+  without it.
+- **(7) SEC-09 -- texts.** The security pack (md + json) and both copies of "Identities and permissions" list the updater's
+  Microsoft Graph application permissions -- `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`,
+  `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementPolicy.Read.AzureADGroup`, `GroupMember.Read.All`,
+  `Application.Read.All` (the list `Get-SIDbInitUpdaterGraphRoleNames` holds) -- and say "never
+  RoleManagement.ReadWrite.Directory"; the updater's Contributor row names the purge-protection change. Grant-SISupportAccess's
+  runAs already names Privileged Role Administrator for the role-assignable group (since SEC-01); the suite pins that no
+  text names "Groups Administrator" or "owner of the group".
+
 #### The engine identity's database rights -- the least-privilege role `si_engine` (#672, framework §12.23 SQL-ACCESS)
 
 The design (P1-P8) is the framework's (`DOCS/REQUIREMENTS.md` §12.23) and is not restated here; this is SI's engine part.
@@ -11681,6 +11955,31 @@ The build stamp stays in BUILD.json, the release notes and the support bundle. T
 missing part 0, so 3.0.1 > 3.0.0.202610272235 everywhere; a code manifest of another MAJOR than the running version is refused
 (`Test-SIInvardiaSameMajor`, the major only -- 2.2 is never an upgrade path to 3.0.x). The web app's pill shows the short
 version (`InstalledRelease.Short`), the full release and the build date in its tooltip.
+## A run that is only starting, and one network blip, never cost the run (#1147, #1150 -- 2026-11-07)
+
+- **The runner's settings read retries a network-level connect error (#1147).** `Invoke-SIProSettingsLayer` reads the
+  settings database once per run; a connect error at the network / transport level (`Test-SISqlConnectTransient`,
+  `engine\_shared\SI-SqlRetry.ps1`: SqlClient 40 / 53 / 10060 / 10061 / 4060 / 40613 ..., "network-related or
+  instance-specific", "Could not open a connection to SQL Server", a semaphore timeout; never a refused sign-in 18456 or a
+  permission) is read again after 5, 10, 20 and 45 s, each said as one `[pro-settings]` line; nothing was read or written
+  yet, every read is a SELECT. Any other error, or the fifth failure, stops the run as before ("could not be read (after N
+  attempts) -- the run stops"). (Live: one TCP error 40 stopped a runner wake-up and the daily run was missed.)
+- **Stop-SIRunAndUpdate reads the run state again right before it starts the updater (#1150).** The plan can be minutes
+  old. Right before step 3 the run record and the install's executions are read again (`Get-SIStopRunStartCheck`): a run
+  that this script did not cancel is running, or a step / the runner executes -> the updater is NOT started (outcome
+  `run-started`, exit 1; the update lands after that run by itself through the run gate); only a young wake-up of the runner
+  -> waited for, up to 5 minutes (`-WakeWaitMinutes`), then the same refusal. The plan WARNS when the install's next
+  scheduled run is within 10 minutes, or due now (`Read-SIStopRunDue` = the runner's own `Get-SIJobFlowDue`;
+  `Get-SIStopRunSlotWarning`).
+- **An "update now" respects a run that is only starting (#1150).** For `SI_UPDATER_MODE = update-now` (the heartbeat's
+  signal, Stop-SIRunAndUpdate, a person) the run gate first asks for executions of `caj-si-flow` that run and started within
+  10 minutes (`Get-SIUpdaterStartingRun` -- a run that may not be in the run record yet); one is asked again for the gate's
+  short busy wait (6 x 20 s; a wake-up that runs nothing ends in seconds), then the update WAITS and is handed to the runner
+  (the wait mark), never rolled under it. An execution started with `SI_FLOW_CANCEL=1` is the caller's own cancel (cancelled
+  on purpose) and never counts. The other modes (nightly, `pending-update` from the runner, `second-pass`) are unchanged.
+  (Live: the plan read no run at 17:59, the scheduled run's runner started 18:00:55, the update-now a minute later found no
+  run recorded, took the lock and the roll cancelled the starting run.)
+
 ## L2 support worker on the development machine (#684) — vendor operations, in no customer payload
 
 Invardia's support team (Invardia DESIGN §7 "SUPPORT TEAM"): **L1** = Invardia's support agent (owns the ticket, the only

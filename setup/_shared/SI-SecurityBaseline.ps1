@@ -216,6 +216,52 @@ function Set-SIKeyVaultPurgeProtection {
     @{ Ok = $false; Line = ('Key Vault {0}: purge protection still reads off after the change' -f $name) }
 }
 
+function Invoke-SIKeyVaultPurgeConverge {
+    <#
+        #1151 (6) SEC-03 (framework §4.5 "Key Vault purge protection on"): brings each of the install's vaults (-VaultIds, ARM
+        ids) to purge protection ON -- the step the UPDATER runs on every update, so an existing install reaches the state a new
+        install is created with (setup also calls it for a vault it found). Per vault: read it; already on = nothing changed
+        (said once); off = ONE PATCH { properties: { enablePurgeProtection: true } } and a READ-BACK with retries (an ARM
+        change can show a moment after its answer). ONE-WAY: Azure never turns purge protection off again -- every line that
+        turns it on says so. NEVER THROWS and never holds anything: a refused PATCH, a vault that cannot be read or a
+        read-back that still says off is ONE line and the next update tries again. Idempotent.
+        Returns @{ Results = @( @{ Vault; Action = already | on | failed | unconfirmed | missing } ); Lines }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [string[]]$VaultIds = @(), [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          [int]$Tries = 10, [int]$PauseSeconds = 6)
+    $results = New-Object System.Collections.Generic.List[object]
+    $lines = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    foreach ($id in @($VaultIds | Where-Object { "$_".Trim() })) {
+        $vid = "$id".Trim().TrimEnd('/')
+        if ($seen.ContainsKey($vid.ToLowerInvariant())) { continue }
+        $seen[$vid.ToLowerInvariant()] = $true
+        $name = ($vid -split '/')[-1]
+        $path = '{0}?api-version={1}' -f $vid, $script:SIBaselineKvApi
+        $res = 'failed'
+        try {
+            $v = $null
+            try { $v = & $Arm 'GET' $path $null } catch { $lines.Add(('Key Vault {0}: purge protection not checked -- the vault could not be read ({1}); the next update tries again' -f $name, $_.Exception.Message)); $results.Add([pscustomobject]@{ Vault = $name; Action = 'failed' }); continue }
+            if (-not $v) { $lines.Add(('Key Vault {0}: not found in the install''s resource group -- purge protection not checked' -f $name)); $results.Add([pscustomobject]@{ Vault = $name; Action = 'missing' }); continue }
+            $d = Get-SIKeyVaultPurgeDecision -Vault $v
+            if ($d.Action -ne 'on') { $lines.Add(('Key Vault {0}: purge protection is on (read)' -f $name)); $results.Add([pscustomobject]@{ Vault = $name; Action = 'already' }); continue }
+            try { $null = & $Arm 'PATCH' $path @{ properties = @{ enablePurgeProtection = $true } } }
+            catch { $lines.Add(('Key Vault {0}: purge protection could not be turned on ({1}) -- nothing else changed; the next update tries again' -f $name, $_.Exception.Message)); $results.Add([pscustomobject]@{ Vault = $name; Action = 'failed' }); continue }
+            $back = $null
+            try { $back = Read-SIBaselineBack -Arm $Arm -Path $path -Sleep $Sleep -Tries $Tries -PauseSeconds $PauseSeconds -Test { param($o) [bool](Get-SIBaselineProp $o @('properties', 'enablePurgeProtection')) } } catch { $back = $null }
+            if ([bool](Get-SIBaselineProp $back @('properties', 'enablePurgeProtection'))) {
+                $res = 'on'
+                $lines.Add(('Key Vault {0}: purge protection turned ON and read back -- this cannot be turned off again (Azure keeps a deleted vault and its secrets for their retention days)' -f $name))
+            } else {
+                $res = 'unconfirmed'
+                $lines.Add(('Key Vault {0}: purge protection was asked for (it cannot be turned off again), but it does not read back as on yet -- the next update reads it again' -f $name))
+            }
+        } catch { $res = 'failed'; $lines.Add(('Key Vault {0}: purge protection not checked ({1}) -- the next update tries again' -f $name, $_.Exception.Message)) }
+        $results.Add([pscustomobject]@{ Vault = $name; Action = $res })
+    }
+    [pscustomobject]@{ Results = $results.ToArray(); Lines = $lines.ToArray() }
+}
+
 # ============================================================================================================== 3. SQL AUDIT
 
 function Get-SISqlAuditDiagnosticBody {

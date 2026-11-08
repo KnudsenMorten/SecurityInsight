@@ -101,11 +101,13 @@ function Get-SISetupDisplayNames {
     <# PURE. The names people read for a new install's directory objects. Without -New: today's ("SecurityInsight" for the
        engine's own app registration, "SecurityInsight Management" for the web app's sign-in registration, grp-si-sql-admins
        for the SQL admin group); -New: the CR5 names (framework 12.11c item 5: the full name where people read) --
-       "SecurityInsight Engine", "SecurityInsight", "SecurityInsight SQL admins" (the group's mailNickname stays grpsisqladmins).
+       "SecurityInsight Engine", "SecurityInsight" -- and the SQL admin group keeps its STANDARD name grp-si-sql-admins (framework
+       5.5, Invardia ruling 2026-11-07: groups follow grp-<code>-<purpose>; an older install's group is renamed back in place by
+       the update's identity-names step).
        An existing install's objects get the same names from the update (setup\_shared\SI-DisplayNames.ps1).
        SIDE BY SIDE IN ONE TENANT (SI #750, 2026-10-27; the same rule as v2.2 beside v3): these three are TENANT-WIDE objects,
        found by name when an install is set up, so a NEW Community edition install (-New -Edition community) gets names of its
-       own -- "SecurityInsight Community Engine", "SecurityInsight Community", "SecurityInsight Community SQL admins" (group
+       own -- "SecurityInsight Community Engine", "SecurityInsight Community", and its own SQL admin group (group
        grp-si-community-sql-admins, mailNickname grpsicommunitysqladmins) -- and never finds, reuses or renames a Pro
        install's application or admin group in the same tenant (nor a Pro install the Community one's). SqlAdminGroupName =
        the name the admin group is looked up and created by (setup\Set-SISqlAdminGroup.ps1 -GroupName). Without -New (an
@@ -115,14 +117,15 @@ function Get-SISetupDisplayNames {
         return [ordered]@{
             SpnDisplayName           = 'SecurityInsight Community Engine'
             WebAppDisplayName        = 'SecurityInsight Community'
-            SqlAdminGroupDisplayName = 'SecurityInsight Community SQL admins'
+            # framework 5.5 (Invardia ruling 2026-11-07): the group carries its STANDARD name from the start, no display name of its own
+            SqlAdminGroupDisplayName = 'grp-si-community-sql-admins'
             SqlAdminGroupName        = 'grp-si-community-sql-admins'
         }
     }
     [ordered]@{
         SpnDisplayName           = $(if ($New) { 'SecurityInsight Engine' } else { 'SecurityInsight' })
         WebAppDisplayName        = $(if ($New) { 'SecurityInsight' } else { 'SecurityInsight Management' })
-        SqlAdminGroupDisplayName = $(if ($New) { 'SecurityInsight SQL admins' } else { 'grp-si-sql-admins' })
+        SqlAdminGroupDisplayName = 'grp-si-sql-admins'
         SqlAdminGroupName        = 'grp-si-sql-admins'
     }
 }

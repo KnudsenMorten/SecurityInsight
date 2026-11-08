@@ -197,7 +197,7 @@ Describe 'WIRING -- every host decides once, before any engine runs' {
         $c | Should -Match 'ALTER ROLE db_owner ADD MEMBER' -Because 'with the owner role the setup scripts need'
         $c | Should -Not -Match 'FROM EXTERNAL PROVIDER' -Because 'never FROM EXTERNAL PROVIDER'
         $c | Should -Not -Match 'GRANT VIEW DEFINITION|db_datawriter|db_ddladmin' -Because 'db_owner is the one role'
-        $c | Should -Match '\$should = -not \$Remove' -Because 'the membership is added at both levels and taken away only by -Remove'
+        $c | Should -Match '\$should = \$LegacyStandingAccess -and -not \$Remove' -Because '#1151 SEC-01: the membership is added only with the legacy switch (off) and taken away only by -Remove'
         $c | Should -Match '/owners/`\$ref' ; $c | Should -Match '/members/`\$ref'
         foreach ($w in 'DROP USER', 'Remove-SIRoleAssignment', 'Invoke-Graph Delete') { $c | Should -Match ([regex]::Escape($w)) -Because "-Remove undoes it ($w)" }
         $c | Should -Match 'exit 1' -Because 'anything not done is reported and fails the run'

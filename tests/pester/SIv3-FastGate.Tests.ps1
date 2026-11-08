@@ -750,7 +750,7 @@ Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is e
         $script:ChildPidFile = Join-Path $script:Fake 'child.pid'
         [IO.File]::WriteAllText((Join-Path $script:Fake 'Quick-Fake.Tests.ps1'), "Describe 'quick' { It 'passes' { 1 | Should -Be 1 } }")
         [IO.File]::WriteAllText((Join-Path $script:Fake 'Silent-Fake.Tests.ps1'), ("Describe 'silent' {{ It 'says nothing' {{ `$c = Start-Process -FilePath '{0}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 300' -PassThru -WindowStyle Hidden; [IO.File]::WriteAllText('{1}', [string]`$c.Id); Start-Sleep -Seconds 300 }} }}" -f $script:Pw, $script:ChildPidFile))
-        [IO.File]::WriteAllText((Join-Path $script:Fake 'Talker-Fake.Tests.ps1'), "Describe 'talker' { It 'works long and says so' { foreach (`$i in 1..12) { Write-Host ('tick {0}' -f `$i); Start-Sleep -Seconds 2 }; 1 | Should -Be 1 } }")
+        [IO.File]::WriteAllText((Join-Path $script:Fake 'Talker-Fake.Tests.ps1'), "Describe 'talker' { It 'works long and says so' { foreach (`$i in 1..18) { Write-Host ('tick {0}' -f `$i); Start-Sleep -Seconds 2 }; 1 | Should -Be 1 } }")
         $script:Item = {
             param([string]$Name, [string]$Work)
             $list = Join-Path $Work "$Name.txt"; $res = Join-Path $Work "$Name.json"
@@ -792,10 +792,12 @@ Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is e
     It 'NO CLOCK: a suite that runs LONGER than the hang time but keeps printing is NOT ended; every queued suite starts (no whole-gate limit, no NOT RUN)' {
         $w = Join-Path $TestDrive 'run2'
         $items = @((& $script:Item 'Talker-Fake.Tests.ps1' $w), (& $script:Item 'Quick-Fake.Tests.ps1' $w))
-        # one at a time: the second waits the whole first run -- and still starts
-        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 1 -HangSeconds 8 -ProgressSeconds 5 6>$null)
+        # one at a time: the second waits the whole first run -- and still starts. The hang time leaves room for a fresh
+        # PowerShell + Pester to start on a loaded machine before its first line (the 3.0.63 release gate: 8 s was not enough
+        # under 8 suites at once, and a suite that had not printed yet was ended); the talker still runs well past it
+        $r = @(Invoke-SIQuickGateRun -Items $items -Work $w -Throttle 1 -HangSeconds 20 -ProgressSeconds 5 6>$null)
         $t = @($r | Where-Object Name -eq 'Talker-Fake.Tests.ps1')[0]
-        $t.State | Should -Be 'Done'; $t.Seconds | Should -BeGreaterThan 20
+        $t.State | Should -Be 'Done' -Because $t.Note; $t.Seconds | Should -BeGreaterThan 30 -Because 'it ran longer than the hang time (20 s) and was not ended'
         @($r | Where-Object Name -eq 'Quick-Fake.Tests.ps1')[0].State | Should -Be 'Done'
         $v = Get-SIQuickGateStatus -Outcomes @($r | ForEach-Object { Get-SIQuickGateItemOutcome -Result $_ })
         $v.Status | Should -Be 'PASS'
@@ -835,5 +837,49 @@ Describe 'TEST-FAST: A HANG IS NOT TIME -- only a suite that prints NOTHING is e
         $g | Should -Match 'if \(-not \$NoDotnet -and \$dotnetPlan\.Count -and \(Get-Command dotnet'
         $g | Should -Match '-NoWhole:\(-not \$Precise\) -MaxClasses'
         # (the release and the VM's offline smoke are Pro / vendor files: SIv3-ReleaseSI and SIv3-GateOnTestVm check them)
+    }
+}
+
+Describe 'THE GRANT CHECKS run in every quick gate with a code change (Invardia 2026-11-07)' {
+    It 'the map carries a grant-list suite and the web write-grant class alone; each one exists where its part of the product is' {
+        $g = $script:Map.GrantChecks
+        $g | Should -Not -BeNullOrEmpty
+        @($g.Suites).Count | Should -BeGreaterThan 0
+        foreach ($s in @($g.Suites)) { $p = Join-Path $script:SIRoot ('tests\pester\' + $s); if (Test-Path -LiteralPath (Split-Path -Parent $p)) { Test-Path -LiteralPath $p | Should -BeTrue -Because $s } }
+        $w = @($g.Dotnet)[0]
+        @($w.Classes) | Should -Be @('WebWriteGrantsTests')
+        $nf = @($script:Map.DotnetFilter | Where-Object { $_.Project -eq $w.Project })[0]
+        $nf | Should -Not -BeNullOrEmpty -Because 'the grant class belongs to a known web test project'
+        $tp = Join-Path $script:SIRoot ($nf.Tests -replace '/', '\')
+        if (Test-Path -LiteralPath $tp) { Test-Path -LiteralPath (Join-Path $tp (@($w.Classes)[0] + '.cs')) | Should -BeTrue }
+    }
+    It 'a code change selects them whatever changed; a document or a release bump alone does not' {
+        $code = Get-SIFastGateGrantChecks -Map $script:Map -CodeChange
+        @($code.Suites) | Should -Be @($script:Map.GrantChecks.Suites)
+        @($code.Dotnet[@($script:Map.GrantChecks.Dotnet)[0].Project]) | Should -Be @('WebWriteGrantsTests')
+        $doc = Get-SIFastGateGrantChecks -Map $script:Map
+        @($doc.Suites).Count | Should -Be 0; $doc.Dotnet.Count | Should -Be 0
+        # the quick selection's rule decides "a code change": an engine script yes, a document alone no
+        (Get-SIQuickGateSelection -Changed @('engine/_shared/SI-Thing.ps1') -SuiteText $script:Suites -Map $script:Map -CodeText $script:Code).Core | Should -BeTrue
+        (Get-SIQuickGateSelection -Changed @('docs/DESIGN.md') -SuiteText $script:Suites -Map $script:Map -CodeText $script:Code).Core | Should -BeFalse
+    }
+    It 'the class ALONE when nothing else of the web project runs; added to the covering classes otherwise; a whole run is left whole' {
+        $only = Add-SIFastGateGrantClasses -Plan ([pscustomobject]@{ Whole = $true; Filter = ''; Classes = @(); Notes = @() }) -Classes @('WebWriteGrantsTests') -Only
+        $only.Whole | Should -BeFalse
+        @($only.Classes) | Should -Be @('WebWriteGrantsTests')
+        $only.Filter | Should -Be 'FullyQualifiedName~WebWriteGrantsTests'
+        $more = Add-SIFastGateGrantClasses -Plan ([pscustomobject]@{ Whole = $false; Filter = 'FullyQualifiedName~RoleMatrixTests'; Classes = @('RoleMatrixTests'); Notes = @() }) -Classes @('WebWriteGrantsTests')
+        @($more.Classes) | Should -Be @('RoleMatrixTests', 'WebWriteGrantsTests')
+        $more.Filter | Should -Be 'FullyQualifiedName~RoleMatrixTests|FullyQualifiedName~WebWriteGrantsTests'
+        (Add-SIFastGateGrantClasses -Plan ([pscustomobject]@{ Whole = $true; Filter = ''; Classes = @(); Notes = @() }) -Classes @('WebWriteGrantsTests')).Whole | Should -BeTrue
+    }
+    It 'WIRING: only on a real code change, after the selection and before -NoDotnet, never in a full run; the class alone carried through a handed-in selection' {
+        $g = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\Invoke-FastGate.ps1'))
+        $i = $g.IndexOf('$gcSel = Get-SIFastGateGrantChecks -Map $map -CodeChange:([bool]($changed.Count -and $quickSel -and $quickSel.Core))')
+        $i | Should -BeGreaterThan 0
+        $i | Should -BeLessThan $g.IndexOf('if ($NoDotnet) { $dotnetPick = [ordered]@{} }')
+        $g | Should -Match '(?s)if \(-not \$Full\) \{\s+# a code change'
+        $g | Should -Match ([regex]::Escape('DotnetGrantOnly = @($dotnetPick.Keys | Where-Object { $grantDotnet.ContainsKey("only:$_") })'))
+        $g | Should -Match ([regex]::Escape('elseif ($preGrantOnly -contains $d) { $grantDotnet["only:$d"] = $true }'))
     }
 }

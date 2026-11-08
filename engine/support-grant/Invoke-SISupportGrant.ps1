@@ -4,7 +4,9 @@
     SecurityInsight -- the SUPPORT GRANT JOB (caj-si-support-grant, REQUIREMENTS #1021): the Invardia Support app's database
     access, opened and closed JUST IN TIME on a request the Support session put on the queue si-support-requests.
 .DESCRIPTION
-    Started by the Invardia Support session with a plain start (no override), after it put ONE request on the queue. The job
+    STARTED BY ITS QUEUE (#1154, framework 5.5: an event trigger, the queue read as the engine identity) when the Invardia
+    Support session put ONE request on it -- the Support app holds no right on the job. An empty queue (another execution
+    took the request) ends ok with no SUPPORT-GRANT line. The job
     revokes any expired grant first, reads and deletes the queue, takes the newest request that is not older than 15
     minutes, and opens or closes the grant through the signed procedures of every product database (the Pro database
     first). The request is a REQUEST: the customer's recorded consent decides the level, maxUntil is at most 8 hours.
@@ -78,6 +80,6 @@ try {
 } catch { $report = $null }
 
 $r = Invoke-SISupportGrantJob -Databases $dbs -Receive $receive -Remove $remove -NowUtc $nowUtc -Say $say -Report $report
-# THE line Invardia reads (ARM may not report the exit code)
-Write-Host $r.Line
+# THE line Invardia reads (ARM may not report the exit code) -- none for an empty queue (#1154: no request to answer)
+if ($r.Line) { Write-Host $r.Line }
 exit $r.ExitCode

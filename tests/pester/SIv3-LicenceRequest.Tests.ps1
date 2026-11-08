@@ -200,7 +200,8 @@ Describe 'when to knock: none, 30 days or less, more than 30 days' {
     }
     It 'framework INSTALL-1: the Community updater never knocks (it returns before the licence request)' {
         $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
-        $c = $u.IndexOf('return (Invoke-SIUpdaterFromCommunity'); $k = $u.IndexOf('$lr = Invoke-SIUpdaterLicenceRequest')
+        $c = $u.IndexOf('$rcCommunity = (Invoke-SIUpdaterFromCommunity'); $k = $u.IndexOf('$lr = Invoke-SIUpdaterLicenceRequest')
+        $u.IndexOf('return $rcCommunity') | Should -BeGreaterThan $c
         $c | Should -BeGreaterThan 0; $k | Should -BeGreaterThan $c
     }
     It 'a licence ending in exactly 30 days -> knock' {

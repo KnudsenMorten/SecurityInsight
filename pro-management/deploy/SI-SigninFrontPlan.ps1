@@ -544,10 +544,15 @@ function Get-SISigninFrontWebIdentity {
     <#
         PURE. The web app's user-assigned managed identity -- the front's client assertion -- from the app as read
         (identity.userAssignedIdentities): the one the web container already names as its sign-in credential
-        (AzureAd__ClientCredentials__0__ManagedIdentityClientId), else the one named in -Names, else the only one.
-        Returns @{ ClientId; PrincipalId; Name }, or $null when it cannot be told.
+        (AzureAd__ClientCredentials__0__ManagedIdentityClientId), else the one the front container names as its client
+        assertion (SIGNIN_FIC_MI_CLIENT_ID, any container), else the one named in -Names (the standard name first), else
+        the only one. Returns @{ ClientId; PrincipalId; Name }, or $null when it cannot be told.
+        #1145: during an identity move BOTH identities are attached; the switch re-points the containers' settings, so the
+        settings decide. (Before: a web container without the credential setting fell back to the OLD name first, and every
+        update wrote the old client id back into the front's SIGNIN_STATE_MI_CLIENT_ID after the switch -- live at internal
+        2026-11-07, the clean-up stopped on it.)
     #>
-    param([AllowNull()]$App, [string[]]$Names = @('uami-si-management', 'id-si-web'))
+    param([AllowNull()]$App, [string[]]$Names = @('id-si-web', 'uami-si-management'))
     $ua = Get-SISigninFrontProp $App @('identity', 'userAssignedIdentities')
     if ($null -eq $ua) { return $null }
     $list = New-Object System.Collections.Generic.List[object]
@@ -559,8 +564,13 @@ function Get-SISigninFrontWebIdentity {
         $list.Add([pscustomobject]@{ ClientId = $cid.ToLowerInvariant(); PrincipalId = $prin.ToLowerInvariant(); Name = ([string]$k -split '/')[-1] })
     }
     if (-not $list.Count) { return $null }
-    $named = (Get-SISigninFrontWebSetting -App $App -Name 'AzureAd__ClientCredentials__0__ManagedIdentityClientId').Trim().ToLowerInvariant()
-    if ($named) { $m = @($list | Where-Object { $_.ClientId -eq $named }); if ($m.Count) { return $m[0] } }
+    $named = @((Get-SISigninFrontWebSetting -App $App -Name 'AzureAd__ClientCredentials__0__ManagedIdentityClientId').Trim().ToLowerInvariant())
+    foreach ($c in @(@(Get-SISigninFrontProp $App @('properties', 'template', 'containers')) | Where-Object { $_ })) {
+        foreach ($e in @(@(Get-SISigninFrontProp $c @('env')) | Where-Object { $_ })) {
+            if ([string](Get-SISigninFrontProp $e @('name')) -eq 'SIGNIN_FIC_MI_CLIENT_ID') { $named += ([string](Get-SISigninFrontProp $e @('value'))).Trim().ToLowerInvariant() }
+        }
+    }
+    foreach ($n in @($named | Where-Object { $_ })) { $m = @($list | Where-Object { $_.ClientId -eq $n }); if ($m.Count) { return $m[0] } }
     foreach ($n in $Names) { $m = @($list | Where-Object { $_.Name -ieq $n }); if ($m.Count) { return $m[0] } }
     if ($list.Count -eq 1) { return $list[0] }
     $null

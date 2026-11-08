@@ -13,6 +13,142 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.72 — A report the hunting service keeps timing out on is completed in smaller parts
+
+### Fixes
+
+- A part of a Risk Analysis report that the hunting service timed out on at every attempt used to be asked again at the
+  same size, so the same report could stay incomplete run after run. Such a part is now asked again in smaller parts in
+  the same run, nothing it held is lost, and the next run starts with smaller parts. A time-out that clears on a retry is
+  handled as before.
+- A report that has not been complete on several runs in a row is now said as such, with the date it started.
+
+## v3.0.71 — Key Vault purge protection everywhere, and faster urgent updates
+
+### Security
+
+- Every installation's Key Vault now has purge protection turned on through the regular update, as new installations
+  already had: a deleted secret or key can always be recovered during its retention period. Once on, it cannot be turned
+  off again; the update says so when it turns it on.
+- The security pack lists every right the updater holds for group memberships, and the right it never holds.
+
+### Updates
+
+- When a fix must reach your installation quickly, it is now installed within minutes of being marked urgent instead of
+  at the next daily update. A release that is not urgent still waits for your installation's own update time.
+- The installation keeps the name it has on the vendor portal, and a failed read never clears it.
+
+## v3.0.70 — Support asks through a queue only, and a private install checks its network first
+
+### Security
+
+- The vendor's support app can no longer start any SecurityInsight job. A support request is now a message on the
+  install's own support queue, and the queue starts the support job. Existing installations move on their next update:
+  the job is switched to its queue first, and only after that reads back is the support app's job right removed. Where
+  the update may not remove a right, it says who can.
+
+### Updates
+
+- A private-network install now checks everything it needs before it creates anything: the private DNS zones, the
+  subnets and their size, your rights on the network and the outbound path. Everything missing is listed at once with
+  what to create, and nothing is created until it is there. A check that cannot be read is said and does not stop the
+  install.
+
+## v3.0.69 — Vendor support gets database rights only while a support case is open
+
+### Security
+
+- The vendor's support app no longer keeps standing owner rights on your SecurityInsight databases. Day to day it holds
+  only a read-only role that sees structure and health, never your data. Wider rights are granted only for an open
+  support case, at the level you consented to, and are removed again when it closes or expires.
+- Existing installations move to this on their next update: owner rights come off a database only after the read-only
+  role and the just-in-time grant are read back there, so support is never left without a way in.
+
+## v3.0.68 — No false 'ran outside the pipeline' warning
+
+### Fixes
+
+- The daily check that every job ran as part of the pipeline no longer warns about the pipeline's own runs. It read
+  the wrong part of the database answer, so every run's jobs were reported as having run outside the pipeline. A real
+  job started outside the pipeline is still reported.
+
+## v3.0.67 — One sign-in when the web app moves, and the identity move finishes
+
+### Updates
+
+- When the web app moves to its standard name, the old address now sends every page to the new one before anyone
+  signs in, so a person signs in once, on the new address. Bookmarks keep working.
+- The identity move now finishes: every container of the web app, including its sign-in front, uses the new identity
+  after the switch and keeps using it on every later update, and the old identity is really detached from an app
+  before it is deleted.
+
+## v3.0.66 — The update's owner check waits for Microsoft Entra
+
+### Updates
+
+- Before the update removes the Invardia Support app as an owner of the web app's sign-in registration, it proves it
+  can change the registration itself. That check read the change back at once, and Microsoft Entra can still answer
+  the old value right after a write, so the check failed although the change had been made. It now reads back a few
+  times over about half a minute.
+
+## v3.0.65 — Every SecurityInsight identity gets its standard name
+
+### Updates
+
+- Every update now reports, per role, whether the identity SecurityInsight runs as carries its standard name
+  (`id-si-<role>`), and whether an older identity still holds rights.
+- Installations created before the standard names move to them, one role at a time: a new identity is made, given
+  every right the old one holds, read back, put in use and proven; only then the old identity's rights are removed and
+  it is deleted. The database access of the old identity is removed only after the new one holds all of it. The move
+  is switched on per installation; until then the update only plans it.
+- The SQL administrators group is renamed in place to its standard name (`grp-si-sql-admins`), with the same members;
+  new installations create it under that name.
+
+## v3.0.64 — Updates, support setup and runs no longer get in each other's way
+
+### Updates and support
+
+- A support setup step no longer starts the database setup job while an update is running; it says to start it
+  after. Each update now reads only its own run of that job, so a parallel run can never hold an update. A database
+  answer that picks the job as a deadlock victim is retried.
+- Stopping a run and updating now checks again, right before the update starts, whether a run has started in the
+  meantime, and warns when the next scheduled run is only minutes away. An update started by hand waits for a run that
+  has just started instead of cutting it short.
+
+### Pipeline
+
+- When a run starts, a short network error while reading the settings is retried a few times before the run stops.
+
+### Data
+
+- `Reset-SIData.ps1` retries a temporary refusal (including a busy audit log) instead of stopping, and empties the
+  tables in a few batches instead of one statement per table.
+
+## v3.0.63 — The web app moves to its standard name, and the update owns its sign-in app
+
+### Updates
+
+- The update now makes its own identity an owner of the web app's sign-in registration, proves it can change it, and
+  only then removes the Invardia Support app as an owner. A registration is never left without an owner; where the
+  update may not do this itself, it says which support step is needed.
+- Installations whose web app still carries the older name move to the standard name `ca-si-web`. The update creates
+  the new app beside the old one, adds its sign-in address, and checks that it answers. Then the old app sends every
+  page to the new address, so bookmarks keep working. The old app is removed only after the first person has signed in
+  on the new one. An installation with a custom domain or a custom public address stops before that step and says so.
+- The database setup job now records which Invardia Support app the installation trusts.
+
+### Release checks
+
+- The checks that every table the web app writes has its database right now run in every release.
+
+## v3.0.62 — The update gives the web app's rights to the identity it really signs in with
+
+### Updates
+
+- When the web app or the MCP server carries more than one managed identity (for example during a change of identity),
+  the update gave the database rights to the first one listed. It now gives them to the identity the app signs in to
+  the database with. An app with one identity is not affected.
+
 ## v3.0.61 — Merge and split decisions on correlation suspects are saved again
 
 ### Web app

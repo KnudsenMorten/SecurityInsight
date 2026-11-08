@@ -1,10 +1,11 @@
 #Requires -Version 5.1
 <#
     SECURITYINSIGHT PRO -- THE SUPPORT GRANT JOB caj-si-support-grant (#1021; framework DOCS/REQUIREMENTS.md SECAUDIT-1a, 4a,
-    4b). The Invardia Support session starts the job with a PLAIN start (body {}) after it put ONE message on the queue
-    si-support-requests of the install's own storage account. The Support app holds only Storage Queue Data Message Sender
-    on that queue and Container Apps Jobs Operator on this one job -- never jobs/write, so it can never change what runs as
-    the engine identity.
+    4b). The Invardia Support session puts ONE message on the queue si-support-requests of the install's own storage account,
+    and THE QUEUE STARTS THE JOB (#1154, framework 5.5: an event trigger, the azure-queue scaler signed in as the engine
+    identity). The Support app holds ONLY Storage Queue Data Message Sender on that queue and NO right on any job: a start
+    right alone (Microsoft.App/jobs/start/action) accepts a container override, so it could have run a command of its own as
+    the engine identity. Nothing below depends on how the job was started: it reads the queue either way.
 
     THE MESSAGE IS A REQUEST, NEVER AN INSTRUCTION (agreed with Invardia and PIM, SEC-92). Raw JSON, only these keys:
         SI_SUPPORT_ACTION    open | close                                         required
@@ -27,8 +28,9 @@
       4. THE READ-BACK each procedure returns (from the catalog, not from the request) decides the result;
       5. ONE log line Invardia reads -- exactly
             SUPPORT-GRANT action=<open|close|none> level=<granted level|none> until=<ISO UTC|none> result=<ok|reason>
-         and the exit code: 0 ok, 2 could not (not prepared, a database failed), 3 no consent, 4 bad request (no message,
-         a stale one, an unknown key, a bad value).
+         and the exit code: 0 ok, 2 could not (not prepared, a database failed), 3 no consent, 4 bad request (only stale
+         messages, an unknown key, a bad value). An EMPTY queue (#1154: another execution the scaler started took the
+         request) is no request: exit 0 and no SUPPORT-GRANT line.
     The uplink events support.granted / support.revoked / support.grant-failed go out only where SI_Uplink_SendSupportGrant
     says so -- OFF until Invardia has agreed the wire (owner rule: an unknown key drops the section).
 
@@ -296,6 +298,14 @@ function Invoke-SISupportGrantJob {
         # 2. every message is read and deleted; the newest fresh one is the request
         $msgs = @()
         try { $msgs = @(& $Receive) } catch { & $Say 'WARN' ('the support request queue could not be read ({0})' -f $_.Exception.Message); return (& $finish 'no-request') }
+        # #1154: the QUEUE starts this job, so an empty queue is no request at all -- the execution that started for the same
+        # message took it first (the scaler may start one more while the first reads). Nothing was asked of this execution:
+        # it ends ok and writes NO SUPPORT-GRANT line (the line answers a request; this one has none to answer).
+        if (-not $msgs.Count) {
+            & $Say 'INFO' 'no support request on the queue -- another execution has answered it; nothing to do'
+            $res.Result = 'empty'; $res.ExitCode = 0; $res.Line = ''
+            return [pscustomobject]$res
+        }
         foreach ($m in $msgs) { if ($Remove) { try { & $Remove $m } catch { & $Say 'WARN' ('a support request could not be deleted from the queue ({0}) -- it is ignored after {1} minutes' -f $_.Exception.Message, $script:SISupportGrantJob.StaleMinutes) } } }
         $pick = Select-SISupportGrantMessage -Messages $msgs -NowUtc $NowUtc
         foreach ($d in $pick.Dropped) { & $Say 'INFO' ('a support request was not used: {0}' -f $d.Why) }

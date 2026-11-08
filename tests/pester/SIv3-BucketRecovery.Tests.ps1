@@ -315,7 +315,8 @@ Describe '#882 THE LATE RETRY GOES ON WHILE THE RUN MAKES PROGRESS -- no clock, 
         $script:CodeNC | Should -Match 'foreach \(\$db in @\(\$__lp\.Current\)\) \{'
         $script:CodeNC | Should -Match 'Set-RALatePassResult -State \$__lp -Index \(\[int\]\$db\) -Result \$dbResult'
         $script:CodeNC | Should -Match "(?s)\} elseif \(\`$dbAction -eq 'Retry'\) \{.{0,700}?\`$dbResult = 'retry'"
-        $script:CodeNC | Should -Match '(?s)foreach \(\$db in @\(\$__lp\.Left\)\) \{.{0,700}?Add-RABucketLoss'
+        # #1155: a slice the gateway timed out on every time is split before this loss line (Get-RALateLeftAction), so the window is wider
+        $script:CodeNC | Should -Match '(?s)foreach \(\$db in @\(\$__lp\.Left\)\) \{.{0,1800}?Add-RABucketLoss'
         # a recovered slice is progress only when its rows were kept
         $script:CodeNC | Should -Match "\} else \{ \`$dbResult = 'ok' \}"
         $script:CodeNC | Should -Match "else \{ \`$ResultAll = @\(\`$ResultAll\) \+ @\(\`$conv\.Rows\); \`$dbResult = 'ok' \}"

@@ -1460,7 +1460,19 @@ function Invoke-SIUpdatePrivateRegistry {
     # the endpoints subnet: the one the registry's endpoint -- else the vault's, the storage's -- sits in (the install made them)
     $peSubnet = ''
     foreach ($k in 'registry', 'vault', 'blob', 'sql') { $p = $(if ($k -eq 'registry') { $regPe } else { & $peOf $k }); $s = [string](Get-SIPnProp $p @('properties', 'subnet', 'id')); if ($s) { $peSubnet = $s; break } }
+    # INS-06 (framework installer rule 8) for the UPDATE: the update adds a private resource here (the registry's private
+    # endpoint + its privatelink zone), so the zone's prerequisites are READ before its first change (the Premium SKU): a
+    # real missing item holds the whole change (nothing is changed; the next update checks again); a read that fails is
+    # "not checked" and holds nothing.
+    $pre = $null
+    if ($peSubnet -and -not ((Test-SIPnSucceeded $regPe) -and (Get-SIPrivateEndpointState $regPe) -eq 'Approved')) {
+        $preTarget = Get-SIInstallPrivateNetworkTarget -Values ([ordered]@{ vnetId = ($peSubnet -replace '(?i)/subnets/[^/]+$', ''); endpointsSubnetName = (($peSubnet -split '/')[-1]) }) -ResourceGroupId $rgId
+        try { $pre = Get-SIPrivateNetworkPreflight -Arm $Arm -Target $preTarget -Sql $false -Vault $false -Storage $false -Registry $true -ZonesOnly } catch { $pre = $null }
+    }
+    $preHeld = [bool]($pre -and -not $pre.Ok)
+    $preLine = if ($preHeld) { 'container registry {0}: NOT made private -- the update holds before its first change, a prerequisite is missing: {1} (the next update checks again)' -f $name, ((@(Format-SIPrivateNetworkPreflightMissing -Missing @($pre.Missing))) -join ' ') } else { '' }
     if ($WhatIf) {
+        if ($preHeld) { return @{ Private = $true; Ok = $true; Lines = @($preLine); Closed = $false; Changed = @() } }
         $plan = @()
         if ($gap -contains 'sku') { $plan += 'Premium' }
         if ($gap -contains 'admin') { $plan += $(if ($users.Count) { 'admin user stays on ({0} pull with its password)' -f ($users -join ', ') } else { 'admin user off' }) }
@@ -1470,6 +1482,7 @@ function Invoke-SIUpdatePrivateRegistry {
         if ($gap -contains 'public' -or $gap -contains 'bypass') { $plan += 'public access closed once its names resolve to private addresses inside' }
         return @{ Private = $true; Ok = $true; Lines = @(('container registry {0} would be made private: {1}' -f $name, ($plan -join '; '))); Closed = $false; Changed = @() }
     }
+    if ($preHeld) { return @{ Private = $true; Ok = $false; Lines = @($preLine); Closed = $false; Changed = @() } }
     $ok = $true
     try {
         if ($gap -contains 'sku') { $x = Set-SIRegistrySku -Arm $Arm -RegistryId $RegistryId -Sku 'Premium' -Sleep $Sleep; $lines.Add($x.Line); if ($x.Ok) { $changed.Add('Premium') } else { $ok = $false } }
@@ -2521,6 +2534,243 @@ function Write-SINetworkHandOffFiles {
         if ($Script -and $Script.Ok) { $out.ScriptPath = [IO.Path]::Combine($Directory, $Script.FileName); [IO.File]::WriteAllText($out.ScriptPath, [string]$Script.Text, (New-Object Text.UTF8Encoding $false)) }
     } catch { }
     $out
+}
+
+# ============================================================================================================== THE NETWORK PREFLIGHT (INS-06 / INS-08)
+# Framework installer rule 8 (Invardia, after a customer's private install 2026-11-03: two privatelink zones were missing in
+# the customer's central DNS resource group, found only AFTER the workspace, the data collection endpoint and the storage
+# account were made): EVERY prerequisite of a private install is checked BEFORE the first resource -- the private DNS zones
+# the install's private endpoints need, the subnets (delegation, size, overlap), the rights on the customer's network and
+# zones, the outbound path of the build subnet, the hub (peering) and the DNS path -- with READS only, as the installing
+# identity. EVERYTHING missing is listed at once, with what to create, and the install stops before anything is made.
+# A read that fails (403, a throttled call, a network error) is NOT a missing item: it is said as "not checked" and never
+# blocks (owner rule: warn on suspicion, hold only on a real failure). What only warns in the install itself (the hub
+# peering, the zones' hub link, a DNS path that will pause at the DNS check) is a note here too, never a stop.
+
+function Get-SIPrivateNetworkZoneNames {
+    <# PURE. The private DNS zones the install's private endpoints need -- derived from the SAME list the endpoints are
+       made from (Get-SIPrivateEndpointTargets over $script:SIPnKinds), so a new endpoint kind is in the preflight at once.
+       -Sql: the database server (every install with the database); -Registry: the container registry (every private
+       install, framework rule 11b). The Container Apps environment's own zone is not here: it is always made in
+       SecurityInsight's own resource group (never the customer's), so it is never a prerequisite. #>
+    param([bool]$Sql = $true, [bool]$Vault = $true, [bool]$Storage = $true, [bool]$Registry = $true)
+    $p = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers'
+    $t = @(Get-SIPrivateEndpointTargets -SqlServerId $(if ($Sql) { "$p/Microsoft.Sql/servers/x" } else { '' }) -KeyVaultId $(if ($Vault) { "$p/Microsoft.KeyVault/vaults/x" } else { '' }) `
+             -StorageAccountId $(if ($Storage) { "$p/Microsoft.Storage/storageAccounts/x" } else { '' }) -RegistryId $(if ($Registry) { "$p/Microsoft.ContainerRegistry/registries/x" } else { '' }))
+    @($t | ForEach-Object { [string]$_.Zone } | Select-Object -Unique)
+}
+
+function Get-SIPnRightsGap {
+    <# READ ONLY. Which of -Actions the signed-in identity may NOT do on -Scope (ARM's own permissions answer for that scope).
+       @{ Read; Missing; Error } -- Read = $false: the answer could not be read (a "not checked", never a missing right). #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$Scope, [Parameter(Mandatory)][string[]]$Actions)
+    $perm = $null
+    try { $perm = & $Arm 'GET' ('{0}/providers/Microsoft.Authorization/permissions?api-version={1}' -f $Scope.TrimEnd('/'), $script:SIPnAuthApi) $null }
+    catch { return @{ Read = $false; Missing = @(); Error = [string]$_.Exception.Message } }
+    if ($null -eq $perm -or $null -eq (Get-SIPnProp $perm @('value'))) { return @{ Read = $false; Missing = @(); Error = 'Azure gave no permissions answer' } }
+    $list = @(Get-SIPnProp $perm @('value') | Where-Object { $_ })
+    @{ Read = $true; Missing = @($Actions | Where-Object { -not (Test-SIActionAllowed -Permissions $list -Action $_) }); Error = '' }
+}
+
+function Get-SIPrivateNetworkPreflight {
+    <#
+        READ ONLY (INS-06 / INS-08, framework installer rule 8). Every prerequisite of a private install for -Target
+        (Get-SIInstallPrivateNetworkTarget), checked with the installing identity's own ARM reads before anything is made.
+        Nothing is written: every call through -Arm is a GET (an Azure Resource Graph query, a read, at most).
+          -Sql / -Vault / -Storage / -Registry   which private endpoints the install makes (the zones follow from them)
+          -ZonesOnly   only the zones (the updater adding ONE private resource to an install whose network is in place)
+        Returns @{ Ok; Items; Missing; NotChecked; Notes; Lines } -- Items: @{ State = ok | missing | notchecked | note;
+        Area; Line; Create }. Ok = no item is 'missing' (a 'notchecked' or a 'note' never makes it false).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][System.Collections.IDictionary]$Target,
+          [bool]$Sql = $true, [bool]$Vault = $true, [bool]$Storage = $true, [bool]$Registry = $true, [switch]$ZonesOnly)
+    $items = New-Object System.Collections.Generic.List[object]
+    $add = { param([string]$State, [string]$Area, [string]$Line, [string]$Create = '') $items.Add([pscustomobject]@{ State = $State; Area = $Area; Line = $Line; Create = $Create }) }
+    $short = { param([string]$Id) if ($Id) { ($Id.TrimEnd('/') -split '/')[-1] } else { '' } }
+    $rgId = ([string]$Target['ResourceGroupId']).TrimEnd('/')
+    $vnetId = ([string]$Target['VnetId']).TrimEnd('/')
+    $create = [bool]$Target['CreateVnet']
+    $vnet = $null; $vnetRead = $false; $vnetReal = $false
+
+    # ---- the virtual network (-ZonesOnly: the network is in place -- the install's endpoints already sit in it)
+    if ($ZonesOnly) { $vnetReal = [bool]$vnetId }
+    elseif (-not $vnetId) {
+        & $add 'missing' 'network' 'no virtual network was given (vnetId), nor an address range for SecurityInsight''s own network (vnetAddressPrefix)' 'give vnetId (your network), or vnetAddressPrefix (at least a /25: SecurityInsight makes its own network in its resource group)'
+    } else {
+        try { $vnet = & $Arm 'GET' ('{0}?api-version={1}' -f $vnetId, $script:SIPnNetApi) $null; $vnetRead = $true }
+        catch { & $add 'notchecked' 'network' ('the virtual network {0} could not be read ({1}) -- not checked; the install checks it again when it prepares the subnets' -f (& $short $vnetId), $_.Exception.Message) }
+        if ($vnet) { $vnetReal = $true; & $add 'ok' 'network' ('the virtual network {0} ({1}) is there' -f (& $short $vnetId), ((@(Get-SIVnetPrefixes $vnet)) -join ', ')) }
+        elseif ($vnetRead -and $create) {
+            $sd = Get-SISpokeSubnetDefaults -AddressPrefix ([string]$Target['VnetAddressPrefix'])
+            if ($sd.Ok) { & $add 'ok' 'network' ('the virtual network {0} ({1}) is made by the install in its resource group' -f (& $short $vnetId), $Target['VnetAddressPrefix']) }
+            else { & $add 'missing' 'network' $sd.Reason 'give vnetAddressPrefix as a range of at least a /25 (two /26 subnets)' }
+            # the subnets are decided against the network the install will make
+            $vnet = [pscustomobject]@{ properties = [pscustomobject]@{ addressSpace = [pscustomobject]@{ addressPrefixes = @([string]$Target['VnetAddressPrefix']) }; subnets = @() } }
+        } elseif ($vnetRead) {
+            & $add 'missing' 'network' ('the virtual network {0} was not found, or the installing account cannot read it' -f $vnetId) 'give the id of an existing virtual network the installing account can read (Reader on it at least), or vnetAddressPrefix for SecurityInsight''s own network'
+        }
+    }
+    $own = $create -or ($vnetReal -and (Test-SIOwnSpokeVnet -Vnet $vnet -ResourceGroupId $rgId))
+
+    # ---- the subnets: size, delegation, inside the address space, no overlap
+    $snE = $null; $decE = $null; $decA = $null; $subnetActions = @()
+    if (-not $ZonesOnly -and $vnet) {
+        $subs = @(@{ Name = [string]$Target['AppsSubnetName']; Prefix = [string]$Target['AppsSubnetPrefix']; Delegate = $true }, @{ Name = [string]$Target['EndpointsSubnetName']; Prefix = [string]$Target['EndpointsSubnetPrefix']; Delegate = $false })
+        foreach ($s in $subs) {
+            $sn = $null
+            if ($vnetReal) {
+                try { $sn = & $Arm 'GET' ('{0}/subnets/{1}?api-version={2}' -f $vnetId, $s.Name, $script:SIPnNetApi) $null }
+                catch { & $add 'notchecked' 'subnet' ('the subnet {0} could not be read ({1}) -- not checked' -f $s.Name, $_.Exception.Message); continue }
+            }
+            $d = Get-SISubnetDecision -Subnet $sn -Prefix $s.Prefix -Name $s.Name -Delegate:([bool]$s.Delegate) -Vnet $vnet
+            if ($s.Delegate) { $decA = $d } else { $decE = $d; $snE = $sn }
+            if ($d.Action -eq 'fail') {
+                $fix = if ($s.Delegate) { 'give appsSubnetName / appsSubnetPrefix for an empty subnet of at least a /27 that is free for the Container Apps delegation (or let your network team create it, delegated to Microsoft.App/environments)' }
+                       else { 'give endpointsSubnetName / endpointsSubnetPrefix for a subnet of the private endpoints (or let your network team create it)' }
+                & $add 'missing' 'subnet' $d.Reason $fix
+            } else {
+                & $add 'ok' 'subnet' $(if ($d.Action -eq 'none') { $d.Reason } else { $d.Reason -replace ' is (created|delegated)', ' is $1 by the install' })
+                if ($d.Action -in 'create', 'delegate') { $subnetActions += 'Microsoft.Network/virtualNetworks/subnets/write' }
+            }
+        }
+        if ($decA -and $decE -and $decA.Action -eq 'create' -and $decE.Action -eq 'create' -and (Test-SICidrOverlap ([string]$Target['AppsSubnetPrefix']) ([string]$Target['EndpointsSubnetPrefix']))) {
+            & $add 'missing' 'subnet' ('the two new subnets overlap ({0} and {1})' -f $Target['AppsSubnetPrefix'], $Target['EndpointsSubnetPrefix']) 'give two address ranges that do not overlap (appsSubnetPrefix, endpointsSubnetPrefix)'
+        }
+    }
+
+    # ---- the outbound path of the build subnet (rule 11b: the registry's agent pool runs in the endpoints subnet)
+    if (-not $ZonesOnly -and $Registry -and $decE -and $decE.Action -ne 'fail') {
+        if ($decE.Action -eq 'create') { & $add 'ok' 'outbound' ('the build subnet {0} is created with default outbound access (outbound only)' -f $Target['EndpointsSubnetName']) }
+        elseif ($snE) {
+            $rt = $null; $rtOk = $true
+            $rtId = [string](Get-SIPnProp $snE @('properties', 'routeTable', 'id'))
+            if ($rtId) { try { $rt = & $Arm 'GET' ('{0}?api-version={1}' -f $rtId.TrimEnd('/'), $script:SIPnNetApi) $null } catch { $rtOk = $false } }
+            $via = Get-SISubnetOutboundPath -Subnet $snE -RouteTable $rt
+            $what = @{ default = 'default outbound access'; nat = 'a NAT gateway'; route = 'a route table with a 0.0.0.0/0 route (your firewall)' }
+            if ($via) { & $add 'ok' 'outbound' ('the build subnet {0} has an outbound path ({1})' -f $Target['EndpointsSubnetName'], $what[$via]) }
+            elseif (-not $rtOk) { & $add 'notchecked' 'outbound' ('the route table {0} of the build subnet {1} could not be read -- its outbound path is not checked' -f (& $short $rtId), $Target['EndpointsSubnetName']) }
+            elseif ($own) { & $add 'ok' 'outbound' ('the build subnet {0} (SecurityInsight''s own network) gets default outbound access from the install (outbound only)' -f $Target['EndpointsSubnetName']) }
+            else { & $add 'missing' 'outbound' ('the build subnet {0} has no outbound path (no default outbound access, no NAT gateway, no 0.0.0.0/0 route): the registry''s build agent pool cannot run there' -f $Target['EndpointsSubnetName']) (Get-SIBuildSubnetOutboundStep -SubnetName ([string]$Target['EndpointsSubnetName'])) }
+        }
+    }
+
+    # ---- the private DNS zones
+    $zones = @(Get-SIPrivateNetworkZoneNames -Sql $Sql -Vault $Vault -Storage $Storage -Registry $Registry)
+    $central = ([string]$Target['DnsResourceGroupId']).TrimEnd('/')
+    if (Test-SIPnSameId $central $rgId) { $central = '' }
+    $zSubs = Get-SIZoneSearchSubscriptions @($rgId, $vnetId, $central)
+    $hub = ([string]$Target['HubVnetId']).TrimEnd('/')
+    $needVnetJoin = $false
+    foreach ($z in $zones) {
+        $zoneId = ''; $where = ''
+        if ($central) {
+            $cid = '{0}/providers/Microsoft.Network/privateDnsZones/{1}' -f $central, $z
+            $zo = $null
+            try { $zo = & $Arm 'GET' ('{0}?api-version={1}' -f $cid, $script:SIPnDnsApi) $null }
+            catch { & $add 'notchecked' 'dns' ('the private DNS zone {0} in your central resource group {1} could not be read ({2}) -- not checked' -f $z, (& $short $central), $_.Exception.Message); continue }
+            if (-not $zo) {
+                & $add 'missing' 'dns' ('the private DNS zone {0} is not in your central resource group {1} (SecurityInsight never makes a zone there)' -f $z, (& $short $central)) ('your network team creates the private DNS zone {0} in {1} -- or leave the central resource group empty (privateDnsZonesResourceGroupId) and the install uses its own zones' -f $z, (& $short $central))
+                continue
+            }
+            $zoneId = $cid; $where = ('your central resource group {0}' -f (& $short $central))
+        } else {
+            $ownZ = '{0}/providers/Microsoft.Network/privateDnsZones/{1}' -f $rgId, $z
+            $have = $null
+            try { $have = & $Arm 'GET' ('{0}?api-version={1}' -f $ownZ, $script:SIPnDnsApi) $null } catch { $have = $null }
+            if ($have) { & $add 'ok' 'dns' ('the private DNS zone {0} is there (SecurityInsight''s own)' -f $z); continue }
+            if ($vnetReal) {
+                $found = ''
+                try { $found = Find-SIVnetLinkedZone -Arm $Arm -VnetId $vnetId -Zone $z -SubscriptionIds $zSubs }
+                catch { & $add 'notchecked' 'dns' ('whether the network is already linked to another zone {0} could not be read ({1}) -- not checked; the install makes its own zone or uses that one' -f $z, $_.Exception.Message); continue }
+                if ($found -and -not (Test-SIPnSameId $found $ownZ)) { $zoneId = $found; $where = ('resource group {0} (the network is already linked to it, so it is used: Azure refuses a second zone of that name on one network)' -f (ConvertFrom-SIPnResourceId $found).ResourceGroup) }
+            }
+            if (-not $zoneId) { & $add 'ok' 'dns' ('the private DNS zone {0} is made by the install in its resource group, linked to the network' -f $z); continue }
+        }
+        # a zone that is NOT SecurityInsight's own: the install writes each endpoint's record into it (its zone group:
+        # privateDnsZones/join/action) and links it to the network when it is not linked yet (virtualNetworkLinks/write)
+        $links = $null
+        try { $links = @(Get-SIPnArmList -Arm $Arm -Path ('{0}/virtualNetworkLinks?api-version={1}' -f $zoneId, $script:SIPnDnsApi)) } catch { $links = $null }
+        $linked = $false
+        if ($null -ne $links -and $vnetId) { $linked = [bool]@($links | Where-Object { Test-SIPnSameId ([string](Get-SIPnProp $_ @('properties', 'virtualNetwork', 'id'))) $vnetId }).Count }
+        $acts = @('Microsoft.Network/privateDnsZones/join/action')
+        if (-not $linked) { $acts += 'Microsoft.Network/privateDnsZones/virtualNetworkLinks/write'; $needVnetJoin = $true }
+        $g = Get-SIPnRightsGap -Arm $Arm -Scope $zoneId -Actions $acts
+        $linkWord = if ($linked) { ('linked to {0}' -f (& $short $vnetId)) } elseif ($null -eq $links) { 'its links could not be read' } else { ('not linked to {0} yet: the install links it' -f (& $short $vnetId)) }
+        if (-not $g.Read) {
+            & $add 'ok' 'dns' ('the private DNS zone {0} is in {1}, {2}' -f $z, $where, $linkWord)
+            & $add 'notchecked' 'rights' ('the installing account''s rights on the zone {0} could not be read ({1}) -- not checked (the install writes the endpoints'' records into it{2})' -f $z, $g.Error, $(if ($linked) { '' } else { ' and links it to the network' }))
+        } elseif (@($g.Missing).Count) {
+            & $add 'missing' 'rights' ('the private DNS zone {0} is in {1}, {2} -- but the installing account may not {3} on it' -f $z, $where, $linkWord, (@($g.Missing) -join ', ')) ('grant the installing account Private DNS Zone Contributor on the zone {0} (or your network team links it to {1} and grants the record write)' -f $z, (& $short $vnetId))
+        } else { & $add 'ok' 'dns' ('the private DNS zone {0} is in {1}, {2}; the installing account may write its records' -f $z, $where, $linkWord) }
+        # warn only: a central zone the hub is not linked to (clients resolving through the hub may not find the names)
+        if (-not $ZonesOnly -and $hub -and $null -ne $links -and -not @($links | Where-Object { Test-SIPnSameId ([string](Get-SIPnProp $_ @('properties', 'virtualNetwork', 'id'))) $hub }).Count) {
+            & $add 'note' 'dns' ('the private DNS zone {0} is not linked to the hub network {1}: clients that resolve through the hub may not find SecurityInsight''s names until your network team links it' -f $z, (& $short $hub))
+        }
+    }
+
+    # ---- the rights on the customer's network (SecurityInsight's own spoke: the resource group rights the preflight checks)
+    if (-not $ZonesOnly -and $vnetReal -and -not $own) {
+        $acts = @('Microsoft.Network/virtualNetworks/subnets/join/action') + @($subnetActions | Select-Object -Unique)
+        if ($needVnetJoin) { $acts += 'Microsoft.Network/virtualNetworks/join/action' }
+        $g = Get-SIPnRightsGap -Arm $Arm -Scope $vnetId -Actions $acts
+        if (-not $g.Read) { & $add 'notchecked' 'rights' ('the installing account''s rights on the virtual network {0} could not be read ({1}) -- not checked' -f (& $short $vnetId), $g.Error) }
+        elseif (@($g.Missing).Count) { & $add 'missing' 'rights' ('the installing account may not {0} on the virtual network {1}' -f (@($g.Missing) -join ', '), (& $short $vnetId)) ('grant the installing account Network Contributor on the virtual network {0} (or your network team prepares the subnets and the links)' -f (& $short $vnetId)) }
+        else { & $add 'ok' 'rights' ('the installing account may use the virtual network {0}' -f (& $short $vnetId)) }
+    }
+
+    if (-not $ZonesOnly) {
+        # ---- the hub: the peering and the zones' hub link warn in the install (hand-off list), so they warn here too
+        if ($hub) {
+            $hubObj = $null; $hubRead = $true
+            try { $hubObj = & $Arm 'GET' ('{0}?api-version={1}' -f $hub, $script:SIPnNetApi) $null } catch { $hubRead = $false }
+            if (-not $hubRead -or -not $hubObj) {
+                & $add 'note' 'hub' ('the hub network {0} could not be read by the installing account -- the peering and the hub''s DNS are on the network hand-off list for your network team' -f (& $short $hub))
+            } else {
+                $pst = if ($vnetReal) { Get-SIPeeringState -Arm $Arm -VnetId $vnetId -RemoteVnetId $hub } else { '' }
+                if ($pst -eq 'Connected') { & $add 'ok' 'hub' ('the network is peered with the hub {0} (Connected)' -f (& $short $hub)) }
+                elseif ([bool]$Target['PeerToHub']) {
+                    $hg = Get-SIPnRightsGap -Arm $Arm -Scope $hub -Actions @('Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write', 'Microsoft.Network/virtualNetworks/peer/action')
+                    if ($hg.Read -and @($hg.Missing).Count) { & $add 'note' 'hub' ('peerToHub is on, but the installing account may not {0} on the hub {1}: the install goes on without the peering (it is on the network hand-off list), or grant Network Contributor on the hub' -f (@($hg.Missing) -join ', '), (& $short $hub)) }
+                    else { & $add 'ok' 'hub' ('the install peers the network with the hub {0} (both directions, peerToHub)' -f (& $short $hub)) }
+                } else { & $add 'note' 'hub' ('the network is not peered with the hub {0} yet{1}: the peering is on the network hand-off list for your network team (or turn on peerToHub)' -f (& $short $hub), $(if ($pst -and $pst -ne 'unreadable') { (' (state: {0})' -f $pst) } else { '' })) }
+                if ([bool]$Target['LinkZonesToHub']) {
+                    $lg = Get-SIPnRightsGap -Arm $Arm -Scope $hub -Actions @('Microsoft.Network/virtualNetworks/join/action')
+                    if ($lg.Read -and @($lg.Missing).Count) { & $add 'note' 'hub' ('linkZonesToHub is on, but the installing account may not join the hub {0}: the environment''s zone is not linked to the hub (hand-off list)' -f (& $short $hub)) }
+                }
+            }
+        }
+        # ---- the DNS path: a network that resolves through its own DNS servers (a hub resolver / forwarder) does not see
+        # zones linked only to SecurityInsight's network -- the install then PAUSES at its DNS check (a wait, not a failure)
+        if ($vnetReal) {
+            $dns = @(Get-SIPnProp $vnet @('properties', 'dhcpOptions', 'dnsServers') | Where-Object { $_ })
+            if ($dns.Count -and -not $central) {
+                & $add 'note' 'dns-path' ('the network resolves names through your DNS servers ({0}): the zones SecurityInsight makes are linked to its network only, so the install pauses at its DNS check until your network team adds the records it lists or forwards the privatelink zones to Azure DNS (168.63.129.16) -- or name a central zone group (privateDnsZonesResourceGroupId) your resolver already answers from' -f ($dns -join ', '))
+            } elseif ($dns.Count) { & $add 'ok' 'dns-path' ('the network resolves names through your DNS servers ({0}); the zones are in your central resource group' -f ($dns -join ', ')) }
+            else { & $add 'ok' 'dns-path' 'the network resolves names through Azure DNS (the zones linked to it answer)' }
+        }
+    }
+
+    $miss = @($items | Where-Object { $_.State -eq 'missing' })
+    $nc = @($items | Where-Object { $_.State -eq 'notchecked' })
+    $notes = @($items | Where-Object { $_.State -eq 'note' })
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($i in $items) { $lines.Add(('{0,-11} {1}' -f $(switch ($i.State) { 'ok' { 'ok' } 'missing' { 'MISSING' } 'notchecked' { 'NOT CHECKED' } default { 'note' } }), $i.Line)) }
+    @{ Ok = (-not $miss.Count); Items = $items.ToArray(); Missing = $miss; NotChecked = $nc; Notes = $notes; Lines = $lines.ToArray(); Zones = $zones }
+}
+
+function Format-SIPrivateNetworkPreflightMissing {
+    <# PURE. The one list the customer's network team works from: each missing item and what to create / grant. #>
+    param([object[]]$Missing = @())
+    $n = 0
+    @(foreach ($m in @($Missing | Where-Object { $_ })) { $n++; '{0}. {1} -- {2}' -f $n, $m.Line, $(if ($m.Create) { $m.Create } else { 'fix it, then run the install again' }) })
+}
+
+function Invoke-SIPrivateNetworkPreflight {
+    <# Setup's call (the guided install's preflight-network step, BEFORE the first resource): Get-SIPrivateNetworkPreflight
+       over setup's own ARM sign-in (Invoke-SIArm, GET only, unless -Arm is given). Returns its answer. #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Target, [bool]$Sql = $true, [bool]$Registry = $true, [scriptblock]$Arm, [string]$SubscriptionId)
+    if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIArm -Path $Path -AllowNotFound } else { Invoke-SIArm -Method $Method -Path $Path -Body $Body } } }
+    Get-SIPrivateNetworkPreflight -Arm $Arm -Target $Target -Sql $Sql -Registry $Registry
 }
 
 # ============================================================================================================== SETUP'S CALLS

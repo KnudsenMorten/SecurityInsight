@@ -48,6 +48,7 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.GuardEvent';              Verbs = 'INSERT' }
     @{ Object = 'cfg.GuardRelease';            Verbs = 'INSERT, UPDATE' }
     @{ Object = 'cfg.InstallKeyClaimAgainRequest'; Verbs = 'EXECUTE' }      # Settings > Updates: claim the install key again (one row, never the table)
+    @{ Object = 'cfg.WebAppSignedInRecord';    Verbs = 'EXECUTE' }      # the first sign-in on this web app, for the updater's move to ca-si-web (one row, never the table)
     @{ Object = 'cfg.GuardStrictEndSet';       Verbs = 'EXECUTE' }      # CR4: a SuperAdmin ends the stricter period of the safety checks early (one row, never the table)
     @{ Object = 'cfg.DataHealthOverrideSet';   Verbs = 'EXECUTE' }      # CR2: a SuperAdmin lets one data-out channel through while the data is Unhealthy (never the table)
     @{ Object = 'cfg.FlowRunCancelSet';        Verbs = 'EXECUTE' }      # #700: Operations > Jobs cancels the RUNNING run (its run, queue request and lock; one run, never the table)

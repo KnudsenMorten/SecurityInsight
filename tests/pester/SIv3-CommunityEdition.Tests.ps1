@@ -109,18 +109,22 @@ Describe '(11) side by side in one tenant: a new Community edition install has t
         $pf = Get-SISqlAdminGroupFilter -GroupName 'grp-si-sql-admins'
         $pf | Should -Not -Match '(?i)community'
     }
-    It 'the install creates the Community group under its own name and display name (both database steps)' {
+    It 'the install creates the Community group under its own standard name (both database steps)' {
         $names = [ordered]@{ SqlServer = 'sql-si-prod-community-ca-abc123'; ResourceGroup = 'rg-si-prod-community-ca'
                              SqlAdminGroupDisplayName = 'SecurityInsight Community SQL admins'; SqlAdminGroupName = 'grp-si-community-sql-admins' }
         $ctx = [pscustomobject]@{ Values = [ordered]@{ subscriptionId = '00000000-0000-0000-0000-000000000001' }; Names = $names; Facts = [ordered]@{ userObjectId = '11111111-1111-1111-1111-111111111111' } }
         $ga = Get-SIInstallSqlAdminGroupArgs -Ctx $ctx
         $ga.GroupName | Should -BeExactly 'grp-si-community-sql-admins'
-        $ga.DisplayName | Should -BeExactly 'SecurityInsight Community SQL admins'
-        # a Pro install with the new names: today's lookup name, the new display name (unchanged behaviour)
-        $ctx.Names = [ordered]@{ SqlServer = 's'; ResourceGroup = 'r'; SqlAdminGroupDisplayName = 'SecurityInsight SQL admins'; SqlAdminGroupName = 'grp-si-sql-admins' }
+        $ga.DisplayName | Should -BeExactly 'SecurityInsight Community SQL admins' -Because 'an install record that carries another display name keeps it'
+        # framework 5.5 (Invardia 2026-11-07): a NEW install's names -- the group is created under its standard name, no display name of its own
+        $ctx.Names = Get-SISetupDisplayNames -New -Edition community; $ctx.Names.SqlServer = 's'; $ctx.Names.ResourceGroup = 'r'
+        $gc = Get-SIInstallSqlAdminGroupArgs -Ctx $ctx
+        $gc.GroupName | Should -BeExactly 'grp-si-community-sql-admins'
+        $gc.Contains('DisplayName') | Should -BeFalse
+        $ctx.Names = Get-SISetupDisplayNames -New -Edition pro; $ctx.Names.SqlServer = 's'; $ctx.Names.ResourceGroup = 'r'
         $gp = Get-SIInstallSqlAdminGroupArgs -Ctx $ctx
-        $gp.Contains('GroupName') | Should -BeFalse
-        $gp.DisplayName | Should -BeExactly 'SecurityInsight SQL admins'
+        $gp.Contains('GroupName') | Should -BeFalse -Because 'grp-si-sql-admins is Set-SISqlAdminGroup''s own default'
+        $gp.Contains('DisplayName') | Should -BeFalse
         # the server step (pro-sql) passes the same names
         $src = Read-SI 'setup\_shared\SI-GuidedInstallData.ps1'
         $src | Should -Match 'Get-SIInstallSqlAdminGroupName -Names \$n'

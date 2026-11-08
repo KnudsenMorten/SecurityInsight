@@ -264,6 +264,112 @@ function Invoke-SIUpdaterSupportQueue {
     } catch { Write-UpdLog ('WARNING: support requests: the queue could not be checked ({0}) -- the next run tries again' -f $_.Exception.Message); $null }
 }
 
+function Invoke-SIUpdaterSupportTrigger {
+    <#
+        #1154 (framework §5.5, 2026-11-08) THE SUPPORT GRANT JOB IS STARTED BY ITS QUEUE, AND THE INVARDIA SUPPORT APP HOLDS NO
+        RIGHT ON ANY JOB (every run, after the queue step): caj-si-support-grant to the event trigger on si-support-requests
+        (the scaler signed in as the engine identity), read back; ONLY THEN every role assignment the Support app holds on a
+        caj-si-* job removed, read back (setup\_shared\SI-SupportGrantUpdate.ps1 Invoke-SISupportGrantQueueTrigger). The
+        Support app is the one recorded on the install (cfg.InstallState 'SupportApp'). One line per change or failure,
+        nothing when there is nothing to do. The library is dot-sourced and called HERE (never from a .GetNewClosure()
+        scriptblock: see Invoke-SIUpdaterSupportQueue). NEVER throws, never fails the run.
+        -Arm { param($Method, $Path, $Body) } / -SupportPrincipalId / -Sleep: test seams. Returns the step's result or $null.
+    #>
+    param([string]$SubscriptionId, [string]$ResourceGroup, [string]$SIRoot, $Store, [scriptblock]$Arm, [AllowNull()]$SupportPrincipalId = $null, [scriptblock]$Sleep)
+    try {
+        $lib = Join-Path $SIRoot 'setup/_shared/SI-SupportGrantUpdate.ps1'
+        if (-not (Test-Path -LiteralPath $lib)) { return $null }
+        . $lib
+        if (-not (Get-Command -Name Invoke-SISupportGrantQueueTrigger -ErrorAction SilentlyContinue)) { return $null }
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        if ($null -eq $SupportPrincipalId) {
+            $SupportPrincipalId = ''
+            if ($Store -and $Store.Invoke) {
+                $sqlSeam = { param($Query, $Params, $Mode) & $Store.Invoke $Query $null 'reader' | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } } }
+                $app = Get-SISupportGrantRecordedApp -Sql $sqlSeam
+                if ($app) { $SupportPrincipalId = Resolve-SISupportGrantPrincipal -Rest (Get-SIUpdaterRest) -AppId $app }
+            }
+        }
+        $how = 'the updater may not remove a role assignment: Invardia support removes it in its Support session (its support grant install step, roles), or the customer''s admin: Azure portal > the job > Access control (IAM) > Role assignments > remove the Invardia Support app'
+        $r = Invoke-SISupportGrantQueueTrigger -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -SupportPrincipalId ([string]$SupportPrincipalId) -RemoveHow $how -Sleep $Sleep
+        foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l.Level -eq 'warn') { 'WARNING: ' + $l.Text } else { $l.Text }) }
+        $r
+    } catch { Write-UpdLog ('WARNING: support requests: the queue trigger could not be checked ({0}) -- the next run tries again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterKeyVaultPurgeStep {
+    <#
+        #1151 (6) SEC-03 KEY VAULT PURGE PROTECTION AT EXISTING INSTALLS (framework §4.5; owner 2026-11-03 "On everywhere"): on
+        every update run (both editions; not in an apply-settings run) the install's Key Vault -- SI_UPDATER_KEY_VAULT, in the
+        install's resource group only -- is brought to purge protection ON, as a new install creates it: read; on = nothing
+        changed; off = one PATCH and a read-back with retries (setup\_shared\SI-SecurityBaseline.ps1
+        Invoke-SIKeyVaultPurgeConverge). ONE-WAY: the line says it cannot be turned off again. It changes no table, job or
+        image, so it does not wait for the run gate. NEVER throws, never fails or holds the update (a refused PATCH is one
+        WARNING line and the next update tries again). The updater holds Contributor on the resource group (Install-SIUpdaterJob).
+        Seams (tests): -Arm { param($Method, $Path, $Body) }, -Lib (the library file), -Sleep. Returns the converge result or $null.
+    #>
+    param([hashtable]$Env = @{}, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
+          [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep)
+    try {
+        $read = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
+        $names = @(@(& $read 'SI_UPDATER_KEY_VAULT') | Where-Object { $_ -and $_ -match '^[A-Za-z0-9-]{3,24}$' } | Select-Object -Unique)
+        if (-not $names.Count) { return $null }
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-SecurityBaseline.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        # dot-sourced and called HERE, in this scope (never from a .GetNewClosure() block: see Invoke-SIUpdaterSupportQueue)
+        . $file
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        $ids = @($names | ForEach-Object { '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.KeyVault/vaults/{2}' -f $SubscriptionId, $ResourceGroup, $_ })
+        $r = if ($Sleep) { Invoke-SIKeyVaultPurgeConverge -Arm $Arm -VaultIds $ids -Sleep $Sleep } else { Invoke-SIKeyVaultPurgeConverge -Arm $Arm -VaultIds $ids }
+        $bad = @($r.Results | Where-Object { $_.Action -in @('failed', 'unconfirmed', 'missing') } | ForEach-Object { [string]$_.Vault })
+        foreach ($l in @($r.Lines)) {
+            $isBad = $false; foreach ($b in $bad) { if ($l -like ('Key Vault {0}:*' -f $b)) { $isBad = $true } }
+            Write-UpdLog $(if ($isBad) { 'WARNING: ' + $l } else { $l })
+        }
+        $r
+    } catch { Write-UpdLog ('WARNING: Key Vault purge protection: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterIdentityNamesStep {
+    <#
+        #1145 THE IDENTITY NAMES (framework §5.5): the release's setup\_shared\SI-IdentityNamesStep.ps1 with this run's seams --
+        ARM and Graph as the updater (its REST client: an answer, never a throw), SQL as the updater, and the database setup
+        job's ARM for the SQL side (the job is the SQL admin). The library is dot-sourced and called HERE, in this scope (never
+        from a .GetNewClosure() scriptblock: see Invoke-SIUpdaterSupportQueue). A step that stopped is a failure Invardia hears
+        (step 'identity-names'); what the updater may not do is a support step in the log -- never a customer action, never a
+        failed update. NEVER throws. -Lib: the test seam (another copy of the step file). Returns the step's result or $null.
+    #>
+    param([hashtable]$Env = @{}, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [string]$TenantId = '',
+          [string]$Auth = 'ManagedIdentity', [string]$Lib = '')
+    try {
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-IdentityNamesStep.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        $global:SI_UpdaterStep = 'identity-names'
+        . $file
+        $read = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
+        $siInRest = Get-SIUpdaterRest
+        $siInSub = $SubscriptionId
+        $arm = { param([string]$Method, [string]$Path, $Body)
+            $b = if ($null -ne $Body -and -not ($Body -is [string])) { ConvertTo-Json -InputObject $Body -Depth 60 -Compress } else { $Body }
+            $r = & $siInRest $Method (Get-SIArmUri -Path $Path -ApiVersion '2021-04-01') $b 'https://management.azure.com/' @{ 'Content-Type' = 'application/json' }
+            [pscustomobject]@{ StatusCode = [int]$r.Status; Content = [string]$r.Body } }
+        $graph = { param([string]$Method, [string]$Uri, $Body)
+            $b = if ($null -ne $Body -and -not ($Body -is [string])) { ConvertTo-Json -InputObject $Body -Depth 30 -Compress } else { $Body }
+            $r = & $siInRest $Method $Uri $b 'https://graph.microsoft.com/' @{ 'Content-Type' = 'application/json' }
+            [pscustomobject]@{ StatusCode = [int]$r.Status; Content = [string]$r.Body } }
+        $sql = { param([string]$Server, [string]$Database, [string]$Query, [bool]$Change)
+            $st = New-SIUpdaterProStore -Server $Server -Database $Database -SubscriptionId $siInSub
+            $rows = & $st.Invoke $Query $null $(if ($Change) { 'nonquery' } else { 'reader' })
+            foreach ($h in @($rows)) { if ($h) { [pscustomobject]$h } } }
+        $jobArm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') }
+        $self = if ($Auth -eq 'ManagedIdentity') { & $read 'SI_UPDATER_CLIENT_ID' } else { '' }
+        $r = Invoke-SIUpdaterIdentityNames -SIRoot (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $file))) -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -TenantId $TenantId `
+                 -SelfClientId $self -SelfAuth $(if ($Auth -eq 'Certificate') { 'Certificate' } else { 'ManagedIdentity' }) -SelfExecution (& $read 'CONTAINER_APP_JOB_EXECUTION_NAME') -Arm $arm -Graph $graph -Sql $sql -JobArm $jobArm -Log { param($m) Write-UpdLog $m }
+        foreach ($f in @($r.Failed)) { if ($f) { Add-SIUpdaterFailureIf 'identity-names' ([string]$f) } }
+        $r
+    } catch { Write-UpdLog ('WARNING: identity names: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
 function Get-SIUpdaterRgPath {
     <# PURE. /subscriptions/<sub>/resourceGroups/<rg>/providers/<provider path>. #>
     param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$Provider)
@@ -594,7 +700,7 @@ function ConvertTo-SIUpdaterPipelineScheduleValue {
 
 function Save-SIUpdaterInstallStateValue {
     <# One cfg.InstallState row (-Name, -Value) written by the updater. Never throws: $true written, $false not. #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState')][string]$Name, [AllowEmptyString()][string]$Value)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState', 'SignInAppOwner', 'WebAppName')][string]$Name, [AllowEmptyString()][string]$Value)
     if (-not "$Value".Trim()) { return $false }
     $sql = @'
 IF OBJECT_ID('cfg.InstallState') IS NOT NULL
@@ -1155,18 +1261,27 @@ function Invoke-SIUpdaterCore {
         # the queue Invardia puts a support request on (made when missing, read back; never fails the run)
         $global:SI_UpdaterStep = 'support-queue'
         $null = Invoke-SIUpdaterSupportQueue -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot
+        # #1154: the support grant job started by that queue, THEN the Support app's rights on the jobs removed (read back each)
+        $global:SI_UpdaterStep = 'support-trigger'
+        $null = Invoke-SIUpdaterSupportTrigger -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot -Store $proStore
         # #1111: the index build job caj-si-index-build (the indexes that did not fit an update, built in idle windows -- the
         # updater itself never builds them outside its schema step) kept present, read back; never fails the run
         if (Get-Command -Name Invoke-SIUpdaterIndexBuildJob -ErrorAction SilentlyContinue) {
             $global:SI_UpdaterStep = 'index-build-job'
             $null = Invoke-SIUpdaterIndexBuildJob -SIRoot $siAutoRoot -Store $proStore -SubscriptionId $sub -ResourceGroup $rg -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env)
         }
+        # #1145 (framework §5.5, owner 2026-11-04): every SI identity to its standard name, id-si-<role>, the updater itself last
+        # (setup\_shared\SI-IdentityNamesStep.ps1). PLAN unless the install's IdentityMoveMode says apply; never fails the run
+        $null = Invoke-SIUpdaterIdentityNamesStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg -TenantId $tenant -Auth $auth
     }
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'
         return 0
     }
+    # #1151 (6) SEC-03: the install's Key Vault to purge protection ON (both editions; read, PATCH only when off, read back with
+    # retries; one-way, said). Never fails or holds the update.
+    $null = Invoke-SIUpdaterKeyVaultPurgeStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg
     if ($edition -eq 'community') {
         # THE COMMUNITY EDITION (#750 (b)): no licence request to Invardia (a Community install holds no licence and must
         # never ask for one), no install key, no Invardia switch -- the signed Community channel only.
@@ -1176,8 +1291,10 @@ function Invoke-SIUpdaterCore {
                     -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env) -McpApp (Get-SIUpdaterInstallName -Role mcp -Env $Env)
         $global:SI_UpdaterStep = 'updater'
         if ($proSql -and $proDb -and -not $proStore) { throw "the SecurityInsight database could not be opened: $proStoreError" }
-        return (Invoke-SIUpdaterFromCommunity -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
+        $rcCommunity = (Invoke-SIUpdaterFromCommunity -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
                     -Deployed (Get-SIUpdaterDeployed -ResourceGroup $rg -AcrName $acrName -SubscriptionId $sub -Env $Env) -AcceptFingerprint (& $get 'SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT'))
+        Invoke-SIUpdaterWebAppStepsAfter -Rc $rcCommunity -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
+        return $rcCommunity
     }
     $switches = Get-SIUpdaterAutoSwitches -Env $Env -Store $proStore -StoreFailed:([bool]$proStoreError) -StoreError $proStoreError
     # Licence requests (#239): ask Invardia for this install's licence, install the approved file. Never fails the run.
@@ -1199,8 +1316,29 @@ function Invoke-SIUpdaterCore {
     if ($updSwitch) { Write-UpdLog ("Pro updates: {0}" -f $updSwitch.Text) }
     if ($updSwitch -and -not $updSwitch.On) { return 0 }
     if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
-    return (Invoke-SIUpdaterFromInvardia -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
+    $rcInvardia = (Invoke-SIUpdaterFromInvardia -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
                 -Deployed (Get-SIUpdaterDeployed -ResourceGroup $rg -AcrName $acrName -SubscriptionId $sub -Env $Env) -AcceptFingerprint (& $get 'SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT'))
+    Invoke-SIUpdaterWebAppStepsAfter -Rc $rcInvardia -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
+    return $rcInvardia
+}
+
+function Invoke-SIUpdaterWebAppStepsAfter {
+    <#
+        The web app's two steps (_shared/SI-UpdaterWebApp.ps1, Invoke-SIUpdaterWebAppSteps): the sign-in app owned by this
+        install's updater, then the web app under the framework name ca-si-web -- AFTER the update, and only when it did not
+        fail (-Rc 0: a failed update never moves the web app; the next update checks again). SI_UPDATER_WEB_APP_MOVE=off on
+        the job switches both off. An image without them (the Community edition carries no web app roll file) = nothing.
+        Never throws, never changes the exit code, writes nothing to the pipeline.
+    #>
+    param($Rc, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup)
+    try {
+        if (-not (Get-Command -Name Invoke-SIUpdaterWebAppSteps -ErrorAction SilentlyContinue)) { return }
+        $last = @($Rc)[-1]
+        if ($null -ne $last -and "$last".Trim() -ne '0') { Write-UpdLog 'web app: its sign-in app owner and name were not checked -- this update did not complete; the next update checks them'; return }
+        # (reported under the step 'post-roll' -- a step name Invardia's uplink already knows)
+        $global:SI_UpdaterStep = 'post-roll'
+        $null = Invoke-SIUpdaterWebAppSteps -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+    } catch { try { Write-UpdLog ('web app: its sign-in app owner and name could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { } }
 }
 
 function Invoke-SIUpdaterFailureReport {

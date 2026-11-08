@@ -191,10 +191,11 @@ Describe 'THE JOB (fake databases)' {
         $bad = & $script:NewDb 'pro' @{ Sweep = $script:OkSweep; Close = @{ Closed = 1; RolesRemoved = 0; RolesStillHeld = 1; UserPresent = 1; ReadOnlyHeld = 1 } }
         (& $script:Run @($bad) @((& $script:M (& $script:Msg @{ SI_SUPPORT_ACTION = 'close' }) 1))).R.ExitCode | Should -Be 2
     }
-    It 'no message, a stale one or a bad one: exit 4 -- and the sweep still ran' {
+    It 'a stale message or a bad one: exit 4; an EMPTY queue (#1154: the queue starts the job, another execution took it): exit 0, no line -- and the sweep still ran' {
         $pro = & $script:NewDb 'pro' @{ Sweep = $script:OkSweep }
-        (& $script:Run @($pro) @()).R.Line | Should -BeExactly 'SUPPORT-GRANT action=none level=none until=none result=no-request'
-        (& $script:Run @($pro) @((& $script:M (& $script:Msg) 16))).R.ExitCode | Should -Be 4
+        $e = (& $script:Run @($pro) @()).R; $e.ExitCode | Should -Be 0; $e.Line | Should -BeNullOrEmpty
+        $s = (& $script:Run @($pro) @((& $script:M (& $script:Msg) 16))).R
+        $s.ExitCode | Should -Be 4; $s.Line | Should -BeExactly 'SUPPORT-GRANT action=none level=none until=none result=no-request'
         (& $script:Run @($pro) @((& $script:M '{"SI_SUPPORT_ACTION":"open","EVIL":"x"}' 1))).R.Line | Should -Match 'result=bad-request$'
         @($pro.State.Calls | Where-Object { $_.Sql -match 'SupportGrantSweep' }).Count | Should -Be 3
         @($pro.State.Calls | Where-Object { $_.Sql -match 'SupportGrantOpen' }).Count | Should -Be 0

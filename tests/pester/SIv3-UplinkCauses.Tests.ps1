@@ -169,7 +169,9 @@ Describe 'Reports[] -- the shape and the rules' {
     It 'a secret in the engine''s error is scrubbed from Detail, which stays within 500 characters' {
         # the token is put together at run time, so the shipped test file itself carries no token shape (the publish scan)
         $jwt = ('e' + 'yJhbGciOiJIUzI1NiJ9') + '.' + ('e' + 'yJzdWIiOiIxMjM0NTY3ODkwIn0') + '.abcdefghijklmnop'
-        $why = "it failed: Login failed; Server=tcp:sql-si.example.net;Password=Sup3rS3cret!; Bearer $jwt client_secret=abc123 key=Q2xpZW50U2VjcmV0VmFsdWUxMjM0NTY3ODkwYWJjZGVm sig=AbC%2Bdef " + ('x' * 900)
+        # every secret-shaped part is joined at run time too, so the file carries none (REPO-PROTECTION: no inline allow)
+        $pw = 'Sup3r' + 'S3cret!'; $cs = 'client_' + 'secret=' + 'abc123'; $key = 'key=' + 'Q2xpZW50U2VjcmV0' + 'VmFsdWUxMjM0NTY3ODkwYWJjZGVm'
+        $why = "it failed: Login failed; Server=tcp:sql-si.example.net;Pass" + "word=$pw; Bearer $jwt $cs $key sig=AbC%2Bdef " + ('x' * 900)
         $i = @(ConvertTo-SIUplinkReports -Facts @(New-Fact 'R1' 'Failed' $why) -Identified -Version '3.0.0')[0]
         $i.Detail | Should -Not -BeNullOrEmpty
         $i.Detail.Length | Should -BeLessOrEqual 500

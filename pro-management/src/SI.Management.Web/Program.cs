@@ -478,6 +478,12 @@ builder.Services.AddSingleton<DimensionMappingPreview>();   // #772 the sub-CI /
 builder.Services.AddSingleton<SI.Management.Web.Settings.PatchCycleSettings>();   // #772 the patch cycle's threshold in words (a view's scope line)
 // Settings > Updates: claim the install key again (one request row, written through cfg.InstallKeyClaimAgainRequest)
 builder.Services.AddSingleton<InstallKeyClaimAgain>();
+// the first sign-in on this web app, recorded once per process for the updater's move to ca-si-web (cfg.WebAppSignedInRecord)
+builder.Services.AddSingleton(sp => new SI.Management.Web.Updating.WebAppSignedInRecorder(sp.GetRequiredService<ISqlExecutor>(),
+    sp.GetRequiredService<ILogger<SI.Management.Web.Updating.WebAppSignedInRecorder>>()));
+// after the updater switched the install to the standard web app name, the OLD web app sends every page request there
+builder.Services.AddSingleton(sp => new SI.Management.Web.Updating.OldWebAppRedirect(sp.GetRequiredService<ISqlExecutor>(),
+    sp.GetRequiredService<ILogger<SI.Management.Web.Updating.OldWebAppRedirect>>()));
 // CR4 (#654): the guard mode -- the stricter period after a release that changed engine code (header, Guards, halved limits)
 builder.Services.AddSingleton<SI.Management.Web.Guards.GuardModeReader>();
 builder.Services.AddSingleton<InstallRingReader>();
@@ -657,6 +663,9 @@ var app = builder.Build();
 SI.Management.Web.ViewerError.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SI.ViewerError");
 
 app.UseForwardedHeaders();
+// the old web app, once the install record names the new one: every page request goes there (path + query kept; never /healthz)
+var oldWebApp = app.Services.GetRequiredService<SI.Management.Web.Updating.OldWebAppRedirect>();
+app.Use(async (ctx, next) => { if (await oldWebApp.TryRedirectAsync(ctx)) return; await next(); });
 // CR7 Option A: behind the front a redeemed link browses under /MagicLink/s/ with its own session (Auth/LinkArea.cs)
 if (signinFront) LinkArea.UseLinkArea(app);
 if (!app.Environment.IsDevelopment())
@@ -699,6 +708,13 @@ app.UseAuthentication();
 // it reaches only what it reaches behind the front (Auth/LinkArea.cs), never a route left on the fallback policy
 if (!signinFront) LinkArea.UseLinkPrincipalEndpointGate(app);
 app.UseAuthorization();
+// the first request of this process that passed sign-in is recorded for the updater (once, in the background, never failing)
+var webAppSignedIn = app.Services.GetRequiredService<SI.Management.Web.Updating.WebAppSignedInRecorder>();
+app.Use(async (ctx, next) =>
+{
+    await next();
+    if (ctx.Response.StatusCode < 400) webAppSignedIn.Observe(ctx);
+});
 app.UseRateLimiter();
 // #636: an old address of a retired page, opened in a browser, opens the page / named view that replaced it
 app.Use((ctx, next) => SI.Management.Web.Navigation.RetiredPages.Middleware(ctx, () => next()));

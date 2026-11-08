@@ -1206,9 +1206,10 @@ function Invoke-SIUpdateOwnSqlConnector {
 # #1021 THE SUPPORT GRANT (setup/_shared/SI-SupportGrantUpdate.ps1; rule: existing installs reach the new-install state): the
 # queue si-support-requests the Invardia Support session puts its request on (made, read back), and ONCE a DERIVED consent
 # from the Support app's Key Vault role (owner 2026-11-01) into an empty cfg.SupportConsent. The job itself comes from the
-# missing-jobs step; signing the procedures, the Support app's read-only user and its two Azure roles need rights the updater
-# does not have -- the one Support-session step per install (setup\Install-SISupportGrantProcedure.ps1). Pro only. Silent
-# when there is nothing to do. Never fails the update. -DetectOnly: the plan.
+# missing-jobs step; #1154: the job started by its queue (read back), then the Support app's rights on the jobs removed (read
+# back). Signing the procedures, the Support app's read-only user and its queue role need rights the updater does not have --
+# the one Support-session step per install (setup\Install-SISupportGrantProcedure.ps1). Pro only. Silent when there is
+# nothing to do. Never fails the update. -DetectOnly: the plan.
 function Invoke-SIUpdateSupportGrant {
     $lib = Join-Path $PSScriptRoot '_shared/SI-SupportGrantUpdate.ps1'
     if (-not (Test-Path -LiteralPath $lib) -or -not $rest) { return }
@@ -1227,6 +1228,16 @@ function Invoke-SIUpdateSupportGrant {
         $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
         $dc = Invoke-SISupportGrantDerivedConsent -Rest $rest -Sql $sql -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -VaultName (& $gv 'SI_KeyVaultName') -WhatIf:$wi
         if ($dc.Line) { $lines.Add(@($dc.Action, $dc.Line)) }
+        # #1154 (framework §5.5): the support grant job started by its queue (read back), THEN the Support app's rights on the
+        # jobs removed (read back) -- the same step the updater runs on every run
+        if (Get-Command -Name Invoke-SISupportGrantQueueTrigger -ErrorAction SilentlyContinue) {
+            $sgArm = { param([string]$Method, [string]$Path, $Body)
+                $b = if ($null -ne $Body -and -not ($Body -is [string])) { ConvertTo-Json -InputObject $Body -Depth 30 -Compress } else { $Body }
+                Invoke-SIRestJson -Rest $rest -Method $Method -Uri ('https://management.azure.com' + $Path) -Body $b -Headers @{ 'Content-Type' = 'application/json' } -AllowNotFound:($Method -eq 'GET') }
+            $sgSp = Resolve-SISupportGrantPrincipal -Rest $rest -AppId (Get-SISupportGrantRecordedApp -Sql $sql)
+            $tr = Invoke-SISupportGrantQueueTrigger -Arm $sgArm -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -StorageAccount (& $gv 'SI_StorageAccount') -SupportPrincipalId $sgSp -WhatIf:$wi
+            foreach ($l in @($tr.Lines)) { $lines.Add(@($(if ($l.Level -eq 'warn') { 'failed' } else { 'done' }), $l.Text)) }
+        }
         if ($lines.Count) { Step '9p. SUPPORT ACCESS (just in time)' }
         foreach ($l in $lines) { if ($l[0] -eq 'failed') { Warn $l[1] } else { Info $l[1] } }
     } catch { Warn ("support access: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }

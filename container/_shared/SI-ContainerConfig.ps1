@@ -1394,6 +1394,55 @@ function Get-SIKedaQueueScaleArgs {
     )
 }
 
+# #1154 (framework §5.5, 2026-11-08): the support grant job caj-si-support-grant is STARTED BY ITS OWN QUEUE. The Invardia
+# Support app puts its request on si-support-requests (Storage Queue Data Message Sender on that one queue -- its ONLY right)
+# and the queue scaler starts the job, signed in as the ENGINE identity (identity only: shared-key access is off, #307). The
+# Support app holds no ARM right on any job any more: Microsoft.App/jobs/start/action alone accepts a container override, so
+# a start right would let it run its own command as the engine identity. One execution at a time; the scaler looks every
+# 10 seconds. The update's PATCH (setup\_shared\SI-SupportGrantUpdate.ps1 Get-SISupportGrantEventTriggerConfig) writes the
+# same trigger -- a test holds the two equal.
+$script:SISupportGrantTrigger = [ordered]@{ Queue = 'si-support-requests'; RuleName = 'si-support-requests'; MaxExecutions = 1; PollingInterval = 10 }
+
+function Get-SISupportGrantTriggerArgs {
+    <#
+        PURE. The trigger part of `az containerapp job create` for caj-si-support-grant: Event, the azure-queue scale rule on
+        si-support-requests in -StorageAccount, signed in as -IdentityResourceId (the engine identity), at most one execution.
+        Both are needed: no storage account or no identity throws (a queue scaler without an identity never reads the queue).
+    #>
+    param([AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId)
+    if ([string]::IsNullOrWhiteSpace($StorageAccount)) { throw 'the support grant job is started by its queue: it needs SI_StorageAccount (the account that holds si-support-requests)' }
+    if ([string]::IsNullOrWhiteSpace($IdentityResourceId)) { throw 'the support grant job is started by its queue: the queue scaler signs in as the engine''s managed identity, and this job has none' }
+    $t = $script:SISupportGrantTrigger
+    @(
+        '--trigger-type', 'Event',
+        '--min-executions', '0',
+        '--max-executions', ([string]$t.MaxExecutions),
+        '--polling-interval', ([string]$t.PollingInterval),
+        '--scale-rule-name', $t.RuleName,
+        '--scale-rule-type', 'azure-queue',
+        '--scale-rule-metadata', ('queueName={0}' -f $t.Queue), ('accountName={0}' -f $StorageAccount.Trim()), 'queueLength=1',
+        '--scale-rule-identity', $IdentityResourceId.Trim()
+    )
+}
+
+function ConvertTo-SISupportGrantEventCreateArgs {
+    <#
+        PURE. A job's create arguments (a Manual or Schedule `az containerapp job create` list) with the trigger replaced by the
+        support grant job's queue trigger (Get-SISupportGrantTriggerArgs): --trigger-type and --cron-expression (with their
+        values) are dropped, the event trigger is added. Everything else is kept as it is. Throws as the trigger does.
+    #>
+    param([Parameter(Mandatory)][object[]]$CreateArgs, [AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId)
+    $trigger = @(Get-SISupportGrantTriggerArgs -StorageAccount $StorageAccount -IdentityResourceId $IdentityResourceId)
+    $a = @($CreateArgs | ForEach-Object { [string]$_ })
+    $out = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $a.Count) {
+        if ($a[$i] -in '--trigger-type', '--cron-expression') { $i += 2; continue }
+        $out.Add($a[$i]); $i++
+    }
+    @(@($out.ToArray()) + $trigger)
+}
+
 # #742 -- RISK ANALYSIS ON QUEUE WORKERS (engine/risk-analysis/_shared/RA-ScaleOut.ps1). The Detailed Risk Analysis job is the
 # run's PRODUCER; caj-si-raworker-detailed is its queue-scaled WORKER job (KEDA, the same identity, the producer's size). One
 # definition, used by Bootstrap for a new install and by every update for an existing one (setup/_shared/SI-RaWorkerJobs.ps1).

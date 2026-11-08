@@ -442,6 +442,7 @@ $script:_RAPublishFailures = New-Object System.Collections.Generic.List[string]
 # the run ends partial, so the data sync holds the collection and the close-loop closes nothing on it.
 $script:_RAReportFailures = New-Object System.Collections.Generic.List[object]
 $script:_RAIncompleteReports = @()
+$script:_RAIncompleteStreaks = @()   # #1155: reports not complete on several runs in a row (said at the end of the run)
 # #901: the reports SI holds ON PURPOSE at their last complete result (a silent source, an incomplete role read) -- report ->
 # @{ Kind; Whys } (Add-RADeliberateHold); the row-count guard's flagged reports (a deliberate hold they are not)
 $script:RADeliberateHolds = @{}
@@ -5500,6 +5501,14 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       # #882: a whole pass recovered nothing -- what is still refused is a named loss (the report is NOT COMPLETE and keeps its
       # last complete result, #877); never fewer rows silently
       foreach ($db in @($__lp.Left)) {
+          # #1155: refused by the gateway's own time limit EVERY time (never as busy) = deterministic, too slow at this size --
+          # split it (lossless smaller slices, the sub-bucket pass below) and let the next run start finer; never written off
+          if ((Get-RALateLeftAction -LastError ([string]$__lpErr[[int]$db]) -Busy ([bool]$__lpBusy[[int]$db])) -eq 'Split') {
+              Write-Warn2 ("late retry: bucket {0}/{1} timed out at the gateway on every attempt ({2} late pass(es)) -- the same failure each time is not transient: it is asked again in smaller slices (the sub-bucket pass), and the next run starts finer" -f ($db + 1), $bucketCountToUse, $__lp.Pass)
+              $__abSplitCause[[int]$db] = $true
+              [void]$failedBucketIndices.Add($db)
+              continue
+          }
           $__lateWhy = if ([bool]$__lpBusy[[int]$db]) { 'Defender kept refusing it as busy (preempted for its load) through' } else { 'API throttling/unavailable survived' }
           Write-Err2 ("late retry: bucket {0}/{1} could not be retrieved -- pass {2} recovered no slice: {3}" -f ($db + 1), $bucketCountToUse, $__lp.Pass, [string]$__lpErr[[int]$db])
           Add-RABucketLoss ("bucket {0}/{1}: {3} the in-loop AND late retries ({4} late pass(es); the last recovered no slice) -- {2}" -f ($db + 1), $bucketCountToUse, [string]$__lpErr[[int]$db], $__lateWhy, $__lp.Pass)
@@ -5800,6 +5809,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                           continue
                       }
                       if ($subAction -eq 'Retry' -and $__subBusy -and $__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].LostBusy = $true }
+                      # #1155: the smaller slice still timed out at the GATEWAY after all its rounds (never as busy) -- the same failure
+                      # every time is not transient: split it deeper (the measured stop below decides when splitting stops helping)
+                      if ($subAction -eq 'Retry' -and (Get-RALateLeftAction -LastError $subErr -Busy $__subBusy) -eq 'Split') {
+                          Write-Warn2 ("[sub-bucket] slice {0}/{1}: timed out at the gateway on every attempt -- not transient: split finer" -f $subN, $newT)
+                          $subAction = 'Split'
+                      }
                       if ($subAction -eq 'Split' -and (Test-RABucketOutOfMemory -Err $_)) {
                           # the worker had no memory for this smaller slice's answer either: split again until it fits (below,
                           # after its siblings) -- never counted towards the futile-prune, never capped by depth
@@ -7205,6 +7220,34 @@ try {
             Add-Member -InputObject $script:_RunHealthCtx -NotePropertyName $__kv[0] -NotePropertyValue $__kv[1] -Force
         }
         Write-Warn2 ("{0} of {1} report(s) are NOT COMPLETE in this run: {2}" -f $__incNames.Count, $__exp, (($__incNames | Sort-Object) -join ', '))
+        # #1155: a report that has not been complete on several runs in a row is said AS SUCH (from its bucket history: the runs
+        # before this one), never only as one more daily warning
+        try {
+            $__hist = if ($script:AutoBucketSql -and $script:AutoBucketSql.History) { $script:AutoBucketSql.History } else { @{} }
+            # runs before a data reset are not counted: the reset empties the pipeline's run records, so the oldest one on
+            # record is the boundary (no reset = simply the oldest run kept)
+            $__notBefore = $null
+            try {
+                if ($script:AutoBucketSql -and $script:AutoBucketSql.Invoke) {
+                    $__nb = @(& $script:AutoBucketSql.Invoke "SELECT CASE WHEN OBJECT_ID(N'cfg.FlowRun') IS NULL THEN NULL ELSE (SELECT MIN(StartedUtc) FROM cfg.FlowRun) END AS M;" @{} 'reader' | ForEach-Object { $_ } | Where-Object { $_ })[0]
+                    $__m = if ($null -eq $__nb) { $null } elseif ($__nb -is [System.Collections.IDictionary]) { $__nb['M'] } else { $__nb.M }
+                    if ($null -ne $__m -and -not ($__m -is [System.DBNull])) { $__notBefore = [datetime]$__m }
+                }
+            } catch { $__notBefore = $null }
+            foreach ($__in in @($__incNames | Sort-Object)) {
+                $__st = Get-RAIncompleteStreak -History @($(if ($__hist.ContainsKey([string]$__in)) { $__hist[[string]$__in] } else { @() })) -NowUtc ([datetime]::UtcNow) -NotBefore $__notBefore
+                if ($__st.Runs -ge 2) {
+                    Write-Warn2 ("{0} has NOT been complete on {1} runs in a row (since {2:yyyy-MM-dd}) -- this is not a passing failure; it needs a fix, not another run" -f $__in, $__st.Runs, $__st.Since)
+                    $script:_RAIncompleteStreaks = @(@($script:_RAIncompleteStreaks) + @([pscustomobject]@{ Report = [string]$__in; Runs = [int]$__st.Runs; Since = $__st.Since }))
+                    # from 3 runs in a row the cause the uplink sends carries it, so the fix request says it is not a passing failure
+                    if ($__st.Runs -ge 3) {
+                        foreach ($__ir in @($script:_RAIncompleteReports | Where-Object { $_ -and [string]$_.Report -eq [string]$__in })) {
+                            if ([string]$__ir.Why -notmatch 'runs in a row') { $__ir.Why = ('{0} -- not complete on {1} runs in a row (since {2:yyyy-MM-dd})' -f [string]$__ir.Why, $__st.Runs, $__st.Since) }
+                        }
+                    }
+                }
+            }
+        } catch { Write-Diag ("completeness: the runs-in-a-row check was skipped: {0}" -f $_.Exception.Message) }
     }
 } catch { Write-Diag ("completeness: the report counts could not be set on the run record: {0}" -f $_.Exception.Message) }
 

@@ -262,10 +262,15 @@ function Invoke-SIUpdaterFromCommunity {
     $writeTag = { param($value)
         if ($s['WriteWaits']) { $null = & $s.WriteWaits $value }
         elseif ($real -and $gate.JobId) { $null = Write-SIUpdaterWaitsTag -JobId $gate.JobId -Value $value } }
+    # #1150 (as Pro): an "update now" start also respects a run that is only starting (the runner's execution of the last minutes)
+    $startingRun = $null
+    if ((& $get 'SI_UPDATER_MODE') -ieq 'update-now' -and (Get-Command -Name Get-SIUpdaterStartingRun -ErrorAction SilentlyContinue)) {
+        $startingRun = { Get-SIUpdaterStartingRun -Executions @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider 'Microsoft.App/jobs/caj-si-flow/executions') -List) -NowUtc ([datetime]::UtcNow) }
+    }
     $askGate = {
         if ($s['RunGate']) { & $s.RunGate $holder }
         elseif ($real -and (Get-Command -Name Invoke-SIUpdaterRunGate -ErrorAction SilentlyContinue)) {
-            Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -SubscriptionId $SubscriptionId `
+            Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -SubscriptionId $SubscriptionId -StartingRun $startingRun `
                 -BusyJobs { $en = Get-SIUpdaterEnvironment -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob $updaterJob
                             @(Get-SIUpdaterBusyJobs -JobNames @($en.JobNames) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } `
                 -DatabaseMissing { if ($Store -and "$($Store.Server)" -and "$($Store.Database)") { Test-SIUpdaterDatabaseMissing -Server ([string]$Store.Server) -Database ([string]$Store.Database) -SubscriptionId $SubscriptionId } else { $false } }

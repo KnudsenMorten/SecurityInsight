@@ -74,6 +74,44 @@ function Test-SISqlStatementTransient {
     [bool]($t -match '(?i)a severe error occurred on the current command|transport-level error|connection was forcibly closed|forcibly closed by the remote host|connection reset|Connection reset by peer|broken pipe|Internal \.NET Framework Data Provider error 6|is not currently available|log for database .* is not available|connection was recovered and rowcount|\b(9001|3314|40613|40501|40197|49918|49919|49920|4083)\b')
 }
 
+function Test-SISqlConnectTransient {
+    <#
+        PURE and SELF-CONTAINED (it travels as a value; it calls nothing by name). Did the CONNECTION fail at the network /
+        transport level, before anything was sent -- so opening it again a moment later is safe? Live 2026-11-07 (an install's
+        pipeline runner, its settings read): "A network-related or instance-specific error occurred while establishing a
+        connection to SQL Server ... (provider: TCP Provider, error: 40 - Could not open a connection to SQL Server)" stopped
+        the run; every wake-up after it read the settings fine.
+          transient: SqlException 40 / 53 / 10060 / 10061 / 10065 / 11001 / 1225 / 121 / 4060 / 40613 / 40197 / 40501 /
+                     49918-49920 / -2 / 258 / 233 / 64 / 10053 / 10054, and the texts "network-related or instance-specific",
+                     "Could not open a connection to SQL Server", "error: 40" / "error: 26" / "error: 0" of a provider, "semaphore
+                     timeout", "connection attempt failed", "actively refused", "No such host is known", "server was not found".
+          never:     a refused sign-in (18456 -- a grant, not the network), a permission, a missing database by name.
+        -ErrorRecord: an ErrorRecord, an exception (SqlException numbers and inner exceptions are read) or a text.
+    #>
+    param([AllowNull()]$ErrorRecord)
+    if ($null -eq $ErrorRecord) { return $false }
+    $codes = @(40, 53, 10060, 10061, 10065, 11001, 1225, 121, 4060, 40613, 40197, 40501, 49918, 49919, 49920, -2, 258, 233, 64, 10053, 10054)
+    $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $null }
+    $nums = New-Object System.Collections.Generic.List[int]
+    $texts = New-Object System.Collections.Generic.List[string]
+    while ($ex) {
+        if ($ex -is [System.Data.SqlClient.SqlException]) { foreach ($er in @($ex.Errors)) { $nums.Add([int]$er.Number) }; $nums.Add([int]$ex.Number) }
+        $texts.Add([string]$ex.Message); $ex = $ex.InnerException
+    }
+    if (-not $texts.Count) { $texts.Add([string]$ErrorRecord) }
+    $t = $texts -join ' | '
+    # a refused sign-in is a grant, not the network (4060 "Cannot open database ... The login failed." IS the failover class)
+    if ($nums -contains 18456 -or $t -match '(?i)Login failed for user|\b18456\b') { return $false }
+    foreach ($n in $nums) { if ($codes -contains $n) { return $true } }
+    [bool]($t -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed|\b(40613|40197|40501|10060|10061|4060)\b')
+}
+
+function Get-SISqlConnectRetryWaits {
+    <# #1147: the pauses before each new attempt to READ when the connection failed at the network level (Test-SISqlConnectTransient):
+       4 more attempts over about 1.5 minutes -- a short network blip or a gateway that moved passes in seconds. #>
+    @(5, 10, 20, 45)
+}
+
 function Get-SISqlStatementRetryWaits {
     <# The pauses before each new attempt of a statement that met an Azure SQL platform answer: 6 more attempts over about
        9 minutes (owner 2026-10-29). A failover or a resume passes in under a minute; a log that recovers after a rollback

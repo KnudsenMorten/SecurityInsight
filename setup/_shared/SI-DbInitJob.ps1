@@ -61,7 +61,29 @@ function Get-SIDbInitNames {
         MembershipRecord = 'DbJobMembership'
         RenewWindowDays  = 30
         SqlApi           = '2021-11-01'
+        # #1146: a statement chosen as a DEADLOCK victim (SQL 1205) is sent again after these waits (seconds), said each time
+        DeadlockWaits    = @(2, 5, 10)
+        # #1146: an updater execution counts as running for at most this long when its job names no run limit (seconds)
+        UpdaterLimitSeconds = 21600
+        UpdaterLockStaleMinutes = 15
     }
+}
+
+function Get-SIDbInitCallerRecordName {
+    <# PURE. #1146: the result row of ONE caller (installer | updater | support | job): 'DbJobUpdater' ... -- written by the
+       job next to the shared row 'DbJob', so a run started beside another (a support setup beside an update) can never
+       overwrite the result the other caller waits for. #>
+    param([AllowEmptyString()][string]$By = '')
+    $b = "$By".Trim().ToLowerInvariant()
+    if ($b -notin 'installer', 'updater', 'support', 'job') { $b = 'job' }
+    (Get-SIDbInitNames).Record + $b.Substring(0, 1).ToUpperInvariant() + $b.Substring(1)
+}
+
+function Test-SIDbInitDeadlock {
+    <# PURE. #1146: is this SQL error a DEADLOCK victim (SQL 1205) -- a statement SQL rolled back so another could finish, which
+       may be sent again? (live 2026-11-07, install-a: "Transaction ... was deadlocked ... and has been chosen as the deadlock victim".) #>
+    param([AllowNull()][AllowEmptyString()][string]$Message)
+    [bool]("$Message" -match '(?i)chosen as the deadlock victim|was deadlocked on|\bdeadlock victim\b|\b1205\b')
 }
 
 function Get-SIDbInitComponents { <# PURE. The product identities the job makes users for, in order. #> @('engine', 'updater', 'web', 'mcp', 'tagging') }
@@ -72,7 +94,7 @@ function Import-SIDbInitSqlSources {
     param([Parameter(Mandatory)][string]$SIRoot)
     foreach ($rel in @('engine/pro-settings/SI-EngineGrants.ps1', 'engine/pro-settings/SI-ProSchema.ps1', 'engine/pro-settings/SI-GrantProcedure.ps1',
                        'engine/pro-settings/SI-SupportGrantSql.ps1', 'pro-management/deploy/SI-ManagementGrants.ps1', 'pro-management/deploy/SI-SigninFrontStore.ps1',
-                       'setup/_shared/SI-SupportAppDatabase.ps1', 'setup/_shared/SI-SupportGrantUpdate.ps1')) {
+                       'setup/_shared/SI-SupportAppDatabase.ps1', 'setup/_shared/SI-SupportGrantUpdate.ps1', 'setup/_shared/SI-IdentityMoveSql.ps1')) {
         $p = [IO.Path]::Combine($SIRoot, $rel)
         if (Test-Path -LiteralPath $p) { . $p }
     }
@@ -116,6 +138,9 @@ function Read-SIDbInitInput {
           SI_DBINIT_ENGINE_ROLE_ONLY  1 = the engine gets its role si_engine only (SI_Setup_EngineLeastPrivilege)
           per execution: SI_DBINIT_RUN (the caller's run id), SI_DBINIT_BY (installer | updater | support),
                          SI_DBINIT_SUPPORT ('<client id>|<user name>': the Invardia Support app -- installer / support only)
+                         SI_DBINIT_SUPPORT_STANDING_OFF ('<client id>': #1151 SEC-01 -- the updater names the recorded Support
+                         app; the job takes its STANDING db_owner off in each product database where the just-in-time path
+                         reads back in the same batch, Get-SISupportStandingOffSql; never the group, never a user)
                          SI_DBINIT_STEPS (all | grants: users, role memberships and grants only -- no procedure, schema or
                          database setting is created or changed, so it may run beside a pipeline run; anything else = all)
     #>
@@ -158,12 +183,124 @@ function Read-SIDbInitInput {
         if ($parts.Count -ne 2 -or -not [guid]::TryParse($parts[0], [ref]$g) -or $parts[1] -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$') { return (& $no 'SI_DBINIT_SUPPORT is not "<client id>|<user name>"') }
         $sup = [pscustomobject]@{ ClientId = $g.ToString(); UserName = $parts[1] }
     }
+    # #1151 SEC-01: the Support app whose STANDING db_owner the job takes off (where the just-in-time path reads back)
+    $off = (& $e 'SI_DBINIT_SUPPORT_STANDING_OFF').Trim()
+    if ($off) { $g = [guid]::Empty; if (-not [guid]::TryParse($off, [ref]$g) -or $g -eq [guid]::Empty) { return (& $no 'SI_DBINIT_SUPPORT_STANDING_OFF is not a client id') }; $off = $g.ToString() }
     $run = (& $e 'SI_DBINIT_RUN').Trim(); if ($run -notmatch '^[A-Za-z0-9-]{1,40}$') { $run = '' }
     $by = (& $e 'SI_DBINIT_BY').Trim().ToLowerInvariant(); if ($by -notin 'installer', 'updater', 'support') { $by = 'job' }
     $on = { param($k) (& $e $k).Trim() -match '^(?i)(1|true|yes|on)$' }
     $steps = if ((& $e 'SI_DBINIT_STEPS').Trim() -ieq 'grants') { 'grants' } else { 'all' }
+    # THE IDENTITY MOVE (framework §5.5 names; setup\_shared\SI-IdentityMove.ps1), per execution only:
+    #   SI_DBINIT_MOVES  [{ "component": "web", "from": "<old client id>", "to": "<new client id>", "toName": "id-si-web" }]
+    #   SI_DBINIT_DROPS  [{ "component": "web", "clientId": "<old>", "keepClientId": "<new>", "keepName": "id-si-web" }]
+    $mv = Read-SIDbInitMoveList -Json (& $e 'SI_DBINIT_MOVES') -Kind moves -MiClientId $mi -Support $sup
+    if (-not $mv.Ok) { return (& $no $mv.Reason) }
+    $dr = Read-SIDbInitMoveList -Json (& $e 'SI_DBINIT_DROPS') -Kind drops -MiClientId $mi -Support $sup -InUse @($p | ForEach-Object { $_.ClientId })
+    if (-not $dr.Ok) { return (& $no $dr.Reason) }
     [pscustomobject]@{ Ok = $true; Reason = ''; Server = $server; Database = $db; LedgerDatabase = $ledger; MiClientId = $mi; Principals = $p.ToArray()
-                       Support = $sup; SignedGrants = (& $on 'SI_DBINIT_SIGNED_GRANTS'); EngineRoleOnly = (& $on 'SI_DBINIT_ENGINE_ROLE_ONLY'); Run = $run; By = $by; Steps = $steps }
+                       Support = $sup; SignedGrants = (& $on 'SI_DBINIT_SIGNED_GRANTS'); EngineRoleOnly = (& $on 'SI_DBINIT_ENGINE_ROLE_ONLY'); Run = $run; By = $by; Steps = $steps
+                       Moves = @($mv.Items); Drops = @($dr.Items); StandingOff = $off }
+}
+
+function Read-SIDbInitMoveList {
+    <#
+        PURE. One identity-move list of the job's input (SI_DBINIT_MOVES / SI_DBINIT_DROPS), checked. '' = none. Refused: not
+        JSON, an unknown component, a client id that is not a GUID, an unsafe name, a move onto itself -- and a DROP of the
+        job's own identity, of the Invardia Support app, of an identity an app or job of the install still signs in as
+        (-InUse: the principal list), or one whose kept identity is the same. Returns @{ Ok; Reason; Items }.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Json, [Parameter(Mandatory)][ValidateSet('moves', 'drops')][string]$Kind, [string]$MiClientId = '', $Support = $null, [string[]]$InUse = @())
+    $ok = { param($items) [pscustomobject]@{ Ok = $true; Reason = ''; Items = @($items) } }
+    $no = { param($r) [pscustomobject]@{ Ok = $false; Reason = $r; Items = @() } }
+    $var = if ($Kind -eq 'moves') { 'SI_DBINIT_MOVES' } else { 'SI_DBINIT_DROPS' }
+    if (-not "$Json".Trim()) { return (& $ok @()) }
+    $list = $null
+    try { $list = @("$Json" | ConvertFrom-Json -ErrorAction Stop) } catch { return (& $no ('{0} is not JSON' -f $var)) }
+    $guid = { param($v) $g = [guid]::Empty; if ([guid]::TryParse("$v".Trim(), [ref]$g) -and $g -ne [guid]::Empty) { $g.ToString() } else { '' } }
+    $known = Get-SIDbInitComponents
+    $used = @($InUse | Where-Object { $_ } | ForEach-Object { "$_".ToLowerInvariant() })
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($x in $list) {
+        if ($null -eq $x) { continue }
+        $c = ([string](Get-SIDbInitProp $x @('component'))).Trim().ToLowerInvariant()
+        if ($known -notcontains $c) { return (& $no ("{0}: unknown component '{1}'" -f $var, $c)) }
+        if ($Kind -eq 'moves') {
+            $f = & $guid (Get-SIDbInitProp $x @('from')); $t = & $guid (Get-SIDbInitProp $x @('to')); $n = ([string](Get-SIDbInitProp $x @('toName'))).Trim()
+            if (-not $f -or -not $t) { return (& $no ('{0}: the {1} move needs the old and the new client id' -f $var, $c)) }
+            if ($f -eq $t) { return (& $no ('{0}: the {1} move names the same identity twice' -f $var, $c)) }
+            if ($n -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$') { return (& $no ("{0}: the {1} identity's name '{2}' is not safe" -f $var, $c, $n)) }
+            $out.Add([pscustomobject]@{ Component = $c; From = $f; To = $t; ToName = $n })
+        } else {
+            $d = & $guid (Get-SIDbInitProp $x @('clientId')); $k = & $guid (Get-SIDbInitProp $x @('keepClientId')); $n = ([string](Get-SIDbInitProp $x @('keepName'))).Trim()
+            if (-not $d -or -not $k) { return (& $no ('{0}: the {1} drop needs the old and the kept client id' -f $var, $c)) }
+            if ($d -eq $k) { return (& $no ('{0}: the {1} drop would drop the identity it keeps' -f $var, $c)) }
+            if ($n -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$') { return (& $no ("{0}: the kept {1} identity's name '{2}' is not safe" -f $var, $c, $n)) }
+            if ($MiClientId -and $d -ieq $MiClientId) { return (& $no ('{0}: the job never drops its own identity' -f $var)) }
+            if ($Support -and $d -ieq [string]$Support.ClientId) { return (& $no ('{0}: the job never drops the Invardia Support app' -f $var)) }
+            if ($used -contains $d.ToLowerInvariant()) { return (& $no ('{0}: the {1} identity {2} is still what an app or job of the install signs in as -- it is not dropped' -f $var, $c, $d)) }
+            $out.Add([pscustomobject]@{ Component = $c; ClientId = $d; KeepClientId = $k; KeepName = $n })
+        }
+    }
+    & $ok $out.ToArray()
+}
+
+function Invoke-SIDbInitMoves {
+    <#
+        THE IDENTITY MOVE's database side, as the SQL admin (setup\_shared\SI-IdentityMoveSql.ps1 -- the move's own builders):
+          moves  per database (-Databases: the Pro database, the identity ledger, every other product database): the old
+                 user's roles and explicit permissions copied to the new identity's user (made from its client id), then
+                 READ AGAIN -- the copy must be empty. A right the builders cannot copy is a problem, never skipped.
+          drops  per database: the old user dropped ONLY where a read made just before shows the kept identity's user
+                 holding every role and permission of it (Test-SIIdentityMoveSqlCovered); then read again -- gone.
+        Returns @{ Problems; Lines; States (component -> ok | none | dropped | failed) }. -Sql: the job's seam.
+    #>
+    param([Parameter(Mandatory)]$DbInput, [Parameter(Mandatory)][scriptblock]$Sql, [string[]]$Databases = @())
+    $problems = New-Object System.Collections.Generic.List[string]; $lines = New-Object System.Collections.Generic.List[string]; $states = @{}
+    $rowsOf = { param($d, $o, $n) @(& $Sql $d (Get-SIIdentityMoveSqlReadSql -OldClientId $o -NewClientId $n) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) }
+    $mark = { param($c, $v) if ($states[$c] -ne 'failed') { if ($v -eq 'failed' -or -not $states.ContainsKey($c) -or $states[$c] -eq 'none') { $states[$c] = $v } } }
+    if (-not (Get-Command -Name Get-SIIdentityMoveSqlCopy -ErrorAction SilentlyContinue)) {
+        foreach ($m in @($DbInput.Moves) + @($DbInput.Drops)) { if ($m) { $states[$m.Component] = 'failed' } }
+        if (@($DbInput.Moves).Count -or @($DbInput.Drops).Count) { $problems.Add('this package carries no identity move SQL (setup\_shared\SI-IdentityMoveSql.ps1)') }
+        return [pscustomobject]@{ Problems = $problems.ToArray(); Lines = $lines.ToArray(); States = $states }
+    }
+    foreach ($m in @($DbInput.Moves)) {
+        foreach ($d in @($Databases | Where-Object { $_ })) {
+            try {
+                $c = Get-SIIdentityMoveSqlCopy -Rows (& $rowsOf $d $m.From $m.To) -NewName $m.ToName -NewClientId $m.To
+                if (-not $c.OldUser) { & $mark $m.Component 'none'; $lines.Add(('{0}: the old {1} identity has no user here -- nothing to copy' -f $d, $m.Component)); continue }
+                if (@($c.Unsupported).Count) { & $mark $m.Component 'failed'; $problems.Add(('{0}: the {1} identity''s user holds a right the move cannot copy ({2}) -- nothing copied' -f $d, $m.Component, (@($c.Unsupported) -join '; '))); continue }
+                if ($c.Sql) { $null = & $Sql $d $c.Sql @{} 'nonquery'; $lines.Add(('done: {0}: {1} -> {2}: {3}' -f $d, $c.OldUser, $m.ToName, (@($c.Items) -join '; '))) }
+                $again = Get-SIIdentityMoveSqlCopy -Rows (& $rowsOf $d $m.From $m.To) -NewName $m.ToName -NewClientId $m.To
+                if ($again.Sql -or @($again.Unsupported).Count -or -not $again.NewUser) { & $mark $m.Component 'failed'; $problems.Add(('{0}: the {1} identity {2} does not read back holding every right of {3}' -f $d, $m.Component, $m.ToName, $c.OldUser)); continue }
+                & $mark $m.Component 'ok'
+                $lines.Add(('read back: {0}: {1} holds every role and permission of {2}' -f $d, $again.NewUser, $c.OldUser))
+            } catch { & $mark $m.Component 'failed'; $problems.Add(('{0}: the {1} move: {2}' -f $d, $m.Component, $_.Exception.Message)) }
+        }
+    }
+    foreach ($x in @($DbInput.Drops)) {
+        foreach ($d in @($Databases | Where-Object { $_ })) {
+            try {
+                $cov = Test-SIIdentityMoveSqlCovered -Rows (& $rowsOf $d $x.ClientId $x.KeepClientId) -KeepName $x.KeepName -KeepClientId $x.KeepClientId
+                if (-not $cov.OldUser) { & $mark $x.Component 'none'; continue }
+                if (-not $cov.Drop) { & $mark $x.Component 'failed'; $problems.Add(('{0}: KEPT: {1}' -f $d, $cov.Why)); continue }
+                $null = & $Sql $d (Get-SIIdentityMoveSqlDropSql -OldClientId $x.ClientId) @{} 'nonquery'
+                $gone = Get-SIIdentityMoveSqlCopy -Rows (& $rowsOf $d $x.ClientId $x.KeepClientId) -NewName $x.KeepName -NewClientId $x.KeepClientId
+                if ($gone.OldUser) { & $mark $x.Component 'failed'; $problems.Add(('{0}: the old {1} user {2} is still there after the drop' -f $d, $x.Component, $gone.OldUser)); continue }
+                & $mark $x.Component 'dropped'
+                $lines.Add(('done: {0}: the old {1} user {2} dropped ({3})' -f $d, $x.Component, $cov.OldUser, $cov.Why))
+            } catch { & $mark $x.Component 'failed'; $problems.Add(('{0}: the {1} drop: {2}' -f $d, $x.Component, $_.Exception.Message)) }
+        }
+    }
+    [pscustomobject]@{ Problems = $problems.ToArray(); Lines = $lines.ToArray(); States = $states }
+}
+
+function New-SIDbInitMovesRecordValue {
+    <# PURE. The identity move's own result row (cfg.InstallState 'DbJobMoves', <= 400 characters): the run and each
+       component's state. #>
+    param([string]$Run = '', [hashtable]$States = @{}, [datetime]$NowUtc = [datetime]::UtcNow)
+    $o = [ordered]@{ run = $Run; at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture); c = [ordered]@{} }
+    foreach ($k in @($States.Keys | Sort-Object)) { $o.c[[string]$k] = [string]$States[$k] }
+    ConvertTo-Json -InputObject $o -Compress -Depth 4
 }
 
 function Get-SIDbInitUsersSql {
@@ -443,6 +580,12 @@ function Get-SIDbInitPlan {
         if (& $has 'Get-SISupportAppDatabaseAccessSql') {
             foreach ($d in $dbs) { & $add 'support-user' $d ('the Invardia Support app''s own user ({0}) in {1}' -f $DbInput.Support.UserName, $d) (Get-SISupportAppDatabaseAccessSql -UserName $DbInput.Support.UserName -ClientId $DbInput.Support.ClientId) $null $true }
         } else { $skipped.Add('support-user (this package has no Support app access)') }
+        # the install records WHICH Support app this is (cfg.InstallState 'SupportApp' = its client id: the heartbeat reports its
+        # access by it, the updater knows it as an owner of the web sign-in app) -- the same write the person-run path makes
+        # (setup\_shared\SI-SupportAppDatabase.ps1 Get-SISupportAppRecordSql: insert, or update when different), Pro database only
+        if (& $has 'Get-SISupportAppRecordSql') {
+            & $add 'support-record' $pro ('the install records the Invardia Support app {0} (cfg.InstallState SupportApp)' -f $DbInput.Support.ClientId) (Get-SISupportAppRecordSql -ClientId $DbInput.Support.ClientId -By 'the database setup job') $null $true
+        } else { $skipped.Add('support-record (this package does not record the Support app)') }
         if (& $has 'Get-SISupportGrantAdminSteps') {
             $lv = ''; $src = 'derived'
             if ($Consent -and $Consent -ne '-') { $lv, $src = $Consent -split '\|', 2; if ($lv -notin 'troubleshoot', 'setup') { $lv = '' }; if ($src -ne 'customer') { $src = 'derived' } }
@@ -589,14 +732,72 @@ END
 }
 
 function Get-SIDbInitRecordReadSql {
-    <# PURE. READ ONLY: the result row's value ('' = none, or no table). #>
-    "IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = N'$((Get-SIDbInitNames).Record)';"
+    <# PURE. READ ONLY: the result row's value ('' = none, or no table). -Name: another row of the job's (#1146: the row of
+       one caller, Get-SIDbInitCallerRecordName). #>
+    param([ValidatePattern('^$|^[A-Za-z]{1,40}$')][string]$Name = '')
+    $n = if ($Name) { $Name } else { (Get-SIDbInitNames).Record }
+    "IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = N'$n';"
 }
 
 function Test-SIDbInitLoginRefused {
     <# PURE. Is this SQL error a refused sign-in (the membership is new or still replicating) -- waited for, never a stop? #>
     param([AllowEmptyString()][string]$Message)
     [bool]("$Message" -match '(?i)Login failed|18456|token-identified principal|not allowed to access|40615')
+}
+
+function Get-SIDbInitStandingOffNames {
+    <# PURE. #1151 SEC-01: the job's row of the standing-off result (cfg.InstallState), read by the updater. #>
+    @{ Record = 'DbJobSupportStanding' }
+}
+
+function Invoke-SIDbInitStandingOff {
+    <#
+        #1151 (1) SEC-01 / OPEN-01, THE JOB'S SIDE: in each of -Databases, Get-SISupportStandingOffSql (engine\pro-settings\
+        SI-SupportGrantSql.ps1) -- db_owner off the Support app's own user ONLY where the just-in-time path reads back in that
+        database, in the same batch. Nothing else is changed: no user dropped, no group, no server administrator. A database
+        that cannot be read or is not ready keeps what it has. Never throws. -Sql: the job's seam. Returns @{ State (off =
+        no product database holds the Support app's standing db_owner any more | kept = at least one still does | unknown =
+        the statement is not in this package); Databases (ordered db -> off | none | absent | kept); Why; Lines }.
+    #>
+    param([Parameter(Mandatory)][string]$ClientId, [Parameter(Mandatory)][scriptblock]$Sql, [string[]]$Databases = @())
+    $lines = New-Object System.Collections.Generic.List[string]
+    $per = [ordered]@{}; $why = New-Object System.Collections.Generic.List[string]
+    if (-not (Get-Command -Name Get-SISupportStandingOffSql -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ State = 'unknown'; Databases = $per; Why = 'this package cannot take the standing access off'; Lines = @('not in this package: the Support app''s standing db_owner off (support-standing-off)') }
+    }
+    foreach ($d in @($Databases | Where-Object { $_ } | Select-Object -Unique)) {
+        try {
+            $r = ConvertFrom-SISupportStandingOffRow -Row (@(& $Sql $d (Get-SISupportStandingOffSql -ClientId $ClientId) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1)
+        } catch { $r = [pscustomobject]@{ State = 'kept'; Roles = @(); Why = ('could not be read ({0})' -f $_.Exception.Message) } }
+        $per[$d] = $r.State
+        switch ($r.State) {
+            'off'    { $lines.Add(('support standing access: {0}: db_owner taken off the Invardia Support app''s own user -- the just-in-time path read back first; read back after: {1}' -f $d, $(if (@($r.Roles).Count) { @($r.Roles) -join ', ' } else { '(no role)' }))) }
+            'none'   { $lines.Add(('support standing access: {0}: the Invardia Support app holds no standing db_owner here' -f $d)) }
+            'absent' { $lines.Add(('support standing access: {0}: the Invardia Support app has no user here' -f $d)) }
+            default  { $why.Add(('{0}: {1}' -f $d, $r.Why)); $lines.Add(('support standing access: {0}: db_owner KEPT, nothing changed -- {1}' -f $d, $r.Why)) }
+        }
+    }
+    $state = if (-not $per.Count) { 'unknown' } elseif (@($per.Values | Where-Object { $_ -eq 'kept' }).Count) { 'kept' } else { 'off' }
+    [pscustomobject]@{ State = $state; Databases = $per; Why = ($why.ToArray() -join '; '); Lines = $lines.ToArray() }
+}
+
+function New-SIDbInitStandingOffRecordValue {
+    <# PURE. The row DbJobSupportStanding: compact JSON { state, at, run, dbs: 'db:off;db2:none', why }, at most 400 characters
+       (the reason is cut first). #>
+    param([Parameter(Mandatory)][ValidateSet('off', 'kept', 'unknown')][string]$State, [string]$Run = '', [System.Collections.IDictionary]$Databases = @{},
+          [string]$Why = '', [datetime]$NowUtc = [datetime]::UtcNow)
+    $max = (Get-SIDbInitNames).RecordMax
+    $o = [ordered]@{ state = $State; at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
+    if ($Run) { $o.run = $Run }
+    $o.dbs = ((@($Databases.Keys) | ForEach-Object { '{0}:{1}' -f $_, $Databases[$_] }) -join ';')
+    if ($o.dbs.Length -gt 200) { $o.dbs = $o.dbs.Substring(0, 197) + '...' }
+    $w = [regex]::Replace([regex]::Replace("$Why", '[\x00-\x1F]', ' '), '\s+', ' ').Trim()
+    $room = $max - (ConvertTo-Json -InputObject $o -Compress).Length - 16
+    if ($w.Length -gt $room) { $w = $(if ($room -gt 3) { $w.Substring(0, $room - 3).TrimEnd() + '...' } else { '' }) }
+    if ($w) { $o.why = $w }
+    $v = ConvertTo-Json -InputObject $o -Compress
+    while ($v.Length -gt $max -and $o.Contains('why') -and ([string]$o.why).Length -gt 16) { $o.why = ([string]$o.why).Substring(0, ([string]$o.why).Length - 13) + '...'; $v = ConvertTo-Json -InputObject $o -Compress }
+    $v
 }
 
 function Invoke-SIDbInit {
@@ -608,7 +809,7 @@ function Invoke-SIDbInit {
     #>
     param([Parameter(Mandatory)]$DbInput, [Parameter(Mandatory)][scriptblock]$Sql, [scriptblock]$Log = { param($m) Write-Host $m },
           [string]$Version = '', [int]$LoginTries = 16, [int]$LoginWaitSeconds = 20, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
-          [scriptblock]$Now = { [datetime]::UtcNow })
+          [scriptblock]$Now = { [datetime]::UtcNow }, [int[]]$DeadlockWaits = (Get-SIDbInitNames).DeadlockWaits)
     $out = New-Object System.Collections.Generic.List[string]
     $say = { param($m) $out.Add([string]$m); $null = & $Log $m }
     $res = { param($code, $verdict, $rec) [pscustomobject]@{ ExitCode = $code; Verdict = $verdict; Lines = $out.ToArray(); Record = $rec } }
@@ -628,11 +829,35 @@ function Invoke-SIDbInit {
         }
     }
     if (-not $ok) { & $say ('the job''s identity could not sign in to the database as a member of the SQL admin group after {0} tries -- is it a member of the group that is the server''s administrator?' -f $LoginTries); return (& $res 1 'failed' '') }
+    # #1146: ONE statement that changes something, sent again when SQL chose it as a DEADLOCK victim (1205: rolled back so
+    # another session could finish -- nothing of it stayed) after a short growing wait, said each time; any other error, or a
+    # deadlock after the last wait, is thrown as it was
+    $dlWaits = @($DeadlockWaits | Where-Object { $_ -ge 0 })
+    $send = {
+        param([string]$db, [string]$q, $p, [string]$what)
+        $try = 0
+        while ($true) {
+            try { $null = & $Sql $db $q $p 'nonquery'; return }
+            catch {
+                $m = [string]$_.Exception.Message
+                if (-not (Test-SIDbInitDeadlock -Message $m) -or $try -ge $dlWaits.Count) { throw }
+                $w = [int]$dlWaits[$try]; $try++
+                & $say ('{0}: chosen as a deadlock victim by SQL (1205: another session held the same rows; nothing of this statement stayed) -- sent again in {1} s (try {2} of {3})' -f $what, $w, ($try + 1), ($dlWaits.Count + 1))
+                & $Sleep $w
+            }
+        }
+    }
     $writeRecord = {
         param($state, $count, $why)
         $v = New-SIDbInitRecordValue -State $state -Run $DbInput.Run -By $DbInput.By -Count $count -Why $why -NowUtc (& $Now)
-        try { $null = & $Sql $pro (Get-SIDbInitRecordSql) @{ Value = $v; Version = $(if ($Version) { $Version.Substring(0, [Math]::Min(32, $Version.Length)) } else { $null }); By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('result recorded: {0}' -f $v) }
+        $rp = @{ Value = $v; Version = $(if ($Version) { $Version.Substring(0, [Math]::Min(32, $Version.Length)) } else { $null }); By = (Get-SIDbInitNames).Job }
+        try { & $send $pro (Get-SIDbInitRecordSql) $rp 'the result row'; & $say ('result recorded: {0}' -f $v) }
         catch { & $say ('WARNING: the result could not be recorded: {0}' -f $_.Exception.Message) }
+        # #1146: the same result in the row of THIS caller (DbJobUpdater / DbJobSupport / DbJobInstaller): a run started beside
+        # another one never overwrites the result the other caller waits for
+        $own = Get-SIDbInitCallerRecordName -By $DbInput.By
+        try { & $send $pro (Get-SIDbInitRecordSql -Name $own) $rp ('the result row ' + $own) }
+        catch { & $say ('WARNING: the result could not be recorded in {0}: {1}' -f $own, $_.Exception.Message) }
         $v
     }
     $usersOf = { param($d) ConvertFrom-SIDbInitUsers -Rows @(& $Sql $d (Get-SIDbInitUsersSql) @{} 'rows' | ForEach-Object { $_ }) }
@@ -674,11 +899,32 @@ function Invoke-SIDbInit {
         foreach ($s in $plan.Skipped) { & $say ('not in this package: {0}' -f $s) }
         $planned = @{}
         foreach ($bt in $plan.Batches) {
-            try { $null = & $Sql $bt.Database $bt.Sql $bt.Params 'nonquery'; & $say ('done: {0}' -f $bt.Name); $planned[$bt.Step] = $true }
+            try { & $send $bt.Database $bt.Sql $bt.Params $bt.Name; & $say ('done: {0}' -f $bt.Name); $planned[$bt.Step] = $true }
             catch {
                 if (-not $bt.Required) { & $say ('WARNING: {0}: {1}' -f $bt.Name, $_.Exception.Message); continue }
                 throw ('{0}: {1}' -f $bt.Name, $_.Exception.Message)
             }
+        }
+        # 3b. THE IDENTITY MOVE (only when this execution names moves / drops): copy and read back, then drop only what the
+        # kept identity reads back holding -- in the Pro database, the identity ledger and every other product database
+        $mvRes = $null
+        if (@($in.Moves).Count -or @($in.Drops).Count) {
+            $mvDbs = @(@($pro) + @($others.ToArray()) | Where-Object { $_ } | Select-Object -Unique)
+            $mvRes = Invoke-SIDbInitMoves -DbInput $in -Sql $Sql -Databases $mvDbs
+            foreach ($l in $mvRes.Lines) { & $say $l }
+            $mvVal = New-SIDbInitMovesRecordValue -Run $in.Run -States $mvRes.States -NowUtc (& $Now)
+            try { $null = & $Sql $pro (Get-SIDbInitRecordSql -Name 'DbJobMoves') @{ Value = $mvVal; Version = $null; By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('identity move recorded: {0}' -f $mvVal) }
+            catch { & $say ('WARNING: the identity move''s result could not be recorded: {0}' -f $_.Exception.Message) }
+        }
+        # 3c. #1151 SEC-01: the Support app's STANDING db_owner taken off (only when the updater names it, only where the
+        # just-in-time path reads back in the same batch) -- never part of the verdict: a database that is not ready keeps it
+        if ([string](Get-SIDbInitProp $in @('StandingOff'))) {
+            $soDbs = @(@($pro) + @($others.ToArray()) | Where-Object { $_ } | Select-Object -Unique)
+            $so = Invoke-SIDbInitStandingOff -ClientId ([string]$in.StandingOff) -Sql $Sql -Databases $soDbs
+            foreach ($l in $so.Lines) { & $say $l }
+            $soVal = New-SIDbInitStandingOffRecordValue -Run $in.Run -State $so.State -Databases $so.Databases -Why $so.Why -NowUtc (& $Now)
+            try { $null = & $Sql $pro (Get-SIDbInitRecordSql -Name (Get-SIDbInitStandingOffNames).Record) @{ Value = $soVal; Version = $null; By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('support standing access recorded: {0}' -f $soVal) }
+            catch { & $say ('WARNING: the support standing access result could not be recorded: {0}' -f $_.Exception.Message) }
         }
         # 4. THE READ-BACK (read only)
         $after = @{}; $after[$pro] = & $usersOf $pro
@@ -714,6 +960,7 @@ function Invoke-SIDbInit {
                 if ($st.Problems.Count) { foreach ($x in $st.Problems) { $more.Add(('{0}: {1}' -f $d, $x)) } } else { & $say ('read back: {0}: the engine may run the support grant procedures; the updater may mirror the consent' -f $d) }
             } catch { $more.Add(('{0}: the support grant''s rights could not be read back ({1})' -f $d, $_.Exception.Message)) }
         }
+        if ($mvRes -and @($mvRes.Problems).Count) { foreach ($x in $mvRes.Problems) { $more.Add(('identity move: {0}' -f $x)) } }
         if ($more.Count) { $t = [pscustomobject]@{ Ok = $false; Problems = @($t.Problems) + $more.ToArray(); Lines = $t.Lines; Count = $t.Count } }
         try { $null = & $Sql $pro (Get-SIDbInitDatabasesRecordSql) @{ Value = ($sgDbs.ToArray() -join ';') } 'nonquery' } catch { & $say ('WARNING: the list of the other product databases could not be recorded: {0}' -f $_.Exception.Message) }
         foreach ($l in $t.Lines) { & $say $l }
@@ -1452,21 +1699,114 @@ function Set-SIDbInitJob {
     [pscustomobject]@{ Ok = $true; JobId = $id; Job = $job; Problem = '' }
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+#  (live 2026-11-07, install-a): a support start of the job BESIDE a running update overwrote the result the update waited for,
+#  and its grants met the update's in a deadlock. Every support start of the job (setup\Start-SIDbInitJob.ps1, its
+#  grants-only run, and Grant-SISupportAppDatabase.ps1 which sends the same kind of grants itself) REFUSES while the updater
+#  runs -- a running execution of the updater job, or a lock row the updater beats -- and says to start it after the update.
+# ---------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDbInitUpdaterLockSql {
+    <# PURE. READ ONLY, one scalar: the lock row an updater run beats now ('<lock>|<holder>|<last beat>'; NULL = none, or no
+       lock table). An updater run holds the 'updater' row from its start, and the 'install' row from its run gate on. #>
+    $m = [int](Get-SIDbInitNames).UpdaterLockStaleMinutes
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.PipelineLock') IS NULL SELECT CAST(NULL AS nvarchar(400)) AS Held; ELSE SELECT TOP (1) LockId + N'|' + Holder + N'|' + ISNULL(CONVERT(nvarchar(19), HeartbeatUtc, 126) + N'Z', N'') AS Held FROM cfg.PipelineLock WHERE Holder LIKE N'caj-si-updater%' AND HeartbeatUtc >= DATEADD(minute, -$m, SYSUTCDATETIME()) ORDER BY HeartbeatUtc DESC;"
+}
+
+function Get-SIDbInitUpdaterRunning {
+    <# PURE. The updater execution that runs now among -Executions (ARM shape: name, properties.status / startTime / endTime):
+       Running / Processing, no end, started within -LimitSeconds (an older one is a leftover). @{ Name; StartedUtc } or $null. #>
+    param([object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$NowUtc, [int]$LimitSeconds = 0)
+    if ($LimitSeconds -le 0) { $LimitSeconds = [int](Get-SIDbInitNames).UpdaterLimitSeconds }
+    $styles = [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal'
+    foreach ($e in @($Executions | Where-Object { $_ })) {
+        $st = [string](Get-SIDbInitProp $e @('properties', 'status'))
+        if ($st -notin 'Running', 'Processing') { continue }
+        if ([string](Get-SIDbInitProp $e @('properties', 'endTime'))) { continue }
+        $s = $null; $t = [string](Get-SIDbInitProp $e @('properties', 'startTime'))
+        if ($t) { $d = [datetime]::MinValue; if ([datetime]::TryParse($t, [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$d)) { $s = $d } }
+        if ($s -and ($NowUtc.ToUniversalTime() - $s).TotalSeconds -gt ($LimitSeconds + 900)) { continue }
+        return [pscustomobject]@{ Name = [string](Get-SIDbInitProp $e @('name')); StartedUtc = $s }
+    }
+    $null
+}
+
+function Test-SIDbInitUpdaterBusy {
+    <#
+        #1146: does the updater run now? (1) -LockText: what Get-SIDbInitUpdaterLockSql answered ('' = no row, $null = not
+        read here); (2) ARM, when -Arm is given: the updater job(s) of the resource group (caj-si-updater, or a job named
+        *-updater) and their executions. Returns @{ Busy; Why; Read (what was looked at) }. A part that cannot be read is said
+        in Read and does not count as busy (a support repair is never blocked by a read that failed).
+    #>
+    param([scriptblock]$Arm, [string]$SubscriptionId = '', [string]$ResourceGroup = '', [AllowNull()][AllowEmptyString()][string]$LockText = $null,
+          [datetime]$NowUtc = [datetime]::UtcNow)
+    $n = Get-SIDbInitNames
+    $read = New-Object System.Collections.Generic.List[string]
+    $busy = { param($why) [pscustomobject]@{ Busy = $true; Why = $why; Read = $read.ToArray() } }
+    if ($null -ne $LockText) {
+        $parts = "$LockText".Split('|')
+        if ("$LockText".Trim() -and $parts.Count -ge 2) {
+            return (& $busy ('the updater runs now: it holds the install''s lock row ''{0}'' ({1}, last sign of life {2})' -f $parts[0], $parts[1], $(if ($parts.Count -ge 3 -and $parts[2]) { $parts[2] } else { '?' })))
+        }
+        $read.Add('the lock rows: no updater holds one')
+    }
+    if ($Arm -and $SubscriptionId -and $ResourceGroup) {
+        try {
+            $base = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $SubscriptionId, $ResourceGroup
+            $jobs = New-Object System.Collections.Generic.List[object]
+            $next = '{0}?api-version={1}' -f $base, $n.AppApi
+            for ($i = 0; $next -and $i -lt 20; $i++) {
+                $page = & $Arm 'GET' $next $null
+                if (-not $page) { break }
+                foreach ($j in @(Get-SIDbInitProp $page @('value'))) { if ($j) { $jobs.Add($j) } }
+                $next = [string](Get-SIDbInitProp $page @('nextLink'))
+            }
+            $upd = @($jobs | Where-Object { [string](Get-SIDbInitProp $_ @('name')) -match '(?i)^caj-si-updater$|-updater$' })
+            if (-not $upd.Count) { $read.Add('the updater job: not found in the resource group') }
+            foreach ($u in $upd) {
+                $un = [string](Get-SIDbInitProp $u @('name'))
+                $limit = 0; try { $limit = [int](Get-SIDbInitProp $u @('properties', 'configuration', 'replicaTimeout')) } catch { $limit = 0 }
+                $ex = & $Arm 'GET' ('{0}/{1}/executions?api-version={2}' -f $base, $un, $n.AppApi) $null
+                $hit = Get-SIDbInitUpdaterRunning -Executions @(Get-SIDbInitProp $ex @('value')) -NowUtc $NowUtc -LimitSeconds $limit
+                if ($hit) {
+                    return (& $busy ('the updater runs now: {0} execution {1}{2}' -f $un, $hit.Name, $(if ($hit.StartedUtc) { ' (started {0:yyyy-MM-dd HH:mm}Z)' -f $hit.StartedUtc } else { '' })))
+                }
+                $read.Add(('the updater job {0}: no execution runs' -f $un))
+            }
+        } catch { $read.Add(('the updater''s executions could not be read ({0})' -f $_.Exception.Message)) }
+    }
+    [pscustomobject]@{ Busy = $false; Why = ''; Read = $read.ToArray() }
+}
+
+function Get-SIDbInitUpdaterBusyText {
+    <# PURE. The refusal's one line (the same words in every script that starts the job). #>
+    param([Parameter(Mandatory)][string]$Why, [string]$What = 'the database setup job')
+    ('REFUSED: {0} -- {1} is not started beside it (a run beside the update overwrites the result the update waits for, and its grants can meet the update''s in a deadlock). Start it again after the update has ended. Nothing was changed.' -f $Why, $What)
+}
+
 function Start-SIDbInitRun {
     <# ONE run: started with -Env on top of the job's own environment (the run id, who started it, the Support app), waited
        for. Returns @{ Ok (the execution Succeeded -- the job exits 0 only when every identity read back); Status; Execution;
-       Run; Seconds }. #>
+       Run; Seconds; Why }. #1146: a SUPPORT start is refused while the updater runs (Test-SIDbInitUpdaterBusy over the job's
+       resource group): Status 'Refused', nothing started, Why says it. #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$JobId, [Parameter(Mandatory)]$Job, [Parameter(Mandatory)][ValidateSet('installer', 'updater', 'support')][string]$By,
           [string]$Support = '', [int]$TimeoutSeconds = 1500, [int]$PollSeconds = 15, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
-          [ValidateSet('all', 'grants')][string]$Steps = 'all')
+          [ValidateSet('all', 'grants')][string]$Steps = 'all',
+          # more per-execution variables (the identity move: SI_DBINIT_MOVES / SI_DBINIT_DROPS and today's SI_DBINIT_PRINCIPALS)
+          [System.Collections.IDictionary]$Extra = @{})
+    if ($By -eq 'support' -and $JobId -match '^/subscriptions/(?<s>[^/]+)/resourceGroups/(?<g>[^/]+)/') {
+        $b = Test-SIDbInitUpdaterBusy -Arm $Arm -SubscriptionId $Matches['s'] -ResourceGroup $Matches['g']
+        if ($b.Busy) { return [pscustomobject]@{ Ok = $false; Status = 'Refused'; Execution = ''; Run = ''; Seconds = 0; Why = (Get-SIDbInitUpdaterBusyText -Why $b.Why) } }
+    }
     $run = New-SIDbInitRunId
     $env = [ordered]@{ SI_DBINIT_RUN = $run; SI_DBINIT_BY = $By; SI_DBINIT_STEPS = $Steps }
     if ($Support) { $env.SI_DBINIT_SUPPORT = $Support }
+    foreach ($k in @($Extra.Keys)) { if ([string]$k -match '^SI_DBINIT_(MOVES|DROPS|PRINCIPALS|SUPPORT_STANDING_OFF)$') { $env[[string]$k] = [string]$Extra[$k] } }
     $start = & $Arm 'POST' ('{0}/start?api-version={1}' -f $JobId, (Get-SIDbInitNames).AppApi) (Get-SIDbInitStartBody -Job $Job -Env $env)
     $exec = [string](Get-SIDbInitProp $start @('name')); if (-not $exec) { $exec = (([string](Get-SIDbInitProp $start @('id'))) -split '/')[-1] }
-    if (-not $exec) { return [pscustomobject]@{ Ok = $false; Status = 'NotStarted'; Execution = ''; Run = $run; Seconds = 0 } }
+    if (-not $exec) { return [pscustomobject]@{ Ok = $false; Status = 'NotStarted'; Execution = ''; Run = $run; Seconds = 0; Why = '' } }
     $w = Wait-SIDbInitExecution -Arm $Arm -JobId $JobId -Execution $exec -TimeoutSeconds $TimeoutSeconds -PollSeconds $PollSeconds -Sleep $Sleep
-    [pscustomobject]@{ Ok = ($w.Status -eq 'Succeeded'); Status = $w.Status; Execution = $exec; Run = $run; Seconds = $w.Seconds }
+    [pscustomobject]@{ Ok = ($w.Status -eq 'Succeeded'); Status = $w.Status; Execution = $exec; Run = $run; Seconds = $w.Seconds; Why = '' }
 }
 
 function Resolve-SIDbInitSupportAppId {

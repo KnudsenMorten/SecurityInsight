@@ -232,7 +232,12 @@ function Get-SIDisplayNamePlan {
                 $nick = [string](Get-SIDisplayNameProp $g 'mailNickname')
                 # only SecurityInsight's own group (its mailNickname, or one of its two names): a customer's own admin group is never touched
                 if ($nick -cne $r.Nick -and $it.Current -cne $r.Old -and $it.Current -cne $r.New) { $it.Action = 'kept'; $it.Line = ('the SQL server''s admin group is "{0}", a group of your own -- kept as it is' -f $it.Current) }
-                else { & $decide $it }
+                # framework §5.5 / §12.11c (Invardia, 2026-11-07): the SQL admin group's name is its STANDARD name
+                # grp-si-sql-admins, not a display name -- this step never renames it any more (it would undo the update's
+                # identity-names step, setup\_shared\SI-IdentityNamesStep.ps1, which renames it back in place with the SQL
+                # server's admin login)
+                elseif ($it.Current -ceq $r.Old) { $it.Action = 'present'; $it.Line = ('the SQL admin group has its standard name "{0}"' -f $r.Old) }
+                else { $it.Action = 'kept'; $it.Line = ('the SQL admin group is "{0}" -- the update''s identity-names step gives it its standard name "{1}" (not this step)' -f $it.Current, $r.Old) }
             }
         } catch {
             # a 404 = the admin is not a group (a person, an application)

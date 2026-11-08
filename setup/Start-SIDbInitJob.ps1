@@ -34,6 +34,9 @@
       default) is the whole job.
       Before step 3 the job's environment is checked to send its console lines to the install's Log Analytics workspace
       (a diagnostic setting si-environment-logs is made when missing, read back) -- a warning only, never a stop.
+    While the install's updater runs (a running execution of its updater job), -Apply REFUSES before anything is changed and
+    says to start it again after the update (a run beside an update overwrites the result the update waits for, and its
+    grants can meet the update's in a deadlock); the plan says it as a warning.
     It never removes a member or an identity, and never changes the SQL server's administrator; the only database user the
     run may drop is a Support app user made from the wrong client id, which it makes again with the right one.
 
@@ -98,6 +101,15 @@ if (-not @($principals | Where-Object { $_.component -eq 'engine' }).Count) { $s
 & $say 'Gray' ('identities: {0}' -f ((@($principals | ForEach-Object { '{0}={1}' -f $_.component, $_.name })) -join ', '))
 if ($SupportAppId) { & $say 'Gray' ('this run also gives the Invardia Support app {0} its own database access' -f $SupportAppId) }
 if ($stop.Count) { foreach ($s in $stop) { & $say 'Yellow' ('STOP: ' + $s) }; & $say 'Yellow' 'Nothing was changed.'; if ($PassThru) { return [pscustomobject]$result }; exit 1 }
+# Never beside a running update -- a running execution of the updater job (this script never opens the database, so
+# the updater's executions are what it reads; Start-SIDbInitRun checks them once more right before the start). The plan
+# says it; -Apply refuses before anything is changed
+$updBusy = Test-SIDbInitUpdaterBusy -Arm $seams.Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+if ($updBusy.Busy) {
+    $txt = Get-SIDbInitUpdaterBusyText -Why $updBusy.Why
+    if ($Apply) { & $say 'Red' $txt; $result.Status = 'Refused'; if ($PassThru) { return [pscustomobject]$result }; exit 1 }
+    & $say 'Yellow' ('WARNING: {0} -- -Apply refuses until the update has ended' -f $updBusy.Why)
+}
 if (-not $Apply) {
     & $say 'Cyan' ('PLAN: the identity {0} (made when missing), its membership of the admin group (added, read back from its memberOf), the environment''s console lines to Log Analytics (a diagnostic setting when missing), the job {1} with the image {2}, one run, its verdict' -f $n.Identity, $n.Job, $tpl.Image)
     & $say 'Yellow' 'PLAN only -- nothing was changed. Re-run with -Apply.'
@@ -137,7 +149,8 @@ if (-not $job.Ok) { & $say 'Red' $job.Problem; if ($PassThru) { return [pscustom
 # ---- 4. one run ----
 $run = Start-SIDbInitRun -Arm $seams.Arm -JobId $job.JobId -Job $job.Job -By 'support' -Support $(if ($SupportAppId) { '{0}|invardia-support-app' -f $SupportAppId } else { '' }) -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep -Steps $Steps
 $result.Execution = $run.Execution; $result.Status = $run.Status; $result.Ok = [bool]$run.Ok
-if ($run.Ok) { & $say 'Green' ('run {0}: Succeeded -- every identity was read back; from now on every update runs the job' -f $run.Execution) }
+if ($run.Status -eq 'Refused') { & $say 'Red' ([string]$run.Why) }
+elseif ($run.Ok) { & $say 'Green' ('run {0}: Succeeded -- every identity was read back; from now on every update runs the job' -f $run.Execution) }
 else { & $say 'Red' ('run {0}: {1} -- its lines: {2}' -f $(if ($run.Execution) { $run.Execution } else { '(not started)' }), $run.Status, (Get-SIDbInitLogText -ResourceGroup $ResourceGroup -Execution $run.Execution)) }
 if ($PassThru) { [pscustomobject]$result }
 elseif (-not $result.Ok) { exit 1 }

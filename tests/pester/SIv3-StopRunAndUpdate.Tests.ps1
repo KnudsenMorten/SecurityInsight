@@ -80,6 +80,8 @@ BeforeAll {
                 foreach ($j in 'caj-si-identity', 'caj-si-azure-worker') { foreach ($e in @($w.Ex[$j] | Where-Object { $_.properties.status -eq 'Running' })) { Stop-TestExec $e } }
             }
         }
+        # #1150: a young wake-up of the runner (W.Wake) ends after W.WakePolls polls
+        if ($w.Wake) { $w.WakeAge++; if ($w.WakeAge -ge $w.WakePolls -and $w.Wake.properties.status -eq 'Running') { Stop-TestExec $w.Wake 'Succeeded' } }
         if ($w.UpdExec) {
             $w.UpdAge++
             if ($w.UpdAge -eq $w.UpdPolls) {
@@ -121,6 +123,13 @@ BeforeAll {
         param([string]$Query, $Params, [string]$Mode)
         $w = $script:W
         if ($Query -match 'INSERT cfg\.AuditEvent') { $w.Audit.Add([string]$Params['Action']); return 'Saved' }
+        # #1150: the stored pipeline (W.Def = its JSON; none = no row)
+        if ($Query -match 'FROM cfg\.JobFlow WHERE FlowId') { if ($w.Def) { return , @(@{ DefinitionJson = $w.Def; Mode = 'flow' }) }; return , @() }
+        # #1150: a run that starts AFTER the plan -- from the W.StartRunOnRead-th read of the run record on
+        if ($Query -match 'SELECT TOP \(1\) \* FROM cfg\.FlowRun' -and $w.StartRunOnRead) {
+            $w.RunReads++
+            if ($w.RunReads -ge $w.StartRunOnRead -and $w.Run.FlowRunId -ne 'run-9') { $w.Run = [ordered]@{ FlowRunId = 'run-9'; State = 'Running'; Trg = 'schedule'; StartedUtc = $w.Clock.AddSeconds(55); Step = '' } }
+        }
         if ($Query -match 'FROM cfg\.FlowStepRun WHERE FlowRunId = @FlowRunId') {
             if (-not $w.Run.Step) { return , @() }
             return , @(@{ StepOrder = 2; GroupNo = 2; Job = $w.Run.Step; Stage = 'collect'; State = $(if ($w.Run.State -eq 'Running') { 'Running' } else { 'Interrupted' }); Execution = 'caj-si-identity-s1'
@@ -163,7 +172,7 @@ Describe '0. the plan (the only output without -Apply)' {
         $txt | Should -Match 'ring serves    : 3\.0\.41 \(sequence 41, ring 2'
         $txt | Should -Match 'will           : 1\. cancel: start caj-si-flow once with SI_FLOW_CANCEL=1, SI_FLOW_CANCEL_RUN=run-8'
         $txt | Should -Match 'will           : 2\. wait up to 30 min'
-        $txt | Should -Match 'will           : 3\. start caj-si-updater once'
+        $txt | Should -Match 'will           : 3\. read the run state AGAIN, then start caj-si-updater once'
         $txt | Should -Match 'limit          : 30 min'
         $txt | Should -Match 'PLAN ONLY -- nothing was started'
         @(Get-StartCalls).Count | Should -Be 0
@@ -297,6 +306,76 @@ Describe '-SkipUpdate, no run running, the version read back' {
         $env = Get-BodyEnv (@(Get-StartCalls)[0].Body)
         $env['SI_UPDATER_MODE'] | Should -Be 'update-now'
         $env['SI_UPDATER_RING'] | Should -Be '2'; $env['SI_SECRET'] | Should -Be '@a-secret'
+    }
+}
+
+Describe '#1150: -Apply reads the run state AGAIN right before it starts the updater (an install 2026-11-07: a run started a minute after the plan)' {
+    It 'a run that started after the plan: the updater is NOT started, said, exit 1 -- nothing else started' {
+        New-TestWorld -Running $false
+        $script:W.StartRunOnRead = 2
+        $r = Invoke-TestRun -Apply
+        $r.Outcome | Should -Be 'run-started'; $r.ExitCode | Should -Be 1
+        @(Get-StartCalls).Count | Should -Be 0 -Because 'neither the updater nor a cancel is started'
+        $line = @($script:Said | Where-Object { $_ -like '3. READ AGAIN:*' })[0]
+        $line | Should -Match 'pipeline run run-9 is running now .* it started after the plan'
+        $line | Should -Match 'The updater was NOT started'
+        $r.Summary | Should -Match 'the update is installed after that run by itself'
+    }
+    It 'after a cancel: the cancelled run itself never holds the start (it reads Cancelled), the updater starts' {
+        New-TestWorld -Running $true
+        $r = Invoke-TestRun -Apply
+        $r.Outcome | Should -Be 'updated'
+        ($script:Said -join "`n") | Should -Match '3\. READ AGAIN: no pipeline run is running'
+    }
+    It 'a young wake-up of the runner (the run record not read here): waited for; it ends -> the updater starts' {
+        New-TestWorld -Running $false
+        $script:W.Wake = New-TestExec 'caj-si-flow-wake' 'Running' $script:T0.AddMinutes(-1); $script:W.WakePolls = 1; $script:W.WakeAge = 0
+        $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
+        $r = Invoke-TestRun -Apply -NoSql
+        ($script:Said -join "`n") | Should -Match 'waiting before the start: a wake-up of the pipeline runner executes \(caj-si-flow caj-si-flow-wake'
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 1
+        $r.Outcome | Should -Be 'updated'
+    }
+    It 'a wake-up that keeps running past the wait (it started a run): NOT started' {
+        New-TestWorld -Running $false
+        $script:W.Wake = New-TestExec 'caj-si-flow-wake' 'Running' $script:T0.AddSeconds(-30); $script:W.WakePolls = 999; $script:W.WakeAge = 0
+        $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
+        $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'the run hangs on the old release'; Apply = $true; PollSeconds = 30; By = 'support (test)'
+                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; SqlWhy = 'not here (test)'; WakeWaitMinutes = 2 }
+        $r = Invoke-SIStopRunAndUpdate @a
+        $r.Outcome | Should -Be 'run-started'
+        $r.Summary | Should -Match 'still after 2 min'
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 0
+    }
+    It 'the decision: <Why> -> <Want>' -ForEach @(
+        @{ Why = 'a run this script did not cancel';  Run = @{ Running = $true; Id = 'run-9' }; Cancelled = '';      Act = @{};                                  Want = 'refuse' }
+        @{ Why = 'the run this script cancelled';     Run = @{ Running = $true; Id = 'run-8' }; Cancelled = 'run-8'; Act = @{};                                  Want = 'go' }
+        @{ Why = 'a step executes';                   Run = $null;                               Cancelled = '';      Act = @{ Steps = @('caj-si-identity x (1 min)') }; Want = 'refuse' }
+        @{ Why = 'only a young wake-up';              Run = $null;                               Cancelled = '';      Act = @{ Wakes = @('caj-si-flow w (20 s)') };      Want = 'wait' }
+        @{ Why = 'nothing';                           Run = @{ Running = $false; Id = 'run-7' }; Cancelled = '';      Act = @{};                                  Want = 'go' }
+    ) {
+        $run = if ($Run) { [pscustomobject]@{ Running = $Run.Running; Id = $Run.Id; StartedUtc = $script:T0; Trigger = 'schedule' } } else { $null }
+        $act = [pscustomobject]@{ Runner = @($Act.Runner | Where-Object { $_ }); Steps = @($Act.Steps | Where-Object { $_ }); Wakes = @($Act.Wakes | Where-Object { $_ }) }
+        (Get-SIStopRunStartCheck -Run $run -Activity $act -CancelledRunId $Cancelled).Verdict | Should -Be $Want
+    }
+}
+
+Describe '#1150: the plan warns when the next scheduled run is near' {
+    It 'the warning: <Why>' -ForEach @(
+        @{ Why = 'the next slot in 5 min';   Due = @{ Action = 'Wait'; NextMin = 5 };   Want = 'the next scheduled run starts at 2026-11-04 10:05Z \(in 5 min\)' }
+        @{ Why = 'a run is due now';         Due = @{ Action = 'Start'; NextMin = $null }; Want = 'a scheduled run is DUE now' }
+        @{ Why = 'the next slot in 3 hours'; Due = @{ Action = 'Wait'; NextMin = 180 }; Want = '^$' }
+        @{ Why = 'a run is going (Busy)';    Due = @{ Action = 'Busy'; NextMin = $null }; Want = '^$' }
+    ) {
+        $d = [pscustomobject]@{ Action = $Due.Action; NextUtc = $(if ($null -ne $Due.NextMin) { $script:T0.AddMinutes($Due.NextMin) } else { $null }) }
+        Get-SIStopRunSlotWarning -Due $d -NowUtc $script:T0 -WithinMinutes 10 | Should -Match $Want
+        Get-SIStopRunSlotWarning -Due $null -NowUtc $script:T0 | Should -Be ''
+    }
+    It 'the plan reads the stored schedule (daily at 10:05, now 10:00) and says it' {
+        New-TestWorld -Running $false
+        $script:W.Def = '{"schema":1,"mode":"flow","cadence":"daily","startTime":"10:05","timeZone":"UTC","steps":[]}'
+        $null = Invoke-TestRun
+        ($script:Said -join "`n") | Should -Match 'WARNING        : the next scheduled run starts at 2026-11-04 10:05Z \(in 5 min\)'
     }
 }
 

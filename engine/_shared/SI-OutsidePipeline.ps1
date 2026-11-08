@@ -46,7 +46,10 @@ IF OBJECT_ID(N'cfg.FlowRun') IS NOT NULL AND OBJECT_ID(N'cfg.FlowStepRun') IS NO
     SELECT N'step', s.Job, s.Execution, s.StartedUtc, s.EndedUtc
     FROM cfg.FlowStepRun s JOIN cfg.FlowRun r ON r.FlowRunId = s.FlowRunId
     WHERE r.StartedUtc >= @since;
+-- ONE result set only (si-flow-1205 fix, 2026-11-08): the reader keeps the FIRST result set, so the people's starts go
+-- into @r too -- a bare EXEC here came back first and hid every step record, which flagged every run's execution.
 IF OBJECT_ID(N'cfg.JobTriggerRequest') IS NOT NULL AND COL_LENGTH(N'cfg.JobTriggerRequest', N'ExecutionName') IS NOT NULL
+    INSERT @r (K, Job, Execution, StartedUtc, EndedUtc, Txt)
     EXEC sp_executesql N'SELECT N''person'' AS K, JobName AS Job, ExecutionName AS Execution, RequestedUtc AS StartedUtc, CAST(NULL AS datetime2(0)) AS EndedUtc, CAST(NULL AS nvarchar(max)) AS Txt
                          FROM cfg.JobTriggerRequest WHERE ExecutionName IS NOT NULL AND RequestedUtc >= @s;', N'@s datetime2(0)', @s = @since;
 SELECT K, Job, Execution, StartedUtc, EndedUtc, Txt FROM @r;

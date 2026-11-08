@@ -34,9 +34,36 @@ function Get-SIUpdaterAppIdentity {
     $a = $null
     try { $a = Get-SIUpdaterContainerApp -App $App -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } catch { $a = $null }
     if (-not $a -or -not $a.identity -or -not $a.identity.userAssignedIdentities) { return $null }
-    $p = @($a.identity.userAssignedIdentities.PSObject.Properties) | Select-Object -First 1
+    $p = Select-SIUpdaterAppSqlIdentity -App $a
     if (-not $p) { return $null }
     [pscustomobject]@{ Name = (([string]$p.Name) -split '/')[-1]; ClientId = [string]$p.Value.clientId; ResourceId = [string]$p.Name }
+}
+
+function Select-SIUpdaterAppSqlIdentity {
+    <#
+        PURE. Of the user-assigned identities on one container app, the one the app SIGNS IN TO SQL WITH: the identity whose
+        client id the app's AZURE_CLIENT_ID names, else Identity__ManagedIdentityClientId, else the only one, else the first.
+        An app can carry two (an identity move in progress, 2026-11-07 internal: the grant went to the first one listed while
+        the app signed in as the other). Returns the identity's property (Name = resource id, Value.clientId) or $null.
+    #>
+    param([Parameter(Mandatory)]$App)
+    if (-not $App.identity -or -not $App.identity.userAssignedIdentities) { return $null }
+    $all = @($App.identity.userAssignedIdentities.PSObject.Properties)
+    if (-not $all.Count) { return $null }
+    if ($all.Count -eq 1) { return $all[0] }
+    foreach ($n in 'AZURE_CLIENT_ID', 'Identity__ManagedIdentityClientId') {
+        $want = ''
+        foreach ($c in @($App.properties.template.containers)) {
+            if (-not $c) { continue }
+            foreach ($e in @($c.env)) { if ($e -and [string]$e.name -eq $n -and [string]$e.value) { $want = [string]$e.value; break } }
+            if ($want) { break }
+        }
+        if ($want) {
+            $hit = @($all | Where-Object { [string]$_.Value.clientId -ieq $want }) | Select-Object -First 1
+            if ($hit) { return $hit }
+        }
+    }
+    $all[0]
 }
 
 function Resolve-SIUpdaterDbUser {
@@ -564,15 +591,29 @@ function Invoke-SIUpdaterDbJob {
         }
         # ---- 3. the run (a failure holds the update; a run after a NEW membership is given time to reach the token) ----
         Write-UpdLog ('the database setup job {0}: started ({1})' -f $n.Job, $(if ($mem.JustAdded) { 'its identity became a member of the SQL admin group in this run' } elseif ($mem.Member -eq $true) { 'its identity is a member of the SQL admin group, read back' } else { 'its identity is a member of the SQL admin group since its run of ' + [string]$rec.at }))
+        # #1151 (1) SEC-01: the recorded Support app named to the run, so the job takes its STANDING db_owner off where the
+        # just-in-time path reads back (setup\_shared\SI-SupportStandingUpdate.ps1); never after a deliberate rollback
+        $so = Get-SIUpdaterSupportStandingInput -SIRoot $SIRoot -Store $Store
+        $extra = @{}; if ($so.ClientId) { $extra['SI_DBINIT_SUPPORT_STANDING_OFF'] = $so.ClientId }
+        if ($so.Why) { Write-UpdLog $so.Why }
         $settle = @($SettleWaits | Where-Object { $_ -gt 0 })
         $try = 0
         while ($true) {
-            $r = Start-SIDbInitRun -Arm $Arm -JobId $job.JobId -Job $job.Job -By 'updater' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep
-            $after = $null
-            try { $row = @(& $Store.Invoke (Get-SIDbInitRecordReadSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1; $after = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $row @('Value'))) } catch { $after = $null }
+            $r = Start-SIDbInitRun -Arm $Arm -JobId $job.JobId -Job $job.Job -By 'updater' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep -Extra $extra
+            # #1146: THIS run's result -- the updater's own row first (DbJobUpdater: a support run started beside this update
+            # writes its own row and can never overwrite it), else the shared row; a row of another run is never taken
+            $after = $null; $other = $null
+            $readRow = { param($nm) try { $x = @(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $nm) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1; ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $x @('Value'))) } catch { $null } }
+            foreach ($nm in @($(if (Get-Command -Name Get-SIDbInitCallerRecordName -ErrorAction SilentlyContinue) { Get-SIDbInitCallerRecordName -By 'updater' }), '') | Select-Object -Unique) {
+                $cand = & $readRow $nm
+                if ($cand -and $cand.PSObject.Properties['run'] -and [string]$cand.run -eq $r.Run) { $after = $cand; break }
+                if (-not $nm -and $cand) { $other = $cand }
+            }
+            if (-not $after) { $after = $other }
             $mine = [bool]($after -and $after.PSObject.Properties['run'] -and [string]$after.run -eq $r.Run)
             if ($r.Ok -and $mine -and [string]$after.state -eq 'ok') {
                 Write-UpdLog ('the database setup job {0}: every identity read back ({1}; execution {2})' -f $n.Job, [string]$after.n, $r.Execution)
+                if ($so.ClientId) { $null = Invoke-SIUpdaterSupportStanding -Store $Store -Graph $Graph -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -ClientId $so.ClientId -Run $r.Run -NowUtc (& $Now) -SIRoot $SIRoot }
                 return (& $res $true 'ok' ('every identity read back (execution {0})' -f $r.Execution))
             }
             if (-not ($mem.JustAdded -and (Test-SIUpdaterDbJobSignInFailure -Mine $mine -Record $after))) { break }
@@ -586,7 +627,7 @@ function Invoke-SIUpdaterDbJob {
             & $Sleep $w
         }
         $why = 'the database setup job {0} did not complete (execution {1}: {2}{3}) -- the update is held, the installed version keeps running; {4}' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status,
-                   $(if ($mine -and $after.PSObject.Properties['why'] -and [string]$after.why) { '; ' + [string]$after.why } elseif (-not $mine) { '; it recorded no result for this run' } else { '' }), (Get-SIDbInitLogText -ResourceGroup $ResourceGroup -Execution $r.Execution)
+                   $(if ($mine -and $after.PSObject.Properties['why'] -and [string]$after.why) { '; ' + [string]$after.why } elseif (-not $mine -and $after -and $after.PSObject.Properties['run'] -and [string]$after.run) { '; it recorded no result for this run -- the last result is of another run of the job ({0}{1}), started beside this update' -f [string]$after.run, $(if ($after.PSObject.Properties['by'] -and [string]$after.by) { ', by ' + [string]$after.by } else { '' }) } elseif (-not $mine) { '; it recorded no result for this run' } else { '' }), (Get-SIDbInitLogText -ResourceGroup $ResourceGroup -Execution $r.Execution)
         Write-UpdLog ('WARNING: ' + $why)
         & $res $false 'failed' $why
     } catch {
@@ -594,6 +635,53 @@ function Invoke-SIUpdaterDbJob {
         Write-UpdLog $why
         & $res $true 'not-ready' $why
     }
+}
+
+function Get-SIUpdaterSupportStandingInput {
+    <#
+        #1151 (1) SEC-01, step 1 (setup\_shared\SI-SupportStandingUpdate.ps1): the Support app the updater names to its run of
+        the database setup job -- the one recorded on the install, never after a deliberate rollback. Returns @{ ClientId
+        ('' = none); Why }. Never throws: anything unreadable = none (the job then changes nothing of the Support app).
+        The file is dot-sourced into THIS function's scope; the step-3 call loads it again in its own (pure functions only).
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store)
+    try {
+        $lib = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-SupportStandingUpdate.ps1')
+        if (-not $Store -or -not $Store.Invoke -or -not (Test-Path -LiteralPath $lib)) { return [pscustomobject]@{ ClientId = ''; Why = '' } }
+        . $lib
+        $row = @(& $Store.Invoke (Get-SISupportStandingInputSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+        $get = { param($k) if ($null -eq $row) { '' } elseif ($row -is [System.Collections.IDictionary]) { [string]$row[$k] } elseif ($row -is [System.Data.DataRow]) { $x = $row[$k]; if ($x -is [System.DBNull]) { '' } else { [string]$x } } elseif ($row.PSObject.Properties[$k]) { [string]$row.$k } else { '' } }
+        Get-SISupportStandingOffInput -SupportApp (& $get 'SupportApp') -Cutover (& $get 'Cutover')
+    } catch { [pscustomobject]@{ ClientId = ''; Why = ('support standing access: not checked ({0}) -- checked again at the next update' -f $_.Exception.Message) } }
+}
+
+function Invoke-SIUpdaterSupportStanding {
+    <#
+        #1151 (1) SEC-01, step 3 (setup\_shared\SI-SupportStandingUpdate.ps1, Invoke-SISupportStandingCheck): after THIS run of
+        the database setup job -- its standing-off row read, the Support app's membership of the SQL admin group read from the
+        member's side (the updater's read-only Graph rights), the state row and the cut-over record written, every line said.
+        The group = the SQL server's Entra administrator (ARM). The update never removes a member and never touches the
+        server's administrator. Never throws, never holds the update.
+    #>
+    param([Parameter(Mandatory)]$Store, [scriptblock]$Graph, [scriptblock]$Arm, [string]$SubscriptionId, [string]$ResourceGroup, [string]$Server,
+          [Parameter(Mandatory)][string]$ClientId, [string]$Run = '', [datetime]$NowUtc = [datetime]::UtcNow, [string]$SIRoot = '')
+    try {
+        $lib =if ($SIRoot) { [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-SupportStandingUpdate.ps1') } else { '' }
+        if ($lib -and (Test-Path -LiteralPath $lib)) { . $lib }
+        if (-not (Get-Command -Name Invoke-SISupportStandingCheck -ErrorAction SilentlyContinue)) { return $null }
+        $gid = ''; $gname = 'the SQL admin group'
+        try {
+            $name = (($Server -split '\.')[0]).Trim()
+            if ($Arm -and $name -match '^[a-z0-9][a-z0-9-]{0,62}$') {
+                $srv = & $Arm 'GET' ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Sql/servers/{2}?api-version={3}' -f $SubscriptionId, $ResourceGroup, $name, (Get-SIDbInitNames).SqlApi) $null
+                $gid = [string](Get-SIDbInitAdminGroupId -Server $srv)
+                $login = [string](Get-SIDbInitProp $srv @('properties', 'administrators', 'login')); if ($login) { $gname = $login }
+            }
+        } catch { $gid = '' }
+        $v = Invoke-SISupportStandingCheck -Store $Store -Graph $Graph -ClientId $ClientId -Run $Run -GroupId $gid -GroupName $gname -ResourceGroup $ResourceGroup -NowUtc $NowUtc
+        foreach ($l in @($v.Lines)) { Write-UpdLog $l }
+        $v
+    } catch { Write-UpdLog ('support standing access: not checked ({0}) -- checked again at the next update' -f $_.Exception.Message); $null }
 }
 
 function Invoke-SIUpdaterIndexBuildJob {

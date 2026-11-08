@@ -274,6 +274,20 @@ Describe '#1096 the pipeline check: ran outside the pipeline' {
         $o.count | Should -Be 1; $saved[0] | Should -Match '"firstUtc":"2026-11-04T05:00:00Z"'
         $saved[0].Length | Should -BeLessOrEqual 400
     }
+    It 'the SQL returns ONE result set: every inner EXEC goes into @r (the reader keeps only the first result set -- a bare EXEC hid the step records and flagged every run, 2026-11-08)' {
+        $sql = Get-SIOutsidePipelineSql
+        $lines = @($sql -split "`r?`n")
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*EXEC\s+sp_executesql') { $lines[$i - 1] | Should -Match '^\s*INSERT @r \(K, Job, Execution, StartedUtc, EndedUtc, Txt\)\s*$' }
+        }
+        # only the final statement selects to the client: every other SELECT feeds an INSERT @r or sits inside an EXEC's string
+        $bare = @($lines | Where-Object { $_ -match '^\s*SELECT\s' -and $_ -notmatch '^\s*SELECT K, Job, Execution, StartedUtc, EndedUtc, Txt FROM @r;' })
+        foreach ($b in $bare) { $idx = [array]::IndexOf($lines, $b); $lines[$idx - 1] | Should -Match 'INSERT @r' }
+        # the first-result-set reader sees the step records -> a run's execution is never flagged
+        $first = { param($q, $p, $m) if ($q -match '(?m)^\s*EXEC\s+sp_executesql' -and $q -notmatch 'INSERT @r \(K, Job, Execution, StartedUtc, EndedUtc, Txt\)\s+EXEC') { @($script:Rows | Where-Object K -eq 'person') } else { $script:Rows } }
+        $r = Invoke-SIOutsidePipelineCheck -Invoke $first -Arm (New-CheckArm) -Base $script:Base -Log { param($l, $m) } -Now { $script:Now } -Save { param($v) } -Map $script:Map
+        @($r.Items | ForEach-Object { $_.Execution }) | Should -Be @('azp-timer')
+    }
     It 'schedules mode: nothing is checked' {
         $rows = @([pscustomobject]@{ K = 'def'; Job = 'schedules'; Execution = $null; StartedUtc = $null; EndedUtc = $null; Txt = $null })
         (Invoke-SIOutsidePipelineCheck -Invoke { param($q, $p, $m) $rows }.GetNewClosure() -Arm (New-CheckArm) -Base $script:Base -Log { param($l, $m) } -Now { $script:Now } -Save { param($v) } -Map $script:Map).State | Should -Be 'schedules-mode'

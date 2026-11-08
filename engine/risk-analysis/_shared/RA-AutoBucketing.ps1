@@ -465,6 +465,52 @@ function Get-RABucketOverflowStep {
 # measured against it the same way its rows and bytes are measured against the answer limits (RA-BucketStore.ps1).
 $script:RASliceCeilingSeconds = 900
 
+function Test-RABucketGatewayTimeout {
+  <# #1155 PURE. The hunting gateway's OWN time limit answered the slice: 504 / Gateway Timeout / GatewayTimeout (about 60 s
+     at the gateway, far below SI's 900 s client ceiling). Not a busy answer (preempted) -- that is backend pressure. #>
+  param([AllowNull()][object]$Err)
+  $msg = if ($Err -is [System.Management.Automation.ErrorRecord]) { [string]$Err.Exception.Message + ' ' + [string]$Err.ErrorDetails } else { [string]$Err }
+  if ($msg -match '(?i)preempted|high cpu|memory resource consumption') { return $false }
+  return [bool]($msg -match '(?i)\b504\b|gateway\s*time-?\s*out')
+}
+
+function Get-RALateLeftAction {
+  <#
+    #1155 PURE. What happens to a slice the late passes could not recover (every in-loop AND late retry used, the last pass
+    recovered nothing). A failure that repeats on the same slice every time is DETERMINISTIC, not transient: a slice the
+    gateway's own time limit refused EVERY time (and never as busy) is too slow at its size, so it goes to the sub-bucket
+    split pass ('Split': lossless smaller slices, and the next run starts finer) instead of being written off. Live
+    2026-11-08: one report at a large install lost 4 of 9 slices to 504 on every run for 13 days at the same count.
+    Anything else still refused ('Lost') stays a named loss, as before. A 504 that recovers on a retry never reaches here.
+  #>
+  param([AllowNull()][AllowEmptyString()][string]$LastError, [bool]$Busy = $false)
+  if (-not $Busy -and (Test-RABucketGatewayTimeout -Err $LastError)) { return 'Split' }
+  return 'Lost'
+}
+
+function Get-RAIncompleteStreak {
+  <#
+    #1155 PURE. How many runs in a row a report has NOT been complete, THIS run included: 1 + the leading 'incomplete' rows of
+    its bucket history (newest first, the runs BEFORE this one). Returns @{ Runs; Since } -- Since = the oldest run of the
+    streak (this run's -NowUtc when it is the first). A report incomplete on several runs in a row is said as such.
+    -NotBefore: runs older than this are not counted -- the bucket history survives a data reset (it is configuration),
+    but a run before the reset was over data that is gone (owner 2026-11-08: "any incomplete reports can be legacy before
+    the reset"). The engine passes the oldest pipeline run on record (a reset empties the run records).
+  #>
+  param([AllowNull()][object[]]$History = @(), [datetime]$NowUtc = [datetime]::UtcNow, [AllowNull()][Nullable[datetime]]$NotBefore = $null)
+  $n = 1; $since = $NowUtc
+  foreach ($h in @($History | Where-Object { $_ })) {
+    if ([string]$h.Decided -ne 'incomplete') { break }
+    if ($null -ne $NotBefore -and $null -ne $h.RunUtc -and -not ($h.RunUtc -is [System.DBNull])) {
+      $ru = $null; try { $ru = [datetime]$h.RunUtc } catch { $ru = $null }
+      if ($null -ne $ru -and $ru -lt [datetime]$NotBefore) { break }   # PowerShell hands a Nullable[datetime] over as the DateTime itself
+    }
+    $n++
+    if ($null -ne $h.RunUtc -and -not ($h.RunUtc -is [System.DBNull])) { try { $since = ([datetime]$h.RunUtc) } catch { } }
+  }
+  [pscustomobject]@{ Runs = $n; Since = $since }
+}
+
 function Test-RABucketBusyAnswer {
   <# #737 PURE. The service's "preempted ... high CPU and/or memory" answer -- the backend is busy, the slice is not proven
      too large (v2.2.199). It carries the overflow wording "exceeded the allowed limits", so it is recognised by its own. #>

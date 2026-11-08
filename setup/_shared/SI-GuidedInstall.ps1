@@ -68,6 +68,7 @@ $script:SIInstallStepTitles = [ordered]@{
     'preflight-names'          = 'Check that the names are free'
     'preflight-region'         = 'Check that the region accepts every resource'
     'preflight-quota'          = 'Check the subscription''s quota in the region'
+    'preflight-network'        = 'Check the private network: DNS zones, subnets, hub and outbound path'
     'preflight-sql-region'     = 'Check that the region accepts the database'
     'resource-group'           = 'Resource group'
     'private-network-subnets'  = 'Private network: the subnets in your virtual network'
@@ -110,6 +111,8 @@ $script:SIInstallDataStepIds = @('preflight-sql-region', 'pro-sql', 'pro-schema'
 # #681 / #683: the steps of an OPTION are in the plan only when the install asks for the option (the answer that turns it
 # on) -- an install without them runs exactly the steps it ran before.
 $script:SIInstallOptionStepIds = [ordered]@{
+    # INS-06 / framework installer rule 8: every prerequisite of the private network, read before the first resource
+    'preflight-network'       = 'privateNetwork'
     'private-network-subnets' = 'privateNetwork'
     'private-network-data'    = 'privateNetwork'
     'private-network-registry' = 'privateNetwork'
@@ -2640,6 +2643,41 @@ function Get-SIInstallStepTable {
             }
         }
         New-SIInstallResult -Message (($lines -join '; ') + '.')
+    }
+
+    # INS-06 / INS-08 (framework installer rule 8; a customer's private install 2026-11-03 stopped AFTER the workspace, the
+    # data collection endpoint and the storage account were made, because two privatelink zones were missing in the
+    # customer's central DNS resource group): EVERY prerequisite of the private network -- the private DNS zones of every
+    # private endpoint the install makes, the subnets, the rights on the customer's network and zones, the build subnet's
+    # outbound path, the hub and the DNS path -- read here, BEFORE the first resource, and everything missing listed AT ONCE
+    # with what to create. A part that could not be read is "not checked" (a warning), never a stop; the hub peering and the
+    # DNS path only warn (the install itself only warns on them). Only for a private install (the option's step); in a
+    # check-only run (-PreflightOnly / -WhatIf) it is the plan form: it reports and changes nothing.
+    $t['preflight-network'] = {
+        param($ctx)
+        $rgId = '/subscriptions/{0}/resourceGroups/{1}' -f [string]$ctx.Values['subscriptionId'], $ctx.Names.ResourceGroup
+        $target = Get-SIInstallPrivateNetworkTarget -Values $ctx.Values -ResourceGroupId $rgId
+        $r = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Invoke-SIPrivateNetworkPreflight' -Arguments ([ordered]@{ Target = $target; Sql = [bool]($ctx.Data -or $ctx.Pro); Registry = $true })
+        if (-not $r.Ok -or $null -eq $r.Value -or $null -eq (Get-SIInstallProp $r.Value 'Ok')) {
+            $why = if ($r.Error) { $r.Error } else { 'no answer' }
+            return (New-SIInstallResult -State 'warning' -Message ('Private network: the prerequisites could not be checked in advance ({0}) -- not checked; the install checks each part again when it makes it.' -f $why))
+        }
+        $p = $r.Value
+        $lines = @($p.Lines)
+        foreach ($l in $lines) { Write-SIInstallConsole -Ctx $ctx -Text ('  ' + $l) -Color $(if ($l -like 'MISSING*') { 'Yellow' } elseif ($l -like 'NOT CHECKED*' -or $l -like 'note*') { 'DarkYellow' } else { 'Gray' }) }
+        $nc = @(@($p.NotChecked) | ForEach-Object { [string]$_.Line })
+        $notes = @(@($p.Notes) | ForEach-Object { [string]$_.Line })
+        if (-not [bool]$p.Ok) {
+            $list = @(Format-SIPrivateNetworkPreflightMissing -Missing @($p.Missing))
+            throw (New-SIInstallFailure -Message ('Private network: {0} prerequisite(s) missing. Nothing was created. {1}' -f $list.Count, ($list -join ' ')) `
+                -ActionText 'Your network team (or you) creates or grants every item in the list -- all of them, the install found them in one go -- then run the install command again:' -Command $ctx.ResumeCommand `
+                -Detail ([ordered]@{ missing = $list; notChecked = $nc; notes = $notes; lines = $lines }))
+        }
+        $zones = @($p.Zones)
+        $msg = 'Private network: every prerequisite that could be read is in place -- the network, the subnets, the build subnet''s outbound path and the private DNS zones ({0}).' -f ($zones -join ', ')
+        if ($nc.Count) { $msg += (' Not checked (could not be read; the install checks again when it makes them): {0}.' -f ($nc -join '; ')) }
+        if ($notes.Count) { $msg += (' Notes: {0}.' -f ($notes -join '; ')) }
+        New-SIInstallResult -State $(if ($nc.Count -or $notes.Count) { 'warning' } else { 'ok' }) -Message $msg -Detail ([ordered]@{ lines = $lines })
     }
 
     $t['resource-group'] = {

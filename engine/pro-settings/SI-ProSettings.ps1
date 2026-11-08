@@ -609,7 +609,10 @@ function Invoke-SIProSettingsLayer {
           [string[]]$ExcludeNames = @(),
           [datetime]$Now = ([datetime]::UtcNow),
           # UPLINK-FIX: { } -> how many runs ever ended well on this install (Test-SIProSettingsInstallPending; tests)
-          [scriptblock]$RunsBefore)
+          [scriptblock]$RunsBefore,
+          # #1147: the waits (seconds) before each new read after a network-level connect error (default Get-SISqlConnectRetryWaits),
+          # and the wait itself { param($Seconds) } (tests)
+          [int[]]$ReadRetryWaits, [scriptblock]$ReadSleep)
     $global:SI_ProSettingsInstallPending = $null; $global:SI_ProSettingsTaggingNoAccess = $null
     # the permission self-check's database part (engine\_shared\SI-PermissionCheck.ps1): what this run saw of its own access
     $global:SI_ProDatabaseAccess = $null
@@ -637,15 +640,39 @@ function Invoke-SIProSettingsLayer {
                         -CertThumbprint (& $first @($global:SI_SPN_CertThumbprint, $global:HighPriv_Modern_CertificateThumbprint_Azure))
         }
         $rows = $null; $docRows = $null; $tplRows = $null; $ovrRows = $null; $exRows = $null; $revRows = @()
-        try {
-            $rows = @(Read-SIProSettings -Store $Store); $docRows = @(Read-SIProDocuments -Store $Store)
-            $tplRows = @(Read-SIProTemplates -Store $Store); $ovrRows = @(Read-SIProItemOverrides -Store $Store); $exRows = @(Read-SIProExemptions -Store $Store)
-            # the shipped bodies the stale overrides were made on -- for the additive upgrade (only those rows are read)
-            # (never fails the run: without them an override behind the shipped content stays as stored, upgrade available)
-            $revRows = @()
-            try { $revRows = @(Read-SIProOverrideBaseRevisions -Store $Store | Where-Object { $_ }) } catch { $revRows = @() }
+        # #1147 (an install's runner, 2026-11-07): ONE network-level failure to connect ("TCP Provider, error: 40 - Could not
+        # open a connection to SQL Server") stopped the run, and the daily run was missed. A connect error at the network /
+        # transport level (Test-SISqlConnectTransient -- nothing was read or written yet; every read here is a SELECT) is
+        # tried again after a short growing wait, each said; any other error, or the last attempt, stops the run as before.
+        if (-not (Get-Command -Name Test-SISqlConnectTransient -ErrorAction SilentlyContinue)) {
+            $rp = [System.IO.Path]::Combine($script:SIProRoot, 'engine', '_shared', 'SI-SqlRetry.ps1'); if (Test-Path -LiteralPath $rp) { . $rp }
         }
-        catch { throw ("SecurityInsight Pro: the settings database {0} could not be read -- the run stops rather than use other settings. {1}" -f $Store.Name, $_.Exception.Message) }
+        $readWaits = if ($PSBoundParameters.ContainsKey('ReadRetryWaits')) { @($ReadRetryWaits) } elseif (Get-Command -Name Get-SISqlConnectRetryWaits -ErrorAction SilentlyContinue) { @(Get-SISqlConnectRetryWaits) } else { @() }
+        $readTry = 0
+        while ($true) {
+            try {
+                $rows = @(Read-SIProSettings -Store $Store); $docRows = @(Read-SIProDocuments -Store $Store)
+                $tplRows = @(Read-SIProTemplates -Store $Store); $ovrRows = @(Read-SIProItemOverrides -Store $Store); $exRows = @(Read-SIProExemptions -Store $Store)
+                # the shipped bodies the stale overrides were made on -- for the additive upgrade (only those rows are read)
+                # (never fails the run: without them an override behind the shipped content stays as stored, upgrade available)
+                $revRows = @()
+                try { $revRows = @(Read-SIProOverrideBaseRevisions -Store $Store | Where-Object { $_ }) } catch { $revRows = @() }
+                if ($readTry -gt 0) { Write-Host ('[pro-settings] the settings database {0} was read on attempt {1}' -f $Store.Name, ($readTry + 1)) }
+                break
+            }
+            catch {
+                $err = $_
+                $netErr = [bool]((Get-Command -Name Test-SISqlConnectTransient -ErrorAction SilentlyContinue) -and (Test-SISqlConnectTransient -ErrorRecord $err))
+                if ($netErr -and $readTry -lt $readWaits.Count) {
+                    $w = [int]$readWaits[$readTry]; $readTry++
+                    Write-Host ('[pro-settings] the settings database {0} could not be reached ({1}) -- a network-level connect error; tried again in {2} s (attempt {3} of {4})' -f $Store.Name, (([string]$err.Exception.Message) -split "`n")[0].Trim(), $w, ($readTry + 1), ($readWaits.Count + 1)) -ForegroundColor DarkYellow
+                    if ($ReadSleep) { & $ReadSleep $w } else { Start-Sleep -Seconds $w }
+                    continue
+                }
+                $after = if ($readTry -gt 0) { ' (after {0} attempts)' -f ($readTry + 1) } else { '' }
+                throw ("SecurityInsight Pro: the settings database {0} could not be read{1} -- the run stops rather than use other settings. {2}" -f $Store.Name, $after, $err.Exception.Message)
+            }
+        }
         # signed in and read: the identity's own database roles, for the permission self-check (never fails the run)
         $global:SI_ProDatabaseAccess = Read-SIProDatabaseAccess -Store $Store
         # the ring this install reports to Invardia (SI-TelemetrySend): the updater's state and the recorded ring, read on

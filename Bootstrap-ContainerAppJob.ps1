@@ -338,8 +338,8 @@ if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-data\Invoke-SID
 }
 # #1021: the support grant job (caj-si-support-grant: the Invardia Support app's database access, just in time, on a request the
 # Support session puts on the queue si-support-requests) is INFRASTRUCTURE like the data-out job: every Pro install with its code
-# gets it whatever the engine list -- MANUAL only, never a timer, never a step. An existing install gets it from the update
-# (setup\_shared\SI-MissingJobs.ps1).
+# gets it whatever the engine list -- never a timer, never a step; #1154: STARTED BY ITS QUEUE (event trigger, the engine
+# identity), never by an ARM start. An existing install gets it from the update (setup\_shared\SI-MissingJobs.ps1).
 if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-ProSettings.ps1')) -and
     (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/support-grant/Invoke-SISupportGrant.ps1')) -and @($Engines) -notcontains 'support-grant') {
     $Engines = @($Engines) + @('support-grant')
@@ -1193,7 +1193,8 @@ foreach ($engine in $Engines) {
     # trigger it has -- a job the web app moved into the flow (Manual) is never put back on a timer by setup.
     $trigPlan = Get-SIBootstrapTriggerPlan -Engine $engine -Mode $orch.Mode -Cron $schedule -Map $flowMap
     $existingManual = ($existing -and [string]$existing.properties.configuration.triggerType -eq 'Manual')
-    $triggerNote = if ($isManualOnly) { 'manual trigger only' }
+    $triggerNote = if ($engine -eq 'support-grant') { 'started by its queue si-support-requests' }
+                   elseif ($isManualOnly) { 'manual trigger only' }
                    elseif ($existingManual) { 'manual trigger kept (in the flow, or disabled)' }
                    elseif (-not $existing -and $trigPlan.Trigger -eq 'Manual') { $(if ($isFlow) { 'waits -- schedules mode' } else { 'in the flow' }) + (' (timer "{0}" remembered)' -f $schedule) }
                    else { 'cron: "' + $schedule + '"' }
@@ -1446,6 +1447,16 @@ foreach ($engine in $Engines) {
     if (-not $effectiveUseKEDA -and -not $isManualOnly -and $trigPlan.Trigger -eq 'Manual') {
         $createArgs = ConvertTo-SIManualCreateArgs -CreateArgs $createArgs -RememberCron $trigPlan.RememberCron
     }
+    # #1154 (framework §5.5): the support grant job is STARTED BY ITS OWN QUEUE si-support-requests (the queue scaler, signed
+    # in as the engine identity) -- the Invardia Support app only puts its request on the queue and holds no right on the job.
+    # Without the managed identity or a storage account it stays manual, said: the update converts it once both are there.
+    $sgEvent = $false
+    if ($engine -eq 'support-grant') {
+        try {
+            $createArgs = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $createArgs -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId))
+            $sgEvent = $true
+        } catch { Write-Warning ('[{0}] stays manual: {1}' -f $jobName, $_.Exception.Message) }
+    }
     $createArgs += @('--tags', $siBuildTag) + $siSizeTags
     $createArgs += $engRegistry
     if ($engAuth.IdentityResourceId) {
@@ -1493,6 +1504,11 @@ foreach ($engine in $Engines) {
             # sign-in, now signs in as the jobs' managed identity.
             if ($effectiveUseKEDA) {
                 $upd['ScaleRule'] = ConvertFrom-SIScaleRuleArgs -ScaleArgs @(Get-SIKedaQueueScaleArgs -Engine $engine -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId))
+            }
+            # #1154: the support grant job already started by its queue keeps its rule, signed in as the engine identity (an
+            # existing manual one is converted by the update -- setup never changes an existing job's trigger)
+            if ($sgEvent -and [string]$existing.properties.configuration.triggerType -eq 'Event') {
+                $upd['ScaleRule'] = ConvertFrom-SIScaleRuleArgs -ScaleArgs @(Get-SISupportGrantTriggerArgs -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId))
             }
             # #209: the identity is on the job in the same write as a Key Vault-referenced secret it resolves
             if ($engAuth.IdentityResourceId) { $upd['AddIdentity'] = [string]$engAuth.IdentityResourceId }

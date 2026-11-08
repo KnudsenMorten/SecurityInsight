@@ -412,12 +412,22 @@ $regPe = & $A 'GET' ('{0}/providers/Microsoft.Network/privateEndpoints/{1}regist
 $regWhy = Get-SIRegistryCloseProblem -RegistryEndpoint $regPe -Pools $pools -VnetId $tgt.VnetId
 $plan['registry-public-off'] = @{ Action = $(if (-not $registry) { 'skip' } elseif ($regClosed) { 'none' } else { 'change' }); Reason = $(if (-not $registry) { 'the install''s container registry was not found (give -RegistryName)' } elseif ($regClosed) { 'the registry''s public endpoint is closed' } elseif ($regWhy) { 'NOT YET: ' + $regWhy } else { 'the registry''s public endpoint is closed (its builds run on the agent pool in the network)' }) }
 
-Write-SIPnLine ('{0,-20} read-only: {1}' -f 'proof', $(if ($noVnet) { $noVnet } else { 'virtual network {0} ({1}); {2} private endpoint(s) planned' -f ($tgt.VnetId -split '/')[-1], [string](Get-SIPnProp $vnet @('location')), $targets.Count })) 'DarkGray'
+# INS-06 / framework installer rule 8: THE NETWORK PREFLIGHT -- every prerequisite of the steps that ADD private resources
+# (the private DNS zones of every endpoint, the subnets, the rights on the network and the zones, the build subnet's outbound
+# path, the hub, the DNS path), read before any change and printed with the plan. An -Apply of those steps is HELD on a real
+# missing item (all of them listed at once, nothing changed); a part that could not be read is "not checked" and holds nothing.
+$pre = $null
+if ($tgt.VnetId) {
+    try { $pre = Get-SIPrivateNetworkPreflight -Arm $A -Target $tgt -Sql ([bool]$ids.SqlServerId) -Vault ([bool]$ids.KeyVaultId) -Storage ([bool]$ids.StorageAccountId) -Registry ([bool]$ids.RegistryId) }
+    catch { $pre = $null; Write-SIPnLine ('network preflight    NOT CHECKED: {0}' -f $_.Exception.Message) 'Yellow' }
+}
+Write-SIPnLine ('{0,-20} read-only: {1}' -f 'proof',$(if ($noVnet) { $noVnet } else { 'virtual network {0} ({1}); {2} private endpoint(s) planned' -f ($tgt.VnetId -split '/')[-1], [string](Get-SIPnProp $vnet @('location')), $targets.Count })) 'DarkGray'
 foreach ($k in @($script:SIPnSteps | Where-Object { $plan.Contains($_) })) {
     $d = $plan[$k]
     $what = switch ([string]$d.Action) { 'none' { 'nothing to do' } 'skip' { 'SKIPPED' } default { 'WOULD CHANGE' } }
     Write-SIPnLine ('{0,-20} {1}: {2}' -f $k, $what, $d.Reason) $(switch ([string]$d.Action) { 'none' { 'DarkGray' } 'skip' { 'Yellow' } default { 'White' } })
 }
+if ($pre) { foreach ($l in @($pre.Lines)) { Write-SIPnLine ('network preflight    ' + $l) $(if ($l -like 'MISSING*') { 'Yellow' } elseif ($l -like 'ok*') { 'DarkGray' } else { 'DarkYellow' }) } }
 # #866: THE NETWORK HAND-OFF -- the exact list for the customer's network team (read only), printed after the plan and after
 # every run; after a run also written next to the record with the hub owner's script, and kept in the record for Invardia
 function Show-SIPnHandOff {
@@ -441,7 +451,11 @@ function Show-SIPnHandOff {
 if (-not $Apply) {
     $hoPlan = Show-SIPnHandOff
     Write-SIPnLine ('PLAN ONLY -- nothing was changed. Apply: -Apply -Steps <{0}>' -f ($script:SIPnSteps[1..($script:SIPnSteps.Count - 1)] -join ',')) 'Yellow'
-    return [pscustomobject]@{ Mode = 'plan'; Shape = $shape; Plan = $plan; RecordPath = $null; Results = @(); HandOff = $(if ($hoPlan) { $hoPlan.HandOff } else { $null }) }
+    return [pscustomobject]@{ Mode = 'plan'; Shape = $shape; Plan = $plan; RecordPath = $null; Results = @(); HandOff = $(if ($hoPlan) { $hoPlan.HandOff } else { $null }); Preflight = $pre }
+}
+$preSteps = @('subnets', 'private-endpoints', 'private-dns', 'private-environment', 'registry-agent-pool')
+if ($pre -and -not $pre.Ok -and @($want | Where-Object { $preSteps -contains $_ }).Count) {
+    throw ('Refused before any change (network preflight): {0} Nothing was changed.' -f ((@(Format-SIPrivateNetworkPreflightMissing -Missing @($pre.Missing))) -join ' '))
 }
 
 # ---------------------------------------------------------------------------------------------------- APPLY

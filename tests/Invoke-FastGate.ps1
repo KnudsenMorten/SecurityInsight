@@ -168,6 +168,10 @@ function Get-SIFastGateMap {
         Explicit = @($j.explicit | ForEach-Object { [pscustomobject]@{ Pattern = [string]$_.pattern; Suites = @($_.suites | ForEach-Object { [string]$_ }); Dotnet = @($_.dotnet | ForEach-Object { [string]$_ }); Exclusive = [bool]$_.exclusive; Kind = $(if ($_.PSObject.Properties['kind']) { [string]$_.kind } else { '' }) } })
         # THE QUICK GATE (owner 2026-10-13: "yes, build it the pim way"): the core set, its rules and the measured hubs
         Core     = @($j.core | Where-Object { $_ } | ForEach-Object { [string]$_.suite })
+        # the grant checks (Invardia 2026-11-07): every quick gate with a code change, whatever changed (Get-SIFastGateGrantChecks)
+        GrantChecks = $(if ($j.PSObject.Properties['grantChecks'] -and $j.grantChecks) { [pscustomobject]@{
+            Suites = @($j.grantChecks.suites | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            Dotnet = @($j.grantChecks.dotnet | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ Project = [string]$_.project; Classes = @($_.classes | ForEach-Object { [string]$_ }) } }) } } else { $null })
         Hubs     = @($j.hubs | Where-Object { $_ } | ForEach-Object { [string]$_.path })
         Quick    = [pscustomobject]@{
             BroadOver = $(if ($j.quick -and $j.quick.broadOver) { [int]$j.quick.broadOver } else { 3 })
@@ -777,6 +781,36 @@ function Get-SIFastGateDotnetFilter {
     $list = $pick.ToArray(); [Array]::Sort($list, [StringComparer]::Ordinal)
     [pscustomobject]@{ Whole = $false; Filter = (@($list | ForEach-Object { 'FullyQualifiedName~' + $_ }) -join '|'); Classes = $list; Notes = $notes.ToArray() }
 }
+function Get-SIFastGateGrantChecks {
+    <#
+        PURE. THE GRANT CHECKS (Invardia 2026-11-07): what runs in EVERY quick gate that has a code change (-CodeChange: the
+        quick selection's core rule -- a code or test change, not a document or a release bump alone), whatever changed --
+        fast-gate.map.json grantChecks: the grant-list suites and, per web test project, the classes that compare the web
+        app's writes with its grants. Returns @{ Suites (names); Dotnet (project -> class names) } -- both empty without a
+        code change or without the map entry.
+    #>
+    param([Parameter(Mandatory)]$Map, [switch]$CodeChange)
+    $out = [pscustomobject]@{ Suites = @(); Dotnet = [ordered]@{} }
+    if (-not $CodeChange -or -not $Map.PSObject.Properties['GrantChecks'] -or -not $Map.GrantChecks) { return $out }
+    $out.Suites = @($Map.GrantChecks.Suites | Where-Object { $_ })
+    foreach ($d in @($Map.GrantChecks.Dotnet | Where-Object { $_ -and $_.Project })) { $out.Dotnet[[string]$d.Project] = @($d.Classes | Where-Object { $_ }) }
+    $out
+}
+
+function Add-SIFastGateGrantClasses {
+    <# PURE. The grant-check classes added to a project's dotnet plan (-Plan: Get-SIFastGateDotnetFilter's answer): -Only (the
+       project runs for the grant checks alone) = exactly those classes; else added to the classes that run (a whole run
+       already has them). #>
+    param([Parameter(Mandatory)]$Plan, [string[]]$Classes = @(), [switch]$Only)
+    $cls = @($Classes | Where-Object { $_ })
+    if (-not $cls.Count) { return $Plan }
+    if ($Only) { $list = @($cls | Sort-Object -Unique) }
+    elseif ($Plan.Whole) { return $Plan }
+    else { $list = @(@($Plan.Classes) + $cls | Where-Object { $_ } | Sort-Object -Unique) }
+    $notes = @(@($Plan.Notes) + @('the grant checks run in every quick gate with a code change: ' + ($cls -join ', ')))
+    [pscustomobject]@{ Whole = $false; Filter = (@($list | ForEach-Object { 'FullyQualifiedName~' + $_ }) -join '|'); Classes = $list; Notes = $notes }
+}
+
 function Get-SIFastGateBudget {
     <#
         PURE. THE 10-MINUTE TARGET of every release gate (TEST-FAST, owner 2026-11-02: "the purpose was to move things
@@ -1275,6 +1309,23 @@ foreach ($s in @($Suites -split ';' | ForEach-Object { $_.Trim() } | Where-Objec
     $n = if ($s -like '*.Tests.ps1') { $s } else { "$s.Tests.ps1" }
     if (@($allSuites | Where-Object Name -eq $n).Count -and -not $reasons.Contains($n)) { $reasons[$n] = '-Suites (named)' }
 }
+# THE GRANT CHECKS (Invardia 2026-11-07: a web write shipped without its grant because no gate ran the check): the web
+# app's write-grant class and the grant-list suites run in EVERY quick gate with a code change -- the class alone, not the
+# whole web test project (fast-gate.map.json grantChecks; Get-SIFastGateGrantChecks)
+$grantDotnet = @{}
+if (-not $Full) {
+    # a code change: something changed, and the quick selection's core rule says it is code (not a document / a bump alone)
+    $gcSel = Get-SIFastGateGrantChecks -Map $map -CodeChange:([bool]($changed.Count -and $quickSel -and $quickSel.Core))
+    # SELECT ONCE: a project that ran for the grant checks alone stays so when the selection is handed back in
+    $preGrantOnly = @(if ($pre -and $pre.PSObject.Properties['DotnetGrantOnly']) { @($pre.DotnetGrantOnly | Where-Object { $_ }) })
+    foreach ($s in @($gcSel.Suites)) { if (@($allSuites | Where-Object Name -eq $s).Count -and -not $reasons.Contains($s)) { $reasons[$s] = 'grant checks (every quick gate with a code change)' } }
+    foreach ($d in @($gcSel.Dotnet.Keys)) {
+        if ($dotnetAll -notcontains $d) { continue }
+        $grantDotnet[$d] = @($gcSel.Dotnet[$d])
+        if (-not $dotnetPick.Contains($d)) { $dotnetPick[$d] = 'grant checks'; $grantDotnet["only:$d"] = $true }
+        elseif ($preGrantOnly -contains $d) { $grantDotnet["only:$d"] = $true }
+    }
+}
 if ($NoDotnet) { $dotnetPick = [ordered]@{} }
 # every suite by another road (-Suites / -Paths naming them all) is the same full run: refused without the owner's words
 if (-not $Full) {
@@ -1310,6 +1361,8 @@ if ($dotnetPick.Count) {
             # the quick gate: never the whole project, at most dotnetMaxClasses classes (+ the always-on ones)
             $df = Get-SIFastGateDotnetFilter -Changed $changed -SourcePrefix $nf.Source -TestPrefix $nf.Tests -TestClasses $cls.ToArray() -Always $nf.Always -TestText $tt -Related $nf.Related -Shared $nf.Shared -FileClasses $fc -NoWhole:(-not $Precise) -MaxClasses $(if ($Precise) { 0 } else { $map.Quick.DotnetMaxClasses })
         }
+        # the grant checks: the class alone when nothing else of this project runs, else added to what runs
+        if ($grantDotnet.ContainsKey($d)) { $df = Add-SIFastGateGrantClasses -Plan $df -Classes @($grantDotnet[$d]) -Only:([bool]$grantDotnet["only:$d"]) }
         [pscustomobject]@{ Name = $d; Path = $proj.FullName; Filter = $df.Filter; Whole = [bool]$df.Whole; Classes = @($df.Classes); Notes = @($df.Notes) }
     })
 }
@@ -1336,7 +1389,8 @@ if ($SelectionFile) {
     $sd = Split-Path -Parent $SelectionFile; if ($sd -and -not (Test-Path -LiteralPath $sd)) { New-Item -ItemType Directory -Force -Path $sd | Out-Null }
     # Reasons: every suite with why it runs -- what a gate handed this file (-SelectionIn) runs as it is (select once)
     $selDoc = [ordered]@{ Full = [bool]$Full; Hotfix = [bool]$Hotfix; Base = "$Base"; Changed = @($changed); Suites = @($reasons.Keys); Reasons = $reasons; Dotnet = @($dotnetPick.Keys); Unmapped = @($unmapped)
-                          OverBudget = @($overBudget.Keys); Dropped = @(); DotnetClasses = [ordered]@{} }
+                          OverBudget = @($overBudget.Keys); Dropped = @(); DotnetClasses = [ordered]@{}
+                          DotnetGrantOnly = @($dotnetPick.Keys | Where-Object { $grantDotnet.ContainsKey("only:$_") }) }
     foreach ($pj in $dotnetPlan) { $selDoc.DotnetClasses[$pj.Name] = $(if ($pj.Whole) { @('*') } else { @($pj.Classes) }) }
     # for the release command's STOP (setup\Release-SI.ps1: a selection of every suite, or one that cannot fit the
     # 10-minute target, is said): how many suites there are, and the selection's measured seconds

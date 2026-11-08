@@ -336,12 +336,19 @@ if ($CreateKeyVault) {
     $kv = $kvr.Vault
     switch ($kvr.Action) {
         'created' {
-            if ($kvPurgeProtect) { _Info ("KV purge protection: {0}" -f $(if ($kv.EnablePurgeProtection) { 'on' } else { 'NOT on -- set it with setup\Set-SISecurityBaseline.ps1' })) }
+            if ($kvPurgeProtect) { _Info ("KV purge protection: {0}" -f $(if ($kv.EnablePurgeProtection) { 'on' } else { 'not on yet -- turned on below' })) }
             if (-not $kv.EnableRbacAuthorization) { throw ("Key Vault {0} was created WITHOUT RBAC authorization -- the SI role grants below would not apply." -f $KeyVaultName) }
             _Ok ("KV created: {0}" -f $kv.VaultUri)
         }
         'recovered' { _Warn ("KV RECOVERED: {0} was soft-deleted (deleted {1}) and is taken back with its keys and secrets, not made again" -f $kv.VaultUri, [string]$kvr.Deleted.DeletionDate) }
         default { _Info ("KV already exists: {0}" -f $kv.VaultUri) }
+    }
+    # #1151 (6) SEC-03: purge protection ON whatever the vault's way in (created, recovered or found), READ BACK with retries
+    # (Invoke-SIKeyVaultPurgeConverge, the step every update runs too) -- one-way; never stops the install (a refusal is said,
+    # and the next update sets it)
+    if ($kvPurgeProtect -and -not $kv.EnablePurgeProtection) {
+        $kvpp = Invoke-SIKeyVaultPurgeConverge -Arm { param([string]$Method, [string]$Path, $Body) Invoke-SIArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } -VaultIds @($kv.ResourceId)
+        foreach ($l in @($kvpp.Lines)) { if ($l -match 'turned ON|is on') { _Ok ("KV {0}" -f $l) } else { _Warn ("KV {0}" -f $l) } }
     }
     _Ok ("KV network {0} and read back: {1}" -f $(if ($kvr.Changed) { 'set' } else { 'already right' }), $kvr.Shape)
     # Grant SPN: Key Vault Secrets User (read), Key Vault Certificate User (read cert)

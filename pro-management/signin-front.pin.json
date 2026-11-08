@@ -1,10 +1,10 @@
 {
   "_comment": "CR7 (framework 12.11g): the ONE shared sign-in front SecurityInsight's web app runs behind, pinned by version. state 'contract' = built against the component's contract, the component is not on main yet: a release carries no front and the switch SI_Web_SigninFront cannot be turned on (setup refuses). state 'pinned' = commit names the main commit of FRAMEWORK/signin-front at that version: setup\\Publish-SIRelease.ps1 packs exactly that tree into the release (pro-management/signin-front/), and setup / the updater build the front's image from it in the install's own registry. The settings below follow the component's README; a change the component needs for SecurityInsight goes to the coordinator, never into a copy here.",
   "component": "FRAMEWORK/signin-front",
-  "version": "1.4.5",
+  "version": "1.5.0",
   "state": "pinned",
-  "commit": "bbdfdbc366d0284e6c7451c5708063cda3086c4b",
-  "tree": "52a9fa056c562dc20b6b028c02396504a939ccc7",
+  "commit": "44818393d6fd249e59a13ab29ddccdc6e520b264",
+  "tree": "b19bd32c07de8fafc91ca9da59ebffd7324456f9",
   "image": "signin-front",
   "context": "src",
   "dockerfile": "Dockerfile",

@@ -248,6 +248,8 @@ Describe 'no free file loads a Pro file' {
             # #350 (c): the self-update test checks that the Pro web app roll builds through the build-context helper only
             # after Test-Path finds it
             'tests\pester\SIv3-UpdaterSelf.Tests.ps1|SI-UpdaterWebApp.ps1'
+            # the web app move's heartbeat wiring check reads the Pro heartbeat job only after Test-Path finds it (skipped without it)
+            'tests\pester\SIv3-UpdaterWebAppName.Tests.ps1|engine\heartbeat'
             # #352: the updater loads its Pro database step only after Test-Path finds it, and its installer offers the Pro
             # database rights (Grant-SIUpdaterDatabase.ps1) only after Test-Path finds that script -- the Community copy has neither.
             'container\updater\Start-SIUpdater.ps1|SI-UpdaterDatabase.ps1'

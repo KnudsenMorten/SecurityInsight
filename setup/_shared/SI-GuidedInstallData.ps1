@@ -320,13 +320,14 @@ function Get-SIInstallSqlAdminGroupArgs {
         if (-not $g) { throw (New-SIInstallFailure -Message ('The database admin group {0} was not found (or your account cannot read it).' -f $v['sqlAdminGroupId']) -ActionText 'Check the group id in the wizard, or leave it empty to use grp-si-sql-admins.') }
         $ga.GroupName = [string](Get-SIInstallProp $g 'displayName')
     }
-    # CR5 (#655): a NEW group is created under the name people read ("SecurityInsight SQL admins" with the new-install names);
-    # its mailNickname follows grp-si-sql-admins, so every later run finds it under either name. An existing group keeps its name.
-    elseif ($n -is [System.Collections.IDictionary] -and $n.Contains('SqlAdminGroupDisplayName') -and [string]$n['SqlAdminGroupDisplayName'] -and [string]$n['SqlAdminGroupDisplayName'] -cne 'grp-si-sql-admins') {
-        $ga.DisplayName = [string]$n['SqlAdminGroupDisplayName']
+    # framework §5.5 / §12.11c (Invardia ruling 2026-11-07): a NEW group is created under its STANDARD name from the start --
+    # grp-si-sql-admins, a Community install's grp-si-community-sql-admins -- never a display name of its own. A display name
+    # is passed only when an install record carries one that differs (an install from before keeps what it has).
+    elseif ($n -is [System.Collections.IDictionary]) {
         # SI #750: a new Community edition install's own group (grp-si-community-sql-admins), never the Pro install's
         $gn = Get-SIInstallSqlAdminGroupName -Names $n
         if ($gn -cne 'grp-si-sql-admins') { $ga.GroupName = $gn }
+        if ($n.Contains('SqlAdminGroupDisplayName') -and [string]$n['SqlAdminGroupDisplayName'] -and [string]$n['SqlAdminGroupDisplayName'] -cne $gn) { $ga.DisplayName = [string]$n['SqlAdminGroupDisplayName'] }
     }
     $ga
 }

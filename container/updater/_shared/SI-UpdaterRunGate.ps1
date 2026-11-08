@@ -140,6 +140,31 @@ function Test-SIUpdaterDatabaseMissing {
     } catch { return $false }
 }
 
+function Get-SIUpdaterStartingRun {
+    <#
+        PURE. #1150 (an install, 2026-11-07: a scheduled run's runner started 18:00:55, an "update now" a minute later found
+        no run recorded yet, took the lock and rolled the jobs under the starting run -- it was cancelled): the executions of
+        the pipeline runner (ARM shape) that run now and started within -Minutes -- a run that may be starting and is not in
+        the run record yet. An execution started with SI_FLOW_CANCEL=1 is the caller's own cancel of a run (cancelled on
+        purpose) and never counts. Returns "name (started HH:mm:ssZ)" strings.
+    #>
+    param([object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$NowUtc, [int]$Minutes = 10)
+    $styles = [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal'
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($e in @($Executions | Where-Object { $_ })) {
+        $p = $e.properties
+        if (-not $p -or "$($p.status)" -notin @('Running', 'Processing') -or "$($p.endTime)".Trim()) { continue }
+        $d = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$($p.startTime)", [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$d)) { continue }
+        if (($NowUtc.ToUniversalTime() - $d).TotalMinutes -gt $Minutes) { continue }
+        $cancel = $false
+        try { foreach ($c in @($p.template.containers)) { foreach ($v in @($c.env)) { if ($v -and "$($v.name)" -eq 'SI_FLOW_CANCEL' -and "$($v.value)" -match '^(?i)(1|true|yes)$') { $cancel = $true } } } } catch { }
+        if ($cancel) { continue }
+        $out.Add(('{0} (started {1:HH:mm:ss}Z)' -f [string]$e.name, $d))
+    }
+    $out.ToArray()   # (unrolled: the callers wrap it in @(); none = nothing)
+}
+
 function Invoke-SIUpdaterRunGate {
     <#
         THE GATE. Returns @{ Go; Verdict = Go | Fresh | Wait | Unreadable; Kind ('' | run | store); Reason; RunId; LockTaken;
@@ -150,10 +175,25 @@ function Invoke-SIUpdaterRunGate {
           [scriptblock]$BusyJobs, [scriptblock]$DatabaseMissing, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$BusyRetries = $script:SIUpdaterRunGate.BusyRetries,
           # #1111: the holders whose lock is TAKEN, never waited for (default: the index build job -- the update goes first);
           # '' = none (the index build job itself)
-          [AllowEmptyString()][string]$TakeFrom = $script:SIUpdaterRunGate.TakeFrom)
+          [AllowEmptyString()][string]$TakeFrom = $script:SIUpdaterRunGate.TakeFrom,
+          # #1150: { } -> the pipeline runner's executions that started minutes ago and still run (Get-SIUpdaterStartingRun);
+          # given for an "update now" start: such a run may be starting and not be recorded yet -- asked again for a short
+          # while (a wake-up that runs nothing ends in seconds), then WAIT. $null = not asked (every other start).
+          [scriptblock]$StartingRun)
     $res = { param($v, $kind, $why, $row, [bool]$lock) [pscustomobject]@{ Go = ($v -in @('Go', 'Fresh')); Verdict = $v; Kind = $kind; Reason = $why
                                                                        RunId = $(if ($row -and $row.ContainsKey('RunId') -and -not ($row['RunId'] -is [DBNull])) { [string]$row['RunId'] } else { '' })
                                                                        LockTaken = $lock; Holder = $Holder } }
+    if ($StartingRun) {
+        $seen = @()
+        for ($i = 0; $i -le $BusyRetries; $i++) {
+            $seen = @(); try { $seen = @(& $StartingRun | Where-Object { $_ }) } catch { $seen = @() }
+            if (-not $seen.Count) { break }
+            if ($i -lt $BusyRetries) { & $Sleep ([int]$script:SIUpdaterRunGate.BusyRetrySeconds) }
+        }
+        if ($seen.Count) {
+            return (& $res 'Wait' 'run' ('update waits: a pipeline run is starting (the pipeline runner {0} started minutes ago and still runs) -- the update is installed when it has ended, before the next run starts' -f ($seen -join ', ')) $null $false)
+        }
+    }
     if (-not $Store) {
         # no state store configured: the SI jobs' executions decide (an install without a Pro database)
         $busy = @(); $err = ''

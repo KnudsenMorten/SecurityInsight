@@ -2513,6 +2513,37 @@ END');
 IF IS_ROLEMEMBER(N'db_owner') = 1 OR IS_ROLEMEMBER(N'db_securityadmin') = 1
 GRANT EXECUTE ON OBJECT::cfg.InstallKeyClaimAgainRequest TO public;
 
+-- THE FIRST SIGN-IN ON EACH WEB APP: the updater removes the old web app after a move to the standard name (ca-si-web) only
+-- once a person signed in on the new one. Each web app records its first request that passed sign-in here, once per
+-- process, in a row of ITS OWN: cfg.InstallState 'WebAppSignedIn:<its container app name>' = {"app":"<name>","at":"<utc>"}
+-- (one row per app name -- the old web app's row never stands in the new one's way, and nothing is ever deleted).
+-- Written ONLY when that app has no row yet (never overwritten). The web app writes only these rows, only through this
+-- procedure (it holds no write right on the table). A container app name is at most 32 characters, so the key fits.
+EXEC (N'CREATE OR ALTER PROCEDURE cfg.WebAppSignedInRecord @App NVARCHAR(64)
+AS
+BEGIN
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+    IF ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''si_audit_writer''), 0) <> 1
+        THROW 51414, N''only the web app may record its first sign-in'', 1;
+    IF @App IS NULL OR LEN(@App) = 0 OR LEN(@App) > 32 OR @App LIKE N''%[^a-z0-9-]%''
+        THROW 51415, N''the first sign-in must name a container app'', 1;
+    DECLARE @key NVARCHAR(64) = N''WebAppSignedIn:'' + LOWER(@App);
+    BEGIN TRAN;
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @key)
+    BEGIN
+        COMMIT;
+        SELECT N''Kept'' AS Outcome;
+        RETURN;
+    END
+    INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy)
+    VALUES (@key, N''{"app":"'' + LOWER(@App) + N''","at":"'' + CONVERT(NVARCHAR(19), SYSUTCDATETIME(), 126) + N''Z"}'', NULL, LEFT(LOWER(@App), 256));
+    COMMIT;
+    SELECT N''Recorded'' AS Outcome;
+END');
+
+IF IS_ROLEMEMBER(N'db_owner') = 1 OR IS_ROLEMEMBER(N'db_securityadmin') = 1
+GRANT EXECUTE ON OBJECT::cfg.WebAppSignedInRecord TO public;
+
 -- CR4 (#654) THE STRICTER PERIOD, ENDED EARLY: for 24 hours after a release that changed engine code the safety checks'
 -- limits are halved (cfg.InstallState 'EngineFingerprint', written by the updater). A SuperAdmin may end that period early,
 -- with a reason, on Operations > Guards (safety checks) (audited guard.strict.end-early). The web app writes only this one row of

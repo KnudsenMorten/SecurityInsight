@@ -38,6 +38,9 @@ COPY container/_shared/ /si/container/_shared/
 # ... and the pipeline's job map, which the size rule and the run limit read (without it a job's own run limit setting was
 # looked for under its own name only)
 COPY config/job-flow.locked.json /si/config/
+# #1145 the identity names (setup/_shared/SI-IdentityNamesStep.ps1): the web identity's move checks and adds the sign-in
+# app's federated credential with the web deploy's own builder -- that one file, not the web app
+COPY pro-management/deploy/SI-ManagementSignInCredential.ps1 /si/pro-management/deploy/
 # After an automatic licence request the updater mails the result with the transports the guard mails use.
 COPY engine/risk-analysis/_shared/RA-Mail.ps1 /si/engine/risk-analysis/_shared/
 

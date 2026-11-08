@@ -13,6 +13,14 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.74 — The install reports that vendor support's database access is temporary only
+
+### Fixes
+
+- An install now reports to the vendor's support platform that support has no standing rights in its databases -- only a
+  read-only view, and admin rights just for the duration of a support case you agreed to. Before, this was not reported,
+  so the support platform could not tell a temporary-only install from one where the standing rights were missing.
+
 ## v3.0.73 — A setting for tenants with very many on-premises AD accounts that never sync to Entra ID
 
 ### New

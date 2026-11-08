@@ -12,7 +12,10 @@
       * EQUIVALENCE over one fixed input set (synced, never-synced, every privilege signal, every disabled form, upper-case
         field names, the forms the query cannot decide): the records SI keeps are IDENTICAL with the filter in the query and
         with the decision after the read only (as before), and the left-out / kept counts are the same counts -- the log
-        now says how many were not fetched.
+        now says how many were not fetched;
+      * THE WIDER SWITCH (SI_Identity_SkipNeverSyncedAd, 2026-11-08): the same equivalence over the same input set with the
+        skip that has no enabled-state test -- every never-synced non-privileged AD account is left out (most in the query),
+        a privileged / synced one and a node that is not an AD account never.
     KQL cannot run offline: the hunting service is played by a PowerShell reading of the generated KQL (the test-side
     Test-KqlSkip below, written step by step from the KQL's own operators), and the KQL text is checked to carry every step.
     Offline (fakes). PS 5.1 and pwsh 7.
@@ -31,9 +34,10 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\asset-profiling\shared\IdentityRoleFetcher.ps1')
     $script:Model = Get-SIDataModel -Root (Join-Path $script:SIRoot 'data-model')
     $script:Tier = Get-SIIdentityCriticalAdGroupNames -SIRoot $script:SIRoot
-    $script:Switches = @('SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
-    # a switch not named here is set OFF (a stored false): unset means the shipped default, ON (2026-11-07)
-    function script:Set-Switches([object]$Ad = $false) {
+    $script:Switches = @('SI_Identity_SkipNeverSyncedAd', 'SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
+    # a switch not named here is set OFF (a stored false): unset means the shipped default
+    function script:Set-Switches([object]$Ad = $false, [object]$Wide = $false) {
+        Set-Variable -Name 'SI_Identity_SkipNeverSyncedAd' -Scope Global -Value $Wide
         Set-Variable -Name 'SI_Identity_SkipNeverSyncedDisabledAd' -Scope Global -Value $Ad
         Set-Variable -Name 'SI_Identity_SkipDeletedGroups' -Scope Global -Value $false
     }
@@ -85,6 +89,11 @@ BeforeAll {
     )
     $script:InQuery = @('u-dis', 'u-uac', 'u-uacnum', 'u-uacstr', 'u-upper', 'u-sidraw', 'u-critempty')
     $script:AfterRead = @('u-flagodd', 'u-uacjson')
+    # the wider switch: the query leaves out every never-synced non-privileged AD account it can decide, enabled or not;
+    # u-flagodd (a service-account flag the query cannot read as false) is left out after the read
+    $script:InQueryWide = @('u-dis', 'u-uac', 'u-uacnum', 'u-uacstr', 'u-upper', 'u-sidraw', 'u-critempty', 'u-uacjson', 'u-en', 'u-enstr', 'u-unk')
+    $script:AfterReadWide = @('u-flagodd')
+    $script:KeptWide = @('u-syn', 'u-rawoid', 'u-da', 'u-dastr', 'u-crit', 'u-svc', 'u-acstr', 'u-roles', 'u-critlvl', 'u-sens')
 
     # ---- the hunting service, played offline: the generated KQL read step by step (KQL's own operators) ----
     function script:KStr($v) {
@@ -106,7 +115,7 @@ BeforeAll {
     }
     function script:KGet($bag, [string]$k) { if ($null -eq $bag -or (KType $bag) -ne 'dictionary') { return $null }; $p = $bag.PSObject.Properties[$k]; if ($p -and $null -ne $p.Value) { , $p.Value } else { $null } }
     function script:KTrim([string]$s) { $s -replace '^[\t\n\f\r ]+|[\t\n\f\r ]+$', '' }
-    function script:Test-KqlSkip($Row) {
+    function script:Test-KqlSkip($Row, [switch]$AnyState) {
         $ids = ([string]$Row.EntityIds).ToLowerInvariant()
         $rd = $null; if ($Row.NodeProperties) { $rd = KGet ($Row.NodeProperties | ConvertFrom-Json) 'rawData' }
         $rl = $null
@@ -132,7 +141,7 @@ BeforeAll {
         $cl = KGet $rl 'criticalitylevel'
         $lvl = if ((KType $cl) -eq 'dictionary') { [bool](KStr (KGet $cl 'criticalitylevel')) } else { [bool](KStr $cl) }
         $priv = ((& $s 'admincount') -cmatch '[1-9]') -or -not $critEmpty -or $grp -or ((& $s 'assignedroles') -notin '', '[]') -or (& $flag 'hasserviceprincipalname') -or (& $flag 'isserviceaccount') -or (& $flag 'issensitive') -or $lvl
-        [bool](-not $hasOid -and $isAd -and $dis -and -not $priv)
+        [bool](-not $hasOid -and $isAd -and ($AnyState -or $dis) -and -not $priv)
     }
     # -Mode Old: the service ignores the filter (= the read before it existed); New: it applies it
     function script:Get-Answer([string]$Query, [string]$Mode) {
@@ -143,7 +152,9 @@ BeforeAll {
             $rows = @(for ($i = 0; $i -lt $rows.Count; $i++) { if (($i % $n) -eq $b) { $rows[$i] } })
         }
         $filtered = $Mode -eq 'New' -and $Query.Contains('_siSkip')
-        $skipped = @(); if ($filtered) { $skipped = @($rows | Where-Object { Test-KqlSkip $_ }); $rows = @($rows | Where-Object { -not (Test-KqlSkip $_) }) }
+        # the query says which skip it is: without a _siDisabled step it is the wider switch's (no enabled-state test)
+        $any = $filtered -and -not $Query.Contains('_siDisabled')
+        $skipped = @(); if ($filtered) { $skipped = @($rows | Where-Object { Test-KqlSkip $_ -AnyState:$any }); $rows = @($rows | Where-Object { -not (Test-KqlSkip $_ -AnyState:$any) }) }
         if ($Query -match '\| count$') { return , @([pscustomobject]@{ Count = $rows.Count }) }
         if ($Query -match '\| summarize Count = countif\(not\(_siSkip\)\), NotFetched = countif\(_siSkip\)$') { return , @([pscustomobject]@{ Count = $rows.Count; NotFetched = $skipped.Count }) }
         , @($rows)
@@ -292,13 +303,62 @@ Describe 'EQUIVALENCE: the records SI keeps are the same with the filter in the 
     }
 }
 
+Describe 'EQUIVALENCE with the wider switch SI_Identity_SkipNeverSyncedAd (no enabled-state test)' {
+    BeforeAll {
+        Mock Invoke-SIEgIdentityQuery { param($Query) $script:Queries.Add($Query); @{ Ok = $true; Rows = (Get-Answer $Query $script:Mode); Error = '' } }
+        Mock Write-SIInfo { param($Message) $script:Info.Add([string]$Message) }
+        Mock Write-SIIdentityScopeCounts { param($Counts) foreach ($c in @($Counts)) { $script:Written.Add($c) }; @($Counts).Count }
+        $script:SetupError3 = ''
+        try {
+            # 1C on too: the wider switch decides, 1C decides nothing
+            Set-Switches -Ad $true -Wide $true
+            $script:OldW = Invoke-EgRun -Mode Old
+            $script:NewW = Invoke-EgRun -Mode New
+            $script:NewWB = Invoke-EgRun -Mode New -PageRows 3
+        } catch { $script:SetupError3 = (('{0} | {1} | {2} | {3}' -f $_.Exception.GetType().FullName, $_.Exception.Message, $_.InvocationInfo.PositionMessage, $_.ScriptStackTrace) -replace '\r?\n', ' // ') } finally { Set-Switches }
+    }
+    It 'the reads ran' { $script:SetupError3 | Should -BeNullOrEmpty }
+    It 'the user queries carry the skip without the enabled-state test' {
+        $filter = Get-SIEgNeverSyncedSkipKql -CriticalGroups $script:Tier -AnyEnabledState
+        $userQ = @($script:NewW.Queries | Where-Object { $_ -match "NodeLabel == 'user'" })
+        $userQ.Count | Should -BeGreaterThan 1
+        foreach ($q in $userQ) { $q.Contains($filter) | Should -BeTrue; $q.Contains('_siDisabled') | Should -BeFalse }
+    }
+    It 'the played service leaves out exactly the never-synced non-privileged AD accounts it can decide, enabled or not' {
+        @($script:Users | Where-Object { Test-KqlSkip $_ -AnyState } | ForEach-Object { $_.NodeId } | Sort-Object) | Should -Be @($script:InQueryWide | Sort-Object)
+    }
+    It 'every node left out in the query is one the decision after the read leaves out; the privileged and synced ones are kept' {
+        foreach ($k in $script:InQueryWide + $script:AfterReadWide) { $script:OldW.ByNode.Contains($k) | Should -BeFalse -Because "$k is left out by the decision" }
+        foreach ($k in $script:KeptWide) { $script:NewW.ByNode.Contains($k) | Should -BeTrue -Because "$k is kept" }
+        $script:NewW.ByNode.Contains('u-noad') | Should -BeFalse -Because 'neither Entra nor AD: dropped as before, never by the switch'
+    }
+    It 'the same records, field for field -- one query and bucketed' {
+        ($script:OldW.Errors + $script:NewW.Errors) | Should -BeNullOrEmpty
+        @($script:NewW.ByNode.Keys) | Should -Be @($script:OldW.ByNode.Keys)
+        @($script:NewWB.ByNode.Keys) | Should -Be @($script:OldW.ByNode.Keys)
+        foreach ($k in @($script:OldW.ByNode.Keys)) { @(RowDiff $script:NewW.ByNode[$k] $script:OldW.ByNode[$k]) | Should -BeNullOrEmpty -Because "$k is the same record" }
+    }
+    It 'the same counts on the wider switch''s counter only, and the log names it' {
+        @($script:NewW.Written | ForEach-Object { $_.Setting }) | Should -Be @('SI_Identity_SkipNeverSyncedAd')
+        $o = $script:OldW.Written[0]; $n = $script:NewW.Written[0]
+        [long]$o.LeftOut | Should -Be ($script:InQueryWide.Count + $script:AfterReadWide.Count)
+        ([long]$n.LeftOut, [long]$n.Kept) | Should -Be @([long]$o.LeftOut, [long]$o.Kept)
+        [long]$script:NewWB.Written[0].LeftOut | Should -Be ([long]$o.LeftOut)
+        $all = $script:NewW.Info -join "`n"
+        $all | Should -Match ([regex]::Escape(('({0:N0} not fetched: never synced to Entra ID and not privileged -- SI_Identity_SkipNeverSyncedAd is on)' -f $script:InQueryWide.Count)))
+        $all | Should -Match ([regex]::Escape(('{0} not fetched (left out in the Exposure Graph query itself), {1} left out after the read' -f $script:InQueryWide.Count, $script:AfterReadWide.Count)))
+    }
+}
+
 Describe 'WIRING: the read builds every user query from the one builder, with the filter only when the setting is on' {
     It 'the count, the single page and the buckets go through Get-SIEgIdentityQueryText with the label''s filter' {
         $t = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\shared\IdentityRoleFetcher.ps1'))
         $t | Should -Match ([regex]::Escape('$countQ = Get-SIEgIdentityQueryText -Label $label -Kind count -Filter $labelFilter'))
         $t | Should -Match ([regex]::Escape('$kql    = Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $labelFilter'))
         $t | Should -Match ([regex]::Escape('Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $labelFilter -Buckets $n -Bucket $bk'))
-        $t | Should -Match ([regex]::Escape('if ($scopeOn -and $scopeChoice.SkipNeverSyncedDisabledAd) { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical }'))
+        $t | Should -Match ([regex]::Escape('if ($scopeOn -and $scopeNeverSynced -eq ''SI_Identity_SkipNeverSyncedAd'') { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical -AnyEnabledState }'))
+        $t | Should -Match ([regex]::Escape('elseif ($scopeOn -and $scopeNeverSynced -eq ''SI_Identity_SkipNeverSyncedDisabledAd'') { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical }'))
+        $t | Should -Match ([regex]::Escape('$nfC = $null; if ($scopeNeverSynced) { $nfC = $scopeCounter[$scopeNeverSynced] }'))
         $t | Should -Not -MatchExactly "ExposureGraphNodes \| where NodeLabel == '\`$label'"
     }
 }

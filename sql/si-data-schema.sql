@@ -2592,8 +2592,9 @@ CREATE TABLE sidata.RecordCollection (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RecordCollection_Engine' AND object_id = OBJECT_ID('sidata.RecordCollection'))
 CREATE INDEX IX_RecordCollection_Engine ON sidata.RecordCollection (Engine, CollectionTime) INCLUDE (State, Records);
 -- ---------------------------------------------------------------------------------------------
--- A CUSTOMER'S CHOICE, COUNTED (ADDED 2026-11-02, REQUIREMENTS #1056). Two per-install switches, off by default
--- (SI_Identity_SkipNeverSyncedDisabledAd, SI_Identity_SkipDeletedGroups), leave Exposure Graph identities out of the assets.
+-- A CUSTOMER'S CHOICE, COUNTED (ADDED 2026-11-02, REQUIREMENTS #1056). Per-install switches, on by default
+-- (SI_Identity_SkipNeverSyncedAd, SI_Identity_SkipNeverSyncedDisabledAd, SI_Identity_SkipDeletedGroups), leave Exposure
+-- Graph identities out of the assets.
 --   CollectionLeftOut  one row per switch and identity run while a switch is on: how many objects it left out (LeftOut),
 --                      how many it looked at and kept (Kept), how many it could not decide and left as they were (Held,
 --                      Applied = 0 with the reason in Detail). The Data health page shows them; the asset-drop check adds

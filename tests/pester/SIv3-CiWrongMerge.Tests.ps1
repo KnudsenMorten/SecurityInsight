@@ -291,11 +291,12 @@ Describe '#642 the repair in a real database: an install''s wrong merge is split
         }
         function script:Q([string]$Sql) { @(& $script:Seam $Sql @{} 'rows') }
         $script:LockOpen = { New-EngineConn }
+        # the fixtures are dated $script:T; the build's lookback runs on SQL Server's clock, so the lookback grows with the fixtures' age and its cutoff stays at T-30 days
         function script:Build([switch]$Full) {
             $script:LogLines = New-Object System.Collections.Generic.List[string]
             $lc = New-EngineConn
             Invoke-SICiBuild -SqlInvoke $script:Seam -LockOpen $script:LockOpen -LedgerProvider ([pscustomobject]@{ Kind = 'sql'; Connection = $lc }) -Rules @() -CmdbIndex (New-SICiCmdbIndex) `
-                -Post { param($Rows) @($Rows).Count } -BatchCis 2 -LookbackDays 30 -WorkbookMaxCis 0 -FullReconcile:$Full `
+                -Post { param($Rows) @($Rows).Count } -BatchCis 2 -LookbackDays ([Math]::Max(30, 30 + [int][Math]::Floor(([datetime]::UtcNow - $script:T).TotalDays))) -WorkbookMaxCis 0 -FullReconcile:$Full `
                 -Log { param($l, $m) $script:LogLines.Add(($l + ' ' + $m)) }
         }
         if ($script:Db) {

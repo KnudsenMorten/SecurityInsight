@@ -2,12 +2,13 @@
 <#
 .SYNOPSIS
     READ-ONLY: how many Exposure Graph objects each identity choice would leave out in one tenant, before it is switched on
-    (REQUIREMENTS #1056 -- SI_Identity_SkipNeverSyncedDisabledAd, SI_Identity_SkipDeletedGroups).
+    (REQUIREMENTS #1056 -- SI_Identity_SkipNeverSyncedAd, SI_Identity_SkipNeverSyncedDisabledAd, SI_Identity_SkipDeletedGroups).
 
 .DESCRIPTION
     Nothing is written anywhere: two advanced hunting queries (Microsoft Graph /security/runHuntingQuery) and two paged
     reads of Entra ID's group ids (/groups, /directory/deletedItems/microsoft.graph.group).
 
+      SI_Identity_SkipNeverSyncedAd /
       SI_Identity_SkipNeverSyncedDisabledAd  one summarize over the Exposure Graph user nodes, with the same rules as the
                                              collection (engine\asset-profiling\shared\SI-IdentityScopeChoice.ps1):
                                              never synced = no Entra object id; an on-premises AD identity (a domain SID,
@@ -16,6 +17,10 @@
                                              userAccountControl; privileged = admin count, critical AD group, a tier 0/1
                                              group of the privilege tier catalog, an assigned role, a service account, a
                                              sensitive account or a Microsoft criticality level.
+                                             LeftOutBySkipNeverSyncedAd: never synced, AD and not privileged, whatever the
+                                             enabled state (the wider switch); LeftOutBySkipNeverSyncedDisabledAd: the same,
+                                             but only the disabled ones (what the narrower switch leaves out while the wider
+                                             one is off).
       SI_Identity_SkipDeletedGroups          the Entra object ids of the Exposure Graph group nodes (read in hash buckets),
                                              against the ids Entra ID returns (active + deleted items).
     The query mirrors the code; the identity run's own log line ("Exposure Graph identities: ... got no asset") is the
@@ -70,7 +75,8 @@ ExposureGraphNodes
 | summarize UserNodes = count(), NeverSyncedAd = countif(not(hasEntra) and isAd),
             NeverSyncedDisabled = countif(not(hasEntra) and isAd and disabled),
             NeverSyncedDisabledPrivileged = countif(not(hasEntra) and isAd and disabled and privileged),
-            LeftOutBySkipNeverSyncedDisabledAd = countif(not(hasEntra) and isAd and disabled and not(privileged))
+            LeftOutBySkipNeverSyncedDisabledAd = countif(not(hasEntra) and isAd and disabled and not(privileged)),
+            LeftOutBySkipNeverSyncedAd = countif(not(hasEntra) and isAd and not(privileged))
 "@
 
 $groupsKql = {
@@ -89,7 +95,7 @@ ExposureGraphNodes
 }
 
 if ($ShowKql) {
-    Write-Output '--- SI_Identity_SkipNeverSyncedDisabledAd (Exposure Graph user nodes) ---'
+    Write-Output '--- SI_Identity_SkipNeverSyncedAd / SI_Identity_SkipNeverSyncedDisabledAd (Exposure Graph user nodes) ---'
     Write-Output $usersKql
     Write-Output ''
     Write-Output ('--- SI_Identity_SkipDeletedGroups (Exposure Graph group nodes with an Entra id; bucket 0 of {0} shown) ---' -f $GroupBuckets)
@@ -119,8 +125,9 @@ $out = [ordered]@{ Tenant = ''; MeasuredUtc = [datetime]::UtcNow.ToString('yyyy-
 try { $org = Invoke-RestMethod -Method Get -Uri 'https://graph.microsoft.com/v1.0/organization?$select=id,displayName' -Headers $headers; $out.Tenant = ('{0} ({1})' -f @($org.value)[0].displayName, @($org.value)[0].id) } catch { }
 
 $u = @(Invoke-Hunting $usersKql)[0]
-foreach ($k in 'UserNodes', 'NeverSyncedAd', 'NeverSyncedDisabled', 'NeverSyncedDisabledPrivileged', 'LeftOutBySkipNeverSyncedDisabledAd') { $out[$k] = [long]$u.$k }
+foreach ($k in 'UserNodes', 'NeverSyncedAd', 'NeverSyncedDisabled', 'NeverSyncedDisabledPrivileged', 'LeftOutBySkipNeverSyncedDisabledAd', 'LeftOutBySkipNeverSyncedAd') { $out[$k] = [long]$u.$k }
 $out['KeptBySkipNeverSyncedDisabledAd'] = [long]$u.NeverSyncedAd - [long]$u.LeftOutBySkipNeverSyncedDisabledAd
+$out['KeptBySkipNeverSyncedAd'] = [long]$u.NeverSyncedAd - [long]$u.LeftOutBySkipNeverSyncedAd
 
 if (-not $SkipGroups) {
     $entra = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)

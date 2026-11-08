@@ -103,6 +103,7 @@ $global:SI_DisabledAssets_Connectors   = $false   # sent out by connectors and e
 # choice): the identity collection records no asset for the objects below, counts them in its log and on the Data health
 # page, and their existing CIs retire with a reason naming the setting. Real users, groups, devices and findings are not
 # affected. Read by engine\asset-profiling\shared\SI-IdentityScopeChoice.ps1.
+$global:SI_Identity_SkipNeverSyncedAd         = $false   # OFF by default; on: on-prem AD accounts never synced to Entra become assets only while privileged (for tenants with very many of them; decides instead of the next one while on)
 $global:SI_Identity_SkipNeverSyncedDisabledAd = $true    # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
 $global:SI_Identity_SkipDeletedGroups         = $true    # groups: only those Entra ID still has (active or recently deleted) become assets
 

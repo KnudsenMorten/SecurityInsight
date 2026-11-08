@@ -13,6 +13,20 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.73 — A setting for tenants with very many on-premises AD accounts that never sync to Entra ID
+
+### New
+
+- New setting SI_Identity_SkipNeverSyncedAd (off by default). Some tenants have very many on-premises Active Directory
+  accounts that never sync to Entra ID, and the Exposure Graph often lists them with only an account name. In those
+  tenants they become hundreds of thousands of assets that nobody manages. Turn this setting on for such a tenant: a
+  never-synced on-premises AD account then becomes an asset only while it is privileged (admin count, a critical or
+  tier 0/1 AD group, an assigned role, a service account, a sensitive account or a Microsoft criticality level), whether
+  it is enabled or not. Only on-premises AD accounts are affected; accounts synced to Entra ID, identities from other
+  sources, groups, devices and findings are not. How many accounts were left out shows in each run's log and on the
+  Data health page. Existing CIs of those accounts retire at once with the setting as the reason, and their findings
+  close as asset retired, never as fixed. Turn it off and the next run records them again.
+
 ## v3.0.72 — A report the hunting service keeps timing out on is completed in smaller parts
 
 ### Fixes

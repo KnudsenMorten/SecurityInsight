@@ -564,7 +564,7 @@ function Get-SIRecordFeedDrops {
             $st = Get-SIItemValue $r 'State'
             if ($null -ne $st -and -not ($st -is [DBNull]) -and "$st") { $rc = Get-SIItemValue $r 'Records'; if ($null -eq $rc -or $rc -is [DBNull]) { $rc = 0 }; $by[$k].History.Add([pscustomobject]@{ Records = [int]$rc; State = [string]$st }) }
         }
-        # #1056 a customer's choice (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves records out
+        # #1056 a customer's choice (SI_Identity_SkipNeverSyncedAd / SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves records out
         # of the Exposure Graph feed on purpose: they are added back to the count judged here, so the choice is never read as a
         # broken source. Read only while a switch is on in this install; off, nothing changes.
         $leftOut = @{}

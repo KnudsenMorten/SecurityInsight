@@ -2204,16 +2204,19 @@ function Get-SIExposureGraphIdentities {
         $egKeep = Get-SIEgIdentityKeepKeys -SIRoot $siRoot
         if ($null -ne $egKeep) { Write-SIInfo ('[perms] EG identity nodes: keeping {0} rawData field(s) the profile, rules and mapping read' -f $egKeep.Count) }
     }
-    # #1056 A CUSTOMER'S CHOICE (SI-IdentityScopeChoice.ps1): two per-install switches, ON by default (unset = the shipped default) -- off, nothing below
-    # changes. On, a never-synced disabled non-privileged AD account (SI_Identity_SkipNeverSyncedDisabledAd) and a group Entra
-    # ID no longer has (SI_Identity_SkipDeletedGroups) are not RECORDED (no asset); they are counted. The index is unchanged.
+    # #1056 A CUSTOMER'S CHOICE (SI-IdentityScopeChoice.ps1): three per-install switches (unset = the shipped default: the wider never-synced switch off, the others on) -- off, nothing below
+    # changes. On, a never-synced non-privileged AD account (SI_Identity_SkipNeverSyncedAd: whatever its enabled state; while it
+    # is off, SI_Identity_SkipNeverSyncedDisabledAd: only a disabled one) and a group Entra ID no longer has
+    # (SI_Identity_SkipDeletedGroups) are not RECORDED (no asset); they are counted. The index is unchanged.
     if (-not (Get-Command -Name Get-SIIdentityScopeChoice -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-IdentityScopeChoice.ps1') }
     $scopeChoice = Get-SIIdentityScopeChoice
     $scopeOn = [bool]($scopeChoice.Any -and ($egCaptureRecords -or $egCaptureFull))
+    # the ONE switch that decides the never-synced AD accounts ('' = none): the wider one while it is on
+    $scopeNeverSynced = Get-SIIdentityNeverSyncedSetting -Choice $scopeChoice
     $scopeCounter = $null; $scopeCritical = $null; $scopeGroups = $null; $scopeGroupsUnknown = $false
     if ($scopeOn) {
         $scopeCounter = New-SIIdentityScopeCounter -Choice $scopeChoice
-        if ($scopeChoice.SkipNeverSyncedDisabledAd) { $scopeCritical = Get-SIIdentityCriticalAdGroupNames -SIRoot $siRoot }
+        if ($scopeNeverSynced) { $scopeCritical = Get-SIIdentityCriticalAdGroupNames -SIRoot $siRoot }
         if ($scopeChoice.SkipDeletedGroups) {
             $scEg = Read-SIEntraGroupIds
             if ($scEg.Ok) {
@@ -2229,11 +2232,13 @@ function Get-SIExposureGraphIdentities {
             }
         }
     }
-    # SI_Identity_SkipNeverSyncedDisabledAd in the query itself: the user nodes the decision below could only leave out are
-    # not fetched at all, and not counted toward the buckets (Get-SIEgNeverSyncedSkipKql leans the safe way on every test, so
-    # nothing it leaves out is a node the decision keeps). The decision still runs on every node that is fetched.
+    # the never-synced switch in the query itself: the user nodes the decision below could only leave out are not fetched at
+    # all, and not counted toward the buckets (Get-SIEgNeverSyncedSkipKql leans the safe way on every test, so nothing it
+    # leaves out is a node the decision keeps; -AnyEnabledState for the wider switch). The decision still runs on every node
+    # that is fetched.
     $userSkipKql = ''
-    if ($scopeOn -and $scopeChoice.SkipNeverSyncedDisabledAd) { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical }
+    if ($scopeOn -and $scopeNeverSynced -eq 'SI_Identity_SkipNeverSyncedAd') { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical -AnyEnabledState }
+    elseif ($scopeOn -and $scopeNeverSynced -eq 'SI_Identity_SkipNeverSyncedDisabledAd') { $userSkipKql = Get-SIEgNeverSyncedSkipKql -CriticalGroups $scopeCritical }
     $notFetchedTotal = 0L
     $skipNoProps = 0; $skipNoOid = 0; $kept = 0; $adKept = 0; $dropped = 0; $rowsTotal = 0; $sampleRowKeys = ''
     $perLabelTotal = @{}; $perLabelKept = @{}; $perLabelSkipNoOid = @{}; $perLabelAdKept = @{}
@@ -2311,9 +2316,10 @@ function Get-SIExposureGraphIdentities {
                 $adId = Get-SIEgAdIdentity -RawData $rawData -Sid $sid
                 if ($adId.IsAd) {
                     if ($scopeOn) {
-                        # #1056 1C: a never-synced, disabled, non-privileged AD account gets no record (counted)
-                        $sd = Get-SIEgIdentityScopeDecision -NodeLabel $nodeLabel -AadObjectId '' -RawData $rawData -Choice $scopeChoice -CriticalGroups $scopeCritical
-                        $keptBy = ''; if ($nodeLabel -eq 'user' -and $scopeChoice.SkipNeverSyncedDisabledAd) { $keptBy = 'SI_Identity_SkipNeverSyncedDisabledAd' }
+                        # #1056: a never-synced, non-privileged AD account (the wider switch), or a disabled one (1C), gets no
+                        # record (counted on the counter of the switch that decided)
+                        $sd = Get-SIEgIdentityScopeDecision -NodeLabel $nodeLabel -AadObjectId '' -RawData $rawData -Choice $scopeChoice -CriticalGroups $scopeCritical -Sid $sid
+                        $keptBy = ''; if ($nodeLabel -eq 'user' -and $scopeNeverSynced) { $keptBy = $scopeNeverSynced }
                         Add-SIIdentityScopeCount -Counter $scopeCounter -Decision $sd -KeptBy $keptBy
                         if (-not $sd.Keep) { continue }
                     }
@@ -2424,7 +2430,10 @@ function Get-SIExposureGraphIdentities {
         }
         $notFetchedTotal += $notFetched
         $nfNote = ''
-        if ($labelFilter) { $nfNote = ('  ({0:N0} not fetched: never synced to Entra ID, disabled and not privileged -- SI_Identity_SkipNeverSyncedDisabledAd is on)' -f $notFetched) }
+        if ($labelFilter) {
+            if ($scopeNeverSynced -eq 'SI_Identity_SkipNeverSyncedAd') { $nfNote = ('  ({0:N0} not fetched: never synced to Entra ID and not privileged -- SI_Identity_SkipNeverSyncedAd is on)' -f $notFetched) }
+            else { $nfNote = ('  ({0:N0} not fetched: never synced to Entra ID, disabled and not privileged -- SI_Identity_SkipNeverSyncedDisabledAd is on)' -f $notFetched) }
+        }
 
         $fetched = 0
         $useBuckets = ($rowCount -gt $chunkRows)
@@ -2485,7 +2494,7 @@ function Get-SIExposureGraphIdentities {
 
     # the nodes the query left out are the decision's left-out count too (the same count, now made before the read)
     if ($notFetchedTotal -gt 0 -and $null -ne $scopeCounter) {
-        $nfC = $scopeCounter['SI_Identity_SkipNeverSyncedDisabledAd']
+        $nfC = $null; if ($scopeNeverSynced) { $nfC = $scopeCounter[$scopeNeverSynced] }
         if ($nfC) { $nfC.LeftOut = [long]$nfC.LeftOut + $notFetchedTotal; $nfC.NotFetched = [long]$notFetchedTotal }
     }
     if ($rowsTotal -eq 0 -and $notFetchedTotal -eq 0) {

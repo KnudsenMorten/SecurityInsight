@@ -1118,11 +1118,17 @@ disabled-account reports (`DisabledAccount_ActivePIMAssignment`, `DisabledUser_S
 `DisabledPrivilegedUser`) can now fire. Until 2026-10-10 Output dropped every disabled identity -- a 22,705-user tenant
 published ~8,940 users, 0 of them disabled.
 
-**Exposure Graph identities without an asset -- on by default** (owner 2026-11-04). Two settings decide which Exposure
-Graph identity nodes become assets at all: `SI_Identity_SkipNeverSyncedDisabledAd` (an on-premises AD account never
-synced to Entra ID becomes an asset only while it is enabled or privileged) and `SI_Identity_SkipDeletedGroups` (a group
-with an Entra object id becomes an asset only while Entra ID still has it, active or in its deleted items; decided only
-on a complete read of the group list). Both are **on by default** -- the shipped default and the settings catalog say on;
+**Exposure Graph identities without an asset -- on by default** (owner 2026-11-04, the third setting 2026-11-08). Three
+settings decide which Exposure Graph identity nodes become assets at all: `SI_Identity_SkipNeverSyncedAd` (an
+on-premises AD account never synced to Entra ID becomes an asset only while it is privileged, whatever its enabled state
+-- the Exposure Graph often lists such accounts with their name only, without an enabled state; only a node that is an
+on-premises AD account, a domain SID or an account name and domain, is ever left out), `SI_Identity_SkipNeverSyncedDisabledAd`
+(the narrower form: such an account becomes an asset only while it is enabled or privileged -- it decides only while
+`SI_Identity_SkipNeverSyncedAd` is off) and `SI_Identity_SkipDeletedGroups` (a group with an Entra object id becomes an
+asset only while Entra ID still has it, active or in its deleted items; decided only on a complete read of the group
+list). `SI_Identity_SkipNeverSyncedAd` is **off by default** (owner 2026-11-08) and meant for a tenant with very many
+on-premises AD accounts that never sync to Entra ID; the two others are **on by default** -- the shipped default and the
+settings catalog say on;
 an install that never stored a value takes it on its next update (the shipped defaults load first and a stored value is
 laid over them, so there is nothing to migrate), and a value an install stored is kept, on or off. What they leave out is
 counted per run (`sidata.CollectionLeftOut`, the Data health page "Left out by your choice"); the CI of an object left

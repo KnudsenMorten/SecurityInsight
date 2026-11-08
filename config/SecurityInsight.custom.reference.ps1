@@ -511,15 +511,20 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_DisabledAssets_StateActions = $false   # finding / vulnerability lifecycle, close-loop, tickets
 # $global:SI_DisabledAssets_Connectors   = $false   # sent out by connectors and exports
 
-# A customer's choice: Exposure Graph identities that get no asset. Off by default; turn on only when your organisation
-# chose it. On, the identity collection records no asset for these objects, counts them in its log and on the Data
-# health page, and their existing CIs retire with a reason naming the setting. Real users (accounts synced to Entra ID),
-# AD-only groups, devices and findings are never affected.
+# A customer's choice: Exposure Graph identities that get no asset. On by default; turn one off when your organisation
+# wants these objects as assets. On, the identity collection records no asset for these objects, counts them in its log
+# and on the Data health page, and their existing CIs retire with a reason naming the setting. Real users (accounts
+# synced to Entra ID), AD-only groups, devices and findings are never affected.
+#   SI_Identity_SkipNeverSyncedAd (OFF by default, for tenants with very many on-premises AD accounts that never sync to
+#     Entra ID): on, an on-premises AD account never synced to Entra ID becomes an asset only while it is privileged,
+#     enabled or not (admin count, critical or tier 0/1 AD group, assigned role, service account, sensitive). While it is
+#     on, the next setting decides nothing.
 #   SI_Identity_SkipNeverSyncedDisabledAd: an on-premises AD account never synced to Entra ID becomes an asset only while
 #     it is enabled or privileged (admin count, critical or tier 0/1 AD group, assigned role, service account, sensitive).
 #   SI_Identity_SkipDeletedGroups: a group with an Entra object id becomes an asset only while Entra ID still has it
 #     (active or in its deleted items).
 
+# $global:SI_Identity_SkipNeverSyncedAd         = $false   # off by default; on: on-prem AD accounts never synced to Entra become assets only while privileged
 # $global:SI_Identity_SkipNeverSyncedDisabledAd = $true    # on-prem AD accounts never synced to Entra: only enabled or privileged ones become assets
 # $global:SI_Identity_SkipDeletedGroups         = $true    # groups: only those Entra ID still has (active or recently deleted) become assets
 
@@ -4007,6 +4012,36 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     CIs come back.
 #   Recommended:      On (the default). Off only when your organisation wants these objects as assets.
 #   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipDeletedGroups/
+#
+# Exposure Graph: no asset for never-synced AD accounts that are not privileged  [SI_Identity_SkipNeverSyncedAd]  (advanced)
+#   What it is for:   A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but
+#                     that were never synced to Entra ID (no Entra object id). On, only the privileged ones become
+#                     assets, whether they are enabled or disabled: privileged = an admin count, a critical or tier
+#                     0/1 AD group (Domain Admins, Enterprise Admins ...), an assigned role, a service account, a
+#                     sensitive account or a Microsoft criticality level. The others are counted and get no asset. It
+#                     is the wider form of SI_Identity_SkipNeverSyncedDisabledAd: while it is on, that setting decides
+#                     nothing.
+#   Default:          Off: never-synced on-premises AD accounts are decided by SI_Identity_SkipNeverSyncedDisabledAd
+#                     (only disabled, non-privileged ones are left out)
+#   If you change it: Stages: the identity collection records no asset for a never-synced AD account that is not
+#                     privileged, whatever its enabled state (the Exposure Graph often lists such accounts with their
+#                     name only); the run log and the Data health page show how many per run; the CI build retires the
+#                     existing CI of such an account at once, with a reason naming this setting (its findings close as
+#                     asset retired, never as fixed). Only on-premises AD accounts are affected (a domain SID, or an
+#                     account name and domain): accounts synced to Entra ID, identities from other sources, groups,
+#                     devices and findings are not. Off, SI_Identity_SkipNeverSyncedDisabledAd decides these accounts
+#                     again (only disabled ones are left out), and the next run records the others again and their CIs
+#                     come back.
+#   When to change:   Off by default. Turn it on only for a tenant with very many on-premises AD accounts that never
+#                     sync to Entra ID (hundreds of thousands), where they would otherwise become assets that nobody
+#                     manages; with a few of them, keep it off so they stay assets.
+#   Risk:             Objects the customer chose not to keep stop being assets from the next run and their CIs retire
+#                     (CMDB / ServiceNow closures follow the retired CIs). Accounts synced to Entra ID, identities
+#                     from other sources, groups, devices and findings are not affected. Reversible: turn it off and
+#                     the next run records them again and their CIs come back.
+#   Recommended:      Off (the default). On only for a tenant with very many on-premises AD accounts that never sync
+#                     to Entra ID.
+#   More info:        https://invardia.com/docs/si/settings/SI_Identity_SkipNeverSyncedAd/
 #
 # Exposure Graph: no asset for never-synced, disabled AD accounts  [SI_Identity_SkipNeverSyncedDisabledAd]  (advanced)
 #   What it is for:   A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but

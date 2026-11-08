@@ -30,7 +30,7 @@ public sealed record DataHealthResult(string Kind, string Name, string Label, lo
 public sealed record DataHealthMissing(string Kind, string Name, string? RecordKey, string? RecordName, string? Problem);
 
 /// <summary>
-/// #1056 one identity run's count for a customer's choice (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups,
+/// #1056 one identity run's count for a customer's choice (SI_Identity_SkipNeverSyncedAd / SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups,
 /// sidata.CollectionLeftOut): how many Exposure Graph objects got no asset, how many it looked at and kept, how many it could
 /// not decide and left as they were (Applied = false, with the reason).
 /// </summary>
@@ -42,7 +42,7 @@ public sealed record DataHealthView(bool HasTables, DataHealthState State, IRead
 {
     public static readonly DataHealthView Missing0 = new(false, DataHealthState.None, [], [], [], [], []);
 
-    /// #1056 the newest identity runs' counts of the customer's choices (newest first); empty while both switches are off.
+    /// #1056 the newest identity runs' counts of the customer's choices (newest first); empty while every switch is off.
     public IReadOnlyList<DataHealthLeftOut> LeftOut { get; init; } = [];
 }
 
@@ -52,6 +52,7 @@ public static class DataHealthLeftOutText
     /// PURE. What a switch leaves out, in words.
     public static string Label(string setting) => setting switch
     {
+        "SI_Identity_SkipNeverSyncedAd" => "On-premises AD accounts never synced to Entra ID and not privileged",
         "SI_Identity_SkipNeverSyncedDisabledAd" => "On-premises AD accounts never synced to Entra ID, disabled and not privileged",
         "SI_Identity_SkipDeletedGroups" => "Groups Entra ID no longer has (neither active nor in its deleted items)",
         _ => setting,

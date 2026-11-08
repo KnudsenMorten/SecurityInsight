@@ -87,11 +87,11 @@ function Get-SICiUnnamedDeviceName {
 }
 
 function Get-SICiIdentityChoice {
-    <# The install's choice (Get-SIIdentityScopeChoice), read once and again only when one of the two settings changes -- the
+    <# The install's choice (Get-SIIdentityScopeChoice), read once and again only when one of the three settings changes -- the
        CI build asks for every missing Exposure Graph record. $null when the choice code is not shipped. #>
     if ($null -eq $script:SICiIdentityChoiceReady) { $script:SICiIdentityChoiceReady = [bool](Get-Command -Name Get-SIRecordLeftOutByIdentityChoice -ErrorAction SilentlyContinue) }
     if (-not $script:SICiIdentityChoiceReady) { return $null }
-    $key = '{0}|{1}' -f $global:SI_Identity_SkipNeverSyncedDisabledAd, $global:SI_Identity_SkipDeletedGroups
+    $key = '{0}|{1}|{2}' -f $global:SI_Identity_SkipNeverSyncedAd, $global:SI_Identity_SkipNeverSyncedDisabledAd, $global:SI_Identity_SkipDeletedGroups
     if ($null -eq $script:SICiIdentityChoiceCache -or $script:SICiIdentityChoiceCache.Key -ne $key) {
         $script:SICiIdentityChoiceCache = [pscustomobject]@{ Key = $key; Choice = (Get-SIIdentityScopeChoice) }
     }
@@ -242,7 +242,7 @@ function Get-SIRecordLink {
           active    otherwise
         Without -SeenWithinDays (0) a listed record is active, as before the lifecycle was kept.
           gone (#1056) also: missing from a COMPLETE newer collection while the install's choice
-                    (SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves it out -- the reason names
+                    (SI_Identity_SkipNeverSyncedAd / SI_Identity_SkipNeverSyncedDisabledAd / SI_Identity_SkipDeletedGroups) leaves it out -- the reason names
                     the switch (Get-SIRecordLeftOutByIdentityChoice). -IdentityChoice: Get-SIIdentityScopeChoice (not given =
                     the install's settings; both off = exactly as before).
     #>

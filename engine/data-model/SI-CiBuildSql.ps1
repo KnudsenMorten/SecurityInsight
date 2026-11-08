@@ -157,7 +157,7 @@ $script:SICiBuildVersion = 14
 # and plain-words reason), Exposure Graph ageing out, the generated name of a nameless machine CI -- re-baselined with the bump.
 # 2026-11-06 (#1135): the identity ledger's statements go through the shared statement retry (New-SICiLedgerSqlInvoke) --
 # the same statements and rows, no CI comes out different: re-baselined, version 14.
-$script:SICiBuildLogicHash = 'c94e300a7172ab951fd3a82e5d4d2faafd10e0272db7ae298b7270bcfc04b558'
+$script:SICiBuildLogicHash = '329a9501802db859086869347c1b9f7585c3b11b54635cb79d93cbc98898477a'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')

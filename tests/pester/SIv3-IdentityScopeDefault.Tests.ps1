@@ -15,7 +15,10 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     . ([IO.Path]::Combine($script:SIRoot, 'engine', 'asset-profiling', 'shared', 'SI-IdentityScopeChoice.ps1'))
-    $script:Names = @('SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
+    $script:Names = @('SI_Identity_SkipNeverSyncedAd', 'SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
+    # the wider switch (2026-11-08): its default is ONE value per file (code, catalog, shared defaults) that the owner may
+    # flip -- read from the catalog here, never hard-coded
+    $script:WideDefault = [bool]((@($script:Catalog.settings | Where-Object { $_.name -eq 'SI_Identity_SkipNeverSyncedAd' }) | Select-Object -First 1).default)
     $script:Catalog = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'settings.catalog.locked.json')) | ConvertFrom-Json
     function script:Read-SharedDefaults {
         # the shipped defaults, read the way the launcher loads them (the file sets globals)
@@ -42,9 +45,19 @@ Describe 'the two Exposure Graph scope switches are on by default' {
         $c.SkipNeverSyncedDisabledAd | Should -BeTrue
         $c.SkipDeletedGroups | Should -BeTrue
         $c.Any | Should -BeTrue
+        $c.SkipNeverSyncedAd | Should -Be $script:WideDefault -Because 'the wider switch takes the catalog''s default'
+        $c.SkipNeverSyncedAd | Should -BeFalse -Because 'owner 2026-11-08: it ships OFF, on only where an install sets it'
+    }
+    It 'set: the wider switch stored OFF stays off, stored ON stays on -- whatever its default' {
+        Read-SharedDefaults
+        $global:SI_Identity_SkipNeverSyncedAd = 'false'
+        (Get-SIIdentityScopeChoice).SkipNeverSyncedAd | Should -BeFalse
+        $global:SI_Identity_SkipNeverSyncedAd = 'true'
+        (Get-SIIdentityScopeChoice).SkipNeverSyncedAd | Should -BeTrue
     }
     It 'set: a value the install stored (OFF) is laid over the default and kept' {
         Read-SharedDefaults
+        $global:SI_Identity_SkipNeverSyncedAd = $false
         $global:SI_Identity_SkipNeverSyncedDisabledAd = $false   # the stored choice, applied after the shipped defaults
         $global:SI_Identity_SkipDeletedGroups = 'false'
         $c = Get-SIIdentityScopeChoice
@@ -72,9 +85,9 @@ Describe 'the container path: no shared defaults, no stored row' {
     }
     It 'a stored no stays OFF: ''false'' / $false' {
         Clear-Switches
-        $global:SI_Identity_SkipNeverSyncedDisabledAd = 'false'; $global:SI_Identity_SkipDeletedGroups = $false
+        $global:SI_Identity_SkipNeverSyncedAd = 'false'; $global:SI_Identity_SkipNeverSyncedDisabledAd = 'false'; $global:SI_Identity_SkipDeletedGroups = $false
         $c = Get-SIIdentityScopeChoice
-        ($c.SkipNeverSyncedDisabledAd, $c.SkipDeletedGroups, $c.Any) | Should -Be @($false, $false, $false)
+        ($c.SkipNeverSyncedAd, $c.SkipNeverSyncedDisabledAd, $c.SkipDeletedGroups, $c.Any) | Should -Be @($false, $false, $false, $false)
         Clear-Switches
     }
     It 'the in-code default = the catalog default = the shared-defaults value, for <_>' -ForEach @('SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups') {
@@ -87,6 +100,20 @@ Describe 'the container path: no shared defaults, no stored row' {
         $code | Should -BeTrue
         $cat | Should -Be $code
         $shared | Should -Be $code
+    }
+    It 'the wider switch: the in-code default = the catalog default = the shared-defaults value (one value, flipped together)' {
+        $code = [bool]$script:SIIdentityScopeSettings.SkipNeverSyncedAd.Default
+        Read-SharedDefaults
+        $shared = Get-Variable -Name 'SI_Identity_SkipNeverSyncedAd' -Scope Global -ValueOnly
+        Clear-Switches
+        $script:WideDefault | Should -Be $code
+        $shared | Should -Be $code
+        Clear-Switches
+        (Get-SIIdentityScopeChoice).SkipNeverSyncedAd | Should -Be $code -Because 'the container (no shared defaults, no row) takes the code''s default'
+        $code | Should -BeFalse -Because 'owner 2026-11-08: off by default'
+        $global:SI_Identity_SkipNeverSyncedAd = $true
+        (Get-SIIdentityScopeChoice).SkipNeverSyncedAd | Should -BeTrue -Because 'a stored true is on'
+        Clear-Switches
     }
     It 'the CI build''s choice (Get-SICiIdentityChoice) is ON with the globals unset, and follows a stored no' {
         . ([IO.Path]::Combine($script:SIRoot, 'engine', 'data-model', 'SI-CiBuild.ps1'))

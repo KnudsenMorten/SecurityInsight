@@ -2,23 +2,35 @@
 <#
     A CUSTOMER'S CHOICE: WHICH EXPOSURE GRAPH IDENTITIES BECOME ASSETS (REQUIREMENTS #1056, owner approved 2026-11-01).
 
-    Two per-install switches, ON by default (config\settings.catalog.locked.json default true; launcher\_lib\
-    SecurityInsight.shared-defaults.ps1 sets both to $true) -- an install turns one off to keep these objects as assets:
+    Three per-install switches. Each one's default is its Default in $script:SIIdentityScopeSettings below, the same value as
+    its default in config\settings.catalog.locked.json and launcher\_lib\SecurityInsight.shared-defaults.ps1 (the two
+    older ones ON -- an install turns one off to keep these objects as assets; SI_Identity_SkipNeverSyncedAd OFF, owner
+    2026-11-08 -- an install with very many never-synced AD accounts turns it on):
+      SI_Identity_SkipNeverSyncedAd          (owner 2026-11-08)  an on-premises AD account the Exposure Graph lists but that
+                                             was never synced to Entra ID (the node has no Entra object id) becomes an asset
+                                             only while it is PRIVILEGED -- whatever its enabled state (the graph often lists
+                                             such an account with its name only, and no enabled state). A non-privileged one
+                                             gets no record and no CI; it is counted. A user node that is NOT an on-premises
+                                             AD account (Test-SIEgIsAdAccount: no domain SID, no account name + domain) is
+                                             never left out by it. It is the wider form of the next switch: while it is on, it
+                                             decides the never-synced AD accounts and the next one decides nothing.
       SI_Identity_SkipNeverSyncedDisabledAd  (customer choice "1C")  an on-premises AD account the Exposure Graph lists but
                                              that was never synced to Entra ID (the node has no Entra object id) becomes an
                                              asset only while it is ENABLED or PRIVILEGED. A disabled, non-privileged one gets
-                                             no record and no CI; it is counted.
+                                             no record and no CI; it is counted. Applies only while SI_Identity_SkipNeverSyncedAd
+                                             is off (Get-SIIdentityNeverSyncedSetting).
       SI_Identity_SkipDeletedGroups          (customer choice "2B")  a group node WITH an Entra object id becomes an asset
                                              only while Entra ID still has the group (active, or in its deleted items). A
                                              group Entra no longer returns at all gets no record and no CI; it is counted.
     Real users, groups, devices and findings are not affected: an account synced to Entra (it has an Entra object id), an
-    AD-only group, a device, a service principal and every finding are never touched by either switch.
+    AD-only group, a device, a service principal and every finding are never touched by any switch.
 
     THE STAGES
       collection   the Exposure Graph identity read (IdentityRoleFetcher.ps1) asks Get-SIEgIdentityScopeDecision for every
                    Exposure Graph user / group node it would record; a node left out is not recorded (no record part, no
                    full-metadata copy). The index that enriches the Entra objects is unchanged.
-                   SI_Identity_SkipNeverSyncedDisabledAd is ALSO applied in the hunting query itself
+                   The never-synced switch that applies (SI_Identity_SkipNeverSyncedAd, or SI_Identity_SkipNeverSyncedDisabledAd
+                   while the first is off) is ALSO applied in the hunting query itself
                    (Get-SIEgNeverSyncedSkipKql): the user nodes the decision could only leave out are not fetched and do
                    not count toward the buckets; the count probe counts them (NotFetched) and they join the left-out count.
                    Every test in the query leans the safe way, so the decision after the read still sees -- and keeps --
@@ -35,6 +47,8 @@
     THE SIGNALS (all already in SecurityInsight)
       never synced  the node has no Entra object id (the identity read found none in EntityIds or rawData) --
                     only AD ids (SecurityIdentifier / ActiveDirectoryObjectGuid)
+      AD account    a domain SID (S-1-5-21-...) in EntityIds or rawData, or an account name AND an account domain in rawData
+                    (Test-SIEgIsAdAccount; the query's _siIsAd)
       disabled      rawData accountEnabled / isEnabled / enabled = false, or userAccountControl carries ACCOUNTDISABLE (the
                     flag name, or bit 0x2 of the number). Unknown = NOT disabled: nothing is left out on a guess
                     (the rule of SI-DisabledAssets.ps1)
@@ -54,10 +68,11 @@
 #>
 
 # Default = the shipped default (config\settings.catalog.locked.json, launcher\_lib\SecurityInsight.shared-defaults.ps1):
-# used when the global is unset -- a container that never stored the setting runs ON, as the catalog says. A stored false
-# stays OFF. (The container also applies every catalog default at start; this keeps the rule where the code reads it,
+# used when the global is unset -- a container that never stored the setting runs as the catalog says (the two older
+# switches ON, SI_Identity_SkipNeverSyncedAd OFF). A stored value (true or false) is kept. (The container also applies every catalog default at start; this keeps the rule where the code reads it,
 # the pattern of SI-DisabledAssets.ps1.)
 $script:SIIdentityScopeSettings = [ordered]@{
+    SkipNeverSyncedAd         = @{ Setting = 'SI_Identity_SkipNeverSyncedAd';         Default = $false }
     SkipNeverSyncedDisabledAd = @{ Setting = 'SI_Identity_SkipNeverSyncedDisabledAd'; Default = $true }
     SkipDeletedGroups         = @{ Setting = 'SI_Identity_SkipDeletedGroups';         Default = $true }
 }
@@ -76,9 +91,11 @@ function ConvertTo-SIIdentityScopeFlag {
 
 function Get-SIIdentityScopeChoice {
     <#
-        PURE (reads the two globals unless -Values is passed). The install's choice:
-        @{ SkipNeverSyncedDisabledAd; SkipDeletedGroups; Any }. Not set (or not readable as yes / no) = the
-        shipped default, ON; a clear no (false, 0, off) = OFF.
+        PURE (reads the three globals unless -Values is passed). The install's choice:
+        @{ SkipNeverSyncedAd; SkipNeverSyncedDisabledAd; SkipDeletedGroups; Any }. Not set (or not readable as yes / no) =
+        each switch's shipped default (the two older ON, SI_Identity_SkipNeverSyncedAd OFF); a clear no (false, 0, off) =
+        OFF, a clear yes = ON. Which never-synced switch decides:
+        Get-SIIdentityNeverSyncedSetting.
     #>
     param([hashtable]$Values)
     $out = [ordered]@{}
@@ -90,8 +107,24 @@ function Get-SIIdentityScopeChoice {
         $flag = ConvertTo-SIIdentityScopeFlag $raw
         $out[$k] = if ($null -eq $flag) { [bool]$script:SIIdentityScopeSettings[$k].Default } else { [bool]$flag }
     }
-    $out['Any'] = [bool]($out.SkipNeverSyncedDisabledAd -or $out.SkipDeletedGroups)
+    $out['Any'] = [bool]($out.SkipNeverSyncedAd -or $out.SkipNeverSyncedDisabledAd -or $out.SkipDeletedGroups)
     [pscustomobject]$out
+}
+
+function Get-SIIdentityNeverSyncedSetting {
+    <#
+        PURE. The ONE switch that decides the never-synced on-premises AD accounts under -Choice (Get-SIIdentityScopeChoice):
+        'SI_Identity_SkipNeverSyncedAd' while it is on (it is the wider form), else 'SI_Identity_SkipNeverSyncedDisabledAd'
+        while that is on, else '' (none: every never-synced AD account is kept, as before either switch existed).
+        A choice made before the wider switch existed (no SkipNeverSyncedAd property) reads it as off.
+    #>
+    param($Choice)
+    if ($null -eq $Choice) { return '' }
+    $p = $Choice.PSObject.Properties['SkipNeverSyncedAd']
+    if ($p -and [bool]$p.Value) { return $script:SIIdentityScopeSettings.SkipNeverSyncedAd.Setting }
+    $p = $Choice.PSObject.Properties['SkipNeverSyncedDisabledAd']
+    if ($p -and [bool]$p.Value) { return $script:SIIdentityScopeSettings.SkipNeverSyncedDisabledAd.Setting }
+    return ''
 }
 
 function Get-SIIdentityScopeValue {
@@ -150,6 +183,27 @@ function Test-SIEgAdAccountDisabled {
     }
     if ($sawEnabled) { return $false }
     return $null
+}
+
+function Test-SIEgIsAdAccount {
+    <#
+        PURE. Is an Exposure Graph node an on-premises AD account? The same test as the query's _siIsAd
+        (Get-SIEgNeverSyncedSkipKql): a domain SID (S-1-5-21-...) -- -Sid (the SID the identity read resolved from EntityIds
+        or rawData) or one of rawData's SID fields -- or an account name AND an account domain in rawData (both non-empty
+        text). Field names without case. Anything else (another identity provider, a node with no AD sign) = $false: a
+        switch about AD accounts never leaves it out.
+    #>
+    param([AllowNull()]$RawData, [AllowNull()][AllowEmptyString()][string]$Sid)
+    if ($Sid -and $Sid.Trim() -match '^(?i)s-1-5-21-') { return $true }
+    if ($null -eq $RawData) { return $false }
+    foreach ($k in 'adSid', 'accountSid', 'onPremSid', 'onPremisesSecurityIdentifier', 'securityIdentifier', 'sid') {
+        $v = Get-SIIdentityScopeValue $RawData $k
+        if ($v -is [string] -and $v.Trim() -match '^(?i)s-1-5-21-') { return $true }
+    }
+    $n = Get-SIIdentityScopeValue $RawData 'accountName'
+    $d = Get-SIIdentityScopeValue $RawData 'accountDomain'
+    if ($n -is [string] -and $n.Length -gt 0 -and $d -is [string] -and $d.Length -gt 0) { return $true }
+    return $false
 }
 
 function Get-SIIdentityCriticalAdGroupNames {
@@ -242,8 +296,11 @@ function Get-SIEgNeverSyncedSkipKql {
         Field names are compared without case (the rawData text is lower-cased once). -CriticalGroups:
         Get-SIIdentityCriticalAdGroupNames. A catalog name with characters outside letters, digits, space, '.', '_', '-'
         cannot be matched safely in the text: then any non-empty nestedAdGroupNames counts as privileged.
+        -AnyEnabledState: SI_Identity_SkipNeverSyncedAd (the wider switch) -- the skip leaves out the enabled state:
+        _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and not(_siPriv). Every other test is the same, and
+        still leans the safe way (the AD identity test is what keeps a node of another identity provider).
     #>
-    param([AllowNull()]$CriticalGroups)
+    param([AllowNull()]$CriticalGroups, [switch]$AnyEnabledState)
     $names = New-Object System.Collections.Generic.List[string]
     $unsafeName = $false
     foreach ($g in @($CriticalGroups)) {
@@ -272,20 +329,27 @@ function Get-SIEgNeverSyncedSkipKql {
         ('| extend _siHasOid = _siIds contains "aadobjectid" or {0} matches regex @"{1}"' -f $oidText, $guid)
         ('| extend _siSid = coalesce(extract(@"securityidentifier[^}}]*?(s-1-[0-9-]+)", 1, _siIds), {0})' -f $rawSid)
         '| extend _siIsAd = _siSid startswith "s-1-5-21-" or (gettype(_siRl.accountname) == "string" and isnotempty(tostring(_siRl.accountname)) and gettype(_siRl.accountdomain) == "string" and isnotempty(tostring(_siRl.accountdomain)))'
+    )
+    if (-not $AnyEnabledState) {
+        $parts += @(
         ('| extend _siUacT = gettype({0}), _siUacS = trim(@"\s+", tostring({0}))' -f $uac)
         ('| extend _siDisabled = {0} or {1} or {2}' -f (& $flagFalse 'accountenabled'), (& $flagFalse 'isenabled'), (& $flagFalse 'enabled')) +
             (' or (_siUacT in ("long", "int") and binary_and(tolong({0}), 2) == 2)' -f $uac) +
             ' or (_siUacT == "string" and _siUacS matches regex @"^[0-9]+$" and binary_and(tolong(_siUacS), 2) == 2)' +
             (' or (_siUacT == "array" and array_length(set_intersect({0}, dynamic([{1}]))) > 0)' -f $uac, $uacNames) +
             ' or (_siUacT == "string" and not(_siUacS startswith "[") and _siUacS matches regex @"(^|[,;])\s*(accountdisabled|accountdisable|account_disabled|disabled)\s*($|[,;])")'
+        )
+    }
+    $parts += @(
         ('| extend _siPriv = tostring(_siRl.admincount) matches regex @"[1-9]"' +
             ' or not(tostring(_siRl.nestedcriticaladgroups) in ("", "[]", "{}") or (gettype(_siRl.nestedcriticaladgroups) == "dictionary" and gettype(_siRl.nestedcriticaladgroups.data) == "array" and array_length(_siRl.nestedcriticaladgroups.data) == 0))' +
             (' or {0}' -f $groupTest) +
             ' or not(tostring(_siRl.assignedroles) in ("", "[]"))' +
             (' or {0} or {1} or {2}' -f (& $flagNotFalse 'hasserviceprincipalname'), (& $flagNotFalse 'isserviceaccount'), (& $flagNotFalse 'issensitive')) +
             ' or iff(gettype(_siRl.criticalitylevel) == "dictionary", isnotempty(tostring(_siRl.criticalitylevel.criticalitylevel)), isnotempty(tostring(_siRl.criticalitylevel))))')
-        '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and _siDisabled and not(_siPriv)'
     )
+    if ($AnyEnabledState) { $parts += '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and not(_siPriv)' }
+    else { $parts += '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and _siDisabled and not(_siPriv)' }
     ($parts -join ' ')
 }
 
@@ -299,16 +363,28 @@ function Get-SIEgIdentityScopeDecision {
           -EntraGroups   the ids Entra ID returns (Read-SIEntraGroupIds .Ids); $null = not read
           -GroupsUnknown the Entra group read was asked for and is NOT complete
           -CriticalGroups Get-SIIdentityCriticalAdGroupNames
+          -Sid           the SID the identity read resolved (EntityIds or rawData), '' = none
         Returns @{ Keep; Setting (the switch that left it out, ''); Why; Held ($true = left out this run only because the
         Entra group read was not complete) }.
+        A never-synced user is decided by ONE switch (Get-SIIdentityNeverSyncedSetting): SI_Identity_SkipNeverSyncedAd while
+        it is on (kept when it is not an AD account, or privileged -- whatever its enabled state), else
+        SI_Identity_SkipNeverSyncedDisabledAd (kept when it is not disabled for certain, or privileged).
     #>
     param([AllowEmptyString()][string]$NodeLabel = '', [AllowEmptyString()][string]$AadObjectId = '', [AllowNull()]$RawData,
-          [Parameter(Mandatory)]$Choice, [AllowNull()]$EntraGroups, [switch]$GroupsUnknown, [AllowNull()]$CriticalGroups)
+          [Parameter(Mandatory)]$Choice, [AllowNull()]$EntraGroups, [switch]$GroupsUnknown, [AllowNull()]$CriticalGroups,
+          [AllowNull()][AllowEmptyString()][string]$Sid = '')
     $keep = [pscustomobject]@{ Keep = $true; Setting = ''; Why = ''; Held = $false }
     if (-not $Choice -or -not $Choice.Any) { return $keep }
     $label = ([string]$NodeLabel).Trim().ToLowerInvariant()
     $oid = ([string]$AadObjectId).Trim().ToLowerInvariant()
-    if ($label -eq 'user' -and -not $oid -and $Choice.SkipNeverSyncedDisabledAd) {
+    $neverSynced = Get-SIIdentityNeverSyncedSetting -Choice $Choice
+    if ($label -eq 'user' -and -not $oid -and $neverSynced -eq $script:SIIdentityScopeSettings.SkipNeverSyncedAd.Setting) {
+        if (-not (Test-SIEgIsAdAccount -RawData $RawData -Sid $Sid)) { return $keep }
+        $priv = Get-SIEgAdPrivilege -RawData $RawData -CriticalGroups $CriticalGroups
+        if ($priv.IsPrivileged) { return $keep }
+        return [pscustomobject]@{ Keep = $false; Setting = $neverSynced; Why = 'an on-premises AD account never synced to Entra ID and not privileged'; Held = $false }
+    }
+    if ($label -eq 'user' -and -not $oid -and $neverSynced -eq $script:SIIdentityScopeSettings.SkipNeverSyncedDisabledAd.Setting) {
         if ((Test-SIEgAdAccountDisabled -RawData $RawData) -ne $true) { return $keep }
         $priv = Get-SIEgAdPrivilege -RawData $RawData -CriticalGroups $CriticalGroups
         if ($priv.IsPrivileged) { return $keep }
@@ -357,11 +433,14 @@ function Read-SIEntraGroupIds {
 }
 
 function New-SIIdentityScopeCounter {
-    <# A counter per switch for one run: @{ <setting> = @{ LeftOut; Held; Kept; Applied; Detail } }, both switches named. #>
+    <# A counter per switch that decides this run: @{ <setting> = @{ LeftOut; Held; Kept; Applied; Detail } }. Of the two
+       never-synced switches only the one that decides (Get-SIIdentityNeverSyncedSetting) gets a counter. #>
     param([Parameter(Mandatory)]$Choice)
     $c = [ordered]@{}
+    $neverSynced = Get-SIIdentityNeverSyncedSetting -Choice $Choice
     foreach ($k in $script:SIIdentityScopeSettings.Keys) {
         if (-not $Choice.$k) { continue }
+        if (($k -in @('SkipNeverSyncedAd', 'SkipNeverSyncedDisabledAd')) -and ($script:SIIdentityScopeSettings[$k].Setting -ne $neverSynced)) { continue }
         $c[$script:SIIdentityScopeSettings[$k].Setting] = [pscustomobject]@{ Setting = $script:SIIdentityScopeSettings[$k].Setting; Feed = 'eg|user'; LeftOut = 0L; Held = 0L; Kept = 0L; Applied = $true; Detail = ''; NotFetched = 0L }
     }
     $c
@@ -384,6 +463,14 @@ function Format-SIIdentityScopeLine {
     param([Parameter(Mandatory)]$Count)
     $n = '{0:N0}' -f [long]$Count.LeftOut
     switch ([string]$Count.Setting) {
+        'SI_Identity_SkipNeverSyncedAd' {
+            # left out in the hunting query itself (Get-SIEgNeverSyncedSkipKql -AnyEnabledState): part of the count, never fetched
+            $nf = 0L; if ($Count.PSObject.Properties['NotFetched'] -and $null -ne $Count.NotFetched) { $nf = [long]$Count.NotFetched }
+            if ($nf -gt 0) {
+                return ('Exposure Graph identities: {0} on-premises AD account(s) never synced to Entra ID and not privileged got no asset (SI_Identity_SkipNeverSyncedAd is on): {1:N0} not fetched (left out in the Exposure Graph query itself), {2:N0} left out after the read; {3:N0} never-synced account(s) kept because they are privileged. Existing CIs of the accounts left out retire with that reason.' -f $n, $nf, ([long]$Count.LeftOut - $nf), [long]$Count.Kept)
+            }
+            return ('Exposure Graph identities: {0} on-premises AD account(s) never synced to Entra ID and not privileged got no asset (SI_Identity_SkipNeverSyncedAd is on); {1:N0} never-synced account(s) kept because they are privileged. Existing CIs of the accounts left out retire with that reason.' -f $n, [long]$Count.Kept)
+        }
         'SI_Identity_SkipNeverSyncedDisabledAd' {
             # left out in the hunting query itself (Get-SIEgNeverSyncedSkipKql): part of the count, never fetched
             $nf = 0L; if ($Count.PSObject.Properties['NotFetched'] -and $null -ne $Count.NotFetched) { $nf = [long]$Count.NotFetched }
@@ -490,7 +577,12 @@ function Get-SIRecordLeftOutByIdentityChoice {
                                                  si_is_sensitive_account, si_ms_criticality): the switch keeps every enabled
                                                  or privileged never-synced account listed, so one that is no longer listed
                                                  is disabled now (or gone from AD)
-          SI_Identity_SkipDeletedGroups          an eg user record of a group (si_identity_type group) with an Entra object id:
+          SI_Identity_SkipNeverSyncedAd          the same record, while this wider switch is on (it then decides instead of
+                                                 the one above), and only when the record shows it is an AD account (a domain
+                                                 SID in ad_sid, or an account name + AD domain): the switch keeps every
+                                                 privileged never-synced account listed, so one no longer listed is not
+                                                 privileged (or gone from AD)
+          SI_Identity_SkipDeletedGroups         an eg user record of a group (si_identity_type group) with an Entra object id:
                                                  the switch keeps every group Entra still has, so one no longer listed is gone
         Returns @{ Gone; Reason } -- Gone = $false for anything else (the lifecycle's usual "not seen" applies).
     #>
@@ -500,13 +592,26 @@ function Get-SIRecordLeftOutByIdentityChoice {
     if ([string](Get-SIIdentityScopeValue $Record 'si_provider') -ne 'eg' -or [string](Get-SIIdentityScopeValue $Record 'si_record_type') -ne 'user') { return $no }
     $type = ([string](Get-SIIdentityScopeValue $Record 'si_identity_type')).Trim().ToLowerInvariant()
     $oid = ([string]@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $Record 'entra_object_id'))[0]).Trim()
-    if ($type -eq 'user' -and -not $oid -and $Choice.SkipNeverSyncedDisabledAd) {
+    $neverSynced = Get-SIIdentityNeverSyncedSetting -Choice $Choice
+    if ($type -eq 'user' -and -not $oid -and $neverSynced) {
+        $wide = ($neverSynced -eq $script:SIIdentityScopeSettings.SkipNeverSyncedAd.Setting)
+        if ($wide) {
+            # the wider switch never leaves out a node that is not an AD account: a record without an AD sign keeps the
+            # usual "not seen" grace
+            $adSid = ([string]@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $Record 'ad_sid'))[0]).Trim()
+            $sam = [string](Get-SIIdentityScopeValue $Record 'si_sam_account_name')
+            $dom = [string](Get-SIIdentityScopeValue $Record 'si_ad_domain')
+            if (-not ($adSid -match '^(?i)s-1-5-21-') -and -not ($sam.Trim() -and $dom.Trim())) { return $no }
+        }
         $ac = 0; if ([int]::TryParse([string](Get-SIIdentityScopeValue $Record 'si_admin_count'), [ref]$ac) -and $ac -gt 0) { return $no }
         if (@(Get-SIIdentityScopeList (Get-SIIdentityScopeValue $Record 'si_ad_critical_groups')).Count -gt 0) { return $no }
         if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $Record 'si_is_sensitive_account')) -eq $true) { return $no }
         if ((ConvertTo-SIIdentityScopeFlag (Get-SIIdentityScopeValue $Record 'si_is_service_account')) -eq $true) { return $no }
         $crit = Get-SIIdentityScopeValue $Record 'si_ms_criticality'
         if ($null -ne $crit -and "$crit".Trim() -ne '') { return $no }
+        if ($wide) {
+            return [pscustomobject]@{ Gone = $true; Reason = 'left out by the install''s choice SI_Identity_SkipNeverSyncedAd: an on-premises AD account never synced to Entra ID that the Exposure Graph no longer lists as privileged' }
+        }
         return [pscustomobject]@{ Gone = $true; Reason = 'left out by the install''s choice SI_Identity_SkipNeverSyncedDisabledAd: an on-premises AD account never synced to Entra ID that the Exposure Graph no longer lists as enabled or privileged' }
     }
     if ($type -eq 'group' -and $oid -and $Choice.SkipDeletedGroups) {

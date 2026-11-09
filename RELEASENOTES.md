@@ -13,6 +13,17 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.77 — Setup status shows the web app correctly; identity changes finish reliably
+
+### Fixes
+
+- The setup status no longer reports the web app as unfinished while its earlier address is back and the recent address is
+  only forwarding visitors for its last few days: the web app is shown as running under its name.
+- Moving an installation's managed identities to their standard names no longer stops by waiting for the temporary
+  support access it opened itself.
+- An identity move no longer asks for a mail-sending permission for the web app, which does not send mail itself; only the
+  parts of SecurityInsight that send mail get that permission.
+
 ## v3.0.76 — The web app keeps its address
 
 ### Fixes

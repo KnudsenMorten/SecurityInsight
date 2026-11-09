@@ -290,7 +290,12 @@ function Get-SISetupSteps {
                 'public-address'        { 'ca-si-management is ready; the public address setting names a custom host, so ca-si-web stays until it is changed.' }
                 default                 { 'Not moved yet (' + $st + '); the old web app keeps serving and the next update tries again.' }
             }
-            & $add (New-SISetupStep -Key 'web-app-name' -State $(if ($st -eq 'moved') { 'ok' } elseif ($st -eq 'kept') { 'n/a' } else { 'missing' }) -CheckedAt $at -Detail $detail)
+            # back on ca-si-management with ca-si-web only forwarding = the web app IS on its standard name (removing the
+            # forwarder is clean-up, not alignment) -- ok; only for a row whose target is ca-si-management (a row of an older
+            # release that moved the other way stays missing)
+            $toMgmt = $wn.PSObject.Properties['to'] -and "$($wn.to)".Trim() -ieq 'ca-si-management'
+            $stepState = if ($st -eq 'moved') { 'ok' } elseif ($st -eq 'kept') { 'n/a' } elseif ($st -in 'forwarding', 'awaiting-signin-proof' -and $toMgmt) { 'ok' } else { 'missing' }
+            & $add (New-SISetupStep -Key 'web-app-name' -State $stepState -CheckedAt $at -Detail $detail)
         }
     } catch { }
     $out.ToArray()

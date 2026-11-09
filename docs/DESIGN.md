@@ -9023,7 +9023,7 @@ nothing has to be set.
 
   | Component | Today's name | New install (setting on) |
   |---|---|---|
-  | the web app | `ca-si-management` | `ca-si-web` |
+  | the web app | `ca-si-management` | `ca-si-management` (every install, new and existing: web app names are not aligned) |
   | its MCP server / the updater job | `ca-si-mcp` / `caj-si-updater` | unchanged |
   | the engine's identity | `id-si-<ring>-<edition>-<hosting>` | `id-si-engine` |
   | the web app's / MCP server's / updater's identity | `uami-si-management` / `uami-si-mcp` / `uami-si-updater` | `id-si-web` / `id-si-mcp` / `id-si-updater` |
@@ -9090,8 +9090,18 @@ for the engine jobs -- ring 1 installs the release's templates directly (#405) -
 the web app and its MCP server (image built from the release, app rolled, healthy revision + `/healthz` 200 awaited,
 previous image restored on failure; a failure = exit 1); then the record, the updater itself (last), and the run's state.
 
-**The web sign-in app owned by the updater, then the web app under its framework name `ca-si-web`** (framework
-SECAUDIT-1a item 2 and the framework's name table; `_shared/SI-UpdaterWebApp.ps1`, `Invoke-SIUpdaterWebAppSteps`). Two
+**The web sign-in app owned by the updater, then the web app under its standard name `ca-si-management`** (framework
+SECAUDIT-1a item 2 and the framework's name table; `_shared/SI-UpdaterWebApp.ps1`, `Invoke-SIUpdaterWebAppSteps`).
+**The web app is `ca-si-management` at every install, new and existing** -- web app names and addresses are not aligned
+across products; only identities get standard names. An install that was given `ca-si-web` goes back: step 2 runs the
+same move with the names swapped (`ca-si-web` -> `ca-si-management`), so `ca-si-management` is made again in the same
+Container Apps environment -- its earlier address -- from `ca-si-web`'s spec, with the same identity. After the switch
+`ca-si-web` forwards every request there for **3 days** (the clock `forwardSince` is kept in the `WebAppName` row across
+updates and never restarted), and is removed after that and a first sign-in on `ca-si-management`. A half-done install
+(both apps, the install still naming `ca-si-management`) only forwards and then removes `ca-si-web`. The guided install
+names a new install's web app `ca-si-management` too. The setup step `web-app-name` is `ok` when the web app runs as
+`ca-si-management` -- also while `ca-si-web` still forwards (a row with `to = ca-si-management`; removing the forwarder
+is clean-up, not alignment); a row of an older release that moved the other way stays `missing`. Two
 idempotent steps at the END of every update that did not fail (Invardia and Community paths alike,
 `Invoke-SIUpdaterWebAppStepsAfter` in `Start-SIUpdater.ps1`), ON unless the updater job says `SI_UPDATER_WEB_APP_MOVE=off`.
 Neither ever throws or fails the update; each says one plain line per outcome and records its state in `cfg.InstallState`
@@ -9107,8 +9117,9 @@ Neither ever throws or fails the update; each says one plain line per outcome an
    Invardia Support app -- the client id the install records in `cfg.InstallState 'SupportApp'` -- is removed and read
    back. A person or any other identity is never removed, and no removal may leave the updater out (never ownerless).
    States: `owned`, `owned-support-kept`, `needs-support-step`, `needs-permission`, `proof-failed`, `unknown`.
-2. **Name** (`Invoke-SIUpdaterWebAppMove`) -- from the web app the install runs (record / `SI_UPDATER_WEB_APP` /
-   `ca-si-management`) to `ca-si-web`; resumable, and any failure leaves the old app serving for the next update.
+2. **Name** (`Invoke-SIUpdaterWebAppMove`, generic old -> new; the update calls it with old = `ca-si-web`, new =
+   `ca-si-management`; below, "the old app" / "the new app" in that sense) -- resumable, and any failure leaves the old
+   app serving for the next update.
    `ca-si-web` runs and the old one does not = done (the install named after it when it is not yet). Otherwise, only once
    step 1 says the updater owns the sign-in app: `ca-si-web` made from the old app's spec (`New-SIUpdaterWebAppCopyBody`:
    the same image, the SAME user-assigned identity -- a system-assigned one refuses the copy --, environment, workload
@@ -9343,6 +9354,17 @@ Support app may do.
   Invardia Support app, which reads and grants everything and records `rightsUtc`; the update then trusts that copy for the
   parts it cannot read itself. An old identity that may still hold such rights is detached but not deleted until the
   Support-app clean-up has removed them.
+- **Rights that live outside Azure and Graph -- the shared-mailbox mail right**: only the roles that SEND shared-mailbox mail
+  in SI's code get Exchange `Application Mail.Send` in the mailbox's scope copied: the engine (its mail jobs) and the
+  updater (its licence notice). The web app sends no mail itself -- its mail goes through the engine's mail job -- so the
+  web identity gets none, even where its old identity held one (that old right is clean-up). A test keeps the move's role
+  table equal to the approved rights list's Exchange rows.
+- **The switch never waits for its own support grant**: where the vendor's Support app is read-only in the databases, the
+  switch opens the just-in-time support grant itself, which runs as an execution of the support-grant job. Executions of
+  that job that started at or after the switch's own start are its own and are not waited for; one started before it is.
+- **Root rights**: the collection and tagging identities read Azure at the install's chosen collection scope (a
+  subscription, a management group or the tenant root). Where that scope is above what the install may grant, the new
+  identity's Reader there is a step for the customer's administrator, and those two roles switch only once it reads back.
 - **Asset tagging**: an install without tagging's own identity gets `id-si-tagging` only when asset tagging is on
   (`SI_AssetTagging_Enabled`); its rights are `Grant-SIIdentity -Tagging` (a support step).
 - **The names report, on every update** (plan, apply, off, and after a move that stopped): a read-only check written to

@@ -385,6 +385,13 @@ feature here working normally.
   where the complete data still is, rather than trimming silently.
 
 - **Mail keeps working when your mailbox address changes.** ✅ 2026-10-07 -- When you change the primary address of the shared mailbox SecurityInsight sends from, for example to your own domain, the mail setup points the sending permission at that address. SecurityInsight keeps sending and stays limited to that one mailbox.
+- **The web app keeps its address.** ✅ 2026-11-09 -- The web app keeps its name and its address at every installation,
+  new and existing. An installation whose web app was recently given a new address got its earlier address back with the
+  same settings and the same sign-in, checked before it was used; the recent address keeps sending visitors to the earlier
+  one for a few days and is then removed, so bookmarks keep working throughout.
+- **Vendor support's database admin access is time-limited only.** ✅ 2026-11-09 -- Vendor support holds no standing
+  administrator right in your SecurityInsight databases or their SQL administrator group: it keeps read-only access, and
+  every change it makes runs under a temporary grant you agreed to, opened for that task and closed again.
 - **Patching after a run is not counted as a data problem.** ✅ 2026-10-18 -- When SecurityInsight checks its stored results against your live sources, a vulnerability you fixed after the collection is counted and shown as drift, not as a missing finding. Your install stays healthy while you patch, and a finding that existed at collection time but is missing still raises a warning.
 
 ## 14. Documentation

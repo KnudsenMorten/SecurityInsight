@@ -81,15 +81,17 @@ $script:SIMove = @{
 
 function Get-SIIdentityMoveRoleTable {
     <# PURE. Per role: Standard (the CR5 name), Old (today's names, SI-InstallNames), OldPattern (the engine's id-si-<label>),
-       RecordKey (the install-names record's role, '' = none), MailSender (Set-SIMail registers it: every identity but
-       tagging and MCP). #>
+       RecordKey (the install-names record's role, '' = none), MailSender (the role SENDS shared-mailbox mail in SI's code,
+       per the approved rights list setup\_shared\si-identity-rights.json: the engine -- SI-MailTransport -- and the updater
+       -- its licence notice; NOT the web app, which sends no mail itself: its mail goes through the engine's mail job --
+       live 2026-11-09 a web move was held for an Exchange right the web app never uses). #>
     $new = Get-SISetupComponentNames -New
     $old = Get-SIInstallNameDefaults
     [ordered]@{
         # the engine: SI-SetupNaming's ManagedIdentity with -NewNames ('id-si-engine', no ring in the name); today
         # id-si-<ring>-<edition>-<hosting>, and 'uami-securityinsight' on the oldest installs
         engine  = @{ Standard = 'id-si-engine'; Old = @('uami-securityinsight'); OldPattern = '^id-si-(r0|r1|r2|prod)-(community|pro)-(ca|vm)$'; RecordKey = ''; MailSender = $true }
-        web     = @{ Standard = [string]$new.WebIdentity;     Old = @([string]$old.webIdentity);     OldPattern = ''; RecordKey = 'webIdentity';     MailSender = $true }
+        web     = @{ Standard = [string]$new.WebIdentity;     Old = @([string]$old.webIdentity);     OldPattern = ''; RecordKey = 'webIdentity';     MailSender = $false }
         mcp     = @{ Standard = [string]$new.McpIdentity;     Old = @([string]$old.mcpIdentity);     OldPattern = ''; RecordKey = 'mcpIdentity';     MailSender = $false }
         updater = @{ Standard = [string]$new.UpdaterIdentity; Old = @([string]$old.updaterIdentity); OldPattern = ''; RecordKey = 'updaterIdentity'; MailSender = $true }
         tagging = @{ Standard = [string]$new.TaggingIdentity; Old = @([string]$old.taggingIdentity); OldPattern = ''; RecordKey = 'taggingIdentity'; MailSender = $false }
@@ -518,6 +520,27 @@ function Get-SIIdentityMoveMailMode {
 # =====================================================================================================================
 #  STEPS 4-7 PLANNERS (PURE)
 # =====================================================================================================================
+
+function Select-SIIdentityMoveWaitExecutions {
+    <#
+        PURE. The executions of job -Name the switch must wait for. Left out: (1) the update's OWN execution
+        (-Ctx.SelfExecution: its template is fixed at its start, the switch takes effect from the next execution); (2) at
+        caj-si-support-grant, every execution that started at or after this invocation (-Ctx.StartedUtc, 5 s slack): the
+        just-in-time support grant this invocation opened itself (live 2026-11-09: the switch waited for its own grant and
+        stopped). An execution started BEFORE this invocation is still waited for.
+    #>
+    param([string]$Name, [object[]]$Executions = @(), $Ctx)
+    $ex = @($Executions | Where-Object { $_ })
+    $self = if ($Ctx) { "$($Ctx.SelfExecution)".Trim() } else { '' }
+    if ($self) { $ex = @($ex | Where-Object { [string]$_.name -ne $self }) }
+    $started = if ($Ctx -and $Ctx.ContainsKey('StartedUtc') -and $Ctx.StartedUtc) { ([datetime]$Ctx.StartedUtc).ToUniversalTime().AddSeconds(-5) } else { $null }
+    if ($Name -eq 'caj-si-support-grant' -and $started) {
+        $ex = @($ex | Where-Object {
+            $t = $null; try { $t = ([datetime](Get-SIMoveProp $_ @('properties', 'startTime'))).ToUniversalTime() } catch { $t = $null }
+            -not $t -or $t -lt $started })
+    }
+    $ex   # (no leading comma: the caller wraps it in @() -- a comma here would make an empty list count as one)
+}
 
 function Get-SIIdentityMoveRunGate {
     <#
@@ -1449,7 +1472,7 @@ function Invoke-SIMoveSwitch {
         if ($u.Kind -eq 'job') { $exl = Get-SIMoveArmList -Path ($u.Id + '/executions?api-version=' + $script:SIMove.AppApi) -Reason $Ctx.Reason; if ($exl.Ok) { $ex = @($exl.Items) } else { $flowBad = $true } }
         # the update that runs this step is an execution of its own job: it never waits for itself (its own template is
         # fixed at its start -- the switch takes effect from the next execution)
-        if ("$($Ctx.SelfExecution)".Trim()) { $ex = @($ex | Where-Object { [string]$_.name -ne "$($Ctx.SelfExecution)".Trim() }) }
+        $ex = @(Select-SIIdentityMoveWaitExecutions -Name $u.Name -Executions $ex -Ctx $Ctx)
         $gate = Get-SIIdentityMoveRunGate -Name $u.Name -Kind $u.Kind -Executions $ex -Flow $flow -FlowUnreadable:$flowBad
         if (-not $gate.Go) { $wait = $true; $lines.Add(('{0}: waits -- {1}' -f $u.Name, ($gate.Why -replace ('^' + [regex]::Escape($u.Name) + ': '), ''))); continue }
         $sv = Invoke-SIMoveArm -Method POST -Path ($u.Id + '/listSecrets?api-version=' + $script:SIMove.AppApi) -Reason $Ctx.Reason -ReadOnly

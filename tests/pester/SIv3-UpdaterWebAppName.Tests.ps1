@@ -757,7 +757,10 @@ Describe 'the setup-step grid: the sign-in app owner and the web app name, per i
         $e = @($s | Where-Object key -eq 'web-app-name')[0]
         $e.state | Should -Be 'missing'; $e.how | Should -Be 'updater'
         $e.detail | Should -Match '^The web app runs as ca-si-management again; ca-si-web sends people there and is removed after the first sign-in'
-        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'missing'
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'missing' -Because 'a row that does not say it targets ca-si-management'
+        # back on ca-si-management, ca-si-web only forwarding: the web app IS on its standard name -> ok (the forwarder's removal is clean-up)
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z","from":"ca-si-web","to":"ca-si-management"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"awaiting-signin-proof","from":"ca-si-web","to":"ca-si-management"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
         $e.checkedAt | Should -Be '2026-11-07T10:00:00Z'
         (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"moved","checkedUtc":"2026-11-07T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
         @(Get-SISetupSteps -StateRows @() -SupportGrant $null | Where-Object { $_.key -in 'web-app-name', 'signin-app-owner' }).Count | Should -Be 0

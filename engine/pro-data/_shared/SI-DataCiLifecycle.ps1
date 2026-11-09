@@ -178,6 +178,14 @@ IF OBJECT_ID('sidata.Ci') IS NOT NULL INSERT @ret (CiId, Why)
                                                              WHEN JSON_VALUE(c.DocJson, '$.si_lifecycle_reason') LIKE N'retired at once: deleted in Azure%' THEN N'asset deleted in Azure'
                                                              WHEN JSON_VALUE(c.DocJson, '$.si_lifecycle_reason') LIKE N'retired at once: deleted in Intune%' THEN N'asset deleted in Intune' END END
     FROM sidata.Ci c WHERE c.Lifecycle = N'retired';
+-- 2026-11-09 A REPLACED DEVICE RECORD IS NOT A FIX: the CIs that carry a not_seen / gone record of a provider they have a
+-- current (active / frozen) record of -- Risk Analysis left the old record's findings out (RA-CiKql.ps1), so an absent
+-- finding there closes as 'report changed', never 'remediated' (SI-VulnDesired.ps1 Get-SIVulnReplacedRecordKeysSql, the same rule)
+DECLARE @rpl TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY);
+IF OBJECT_ID('sidata.CiLink') IS NOT NULL AND COL_LENGTH('sidata.CiLink', 'State') IS NOT NULL
+    INSERT @rpl (CiId) SELECT DISTINCT o.CiId FROM sidata.CiLink AS o
+    WHERE o.State IN (N'not_seen', N'gone') AND o.RecordType <> N'child_resource'
+      AND EXISTS (SELECT 1 FROM sidata.CiLink AS c WHERE c.CiId = o.CiId AND c.Provider = o.Provider AND c.State IN (N'active', N'frozen'));
 DECLARE @reo TABLE (OwnerKey NVARCHAR(450) NOT NULL, FindingKey NVARCHAR(256) NOT NULL, WasReason NVARCHAR(64) NULL, PRIMARY KEY (OwnerKey, FindingKey));
 DECLARE @retiredClosed INT = 0, @rekeyed INT = 0;
 -- REKEYED: an open finding under an asset key ('asset:<id>', no CI) that this collection reports under a CI instead -- the
@@ -249,6 +257,8 @@ BEGIN
                               -- #690 (34): it left because a report that found it changed (or was removed) -- not a fix
                               WHEN EXISTS (SELECT 1 FROM @rc g WHERE g.Seen = s.LastSeen
                                              AND CHARINDEX(N';' + REPLACE(g.Name, N' ', N'') + N';', N';' + REPLACE(ISNULL(s.DetectedBy, N''), N' ', N'') + N';') > 0) THEN N'report changed'
+                              -- 2026-11-09: the device record that reported it was replaced -- not a fix
+                              WHEN NULLIF(s.CiId, N'') IS NOT NULL AND EXISTS (SELECT 1 FROM @rpl p WHERE p.CiId = s.CiId) THEN N'report changed'
                               ELSE N'remediated' END
     FROM sidata.CiFindingState s LEFT JOIN sidata.Ci c ON c.CiId = s.CiId
     WHERE s.State <> N'closed'/*R:s.OwnerKey*//*ABS*/ AND NOT EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey)

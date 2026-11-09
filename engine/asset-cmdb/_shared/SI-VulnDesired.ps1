@@ -1408,6 +1408,56 @@ function Read-SIVulnOutOfScopeKeys {
     } catch { return [pscustomobject]@{ Keys = $set; Known = $false; Error = $_.Exception.Message } }
 }
 
+# =====================================================================================================================
+#  2026-11-09 A REPLACED DEVICE RECORD IS NOT A FIX (backlog "a CI with two Defender device records"; SI rule 4, absence
+#  is not remediation). Risk Analysis takes a stale record's key out of scope (RA-CiKql.ps1: a not_seen / gone link of a
+#  provider the CI has a current -- active / frozen -- link of): what only the old record reported leaves the desired set.
+#  The CIs that carry such a REPLACED record (sidata.CiLink, the CI build's links with their state) close an absent
+#  finding as 'Report changed' with its own plain reason -- never 'Remediated'. A device whose source stops listing it
+#  without a current sibling record is not one of them: as before.
+# =====================================================================================================================
+function Get-SIVulnReplacedRecordKeysSql {
+    <# The CI keys with a replaced record: a not_seen / gone link whose provider also has an active / frozen link on the
+       same CI -- the KQL link block's rule. Guarded (no table or no State column = no rows). #>
+    @'
+IF OBJECT_ID('sidata.CiLink') IS NULL OR COL_LENGTH('sidata.CiLink', 'State') IS NULL
+    SELECT CAST(NULL AS NVARCHAR(64)) AS CiId, CAST(NULL AS NVARCHAR(32)) AS Provider, CAST(NULL AS INT) AS Replaced WHERE 1 = 0;
+ELSE SELECT o.CiId, MIN(o.Provider) AS Provider, COUNT(*) AS Replaced FROM sidata.CiLink AS o
+WHERE o.State IN (N'not_seen', N'gone') AND o.RecordType <> N'child_resource'
+  AND EXISTS (SELECT 1 FROM sidata.CiLink AS c WHERE c.CiId = o.CiId AND c.Provider = o.Provider AND c.State IN (N'active', N'frozen'))
+GROUP BY o.CiId;
+'@
+}
+
+function ConvertFrom-SIVulnReplacedRecordRows {
+    <# PURE. Rows (CiId, Provider, Replaced) -> @{ '<CI key lower>' = '<evidence, plain>' }. #>
+    param([AllowEmptyCollection()][object[]]$Rows = @())
+    $out = @{}
+    $val = { param($r, [string]$n) $v = if ($r -is [System.Collections.IDictionary]) { $r[$n] } elseif ($r.PSObject.Properties[$n]) { $r.$n } else { $null }; if ($v -is [System.DBNull]) { $null } else { $v } }
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $k = ([string](& $val $r 'CiId')).Trim().ToLowerInvariant(); if (-not $k) { continue }
+        $p = [string](& $val $r 'Provider'); $n = 0; [void][int]::TryParse([string](& $val $r 'Replaced'), [ref]$n)
+        $label = switch ($p) { 'mde' { 'Defender' } 'entra' { 'Entra ID' } 'intune' { 'Intune' } 'azure' { 'Azure' } 'eg' { 'Exposure Graph' } 'ad' { 'Active Directory' } default { $p } }
+        $out[$k] = ('{0} has a newer record of this asset; {1} older record(s) no longer report' -f $label, [Math]::Max(1, $n))
+    }
+    $out
+}
+
+function Read-SIVulnReplacedRecordKeys {
+    <#
+        The CIs with a replaced record (Get-SIVulnReplacedRecordKeysSql) -- -Invoke: the database seam. Returns @{ Keys
+        (hashtable CI key -> evidence); Known }; Known $false when the read fails -- the caller then closes nothing this run
+        (unknown never closes: an absence on such a CI must not be called a fix).
+    #>
+    param([scriptblock]$Invoke)
+    if (-not $Invoke) { return [pscustomobject]@{ Keys = @{}; Known = $true } }
+    try {
+        $rows = @(& $Invoke (Get-SIVulnReplacedRecordKeysSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+        return [pscustomobject]@{ Keys = (ConvertFrom-SIVulnReplacedRecordRows -Rows $rows); Known = $true }
+    } catch { return [pscustomobject]@{ Keys = @{}; Known = $false; Error = $_.Exception.Message } }
+}
+
 function Set-SIVulnOutOfScopeStates {
     <#
         PURE. Marks the out-of-scope assets 'OutOfScope' in the plan's asset states (in place; returns how many). A 'Disabled'

@@ -80,7 +80,7 @@ Describe 'paired reports receive the same structural treatment' {
             if (-not ($p.ContainsKey('S') -and $p.ContainsKey('D'))) { continue }
             # the other asset's CI block (#677, `let _ciPeer = ...`) carries the peer's context only -- it computes
             # peer_in_scope but filters nothing, and only a Detailed report needs it; it is left out of the count
-            $peer = '(?s)let _ciPeer\s*=.*?peer_in_scope = si_in_scope_;'
+            $peer = '(?s)let _ciPeer\s*=.*?peer_in_scope = [^;]*;'
             $s = ([regex]::Matches(((script:CodeOf (script:QueryOf $p.S)) -replace $peer, ''), $rx)).Count
             $d = ([regex]::Matches(((script:CodeOf (script:QueryOf $p.D)) -replace $peer, ''), $rx)).Count
             $total += $s + $d

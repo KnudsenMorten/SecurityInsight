@@ -3979,6 +3979,27 @@ bucketing):
    scope block): `_ciAsset` keeps the CIs in scope (`| where <predicate>`); `_ciLink` marks `si_in_scope_` and every report
    keeps `| where coalesce(si_in_scope_, true)` after its join (a finding with no CI has nothing to scope it by). Both restrict
    `si_rf_p` / `si_rf_c` to the report's factor set.
+   **A stale record's key is out of scope (2026-11-09, backlog "a CI with two Defender device records").** `_ciLink` keys a
+   CI by EVERY linked id, so a rebuilt server's OLD Defender record (not reporting since the rebuild) kept the
+   vulnerabilities the current record no longer has open on the CI. The CI build posts each link's state with
+   `si_linked_objects` (`{ provider, id, state }`, `ConvertTo-SICiPostRow`; the post contract value moved, so the first build
+   after the release posts every CI's full row), and `_ciLink` / `_ciPeer` mark a key `si_in_scope_` / `peer_in_scope` =
+   false when its link is `not_seen` / `gone` AND the CI has a current (`active` / `frozen`) link of the same provider --
+   the rule the CI build's primary pick uses. The key is KEPT (dropping it would leave the finding an orphan row keyed by
+   its own device id); the report's scope filter after the join drops the finding. A provider with no current link keeps
+   every key (a device off for a while keeps its findings); a link without a state (a row posted before) is never out of
+   scope. **A REPLACED RECORD IS NOT A FIX (SI rule 4, decided 2026-11-09):** such a finding leaves the desired set, and
+   on a CI that carries a replaced record (sidata.CiLink: a `not_seen` / `gone` link of a provider with an `active` /
+   `frozen` link on the same CI -- the same rule, `Get-SIVulnReplacedRecordKeysSql`) an absent finding closes after the
+   usual absence count as **'Report changed'** -- the existing non-fix reason every target and close-code map already
+   carries -- with its own why: *"The device record that reported this was replaced -- not confirmed fixed"*; never
+   'Remediated', never corroborated (`New-SIVulnSyncPlan -ReplacedRecord`, plan list `ReplacedRecord`). This holds whenever
+   the old record's finding leaves -- also when the first run after the release still read SI_CI_CL rows without the
+   state. The Pro finding lifecycle (`SI-DataCiLifecycle.ps1`, sidata.CiFindingState) closes it as 'report changed' by the
+   same rule. The source's own "fixed" signal still closes as Remediated. The rule is per CI: while a CI carries a replaced
+   record, a genuine fix on its current record also closes as 'Report changed' (never a false "fixed"; it reads as fixed
+   again once the old record leaves the CI). Unreadable = the connector closes nothing that run. Not changed: a device
+   its source stops listing with NO current sibling record (open point).
 3. **The excluded configuration ids** end every query (every report emits a ConfigurationId).
 
 **What applies to which report** is the data-model template `data-model/report-scope.locked.json` (kind `report-scope`,

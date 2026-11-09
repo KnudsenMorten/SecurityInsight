@@ -108,15 +108,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
 
@@ -520,15 +525,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
 
@@ -956,15 +966,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           // Step 0c  Excluded ConfigurationIds -- block-marker substituted by engine from the per-report exclude.custom.json.
@@ -1253,15 +1268,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           // Step 0c  Excluded ConfigurationIds -- block-marker substituted by engine from the per-report exclude.custom.json.
@@ -1551,15 +1571,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -1786,15 +1811,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -2004,15 +2034,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -2262,15 +2297,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -2503,15 +2543,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -2734,15 +2779,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           let _src =
@@ -2965,15 +3015,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           // #192 a subscription-level recommendation takes the subscription's most critical CI.
@@ -3403,15 +3458,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
 
           // #192 a subscription-level recommendation takes the subscription's most critical CI.
@@ -3817,15 +3877,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
           let _recAll = union isfuzzy=true
               (datatable(CollectionTime:datetime, ResourceId:string, ResourceIdLower:string, ResourceName:string, ResourceType:string, RowKind:string, Recommendation:string, AssessmentKey:string, Severity:string, RecommendationCategory:string, SecurityIssue:string, Categories:string, Tactics:string, RiskFactors:string, PortalLink:string, MaxCvssScore:string, AffectedEntityKind:string, AffectedEntities:string, SubscriptionId:string, ResourceGroup:string, Description:string, Remediation:string, SubFindingMaxSeverity:string, SubFindings:string)[]),
@@ -4115,15 +4180,20 @@ Reports:
                   | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                   | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                   | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                  | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                      summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                                _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                    )
                   | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                   | mv-expand _ciKey = _ciKeys to typeof(string)
                   | where isnotempty(_ciKey)
+                  | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                   | summarize arg_max(_ciBuild, *) by _ciKey
                   | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                             si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                             si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                             si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                            si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
           //__SI_CI_LINK_END__
           let _recAll = union isfuzzy=true
               (datatable(CollectionTime:datetime, ResourceId:string, ResourceIdLower:string, ResourceName:string, ResourceType:string, RowKind:string, Recommendation:string, AssessmentKey:string, Severity:string, RecommendationCategory:string, SecurityIssue:string, Categories:string, Tactics:string, RiskFactors:string, PortalLink:string, MaxCvssScore:string, AffectedEntityKind:string, AffectedEntities:string, SubscriptionId:string, ResourceGroup:string, Description:string, Remediation:string, SubFindingMaxSeverity:string, SubFindings:string)[]),
@@ -4454,14 +4524,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -5438,14 +5513,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths (UPDATED to match your standard context)
@@ -6179,14 +6259,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -7104,14 +7189,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich results (context standard)
@@ -7852,14 +7942,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -8727,14 +8822,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -9412,14 +9512,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -10213,14 +10318,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Build node catalog used to enrich attack paths
@@ -10926,14 +11036,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Credential edges (not sliced since #677 -- every source of a credential is needed in its slice)
@@ -11731,15 +11846,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
 
         let VulnerableDevices = ExposureGraphNodes
@@ -12040,15 +12160,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -12069,14 +12194,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let VulnerableDevices = ExposureGraphNodes
@@ -12398,14 +12528,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         // Step 1  Credential edges (not sliced since #677 -- every source of a credential is needed in its slice)
@@ -13058,14 +13193,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         let ImpersonationEdges =
             ExposureGraphEdges
@@ -13305,14 +13445,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         let ImpersonationEdges =
             ExposureGraphEdges
@@ -13549,14 +13694,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         // a target no CI links takes the tier its own resource tree gives it -- the top-level resource it belongs to (#190),
         // else its subscription's most critical CI (#192) -- read on its own, never from a slice's share (#675)
@@ -13857,14 +14007,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         // a target no CI links takes the tier its own resource tree gives it -- the top-level resource it belongs to (#190),
         // else its subscription's most critical CI (#192) -- read on its own, never from a slice's share (#675)
@@ -14139,14 +14294,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         let ServerGrants =
             ExposureGraphEdges
@@ -14408,14 +14568,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         let ServerGrants =
             ExposureGraphEdges
@@ -14760,14 +14925,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         _ciAsset
         | where si_identity_type == "service_principal"
@@ -15077,14 +15247,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
         _ciAsset
         | where si_identity_type == "service_principal"
@@ -19341,15 +19516,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         let _roleHolders =
             IdentityInfo
@@ -19560,15 +19740,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         let _roleHolders =
             IdentityInfo
@@ -24144,15 +24329,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -24173,14 +24363,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -24417,15 +24612,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -24446,14 +24646,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -24679,15 +24884,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -24708,14 +24918,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -24954,15 +25169,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -24983,14 +25203,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -25260,15 +25485,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -25289,14 +25519,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -26043,15 +26278,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -26072,14 +26312,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -26308,15 +26553,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -26337,14 +26587,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -27617,15 +27872,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         //__SI_CI_PEER_BEGIN__
             let _ciPeer =
@@ -27646,14 +27906,19 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                           peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           peer_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), peer_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_;
+                          peer_rf_p = si_rf_p, peer_rf_names = si_rf_names_, peer_in_scope = si_in_scope_ and not(_ciOff);
         //__SI_CI_PEER_END__
 
         let _devices =
@@ -36431,15 +36696,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         let _roleHolders =
             IdentityInfo
@@ -39027,15 +39297,20 @@ Reports:
                 | mv-apply _ciRfN = si_rf_p to typeof(string) on (summarize si_rf_names_ = make_list(iff(isempty(tostring(_ciRfNames[_ciRfN])), _ciRfN, tostring(_ciRfNames[_ciRfN]))))
                 | extend si_stale_ = isnotnull(_ciSeen) and _ciSeen < ago(30d), si_last_seen_ = _ciSeen, si_tags_ = tolower(tostring(column_ifexists("si_tags", dynamic(null))))
                 | extend si_in_scope_ = coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true) and not(si_tags_ has_any (dynamic(["--excluded--si"])))
+                | mv-apply _ciLo = todynamic(column_ifexists("si_linked_objects", dynamic([]))) to typeof(dynamic) on (
+                    summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in ("active", "frozen")),
+                              _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in ("not_seen", "gone"))
+                  )
                 | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array(tolower(tostring(column_ifexists("si_link_mde", ""))), tolower(tostring(column_ifexists("si_link_entra", ""))), tolower(tostring(column_ifexists("si_link_azure", ""))), tolower(tostring(column_ifexists("si_link_eg", ""))), tolower(tostring(column_ifexists("si_link_ad", ""))), tolower(tostring(column_ifexists("si_link_intune", "")))))
                 | mv-expand _ciKey = _ciKeys to typeof(string)
                 | where isnotempty(_ciKey)
+                | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))
                 | summarize arg_max(_ciBuild, *) by _ciKey
                 | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                           si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
                           si_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), si_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),
                           si_cmdb_criticality = tostring(column_ifexists("si_cmdb_criticality", "")), si_cmdb_data_sensitivity = tostring(column_ifexists("si_cmdb_data_sensitivity", "")),
-                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_;
+                          si_criticality_factor = todouble(column_ifexists("si_criticality_factor", real(null))), si_rf_p, si_rf_c, si_rf_names_, si_stale_, si_tags_, si_in_scope_ = si_in_scope_ and not(_ciOff);
         //__SI_CI_LINK_END__
         let _roleHolders =
             IdentityInfo

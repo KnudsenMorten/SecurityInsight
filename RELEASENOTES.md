@@ -13,6 +13,17 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.79 — A replaced device record no longer shows old vulnerabilities
+
+### Fixes
+
+- When a server is rebuilt or re-onboarded, Microsoft Defender can keep its older device record beside the new one. Its
+  vulnerabilities no longer count for the asset once Defender reports the asset through a newer record: an update shown
+  as missing only on the old record no longer appears on a server that has it installed.
+- Findings that leave this way close as "report changed" with a plain explanation that the device record was replaced,
+  never as fixed, so a connected ticketing system does not record a fix that was not confirmed.
+- An asset whose only Defender record has stopped reporting keeps its findings, as before.
+
 ## v3.0.78 — A template change never holds an update
 
 ### Fixes

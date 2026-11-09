@@ -157,7 +157,10 @@ $script:SICiBuildVersion = 14
 # and plain-words reason), Exposure Graph ageing out, the generated name of a nameless machine CI -- re-baselined with the bump.
 # 2026-11-06 (#1135): the identity ledger's statements go through the shared statement retry (New-SICiLedgerSqlInvoke) --
 # the same statements and rows, no CI comes out different: re-baselined, version 14.
-$script:SICiBuildLogicHash = 'a01197ac97002cd7178150b359c90c17fb92b596d91561afdb2069be5fbfef30'
+# 2026-11-09 (a CI with two Defender device records): SI_CI_CL's linked objects carry each link's state -- the CI document
+# is the same (it always held the state); the post contract value moves instead, so every full row is posted once:
+# re-baselined, version 14.
+$script:SICiBuildLogicHash = '6d2e8ed1013a1b8a55d0b215ad2a14cfd91fc9b9893434fe9458bf3299cebdf6'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -300,12 +303,22 @@ $script:SICiPostDatabaseOnly = @(
     'si_mdc_high_count', 'si_mdc_medium_count', 'si_mdc_low_count', 'si_mdc_oldest_unhealthy', 'si_mdc_newest_change', 'si_mdc_top',
     # rc12 (#499): the software past (or near) end of support -- a list like si_installed_software (its count is posted)
     'si_software_eos')
+# the fields each linked object carries in SI_CI_CL si_linked_objects. `state` (active / frozen / not_seen / gone, the
+# link's own state from the CI build): Risk Analysis's link block (RA-CiKql.ps1) takes a key whose record is not seen or
+# gone OUT OF SCOPE when the CI has a current record of the same provider -- a rebuilt server's old Defender record never
+# keeps a vulnerability open that the current record no longer has. A row without state (posted before) reads as today.
+$script:SICiPostLinkedFields = @('provider', 'id', 'state')
 
 function Get-SICiPostContractHash {
-    <# PURE. The SI_CI_CL column contract as one value (SHA-256 of the post fields): a release that changes the columns makes
-       the next build post every CI's full row (SI-CiBuildRun.ps1, state 'PostContract'). #>
+    <# PURE. The SI_CI_CL column contract as one value (SHA-256 of the post fields, and of the fields each linked object
+       carries): a release that changes either makes the next build post every CI's full row (SI-CiBuildRun.ps1, state
+       'PostContract'). The linked-object part is added only when it is more than { provider, id } -- the contract value of
+       a release before it is unchanged. #>
+    $text = @($script:SICiPostFields) -join ','
+    $lf = @($script:SICiPostLinkedFields)
+    if (($lf -join ',') -ne 'provider,id') { $text += '|si_linked_objects=' + ($lf -join ',') }
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { (([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes((@($script:SICiPostFields) -join ','))))) -replace '-', '').ToLowerInvariant() }
+    try { (([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text)))) -replace '-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
 }
 
@@ -718,14 +731,21 @@ function ConvertFrom-SICiStoredRecord {
 function ConvertTo-SICiPostRow {
     <# PURE. A CI document -> the SI_CI_CL full row Risk Analysis reads (the column contract only, $script:SICiPostFields: no
        run id and nothing else that changes every build; the lifecycle IS posted -- it changes only when the CI's linked
-       objects do; linked objects as { provider, id }, risk factors as { id, axis, impact, stage }). #>
+       objects do; linked objects as { provider, id, state } ($script:SICiPostLinkedFields -- the state only where the link
+       has one), risk factors as { id, axis, impact, stage }). #>
     param([Parameter(Mandatory)]$Ci)
     $r = [ordered]@{}
     foreach ($f in $script:SICiPostFields) {
         if (-not $Ci.Contains($f)) { continue }
         $v = $Ci[$f]
         # (loops, not pipelines: this runs for every CI of the build)
-        if ($f -eq 'si_linked_objects') { $v = @(foreach ($x in @($v)) { if ($x) { [ordered]@{ provider = $x.provider; id = $x.id } } }) }
+        if ($f -eq 'si_linked_objects') {
+            # the link's state rides along (Risk Analysis takes a stale record's key out of scope, RA-CiKql.ps1); none = left out
+            $v = @(foreach ($x in @($v)) { if (-not $x) { continue }
+                    $o = [ordered]@{ provider = $x.provider; id = $x.id }
+                    $st = [string](Get-SIItemValue $x 'state'); if ($st) { $o['state'] = $st }
+                    $o })
+        }
         elseif ($f -eq 'si_risk_factors') {
             # each factor's providers ('by', #464) ride along; the full evidence stays in the sidata.Ci document
             $v = @(foreach ($x in @($v)) { if (-not $x) { continue }

@@ -11,7 +11,9 @@
                 `join kind=leftouter (_ciLink) on $left.<provider id> == $right._ciKey`, never on AadDeviceId, SI_AssetId
                 or a name. One key = one CI (the newest build wins a key two CIs claim), so the join cannot fan out.
                 Columns: _ciKey, si_ci_id, si_class, si_asset_name, si_tier, si_tier_set_by, si_cmdb_id, si_cmdb_name,
-                si_cmdb_criticality, si_cmdb_data_sensitivity, si_criticality_factor, si_rf_p, si_rf_c, si_stale_.
+                si_cmdb_criticality, si_cmdb_data_sensitivity, si_criticality_factor, si_rf_p, si_rf_c, si_stale_,
+                si_in_scope_ (the report's scope AND not a stale record's key -- a not_seen / gone link of a provider
+                the CI has a current link of, so a rebuilt server's old Defender record keeps nothing open on the CI).
                 An optional class filter keeps the inlined copy small (the hybrid path inlines it into advanced hunting,
                 bucketed on _ciKey -- the report's DeviceKey must be the same provider id for the buckets to align).
       _ciAsset  one row per CI with every SI field Risk Analysis reads ($script:RACiAssetFields) -- for the reports
@@ -216,7 +218,8 @@ function Get-RACiKqlBlock {
     .PARAMETER FactorSet       the report's factor set (#541) -- si_rf_p / si_rf_c restricted to it
     .PARAMETER ScopePredicate  the report's in-scope test of a CI (#541, RA-ScopePreamble.ps1 Get-RAScopeCiPredicate):
                                _ciAsset keeps the CIs it accepts; _ciLink carries it as si_in_scope_ (the report keeps
-                               coalesce(si_in_scope_, true) after its join). Empty / 'true' = no scope line.
+                               coalesce(si_in_scope_, true) after its join). Empty / 'true' = no scope line. _ciLink /
+                               _ciPeer always carry si_in_scope_ / peer_in_scope: the scope AND not a stale record's key.
     #>
     param([Parameter(Mandatory)][ValidateSet('link', 'asset', 'subtier', 'peer')][string]$Kind, [int]$StaleDays = 30, [string[]]$Classes = @(),
           [AllowEmptyCollection()][string[]]$FactorSet = @(), [AllowEmptyString()][string]$ScopePredicate = '', [hashtable]$FactorNames = @{})
@@ -252,17 +255,32 @@ $($script:RACiSubTierEnd)
     }
     $core = Get-RACiKqlCore -StaleDays $StaleDays -Classes $Classes -FactorSet $FactorSet -FactorNames $FactorNames
     $hasScope = ($ScopePredicate -and $ScopePredicate.Trim() -ne 'true')
+    # A STALE RECORD'S KEY IS OUT OF SCOPE (a CI with two Defender device records -- a rebuilt server: its old record, not
+    # seen for longer than the not-seen window, kept the vulnerabilities the current record no longer has open on the CI).
+    # Per CI, from si_linked_objects' state (SI-CiBuildSql.ps1 posts it): _ciLive = the providers with a CURRENT link
+    # (active or frozen -- the CI build's primary rank), _ciOld = each not_seen / gone link's id -> its provider. A key is
+    # OFF when its link is stale AND its provider has a current link: the finding is then not the CI's (the key stays, so
+    # a finding on it never falls back to an orphan row of its own -- the report's coalesce(si_in_scope_, true) drops it).
+    # A provider with no current link keeps every key (a device off for a while keeps its findings), and a link without a
+    # state (a row posted before) is never off -- as before.
+    $staleApply = "`n        | mv-apply _ciLo = todynamic(column_ifexists(""si_linked_objects"", dynamic([]))) to typeof(dynamic) on (" +
+                  "`n            summarize _ciLive = make_set_if(tostring(_ciLo.provider), tostring(_ciLo.state) in (""active"", ""frozen""))," +
+                  "`n                      _ciOld = make_bag_if(bag_pack(tolower(tostring(_ciLo.id)), tostring(_ciLo.provider)), tostring(_ciLo.state) in (""not_seen"", ""gone""))" +
+                  "`n          )"
+    $staleOff = "`n        | extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))"
+    $inScope = 'not(_ciOff)'; if ($hasScope) { $inScope = 'si_in_scope_ and not(_ciOff)' }
     if ($Kind -eq 'link') {
         $keys = @('si_link_mde', 'si_link_entra', 'si_link_azure', 'si_link_eg', 'si_link_ad', 'si_link_intune') | ForEach-Object { 'tolower(tostring(column_ifexists("{0}", "")))' -f $_ }
-        $scopeLine = ''; $scopeCol = ''
-        if ($hasScope) { $scopeLine = "`n        | extend si_in_scope_ = $ScopePredicate"; $scopeCol = ', si_in_scope_' }
+        $scopeLine = ''
+        if ($hasScope) { $scopeLine = "`n        | extend si_in_scope_ = $ScopePredicate" }
+        $scopeCol = ', si_in_scope_ = ' + $inScope
         return @"
 $($script:RACiLinkBegin)
     let _ciLink =
-$core$scopeLine
+$core$scopeLine$staleApply
         | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array($($keys -join ', ')))
         | mv-expand _ciKey = _ciKeys to typeof(string)
-        | where isnotempty(_ciKey)
+        | where isnotempty(_ciKey)$staleOff
         | summarize arg_max(_ciBuild, *) by _ciKey
         | project _ciKey, si_ci_id = _ciId, si_class = tostring(si_class), si_asset_name = tostring(si_asset_name),
                   si_tier = toint(column_ifexists("si_tier", int(null))), si_tier_set_by = tostring(column_ifexists("si_tier_set_by", "")),
@@ -275,15 +293,18 @@ $($script:RACiLinkEnd)
     if ($Kind -eq 'peer') {
         # #677: the link block's CIs and keys, a lean projection under names the slice cut does not key on
         $keys = @('si_link_mde', 'si_link_entra', 'si_link_azure', 'si_link_eg', 'si_link_ad', 'si_link_intune') | ForEach-Object { 'tolower(tostring(column_ifexists("{0}", "")))' -f $_ }
-        $scopeLine = ''; $scopeCol = ''
-        if ($hasScope) { $scopeLine = "`n        | extend si_in_scope_ = $ScopePredicate"; $scopeCol = ', peer_in_scope = si_in_scope_' }
+        # the same stale-record rule as the link block: a report that keeps coalesce(peer_in_scope ...) drops the other
+        # asset's stale key (an attack path to a rebuilt server's old record)
+        $scopeLine = ''
+        if ($hasScope) { $scopeLine = "`n        | extend si_in_scope_ = $ScopePredicate" }
+        $scopeCol = ', peer_in_scope = ' + $inScope
         return @"
 $($script:RACiPeerBegin)
     let _ciPeer =
-$core$scopeLine
+$core$scopeLine$staleApply
         | extend _ciKeys = set_union(extract_all(@'"id"\s*:\s*"([^"]+)"', tolower(tostring(column_ifexists("si_linked_objects", dynamic([]))))), pack_array($($keys -join ', ')))
         | mv-expand _ciKey = _ciKeys to typeof(string)
-        | where isnotempty(_ciKey)
+        | where isnotempty(_ciKey)$staleOff
         | summarize arg_max(_ciBuild, *) by _ciKey
         | project _peerKey = _ciKey, peer_ci_id = _ciId, peer_tier = toint(column_ifexists("si_tier", int(null))),
                   peer_cmdb_id = tostring(column_ifexists("si_cmdb_id", "")), peer_cmdb_name = tostring(column_ifexists("si_cmdb_name", "")),

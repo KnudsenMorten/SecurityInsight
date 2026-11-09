@@ -139,11 +139,18 @@ Describe 'The CI blocks and the SI_CI_CL contract (#505)' {
             }
         }
     }
-    It 'the link block keys a CI by every linked id, lower-case, one CI per key' {
+    It 'the link block keys a CI by every linked id, lower-case, one CI per key -- a stale record''s key stays a key, out of scope' {
         $b = Get-RACiKqlBlock -Kind link
         $b | Should -Match ([regex]::Escape('extract_all(@''"id"\s*:\s*"([^"]+)"'''))
         $b | Should -Match ([regex]::Escape('summarize arg_max(_ciBuild, *) by _ciKey'))
         foreach ($l in 'si_link_mde', 'si_link_entra', 'si_link_azure', 'si_link_eg', 'si_link_ad', 'si_link_intune') { $b | Should -Match $l }
+        # (backlog 2026-11-09, a CI with two Defender device records) every linked id still keys the CI -- a not_seen / gone
+        # link of a provider the CI has a current link of is marked out of scope (si_in_scope_), never dropped as a key
+        # (SIv3-CiStaleDeviceRecord.Tests.ps1 holds the two-record fixture)
+        $b | Should -Not -Match 'where not\(_ciOff\)'
+        $b | Should -Match ([regex]::Escape('| extend _ciOff = set_has_element(_ciLive, tostring(_ciOld[_ciKey]))'))
+        $b | Should -Match ([regex]::Escape('si_in_scope_ = not(_ciOff);'))
+        Get-RACiKqlBlock -Kind link -ScopePredicate 'x == 1' | Should -Match ([regex]::Escape('si_in_scope_ = si_in_scope_ and not(_ciOff);'))
     }
     It 'both blocks: the newest build''s CIs, the latest full row within the stale days, seen rows for liveness' {
         foreach ($k in 'link', 'asset') {

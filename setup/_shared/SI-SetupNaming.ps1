@@ -77,7 +77,9 @@ function Get-SISetupComponentNames {
     param([switch]$New)
     if ($New) {
         return [ordered]@{
-            WebApp          = 'ca-si-web'
+            # the web app keeps ca-si-management for every install, new ones too (framework 5.5, owner 2026-11-09: identities
+            # get standard names, web app names / addresses are not aligned)
+            WebApp          = 'ca-si-management'
             McpApp          = 'ca-si-mcp'
             UpdaterJob      = 'caj-si-updater'
             WebIdentity     = 'id-si-web'
@@ -245,7 +247,7 @@ function Get-SISetupInstallNames {
         PURE. Framework section 5.5 "THE AGREED LIST" for SecurityInsight -- the names a NEW guided install gets:
           ResourceGroup rg-si, ContainerEnv cae-si, Workspace log-si, Dce dce-si, Vnet vnet-si (in the install's own group),
           SqlServer sql-si-<t>, KeyVault kv-si-<t>, StorageAccount stsi<t>, Acr acrsi<t>, the engine identity id-si-engine,
-          the components of Get-SISetupComponentNames -New (ca-si-web, ca-si-mcp, caj-si-updater, id-si-web / -mcp /
+          the components of Get-SISetupComponentNames -New (ca-si-management, ca-si-mcp, caj-si-updater, id-si-web / -mcp /
           -updater / -tagging) and the -New display names (grp-si-sql-admins). -ResourceGroup: the customer's own group wins.
         Length rules: storage 3-24 lower-case letters and digits, Key Vault 3-24, registry 5-50 letters and digits, SQL 1-63
         -- every name here is 13 characters or fewer.

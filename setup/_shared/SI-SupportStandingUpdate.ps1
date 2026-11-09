@@ -21,6 +21,17 @@
            * the cut-over record 'SupportStandingAccess' (the same short shape setup\Remove-SISupportStandingAccess.ps1
              keeps: { at, applied, file }) -- only ADDING what is now read back as gone, so the heartbeat's
              supportSqlAccess expects the just-in-time state.
+    EVERY UPDATER RUN, ALSO ONE THAT INSTALLS NOTHING (live 2026-11-09: the state row stayed 'missing' for hours after Invardia
+    support had removed the standing admin, because only an update that installs a release ran step 3):
+      4. RE-CHECK (Invoke-SISupportStandingCheck -Recheck) -- READ ONLY, without the database setup job: the membership of
+         the SQL admin group read NOW (the member's side), db_owner from the NEWEST read-back on record -- the job's row
+         'DbJobSupportStanding' of any run, or the state row itself when it is newer (written by the job's verdict or by the
+         Support-app step below after ITS read-back). The re-check never takes anything off and never runs after a
+         deliberate rollback; a re-check that could read nothing never replaces a row that knows more.
+    THE SUPPORT-APP STEP setup\Remove-SISupportStandingAccess writes the state row in the SAME shape
+    (New-SISupportStandingStateValue over New-SISupportStandingStepVerdict): 'ok' once its own read-back proves no db_owner in
+    any product database AND not a member of the SQL admin group (also when it finds nothing to do); 'missing' after a
+    rollback.
     WHAT THE UPDATE NEVER DOES: remove a group member (it holds no right to change a role-assignable group, by design: least
     privilege, framework §4.5 G5) -- while the Support app is still a member, ONE line names the Support-app step that
     does it, setup\Remove-SISupportStandingAccess.ps1 (it refuses unless the server's Entra admin is the group AND the
@@ -44,10 +55,60 @@ function Get-SISupportStandingNames {
 }
 
 function Get-SISupportStandingInputSql {
-    <# PURE. READ ONLY, one row: the recorded Support app, the cut-over record, the job's standing-off row ('' = none / no table). #>
+    <# PURE. READ ONLY, one row: the recorded Support app, the cut-over record, the job's standing-off row, the state row itself
+       ('' = none / no table). #>
     $n = Get-SISupportStandingNames
     $v = { param($name) "CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN N'' ELSE ISNULL((SELECT Value FROM cfg.InstallState WHERE Name = N'$name'), N'') END" }
-    "SELECT $(& $v 'SupportApp') AS SupportApp, $(& $v $n.CutoverRow) AS Cutover, $(& $v $n.JobRow) AS JobRow;"
+    "SELECT $(& $v 'SupportApp') AS SupportApp, $(& $v $n.CutoverRow) AS Cutover, $(& $v $n.JobRow) AS JobRow, $(& $v $n.StateRow) AS StateRow;"
+}
+
+function ConvertFrom-SISupportStandingUtcText {
+    <# PURE. One "yyyy-MM-ddTHH:mm:ssZ" field of a row's raw JSON text (read by pattern: ConvertFrom-Json would turn it into a
+       local DateTime) -> a UTC [datetime], or $null. #>
+    param([AllowNull()][AllowEmptyString()][string]$Text, [Parameter(Mandatory)][string]$Field)
+    if (-not "$Text".Trim()) { return $null }
+    if ("$Text" -notmatch ('"{0}"\s*:\s*"([^"]+)"' -f [regex]::Escape($Field))) { return $null }
+    $t = [datetime]::MinValue
+    if ([datetime]::TryParse($Matches[1], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal', [ref]$t)) { return $t }
+    $null
+}
+
+function Resolve-SISupportStandingDbOwnerEvidence {
+    <#
+        PURE. Step 4 (the re-check without the database setup job): the Support app's standing db_owner from the NEWEST read-back
+        on record -- -JobRow: the job's row 'DbJobSupportStanding' (any run; its 'at'); -StateRow: the state row 'SupportStanding'
+        (its dbOwner + checkedUtc: written by the job's verdict or by the Support-app step after its own read-back). An entry
+        that says 'unknown', or has no time, is no evidence. Returns @{ State (off | kept); Run; Why; At; Source (job | state) }
+        in the shape Resolve-SISupportStandingState takes as -Job, or $null (nothing on record).
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$JobRow, [AllowNull()][AllowEmptyString()][string]$StateRow)
+    $cands = New-Object System.Collections.Generic.List[object]
+    $job = ConvertFrom-SISupportStandingJobRow -Text $JobRow
+    $jAt = ConvertFrom-SISupportStandingUtcText -Text $JobRow -Field 'at'
+    if ($job -and $job.State -in 'off', 'kept' -and $jAt) { $cands.Add([pscustomobject]@{ State = $job.State; Run = $job.Run; Why = $job.Why; At = $jAt; Source = 'job' }) }
+    if ("$StateRow".Trim()) {
+        $s = $null; try { $s = "$StateRow" | ConvertFrom-Json -ErrorAction Stop } catch { $s = $null }
+        $sAt = ConvertFrom-SISupportStandingUtcText -Text $StateRow -Field 'checkedUtc'
+        $sDb = if ($s -and $s.PSObject.Properties['dbOwner']) { ([string]$s.dbOwner).Trim().ToLowerInvariant() } else { '' }
+        if ($sDb -in 'off', 'kept' -and $sAt) { $cands.Add([pscustomobject]@{ State = $sDb; Run = ''; Why = $(if ($s.PSObject.Properties['why']) { [string]$s.why } else { '' }); At = $sAt; Source = 'state' }) }
+    }
+    if (-not $cands.Count) { return $null }
+    # the newest wins; the same second = the state row (it was written from that read-back, or after it)
+    @($cands | Sort-Object -Property @{ Expression = 'At'; Descending = $true }, @{ Expression = { if ($_.Source -eq 'state') { 0 } else { 1 } }; Descending = $false })[0]
+}
+
+function New-SISupportStandingStepVerdict {
+    <#
+        PURE. The verdict the Support-app step (setup\Remove-SISupportStandingAccess) records in the state row, in the shape
+        New-SISupportStandingStateValue writes: -Outcome ok (its OWN read-back proved no db_owner in any product database AND
+        not a member of the SQL admin group) | rollback (standing access put back on purpose: missing; the update does not
+        take it again; -DbOwner / -Group: what the rollback put back and read back). The heartbeat's words name no command.
+    #>
+    param([Parameter(Mandatory)][ValidateSet('ok', 'rollback')][string]$Outcome,
+          [ValidateSet('off', 'kept', 'unknown')][string]$DbOwner = 'kept', [ValidateSet('member', 'not-member', 'unknown')][string]$Group = 'member')
+    if ($Outcome -eq 'ok') { return (Resolve-SISupportStandingState -Job ([pscustomobject]@{ State = 'off'; Run = ''; Why = '' }) -Member $false) }
+    [pscustomobject]@{ State = 'missing'; DbOwner = $DbOwner; Group = $Group; Applied = $null; Lines = @()
+                       Detail = 'Standing admin was put back on purpose (a rollback by Invardia support); the update does not take it again.' }
 }
 
 function ConvertFrom-SISupportStandingCutoverText {
@@ -182,20 +243,36 @@ function Invoke-SISupportStandingCheck {
         Graph seam. -GroupId: the group the SQL server names as its Entra administrator ('' = not a group / not read).
         Writes the state row and (only when more is read back as gone) the cut-over record. Never throws. Returns the verdict
         (Resolve-SISupportStandingState) plus @{ Written }.
+        -Recheck: step 4 -- every updater run, without the database setup job (no -Run): db_owner from the newest read-back on
+        record (Resolve-SISupportStandingDbOwnerEvidence), the membership read now. Never after a deliberate rollback (nothing
+        read, nothing written); a verdict of 'unknown' never replaces a state row that is already there.
     #>
     param([Parameter(Mandatory)]$Store, [scriptblock]$Graph, [Parameter(Mandatory)][string]$ClientId, [string]$Run = '', [AllowEmptyString()][string]$GroupId = '',
-          [string]$GroupName = 'the SQL admin group', [string]$ResourceGroup = '<resource group>', [datetime]$NowUtc = [datetime]::UtcNow)
+          [string]$GroupName = 'the SQL admin group', [string]$ResourceGroup = '<resource group>', [datetime]$NowUtc = [datetime]::UtcNow, [switch]$Recheck)
     $n = Get-SISupportStandingNames
     $val = { param($r, $k) if ($null -eq $r) { '' } elseif ($r -is [System.Collections.IDictionary]) { [string]$r[$k] } elseif ($r -is [System.Data.DataRow]) { $x = $r[$k]; if ($x -is [System.DBNull]) { '' } else { [string]$x } } elseif ($r.PSObject.Properties[$k]) { [string]$r.$k } else { '' } }
     try {
         $row = @(& $Store.Invoke (Get-SISupportStandingInputSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
-        $job = ConvertFrom-SISupportStandingJobRow -Text (& $val $row 'JobRow')
-        if ($job -and $Run -and $job.Run -ne $Run) { $job = $null }   # a row of another run is never taken
+        $pre = New-Object System.Collections.Generic.List[string]
+        if ($Recheck) {
+            if ((ConvertFrom-SISupportStandingCutoverText -Text (& $val $row 'Cutover')).Rollback) {
+                return [pscustomobject]@{ State = 'skipped'; DbOwner = ''; Group = ''; Applied = $null; Detail = ''; Written = @()
+                                          Lines = @('support standing access: not re-checked -- a rollback put the standing access back on purpose; the state row stays as the rollback wrote it') }
+            }
+            $job = Resolve-SISupportStandingDbOwnerEvidence -JobRow (& $val $row 'JobRow') -StateRow (& $val $row 'StateRow')
+            $pre.Add(('support standing access: re-checked on this run (read only, without the database setup job): the SQL admin group read now; db_owner {0}' -f $(if ($job) { 'from the newest read-back on record ({0}, {1})' -f $(if ($job.Source -eq 'job') { 'the database setup job' } else { 'the state row' }), $job.At.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } else { 'not on record yet' })))
+        } else {
+            $job = ConvertFrom-SISupportStandingJobRow -Text (& $val $row 'JobRow')
+            if ($job -and $Run -and $job.Run -ne $Run) { $job = $null }   # a row of another run is never taken
+        }
         $member = if ($Graph) { Test-SISupportStandingMember -Graph $Graph -ClientId $ClientId -GroupId $GroupId } else { $null }
         $v = Resolve-SISupportStandingState -Job $job -Member $member -Prior (& $val $row 'Cutover') -GroupName $GroupName -ResourceGroup $ResourceGroup
+        if ($pre.Count) { $v.Lines = @($pre.ToArray()) + @($v.Lines) }
         $written = New-Object System.Collections.Generic.List[string]
-        try { $null = & $Store.Invoke (Get-SISupportStandingWriteSql -Name $n.StateRow) @{ Value = (New-SISupportStandingStateValue -Verdict $v -NowUtc $NowUtc); By = 'caj-si-updater' } 'nonquery'; $written.Add($n.StateRow) } catch { }
-        if ($v.Applied) {
+        $keep = $Recheck -and $v.State -eq 'unknown' -and "$(& $val $row 'StateRow')".Trim()
+        if ($keep) { $v.Lines = @($v.Lines) + @('support standing access: the re-check could not read enough -- nothing is written, the state row keeps what it says') }
+        else { try { $null = & $Store.Invoke (Get-SISupportStandingWriteSql -Name $n.StateRow) @{ Value = (New-SISupportStandingStateValue -Verdict $v -NowUtc $NowUtc); By = 'caj-si-updater' } 'nonquery'; $written.Add($n.StateRow) } catch { } }
+        if ($v.Applied -and -not $keep) {
             try { $null = & $Store.Invoke (Get-SISupportStandingWriteSql -Name $n.CutoverRow) @{ Value = (New-SISupportStandingCutoverValue -Applied @($v.Applied) -NowUtc $NowUtc); By = 'caj-si-updater' } 'nonquery'; $written.Add($n.CutoverRow) } catch { }
         }
         $v | Add-Member -NotePropertyName Written -NotePropertyValue $written.ToArray() -PassThru

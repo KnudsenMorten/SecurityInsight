@@ -13,6 +13,19 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.76 — The web app keeps its address
+
+### Fixes
+
+- The web app keeps its name and its address at every installation, new and existing. An installation whose web app was
+  recently given a new address gets its earlier address back: the web app is set up again under its earlier name in the
+  same place, with the same settings and the same sign-in, and is checked before it is used.
+- The recent address keeps working for a few days and sends every visitor to the earlier address; after that it is
+  removed. Bookmarks to the earlier address work again straight away.
+- Installations that never changed address are not touched.
+- A support tool that removes vendor support's standing database access now reports the change correctly once it has
+  been made (it could say "not removed" for a change that had gone through).
+
 ## v3.0.75 — Support tools work where vendor support has only temporary database access
 
 ### Fixes

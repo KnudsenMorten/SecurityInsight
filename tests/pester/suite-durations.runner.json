@@ -21,7 +21,9 @@
     "SIv3-CiBuildHeavyResources.Tests.ps1": 57.4,
     "SIv3-CiBuildLedgerRetry.Tests.ps1": 30.4,
     "SIv3-CiBuildScale.Tests.ps1": 82.6,
-    "SIv3-CiBuildSpeed.Tests.ps1": 454.5,
+    "SIv3-CiBuildSpeed.Tests.ps1": 230,
+    "SIv3-CiBuildSpeedSql.Tests.ps1": 190,
+    "SIv3-CiBuildSpeedThreads.Tests.ps1": 170,
     "SIv3-CiBuildSql.Tests.ps1": 138.9,
     "SIv3-CiBuildSqlCarryOn.Tests.ps1": 263.6,
     "SIv3-CiBuildSqlIncremental.Tests.ps1": 244.6,
@@ -167,7 +169,8 @@
     "SIv3-UplinkOutboxSqlReal.Tests.ps1": 3.8,
     "SIv3-Verification.Tests.ps1": 13.3,
     "SIv3-ViewContextFill.Tests.ps1": 92.4,
-    "SIv3-VulnSetBasedSame.Tests.ps1": 293.5,
+    "SIv3-VulnSetBasedSame.Tests.ps1": 160,
+    "SIv3-VulnSetBasedFill.Tests.ps1": 80,
     "SIv3-WebDuringUpdate.Tests.ps1": 27.4
   }
 }

@@ -1264,6 +1264,12 @@ function Invoke-SIUpdaterCore {
         # #1154: the support grant job started by that queue, THEN the Support app's rights on the jobs removed (read back each)
         $global:SI_UpdaterStep = 'support-trigger'
         $null = Invoke-SIUpdaterSupportTrigger -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot -Store $proStore
+        # #1151 (1) SEC-01 step 4: the Support app's standing access re-checked on EVERY run, also one that installs nothing --
+        # read only, no database setup job (the state row the heartbeat's support-grant-jit reads); never after a rollback
+        if (Get-Command -Name Invoke-SIUpdaterSupportStandingRecheck -ErrorAction SilentlyContinue) {
+            $global:SI_UpdaterStep = 'support-standing'
+            $null = Invoke-SIUpdaterSupportStandingRecheck -SIRoot $siAutoRoot -Store $proStore -SubscriptionId $sub -ResourceGroup $rg -Server $proSql
+        }
         # #1111: the index build job caj-si-index-build (the indexes that did not fit an update, built in idle windows -- the
         # updater itself never builds them outside its schema step) kept present, read back; never fails the run
         if (Get-Command -Name Invoke-SIUpdaterIndexBuildJob -ErrorAction SilentlyContinue) {

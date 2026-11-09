@@ -148,9 +148,10 @@ BeforeAll {
         $ru = if ($script:Fail -eq 'signin') { 'https://ca-si-management.env.example.io/signin-oidc' } else { "https://$h/signin-oidc" }
         [pscustomobject]@{ Status = 302; Location = ('https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/authorize?client_id={0}&redirect_uri={1}&response_type=code' -f $script:C, [uri]::EscapeDataString($ru)) }
     }
+    # -AllowStart by default here: these tests cover the move itself (a Support-app step finishing a held move); -NoStart = what an UPDATE does
     function script:Invoke-Move {
-        param($Owner = $script:Owner)
-        Invoke-SIUpdaterWebAppMove -ResourceGroup 'rg' -SubscriptionId 'sub' -OldName 'ca-si-management' -NewName 'ca-si-web' -CurrentName $script:Cur -Owner $Owner `
+        param($Owner = $script:Owner, [switch]$NoStart)
+        Invoke-SIUpdaterWebAppMove -ResourceGroup 'rg' -SubscriptionId 'sub' -OldName 'ca-si-management' -NewName 'ca-si-web' -CurrentName $script:Cur -Owner $Owner -AllowStart:(-not $NoStart) `
             -Arm $script:ArmFake -Graph $script:GraphFn -Probe $script:ProbeFake `
             -SignedInProof { param($n) if ($script:Fail -eq 'proof') { [pscustomobject]@{ Ok = $false; Why = 'no signed-in page load is recorded yet' } } else { [pscustomobject]@{ Ok = $true; Why = '' } } } `
             -SwitchName { param($n) $script:Calls.Add('SWITCH ' + $n); if ($script:Fail -eq 'switch') { return [pscustomobject]@{ Ok = $false; Why = 'the install record could not be written' } }; $script:Cur = $n; [pscustomobject]@{ Ok = $true; Why = '' } } `
@@ -540,6 +541,29 @@ Describe 'step 2: the web app moves to ca-si-web' {
         $r.State | Should -Be 'waiting-owner'
         @($script:Calls | Where-Object { $_ -like 'ARM PUT *' -or $_ -like 'ARM POST *' }).Count | Should -Be 0
     }
+    It 'AN EXISTING INSTALL KEEPS ITS WEB APP NAME (framework 5.5, 2026-11-09): without -AllowStart only the old app = kept -- nothing read beyond the two apps, nothing written, nothing said' {
+        $r = Invoke-Move -NoStart
+        $r.State | Should -Be 'kept'; $r.Text | Should -BeNullOrEmpty
+        @($script:Calls | Where-Object { $_ -notlike 'ARM GET *' }).Count | Should -Be 0 -Because 'no listSecrets, no PUT, no Graph, no probe'
+        $script:Apps.ContainsKey('ca-si-web') | Should -BeFalse
+        $script:Cur | Should -Be 'ca-si-management'
+    }
+    It 'without -AllowStart both apps, the install not switched (a half-done move) = held -- nothing written, the old app keeps serving' {
+        $script:Apps['ca-si-web'] = (New-WebApp 'ca-si-web')
+        $r = Invoke-Move -NoStart
+        $r.State | Should -Be 'held'
+        $r.Text | Should -Match '^ca-si-management serves; ca-si-web exists beside it but the install does not use it -- nothing is changed$'
+        @(Writes).Count | Should -Be 0
+        @($script:Calls | Where-Object { $_ -like 'SWITCH *' -or $_ -like 'SETADDR *' -or $_ -like 'PROBE *' }).Count | Should -Be 0
+        $script:Apps.ContainsKey('ca-si-management') | Should -BeTrue
+    }
+    It 'without -AllowStart a move already SWITCHED is finished as before: the old app removed after the first sign-in' {
+        $script:Apps['ca-si-web'] = (New-WebApp 'ca-si-web'); $script:Cur = 'ca-si-web'
+        $r = Invoke-Move -NoStart
+        $r.State | Should -Be 'moved'
+        $script:Apps.ContainsKey('ca-si-management') | Should -BeFalse
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' }).Count | Should -Be 0 -Because 'nothing is made at a switched install'
+    }
     It 'a web app with a system-assigned identity or a secret that does not come back is not copied' {
         { New-SIUpdaterWebAppCopyBody -App (New-WebApp 'ca-si-management' -IdentityType 'SystemAssigned, UserAssigned') -Secrets @() } | Should -Throw '*system-assigned*'
         { New-SIUpdaterWebAppCopyBody -App (New-WebApp 'ca-si-management') -Secrets @([pscustomobject]@{ name = 'sql-conn'; value = 'x' }) } | Should -Throw '*kv-key*'
@@ -556,35 +580,97 @@ Describe 'step 2: the web app moves to ca-si-web' {
 Describe 'both steps together, the switch, the state rows and the wiring' {
     BeforeEach {
         $script:Calls = New-Object System.Collections.Generic.List[string]; $script:Logged = New-Object System.Collections.Generic.List[string]
-        $script:Saved = @{}; $script:Fail = ''; $script:PublicAddress = ''; $script:Cur = 'ca-si-management'
-        $script:Apps = @{ 'ca-si-management' = (New-WebApp 'ca-si-management') }
+        $script:Saved = @{}; $script:Fail = ''; $script:PublicAddress = ''; $script:Cur = 'ca-si-web'
+        # the shape of an install fully moved to ca-si-web: ca-si-web only, the install names it
+        $script:Apps = @{ 'ca-si-web' = (New-WebApp 'ca-si-web') }
         New-GraphState -Owners @($script:OwnerSup)
         $script:KeepNames = $global:SI_InstallNames; $global:SI_InstallNames = $null
-        $script:Store = [pscustomobject]@{ Invoke = { param($sql, $p, $mode) if ($sql -match "N'SupportApp'") { , @([pscustomobject]@{ Value = $script:S }) } else { , @() } } }
+        # the step's last state row is read back from what it saved (the forwarding clock)
+        $script:Store = [pscustomobject]@{ Invoke = { param($sql, $p, $mode)
+            if ($sql -match "N'SupportApp'") { return , @([pscustomobject]@{ Value = $script:S }) }
+            if ($sql -match "N'WebAppName'" -and $script:Saved.ContainsKey('WebAppName')) { return , @([pscustomobject]@{ Value = $script:Saved['WebAppName'] }) }
+            , @() } }
         $script:StepArgs = @{
-            Env = @{ SI_UPDATER_WEB_APP = 'ca-si-management'; SI_UPDATER_CLIENT_ID = $script:U }
+            Env = @{ SI_UPDATER_WEB_APP = 'ca-si-web'; SI_UPDATER_CLIENT_ID = $script:U }
             Store = $script:Store; SubscriptionId = 'sub'; ResourceGroup = 'rg'; Graph = $script:GraphFn; WhoAmI = $script:WhoAmI
             GetApp = { param($n) $script:Calls.Add('GETAPP ' + $n); $script:Apps[$n] }
             SaveState = { param($n, $v) $script:Saved[$n] = $v }
             Log = { param($m) $script:Logged.Add($m) }
             MoveSeams = @{ Arm = $script:ArmFake; Probe = $script:ProbeFake; PollSeconds = 0; TimeoutMinutes = 0
                 SignedInProof = { param($n) [pscustomobject]@{ Ok = $true; Why = '' } }
-                SwitchName = { param($n) $script:Calls.Add('SWITCH ' + $n); $script:Cur = $n; [pscustomobject]@{ Ok = $true; Why = '' } }
+                # the switch names the app on the updater job too (what Set-SIUpdaterWebAppName writes), so the next update reads it
+                SwitchName = { param($n) $script:Calls.Add('SWITCH ' + $n); $script:Cur = $n; $script:StepArgs.Env['SI_UPDATER_WEB_APP'] = $n; [pscustomobject]@{ Ok = $true; Why = '' } }
                 ReadPublicAddress = { '' } }
         }
     }
     AfterEach { $global:SI_InstallNames = $script:KeepNames }
-    It 'ON by default: the owner step (with the recorded Support app) then the move; one line each; both state rows written' {
+    It 'BACK TO ca-si-management (framework 5.5, 2026-11-09): made again from ca-si-web''s spec, switched; ca-si-web forwards and is NOT removed yet; the clock recorded' {
         $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
         $r.Owner.State | Should -Be 'owned'
-        $r.Move.State | Should -Be 'moved'
         @(OwnerIds) | Should -Be @('sp-upd')
-        ($script:Saved['SignInAppOwner'] | ConvertFrom-Json).state | Should -Be 'owned'
         ($script:Saved['SignInAppOwner'] | ConvertFrom-Json).app | Should -Be $script:C
-        ($script:Saved['WebAppName'] | ConvertFrom-Json).state | Should -Be 'moved'
-        ($script:Saved['WebAppName'] | ConvertFrom-Json).to | Should -Be 'ca-si-web'
+        $r.Move.State | Should -Be 'forwarding'
+        $r.Move.Text | Should -Match '^ca-si-management serves and the install names it; ca-si-web sends every page request there until \d{4}-\d\d-\d\d \d\d:\d\d UTC, then it is removed'
+        $script:Apps.ContainsKey('ca-si-management') | Should -BeTrue
+        $script:Apps.ContainsKey('ca-si-web') | Should -BeTrue -Because 'the forwarder stays for the forwarding days'
+        $script:Cur | Should -Be 'ca-si-management'
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' }) | Should -Be @('ARM PUT ca-si-management')
+        @($script:Calls | Where-Object { $_ -like 'ARM DELETE *' }).Count | Should -Be 0
+        (FrontEnvOf $script:Apps['ca-si-management'] 'SIGNIN_FRONT_MOVED_TO').Count | Should -Be 0 -Because 'the app made again never forwards'
+        $row = $script:Saved['WebAppName'] | ConvertFrom-Json
+        $row.state | Should -Be 'forwarding'; $row.from | Should -Be 'ca-si-web'; $row.to | Should -Be 'ca-si-management'
+        $script:Saved['WebAppName'] | Should -Match '"forwardSince":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"'
         $script:Saved['WebAppName'].Length | Should -BeLessOrEqual 400
         @($script:Logged | Where-Object { $_ -match "`n" }).Count | Should -Be 0
+    }
+    It 'the next update inside the forwarding days: still forwarding, the clock KEPT (not restarted); after 3 days: ca-si-web removed, moved' {
+        $null = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $since = [regex]::Match($script:Saved['WebAppName'], '"forwardSince":"([^"]+)"').Groups[1].Value
+        $since | Should -Not -BeNullOrEmpty
+        $script:StepArgs.MoveSeams['NowUtc'] = [datetime]::UtcNow.AddDays(2)
+        $r2 = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r2.Move.State | Should -Be 'forwarding'
+        [regex]::Match($script:Saved['WebAppName'], '"forwardSince":"([^"]+)"').Groups[1].Value | Should -Be $since -Because 'the clock is kept, not restarted'
+        $script:Apps.ContainsKey('ca-si-web') | Should -BeTrue
+        $script:StepArgs.MoveSeams['NowUtc'] = [datetime]::UtcNow.AddDays(3).AddMinutes(5)
+        $r3 = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r3.Move.State | Should -Be 'moved'
+        $script:Apps.ContainsKey('ca-si-web') | Should -BeFalse
+        $script:Apps.ContainsKey('ca-si-management') | Should -BeTrue
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' }).Count | Should -Be 1 -Because 'made once; the later updates only forward and then remove'
+        ($script:Saved['WebAppName'] | ConvertFrom-Json).state | Should -Be 'moved'
+    }
+    It 'both apps, the install names ca-si-web (the old app forwarding to it): ca-si-management refreshed from ca-si-web''s spec, its forwarder gone, switched; ca-si-web forwards' {
+        $script:Apps['ca-si-management'] = (New-FrontWebApp 'ca-si-management' -FrontEnv @([pscustomobject]@{ name = 'SIGNIN_FRONT_MOVED_TO'; value = 'https://ca-si-web.env.example.io' }))
+        $script:Apps['ca-si-web'] = (New-FrontWebApp 'ca-si-web')
+        $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r.Move.State | Should -Be 'forwarding'
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' }) | Should -Be @('ARM PUT ca-si-management')
+        (FrontEnvOf $script:Apps['ca-si-management'] 'SIGNIN_FRONT_MOVED_TO').Count | Should -Be 0
+        (FrontEnvOf $script:Apps['ca-si-web'] 'SIGNIN_FRONT_MOVED_TO') | Should -Be @('https://ca-si-management.env.example.io')
+        $script:Cur | Should -Be 'ca-si-management'
+    }
+    It 'the half-done install (both apps, the install still names ca-si-management): nothing made; ca-si-web forwards, then goes' {
+        $script:Apps['ca-si-management'] = (New-FrontWebApp 'ca-si-management'); $script:Apps['ca-si-web'] = (New-FrontWebApp 'ca-si-web')
+        $script:Cur = 'ca-si-management'; $script:StepArgs.Env['SI_UPDATER_WEB_APP'] = 'ca-si-management'
+        $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r.Move.State | Should -Be 'forwarding'
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' -or $_ -like 'SWITCH *' }).Count | Should -Be 0
+        (FrontEnvOf $script:Apps['ca-si-web'] 'SIGNIN_FRONT_MOVED_TO') | Should -Be @('https://ca-si-management.env.example.io')
+    }
+    It 'an install that never moved (ca-si-management only): moved = ok -- nothing made, switched or removed' {
+        $script:Apps = @{ 'ca-si-management' = (New-WebApp 'ca-si-management') }
+        $script:Cur = 'ca-si-management'; $script:StepArgs.Env['SI_UPDATER_WEB_APP'] = 'ca-si-management'
+        $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r.Move.State | Should -Be 'moved'
+        @($script:Calls | Where-Object { $_ -like 'ARM PUT *' -or $_ -like 'ARM DELETE *' -or $_ -like 'SWITCH *' }).Count | Should -Be 0
+        ($script:Saved['WebAppName'] | ConvertFrom-Json).state | Should -Be 'moved'
+    }
+    It 'NEGATIVE: a new install is named ca-si-management too (the installer''s names)' {
+        . (Join-Path $script:SIRoot 'setup\_shared\SI-SetupNaming.ps1')
+        (Get-SISetupComponentNames -New).WebApp | Should -Be 'ca-si-management'
+        (Get-SISetupComponentNames).WebApp | Should -Be 'ca-si-management'
+        (Get-SISetupComponentNames -New).WebIdentity | Should -Be 'id-si-web'
     }
     It 'SI_UPDATER_WEB_APP_MOVE=off: nothing is read or changed; one line says so' {
         $script:StepArgs.Env['SI_UPDATER_WEB_APP_MOVE'] = 'off'
@@ -592,16 +678,16 @@ Describe 'both steps together, the switch, the state rows and the wiring' {
         $r.Owner | Should -BeNullOrEmpty; $r.Move | Should -BeNullOrEmpty
         @($script:Calls).Count | Should -Be 0
         $script:Saved.Count | Should -Be 0
-        @($script:Logged) | Should -Be @('web app: the sign-in app owner check and the move to ca-si-web are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked')
+        @($script:Logged) | Should -Be @('web app: the sign-in app owner check and the web app name check are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked')
         Test-SIUpdaterWebAppMoveOn -Value '' | Should -BeTrue
         Test-SIUpdaterWebAppMoveOn -Value 'OFF' | Should -BeFalse
     }
-    It 'the owner step needs a Support-app step: the move waits, nothing is made, both rows say so' {
+    It 'the owner step needs a Support-app step: the move back waits, nothing is made, both rows say so' {
         $script:GS.DenyAdd = $true
         $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
         $r.Owner.State | Should -Be 'needs-support-step'
         $r.Move.State | Should -Be 'waiting-owner'
-        $script:Apps.ContainsKey('ca-si-management') | Should -BeTrue
+        $script:Apps.ContainsKey('ca-si-web') | Should -BeTrue
         @($script:Calls | Where-Object { $_ -like 'ARM PUT *' }).Count | Should -Be 0
         ($script:Saved['WebAppName'] | ConvertFrom-Json).state | Should -Be 'waiting-owner'
     }
@@ -670,10 +756,18 @@ Describe 'the setup-step grid: the sign-in app owner and the web app name, per i
         $s = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"awaiting-signin-proof","from":"ca-si-management","to":"ca-si-web","checkedUtc":"2026-11-07T10:00:00Z"}')) -SupportGrant $null)
         $e = @($s | Where-Object key -eq 'web-app-name')[0]
         $e.state | Should -Be 'missing'; $e.how | Should -Be 'updater'
-        $e.detail | Should -Match '^Waiting for first sign-in on ca-si-web'
+        $e.detail | Should -Match '^The web app runs as ca-si-management again; ca-si-web sends people there and is removed after the first sign-in'
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'missing'
         $e.checkedAt | Should -Be '2026-11-07T10:00:00Z'
         (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"moved","checkedUtc":"2026-11-07T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
         @(Get-SISetupSteps -StateRows @() -SupportGrant $null | Where-Object { $_.key -in 'web-app-name', 'signin-app-owner' }).Count | Should -Be 0
+    }
+    It 'kept (an existing install keeps its web app name) = n/a; held (both apps, the new one not in use) = missing' {
+        $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }
+        $k = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"kept","checkedUtc":"2026-11-09T10:00:00Z"}')) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
+        $k.state | Should -Be 'n/a'; $k.detail | Should -Be 'This install keeps its web app name; nothing to move.'
+        $h = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"held","checkedUtc":"2026-11-09T10:00:00Z"}')) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
+        $h.state | Should -Be 'missing'; $h.detail | Should -Match '^A second web app exists beside the web app but is not in use'
     }
     It 'the sign-in app owner: a Support-app step waited for = missing (how support-app); owned = ok; never a command in the detail' {
         $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }

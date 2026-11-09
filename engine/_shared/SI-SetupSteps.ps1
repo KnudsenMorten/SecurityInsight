@@ -38,9 +38,11 @@
                          missing, at, end } -- gone = missing (updates are held); renewal-failed keeps ok, said in the detail
       signin-app-owner   the web sign-in app owned by the updater (framework SECAUDIT-1a item 2) -- cfg.InstallState
                          'SignInAppOwner' { state, app, why?, checkedUtc }, written by the updater's owner step every update
-      web-app-name       the web app under its standard name ca-si-web -- cfg.InstallState 'WebAppName' { state, from, to,
+      web-app-name       the web app under its standard name ca-si-management (an install moved to ca-si-web goes back;
+                         'forwarding' = ca-si-web still forwards) -- cfg.InstallState 'WebAppName' { state, from, to, forwardSince?,
                          why?, checkedUtc }, written by the updater's move step; 'awaiting-signin-proof' = waiting for the
-                         first sign-in on the new web app (the old one redirects there until then)
+                         first sign-in on the new web app (the old one redirects there until then); 'kept' = n/a (an
+                         existing install keeps its web app name); 'held' = missing (both apps, the new one not in use)
     The Invardia Support app's own database access is NOT a step here: Invardia checks it itself from the heartbeat's
     supportSqlAccess (its step support-arm).
 
@@ -65,7 +67,7 @@ function Get-SISetupStepsContract {
             'identity-names'    = @{ Title = 'Every SecurityInsight identity has its standard name (id-si-<role>)'; How = 'support-app' }
             'db-job'            = @{ Title = 'The database setup job runs as its own identity'; How = 'support-app' }
             'signin-app-owner'  = @{ Title = 'The web sign-in app is owned by the install''s updater'; How = 'support-app' }
-            'web-app-name'      = @{ Title = 'The web app runs under its standard name (ca-si-web)'; How = 'updater' }
+            'web-app-name'      = @{ Title = 'The web app runs under its standard name (ca-si-management)'; How = 'updater' }
         }
         # the cfg.InstallState rows the checks read
         StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership', 'SignInAppOwner', 'WebAppName', 'SupportStanding')
@@ -278,14 +280,17 @@ function Get-SISetupSteps {
             $at = ConvertTo-SISetupStepUtc $(if ($wn.PSObject.Properties['checkedUtc']) { $wn.checkedUtc } else { Get-SISetupStepRowValue $StateRows 'WebAppName' 'UpdatedAt' })
             $st = "$($wn.state)".Trim().ToLowerInvariant()
             $detail = switch ($st) {
-                'moved'                 { 'The web app runs as ca-si-web.' }
-                'awaiting-signin-proof' { 'Waiting for first sign-in on ca-si-web; the old web app sends people there and is removed after it.' }
+                'moved'                 { 'The web app runs as ca-si-management.' }
+                'kept'                  { 'This install keeps its web app name; nothing to move.' }
+                'held'                  { 'A second web app exists beside the web app but is not in use; nothing is changed until the move is finished or undone.' }
+                'forwarding'            { 'The web app runs as ca-si-management again; ca-si-web sends people there for a few days, then it is removed.' }
+                'awaiting-signin-proof' { 'The web app runs as ca-si-management again; ca-si-web sends people there and is removed after the first sign-in.' }
                 'waiting-owner'         { 'Waiting for the updater to own the web sign-in app; the web app keeps serving as it is.' }
-                'custom-domain'         { 'ca-si-web is ready; the custom domain on the old web app is moved by a Support-app step first.' }
-                'public-address'        { 'ca-si-web is ready; the public address setting names a custom host, so the old web app stays until it is changed.' }
+                'custom-domain'         { 'ca-si-management is ready; the custom domain on ca-si-web is moved by a Support-app step first.' }
+                'public-address'        { 'ca-si-management is ready; the public address setting names a custom host, so ca-si-web stays until it is changed.' }
                 default                 { 'Not moved yet (' + $st + '); the old web app keeps serving and the next update tries again.' }
             }
-            & $add (New-SISetupStep -Key 'web-app-name' -State $(if ($st -eq 'moved') { 'ok' } else { 'missing' }) -CheckedAt $at -Detail $detail)
+            & $add (New-SISetupStep -Key 'web-app-name' -State $(if ($st -eq 'moved') { 'ok' } elseif ($st -eq 'kept') { 'n/a' } else { 'missing' }) -CheckedAt $at -Detail $detail)
         }
     } catch { }
     $out.ToArray()

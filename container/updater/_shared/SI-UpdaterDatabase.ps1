@@ -662,9 +662,10 @@ function Invoke-SIUpdaterSupportStanding {
         member's side (the updater's read-only Graph rights), the state row and the cut-over record written, every line said.
         The group = the SQL server's Entra administrator (ARM). The update never removes a member and never touches the
         server's administrator. Never throws, never holds the update.
+        -Recheck: step 4, the read-only re-check of every run (Invoke-SIUpdaterSupportStandingRecheck) -- no job run behind it.
     #>
     param([Parameter(Mandatory)]$Store, [scriptblock]$Graph, [scriptblock]$Arm, [string]$SubscriptionId, [string]$ResourceGroup, [string]$Server,
-          [Parameter(Mandatory)][string]$ClientId, [string]$Run = '', [datetime]$NowUtc = [datetime]::UtcNow, [string]$SIRoot = '')
+          [Parameter(Mandatory)][string]$ClientId, [string]$Run = '', [datetime]$NowUtc = [datetime]::UtcNow, [string]$SIRoot = '', [switch]$Recheck)
     try {
         $lib =if ($SIRoot) { [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-SupportStandingUpdate.ps1') } else { '' }
         if ($lib -and (Test-Path -LiteralPath $lib)) { . $lib }
@@ -678,10 +679,36 @@ function Invoke-SIUpdaterSupportStanding {
                 $login = [string](Get-SIDbInitProp $srv @('properties', 'administrators', 'login')); if ($login) { $gname = $login }
             }
         } catch { $gid = '' }
-        $v = Invoke-SISupportStandingCheck -Store $Store -Graph $Graph -ClientId $ClientId -Run $Run -GroupId $gid -GroupName $gname -ResourceGroup $ResourceGroup -NowUtc $NowUtc
+        $v = Invoke-SISupportStandingCheck -Store $Store -Graph $Graph -ClientId $ClientId -Run $Run -GroupId $gid -GroupName $gname -ResourceGroup $ResourceGroup -NowUtc $NowUtc -Recheck:$Recheck
         foreach ($l in @($v.Lines)) { Write-UpdLog $l }
         $v
     } catch { Write-UpdLog ('support standing access: not checked ({0}) -- checked again at the next update' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterSupportStandingRecheck {
+    <#
+        #1151 (1) SEC-01, step 4 (setup\_shared\SI-SupportStandingUpdate.ps1): the state row 'SupportStanding' re-checked on
+        EVERY updater run -- also one that installs nothing (live 2026-11-09: the row stayed 'missing' for hours after Invardia
+        support removed the standing admin, because only an update that installed a release, after its database setup job,
+        refreshed it). READ ONLY and WITHOUT the database setup job: the membership of the SQL admin group read now (the
+        updater's read-only Graph rights), db_owner from the newest read-back on record. Only for the Support app recorded on
+        the install; never after a deliberate rollback (Get-SIUpdaterSupportStandingInput names none then). The update never
+        removes a member, never touches a role or the server's administrator. Never throws, never holds the update.
+        -Arm / -Graph are test seams (the updater's own REST calls otherwise).
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [string]$SubscriptionId, [string]$ResourceGroup, [string]$Server,
+          [scriptblock]$Arm, [scriptblock]$Graph, [datetime]$NowUtc = [datetime]::UtcNow)
+    try {
+        if (-not $Store -or -not $Store.Invoke) { return $null }
+        $so = Get-SIUpdaterSupportStandingInput -SIRoot $SIRoot -Store $Store
+        if ($so.Why) { Write-UpdLog $so.Why }
+        if (-not $so.ClientId) { return $null }
+        # the server's Entra administrator group is read with the database setup job's pure helpers (no job is run)
+        $dj = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-DbInitJob.ps1'); if (Test-Path -LiteralPath $dj) { . $dj }
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        if (-not $Graph) { $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $Body -Resource 'https://graph.microsoft.com/' } }
+        Invoke-SIUpdaterSupportStanding -Store $Store -Graph $Graph -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $Server -ClientId $so.ClientId -NowUtc $NowUtc -SIRoot $SIRoot -Recheck
+    } catch { Write-UpdLog ('support standing access: not re-checked ({0}) -- checked again at the next update' -f $_.Exception.Message); $null }
 }
 
 function Invoke-SIUpdaterIndexBuildJob {

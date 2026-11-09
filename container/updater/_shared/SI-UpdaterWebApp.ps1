@@ -989,6 +989,18 @@ function Read-SIUpdaterWebSignedInProof {
         & $no ('its sign-in row does not name {0}' -f $Name)
     } catch { & $no ('its sign-in row could not be read: {0}' -f $_.Exception.Message) }
 }
+function Read-SIUpdaterWebAppNameState {
+    <# The web app step's last state row (cfg.InstallState 'WebAppName', JSON) as an object, $null when none or unreadable.
+       Never throws. #>
+    param($Store)
+    if (-not $Store -or -not $Store.Invoke) { return $null }
+    try {
+        $row = @(& $Store.Invoke "IF OBJECT_ID('cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = N'WebAppName';" ([ordered]@{}) 'reader' | ForEach-Object { $_ } | Where-Object { $_ }) | Select-Object -First 1
+        if (-not $row) { return $null }
+        $v = if ($row -is [System.Collections.IDictionary]) { [string]$row['Value'] } elseif ($row.PSObject.Properties['Value']) { [string]$row.Value } else { [string]$row }
+        $v | ConvertFrom-Json -ErrorAction Stop
+    } catch { $null }
+}
 function Read-SIUpdaterPublicAddress {
     <# The web app's public address setting (SIWeb_PublicBaseUrl, the links in mails); '' when not set or not readable. #>
     param($Store)
@@ -1063,19 +1075,30 @@ function Invoke-SIUpdaterWebAppMove {
           * the first sign-in on the new web app (-SignedInProof: its own row, recorded by the web app itself): none = it
             stops here, the old app redirecting; no timer;
           * only then the old web app removed (waited for), and its redirect URI removed from the sign-in app, read back.
+        AN EXISTING INSTALL KEEPS ITS WEB APP NAME (framework 5.5, corrected 2026-11-09: existing installs keep their Azure
+        resource names; only identities are renamed; a new install is made as ca-si-web). So an update NEVER starts a move:
+        without -AllowStart, an install where only the old web app runs is 'kept' (nothing read beyond the two apps, nothing
+        changed), and one where both run but the install does not name the new one yet is 'held' (nothing changed). A move
+        already switched (the install names -NewName) is finished as before. -AllowStart = a Support-app step that finishes
+        a held move on purpose.
         -CurrentName: the name the install resolves today (record, variable, default). Seams for tests: -Arm { param($Method,
         $Path, $Body, [bool]$AllowNotFound) }, -Graph, -Probe { param($Url) } -> @{ Status; Location }, -SignedInProof
         { param($Name) } -> @{ Ok; Why }, -SwitchName { param($Name) } -> @{ Ok; Why }, -ReadPublicAddress { },
         -SetPublicAddress { param($From, $To) } -> @{ Ok; Why }.
-        Never throws. Returns @{ State ('' = nothing here | moved | waiting-owner | create-failed | redirect-failed |
+        Never throws. Returns @{ ForwardSince; State ('' = nothing here | kept | held | moved | forwarding | waiting-owner | create-failed | redirect-failed |
         signin-failed | custom-domain | public-address | awaiting-signin-proof | switch-failed | delete-failed); Text; Why }.
     #>
     param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId,
           [string]$OldName = 'ca-si-management', [string]$NewName = 'ca-si-web', [string]$CurrentName = '',
           $Owner = $null, $Store = $null, [hashtable]$Env = @{},
           [scriptblock]$Arm, [scriptblock]$Graph, [scriptblock]$Probe, [scriptblock]$SignedInProof, [scriptblock]$SwitchName,
-          [scriptblock]$ReadPublicAddress, [scriptblock]$SetPublicAddress, [scriptblock]$Log, [int]$TimeoutMinutes = 15, [int]$PollSeconds = 15)
-    $out = { param([string]$State, [string]$Text, [string]$Why = '') [pscustomobject]@{ State = $State; Text = $Text; Why = $Why } }
+          [scriptblock]$ReadPublicAddress, [scriptblock]$SetPublicAddress, [scriptblock]$Log, [int]$TimeoutMinutes = 15, [int]$PollSeconds = 15,
+          [switch]$AllowStart, [int]$ForwardDays = 0, [string]$ForwardSinceUtc = '', [Nullable[datetime]]$NowUtc = $null)
+    # the old app forwards to the new one from the switch on; it is removed only after -ForwardDays of that (-ForwardSinceUtc:
+    # when it began, from the step's last state row; returned as ForwardSince so the next update counts on)
+    $fwdSince = "$ForwardSinceUtc".Trim()
+    $now = if ($NowUtc) { [datetime]$NowUtc } else { [datetime]::UtcNow }
+    $out = { param([string]$State, [string]$Text, [string]$Why = '') [pscustomobject]@{ State = $State; Text = $Text; Why = $Why; ForwardSince = $fwdSince } }
     try {
         if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body, [bool]$AllowNotFound) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:$AllowNotFound } }
         if (-not $Graph) { $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $Body -Resource 'https://graph.microsoft.com/' } }
@@ -1140,6 +1163,11 @@ function Invoke-SIUpdaterWebAppMove {
 
         # THE OLD WEB APP RUNS
         $switched = [bool]($new -and $CurrentName -and $CurrentName -ieq $NewName)
+        if (-not $switched -and -not $AllowStart) {
+            # an existing install keeps its web app name: an update never starts a move, nor carries one on before its switch
+            if (-not $new) { return (& $out 'kept' '') }
+            return (& $out 'held' ("{0} serves; {1} exists beside it but the install does not use it -- nothing is changed" -f $OldName, $NewName))
+        }
         if (-not $switched) {
             if (-not $owned) { return (& $out 'waiting-owner' ("{0}: moves to {1} once this install's updater owns its sign-in app -- it keeps serving as it is" -f $OldName, $NewName)) }
             # 1. the new web app from the old one's spec (secrets re-read), waited for
@@ -1220,10 +1248,18 @@ function Invoke-SIUpdaterWebAppMove {
             if ($mv.Changed -and $mv.Ok) { & $Log ("{0}: its sign-in front sends every request to https://{1} before any sign-in (read back)" -f $OldName, $newFqdn) }
             if (-not $mv.Ok) { $mvNote = ('; its sign-in front could not be pointed at the new address yet ({0}) -- the web app''s own redirect answers, the next update tries again' -f $mv.Why); & $Log ("{0}{1}" -f $OldName, $mvNote) }
         }
+        # the forwarding clock starts at the first update that sees the switch made (kept across updates in the state row)
+        $since = $null
+        if ($fwdSince) { try { $since = [datetime]::Parse($fwdSince, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal,AssumeUniversal') } catch { $since = $null } }
+        if (-not $since) { $since = $now; $fwdSince = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
         $proof = & $SignedInProof $NewName
         if (-not $proof -or -not $proof.Ok) {
             $pw = if ($proof) { [string]$proof.Why } else { 'not known' }
             return (& $out 'awaiting-signin-proof' ("{1} serves and the install names it; {0} sends every page request there and is removed after the first sign-in on {1} ({2}){3}" -f $OldName, $NewName, $pw, $mvNote) $pw)
+        }
+        if ($ForwardDays -gt 0 -and ($now - $since).TotalDays -lt $ForwardDays) {
+            $until = $since.AddDays($ForwardDays).ToString('yyyy-MM-dd HH:mm')
+            return (& $out 'forwarding' ("{1} serves and the install names it; {0} sends every page request there until {2} UTC, then it is removed{3}" -f $OldName, $NewName, $until, $mvNote))
         }
         try {
             $null = & $Arm 'DELETE' (& $pathOf $OldName) $null $true
@@ -1247,7 +1283,8 @@ function Invoke-SIUpdaterWebAppMove {
 function Invoke-SIUpdaterWebAppSteps {
     <#
         Both web app steps, in order, at the end of an update that did not fail: the sign-in app owned by the updater
-        (Invoke-SIUpdaterSignInAppOwner), then the web app under the name ca-si-web (Invoke-SIUpdaterWebAppMove). Off only
+        (Invoke-SIUpdaterSignInAppOwner), then the web app name: ca-si-management at every install -- an install moved to
+        ca-si-web is moved back (Invoke-SIUpdaterWebAppMove ca-si-web -> ca-si-management, forwarding 3 days). Off only
         when the updater job says SI_UPDATER_WEB_APP_MOVE=off. One line per outcome, each step's state in cfg.InstallState
         ('SignInAppOwner', 'WebAppName'). Never throws, never fails the update. -GetApp { param($Name) } / -SaveState
         { param($Name, $Value) } / -Graph / -MoveSeams (Invoke-SIUpdaterWebAppMove's seams): tests.
@@ -1259,14 +1296,18 @@ function Invoke-SIUpdaterWebAppSteps {
     try {
         $get = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
         if (-not (Test-SIUpdaterWebAppMoveOn -Value (& $get 'SI_UPDATER_WEB_APP_MOVE'))) {
-            & $Log 'web app: the sign-in app owner check and the move to ca-si-web are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked'
+            & $Log 'web app: the sign-in app owner check and the web app name check are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked'
             return $none
         }
         if (-not $SaveState) { $SaveState = { param($n, $v) if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name $n -Value $v } } }
         if (-not $GetApp) { $GetApp = { param([string]$N) Get-SIUpdaterContainerApp -App $N -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } }
-        $newName = 'ca-si-web'
+        # THE WEB APP IS ca-si-management AT EVERY INSTALL (framework 5.5, owner 2026-11-09: identities get standard names,
+        # web app names / addresses are not aligned). An install moved to ca-si-web goes back: ca-si-management made again
+        # from ca-si-web's spec in the same environment (= its old address), switched, ca-si-web forwarding there for
+        # $forwardDays days, then removed.
+        $newName = 'ca-si-management'; $oldName = 'ca-si-web'; $forwardDays = 3
         $cur = if (Get-Command -Name Get-SIUpdaterInstallName -ErrorAction SilentlyContinue) { [string](Get-SIUpdaterInstallName -Role web -Env $Env) } else { & $get 'SI_UPDATER_WEB_APP' }
-        $oldName = if ("$cur".Trim() -and "$cur".Trim() -ine $newName) { "$cur".Trim() } else { 'ca-si-management' }
+        $prev = Read-SIUpdaterWebAppNameState -Store $Store
         $oldApp = & $GetApp $oldName
         $newApp = & $GetApp $newName
         $app = if ($oldApp) { $oldApp } else { $newApp }
@@ -1275,12 +1316,23 @@ function Invoke-SIUpdaterWebAppSteps {
                  -SupportAppId (Read-SIUpdaterSupportAppId -Store $Store) -ProveWrite:([bool]$oldApp) -Graph $Graph -WhoAmI $WhoAmI
         if ($o.Text) { & $Log $o.Text }
         if ($o.State) { & $SaveState 'SignInAppOwner' (ConvertTo-SIUpdaterStepStateValue -State $o.State -More @{ app = $o.ClientId } -Why $o.Why) }
-        $mv = @{ ResourceGroup = $ResourceGroup; SubscriptionId = $SubscriptionId; OldName = $oldName; NewName = $newName; CurrentName = "$cur".Trim(); Owner = $o; Store = $Store; Env = $Env; Log = $Log }
+        # (pwsh's ConvertFrom-Json turns an ISO date into a DateTime -- written back in the row's own format)
+        $since = ''
+        if ($prev -and $prev.PSObject.Properties['forwardSince'] -and "$($prev.to)" -ieq $newName) {
+            $fs = $prev.forwardSince
+            $since = if ($fs -is [datetime]) { $fs.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } else { "$fs".Trim() }
+        }
+        $mv = @{ ResourceGroup = $ResourceGroup; SubscriptionId = $SubscriptionId; OldName = $oldName; NewName = $newName; CurrentName = "$cur".Trim(); Owner = $o; Store = $Store; Env = $Env; Log = $Log
+                 AllowStart = $true; ForwardDays = $forwardDays; ForwardSinceUtc = $since }
         if ($Graph) { $mv['Graph'] = $Graph }
         foreach ($k in @($MoveSeams.Keys)) { $mv[$k] = $MoveSeams[$k] }
         $m = Invoke-SIUpdaterWebAppMove @mv
         if ($m.Text) { & $Log $m.Text }
-        if ($m.State) { & $SaveState 'WebAppName' (ConvertTo-SIUpdaterStepStateValue -State $m.State -More @{ from = $oldName; to = $newName } -Why $m.Why) }
+        if ($m.State) {
+            $more = @{ from = $oldName; to = $newName }
+            if ("$($m.ForwardSince)".Trim() -and $m.State -ne 'moved') { $more['forwardSince'] = "$($m.ForwardSince)".Trim() }
+            & $SaveState 'WebAppName' (ConvertTo-SIUpdaterStepStateValue -State $m.State -More $more -Why $m.Why)
+        }
         [pscustomobject]@{ Owner = $o; Move = $m }
     } catch { & $Log ('web app: the sign-in app owner and the web app name could not be checked ({0}) -- the update goes on' -f $_.Exception.Message); $none }
 }

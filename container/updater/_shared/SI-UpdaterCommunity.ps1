@@ -30,7 +30,7 @@
          app (_shared/SI-UpdaterWebApp.ps1), the installed record and, LAST, the updater's own job.
       6. THE STATE in the database: cfg.InstallState 'CommunityUpdateState' (applied sequence / version / ring) and the compact
          'UpdateState' the web app's Settings page reads (source 'community'). Without the database the running version is
-         the guard (an entry for the version the jobs run is 'current'; an older one is held).
+         the version rule (an entry for the version the jobs run is 'current'; an older one is held).
     NOT IN THE COMMUNITY EDITION: no install key, no claim, no licence request to Invardia, no template channel (the release
     installs its own templates through the template gate), no update tracking or failure report to Invardia (the run's
     failures are in the job's log and the Settings page). Every call that leaves the process goes through -Seams (tests).
@@ -168,7 +168,7 @@ function Read-SIUpdaterCommunityStateRow {
         $row = $rows | Select-Object -First 1
         if (-not $row) { return '' }
         [string]$(if ($row -is [System.Collections.IDictionary]) { $row['Value'] } else { $row.Value })
-    } catch { Write-UpdLog ("WARNING: the Community update state could not be read ({0}) -- the running version is the guard this run" -f $_.Exception.Message); '' }
+    } catch { Write-UpdLog ("WARNING: the Community update state could not be read ({0}) -- the running version is the version rule this run" -f $_.Exception.Message); '' }
 }
 
 function Get-SIUpdaterCommunityReleaseCommit {

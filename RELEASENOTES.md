@@ -13,6 +13,17 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.78 — A template change never holds an update
+
+### Fixes
+
+- When a release would change configuration templates you use, the code update now goes ahead; only the template change
+  waits for an administrator to accept it, said in one plain line and shown on the Template releases page. Previously the
+  whole update waited.
+- If the database setup step fails during an update, the update is still held so new code never runs on an older
+  database, but the failure is now reported and the next update run tries again by itself -- nobody has to act.
+- Update behaviour is the same whatever the protection level of the installation's guards.
+
 ## v3.0.77 — Setup status shows the web app correctly; identity changes finish reliably
 
 ### Fixes

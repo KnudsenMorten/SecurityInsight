@@ -553,9 +553,12 @@ function Invoke-SIUpdaterTemplateGate {
         THE TEMPLATE GATE ON THE UPDATE PATH (the same gate PIM4EntraPS uses: every update path, the image roll included,
         goes through it, so a release never changes the templates in force unseen). For a Pro install (the Pro database is configured on the
         job) the approved release's OWN setup/Publish-SITemplates.ps1 plans its templates against the install's recorded
-        template fingerprint. When the content in force would change, the update is HELD -- no image roll, no publish --
-        until SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT names exactly the fingerprint printed here. The publish itself runs
-        after the roll (Publish-SIUpdaterTemplates) and records the fingerprint only after it verified the write.
+        template fingerprint. When the content in force would change, ONLY THE TEMPLATES wait (Proceed = $false): nothing of
+        them is written until an Admin accepts the change on the web app's Template releases page or
+        SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT names exactly the fingerprint printed here. The code update never waits for
+        it (owner 2026-11-09: nothing but a running run holds an update -- Invoke-SIUpdaterRoll rolls the code and records
+        the template change as pending). The publish itself runs after the roll (Publish-SIUpdaterTemplates) and records
+        the fingerprint only after it verified the write.
         Returns @{ Proceed; Accept; Fingerprint; Reason; Plan }. -Families: tests only.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Store, [string]$AcceptFingerprint, [string[]]$Families)
@@ -584,7 +587,7 @@ function Invoke-SIUpdaterTemplateGate {
         return [pscustomobject]@{ Proceed = $true; Accept = $true; Fingerprint = $plan.Fingerprint; Reason = ('template change accepted for fingerprint {0}' -f $short); Plan = $plan }
     }
     [pscustomobject]@{ Proceed = $false; Accept = $false; Fingerprint = $plan.Fingerprint
-        Reason = ('HELD: this release changes {0} configuration template(s) in force (fingerprint {1}). Nothing was rolled or written. Review the change, then set SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT = {1} on the updater job.' -f @($plan.Changes).Count, $short)
+        Reason = ('the template change waits for an Admin: this release changes {0} configuration template(s) in force (fingerprint {1}); none of them is written until it is accepted on the Template releases page, or with SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT = {1} on the updater job. The code update goes on.' -f @($plan.Changes).Count, $short)
         Plan = $plan }
 }
 
@@ -597,11 +600,37 @@ function Publish-SIUpdaterTemplates {
     & (Join-Path $SIRoot 'setup/Publish-SITemplates.ps1') @a | Where-Object { $_ -and $_.PSObject.Properties['Mode'] } | Select-Object -Last 1
 }
 
+function Invoke-SIUpdaterPendingTemplates {
+    <#
+        A template change that waited while the code of the INSTALLED release (-SIRoot) rolled, accepted later with
+        SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT: the same gate again, then the publish (written, read back, recorded).
+        (An Admin's accept on the Template releases page publishes through the templates job instead.)
+        Returns @{ Done; Fingerprint; Reason }: Done = published, or nothing waits any more. Throws when the publish fails.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Store, [string]$AcceptFingerprint)
+    $g = Invoke-SIUpdaterTemplateGate -SIRoot $SIRoot -Store $Store -AcceptFingerprint $AcceptFingerprint
+    if (-not $g.Proceed) { return [pscustomobject]@{ Done = $false; Fingerprint = [string]$g.Fingerprint; Reason = [string]$g.Reason } }
+    if ($g.Plan -and $g.Plan.PSObject.Properties['Moved'] -and -not $g.Plan.Moved) { return [pscustomobject]@{ Done = $true; Fingerprint = [string]$g.Fingerprint; Reason = 'the template change that waited is in force already -- nothing to publish' } }
+    $pub = Publish-SIUpdaterTemplates -SIRoot $SIRoot -Store $Store -AcceptFingerprint $AcceptFingerprint -Accept:$g.Accept
+    if (-not $pub -or $pub.Mode -ne 'applied') { throw ("configuration templates NOT published: {0}" -f $(if ($pub) { $pub.Reason } else { 'no result' })) }
+    [pscustomobject]@{ Done = $true; Fingerprint = [string]$pub.Fingerprint; Reason = ('the template change that waited is published and verified ({0} change(s), accepted by fingerprint)' -f $pub.Written) }
+}
+
 function Read-SIUpdaterInstalledPack {
     <# The template pack the install recorded (cfg.InstallState 'TemplatePack'), '' when none. #>
     param([Parameter(Mandatory)]$Store)
     $rows = @(& $Store.Invoke "IF OBJECT_ID('cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = 'TemplatePack'" @{} 'reader' | ForEach-Object { $_ })
     if ($rows.Count) { $v = $rows[0]; if ($v -is [System.Collections.IDictionary]) { return ([string]$v['Value']).Trim() } else { return ([string]$v.Value).Trim() } }
+    ''
+}
+
+function Read-SIUpdaterTemplateFingerprint {
+    <# The template fingerprint in force (cfg.InstallState 'TemplateFingerprint'), '' when none or unreadable. Never throws. #>
+    param([Parameter(Mandatory)]$Store)
+    try {
+        $rows = @(& $Store.Invoke "IF OBJECT_ID('cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = 'TemplateFingerprint'" @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+        if ($rows.Count) { $v = $rows[0]; if ($v -is [System.Collections.IDictionary]) { return ([string]$v['Value']).Trim() } else { return ([string]$v.Value).Trim() } }
+    } catch { }
     ''
 }
 
@@ -828,9 +857,14 @@ function Invoke-SIUpdaterRoll {
     <#
         From an EXTRACTED, verified release (-SIRoot) to running jobs: the release's own template gate first (Pro, unless the
         templates follow a template channel), then setup/Invoke-SIContainerUpdate.ps1 -Apply (build, roll, verify, restore on
-        failure), then the release's templates. Shared by the feed and Invardia. Returns @{ Code (exit code); Held; Reason }.
+        failure), then the release's templates. Shared by the feed and Invardia. Returns @{ Code (exit code); Held; Reason;
+        TemplatesPending; TemplatesPendingFingerprint }.
         Pro: the database step (Invoke-SIUpdaterDatabase: schema, grants, record) comes FIRST of all; its failure = Code 1 with
-        the Reason, and nothing is rolled.
+        the Reason, and nothing is rolled (never new code on an old schema); the failure is reported to Invardia and the next
+        update run tries again by itself.
+        Owner 2026-11-09 ("we have no guards anywhere that blocks updates"): a template change that waits for an Admin never
+        holds the code -- the code rolls, only the templates wait (TemplatesPending: one plain line; the change stays staged
+        on the Template releases page). Held is never set by this function any more; the field stays for its callers.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$SubscriptionId, $Store, [string]$AcceptFingerprint, [switch]$TemplatesFollowChannel,
@@ -845,14 +879,17 @@ function Invoke-SIUpdaterRoll {
     # schema: a failure here stops the update with nothing rolled. No Pro database (Community / VM) = skipped.
     # framework SEC-08: the database setup job caj-si-dbinit FIRST (the database work that needs the SQL admin group, as the
     # job's own identity): kept present on every update, run once its membership is proven -- a run that fails HOLDS the
-    # update (nothing rolled, the installed version keeps running); anything else is a warning and today's path goes on
+    # update (nothing rolled, the installed version keeps running); anything else is a warning and today's path goes on.
+    # Owner 2026-11-09: that hold is never silent and never waits for a person -- the failure goes to Invardia (the failure
+    # uplink, step 'database') and the next update run starts the job again by itself (the release stays unapplied).
     if ($Store -and (Get-Command -Name Invoke-SIUpdaterDbJob -ErrorAction SilentlyContinue)) {
         # (reported under the step 'database' -- the update's database stage, a step name Invardia's uplink already knows)
         $global:SI_UpdaterStep = 'database'
         $dj = Invoke-SIUpdaterDbJob -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
         if (-not $dj.Ok) {
             Add-SIUpdaterFailureIf 'database' ([string]$dj.Reason)
-            return [pscustomobject]@{ Code = 1; Held = $false; Reason = ("the database setup job failed, so nothing was rolled: {0}" -f $dj.Reason) }
+            Write-UpdLog 'the database setup job failed: the installed version keeps running, Invardia is told, and the next update run tries again by itself'
+            return [pscustomobject]@{ Code = 1; Held = $false; Reason = ("the database setup job failed, so nothing was rolled (the next update run tries again by itself): {0}" -f $dj.Reason); TemplatesPending = ''; TemplatesPendingFingerprint = '' }
         }
     }
     if ($Store -and (Get-Command -Name Invoke-SIUpdaterDatabase -ErrorAction SilentlyContinue)) {
@@ -870,7 +907,7 @@ function Invoke-SIUpdaterRoll {
     # Pro: the template gate BEFORE anything changes (a Community install has no Pro database and no templates).
     # An install whose ring takes template packs from a template channel keeps the templates that channel released:
     # the code roll does not republish the release's own templates over them.
-    $tplGate = $null
+    $tplGate = $null; $tplPending = $null
     $publishScript = Join-Path $SIRoot 'setup/Publish-SITemplates.ps1'
     $direct = $InstallTemplatesDirect -and $Store -and (Test-Path -LiteralPath $publishScript) -and (Get-Command -Name $publishScript).Parameters.ContainsKey('InstallCurrent')
     if ($direct) { Write-UpdLog 'configuration templates: ring 1 -- every template of this release is installed directly after the roll (no pack, no gate)'; $TemplatesFollowChannel = $true }
@@ -885,7 +922,9 @@ function Invoke-SIUpdaterRoll {
     } elseif ($Store) {
         $tplGate = Invoke-SIUpdaterTemplateGate -SIRoot $SIRoot -Store $Store -AcceptFingerprint $AcceptFingerprint
         Write-UpdLog ("configuration templates: {0}" -f $tplGate.Reason)
-        if (-not $tplGate.Proceed) { return [pscustomobject]@{ Code = 0; Held = $true; Reason = $tplGate.Reason } }
+        # owner 2026-11-09: a template change waiting for an Admin never holds the code -- the code rolls, only the
+        # templates wait (nothing of them is published by this roll; the change stays staged on the Template releases page)
+        if (-not $tplGate.Proceed) { $tplPending = $tplGate; $tplGate = $null }
     }
 
     # #416: every OTHER image of this release starts building NOW, in parallel with the engine build and roll
@@ -937,7 +976,15 @@ function Invoke-SIUpdaterRoll {
             Write-UpdLog ("configuration templates installed directly ({0} change(s))" -f $pub.Written)
         } catch { Write-UpdLog ("configuration templates NOT installed: {0}" -f $_.Exception.Message); Add-SIUpdaterFailureIf 'templates' ("configuration templates NOT installed: {0}" -f $_.Exception.Message); return [pscustomobject]@{ Code = 1; Held = $false; Reason = 'templates not installed' } }
     }
-    if ($code -ne 0 -or -not $tplGate) { return [pscustomobject]@{ Code = $code; Held = $false; Reason = '' } }
+    if ($code -ne 0 -or -not $tplGate) {
+        $pendText = ''; $pendFp = ''
+        if ($code -eq 0 -and $tplPending) {
+            $pendFp = [string]$tplPending.Fingerprint
+            $pendText = 'the code is updated; the template change waits for an Admin (fingerprint {0}): accept it on the Template releases page, or with SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT on the updater job' -f $(if ($pendFp) { $pendFp.Substring(0, [Math]::Min(12, $pendFp.Length)) } else { 'unknown' })
+            Write-UpdLog ("configuration templates: {0}" -f $pendText)
+        }
+        return [pscustomobject]@{ Code = $code; Held = $false; Reason = ''; TemplatesPending = $pendText; TemplatesPendingFingerprint = $pendFp }
+    }
 
     try {
         $pub = Publish-SIUpdaterTemplates -SIRoot $SIRoot -Store $Store -AcceptFingerprint $AcceptFingerprint -Accept:$tplGate.Accept
@@ -978,7 +1025,7 @@ function Invoke-SIUpdaterSizingPass {
 }
 
 function Get-SIUpdaterDeployed {
-    <# The registry and the version the SI jobs run now -> the forward-only guard and the update record's from-version: the
+    <# The registry and the version the SI jobs run now -> the forward-only version rule and the update record's from-version: the
        release recorded on the updater job when it was last applied (tag si-installed), the jobs' image tags as the fallback
        (they carry only the base version since the images are tagged by content). #>
     param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$SubscriptionId,

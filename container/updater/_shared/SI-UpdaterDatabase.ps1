@@ -576,7 +576,7 @@ function Invoke-SIUpdaterDbJob {
         if ($proven -and $mem.Member -eq $false) {
             # a membership a run of the job PROVED is gone, and it could not be made again: the job cannot sign in -- held
             Save-SIUpdaterDbJobMembership -Store $Store -State 'gone' -Why $mem.Detail -NowUtc $nowUtc
-            $why = 'the database setup job {0}: its identity {1} is no longer a member of the SQL admin group and could not be made one again ({2}) -- the update is held, the installed version keeps running; Invardia support (the Support app) or the customer adds it again' -f $n.Job, $n.Identity, $mem.Detail
+            $why = 'the database setup job {0}: its identity {1} is no longer a member of the SQL admin group and could not be made one again ({2}) -- the update is held, the installed version keeps running; Invardia is told, and the next update run tries to make it again and runs the job by itself' -f $n.Job, $n.Identity, $mem.Detail
             Write-UpdLog ('WARNING: ' + $why)
             return (& $res $false 'failed' $why)
         }
@@ -626,7 +626,7 @@ function Invoke-SIUpdaterDbJob {
             Write-UpdLog ('the database setup job {0}: run {1} could not sign in yet -- its identity became a member of the SQL admin group only in this run and the membership has not reached its token; started again in {2} s (try {3} of {4})' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { '(not started)' }), $w, ($try + 1), ($settle.Count + 1))
             & $Sleep $w
         }
-        $why = 'the database setup job {0} did not complete (execution {1}: {2}{3}) -- the update is held, the installed version keeps running; {4}' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status,
+        $why = 'the database setup job {0} did not complete (execution {1}: {2}{3}) -- the update is held, the installed version keeps running; Invardia is told, and the next update run starts the job again by itself; {4}' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status,
                    $(if ($mine -and $after.PSObject.Properties['why'] -and [string]$after.why) { '; ' + [string]$after.why } elseif (-not $mine -and $after -and $after.PSObject.Properties['run'] -and [string]$after.run) { '; it recorded no result for this run -- the last result is of another run of the job ({0}{1}), started beside this update' -f [string]$after.run, $(if ($after.PSObject.Properties['by'] -and [string]$after.by) { ', by ' + [string]$after.by } else { '' }) } elseif (-not $mine) { '; it recorded no result for this run' } else { '' }), (Get-SIDbInitLogText -ResourceGroup $ResourceGroup -Execution $r.Execution)
         Write-UpdLog ('WARNING: ' + $why)
         & $res $false 'failed' $why

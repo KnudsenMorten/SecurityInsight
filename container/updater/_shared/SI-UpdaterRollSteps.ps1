@@ -13,7 +13,7 @@
 #>
 function Resolve-SIUpdaterRunningRelease {
     <#
-        PURE. The release the jobs run, for the forward-only guard and the update record's from-version. -Deployed is what
+        PURE. The release the jobs run, for the forward-only version rule and the update record's from-version. -Deployed is what
         the environment says (the recorded release, else the image tags' base version, e.g. '3.0.0'); -AppliedVersion is
         what this updater recorded when it last applied an Invardia release (e.g. '3.0.0.202610142040'). The applied
         version is taken ONLY when it is a build OF the deployed version (it starts with it plus a dot) -- the deployed

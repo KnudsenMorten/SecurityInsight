@@ -9082,13 +9082,38 @@ A release whose version is recorded there (a manual deploy of exactly that build
 rolled twice.
 
 **The update** (`_shared/SI-UpdaterInvardia.ps1`): verify and download the archive (size + SHA-256 from the signed
-manifest); then -- the guards below -- an SI job with an execution in progress does **not** hold the update (it finishes
+manifest); then -- the waits below -- an SI job with an execution in progress does **not** hold the update (it finishes
 on the version it started with); only a release carrying `UPDATE-NEEDS-QUIET.txt` waits for the running jobs (up to
 `SI_UPDATER_WAIT_MINUTES`, 60; still busy = **deferred** to the next run); then
 the release's own template gate and `setup/Invoke-SIContainerUpdate.ps1 -Apply` (build, roll, verify, restore on failure)
 for the engine jobs -- ring 1 installs the release's templates directly (#405) -- then, Pro, `_shared/SI-UpdaterWebApp.ps1`:
 the web app and its MCP server (image built from the release, app rolled, healthy revision + `/healthz` 200 awaited,
 previous image restored on failure; a failure = exit 1); then the record, the updater itself (last), and the run's state.
+
+**Nothing but a running run holds an update** (owner 2026-11-09: "strict mode can never block an update" / "we have no
+guards anywhere that blocks updates"; framework 12.11b point 6). What may still stop or delay a code roll is a short,
+named list: a running pipeline run (the run gate), a manual deploy or a release that asks for quiet jobs (the waits
+above), Invardia's own `hold` action, the customer's opt-outs (`SI_UPDATER_BLOCK`, `SI_InvardiaUpdate_Enabled`), the
+**version rule**, and a failed database step. Nothing else does -- in particular not the install's guard mode: no
+updater file reads it, and an update decides exactly the same with Strict on and off (`SIv3-UpdateNoGuard.Tests.ps1`).
+- **The version rule** (`Get-SIUpdaterInvardiaCodeDecision`): a release whose `minFromVersion` is above the running
+  version waits for an intermediate release, and the first manifest never moves the jobs backward (a later rollback is
+  a new, higher sequence). Unchanged behaviour; it is a rule of the release, never called a guard.
+- **A template change waits alone** (`Invoke-SIUpdaterRoll`, `Invoke-SIUpdaterTemplateGate`): when the release's own
+  templates would change the templates in force and no Admin has accepted the fingerprint, the CODE ROLLS ANYWAY; only
+  the templates wait. The gate stages them (`cfg.TemplatePackStaged`, origin `shipped`) for the Template releases page,
+  the roll publishes none of them and says one line ("the code is updated; the template change waits for an Admin
+  (fingerprint ...)"), and the update state records it (`templates.hold` + `templates.pendingFingerprint`, shown on the
+  Settings page). Accepting on the Template releases page publishes it through the templates job; accepting with
+  `SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT` publishes it on the next updater run (`Invoke-SIUpdaterPendingTemplates`:
+  the installed release's gate again, then the publish, read back). The pending record clears itself once the
+  fingerprint in force (`cfg.InstallState 'TemplateFingerprint'`) is the one that waited. A template pack from the
+  template channel holds only the pack, as before.
+- **A failed database step holds -- loudly, and only until the next run.** Never new code on an old schema: a database
+  setup job (`caj-si-dbinit`) run or a schema / grant step that fails rolls nothing and the installed version keeps
+  running. The failure is recorded for Invardia's failure uplink (step `database`), the reason says so, and the release
+  stays unapplied, so the next scheduled updater run starts the job again by itself -- no setting, no person; a
+  membership that is gone is made again by that run as on every update.
 
 **The web sign-in app owned by the updater, then the web app under its standard name `ca-si-management`** (framework
 SECAUDIT-1a item 2 and the framework's name table; `_shared/SI-UpdaterWebApp.ps1`, `Invoke-SIUpdaterWebAppSteps`).

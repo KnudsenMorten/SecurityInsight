@@ -17,7 +17,7 @@ function Get-SIDeployedVersionFromJobs {
         The version the jobs run now, from their image tags (v<VERSION>-<hash>, as Invoke-SIContainerUpdate
         tags them). The HIGHEST across SI jobs wins, so a half-rolled estate never reads as older than it is
         (that would let a ring move it backward). '' when no SI job carries a readable tag -- the forward-only
-        guard is then simply not applied, which is today's behaviour.
+        version rule is then simply not applied, which is today's behaviour.
         -Recorded: the RELEASE the updater recorded when it last applied one (the si-installed tag on the updater job,
         written after every roll and by a manual deploy, e.g. 3.0.0.202610142040). The engine images are tagged by content
         (v3.0.0-<hash>), so the tag alone only knows the base version -- the update record then read "3.0.0 -> ..." for an

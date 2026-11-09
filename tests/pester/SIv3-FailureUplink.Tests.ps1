@@ -220,7 +220,8 @@ $global:LASTEXITCODE = 1
         $cu | Should -Match 'function Step\(\[string\]\$m\) \{ \$global:SI_UpdateStage = \$m'
         $cu | Should -Match 'function Warn\(\[string\]\$m\) \{ if \(-not "\$global:SI_UpdateFirstWarn"\.Trim\(\)\) \{ \$global:SI_UpdateFirstWarn = \$m \}'
         $su = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1')
-        $su | Should -Match '\$null = Invoke-SIUpdaterFailureReport -ExitCode \$rc -StartedAt \$updStarted\s+exit \$rc'
+        # the report is sent BEFORE the run exits (a few lines may sit between, e.g. the end of the update's sign of life)
+        $su | Should -Match '\$null = Invoke-SIUpdaterFailureReport -ExitCode \$rc -StartedAt \$updStarted(?:\r?\n[^\r\n]*){0,4}?\r?\n\s*exit \$rc'
         $su | Should -Match "Add-SIUpdaterFailureIf 'licence' \`$lf"
         $df = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\Dockerfile')
         $df | Should -Match 'COPY container/updater/_shared/ \./_shared/'

@@ -13,6 +13,27 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.87 — A data sync step never waits in silence
+
+### Fixes
+
+- The data sync could wait for hours without a word when one part of its parallel work was held up in the database, and
+  the run then never ended. It now says about once a minute what each part is waiting on and what holds it up. A part
+  that makes no progress for 15 minutes is stopped and done again; if it is held up a second time, the step says so
+  plainly and the run goes on instead of waiting.
+- A pipeline step that runs far past its usual time without progress now opens a support case, so support acts on it
+  the same day.
+- The data sync comes first: while it (or a data out) runs, the removal of old data waits. The removal goes on, in small
+  paced portions, whenever neither runs -- also during the rest of a run -- so even millions of old rows keep going down.
+## v3.0.86 — Findings past their due date are counted at every install
+
+### Fixes
+
+- The executive overview's "Findings past their due date" said "not available yet" at nearly every install, because only
+  a due date set in Defender for Cloud counted. A finding is now due at its first-seen date plus the accepted time to fix
+  of its asset type -- the same rule as the Protection Score within the accepted lifecycle (30 days by default for a
+  patch). A due date set in the source still wins, and the table says how the due dates were set.
+
 ## v3.0.85 — Moves to .NET 10 and PowerShell 7.6
 
 ### Security

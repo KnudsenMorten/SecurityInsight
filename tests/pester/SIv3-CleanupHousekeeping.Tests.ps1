@@ -152,8 +152,8 @@ Describe 'a removal does not start while a run, a data sync or a data out is goi
     It '#1063: a pipeline run is going -- the rows of collections marked BEFORE the run started ARE removed during it (paced), the newest two stay' {
         $d = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5; 3 = 4; 4 = 4 }
         $s = New-Settings -Runs 1 -RunStart (T 25)
-        # a data sync running does not stop it (the data out does, below)
-        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning (New-Job -Job 'asset-datasync').Fn -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        # nothing else going (owner 2026-11-10: the data sync and a data out each stop it -- the cases below)
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
         $r.Status | Should -Be 'ok'
         $r.Finished | Should -Not -BeNullOrEmpty
         $d.Left['1'].Count | Should -Be 0; $d.Left['2'].Count | Should -Be 0
@@ -183,6 +183,22 @@ Describe 'a removal does not start while a run, a data sync or a data out is goi
         $r2.Status | Should -Be 'ok'
         @(Removals $d2.Sent).Count | Should -Be 0 -Because 'FAIL SAFE: no run start = nothing removed'
         $r2.Why | Should -Match 'when the run started could not be read'
+    }
+    It 'owner 2026-11-10 "data sync is prio 1, and data clean-up happens when idle": during a run nothing is removed while the data sync runs, nor on a host that cannot read the jobs' {
+        $d = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5 }
+        $s = New-Settings -Runs 1 -RunStart (T 25)
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -RaRunning { $null } -JobRunning (New-Job -Job 'asset-datasync').Fn -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        @(Removals $d.Sent).Count | Should -Be 0 -Because 'the data sync goes first: no row is removed while it runs'
+        $rec = $s.Recorded[$s.Recorded.Count - 1] | ConvertFrom-Json
+        $rec.state | Should -Be 'paused'; $rec.why | Should -Match 'the data sync is running'
+        $r.Why | Should -Match 'no row is removed now: the data sync is running'
+        $d2 = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5 }
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $d2.Invoke -SettingsInvoke (New-Settings -Runs 1 -RunStart (T 25)).Invoke -RaRunning { $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        @(Removals $d2.Sent).Count | Should -Be 0 -Because 'a host that cannot say whether the data sync runs removes nothing during a run'
+        # nothing going (no data sync, no data out): the removal during the run goes on as before
+        $d3 = New-HkData -State $script:State -Rows @{ 1 = 5; 2 = 5 }
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $d3.Invoke -SettingsInvoke (New-Settings -Runs 1 -RunStart (T 25)).Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -TimeBudgetSeconds 60 -Log $script:Quiet
+        @(Removals $d3.Sent).Count | Should -BeGreaterThan 0
     }
     It 'the executions of a job that cannot be read: nothing removed (fail safe)' {
         $d = New-HkData -State $script:State -Rows @{ 1 = 5 }

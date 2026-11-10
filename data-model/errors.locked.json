@@ -1059,15 +1059,15 @@
     "customerText": "A step of the pipeline run going on now has run far longer than its last run took on this installation, and it has shown no sign of progress for an hour. Nothing is stopped: the run goes on. Support looks at the step to see whether it is stuck.",
     "internalNote": "The newest cfg.FlowRun is Running and a Running / Starting cfg.FlowStepRun of it has run longer than max(2 x its last run's time, its last run's time + 60 min) -- its last run's time = that job's newest successful step among the newest 10 run records; none known: 6 h -- AND shows no progress for 60 minutes: its newest mark in cfg.StepProgress (its own execution's or its job's workers', moved by every batch a step writes, at most every 5 minutes) or phase row in cfg.StepPhaseTime is older than that, or, for a step that writes neither, the runner's log check found no sign of progress (its RetryReason). Get-SIPipelineStalledSteps, engine/_shared/SI-JobFlow.ps1. Found 2026-10-29: a correlation ran 55 h and two data syncs 35 h+ before anyone acted. Warning only: nothing is stopped or held. since = when it became stuck; the steps are named in Pipeline.stalledSteps (step, sinceUtc, lastProgressUtc); the runner's log and the step's RetryReason say it once. A person may cancel the run on Operations > Jobs -- SecurityInsight never does.",
     "whoActs": "support",
-    "priority": "P3",
-    "opensTicket": false,
+    "priority": "P2",
+    "opensTicket": true,
     "action": "support",
     "fixedIn": null,
     "waitForFix": false,
     "steps": [
       {
         "who": "support",
-        "text": "Open the run on Operations > Jobs and the step named on the heartbeat: read its log and its database load. A step that stands still: decide with the customer whether to cancel the run there."
+        "text": "Open the run on Operations > Jobs and the step named on the heartbeat: read its log (a field fill names what it waits on once a minute) and its database load. A step that stands still is cancelled and the run started again on the newest version; the owner is not asked -- a stall is support's to handle."
       }
     ],
     "lesson": "Time alone does not tell a long step from a stuck one: a step that writes nothing for an hour, far past its usual time, is the one to look at.",

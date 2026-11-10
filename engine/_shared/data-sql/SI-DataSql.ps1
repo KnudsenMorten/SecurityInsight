@@ -3414,15 +3414,24 @@ function Invoke-SIDataStoppedRunCleanup {
             } catch { $runStart = $null }
             $left = if ($TimeBudgetSeconds -gt 0) { [int][Math]::Floor($TimeBudgetSeconds - ([datetime]::UtcNow - $hkStarted).TotalSeconds) } else { 0 }
             $fin = $null
-            if ($left -gt 0 -and $null -ne $runStart) {
-                $hkJobRunning = $JobRunning
-                $doStop = {
-                    if (-not $hkJobRunning) { return '' }
+            # owner 2026-11-10 (the most critical install: its data sync waited 4 h while the in-run removal shared its tables):
+            # "data sync is prio 1, and data clean-up happens when idle" -- while a run goes, rows are removed ONLY while no data
+            # sync and no data out is running: asked before the first range and before every range and batch; a host that cannot
+            # read the jobs removes nothing during a run (the data sync always wins). Marking (above) is unchanged.
+            $hkJobRunning = $JobRunning
+            $doStop = {
+                if (-not $hkJobRunning) { return 'whether a data sync runs cannot be read on this host' }
+                foreach ($jk in @('asset-datasync', 'data-out')) {
                     $x = $null
-                    try { $x = & $hkJobRunning 'data-out' }
-                    catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { return '' }; return ('whether the data out runs could not be read ({0})' -f $_.Exception.Message) }
-                    if ($x) { 'a data out is running' } else { '' }
+                    try { $x = & $hkJobRunning $jk }
+                    catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { continue }; return ('whether caj-si-{0} runs could not be read ({1})' -f $jk, $_.Exception.Message) }
+                    if ($x) { return $(if ($jk -eq 'asset-datasync') { 'the data sync is running -- it goes first' } else { 'a data out is running' }) }
                 }
+                ''
+            }
+            $first = if ($left -gt 0 -and $null -ne $runStart) { [string](& $doStop) } else { '' }
+            if ($first) { $out['FinishWaits'] = $first }
+            if ($left -gt 0 -and $null -ne $runStart -and -not $first) {
                 $fin = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -FinishOnly -FinishFloorUtc $own.Before -FinishMarkedBeforeUtc $runStart -TimeBudgetSeconds $left -ShouldStop $doStop
             }
             $out['Finished'] = $fin
@@ -3433,8 +3442,8 @@ function Invoke-SIDataStoppedRunCleanup {
                 try { $hkLeft = @(@(& $Invoke (Get-SIDataHousekeepingLeftSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1 } catch { $hkLeft = $null }
             }
             if ($null -eq $fin) {
-                $out.Why = 'a pipeline run is running -- collections no live run owns were marked; ' + $(if ($null -eq $runStart) { 'when the run started could not be read, so no row is removed this time' } else { 'no time is left in this wake-up for removing rows' })
-                $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Left $hkLeft -Why $busy.Why -Log $Log -NowUtc $NowUtc -By $By
+                $out.Why = 'a pipeline run is running -- collections no live run owns were marked; ' + $(if ($out['FinishWaits']) { 'no row is removed now: ' + $out['FinishWaits'] } elseif ($null -eq $runStart) { 'when the run started could not be read, so no row is removed this time' } else { 'no time is left in this wake-up for removing rows' })
+                $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State 'paused' -Left $hkLeft -Why $(if ($out['FinishWaits']) { [string]$out['FinishWaits'] } else { $busy.Why }) -Log $Log -NowUtc $NowUtc -By $By
             } else {
                 $fState = if ($fin.Status -eq 'failed') { 'failed' } elseif ($fin.Paused) { 'paused' } else { 'removing' }
                 $fWhy = if ($fState -eq 'failed') { [string]$fin.Error } elseif ($fState -eq 'paused') { [string]$fin.Paused } else { 'a pipeline run is going: the rows of collections marked before it began are removed, paced by the database''s load' }

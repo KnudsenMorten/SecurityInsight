@@ -274,15 +274,17 @@ GROUP BY b.Basis, b.Name;
 -- the FINDINGS of each view by domain x severity (owner 2026-10-20: "the toggle is also confusing as it just flips the 2
 -- numbers around, but the numbers below doesnt chg"): findings_technical = every open finding of the run; findings_lifecycle =
 -- the ones the lifecycle view counts -- on an active in-scope CI and past its asset type's grace (no date = it counts)
-CREATE TABLE #pg (Dom NVARCHAR(16) NOT NULL, SevB NVARCHAR(16) NOT NULL, Life BIT NOT NULL);
-INSERT #pg (Dom, SevB, Life)
+CREATE TABLE #pg (Dom NVARCHAR(16) NOT NULL, SevB NVARCHAR(16) NOT NULL, Life BIT NOT NULL,
+                  AssetKey NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL, Sev NVARCHAR(30) NULL, InScope BIT NOT NULL);
+INSERT #pg (Dom, SevB, Life, AssetKey, Sev, InScope)
 SELECT f.Dom,
        CASE WHEN f.Sev IN (N'Very High', N'Critical') THEN N'Critical' WHEN f.Sev IN (N'High', N'Medium-High', N'MediumHigh') THEN N'High'
             WHEN f.Sev = N'Medium' THEN N'Medium' WHEN f.Sev = N'Low' THEN N'Low' ELSE N'Other' END,
        CASE WHEN d.CiId IS NULL THEN 0
             WHEN a.AgeDate IS NULL THEN 1
             WHEN DATEDIFF(day, a.AgeDate, @t) >= CASE WHEN $patch = 1 THEN $graceOf ELSE $otherOf END THEN 1
-            ELSE 0 END
+            ELSE 0 END,
+       f.AssetKey, f.Sev, CASE WHEN d.CiId IS NULL THEN 0 ELSE 1 END
 FROM #f AS f
 LEFT JOIN #m AS m ON m.AssetKey = f.AssetKey
 LEFT JOIN #d AS d ON d.CiId = m.CiId AND d.Active = 1 AND d.Class IN (N'device', N'identity', N'cloud_resource', N'public_ip')
@@ -303,6 +305,24 @@ INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
 SELECT N'protection', v.Fig, N'(all)', N'(all)', 0, NULL, 0, 1, NULL
 FROM (VALUES (N'findings_technical'), (N'findings_lifecycle')) AS v (Fig)
 WHERE NOT EXISTS (SELECT 1 FROM #pg);
+-- FINDINGS PAST THEIR DUE DATE when no source gives one (owner 2026-11-10: the tile said "not available yet" at every
+-- install -- only a Defender for Cloud governance assignment sets a source due date): a finding is due at its age date
+-- + the accepted time to fix of its asset type, the SAME rule as the lifecycle view above (a patch: the grace; any other
+-- finding: the other grace; no date = it counts) -- per severity, on the active in-scope assets. A source's own due date
+-- (the figures step) always wins: this only replaces the not-available row.
+IF NOT EXISTS (SELECT 1 FROM #kf WHERE Block = N'patching' AND Figure = N'sla_breaches' AND Available = 1)
+BEGIN
+    DELETE FROM #kf WHERE Block = N'patching' AND Figure = N'sla_breaches';
+    INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
+    SELECT N'patching', N'sla_breaches', CASE WHEN GROUPING(ISNULL(g.Sev, N'(none)')) = 1 THEN N'(all)' ELSE ISNULL(g.Sev, N'(none)') END, N'',
+           SUM(CONVERT(int, g.Life)), COUNT(DISTINCT CASE WHEN g.Life = 1 THEN g.AssetKey END), COUNT(*), 1,
+           N'due = first seen + the accepted time to fix of its asset type'
+    FROM #pg AS g WHERE g.InScope = 1
+    GROUP BY GROUPING SETS ((ISNULL(g.Sev, N'(none)')), ());
+    IF NOT EXISTS (SELECT 1 FROM #kf WHERE Block = N'patching' AND Figure = N'sla_breaches')
+        INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
+        VALUES (N'patching', N'sla_breaches', N'(all)', N'', 0, 0, 0, 1, N'due = first seen + the accepted time to fix of its asset type');
+END
 "@
 }
 function Get-SIDataKeyFiguresSql {
@@ -459,7 +479,7 @@ IF EXISTS (SELECT 1 FROM #f WHERE Due IS NOT NULL)
     INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) SELECT N'patching', N'sla_breaches', CASE WHEN GROUPING(ISNULL(Sev, N'(none)')) = 1 THEN N'(all)' ELSE ISNULL(Sev, N'(none)') END, N'',
                       SUM(CASE WHEN Due < @t THEN 1 ELSE 0 END), COUNT(DISTINCT CASE WHEN Due < @t THEN AssetKey END), SUM(CASE WHEN Due IS NOT NULL THEN 1 ELSE 0 END), 1, NULL
     FROM #f GROUP BY GROUPING SETS ((ISNULL(Sev, N'(none)')), ());
-ELSE INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) VALUES (N'patching', N'sla_breaches', N'(all)', N'', NULL, NULL, NULL, 0, N'no finding has a fix due date (a remediation flow or service level sets si_fix_due_date)');
+ELSE INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) VALUES (N'patching', N'sla_breaches', N'(all)', N'', NULL, NULL, NULL, 0, N'no finding has a fix due date yet');
 -- opened vs fixed in the last @kfRecent days (SI_KeyFigures_RecentDays) and the mean time to fix over the last @kfMttr days
 -- (SI_KeyFigures_MeanTimeToFixDays) -- the finding lifecycle, CVE findings. The figures' keys keep their old names
 -- (opened_30d / fixed_30d); the window in force is the meta 'window' row below

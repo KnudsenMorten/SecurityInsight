@@ -442,47 +442,172 @@ function Invoke-SIDataParallelRanges {
         -Params: more parameters every range's statement takes (the findings per CI: the rating bands); -UpperName: the
         name the range's upper bound goes by (the findings per CI's key ranges call it @Upper).
     #>
+    # THE WATCHDOG (owner 2026-11-10, a large install: the data sync waited 4 hours in silence on ONE range of a field fill --
+    # the database idle, nothing said, nobody told): still no time limit on a statement that WORKS (no fixed limits), but the
+    # wait is watched. -Log: about once a minute, while ranges are still out, one line saying what each waits on (its wait
+    # type, how long, and the session that blocks it with that session's program, host and statement) -- read from the
+    # database's own request views over a separate connection. A range that has made NO progress for -StallSeconds (it is
+    # waiting on a lock / is blocked, or its session has gone) is cancelled and filled again (a range is idempotent); a
+    # range stalled a second time ends the call with an error naming what it waited on -- the caller's step then says so and
+    # goes on, never a silent hang.
     param([Parameter(Mandatory)][scriptblock]$ConnectionInfo, [Parameter(Mandatory)][string]$Sql, [Parameter(Mandatory)][long]$CollectionId,
-          [Parameter(Mandatory)][object[]]$Ranges, [hashtable]$Params, [string]$UpperName = 'Upto')
+          [Parameter(Mandatory)][object[]]$Ranges, [hashtable]$Params, [string]$UpperName = 'Upto',
+          [scriptblock]$Log, [int]$StallSeconds = 900, [int]$WatchSeconds = 60)
     $info = & $ConnectionInfo
     $more = @{}; if ($Params) { foreach ($k in $Params.Keys) { if ([string]$k -notin 'CollectionId', 'After', $UpperName) { $more[[string]$k] = $Params[$k] } } }
+    $tag = 'SI-fill-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $live = [hashtable]::Synchronized(@{})
+    # A LOCK WAIT ENDS ON THE DATABASE (2026-11-10, measured on the Linux test runner: SqlCommand.Cancel does NOT interrupt a
+    # statement waiting on a lock -- it waits for the statement, and blocked the watch with it): every range's batch starts
+    # with SET LOCK_TIMEOUT = the stall time. A statement that WORKS is never limited (no fixed limits); only a wait for
+    # another session's lock ends, with the database's own error 1222 -- the range is then filled again once (idempotent);
+    # a second one ends the call naming what it waited on.
+    $lockMs = [long][Math]::Max(1000, [long]$StallSeconds * 1000)
+    # a cancel / close that may itself wait (a lost connection) runs on its own runspace, never on the watch's thread
+    $loose = {
+        param($lv)
+        if (-not $lv) { return }
+        try {
+            $p2 = [powershell]::Create()
+            $null = $p2.AddScript('param($l) try { $l.Cmd.Cancel() } catch { }; try { $l.Cn.Dispose() } catch { }').AddArgument($lv)
+            $null = $p2.BeginInvoke()
+        } catch { }
+    }
     $work = {
-        param([string]$Cs, [string]$Token, [string]$Text, [long]$Cid, [long]$After, [long]$Upto, [hashtable]$More, [string]$UpName)
-        $cn = New-Object System.Data.SqlClient.SqlConnection($Cs)
+        param([string]$Cs, [string]$Token, [string]$Text, [long]$Cid, [long]$After, [long]$Upto, [hashtable]$More, [string]$UpName, [string]$App, [hashtable]$Live, [long]$LockMs)
+        # the range's program name: the watchdog finds its session by it
+        # (the builder's keyword is 'Application Name' -- PowerShell sets a builder's keys through its indexer)
+        $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder($Cs); $b['Application Name'] = $App
+        $cn = New-Object System.Data.SqlClient.SqlConnection($b.ConnectionString)
         # (no token: a connection string that signs in by itself -- the tests' local server)
         if ($Token) { $cn.AccessToken = $Token }
         try {
             $cn.Open()
-            $c = $cn.CreateCommand(); $c.CommandText = $Text; $c.CommandTimeout = 0
+            $c = $cn.CreateCommand(); $c.CommandText = ('SET LOCK_TIMEOUT {0};' -f $LockMs) + "`n" + $Text; $c.CommandTimeout = 0   # limit-ok: only a wait for another session's lock ends (the stall time); the work itself has no limit
             [void]$c.Parameters.AddWithValue('@CollectionId', $Cid); [void]$c.Parameters.AddWithValue('@After', $After); [void]$c.Parameters.AddWithValue('@' + $UpName, $Upto)
             if ($More) { foreach ($k in $More.Keys) { $v = $More[$k]; if ($null -eq $v) { $v = [System.DBNull]::Value }; [void]$c.Parameters.AddWithValue('@' + $k, $v) } }
+            $Live[$App] = @{ Cmd = $c; Cn = $cn }
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $v = $c.ExecuteScalar()
             [pscustomobject]@{ N = $(if ($null -eq $v -or $v -is [System.DBNull]) { 0L } else { [long]$v }); Ms = $sw.ElapsedMilliseconds }
-        } finally { $cn.Dispose() }
+        } finally { $Live.Remove($App); $cn.Dispose() }
     }
     $pool = [runspacefactory]::CreateRunspacePool(1, [Math]::Max(1, $Ranges.Count))
     $pool.Open()
     $jobs = New-Object System.Collections.Generic.List[object]
+    $start = {
+        param($i, $try)
+        $r = $Ranges[$i]; $app = '{0}-{1}-{2}' -f $tag, $i, $try
+        $ps = [powershell]::Create(); $ps.RunspacePool = $pool
+        $null = $ps.AddScript($work.ToString()).AddArgument([string]$info.ConnectionString).AddArgument([string]$info.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName).AddArgument($app).AddArgument($live).AddArgument($lockMs)
+        [pscustomobject]@{ I = $i; Try = $try; App = $app; Ps = $ps; Ar = $ps.BeginInvoke(); Since = [datetime]::UtcNow; StallSince = $null; Wait = ''; Cancelled = $false; CancelledAt = $null }
+    }
     try {
-        foreach ($r in $Ranges) {
-            $ps = [powershell]::Create(); $ps.RunspacePool = $pool
-            $null = $ps.AddScript($work.ToString()).AddArgument([string]$info.ConnectionString).AddArgument([string]$info.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName)
-            $jobs.Add(@($ps, $ps.BeginInvoke()))
-        }
-        $out = New-Object System.Collections.Generic.List[object]; $err = $null
-        foreach ($j in $jobs) {
+        for ($i = 0; $i -lt $Ranges.Count; $i++) { $jobs.Add((& $start $i 1)) }
+        $out = @{}; $err = $null; $lastDone = $null
+        $open = New-Object System.Collections.Generic.List[object]; foreach ($j in $jobs) { $open.Add($j) }
+        while ($open.Count -gt 0) {
+            # wait for any range, at most one watch interval
+            $handles = @($open | ForEach-Object { $_.Ar.AsyncWaitHandle })
+            $null = [System.Threading.WaitHandle]::WaitAny([System.Threading.WaitHandle[]]$handles, [Math]::Max(1, $WatchSeconds) * 1000)
+            # a cancelled range that has still not come back two minutes later (its cancel / close did not end it: a dead
+            # connection) is given up -- handled as cancelled, never waited on again
+            foreach ($j in @($open | Where-Object { $_.Cancelled -and -not $_.Ar.IsCompleted -and $_.CancelledAt -and ([datetime]::UtcNow - $_.CancelledAt).TotalSeconds -ge 120 })) {
+                $null = $open.Remove($j)
+                if ($Log) { & $Log 'WARN' ('fill watch  : range {0} did not end after its cancel -- given up' -f ($j.I + 1)) }
+                if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of the field fill made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait)) } }
+                else { $n = & $start $j.I 2; $jobs.Add($n); $open.Add($n) }
+            }
+            foreach ($j in @($open | Where-Object { $_.Ar.IsCompleted })) {
+                $null = $open.Remove($j); $lastDone = [datetime]::UtcNow
+                $rangeErr = $null; $res = @()
+                try {
+                    $res = @($j.Ps.EndInvoke($j.Ar))
+                    if ($j.Ps.Streams.Error.Count -gt 0) { $rangeErr = $j.Ps.Streams.Error[0].Exception }
+                } catch { $rangeErr = $_.Exception }
+                # the database ended a lock wait (SET LOCK_TIMEOUT, error 1222): that range made no progress -- a stall
+                $lockOut = $rangeErr -and ("$($rangeErr.Message)" -match 'Lock request time out|\b1222\b')
+                if ($lockOut -and -not $j.Cancelled) {
+                    $j.Cancelled = $true
+                    if (-not $j.Wait) { $j.Wait = 'a lock it waited for' }
+                    if ($Log) { & $Log 'WARN' ('fill watch  : range {0} waited {1} min for a lock and was stopped by the database ({2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) }
+                }
+                if (-not $j.Cancelled) {
+                    if ($rangeErr -and $null -eq $err) { $err = $rangeErr }
+                    if ($res.Count) { $out[$j.I] = $res[-1] }
+                }
+                if ($j.Cancelled) {
+                    # the stalled range again, on a fresh connection; a second stall is the end of this call
+                    if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of the field fill made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait)) } }
+                    else { $n = & $start $j.I 2; $jobs.Add($n); $open.Add($n); if ($Log) { & $Log 'WARN' ('fill watch  : range {0} is filled again on a fresh connection (it had made no progress for {1} min: {2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) } }
+                }
+                $j.Ps.Dispose()
+            }
+            if ($open.Count -eq 0) { break }
+            # what the ranges still out are waiting on, from the database's own views (a separate connection)
+            $seen = @{}
             try {
-                $res = @($j[0].EndInvoke($j[1]))
-                if ($j[0].Streams.Error.Count -gt 0 -and $null -eq $err) { $err = $j[0].Streams.Error[0].Exception }
-                if ($res.Count) { $out.Add($res[-1]) }
-            } catch { if ($null -eq $err) { $err = $_.Exception } }
+                $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder([string]$info.ConnectionString); $b['Application Name'] = "$tag-watch"
+                $wc = New-Object System.Data.SqlClient.SqlConnection($b.ConnectionString); if ($info.AccessToken) { $wc.AccessToken = [string]$info.AccessToken }
+                try {
+                    $wc.Open(); $q = $wc.CreateCommand(); $q.CommandTimeout = 30   # limit-ok: the watch's own read of the request views; a slow read is skipped this minute, never the work
+                    $q.CommandText = @"
+SELECT s.program_name AS App, r.status AS St, r.wait_type AS WaitType, r.wait_time AS WaitMs, r.blocking_session_id AS Blocker,
+       bs.program_name AS BlockerApp, bs.host_name AS BlockerHost, bs.status AS BlockerStatus, bs.open_transaction_count AS BlockerTrans,
+       LEFT(REPLACE(REPLACE(COALESCE(bt.text, bst.text, N''), CHAR(13), N' '), CHAR(10), N' '), 160) AS BlockerSql
+FROM sys.dm_exec_sessions AS s
+LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id
+LEFT JOIN sys.dm_exec_sessions AS bs ON bs.session_id = r.blocking_session_id
+LEFT JOIN sys.dm_exec_requests AS br ON br.session_id = r.blocking_session_id
+OUTER APPLY sys.dm_exec_sql_text(br.sql_handle) AS bt
+LEFT JOIN sys.dm_exec_connections AS bc ON bc.session_id = r.blocking_session_id
+OUTER APPLY sys.dm_exec_sql_text(bc.most_recent_sql_handle) AS bst
+WHERE s.program_name LIKE @tag + N'-%' AND s.program_name <> @tag + N'-watch';
+"@
+                    [void]$q.Parameters.AddWithValue('@tag', $tag)
+                    $rd = $q.ExecuteReader()
+                    while ($rd.Read()) {
+                        $blk = if ($rd['Blocker'] -isnot [System.DBNull] -and [int]$rd['Blocker'] -gt 0) { ' -- blocked by session {0} ({1} on {2}, {3}, {4} open transaction(s)): {5}' -f $rd['Blocker'], $rd['BlockerApp'], $rd['BlockerHost'], $rd['BlockerStatus'], $rd['BlockerTrans'], $rd['BlockerSql'] } else { '' }
+                        $seen[[string]$rd['App']] = [pscustomobject]@{ Lock = ("$($rd['WaitType'])" -like 'LCK_*') -or $blk; Text = ('{0} {1} {2:N0} s{3}' -f $rd['St'], $(if ($rd['WaitType'] -is [System.DBNull]) { 'running' } else { $rd['WaitType'] }), $(if ($rd['WaitMs'] -is [System.DBNull]) { 0 } else { [long]$rd['WaitMs'] / 1000 }), $blk) }
+                    }
+                    $rd.Close()
+                } finally { $wc.Dispose() }
+            } catch { $seen = $null; if ($Log) { & $Log 'INFO' ('fill watch  : the database''s request views could not be read ({0}) -- the ranges are watched by their own sessions only' -f $_.Exception.Message) } }
+            $now = [datetime]::UtcNow; $parts = @()
+            foreach ($j in $open) {
+                $s = if ($null -ne $seen) { $seen[$j.App] } else { $null }
+                # no progress = waiting on a lock / blocked, or the range's session is gone while its call is still out
+                $stuck = ($null -ne $seen) -and ($null -eq $s -or $s.Lock)
+                # the views cannot be read (no right to them): a range still out four stall times after the last of its
+                # peers came back is taken as stalled -- the peers did the same work on the same database
+                if ($null -eq $seen -and $null -ne $lastDone) {
+                    $ref = if ($j.Since -gt $lastDone) { $j.Since } else { $lastDone }   # a range filled again counts from its own start
+                    if (($now - $ref).TotalSeconds -ge 4 * $StallSeconds) { $stuck = $true; if ($null -eq $j.StallSince) { $j.StallSince = $ref.AddSeconds(3 * $StallSeconds) } }
+                }
+                $j.Wait = if ($s) { $s.Text } elseif ($null -ne $seen) { 'its session is gone' } else { 'unknown' }
+                if ($stuck) { if ($null -eq $j.StallSince) { $j.StallSince = $now } } else { $j.StallSince = $null }
+                $parts += ('range {0}: {1}' -f ($j.I + 1), $j.Wait)
+                # a lock wait is ended by the database itself (above); the watch steps in only when that did not happen -- the
+                # session is gone, the views cannot be read, or the lock time-out did not come within a minute of its due time
+                $grace = if ($s -and $s.Lock) { 60 } else { 0 }
+                if ($stuck -and -not $j.Cancelled -and ($now - $j.StallSince).TotalSeconds -ge ($StallSeconds + $grace)) {
+                    $j.Cancelled = $true; $j.CancelledAt = $now
+                    if ($Log) { & $Log 'WARN' ('fill watch  : range {0} made no progress for {1} min -- stopped ({2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) }
+                    # never on this thread: a cancel / close can itself wait on the same hang (measured) -- its own runspace
+                    & $loose $live[$j.App]; try { $null = $j.Ps.BeginStop($null, $null) } catch { }
+                }
+            }
+            if ($Log) { & $Log 'INFO' ('fill watch  : {0} range(s) still out -- {1}' -f $open.Count, ($parts -join '; ')) }
         }
         if ($err) { throw $err }
-        , $out.ToArray()
+        , @(for ($i = 0; $i -lt $Ranges.Count; $i++) { $out[$i] })
     } finally {
-        foreach ($j in $jobs) { try { $j[0].Dispose() } catch { } }
-        $pool.Close(); $pool.Dispose()
+        # never wait here on a range that is still out (given up, or the call threw): stop it and close its connection
+        # without waiting, and let the pool close in the background -- the cleanup must not become the next hang
+        $still = @($jobs | Where-Object { -not $_.Ar.IsCompleted })
+        foreach ($j in $still) { & $loose $live[$j.App]; try { $null = $j.Ps.BeginStop($null, $null) } catch { } }
+        foreach ($j in @($jobs | Where-Object { $_.Ar.IsCompleted })) { try { $j.Ps.Dispose() } catch { } }
+        if ($still.Count) { try { $null = $pool.BeginClose($null, $null) } catch { } } else { $pool.Close(); $pool.Dispose() }
     }
 }
 
@@ -565,7 +690,7 @@ function Invoke-SIDataViewContext {
                     for ($k = 0; $k -lt $workersNow -and $from -lt $hi; $k++) { $to = [Math]::Min($hi, $from + $size); $wave.Add(@($from, $to)); $from = $to }
                     $sw = [Diagnostics.Stopwatch]::StartNew()
                     if ($wave.Count -gt 1) {
-                        $res = Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray()
+                        $res = Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray() -Log $Log
                         $n = [long]0; $ms = [long]0
                         foreach ($r in $res) { $n += [long]$r.N; if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms } }
                     } else {

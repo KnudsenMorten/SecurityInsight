@@ -1864,7 +1864,7 @@ function Invoke-SIDataCiFindingFromDbRanged {
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $n = 0L; $ms = 0L
             if ($wave.Count -gt 1) {
-                foreach ($r in (Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray())) { $n += [long]$r.N; if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms } }
+                foreach ($r in (Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray() -Log $Log)) { $n += [long]$r.N; if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms } }
             } else {
                 $n = [long](& $Invoke $fill @{ CollectionId = [string]$cid; After = [string]$wave[0][0]; Upto = [string]$wave[0][1] } 'scalar')
                 $ms = $sw.ElapsedMilliseconds
@@ -1894,7 +1894,7 @@ function Invoke-SIDataCiFindingFromDbRanged {
             }
             if ($wave.Count -eq 0) { break }
             if ($wave.Count -gt 1) {
-                foreach ($r in (Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $sql -CollectionId $cid -Ranges $wave.ToArray() -Params $Params -UpperName 'Upper')) { $staged += [long]$r.N }
+                foreach ($r in (Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $sql -CollectionId $cid -Ranges $wave.ToArray() -Params $Params -UpperName 'Upper' -Log $Log)) { $staged += [long]$r.N }
             } else {
                 $p = @{}; foreach ($k2 in $Params.Keys) { $p[$k2] = $Params[$k2] }
                 $p['After'] = [string]$wave[0][0]; $p['Upper'] = [string]$wave[0][1]

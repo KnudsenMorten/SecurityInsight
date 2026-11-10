@@ -465,8 +465,12 @@ public sealed class ExecutiveFigures
     {
         var rows = Now.Where(r => r.Block == "patching" && r.Figure == "sla_breaches").ToList();
         if (rows.Count == 1 && !rows[0].Available) return new FigureTable("sla", "Past the due date, per severity", [], [], Note: "Not available yet: " + rows[0].Note + ".");
+        // owner 2026-11-10: with no source due date the data sync gives every finding one -- first seen + the accepted time to fix
+        // of its asset type -- and says so in the (all) row's note, which the table repeats
+        var basis = rows.FirstOrDefault(r => r.Dim1 == "(all)")?.Note;
         return new FigureTable("sla", "Past the due date, per severity", ["Severity", "Past due", "Devices", "With a due date"],
-            rows.OrderBy(r => r.Dim1 == "(all)" ? 9 : SeverityOrder.Rank(r.Dim1)).Select(r => (IReadOnlyList<string>)[r.Dim1, Fmt.Int((long)(r.Value ?? 0)), Fmt.Int(r.Assets), Fmt.Int(r.Total)]).ToList());
+            rows.OrderBy(r => r.Dim1 == "(all)" ? 9 : SeverityOrder.Rank(r.Dim1)).Select(r => (IReadOnlyList<string>)[r.Dim1, Fmt.Int((long)(r.Value ?? 0)), Fmt.Int(r.Assets), Fmt.Int(r.Total)]).ToList(),
+            Note: string.IsNullOrWhiteSpace(basis) ? null : "Due date: " + basis + ".");
     }
 
     public static readonly string[] LagOrder = ["current", "1 month behind", "2+ months behind", "not known"];

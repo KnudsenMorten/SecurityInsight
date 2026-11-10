@@ -19,13 +19,16 @@
 #   cd SOLUTIONS/SecurityInsight
 #   az acr build --registry <acr> --image si-orchestrator:<tag> --file container/Dockerfile .
 
-FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04@sha256:663a172849444279d8e7b50e19977b6e42380eae6856bdc8931ca08e2e03e92a
+# THE BASE (IMAGE-PATCH-1 1b, owner 2026-11-10): the .NET 10 SDK image on Ubuntu 24.04 -- it ships PowerShell 7.6 LTS
+# (installed as a .NET tool under /usr/share/powershell, /usr/bin/pwsh links to it) on the .NET 10 runtime. The old
+# powershell:lts-ubuntu-22.04 image carried PowerShell 7.4 on .NET 8, both out of support on 2026-11-10. Runs as root,
+# as the old base did (no USER is set). Pinned by digest (release\Update-SIBaseImageDigests.ps1).
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e
 
 # NO POWERSHELL MODULES. SecurityInsight reaches Azure, Log Analytics, storage, Key
 # Vault, Resource Graph, Microsoft Graph and the Log Ingestion API over plain REST
 # with its own sign-in (managed identity, certificate or client secret), so the
-# image installs nothing beyond PowerShell itself -- smaller, faster to build and
-# to start, and nothing to keep in step with a gallery.
+# image installs no PowerShell module -- nothing to keep in step with a gallery.
 # Risk Analysis writes its .xlsx with SI's own .NET writer
 # (engine/risk-analysis/_shared/RA-XlsxWriter.ps1), so no Excel module either.
 
@@ -34,9 +37,22 @@ FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04@sha256:663a172849444279d8e7b5
 # Time' is not known on this machine" (live 2026-10-06, Community rehearsal). With tzdata, IANA ids (Europe/Copenhagen)
 # resolve, and Windows ids through SI-Pipeline's map. Before the COPY, so it stays in the cached base layer.
 # #574: fonts-dejavu-core -- the fonts of the mail PDF (the PDF builder uses the system's fonts; none is bundled).
+# IMAGE-PATCH-1 (2026-11-10): the base's OS packages are upgraded at build -- a digest-pinned base never moves, so its
+# fixed Ubuntu security updates reach the image only this way.
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
+
+# THE POWERSHELL VERSION: the build FAILS unless pwsh is 7.6 -- the release is made for 7.6, and a base image that
+# moved to another PowerShell line must not ship unnoticed.
+RUN ["pwsh","-NoProfile","-NonInteractive","-Command","if ($PSVersionTable.PSVersion.Major -ne 7 -or $PSVersionTable.PSVersion.Minor -ne 6) { Write-Error ('PowerShell 7.6 required, got ' + $PSVersionTable.PSVersion); exit 1 }; Write-Host ('PowerShell ' + $PSVersionTable.PSVersion)"]
+
+# THE CULTURE the old base image set (LANG / LC_ALL en_US.UTF-8): the .NET SDK image sets none, and without it .NET runs
+# the engines in the invariant culture -- dates and numbers formatted by the current culture would change (24-hour times
+# instead of AM/PM). Kept, so a mail or report reads as before. .NET takes the culture data from ICU (in the base).
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # #574: the mail PDF's library -- the managed DLLs of PDFsharp + MigraDoc 6.2.4 (MIT), downloaded at build from nuget.org
 # exactly as pinned in engine/_shared/pdf/SI.Pdf.packages.json; a package whose SHA-512 differs fails the build. DLLs

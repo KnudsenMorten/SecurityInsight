@@ -58,7 +58,9 @@ builder.Services.AddSingleton<IDistributedCache>(sp => sp.GetRequiredService<Sql
 builder.Services.AddHostedService<FrontStateCleanup>();
 builder.Services.AddDataProtection()
     .SetApplicationName("signin-front")
-    .ProtectKeysWithAzureKeyVault(new Uri(settings.KeyVaultKeyId), new ManagedIdentityCredential(settings.StateManagedIdentityClientId));
+    // 2.0.0: the user-assigned identity named through ManagedIdentityId (Azure.Identity 1.21: the client-id string
+    // constructor is obsolete). Same identity, same behaviour.
+    .ProtectKeysWithAzureKeyVault(new Uri(settings.KeyVaultKeyId), new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(settings.StateManagedIdentityClientId)));
 builder.Services.AddOptions<KeyManagementOptions>().Configure<SqlFrontStore>((o, store) => o.XmlRepository = store);
 builder.Services.Configure<MsalDistributedTokenCacheAdapterOptions>(o =>
 {
@@ -83,7 +85,7 @@ app.Use(async (ctx, next) =>
 });
 // 2. TLS ends at the platform ingress, the only thing that reaches this container: trust its X-Forwarded-Proto / -For.
 var fwd = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
-fwd.KnownNetworks.Clear();
+fwd.KnownIPNetworks.Clear();   // 2.0.0: ASP.NET Core 10 renamed KnownNetworks (ASPDEPR005); same list, same meaning
 fwd.KnownProxies.Clear();
 app.UseForwardedHeaders(fwd);
 // 2b. 1.5.0 SIGNIN_FRONT_MOVED_TO (MovedTo.cs): the app has moved -- EVERY request (but /healthz) is redirected to the new

@@ -13,6 +13,30 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.85 — Moves to .NET 10 and PowerShell 7.6
+
+### Security
+
+- SecurityInsight now runs on .NET 10 and PowerShell 7.6, both long-term supported releases. .NET 8 and PowerShell 7.4,
+  which it ran on before, are no longer supported by Microsoft and receive no more security updates.
+- The web app and the AI assistant server run on the .NET 10 runtime on the same minimal Ubuntu 24.04 base as before.
+- The job images move from Ubuntu 22.04 to Ubuntu 24.04 and carry PowerShell 7.6. They still install the latest Ubuntu
+  security updates when they are built, and an image without PowerShell 7.6 is never built.
+- The libraries the web app uses for sign-in and for signed and encrypted data move to their current patched versions.
+
+### Changes
+
+- Nothing changes in how you use SecurityInsight: reports, mails, dates and numbers look as before.
+## v3.0.84 — Security patch for the container images
+
+### Security
+
+- The web app and the AI assistant server now run on a minimal Ubuntu 24.04 base without a shell or package manager,
+  which removes most of the operating system packages that security scanners report. Number and time formatting in
+  your own language and time zone work as before.
+- All base images move to their latest patched versions, and the job images install the latest Ubuntu security
+  updates when they are built.
+- A .NET library used for signed XML moves to its patched version.
 ## v3.0.83 — Old identities are removed completely
 
 ### Fixes

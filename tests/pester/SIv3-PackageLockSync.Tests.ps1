@@ -14,6 +14,10 @@
 BeforeAll {
     $script:Src = (Resolve-Path (Join-Path $PSScriptRoot '..\..\pro-management\src')).Path
     $script:Projects = @('SI.Management.Core', 'SI.Management.Mcp', 'SI.Management.Web')
+    # .NET 10 (NuGet package pruning): a package the ASP.NET Core shared framework already carries is PRUNED from an
+    # ASP.NET project's lock file -- also from the entry of a project it references. Exactly these of SI.Management.Core's
+    # packages are pruned in the web app's and the MCP server's lock files (the shared framework supplies them at run time).
+    $script:PrunedInAspNet = @('Microsoft.Extensions.DependencyInjection.Abstractions', 'Microsoft.Extensions.Options', 'Microsoft.Extensions.Options.ConfigurationExtensions', 'System.Threading.RateLimiting')
 
     function script:Get-DirectRefs([string]$Csproj) {
         [xml]$x = Get-Content -LiteralPath $Csproj -Raw
@@ -24,7 +28,7 @@ BeforeAll {
         @($x.SelectNodes('//ProjectReference') | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension(($_.Include -replace '\\', '/')) })
     }
     function script:Get-LockDirect($Lock) {
-        @($Lock.dependencies.'net8.0'.PSObject.Properties | Where-Object { $_.Value.type -eq 'Direct' } | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value.resolved } | Sort-Object)
+        @($Lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Value.type -eq 'Direct' } | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value.resolved } | Sort-Object)
     }
     function script:Compare-RefsToLock([string[]]$Refs, [string[]]$Direct) {
         @(@($Refs | Where-Object { $_ -notin $Direct } | ForEach-Object { "in the project, not in the lock file: $_" }) +
@@ -48,12 +52,14 @@ Describe 'the .NET lock files match the projects (the images restore --locked-mo
         $me = $_
         $lock = Get-Content (Join-Path $script:Src "$me\packages.lock.json") -Raw | ConvertFrom-Json
         foreach ($p in (Get-ProjectRefs (Join-Path $script:Src "$me\$me.csproj"))) {
-            $entry = $lock.dependencies.'net8.0'.PSObject.Properties | Where-Object { $_.Name -ieq $p } | Select-Object -First 1
+            $entry = $lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Name -ieq $p } | Select-Object -First 1
             $entry | Should -Not -BeNullOrEmpty -Because "$me references $p"
             $entry.Value.type | Should -Be 'Project'
             $names = @($entry.Value.dependencies.PSObject.Properties.Name | Sort-Object)
             $want = @((Get-DirectRefs (Join-Path $script:Src "$p\$p.csproj")) | ForEach-Object { ($_ -split '=')[0] } | Sort-Object)
-            @($want | Where-Object { $_ -notin $names }) | Should -BeNullOrEmpty -Because "$me's lock file must list $p's packages"
+            @($want | Where-Object { $_ -notin $names -and $_ -notin $script:PrunedInAspNet }) | Should -BeNullOrEmpty -Because "$me's lock file must list $p's packages"
+            # the pruned list stays exact: a package on it that the lock file DOES list means the list is out of date
+            @($want | Where-Object { $_ -in $names -and $_ -in $script:PrunedInAspNet }) | Should -BeNullOrEmpty -Because 'a package the SDK no longer prunes must leave PrunedInAspNet'
         }
     }
 

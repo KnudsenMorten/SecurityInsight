@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <!-- the restore is LOCKED (2026-10-31): packages.lock.json is committed; the image build restores with locked-mode -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Nullable>enable</Nullable>
@@ -12,9 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
-    <PackageReference Include="Microsoft.Identity.Web" Version="4.16.0" />
+    <PackageReference Include="ModelContextProtocol" Version="2.4.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="4.18.0" />
+    <!-- IMAGE-PATCH-1 (2026-11-10): pinned directly; they came in transitively at versions with fixed High findings.
+         Moved to the .NET 10 servicing line with the move to net10.0. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.14" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>

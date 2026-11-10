@@ -11,14 +11,14 @@
 #   az acr build --registry <acr> --image si-management:<tag> --file pro-management/Dockerfile <stage>
 #   docker build -f pro-management/Dockerfile -t si-management:dev <stage>
 
-# BASE IMAGES PINNED BY DIGEST (2026-10-31): a tag (sdk:8.0, aspnet:8.0) is a pointer Microsoft moves on every patch, so
+# BASE IMAGES PINNED BY DIGEST (2026-10-31): a tag (sdk:10.0, aspnet:10.0) is a pointer Microsoft moves on every patch, so
 # the same release could build a different image at each install. Every FROM is written image:tag@sha256:<digest> --
 # the tag stays for people, the digest is what is built. release\Update-SIBaseImageDigests.ps1 reads each tag's digest
 # from the registry and writes it here; a release whose Dockerfiles carry a FROM without a digest is refused
 # (New-SIReleaseCodeArchive -RequirePinnedBaseImages), and the digests go into the release's SBOM.
 # THE .NET RESTORE IS LOCKED: every project carries packages.lock.json (RestorePackagesWithLockFile) and the restore runs
 # --locked-mode -- a package (or a package it brings in) that differs from the lock file fails the build.
-FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /src
 # every shipped config file the projects link (settings catalog, audit actions, guard catalog, ...): the stage holds
 # exactly those, read from the csproj files by Deploy-SIManagement.ps1
@@ -34,13 +34,16 @@ RUN dotnet restore pro-management/src/SI.Management.Web/SI.Management.Web.csproj
 COPY pro-management/src/ pro-management/src/
 RUN dotnet publish pro-management/src/SI.Management.Web/SI.Management.Web.csproj -c Release -o /app --no-restore -p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:ea721098d6ea2894ff9bd8387821a1659d4765d6c014b8d648bb1da16f016f5a AS runtime
+# IMAGE-PATCH-1 (2026-11-10): the runtime is Ubuntu 24.04 CHISELED -- no shell, no package manager, only the .NET runtime's
+# own files, so far fewer OS packages to carry a vulnerability. The -extra flavour keeps ICU + tzdata: the web app formats
+# numbers and times in the viewer's culture and time zone. Non-root by default (APP_UID 1654). Nothing below may need a shell.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:a9298ccc39c6258ae71228479e2f3f8d2ceb6639a9927262a4b0ff7d319a0e7e AS runtime
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_HTTP_PORTS=8080 \
     DOTNET_RUNNING_IN_CONTAINER=true \
     ASPNETCORE_ENVIRONMENT=Production
 EXPOSE 8080
-# the non-root user the .NET 8 images ship (uid 1654)
+# the non-root user the .NET images ship (uid 1654)
 USER $APP_UID
 ENTRYPOINT ["dotnet", "SI.Management.Web.dll"]

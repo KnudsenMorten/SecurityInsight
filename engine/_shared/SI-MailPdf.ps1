@@ -1,4 +1,4 @@
-# pwsh 7 (Add-Type on .NET 8); in Windows PowerShell 5.1 the PDF is simply not built and the mail goes without it.
+# pwsh 7 (Add-Type; the images run 7.6 on .NET 10 and load the net8.0 DLLs of SI.Pdf.packages.json); in Windows PowerShell 5.1 the PDF is simply not built and the mail goes without it.
 <#
     SECURITYINSIGHT -- THE MAIL PDF (REQUIREMENTS #574; owner: "include pdf file with summary and relavant infp in mails").
     Send-SIMail (SI-MailTransport.ps1) attaches ONE PDF to every mail that reports something: the mail's own content (after

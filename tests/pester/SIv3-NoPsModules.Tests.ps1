@@ -140,7 +140,8 @@ Describe 'SecurityInsight runs with no PowerShell modules (runtime: engine, laun
 
     It 'scans a real runtime (sanity: the runtime folders hold scripts)' {
         $script:Files.Count | Should -BeGreaterThan 100
-        foreach ($d in $script:RuntimeDirs) { @($script:Files | Where-Object { $_.FullName -like ('*\' + $d + '\*') }).Count | Should -BeGreaterThan 0 -Because $d }
+        # separators normalised: the same check on Windows and on the Linux test runner
+        foreach ($d in $script:RuntimeDirs) { @($script:Files | Where-Object { $_.FullName.Replace('/', '\') -like ('*\' + $d + '\*') }).Count | Should -BeGreaterThan 0 -Because $d }
     }
 
     It 'every runtime script parses' {
@@ -184,7 +185,7 @@ Describe 'SecurityInsight runs with no PowerShell modules (runtime: engine, laun
             @($p.dlls | Where-Object { $_ -notmatch '^[A-Za-z][A-Za-z0-9.]*\.dll$' -or $_ -match '(?i)^(Az|Microsoft\.Graph|Microsoft\.Identity|AzLogDcrIngestPS)' }) | Should -BeNullOrEmpty
         }
         # and no other runtime file loads an assembly
-        $others = @($script:Files | Where-Object { $_.FullName -notlike '*\engine\_shared\SI-MailPdf.ps1' } | Where-Object {
+        $others = @($script:Files | Where-Object { $_.FullName.Replace('/', '\') -notlike '*\engine\_shared\SI-MailPdf.ps1' } | Where-Object {
             @($script:Asts[$_.FullName].FindAll({ $args[0] -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $args[0].Static -and
                 ([string]$args[0].Member.Value) -in 'LoadFrom', 'LoadFile', 'UnsafeLoadFrom' }, $true)).Count })
         $others | Should -BeNullOrEmpty

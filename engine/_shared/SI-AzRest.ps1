@@ -964,7 +964,7 @@ function ConvertFrom-SILaQueryJson {
 function Get-SILaCompactRowType {
     <#
         #711. A .NET class for one column list: one public text property per column, in the column order, built from the
-        row's values in one call (new(string[])). Built once per column list and process (Add-Type, pwsh 7 / .NET 8) and
+        row's values in one call (new(string[])). Built once per column list and process (Add-Type, pwsh 7 / .NET 8+) and
         reused. $null when it cannot be built -- a column name that is not a plain identifier, two names that differ only in
         case (PowerShell reads properties without case), Windows PowerShell -- and the caller keeps PSCustomObject rows.
     #>

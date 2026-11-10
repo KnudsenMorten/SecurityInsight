@@ -103,7 +103,10 @@ Describe 'a deep build context is built from a short copy (Windows long paths)' 
             $script:Seen | Should -Be ([IO.Path]::GetFullPath($src).TrimEnd('\'))
         } finally { Remove-Item -LiteralPath $src -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    It 'the copy (robocopy) carries a path longer than 260 characters and leaves out .git, bin and obj' -Skip:(-not ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows)) {
+    # robocopy and the 260-character limit exist only on Windows: the test is DEFINED only there (a skip on the Linux test
+    # runner counts as a failure of the gate, and there is nothing to test on Linux -- the Linux path never stages)
+    if ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows) {
+    It 'the copy (robocopy) carries a path longer than 260 characters and leaves out .git, bin and obj' {
         $src = Join-Path ([IO.Path]::GetTempPath()) ('si-self-long-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
         $deep = $src
         while ($deep.Length -lt 250) { $deep = Join-Path $deep ('segment' + ('x' * 20)) }
@@ -125,6 +128,7 @@ Describe 'a deep build context is built from a short copy (Windows long paths)' 
                 [IO.File]::Exists('\\?\' + (Join-Path (Join-Path $stage $rel) 'rule.custom.sample.yaml')) | Should -BeTrue
             } finally { $null = & robocopy $src $stage /PURGE /NFL /NDL /NJH /NJS 2>&1; $global:LASTEXITCODE = 0; [IO.Directory]::Delete('\\?\' + $stage, $true) }
         } finally { if ([IO.Directory]::Exists('\\?\' + $src)) { [IO.Directory]::Delete('\\?\' + $src, $true) } }
+    }
     }
     It 'the product build paths use it: the engine image, the updater image, and the updater''s own builds' {
         $cu = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'setup\Invoke-SIContainerUpdate.ps1')

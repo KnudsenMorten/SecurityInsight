@@ -281,7 +281,7 @@ builder.Services.AddSingleton<SI.Management.Web.Exemptions.ExemptedPageFilter>()
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | (signinFront ? ForwardedHeaders.XForwardedHost : ForwardedHeaders.None);
-    o.KnownNetworks.Clear();
+    o.KnownIPNetworks.Clear();   // .NET 10: KnownNetworks is obsolete (ASPDEPR005); both name the same list
     o.KnownProxies.Clear();
 });
 

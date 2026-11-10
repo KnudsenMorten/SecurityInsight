@@ -5489,7 +5489,7 @@ $global:SI_Bootstrap_KedaMaxReplicas = 60
 **The image** therefore has no `Install-Module` layer:
 
 ```dockerfile
-FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:<digest>   # PowerShell 7.6 on .NET 10 (3.0.85; before: powershell:lts-ubuntu-22.04, 7.4)
 COPY . /app/
 ENTRYPOINT ["pwsh","-NoProfile","-File","/app/container/Start-SIInContainer.ps1"]
 ```

@@ -237,6 +237,9 @@ Describe 'one connect path: SI''s own REST client, with the Invardia support ses
         It 'no support session: the person signs in through SI''s own client; an Az PowerShell session is not borrowed' {
             Install-FakeAzSession
             Mock Connect-SISetupUser { [pscustomobject]@{ Account = 'me@contoso.example'; TenantId = $script:Tid; ObjectId = 'o'; Method = 'Browser' } }
+            # the mocked sign-in holds no tokens: the run's own sign-in state says "signed in", as after a real sign-in
+            # (2026-11-03: a person's connection this run does not hold is not a sign-in)
+            Mock Test-SISetupUserSignedIn { $true }
             $c = Connect-SISetupAzure -TenantId $script:Tid
             Should -Invoke Connect-SISetupUser -Times 1
             $c.SignInMethod | Should -Be 'Browser'

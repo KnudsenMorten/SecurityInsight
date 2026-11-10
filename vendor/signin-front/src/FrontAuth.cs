@@ -60,6 +60,11 @@ public static class FrontAuth
         o.SaveTokens = true;
         o.UseTokenLifetime = false;
         o.ClientSecret = null;
+        // 2.0.0 (.NET 10): ASP.NET Core 9 turned Pushed Authorization Requests on by default whenever the discovery document
+        // offers them. A pushed request is a back-channel call that must carry the client credential, and this front's
+        // only credential (the managed identity's assertion) is added by Microsoft.Identity.Web at the code redemption.
+        // Off: the sign-in request stays the front-channel redirect of 1.x, whatever the tenant's metadata says.
+        o.PushedAuthorizationBehavior = PushedAuthorizationBehavior.Disable;
         // 1.3.0 (framework §12.11g item 9): AT MOST ONE pending sign-in's correlation + nonce pair in a browser, living 15
         // minutes. Path "/" on purpose: the front SEES the older pairs on the next challenge and deletes them there (a pair
         // scoped to /signin-oidc would be invisible until the callback, and abandoned sign-ins would pile up on it -- past a

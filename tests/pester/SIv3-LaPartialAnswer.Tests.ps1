@@ -173,7 +173,7 @@ Describe 'too large for one answer: read again in parts -- never fewer rows, nev
         $err = $null; try { $null = Invoke-LogAnalyticsKqlQueryParted -WorkspaceResourceId $script:Ws -Query 'SI_X_CL' -What 'the lookup ''_x''' } catch { $err = $_ }
         $err | Should -Not -BeNullOrEmpty
         $script:Asked.Count | Should -Be 2 -Because 'the whole query and the first of 2 parts -- the work itself is the limit, more parts cannot help'
-        $err.Exception.Data['SIRACode'] | Should -Be 'si-ra-0302'
+        $err.Exception.Data['SIRALookupTooLarge'] | Should -BeTrue
         Test-RAReportCannotRunError -Err $err | Should -BeTrue
         Get-RABucketFailureAction -Err $err | Should -Be 'Fail'
         ConvertTo-RALookupUnavailableError -What 'the lookup' -Err $err | Should -BeNullOrEmpty -Because 'passed on as it is'

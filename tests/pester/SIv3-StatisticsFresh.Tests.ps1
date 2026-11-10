@@ -81,23 +81,21 @@ Describe 'STATIC: the schema, the grant and the runner' {
         @($script:SIEngineObjectGrants | Where-Object { $_.Object -eq 'sidata.StatisticsRefresh' -and $_.Verbs -eq 'EXECUTE' }).Count | Should -Be 1
         @($script:SIEngineObjectGrants | Where-Object { $_.Object -eq 'sidata.StatisticsRefreshTable' }).Count | Should -Be 0
     }
-    It 'the runner: the setting on every wake-up; the refresh when a run has ended -- ONCE, only after its publish, the lock beaten; on schedules only after a publish' {
+    It 'the runner: the setting on every wake-up; the refresh ONCE after a run, in the wake-up''s upkeep after the publish and its copies, beaten; on schedules only after a publish' {
         $f = $script:Flow
         $f | Should -Match ([regex]::Escape(". (Join-Path `$siRoot 'engine/_shared/data-sql/SI-DataStatistics.ps1')"))
-        $wake = $f.IndexOf('Invoke-SIDataStatisticsRefresh -Invoke $publishSql -AsyncOnly -Log $say')
-        $wake | Should -BeGreaterThan $f.IndexOf('Invoke-SIDataPublishRun -Invoke $publishSql -Source update')
+        $f | Should -Match ([regex]::Escape('if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -AsyncOnly -Log $say }'))
         $flowEnd = $f.IndexOf('$pipeResult = Invoke-SIJobFlow @pArgs')
         $pub = $f.IndexOf('Invoke-SIDataPublishRun -Invoke $publishSql -State $pipeResult')
-        $after = $f.IndexOf("Invoke-SIDataStatisticsRefresh -Invoke `$publishSql -When 'at the end of the run, after the pages moved to it' -Log `$say -Beat `$pipeBeat")
         $flowEnd | Should -BeGreaterThan 0
         $pub | Should -BeGreaterThan $flowEnd
-        $after | Should -BeGreaterThan $pub
-        # Invardia 2026-11-05: ONE refresh at the end of a run, only after the publish (before it, 640 s live held the pages)
+        # live 2026-11-09/10: the run's end no longer refreshes anything (it held the report, the lock and the waiting update back)
         $endOfRun = $f.Substring($flowEnd)
         $endOfRun = $endOfRun.Substring(0, $endOfRun.IndexOf('Get-SIJobFlowSummary -State $pipeResult'))
-        @([regex]::Matches($endOfRun, 'Invoke-SIDataStatisticsRefresh ')).Count | Should -Be 1 -Because 'exactly one end-of-run refresh'
-        $endOfRun.IndexOf('Invoke-SIDataStatisticsRefresh ') | Should -BeGreaterThan $endOfRun.IndexOf('Invoke-SIDataPublishRun ') -Because 'never before the publish'
-        $f | Should -Match ([regex]::Escape('if ($publishSql -and $statsOn -and $schedPub -and $schedPub.Published) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql'))
+        @([regex]::Matches($endOfRun, 'Invoke-SIDataStatisticsRefresh ')).Count | Should -Be 0 -Because 'the refresh is in the upkeep now'
+        # Invardia 2026-11-05: ONE refresh after a run, only after the publish -- the upkeep runs it after the copies, beaten
+        $f | Should -Match ([regex]::Escape("`$upkeepStats = { param(`$Beat) if (`$publishSql -and `$statsOn) { `$null = Invoke-SIDataStatisticsRefresh -Invoke `$publishSql -When 'after the run, once the pages moved to it' -Log `$say -Beat `$Beat } }"))
+        $f | Should -Match ([regex]::Escape('-Stats ([bool]($publishSql -and $statsOn -and $schedPub -and $schedPub.Published))'))
     }
 }
 

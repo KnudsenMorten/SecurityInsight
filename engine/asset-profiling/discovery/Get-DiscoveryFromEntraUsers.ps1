@@ -246,7 +246,9 @@ function Get-DiscoveryFromEntraUsers {
         # record (data-model/mappings/mdi.locked.json, part 'identity') -- service account, investigation priority
         # percentile, blast radius, risk, the on-premises object id. Captured only for a user the Entra collection holds,
         # so no CI is minted for an IdentityInfo row alone. No new read, no new permission.
-        if ($ii -and (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) {
+        # (never for a user in Entra ID's deleted items: its IdentityInfo row lags, and an active Defender for Identity link
+        # would keep the deleted user's CI active)
+        if ($ii -and -not [bool]$u.ENTRA_IsDeleted -and (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) {
             try { Add-SIRecordPart -Provider 'mdi' -RecordType 'user' -Key ([string]$u.id) -Part 'identity' -Object $ii } catch { }
         }
 
@@ -296,7 +298,15 @@ function Get-DiscoveryFromEntraUsers {
             ENTRA_JobTitle  = $u.jobTitle
             ENTRA_Department = $u.department
             ENTRA_Created   = $u.createdDateTime
+            # a user read from Entra ID's deleted items (the profile's DeletedDateTime; the CI takes it from the user's record)
+            ENTRA_IsDeleted       = [bool]$u.ENTRA_IsDeleted
+            ENTRA_DeletedDateTime = $u.deletedDateTime
             ENTRA_OnPrem    = if ($null -ne $u.onPremisesSyncEnabled) { [bool]$u.onPremisesSyncEnabled } else { $false }
+            # the user's on-premises AD ids as Graph gives them (the profile's OnPremSid / OnPremSamAccountName / OnPremDomainName):
+            # the SID is what tells a synced user from an AD-only account in the users count
+            ENTRA_OnPremSID            = $u.onPremisesSecurityIdentifier
+            ENTRA_OnPremSamAccountName = $u.onPremisesSamAccountName
+            ENTRA_OnPremDomainName     = $u.onPremisesDomainName
             ENTRA_Mail      = $u.mail
             ENTRA_UserType  = $u.userType
             ENTRA_LicenseCount = ($u.assignedLicenses | Measure-Object).Count

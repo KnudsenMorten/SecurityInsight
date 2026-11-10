@@ -211,35 +211,74 @@ if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase -and 
         $pubSrv = if ([string]$global:SI_Pro_DataSqlServer) { [string]$global:SI_Pro_DataSqlServer } else { [string]$global:SI_ProSqlServer }
         $pubDb = if ([string]$global:SI_Pro_DataSqlDatabase) { [string]$global:SI_Pro_DataSqlDatabase } else { [string]$global:SI_ProSqlDatabase }
         $publishSql = New-SIRecordSqlInvoke -Server $pubSrv -Database $pubDb
+        # #1159 (live 2026-11-09/10, four large installs): the seam above hands out no connections (no SIConnectionInfo), so the
+        # copies of the published run were refreshed by the database's procedure in ONE silent call -- no beat, no line -- and a
+        # large install's runner was stopped as dead 15 minutes into it, every later wake-up 30 minutes into the same call. The
+        # data seam carries SIConnectionInfo: the engine's range driver then refreshes range by range, beats the lock after every
+        # range and says its progress (Invoke-SIPublishedCopyRefresh). Not there = the seam above, as before.
+        try {
+            if (-not (Get-Command -Name New-SIDataSqlInvoke -ErrorAction SilentlyContinue)) {
+                . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
+                . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataSql.ps1')
+            }
+            $publishSql = New-SIDataSqlInvoke -Server $pubSrv -Database $pubDb -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint
+        } catch { & $say 'WARN' ('the copies the pages show are refreshed in one call in this wake-up ({0})' -f $_.Exception.Message) }
     } catch { & $say 'WARN' ('the run the web app shows is not moved by this wake-up ({0}) -- it keeps the last trusted run' -f $_.Exception.Message) }
 }
-# the update that brings the published run (SUP-2026-00204): an install with complete data and NOTHING published yet is
-# published once, here, by the first wake-up after it -- the newest complete collection, its CI and asset copies filled.
-# Every later wake-up only reads that a run is published. (The schema apply cannot: it runs as the updater, without EXECUTE.)
-if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -Source update -SolutionVersion $siVersion -Log $say }
 # 2026-11-05 (owner: "Fix code + refresh now"): the pages never wait for a statistic -- the database updates a stale one in the
 # background (engine/_shared/data-sql/SI-DataStatistics.ps1). One read when it is on already; set where the database's procedure
 # may change the database (made by setup's admin), left as it is where it may not (made by the updater). Says nothing.
 $statsOn = [bool](Get-Command -Name Invoke-SIDataStatisticsRefresh -ErrorAction SilentlyContinue)
 if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -AsyncOnly -Log $say }
-# #816 (owner 2026-10-20): a run that failed or was cancelled leaves its Detailed collection 'Loading' with all its rows, and
-# the collections' retention runs only at the end of a SUCCESSFUL data sync. So every wake-up while NO pipeline run is running
-# removes stopped runs' collections (and the older ones retention would), inside a time budget -- the published run's
-# collection and a result waiting for the data sync are never touched. Says only what it removed or what went wrong.
-# NO FRESH BEAT = DEAD: a clean-up pass (a wake-up during a run) beats its OWN lock -- taken by the container entry as its first
-# act, beaten here at once and with the clean-up's lines (at most once a minute), released at its end. A hung pass stops
-# beating, and the next wake-up stops it (engine\_shared\SI-ExecutionLiveness.ps1). Function blocks, not names: the beat runs
-# inside the clean-up's closures, which cannot see the functions this script dot-sourced.
-$hkLockStore = $null; $hkHolder = [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME
-$hkBeatFn = ${function:Update-SIExecutionLockBeat}; $hkBeatState = @{ Last = [datetime]::MinValue }
-if ($housekeepingOnly -and $HostKind -eq 'Container' -and $hkHolder -and $hkBeatFn) {
+
+# ---- THE WAKE-UP'S OWN BEAT (live 2026-11-09/10, four large installs: a wake-up refreshed the copies the pages show in one long
+# call before it took the queue or the waiting update, never beat, and was stopped as dead 30 minutes after its start -- every
+# 30 minutes, for 19 hours at one install). NO FRESH BEAT = DEAD (engine\_shared\SI-ExecutionLiveness.ps1): every long piece of
+# a wake-up beats a lock row that names this execution, at most once a minute, on progress only (a hung piece stops beating).
+#   * a wake-up during a run (housekeeping only): the clean-up's row 'housekeeping', taken by the container entry as its first act;
+#   * a full wake-up: its own row 'wakeup', taken here first and beaten through the upkeep after the queue (judged as a
+#     clean-up: it never holds another wake-up back). While it runs the queue, the install lock beats for it.
+# Released at the end. Function blocks, not names: the beat runs inside closures that cannot see this script's functions.
+$wkHolder = [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME
+$wkLock = if ($housekeepingOnly) { 'housekeeping' } else { 'wakeup' }
+$wkWhat = if ($housekeepingOnly) { 'clean-up of old data' } else { 'the wake-up''s upkeep: the copies the pages show, the clean-up of old data' }
+$wkBeatFn = ${function:Update-SIExecutionLockBeat}; $wkEnterFn = ${function:Enter-SIExecutionLock}
+$wkState = @{ Store = $null; Held = $false; Last = [datetime]::MinValue }
+if ($HostKind -eq 'Container' -and $wkHolder -and $wkBeatFn -and -not $Cancel) {
     try {
-        if ($proStore) { $hkLockStore = New-SIExecutionLockStore -Invoke $proStore.Invoke }
-        elseif ([string]$global:SI_StorageAccount) { $hkLockStore = New-SIExecutionLockStore -Docs (New-SIExecutionLockBlobDocs -Account ([string]$global:SI_StorageAccount)) }
-        if ($hkLockStore) { $null = & $hkBeatFn -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder -What 'clean-up of old data'; $hkBeatState.Last = [datetime]::UtcNow }
-    } catch { $hkLockStore = $null }
+        if ($proStore) { $wkState.Store = New-SIExecutionLockStore -Invoke $proStore.Invoke }
+        elseif ([string]$global:SI_StorageAccount) { $wkState.Store = New-SIExecutionLockStore -Docs (New-SIExecutionLockBlobDocs -Account ([string]$global:SI_StorageAccount)) }
+        if ($wkState.Store) {
+            $wkState.Held = if ($housekeepingOnly) { [bool](& $wkBeatFn -Store $wkState.Store -Lock $wkLock -Holder $wkHolder -What $wkWhat) }
+                            else { [bool](& $wkEnterFn -Store $wkState.Store -Lock $wkLock -Holder $wkHolder -What $wkWhat) }
+            if ($wkState.Held) { $wkState.Last = [datetime]::UtcNow }
+        }
+    } catch { $wkState.Held = $false }
 }
-if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
+$wkBeat = {
+    if (-not $wkState.Store -or -not $wkState.Held -or ([datetime]::UtcNow - $wkState.Last).TotalSeconds -lt 60) { return }
+    try { if (& $wkBeatFn -Store $wkState.Store -Lock $wkLock -Holder $wkHolder -What $wkWhat) { $wkState.Last = [datetime]::UtcNow } } catch { }
+}.GetNewClosure()
+$wkRelease = { if ($wkState.Store -and $wkState.Held) { Exit-SIExecutionLock -Store $wkState.Store -Lock $wkLock -Holder $wkHolder; $wkState.Held = $false } }
+
+# ---- THE UPKEEP (Invoke-SIPipelineUpkeep): a full wake-up runs it AFTER the queue and the update hand-off (Get-SIPipelineUpkeepDecision);
+# a wake-up during a run runs only the clean-up.
+# (a) the copies the pages show (#881): the published run's copies caught up when they are older than it, range by range, each
+#     range beating the wake-up's row; an install with complete data and NOTHING published yet is published once, here
+#     (SUP-2026-00204; the schema apply cannot: it runs as the updater, without EXECUTE). A run's end moves only the pointer --
+#     its copies follow here, after the lock was released and a waiting update was started.
+$upkeepCatchUp = { param($Beat) if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -Source update -SolutionVersion $siVersion -Log $say -Beat $Beat } }
+# (b) 2026-11-05 STATISTICS KEPT FRESH (engine/_shared/data-sql/SI-DataStatistics.ps1): ONE refresh after a run, ONLY AFTER its
+#     publish and the copies (Invardia, framework owner: the pages move to a run only at the publish), table by table, beaten
+#     between tables. An update that waits goes first: the updater was started, and the upkeep is left to the next wake-up.
+$upkeepStats = { param($Beat) if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the run, once the pages moved to it' -Log $say -Beat $Beat } }
+# (c) #816 (owner 2026-10-20): a run that failed or was cancelled leaves its Detailed collection 'Loading' with all its rows, and
+#     the collections' retention runs only at the end of a SUCCESSFUL data sync. So every wake-up removes stopped runs'
+#     collections (and the older ones retention would), inside a time budget -- the published run's collection and a result
+#     waiting for the data sync are never touched. Says only what it removed or what went wrong; beats with its lines.
+$upkeepCleanup = {
+    param($Beat)
+    if (-not ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase)) { return }
     try {
         if (-not (Get-Command -Name Invoke-SIDataStoppedRunCleanup -ErrorAction SilentlyContinue)) {
             . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
@@ -249,9 +288,10 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
         $cleanDb = if ([string]$global:SI_Pro_DataSqlDatabase) { [string]$global:SI_Pro_DataSqlDatabase } else { [string]$global:SI_ProSqlDatabase }
         $cleanSql = New-SIDataSqlInvoke -Server $cleanSrv -Database $cleanDb -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint
         # the pacing's own line ('pacing: ...', one a minute at most) goes through: the log shows when the clean-up waits
+        $cleanSay = $say
         $cleanLog = { param([string]$level, [string]$msg)
-            if ($hkLockStore -and ([datetime]::UtcNow - $hkBeatState.Last).TotalSeconds -ge 60) { try { $null = & $hkBeatFn -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder -What 'clean-up of old data'; $hkBeatState.Last = [datetime]::UtcNow } catch { } }
-            if ($level -ne 'INFO' -or $msg -match 'still loading' -or $msg -match '^pacing:') { & $say $(if ($level -eq 'OK') { 'INFO' } else { $level }) $msg } }.GetNewClosure()
+            if ($Beat) { try { $null = & $Beat } catch { } }
+            if ($level -ne 'INFO' -or $msg -match 'still loading' -or $msg -match '^pacing:') { & $cleanSay $(if ($level -eq 'OK') { 'INFO' } else { $level }) $msg } }.GetNewClosure()
         # on its own schedules a job runs without a pipeline run record, so "no run is running" proves nothing: the idle rule is off
         $idleHours = if ($pipeDefinition.Mode -eq 'schedules') { 0 } else { 24 }
         # #882: while a run is going, the 'Loading' collections no live run owns are marked at once -- which run owns which is
@@ -268,9 +308,10 @@ if ($proStore -and [string]$global:SI_ProSqlServer -and [string]$global:SI_ProSq
         $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
-# #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) has done its one job -- the housekeeping above; it starts nothing
+# #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) does its one job -- the clean-up; it starts nothing
 if ($housekeepingOnly) {
-    if ($hkLockStore) { Exit-SIExecutionLock -Store $hkLockStore -Lock 'housekeeping' -Holder $hkHolder }
+    $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -Cleanup $upkeepCleanup -Log $say
+    & $wkRelease
     & $say 'INFO' 'a wake-up during a run: the housekeeping is done for this wake-up; it starts nothing -- the running run goes on'
     exit 0
 }
@@ -278,9 +319,11 @@ if ($pipeDefinition.Mode -eq 'schedules' -and -not $pipeRequest -and -not $Cance
     & $say 'INFO' 'this install runs its jobs on their own schedules (Operations > Jobs: Schedules) -- the pipeline does nothing.'
     # no pipeline run judges the data here: the web app moves to the newest complete collection newer than the one it shows
     $schedPub = $null
-    if ($publishSql) { $schedPub = Invoke-SIDataPublishRun -Invoke $publishSql -Source schedules -SolutionVersion $siVersion -Log $say }
-    # a newer collection is shown: its statistics (and the copies' just refreshed) brought up to date -- never fails the wake-up
-    if ($publishSql -and $statsOn -and $schedPub -and $schedPub.Published) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the newest collection was shown' -Log $say }
+    if ($publishSql) { $schedPub = Invoke-SIDataPublishRun -Invoke $publishSql -Source schedules -SolutionVersion $siVersion -Log $say -Beat $wkBeat }
+    # the copies, then (a newer collection is shown) its statistics, then the clean-up -- never fails the wake-up
+    $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -CatchUp $upkeepCatchUp -Statistics { param($Beat) $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the newest collection was shown' -Log $say -Beat $Beat } `
+        -Stats ([bool]($publishSql -and $statsOn -and $schedPub -and $schedPub.Published)) -Cleanup $upkeepCleanup -Log $say
+    & $wkRelease
     exit 0
 }
 
@@ -497,28 +540,19 @@ $pipeRunOne = {
     if (-not $pipeResult -or $pipeResult.Outcome -in @('Busy', 'Wait', 'Done')) { return $pipeResult }
     # ONE TRUSTED RUN: the run has ended -- the web app moves to it only when it is trusted; otherwise it keeps the last
     # trusted run, and the reason is kept for the banner and Operations (the 'refused' row)
-    # 2026-10-24: the run's publish copy can take 15-50 minutes -- its progress keeps THIS runner's lock alive (same holder,
-    # the expiry moves), so the next wake-up never starts a run beside it; a copy that dies stops beating and the lock
-    # lapses after its 15 minutes, as before
-    # #1129 (live 2026-11-05): built by New-SIPipelineLockBeat -- the closure made here saw $null for $control / $lockHolder
-    # (they live in this script's scope, not in this block's), so no beat ever renewed the lock and a failing beat was silent
+    # LIVE 2026-11-09/10 (four large installs): the run's end refreshed the copies the pages show in one long call that never
+    # beat (the runner's seam handed out no connections, so the range driver never ran), and the runner was stopped as dead
+    # 15 minutes after its last step -- before its report, its lock release and the waiting update. THE RUN'S END NOW: the
+    # lock beaten, the decision and the pointer only (-SkipCopyCatchUp), the run's report; then the drain hands a waiting
+    # update over and releases the lock; the copies and the statistics follow in the same wake-up's upkeep, under its own
+    # beat (Get-SIPipelineUpkeepDecision / Invoke-SIPipelineUpkeep). The run record was closed before (Invoke-SIJobFlow).
+    # #1129 (live 2026-11-05): the beat is built by New-SIPipelineLockBeat (a closure made here saw $null for $control / $lockHolder)
     $pipeBeat = New-SIPipelineLockBeat -Control $control -Holder $lockHolder -FlowRunId ([string]$pipeResult.FlowRunId) -What ('publishing run {0}' -f $pipeResult.FlowRunId) -Log $say
-    if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -State $pipeResult -Map (Get-SIJobFlowMap) -Previous $PipePrev -SolutionVersion $siVersion -Log $say -Beat $pipeBeat }
-    # 2026-11-05 STATISTICS KEPT FRESH (engine/_shared/data-sql/SI-DataStatistics.ps1): ONE refresh, ONLY AFTER the publish
-    # (Invardia, framework owner: measured live, a refresh before the publish took 640 s at an S2 database and held the pages back
-    # -- they move to a run only at the publish). After it, every step that writes has finished and the published copies were
-    # just refreshed, so one refresh covers the source tables and the copies. Any run (a run that is not shown wrote rows all the
-    # same). Table by table, the lock beaten between them; never fails the run (a failure is one warning: a page is slower, never
-    # wrong). #1129 (live 2026-11-05): an update that waits for THIS run goes first -- the refresh (maintenance, not data) is left
-    # to the next run's end; the publish always runs. The mark is read once, after the publish; a mark that cannot be read
-    # changes nothing.
-    $pipeStats = [bool]($publishSql -and $statsOn)
-    if ($pipeStats -and $updateWaits) {
-        $pipeUpdFirst = ''
-        try { $pipeUpdFirst = Get-SIPipelineEndOfRunUpdateFirst -Waits (& $updateWaits) } catch { $pipeUpdFirst = '' }
-        if ($pipeUpdFirst) { & $say 'INFO' $pipeUpdFirst; $pipeStats = $false }
-    }
-    if ($pipeStats) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'at the end of the run, after the pages moved to it' -Log $say -Beat $pipeBeat }
+    $null = & $pipeBeat
+    if ($publishSql) { $null = Invoke-SIDataPublishRun -Invoke $publishSql -State $pipeResult -Map (Get-SIJobFlowMap) -Previous $PipePrev -SolutionVersion $siVersion -Log $say -Beat $pipeBeat -SkipCopyCatchUp }
+    # 2026-11-05 STATISTICS KEPT FRESH: ONE refresh after the run, ONLY AFTER the publish and its copies (Invardia, framework owner)
+    # -- in the wake-up's upkeep now. An update that waits for THIS run goes first (#1129): the updater is started and the upkeep
+    # is left to the next wake-up.
     # #277: the run's guards (a missed scheduled start, skipped / interrupted steps) mail and report themselves. A start that
     # was late ONLY because the previous run was still going is not one of them: the run's note says it, no guard event
     if (Get-Command -Name Invoke-SIGuardCalls -ErrorAction SilentlyContinue) { $null = Invoke-SIGuardCalls -Calls @(Get-SIGuardCallsForFlow -Result $pipeResult) -Common @{ Engine = 'flow'; RunId = [string]$pipeResult.FlowRunId; Invoke = $(if ($proStore) { $proStore.Invoke } else { $null }) } }
@@ -849,6 +883,19 @@ try {
     }
     exit 1
 }
+# ---- THE UPKEEP, after the queue and the update hand-off (live 2026-11-09/10): the copies the pages show, the statistics after
+# a run, the clean-up of old data -- under the wake-up's own row 'wakeup' (taken again here: a long run lets it go stale). Held
+# by another live wake-up = that one does it. Never fails the wake-up.
+$upkeepDo = Get-SIPipelineUpkeepDecision -Drain $drain
+if ($upkeepDo.Run) {
+    $upkeepMine = $true
+    if ($wkState.Store) {
+        try { $wkState.Held = [bool](& $wkEnterFn -Store $wkState.Store -Lock $wkLock -Holder $wkHolder -What $wkWhat) } catch { $wkState.Held = $false }
+        if ($wkState.Held) { $wkState.Last = [datetime]::UtcNow } else { $upkeepMine = $false; & $say 'INFO' 'another wake-up is bringing the copies the pages show and the clean-up of old data up to date -- this one leaves it to it' }
+    }
+    if ($upkeepMine) { $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -CatchUp $upkeepCatchUp -Statistics $upkeepStats -Stats ([bool]$upkeepDo.Stats) -Cleanup $upkeepCleanup -Log $say }
+} elseif ($upkeepDo.Why) { & $say 'INFO' $upkeepDo.Why }
+& $wkRelease
 # #277: a busy wake-up is normal operation (every 5 minutes of a long run) -- one INFO line, no row, not a guard. A Run now
 # that waits in the queue is recorded once ("queued") so it is visible.
 if ($drain.Outcome -in @('Busy', 'Blocked')) {

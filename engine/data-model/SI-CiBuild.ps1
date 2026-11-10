@@ -227,6 +227,14 @@ function Test-SIRecordAdAccountAsDevice {
     $true
 }
 
+function Test-SIRecordDeletedInSource {
+    <# PURE. Does this record's own source list the object as deleted (si_source_deleted_at, Entra ID's deleted items)? #>
+    param($Record)
+    if ($null -eq $Record) { return $false }
+    $v = Get-SIItemValue $Record 'si_source_deleted_at'
+    ($null -ne $v -and "$v" -ne '')
+}
+
 function Get-SIRecordLink {
     <#
         PURE. One record's link state with its evidence: @{ State (active | not_seen | frozen | gone); Reason ('' when active) }.
@@ -254,6 +262,14 @@ function Get-SIRecordLink {
     $p = [string](Get-SIItemValue $Record 'si_provider')
     if ([string](Get-SIItemValue $Record 'si_onboarding_status') -eq 'offboarded') { return [pscustomobject]@{ State = 'gone'; Reason = ('{0} says it is offboarded' -f $p) } }
     if (Test-SIRecordAdAccountAsDevice $Record) { return [pscustomobject]@{ State = 'gone'; Reason = 'an Active Directory computer account, not a device of its own (#1052) -- its facts go to its Defender device when the match is safe' } }
+    # the source itself lists this object as deleted (a user in Entra ID's deleted items): positive evidence, not an absence.
+    # Not a setting: only whether deleted users are read at all is the customer's choice. A restored user is listed again without it.
+    if (Test-SIRecordDeletedInSource $Record) {
+        $delLabel = $p; if ($p -eq 'entra') { $delLabel = 'Entra ID' }
+        $delAt = ConvertTo-SIUtcOrNull (Get-SIItemValue $Record 'si_source_deleted_at')
+        $delOn = ''; if ($null -ne $delAt) { $delOn = ' on ' + ([datetime]$delAt).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) }
+        return [pscustomobject]@{ State = 'gone'; Reason = ('deleted in {0}{1} (in its deleted items)' -f $delLabel, $delOn); Deleted = [string]$delLabel }
+    }
     $t = ConvertTo-SIUtcOrNull (Get-SIItemValue $Record 'si_collection_time')
     $fl = $null; if ($FeedLatest) { $fl = $FeedLatest[(Get-SIRecordFeed $Record)] }
     $fmt = { param($d) ([datetime]$d).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) }
@@ -527,6 +543,7 @@ function New-SICiDocument {
     $class = 'identity'; $bestRank = 99
     $cands = New-Object System.Collections.Generic.List[object]
     $links = New-Object System.Collections.Generic.List[object]
+    $adAccounts = New-Object System.Collections.Generic.List[object]
     foreach ($r in $Records) {
         $rc = [string](Get-SIItemValue $r 'si_class')
         $rk = Get-SICiClassRank $rc
@@ -546,6 +563,13 @@ function New-SICiDocument {
         if ($ls.PSObject.Properties['Deleted'] -and $ls.Deleted) { $lo | Add-Member -NotePropertyName 'deleted' -NotePropertyValue ([string]$ls.Deleted) }
         $links.Add($lo)
         $cands.Add([pscustomobject]@{ Record = $r; Provider = $p; Key = $key; State = $state })
+        if ($p -eq 'eg' -and $state -eq 'active' -and [string](Get-SIItemValue $r 'si_primary_provider') -ieq 'ActiveDirectory') { $adAccounts.Add($lo) }
+    }
+    # A LIVE ACTIVE DIRECTORY ACCOUNT IS NOT DELETED WITH ITS ENTRA USER: a user Entra ID lists as deleted whose account is still
+    # active in Active Directory (Exposure Graph, primary provider ActiveDirectory) keeps its CI active -- findings about the
+    # live account never close. Marked only then, so no other CI changes (Get-SICiLifecycle).
+    if ($adAccounts.Count -gt 0 -and @($links | Where-Object { $_.PSObject.Properties['deleted'] }).Count -gt 0) {
+        foreach ($al in $adAccounts) { $al | Add-Member -NotePropertyName 'ad_account' -NotePropertyValue $true }
     }
     # primary link per provider: active first, then the newest -- #1052 an AD computer account's link is never the primary
     # one while the provider has another (si_link_eg names the device's own graph node, which the reports join by)

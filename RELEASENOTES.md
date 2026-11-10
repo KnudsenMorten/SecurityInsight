@@ -13,6 +13,36 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.81 — Large installs finish their runs and stay ready for the next one
+
+### Fixes
+
+- At the end of a run on a large install, the pages now catch up with the new run in steps that report their progress.
+  Before, one long silent step at the end could be taken for a hang and stopped, so the pages kept older data and the next
+  run and the waiting update could not start.
+- An update that waits for a run is now installed right after the run ends, before the pages catch up and before any
+  other run starts.
+- A run that ended while its runner was stopped is now closed at once, so the next run is not held back.
+## v3.0.80 — Deleted users, your correlation decisions, and reports that are never blank and complete
+
+### Fixes
+
+- A user Microsoft Entra ID lists as deleted is no longer shown as an active identity. It is retired at once and its
+  findings close as "asset deleted in Entra ID", never as fixed. A user that is restored comes back by itself. If another
+  source still sees the account, or its Active Directory account is still live, it stays active. Expect a one-time
+  retirement of these identities at the first run after this update; the run log states how many.
+- Your correlation decisions (never merge, always merge, keep this id) now apply to the assets themselves, not only to
+  the correlation map. An install with no decisions is unaffected. When a decision splits an asset, findings that move
+  with it never read as fixed.
+- A report whose lookup could not be read now ends as not complete and keeps its last complete result. Previously it could
+  finish as complete with some columns left empty.
+- A large report that does not fit in one answer now keeps going while it is making progress, and says plainly whether the
+  service was briefly unavailable or the report is too large.
+- Users synchronised from Active Directory are no longer counted twice in the users count, so that number can fall at
+  hybrid installs.
+- During a move to the standard identity names, a run that failed for another reason, such as a platform timeout, is no
+  longer reported as a problem with the new identity.
+
 ## v3.0.79 — A replaced device record no longer shows old vulnerabilities
 
 ### Fixes

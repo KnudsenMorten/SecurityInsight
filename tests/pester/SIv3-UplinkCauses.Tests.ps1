@@ -89,6 +89,13 @@ Describe 'the cause and the code of one report' {
         @{ State = 'Failed'; Why = 'it failed: The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing. TaskCanceledException'; Code = 'si-ra-0904'; Cls = 'platform-timeout'; Name = '' }
         @{ State = 'NotApplicable'; Why = 'SI-RA: advanced hunting is not provisioned in this tenant'; Code = 'si-ra-0901'; Cls = 'no-data-source'; Name = 'defender-xdr' }
         @{ State = 'Failed'; Why = 'it is not in this run'; Code = 'si-ra-0900'; Cls = 'query-defect'; Name = '' }
+        # a SQL statement's temporary answer that arrived without its tag is the platform's; a text the test does not know stays unknown
+        @{ State = 'Failed'; Why = 'it failed: Exception calling "ExecuteScalar" with "3" argument(s): "The log for database ''x'' is not available."'; Code = 'si-ra-0904'; Cls = 'platform-timeout'; Name = '' }
+        @{ State = 'Failed'; Why = 'it failed: Exception calling "ExecuteScalar" with "3" argument(s): "The database did something this test has never seen."'; Code = 'si-ra-0900'; Cls = 'query-defect'; Name = '' }
+        # a read no number of parts makes fit has its own code; the service's words it quotes do not decide
+        @{ State = 'Failed'; Why = "its query could not be sent: the lookup '_ciPeer' is more than Log Analytics can answer: read in 8 part(s), a part still stopped at the service's limit before it returned a row, so reading it in more parts cannot make it fit -- Log Analytics returned a PARTIAL answer (x: out of memory) -- Query execution has exceeded the allowed limits"; Code = 'si-ra-0302'; Cls = 'too-large'; Name = 'log-analytics-answer' }
+        # a read that ended while the service was short of memory is the platform's, never too large
+        @{ State = 'Failed'; Why = "it was not run: a lookup this report needs could not be read (the lookup '_ciPeer') -- Log Analytics is temporarily unavailable for it: it was short of memory each time it was asked, also after waiting. The findings are unknown for this run, not resolved."; Code = 'si-ra-0904'; Cls = 'platform-timeout'; Name = '' }
         # 3.0.30: a full database is its own known cause (the catalogue's si-data-1404), never the unknown si-ra-0900
         @{ State = 'Failed'; Why = "it failed: SQL error 40544 (line 1): The database 'sqldb-si' has reached its size quota. Partition or delete data, drop indexes, or consult the documentation for possible resolutions."; Code = 'si-data-1404'; Cls = 'too-large'; Name = 'database' }
         @{ State = 'Failed'; Why = 'it failed: Could not allocate space for object in database because the PRIMARY filegroup is full (1105)'; Code = 'si-data-1404'; Cls = 'too-large'; Name = 'database' }
@@ -209,6 +216,35 @@ Describe 'Reports[] -- the shape and the rules' {
         $null = Limit-SIUplinkRecordSize -Record $rec
         [System.Text.Encoding]::UTF8.GetByteCount(($rec | ConvertTo-Json -Depth 8 -Compress)) | Should -BeLessOrEqual 15000
         @($rec.Reports).Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'SQL''s own error number: the log and the Detail only' {
+    BeforeAll {
+        $script:SqlFact = [pscustomobject]@{ Report = 'R_Detailed'; State = 'Failed'; Why = 'it failed: Exception calling "ExecuteScalar" with "3" argument(s): "Something the database said."'; SqlNumbers = '9001,3314' }
+    }
+    It 'an identified record''s Detail carries it, in front of the engine''s line' {
+        $i = @(ConvertTo-SIUplinkReports -Facts @($script:SqlFact) -Identified -Version '3.0.0')[0]
+        $i.Detail | Should -Match 'SQL 9001,3314: it failed'
+    }
+    It 'an anonymous record has no text at all' {
+        $i = @(ConvertTo-SIUplinkReports -Facts @($script:SqlFact) -Version '3.0.0')[0]
+        $i.PSObject.Properties['Detail'] | Should -BeNullOrEmpty
+    }
+    It 'anything but numbers is left out' {
+        $f = [pscustomobject]@{ Report = 'R_Detailed'; State = 'Failed'; Why = 'it failed: x'; SqlNumbers = 'not a number' }
+        $i = @(ConvertTo-SIUplinkReports -Facts @($f) -Identified -Version '3.0.0')[0]
+        $i.Detail | Should -Not -Match 'SQL not'
+    }
+    It 'the report''s facts carry it beside the reason, and the reason stays without it' {
+        $f = @(Get-SIReportCauseFacts -Notes @{ R = @{ SqlNumbers = '9001' } } -Failures @(@{ Report = 'R'; Why = 'it failed: x' }))[0]
+        $f.SqlNumbers | Should -Be '9001'
+        $f.Why | Should -Be 'it failed: x'
+    }
+    It 'the report loop notes it apart from the reason it records (source)' {
+        $eng = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
+        $eng | Should -Match 'Set-RAReportNote -ReportName \(\[string\]\$ReportName\) -Values @\{ SqlNumbers = \[string\]\$__sqlNumbers \}'
+        $eng | Should -Match ([regex]::Escape('-Reason ("it failed: {0}" -f $_.Exception.Message)'))
     }
 }
 

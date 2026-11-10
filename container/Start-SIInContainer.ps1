@@ -401,6 +401,12 @@ if ($guardJob -and $guardExec -and $guardSub -and $guardRg -and (Get-OptionalEnv
                     -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warning ('[flow] ' + $m) } else { Write-Host ('[flow] ' + $m) } } `
                     -Stop { param($n) $null = Invoke-SIArm -Method POST -Path (Get-SIExecutionStopPath -Base ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $guardSub, $guardRg) -Job $guardJob -Execution $n) -Body @{} } `
                     -Alert { param($ev) if (-not (Get-Command -Name Get-SITelemetryContext -ErrorAction SilentlyContinue)) { try { . (Join-Path $PSScriptRoot '../engine/_shared/SI-TelemetrySend.ps1') } catch { } }; $null = Send-SIExecutionStoppedAlert -Event $ev }
+                # live 2026-11-09/10: the install lock of a runner just stopped is freed in the same step (only while it still
+                # holds it) -- the runner below takes the queue at once: it closes the request of a run that ended and resumes
+                # one that did not, instead of the lock lapsing 15 minutes later
+                foreach ($gs in @($guardStop.Stopped)) {
+                    if ($guardLockStore -and (Exit-SIExecutionInstallLockOf -Store $guardLockStore -Holder ([string]$gs.Name))) { Write-Host ('[flow] the install''s lock of the stopped runner {0} is released -- the waiting work goes on in this wake-up' -f [string]$gs.Name) }
+                }
                 # a stop that failed (and is not past the 6-hour fallback) still holds this wake-up back: never two runs side by side
                 $guardOther = if ($guardLive.Other) { $guardLive.Other } elseif (@($guardStop.Blocking).Count) { @($guardStop.Blocking)[0].Execution } else { $null }
             } else { $guardOther = $guardLive.Other }

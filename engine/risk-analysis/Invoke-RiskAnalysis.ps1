@@ -2509,8 +2509,9 @@ $global:RA_TemplateReportNames = @($incNamesForLog)
 # keeping those in step across ~6,000 customer estates is not achievable -- they drift silently.
 # The resolver is keyed on identity SOURCE PRIORITY (exact name -> short name -> ARM parent/child),
 # never on resource type, so it holds for an estate this code has never seen.
-# 🔒 Non-fatal by design: a customer may not run every engine, and a report that cannot resolve an
-# id must still ship its findings. A failure here degrades to today's behaviour, it never stops a run.
+# 🔒 Never stops a run: a customer may not run every engine, and a table that does not exist has no
+# assets. A table that exists and could not be read is different -- the summary reports, which fill
+# their asset ids from this map, end not complete until it can be read (Assert-SIAssetIdentityMapRead).
 if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_WorkspaceResourceId)) {
     try {
         $global:RA_CiIndex = $null   # v3: the CI index is read once per run (RA-CiContext.ps1)
@@ -4630,6 +4631,8 @@ foreach ($includeItem in $script:RALoopList) {
         if ($null -ne $global:RA_RowCountsThisRun) { $global:RA_RowCountsThisRun[[string]$ReportName] = 0 }
         if ($null -ne $global:RA_ColumnFillThisRun) { $global:RA_ColumnFillThisRun.Remove([string]$ReportName) }
     }
+    # After the report's stream start, so "the report failed" below removes THIS report's rows and no other's
+    if (Get-Command -Name Assert-SIAssetIdentityMapRead -ErrorAction SilentlyContinue) { Assert-SIAssetIdentityMapRead -ReportName ([string]$ReportName) -WorkspaceResourceId ([string]$global:SI_WorkspaceResourceId) }
 
     if ($effectiveUseBucket -and $querySupportsBucket -and $effectiveBucketCount -gt 1) {
 
@@ -6157,6 +6160,11 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
     # etc.) kills the whole loop -- we'd lose the other 54 reports' output.
     # Log the error with the report name and continue with the next report.
     Write-Warn2 ("report failed -- skipping: {0}: {1}" -f $ReportName, $_.Exception.Message)
+    # SQL's own error number, which the driver's message does not carry: the log and the uplink's Detail only, never the reason below
+    if (Get-Command -Name Get-SISqlErrorNumbers -ErrorAction SilentlyContinue) {
+        $__sqlNumbers = Get-SISqlErrorNumbers -ErrorRecord $_
+        if ($__sqlNumbers) { Write-Info ("report '{0}': the database answered with error number(s) {1}" -f $ReportName, $__sqlNumbers); Set-RAReportNote -ReportName ([string]$ReportName) -Values @{ SqlNumbers = [string]$__sqlNumbers } }
+    }
     # #638: a part of a report never goes out as the report -- what its buckets already wrote is removed
     if ($script:RAStreamOn) { try { Clear-RAStreamReport -Stream $script:RAStream -Why 'the report failed' } catch { Set-RAReportRowsHeld -Cause $_.Exception.Message } }
     Add-RAReportFailure -ReportName ([string]$ReportName) -Reason ("it failed: {0}" -f $_.Exception.Message)

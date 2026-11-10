@@ -153,7 +153,7 @@ Describe '🔒 The diagnostic capture that produced the fixture stays inert by d
         # that implements the guard correctly -- a check that indicts its own subject teaches nothing.
         $setters = New-Object System.Collections.ArrayList
         foreach ($f in (Get-ChildItem -Path $script:SIRootDir -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue |
-                            Where-Object { $_.FullName -notmatch '\\tests\\' })) {
+                            Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' })) {
             $raw = [System.IO.File]::ReadAllText($f.FullName)
             if ($raw -notmatch 'SI_RA_DumpAugmentInput') { continue }
             $noBlocks = [regex]::Replace($raw, '(?s)<#.*?#>', '')

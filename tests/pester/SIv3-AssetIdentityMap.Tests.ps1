@@ -101,6 +101,86 @@ Describe 'the asset-identity resolver -- lookup priority' {
     }
 }
 
+Describe 'a table the map could not read is never taken as no assets' {
+    BeforeAll {
+        function script:Write-Info { param($m) }
+        function script:Write-Warn2 { param($m) $script:Warned.Add([string]$m) }
+        function script:Test-RANoDataSource { param($Message) [string]$Message -match 'Failed to resolve table' }
+        function script:Invoke-LogAnalyticsKqlQueryParted {
+            param($WorkspaceResourceId, $Query, $What)
+            $script:Asked.Add([string]$What)
+            foreach ($t in @($script:Fail.Keys)) { if ($Query -match $t) { throw $script:Fail[$t] } }
+            $k = if ($Query -match 'SI_Endpoint') { 'e' } elseif ($Query -match 'SI_Azure') { 'a' } else { 'i' }
+            , @([pscustomobject]@{ SI_AssetName = "host-$k"; SI_AssetId = "id-$k"; Seen = '2026-11-01T00:00:00Z'; AssetType = 'x'; AzureResourceId = ''; EgNodeId = '' })
+        }
+        $script:Ws = '/subscriptions/x/workspaces/w'
+    }
+    BeforeEach {
+        $script:Warned = New-Object System.Collections.Generic.List[string]
+        $script:Asked = New-Object System.Collections.Generic.List[string]
+        $script:Fail = @{}
+    }
+    It 'a table that timed out: the other tables are mapped, a summary report ends not complete' {
+        $script:Fail['SI_Azure'] = 'Request timed out'
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        (Resolve-SIAssetIdentity -Name 'host-e').Id | Should -Be 'id-e'
+        $err = $null; try { Assert-SIAssetIdentityMapRead -ReportName 'X_Summary' -WorkspaceResourceId '' } catch { $err = $_ }
+        $err.Exception.Data['SIRALookupUnavailable'] | Should -BeTrue
+        $err.Exception.Message | Should -Match 'a lookup this report needs could not be read'
+    }
+    It 'a table too large for any number of parts is the same' {
+        $tooLarge = New-Object System.InvalidOperationException('the asset identities are more than Log Analytics can answer')
+        $tooLarge.Data['SIRALookupTooLarge'] = $true
+        $script:Fail['SI_Identity'] = $tooLarge
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        { Assert-SIAssetIdentityMapRead -ReportName 'X_Summary_Y' -WorkspaceResourceId '' } | Should -Throw '*could not be read*'
+    }
+    It 'a detailed report is not held for it and asks nothing' {
+        $script:Fail['SI_Azure'] = 'Request timed out'
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        $script:Asked.Clear()
+        { Assert-SIAssetIdentityMapRead -ReportName 'X_Detailed_Y' -WorkspaceResourceId $script:Ws } | Should -Not -Throw
+        $script:Asked.Count | Should -Be 0
+    }
+    It 'the next report asks only the unread table again; once it reads, the map is whole and nothing more is asked' {
+        $script:Fail['SI_Azure'] = 'Request timed out'
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        $script:Fail.Clear(); $script:Asked.Clear()
+        { Assert-SIAssetIdentityMapRead -ReportName 'X_Summary' -WorkspaceResourceId $script:Ws } | Should -Not -Throw
+        @($script:Asked) | Should -Be @('the asset identities of SI_Azure_Profile_CL')
+        (Resolve-SIAssetIdentity -Name 'host-a').Id | Should -Be 'id-a'
+        (Resolve-SIAssetIdentity -Name 'host-e').Id | Should -Be 'id-e'
+        $script:Asked.Clear()
+        Assert-SIAssetIdentityMapRead -ReportName 'X_Summary' -WorkspaceResourceId $script:Ws
+        $script:Asked.Count | Should -Be 0
+    }
+    It 'still unread on the next report: asked again, never remembered as no assets' {
+        $script:Fail['SI_Azure'] = 'Request timed out'
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        $script:Asked.Clear()
+        { Assert-SIAssetIdentityMapRead -ReportName 'X_Summary' -WorkspaceResourceId $script:Ws } | Should -Throw '*could not be read*'
+        @($script:Asked) | Should -Be @('the asset identities of SI_Azure_Profile_CL')
+    }
+    It 'a table that does not exist has no assets: no report is held and it is not asked again (control)' {
+        $script:Fail['SI_Azure'] = "Failed to resolve table or column expression named 'SI_Azure_Profile_CL'"
+        Initialize-SIAssetIdentityMap -WorkspaceResourceId $script:Ws -Force
+        $script:Asked.Clear()
+        { Assert-SIAssetIdentityMapRead -ReportName 'X_Summary' -WorkspaceResourceId $script:Ws } | Should -Not -Throw
+        $script:Asked.Count | Should -Be 0
+    }
+    It 'which reports need the map: the summary names only' {
+        Test-SIAssetIdentityMapNeeded -ReportName 'A_Summary' | Should -BeTrue
+        Test-SIAssetIdentityMapNeeded -ReportName 'A_Summary_B' | Should -BeTrue
+        Test-SIAssetIdentityMapNeeded -ReportName 'A_Detailed_B' | Should -BeFalse
+    }
+    It 'the report loop checks it after the report''s stream start, so a failure removes only that report''s rows (source)' {
+        $eng = Get-Content -Raw -Encoding UTF8 (Join-Path $script:SIRoot 'engine\risk-analysis\Invoke-RiskAnalysis.ps1')
+        $start = $eng.IndexOf('$null = Start-RAStreamReport -Stream $script:RAStream -ReportName')
+        $start | Should -BeGreaterThan 0
+        $eng.IndexOf('Assert-SIAssetIdentityMapRead -ReportName') | Should -BeGreaterThan $start
+    }
+}
+
 Describe 'the resolver is wired into the engine, not merely present' {
 
     It 'is dot-sourced by the risk-analysis engine' {

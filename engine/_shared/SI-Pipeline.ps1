@@ -1652,6 +1652,47 @@ function Test-SIPipelineCodeCurrent {
     [string]::Equals("$StartImage".Trim(), "$NowImage".Trim(), [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-SIPipelineUpkeepDecision {
+    <#
+        PURE. Live 2026-11-09/10 (four large installs): the copies the pages show were refreshed at the end of a run and on every
+        wake-up BEFORE the queue and the waiting update -- in one call that never said it was alive, so the runner was stopped
+        as dead and every later wake-up was stopped in the same call (one install took no run and no update for 19 hours).
+        THE ORDER NOW: the queue, the resume and the update hand-off first (Invoke-SIPipelineDrain); then the UPKEEP of the
+        wake-up -- the copies the pages show caught up, the statistics after a run, the clean-up of old data -- under the
+        wake-up's own beat. -Drain: Invoke-SIPipelineDrain's answer. Returns @{ Run; Stats; Why }:
+          * the updater was started for a waiting update: no upkeep (it would work beside the update); the next wake-up does it;
+          * the install is held (Busy / Blocked: an update runs, or a live run holds the lock): no upkeep, nothing said;
+          * otherwise the upkeep runs; Stats when this wake-up ran (or finished) a run -- the statistics refresh after its publish.
+    #>
+    param($Drain)
+    if (-not $Drain) { return [pscustomobject]@{ Run = $false; Stats = $false; Why = '' } }
+    $started = if ($Drain.PSObject.Properties['UpdateStarted']) { [string]$Drain.UpdateStarted } else { '' }
+    if ($started) { return [pscustomobject]@{ Run = $false; Stats = $false; Why = 'the updater was started -- the copies the pages show and the clean-up of old data are brought up to date by the next wake-up, after the update' } }
+    if ([string]$Drain.Outcome -in @('Busy', 'Blocked')) { return [pscustomobject]@{ Run = $false; Stats = $false; Why = '' } }
+    $ran = @(@($Drain.Runs) | Where-Object { $_ -and $_.PSObject.Properties['State'] -and [string]$_.State -in @('Succeeded', 'Failed', 'Stopped') }).Count -gt 0
+    [pscustomobject]@{ Run = $true; Stats = [bool]$ran; Why = '' }
+}
+
+function Invoke-SIPipelineUpkeep {
+    <#
+        The upkeep of one wake-up, in this order, each part beating the wake-up's own lock row (-Beat, called before each part
+        and passed into it -- the parts call it on progress, at most once a minute): -CatchUp { param($Beat) } (the copies the
+        pages show; an install with nothing published yet gets its first publish), -Statistics { param($Beat) } (only with
+        -Stats: after a run), -Cleanup { param($Beat) } (old data). A part that fails is one WARNING and the next part runs;
+        never throws. Returns the parts that ran, in order.
+    #>
+    param([scriptblock]$Beat, [scriptblock]$CatchUp, [scriptblock]$Statistics, [scriptblock]$Cleanup, [bool]$Stats, [scriptblock]$Log = { param($l, $m) })
+    $done = New-Object System.Collections.Generic.List[string]
+    $parts = @(@('copies', $CatchUp, $true), @('statistics', $Statistics, $Stats), @('clean-up', $Cleanup, $true))
+    foreach ($p in $parts) {
+        if (-not $p[1] -or -not $p[2]) { continue }
+        if ($Beat) { try { $null = & $Beat } catch { } }
+        try { $null = & $p[1] $Beat; $done.Add([string]$p[0]) }
+        catch { try { & $Log 'WARN' ('the wake-up''s upkeep ({0}) did not finish ({1}) -- the next wake-up does it again' -f $p[0], $_.Exception.Message) } catch { } }
+    }
+    , $done.ToArray()
+}
+
 function Invoke-SIPipelineDrain {
     <#
         One wake-up (the 5-minute timer of caj-si-flow / the VM task, or a "Run now"):
@@ -1807,7 +1848,11 @@ function Invoke-SIPipelineDrain {
         }
         # a request marked Running whose run is not the current one never finished being recorded
         foreach ($x in @($open | Where-Object { $_.State -eq 'Running' })) {
-            if ($prev -and [string]$x.FlowRunId -eq [string]$prev.FlowRunId -and [string]$prev.State -in $script:SIPipeline.RunFinished) { $Control.MarkDone($x.Id, [string]$prev.State) }
+            if ($prev -and [string]$x.FlowRunId -eq [string]$prev.FlowRunId -and [string]$prev.State -in $script:SIPipeline.RunFinished) {
+                $Control.MarkDone($x.Id, [string]$prev.State)
+                # live 2026-11-09/10: a run that ended while its runner stopped before closing its request -- said once, plainly
+                & $Log 'INFO' ('run {0} had ended ({1}), but its runner stopped before it closed the request -- the request is closed now' -f $prev.FlowRunId, ([string]$prev.State).ToLowerInvariant())
+            }
             elseif (-not $prev -or [string]$x.FlowRunId -ne [string]$prev.FlowRunId) { $Control.MarkDone($x.Id, 'Interrupted') }
         }
         # 4c. an update waits for the pipeline (owner 2026-10-23): no NEW run -- the updater is started first; a wait of kind

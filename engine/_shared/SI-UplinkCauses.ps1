@@ -226,6 +226,8 @@ function Get-SIReportCause {
     $r = { param($c, $n, $k = $true) [pscustomobject]@{ CauseClass = $c; MissingName = (ConvertTo-SIUplinkId $n); Known = [bool]$k } }
     # ---- the settings database ------------------------------------------------------------------------------------------
     if ($t -match '(?i)SQL error 40\b|error: 40 -|settings database (cannot|could not) be reached|could not reach (its|the) (own )?settings database|settings database is not reachable') { return (& $r 'settings-unreachable' '') }
+    # ---- a read no number of parts makes fit (RA-LaPartedRead.ps1): before the other rules, its text quotes the service's ----
+    if ($t -match '(?i)is more than Log Analytics can answer') { return (& $r 'too-large' 'log-analytics-answer') }
     # ---- #711: the process ran out of memory (before the other rules: its text can carry any other words) ------------------
     if ($t -match '(?i)OutOfMemoryException|\bOOMKilled\b|\bout of memory\b|\bsi-ra-0303\b') { return (& $r 'out-of-memory' '') }
     # ---- a data source / licence this tenant does not have ---------------------------------------------------------------
@@ -288,7 +290,7 @@ function Resolve-SIReportCauseCode {
             'missing-column'       { if ($mn -match ('^' + ((Get-SIUplinkCausesState).OptionalCiColumnPattern.Trim('^', '$') -replace '_', '-') + '$')) { return 'si-ra-0102' } }
             'query-defect'         { if ($mn -eq 'syn0002') { return 'si-ra-0103' } }
             'count-more'           { return 'si-ra-0201' }
-            'too-large'            { if ($mn -eq 'query-body') { return 'si-ra-0302' }; if ($mn -eq 'database') { return 'si-data-1404' } }
+            'too-large'            { if ($mn -eq 'query-body' -or $mn -eq 'log-analytics-answer') { return 'si-ra-0302' }; if ($mn -eq 'database') { return 'si-data-1404' } }
             'settings-unreachable' { return 'si-set-0401' }
         }
         $g = (Get-SIUplinkCausesState).GenericCodes[$cc]
@@ -462,7 +464,10 @@ function ConvertTo-SIUplinkReports {
                 }
                 # #709: the cause in plain words FIRST ("<report>, <step>: <why>."), then the engine's own first error line
                 if ($Identified) {
-                    if ($hold) { $it.Detail = Join-SIUplinkCauseDetail -Sentence (Get-SIHoldCauseSentence -Fact $f) -Raw '' } else { $it.Detail = Join-SIUplinkCauseDetail -Sentence (Get-SIReportCauseSentence -Fact $f -Cause $cause) -Raw (ConvertTo-SIUplinkDetail $why) }
+                    # SQL's own error number goes in front of the engine's line, so the 500-character cut never takes it
+                    $rawLine = ConvertTo-SIUplinkDetail $why; $sqlN = [string](& $get 'SqlNumbers')
+                    if ($sqlN -match '^-?\d+(,-?\d+)*$') { $rawLine = ('SQL {0}: {1}' -f $sqlN, $rawLine).TrimEnd(' ', ':') }
+                    if ($hold) { $it.Detail = Join-SIUplinkCauseDetail -Sentence (Get-SIHoldCauseSentence -Fact $f) -Raw '' } else { $it.Detail = Join-SIUplinkCauseDetail -Sentence (Get-SIReportCauseSentence -Fact $f -Cause $cause) -Raw $rawLine }
                 }
                 $seen[$rid] = $true
                 # #902: an information hold sorts after every real failure (it never pushes a real item out of the 20)
@@ -553,6 +558,7 @@ function Get-SIReportCauseFacts {
             $out.Add([pscustomobject]@{
                 Report = $n; State = $state; Why = $text; StartedUtc = (& $nv 'StartedUtc'); RunMs = $runMs
                 Rows = (& $nv 'Rows'); SourceCount = (& $nv 'SourceCount'); Buckets = (& $nv 'Buckets'); QueryHash = [string](& $nv 'QueryHash')
+                SqlNumbers = [string](& $nv 'SqlNumbers')
                 Retries = $(if ($Retries -and $Retries.Contains($n)) { $Retries[$n] } else { $null })
                 LastGoodRows = $(if ($lg) { $lg.Rows } else { $null }); LastGoodRunMs = $null
                 LastGoodQueryHash = $(if ($lg) { [string]$lg.QueryHash } else { '' })

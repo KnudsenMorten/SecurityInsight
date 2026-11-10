@@ -1818,6 +1818,9 @@ function Invoke-ProfileAugment {
                 # so the next report reads again. A table that does not exist is passed on as before (no data source).
                 $e = ConvertTo-RALookupUnavailableError -What ("the lookup '{0}'" -f $plan.Var) -Err $_
                 if ($e) { Write-Err2 ("[2phase] {0}" -f $e.Message); throw $e }
+                # ConvertTo-RALookupUnavailableError also answers $null for a read that is too large and for an error that already
+                # says "unavailable": those end the report as they are. Only a table that does not exist reads as no rows here.
+                if (-not ((Get-Command -Name Test-RANoDataSource -ErrorAction SilentlyContinue) -and (Test-RANoDataSource -Message ([string]$_.Exception.Message)))) { throw }
                 Write-Warn2 ("[2phase] '{0}' has no table in Log Analytics; its columns stay empty: {1}" -f $plan.Var, $_.Exception.Message)
                 $clRows = @()
             }

@@ -318,6 +318,40 @@
       "description": "Days since si_last_seen."
     },
     {
+      "name": "si_source_deleted_at",
+      "classes": "identity",
+      "type": "datetime",
+      "group": "lifecycle",
+      "level": "record",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "entra"
+        ]
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "When the source lists the object as deleted (Entra ID's deleted items). Set only on a record the source itself says is deleted."
+    },
+    {
+      "name": "si_primary_provider",
+      "classes": "identity",
+      "type": "string",
+      "group": "lifecycle",
+      "level": "record",
+      "join": "none",
+      "resolution": {
+        "policy": "authority",
+        "authority": [
+          "eg"
+        ]
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The directory an Exposure Graph identity comes from (for example ActiveDirectory). An active account from Active Directory keeps its asset active when Entra ID lists the user as deleted."
+    },
+    {
       "name": "si_collection_complete",
       "classes": [
         "device",

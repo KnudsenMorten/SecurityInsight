@@ -55,6 +55,9 @@ if (-not (Get-Command -Name Invoke-SICiClassification -ErrorAction SilentlyConti
 if (-not (Get-Command -Name Invoke-SIDeletionProof -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DeletionProof.ps1') }
 # #533 (b): disabled accounts and devices -- SI_DisabledAssets_Correlate (engine/_shared)
 if (-not (Get-Command -Name Select-SIDisabledForStage -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-DisabledAssets.ps1') }
+# the customer's correlation decisions (never-merge, force-merge, pin-id): the CI build reads and applies them itself, in every edition
+if (-not (Get-Command -Name Get-SICorrelationGroups -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-correlation\_shared\SI-CorrelationCore.ps1') }
+if (-not (Get-Command -Name Import-SICorrelationDecisions -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-correlation\_shared\SI-CorrelationDecisions.ps1') }
 
 function Select-SICiGroupsEnabled {
     <#
@@ -67,6 +70,8 @@ function Select-SICiGroupsEnabled {
     param([AllowEmptyCollection()][object[]]$Groups = @(), $Policy)
     Select-SIDisabledForStage -Items @($Groups) -Stage Correlate -Policy $Policy -Where 'CI correlation' -StateOf {
         param($g)
+        # a record its source lists as deleted is never left out as disabled: the CI must be built to retire
+        foreach ($m in @($g.Members)) { if (Test-SIRecordDeletedInSource $m.Record) { return [pscustomobject]@{} } }
         # disabled wins: the first member that is disabled represents the group; else the first that says enabled
         $en = $null
         foreach ($m in @($g.Members)) {
@@ -81,6 +86,191 @@ function Format-SICiScopeLine {
     <# PURE. The one line the CI build logs when the collection scope left CIs out. Customer-facing: the settings named. #>
     param([int]$Count)
     ('CI correlation: left out {0} CI(s) of assets the collection scope settings leave out (SI_IncludeInactive_Endpoint, SI_RequireMdeActive_Endpoint, SI_IncludeInactive_Identity, SI_RequireRecentSignIn_Identity). Each keeps its last build and its findings are kept as they are, not closed; it is built again when the asset is in scope again.' -f $Count)
+}
+
+function Get-SICiDecisionHash {
+    <# PURE. One text for the decisions in force ('' = none): a changed decision rebuilds every CI once; an install with none has a fingerprint exactly as without this. #>
+    param($Plan)
+    if ($null -eq $Plan -or $Plan.IsEmpty) { return '' }
+    $sorted = { param([string[]]$a) $c = [string[]]@($a); [Array]::Sort($c, [StringComparer]::Ordinal); $c }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($a in @($Plan.Forbid.Keys)) { foreach ($b in @($Plan.Forbid[$a].Keys)) { if ([string]::CompareOrdinal([string]$a, [string]$b) -lt 0) { $lines.Add('never:' + $a + '##' + $b) } } }
+    foreach ($f in @($Plan.Force)) { $lines.Add('force:' + ((& $sorted ([string[]]@($f.AnchorKeys))) -join '##')) }
+    foreach ($k in @($Plan.Pinned.Keys)) { $lines.Add('pin:' + $k + '=' + [string]$Plan.Pinned[$k]) }
+    $text = (& $sorted ([string[]]$lines.ToArray())) -join "`n"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { 'sha256:' + ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))) -replace '-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+}
+
+function Get-SICiDecisionState {
+    <# The customer's correlation decisions as this build reads them: @{ Report; Plan; Hash; Unreadable (why a file that should be read was not, '' = all read) }. What will not apply is said, one line each. Never throws. #>
+    param([scriptblock]$Log)
+    if (-not $Log) { $Log = { param($l, $m) } }
+    $report = $null
+    try { $report = Import-SICorrelationDecisions } catch { return [pscustomobject]@{ Report = $null; Plan = (Get-SICorrelationDecisionPlan -Decisions @()); Hash = ''; Unreadable = $_.Exception.Message } }
+    $why = New-Object System.Collections.Generic.List[string]
+    foreach ($m in @($report.Missing)) { & $Log 'WARN' ("CIs: correlation decisions: configured at '{0}' but not found -- none of its decisions are in force." -f $m.Path); $why.Add(('{0} was not found' -f $m.Path)) }
+    foreach ($p in @($report.ParseFailed)) { & $Log 'WARN' ("CIs: correlation decisions: '{0}' could not be read -- {1}." -f $p.Path, $p.Error); $why.Add(('{0} could not be read' -f $p.Path)) }
+    foreach ($r in @($report.Rejected)) { & $Log 'WARN' ("CIs: correlation decisions: entry #{0} in '{1}' refused -- {2}" -f $r.Index, $r.Path, $r.Problem) }
+    $plan = Get-SICorrelationDecisionPlan -Decisions @($report.Decisions)
+    foreach ($c in @($plan.Conflicts)) { & $Log 'WARN' ('CIs: correlation decisions: ' + [string]$c.Problem) }
+    [pscustomobject]@{ Report = $report; Plan = $plan; Hash = (Get-SICiDecisionHash -Plan $plan); Unreadable = ($why.ToArray() -join '; ') }
+}
+
+function Split-SICiDecisionMembers {
+    <# PURE. One group's members (@{ Key; Identifiers }) -> its parts under the plan, by the correlation map's own Get-SICorrelationGroups: Parts (each @{ Keys }), Ambiguous (the identifier keys two parts share), Refused (the joins a never-merge refused). #>
+    param([Parameter(Mandatory)][object[]]$Members, [Parameter(Mandatory)]$Plan)
+    $inputs = foreach ($m in $Members) {
+        [pscustomobject]@{ Engine = 'ci'; SIAssetId = [string]$m.Key; Identifiers = @(foreach ($id in @($m.Identifiers)) { [pscustomobject]@{ Type = [string]$id.Type; Value = ([string]$id.Value).ToLowerInvariant() } }) }
+    }
+    $out = @(Get-SICorrelationGroups -Inputs @($inputs) -Plan $Plan)
+    $parts = foreach ($g in $out) { [pscustomobject]@{ Keys = [string[]]@(foreach ($x in @($g.Members)) { [string]$x.SIAssetId }) } }
+    $amb = $null; $ref = @()
+    if ($out.Count -gt 0) {
+        if ($out[0].PSObject.Properties['AmbiguousIdKeys']) { $amb = $out[0].AmbiguousIdKeys }
+        if ($out[0].PSObject.Properties['RefusedJoins']) { $ref = @($out[0].RefusedJoins) }
+    }
+    [pscustomobject]@{ Parts = @($parts); Ambiguous = $amb; Refused = $ref }
+}
+
+function Get-SICiDecisionSplit {
+    <# PURE. The rows of the groups that hold a forbidden anchor (GroupKey, RecordKey, IdType, IdValue) -> Moves (each record that leaves its group: @{ r; g }, a part's group key = its ordinally lowest record key), Ambiguous, Refused. #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [Parameter(Mandatory)]$Plan)
+    $byGroup = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal)
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $gk = [string](Get-SIItemValue $r 'GroupKey'); $rk = [string](Get-SIItemValue $r 'RecordKey')
+        if (-not $byGroup.ContainsKey($gk)) { $byGroup[$gk] = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal) }
+        if (-not $byGroup[$gk].ContainsKey($rk)) { $byGroup[$gk][$rk] = New-Object System.Collections.Generic.List[object] }
+        $byGroup[$gk][$rk].Add([pscustomobject]@{ Type = [string](Get-SIItemValue $r 'IdType'); Value = [string](Get-SIItemValue $r 'IdValue') })
+    }
+    $moves = New-Object System.Collections.Generic.List[object]; $amb = $null; $refused = New-Object System.Collections.Generic.List[object]
+    foreach ($gk in @($byGroup.Keys)) {
+        [string[]]$rks = @($byGroup[$gk].Keys); [Array]::Sort($rks, [StringComparer]::Ordinal)
+        $res = Split-SICiDecisionMembers -Members @(foreach ($rk in $rks) { [pscustomobject]@{ Key = $rk; Identifiers = $byGroup[$gk][$rk].ToArray() } }) -Plan $Plan
+        foreach ($x in @($res.Refused)) { $refused.Add($x) }
+        if ($null -ne $res.Ambiguous) { if ($null -eq $amb) { $amb = @{} }; foreach ($k in @($res.Ambiguous.Keys)) { $amb[$k] = $true } }
+        if (@($res.Parts).Count -lt 2) { continue }
+        foreach ($p in @($res.Parts)) {
+            [string[]]$keys = @($p.Keys); [Array]::Sort($keys, [StringComparer]::Ordinal)
+            if ($keys[0] -ceq $gk) { continue }
+            foreach ($k in $keys) { $moves.Add([ordered]@{ r = $k; g = $keys[0] }) }
+        }
+    }
+    [pscustomobject]@{ Moves = $moves.ToArray(); Ambiguous = $amb; Refused = $refused.ToArray() }
+}
+
+function Split-SICiGroupsByDecisions {
+    <# PURE. The in-memory build's groups under the plan -- the same outcome as the SQL grouping: force-merge joins the groups that hold its anchors, never-merge re-splits the groups that hold a forbidden anchor. An empty plan answers the groups as they are. #>
+    param([AllowEmptyCollection()][object[]]$Groups = @(), $Plan)
+    $res = [ordered]@{ Groups = @($Groups); Ambiguous = $null; Refused = @(); ForceCounts = @{}; PinFound = @{} }
+    if ($null -eq $Plan -or $Plan.IsEmpty) { return [pscustomobject]$res }
+    $keysOf = { param($m) foreach ($id in @($m.Identifiers)) { Get-SILedgerKey -Type ([string]$id.Type) -Value ([string]$id.Value) } }
+    $work = New-Object System.Collections.Generic.List[object]
+    foreach ($g in @($Groups)) { $work.Add((New-Object System.Collections.Generic.List[object] (, [object[]]@($g.Members)))) }
+    foreach ($w in $work) { foreach ($m in $w) { foreach ($k in (& $keysOf $m)) { if ($Plan.Pinned.ContainsKey($k)) { $res.PinFound[$k] = $true } } } }
+    for ($n = 0; $n -lt @($Plan.Force).Count; $n++) {
+        $anchors = @(@($Plan.Force)[$n].AnchorKeys); $hit = New-Object System.Collections.Generic.List[int]; $records = 0
+        for ($i = 0; $i -lt $work.Count; $i++) {
+            $inGroup = 0; foreach ($m in $work[$i]) { foreach ($k in (& $keysOf $m)) { if ($anchors -contains $k) { $inGroup++; break } } }
+            if ($inGroup -gt 0) { $hit.Add($i); $records += $inGroup }
+        }
+        $res.ForceCounts[$n] = $records
+        for ($h = $hit.Count - 1; $h -ge 1; $h--) { $work[$hit[0]].AddRange($work[$hit[$h]]); $work.RemoveAt($hit[$h]) }
+    }
+    $out = New-Object System.Collections.Generic.List[object]; $refused = New-Object System.Collections.Generic.List[object]
+    foreach ($w in $work) {
+        $byNode = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal); foreach ($m in $w) { $byNode[[string]$m.Node] = $m }
+        [string[]]$nodes = @($byNode.Keys); [Array]::Sort($nodes, [StringComparer]::Ordinal)
+        $forbidden = $false
+        foreach ($m in $w) { foreach ($k in (& $keysOf $m)) { if ($Plan.Forbid.ContainsKey($k)) { $forbidden = $true; break } }; if ($forbidden) { break } }
+        if (-not $forbidden -or $nodes.Count -lt 2) { $out.Add([pscustomobject]@{ Members = @(foreach ($nd in $nodes) { $byNode[$nd] }) }); continue }
+        $sp = Split-SICiDecisionMembers -Members @(foreach ($nd in $nodes) { [pscustomobject]@{ Key = $nd; Identifiers = $byNode[$nd].Identifiers } }) -Plan $Plan
+        foreach ($x in @($sp.Refused)) { $refused.Add($x) }
+        if ($null -ne $sp.Ambiguous) { if ($null -eq $res.Ambiguous) { $res.Ambiguous = @{} }; foreach ($k in @($sp.Ambiguous.Keys)) { $res.Ambiguous[$k] = $true } }
+        foreach ($p in @($sp.Parts)) {
+            [string[]]$pk = @($p.Keys); [Array]::Sort($pk, [StringComparer]::Ordinal)
+            $out.Add([pscustomobject]@{ Members = @(foreach ($nd in $pk) { $byNode[$nd] }) })
+        }
+    }
+    $res.Groups = $out.ToArray(); $res.Refused = $refused.ToArray()
+    [pscustomobject]$res
+}
+
+function Set-SICiGroupsSeparated {
+    <# PURE (marks the groups). A group that carries an identifier a never-merge made ambiguous is separated by a decision: the identity ledger may then give its halves their own ids. No ambiguous key = nothing is touched. #>
+    param([AllowEmptyCollection()][object[]]$Groups = @(), [AllowNull()][hashtable]$Ambiguous)
+    if ($null -eq $Ambiguous -or $Ambiguous.Count -eq 0) { return }
+    foreach ($g in @($Groups)) {
+        if ($null -eq $g) { continue }
+        $sep = $false
+        foreach ($m in @($g.Members)) { foreach ($id in @($m.Identifiers)) { if ($Ambiguous.ContainsKey((Get-SILedgerKey -Type ([string]$id.Type) -Value ([string]$id.Value)))) { $sep = $true; break } }; if ($sep) { break } }
+        if ($sep) { $g | Add-Member -NotePropertyName SeparatedByDecision -NotePropertyValue $true -Force }
+    }
+}
+
+function Format-SICiDecisionLines {
+    <# PURE. One plain line per decision in force: what it did in this build, or that it had nothing to act on. #>
+    param([AllowEmptyCollection()][object[]]$Decisions = @(), $Plan, [AllowEmptyCollection()][object[]]$Refused = @(), [hashtable]$ForceCounts = @{}, [hashtable]$PinFound = @{})
+    $show = { param($k) ([string]$k) -replace '\|', ':' }
+    foreach ($d in @($Decisions)) {
+        if ($null -eq $d) { continue }
+        $keys = @($d.AnchorKeys); $names = (@($keys | ForEach-Object { & $show $_ }) -join ' and ')
+        $by = ''; if ($d.By) { $by = ' (set by {0})' -f [string]$d.By }
+        $applied = $false; $what = ''
+        switch ([string]$d.Kind) {
+            'never-merge' { foreach ($r in @($Refused)) { if ($keys -contains $r.AnchorA -and $keys -contains $r.AnchorB) { $applied = $true } }; $what = 'never-merge: {0} are kept as separate CIs' -f $names }
+            'force-merge' {
+                $n = -1; $fl = @($Plan.Force); for ($i = 0; $i -lt $fl.Count; $i++) { if (-not (Compare-Object @($fl[$i].AnchorKeys) $keys)) { $n = $i; break } }
+                $c = 0; if ($n -ge 0 -and $ForceCounts.ContainsKey($n)) { $c = [int]$ForceCounts[$n] }
+                $applied = ($c -ge 2); $what = 'force-merge: {0} are one CI ({1} record(s))' -f $names, $c
+            }
+            'pin-id' { $applied = $PinFound.ContainsKey([string]$keys[0]); $what = 'pin-id: {0} keeps the CI id {1}' -f $names, [string]$d.PinnedId }
+            default { continue }
+        }
+        if ($applied) { 'CIs: correlation decision applied -- {0}{1}.' -f $what, $by }
+        else { 'CIs: correlation decision with nothing to act on in this build -- {0}{1}: its assets are absent, or the data already agrees.' -f $what, $by }
+    }
+}
+
+function Get-SICiSplitEvents {
+    <# PURE. The CIs this set split: a record that moved off the CI it belonged to, because a never-merge separated its group, a removed "same machine" decision took its identifiers back (-SplitKeys) or a proven wrong merge was split off: @{ f; t; k }, one per pair. A plain merge is no split. #>
+    param([AllowEmptyCollection()][object[]]$Decisions = @(), [hashtable]$PreviousRecordCi = @{}, [hashtable]$SplitKeys = @{})
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($d in @($Decisions)) {
+        if ($null -eq $d -or -not $d.CorrelationId -or $null -eq $d.Group) { continue }
+        $k = ''
+        if ([string]$d.Action -eq 'split') { $k = 'split' }
+        elseif ($d.Group.PSObject.Properties['SeparatedByDecision'] -and $d.Group.SeparatedByDecision) { $k = 'never-merge' }
+        elseif ($SplitKeys -and $SplitKeys.Count -gt 0) {
+            foreach ($m in @($d.Group.Members)) { foreach ($id in @($m.Identifiers)) { if ($SplitKeys.ContainsKey((Get-SILedgerKey -Type ([string]$id.Type) -Value ([string]$id.Value)))) { $k = 'same-machine-removed'; break } }; if ($k) { break } }
+        }
+        if (-not $k) { continue }
+        foreach ($m in @($d.Group.Members)) {
+            $prev = [string]$PreviousRecordCi[[string](Get-SIItemValue $m.Record 'si_record_key')]
+            if ($prev -and $prev -ine [string]$d.CorrelationId -and $seen.Add($prev + '>' + [string]$d.CorrelationId)) { [ordered]@{ f = $prev; t = [string]$d.CorrelationId; k = $k } }
+        }
+    }
+}
+
+function Get-SICiEntraDeletedRetiredCount {
+    <# PURE. How many identity CIs of -Docs became retired in this build because Entra ID lists them as deleted. -Previous: CI id -> what the CI was after the last build (@{ Lifecycle }); a CI that was retired already is not counted. #>
+    param([AllowEmptyCollection()][object[]]$Docs = @(), [hashtable]$Previous)
+    $n = 0
+    foreach ($d in @($Docs)) {
+        if ($null -eq $d -or [string]$d['si_class'] -ne 'identity' -or [string]$d['si_lifecycle'] -ne 'retired') { continue }
+        if ([string]$d['si_lifecycle_reason'] -notlike 'retired at once: deleted in Entra ID*') { continue }
+        $was = ''; if ($Previous) { $was = [string](Get-SILifecycleValue $Previous[[string]$d['si_ci_id']] 'Lifecycle') }
+        if ($was -ne 'retired') { $n++ }
+    }
+    $n
+}
+
+function Format-SICiEntraDeletedLine {
+    <# PURE. The run log's one line: how many identities this build retired because Entra ID lists them as deleted, and why. #>
+    param([int]$Count, [switch]$DryRun)
+    $verb = 'retired'; if ($DryRun) { $verb = 'would be retired (dry run, nothing written)' }
+    'CIs: {0:N0} identity asset(s) {1} because Entra ID lists them as deleted (they are in its deleted items). Their findings close as "asset deleted in Entra ID", never as fixed. A user that is restored in Entra ID comes back by itself.' -f $Count, $verb
 }
 
 function Select-SICiGroupsInScope {
@@ -99,7 +289,8 @@ function Select-SICiGroupsInScope {
         $out = $members.Count -gt 0
         foreach ($m in $members) {
             $v = Get-SIItemValue $m.Record 'si_in_scope'
-            if (-not ($v -eq $false -or ([string]$v) -ieq 'false')) { $out = $false; break }
+            # (a record its source lists as deleted is built whatever the scope said: a deleted user has no sign-in to judge it by)
+            if ((Test-SIRecordDeletedInSource $m.Record) -or -not ($v -eq $false -or ([string]$v) -ieq 'false')) { $out = $false; break }
         }
         if ($out) { $excl.Add($g) } else { $kept.Add($g) }
     }
@@ -430,10 +621,12 @@ function Invoke-SICiCore {
           # #1057 record key -> its source's proof of deletion (Invoke-SIDeletionProof); none = no proof
           [hashtable]$DeletionProof,
           # the merged-away ids (ConvertTo-SISupersededMap): never used again, a record resolves to the end of the chain
-          [hashtable]$Superseded)
+          [hashtable]$Superseded,
+          # the customer's correlation decisions: the identifiers a never-merge made ambiguous, and the pin-id anchors
+          [AllowNull()][hashtable]$AmbiguousIdKeys, [AllowNull()][hashtable]$PinnedIdKeys)
     if ($null -eq $Lifecycle) { $Lifecycle = Get-SICiLifecycleSettings }
     Set-SICiWatchPhase -Watch $Watch -Phase 'looking up the ids of its assets'
-    $idy = Resolve-SIObjectIdentity -Groups @($Groups) -Ledger $Ledger -Now $Now -MergedAway $Superseded
+    $idy = Resolve-SIObjectIdentity -Groups @($Groups) -Ledger $Ledger -Now $Now -MergedAway $Superseded -AmbiguousIdKeys $AmbiguousIdKeys -PinnedIdKeys $PinnedIdKeys
     $owner = Get-SICmdbOwner
     $docs = New-Object System.Collections.Generic.List[object]
     $minted = 0; $merged = 0
@@ -737,6 +930,9 @@ function Invoke-SICiBuild {
         # the same settings and the same rules as the CMDB sync's asset lifecycle)
         $lifeSettings = Get-SICiLifecycleSettings
         foreach ($w in @($lifeSettings.Warnings)) { & $Log 'WARN' ('CIs: lifecycle -- ' + $w) }
+        # THE CUSTOMER'S CORRELATION DECISIONS, read here so every job that builds CIs applies them (the correlation job and,
+        # in the Community edition, Risk Analysis). None = every statement and the fingerprint exactly as without them.
+        $decs = Get-SICiDecisionState -Log $Log
 
         # ---- the OFFLINE seam: records in hand, one in-memory pass through the same core ----
         if ($null -ne $Records) {
@@ -749,6 +945,10 @@ function Invoke-SICiBuild {
             [Array]::Sort($rk, $ix, [StringComparer]::Ordinal)
             $sorted = @(foreach ($i in $ix) { $inHand[$i] })
             $g = Get-SICiGroups -Records $sorted
+            $memDec = Split-SICiGroupsByDecisions -Groups @($g.Groups) -Plan $decs.Plan
+            $g['Groups'] = @($memDec.Groups)
+            Set-SICiGroupsSeparated -Groups @($g.Groups) -Ambiguous $memDec.Ambiguous
+            if ($decs.Report) { foreach ($dl in @(Format-SICiDecisionLines -Decisions @($decs.Report.Decisions) -Plan $decs.Plan -Refused @($memDec.Refused) -ForceCounts $memDec.ForceCounts -PinFound $memDec.PinFound)) { & $Log 'INFO' $dl } }
             # #533 (b): disabled accounts and devices left out by SI_DisabledAssets_Correlate (said in one line)
             $gDis = Select-SICiGroupsEnabled -Groups @($g.Groups)
             if ($gDis.Line) { & $Log 'INFO' $gDis.Line }
@@ -767,7 +967,7 @@ function Invoke-SICiBuild {
             # same CI fields the SQL build sets
             if ($null -eq $ServiceIndex) { $ServiceIndex = Get-SICiServiceIndex -Log $Log }
             $core = Invoke-SICiCore -Groups @($g.Groups) -FeedLatest $feeds -Ledger $read.Ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex `
-                -Lifecycle $lifeSettings -PreviousLifecycle $PreviousLifecycle
+                -Lifecycle $lifeSettings -PreviousLifecycle $PreviousLifecycle -AmbiguousIdKeys $memDec.Ambiguous -PinnedIdKeys $decs.Plan.Pinned
             # a CI whose rules took too long is kept out until it is fully evaluated (nothing is stored here: it is left out)
             $held = Get-SICiHeld -Docs $core.Docs -Incomplete $core.Incomplete
             $docs = @($held.Docs)
@@ -822,9 +1022,21 @@ function Invoke-SICiBuild {
         if ($ciCut.Line) { & $Log 'INFO' $ciCut.Line }
         $cutUtc = $null; if ($ciCut.Applied) { $cutUtc = $ciCut.CutoffUtc }
 
+        # A DAMAGE BRAKE: decisions were in force at the last build and the file cannot be read now. Building without them would
+        # undo every split the customer asked for, and a CMDB would see it. No decision was in force: nothing to undo, it is said and the build goes on.
+        if ($decs.Unreadable) {
+            $prevDecisions = ''
+            try { foreach ($sr in @(& $sql (Get-SICiStateAllSql) @{} 'rows')) { if ([string](Get-SIItemValue $sr 'Name') -eq 'CorrelationDecisions') { $prevDecisions = [string](Get-SIItemValue $sr 'Value') } } } catch { $prevDecisions = 'unknown' }
+            if ($prevDecisions) {
+                & $Log 'WARN' ("CIs were NOT built: the correlation decisions in force at the last build cannot be read ({0}). Building without them would undo them; fix the file and run again." -f $decs.Unreadable)
+                return [pscustomobject]@{ Failed = $true; Reason = 'the correlation decisions could not be read'; CiCount = 0; Cis = @() }
+            }
+            $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('the correlation decisions could not be read ({0}) -- none are in force in this build' -f $decs.Unreadable) })
+        }
         # 1. grouping, in SQL
-        $gr = Invoke-SICiGrouping -Sql $sql -LookbackDays $LookbackDays -BatchCis $BatchCis -BudgetSeconds $GroupingBudgetSeconds -Log $Log -CutoffUtc $cutUtc
+        $gr = Invoke-SICiGrouping -Sql $sql -LookbackDays $LookbackDays -BatchCis $BatchCis -BudgetSeconds $GroupingBudgetSeconds -Log $Log -CutoffUtc $cutUtc -DecisionPlan $decs.Plan
         & $mark 'group'
+        if ($decs.Report) { foreach ($dl in @(Format-SICiDecisionLines -Decisions @($decs.Report.Decisions) -Plan $decs.Plan -Refused @($gr.DecisionRefused) -ForceCounts $gr.ForceCounts -PinFound $gr.PinFound)) { & $Log 'INFO' $dl } }
         # the statement always answers ONE row (Rounds >= 1): no row is a failure, never "no records" (customer H 2026-10-09)
         if ($null -eq $gr -or $null -eq (Get-SIItemValue $gr 'Rounds')) {
             & $Log 'WARN' ("CIs were NOT built: the grouping statement answered no result after {0} s -- the database did not complete it." -f $phase['group'])
@@ -978,7 +1190,7 @@ function Invoke-SICiBuild {
             # CMDB page's links and the services dirty only the CIs that use them -- Get-SICiServiceKeyHashes)
             $fingerprint = Get-SICiBuildFingerprint -Model $model -Rules (@($Rules) + @($ServiceIndex.Bindings)) -CmdbOwner (Get-SICmdbOwner) -Thresholds $thresholds -LookbackDays $LookbackDays `
                 -BuildVersion $script:SICiBuildVersion -ExposedRanges ((@($global:SI_InternetExposedRanges) | Where-Object { $_ } | ForEach-Object { [string]$_ }) -join ',') `
-                -CollectionScope ((@($scope.State.Keys) | Sort-Object | ForEach-Object { '{0}={1}' -f $_, (Get-SIItemValue $scope.State[$_] 'h') }) -join ';')
+                -CollectionScope ((@($scope.State.Keys) | Sort-Object | ForEach-Object { '{0}={1}' -f $_, (Get-SIItemValue $scope.State[$_] 'h') }) -join ';') -DecisionsHash ([string]$decs.Hash)
         } catch { & $Log 'WARN' ("CIs: the build fingerprint could not be computed ({0}) -- this build is full." -f $_.Exception.Message) }
         if ($FullReconcileDays -lt 0) { $FullReconcileDays = Get-SICiFullReconcileDays }
         $decision = Get-SICiFullReconcileDecision -State $state -Fingerprint $fingerprint -Now $now -Days $FullReconcileDays -Force:([bool]$FullReconcile) -FullPostDue:$full
@@ -1066,7 +1278,7 @@ function Invoke-SICiBuild {
         }
 
         # 4. the batches
-        $t = [ordered]@{ Cis = 0; Changed = 0; LastSeenOnly = 0; Links = 0; RecordCi = 0; Daily = 0; Anchors = 0; Superseded = 0; PostedFull = 0; PostedSeen = 0; Bytes = [long]0; Minted = 0; Merged = 0; PostFailed = 0; Slim = 0; Resent = 0; Touched = 0; Marked = 0; IdentityLinked = 0; Incomplete = 0; IncompleteKept = 0; IncompleteLeftOut = 0; WrongMergeSplit = 0; Collisions = 0; Duplicates = 0; Trimmed = 0 }
+        $t = [ordered]@{ Cis = 0; Changed = 0; LastSeenOnly = 0; Links = 0; RecordCi = 0; Daily = 0; Anchors = 0; Superseded = 0; PostedFull = 0; PostedSeen = 0; Bytes = [long]0; Minted = 0; Merged = 0; PostFailed = 0; Slim = 0; Resent = 0; Touched = 0; Marked = 0; IdentityLinked = 0; Incomplete = 0; IncompleteKept = 0; IncompleteLeftOut = 0; WrongMergeSplit = 0; Collisions = 0; Duplicates = 0; Trimmed = 0; RetiredDeletedInEntra = 0; CisSplit = 0 }
         # #642 the ledger ids this build found holding several objects: split off (proven) and still shared (not proven); the first 20 of each
         $wrongIds = New-Object System.Collections.Generic.List[string]; $collIds = New-Object System.Collections.Generic.List[string]
         # KEEP IT OUT UNTIL FULLY EVALUATED: the records of the CIs the rules' time limit stopped in this build (their built
@@ -1113,6 +1325,7 @@ function Invoke-SICiBuild {
             $dirtyRec = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
             foreach ($row in $batchRows) { if ($null -ne $row -and [bool](Get-SIItemValue $row 'Dirty')) { [void]$dirtyRec.Add([string](Get-SIItemValue $row 'RecordKey')) } }
             $bg = ConvertTo-SICiBatchGroups -Rows $batchRows -Types $types
+            Set-SICiGroupsSeparated -Groups @($bg.Groups) -Ambiguous $gr.DecisionAmbiguous
             # #533 (b): disabled accounts and devices left out by SI_DisabledAssets_Correlate (counted, said once below)
             $bgDis = Select-SICiGroupsEnabled -Groups @($bg.Groups) -Policy $disabledPolicy
             $disabledLeftOut += $bgDis.Count
@@ -1137,7 +1350,8 @@ function Invoke-SICiBuild {
             & $Log 'INFO' ("CIs: batch {0} of {1} -- building {2} CI(s) from {3} record(s)" -f $b, $nBatches, @($bg.Groups).Count, [int]$bg.Records); $said.At = [datetime]::UtcNow
             if ($ciWatch) { $ciWatch.What = ('batch {0} of {1} -- ' -f $b, $nBatches) }
             $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -Watch $ciWatch `
-                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof -Superseded $supMap
+                -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof -Superseded $supMap -AmbiguousIdKeys $gr.DecisionAmbiguous -PinnedIdKeys $decs.Plan.Pinned
+            foreach ($pd in @($core.Decisions)) { if ($pd -and $pd.PSObject.Properties['PinConflict'] -and $pd.PinConflict) { & $Log 'WARN' ("CIs: correlation decision not applied -- pin-id: the asset CI {0} carries two different pinned ids; none applied." -f [string]$pd.CorrelationId) } }
             Set-SICiWatchPhase -Watch $ciWatch -Phase 'linking its CIs to their owners and users, and preparing them for the database'
             # KEEP IT OUT UNTIL FULLY EVALUATED (Get-SICiHeld): a CI whose rules took too long got only part of the rules, so
             # nothing of this run's result of it is written, posted, linked or handed on -- $docs are the complete CIs of the
@@ -1146,6 +1360,7 @@ function Invoke-SICiBuild {
             $held = Get-SICiHeld -Docs $core.Docs -Incomplete $core.Incomplete -Stored $stored
             $docs = @($held.Docs)
             $t.Minted += $core.Minted; $t.Merged += $core.Merged; $t.Cis += $docs.Count + @($held.Kept).Count
+            $t.RetiredDeletedInEntra += [int](Get-SICiEntraDeletedRetiredCount -Docs $docs -Previous $stored.Lifecycle)
             foreach ($ic in @(@($held.Kept) + @($held.LeftOut))) {
                 $t.Incomplete++; if ($ic.Kept) { $t.IncompleteKept++ } else { $t.IncompleteLeftOut++ }
                 if ($t.Incomplete -le 50) { $heldNames.Add([string]$ic.Label); & $Log 'INFO' (Format-SICiIncompleteLine -Item $ic -Budget (Get-SICiRulesBudgetSeconds) -Kept ([bool]$ic.Kept)) }
@@ -1237,6 +1452,17 @@ function Invoke-SICiBuild {
                     $t.Slim -= $resend.Count; $t.Resent += $resend.Count
                     $resend.Clear()
                     & $readW @(& $sql (Get-SICiWriteSql) @{ j = (ConvertTo-SIJsonArray $whole2.Cis -Depth 14); l = (ConvertTo-SIJsonArray $whole2.Links); m = (ConvertTo-SIJsonArray $whole2.Map); p = '[]' } 'rows')
+                }
+                # A SPLIT IS NOT A FIX: the CIs this batch split are recorded, so a finding that moved with its record closes as
+                # 'rekeyed', never as 'remediated' (SI-DataCiLifecycle.ps1); two CIs merged again are no split any more
+                $splitEvents = @(Get-SICiSplitEvents -Decisions $core.Decisions -PreviousRecordCi $stored.RecordCi -SplitKeys $splitKeys)
+                if ($splitEvents.Count -gt 0 -or @($core.Superseded).Count -gt 0) {
+                    $mergedPairs = @(foreach ($sup in @($core.Superseded)) { if ($sup) { [ordered]@{ o = [string]$sup.OldId; n = [string]$sup.NewId } } })
+                    $sw2 = @(& $sql (Get-SICiSplitWriteSql) @{ s = (ConvertTo-SIJsonArray $splitEvents); m = (ConvertTo-SIJsonArray $mergedPairs) } 'rows') | Select-Object -First 1
+                    if ($splitEvents.Count -gt 0) {
+                        if ($sw2 -and [int](Get-SIItemValue $sw2 'Written') -lt 0) { $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = 'the database is not updated yet (sidata.CiSplit is missing): a CI split in this build is not recorded -- run the updater' }) }
+                        else { $t.CisSplit += $splitEvents.Count }
+                    }
                 }
                 # the owner / user values the batch's device / resource records named (a dirty identity dirties them next run)
                 if ($null -ne $idLinks) { $null = & $sql (Get-SICiIdentityRefWriteSql) @{ rk = (ConvertTo-SIJsonArray @($idLinks.RecordKeys)); r = (ConvertTo-SIJsonArray @($idLinks.Refs)) } 'rows' }
@@ -1359,6 +1585,8 @@ function Invoke-SICiBuild {
         Stop-SICiWatch -Watch $ciWatch; $ciWatch = $null
         if ($disabledLeftOut -gt 0) { & $Log 'INFO' (Format-SIDisabledStageLine -Stage Correlate -Count $disabledLeftOut -Where 'CI correlation') }
         if ($scopeLeftOut -gt 0) { & $Log 'INFO' (Format-SICiScopeLine -Count $scopeLeftOut) }
+        if ($t.RetiredDeletedInEntra -gt 0) { & $Log 'INFO' (Format-SICiEntraDeletedLine -Count $t.RetiredDeletedInEntra -DryRun:$DryRun) }
+        if ($t.CisSplit -gt 0) { & $Log 'INFO' ('CIs: {0:N0} CI(s) were split: the part that moved is a new CI, and a finding that moved with it closes on the old CI as "rekeyed", never as fixed.' -f $t.CisSplit) }
         if ($t.Incomplete -gt 0) { & $Log 'WARN' (Format-SICiIncompleteSummary -Count $t.Incomplete -Kept $t.IncompleteKept -LeftOut $t.IncompleteLeftOut -Budget (Get-SICiRulesBudgetSeconds)) }
         # the last batch's posted marks (the only separate mark statement of the build)
         if (-not $DryRun -and $pendingMarks.Count -gt 0) {
@@ -1562,6 +1790,7 @@ function Invoke-SICiBuild {
             $sv = New-Object System.Collections.Generic.List[object]
             $sv.Add([ordered]@{ n = 'LastBuildStatus'; v = $(if ($t.PostFailed -eq 0) { 'ok' } else { 'partial' }) })
             if ($fingerprint) { $sv.Add([ordered]@{ n = 'BuildFingerprint'; v = $fingerprint }) }
+            if ($decs.Hash -or [string]$state['CorrelationDecisions']) { $sv.Add([ordered]@{ n = 'CorrelationDecisions'; v = [string]$decs.Hash }) }
             if ($fullBuild) { $sv.Add([ordered]@{ n = 'LastFullBuild'; v = $now.ToString('o') }) }
             # (a build that carried on compared nothing: the count of the last whole reconcile stays)
             if ($buildAll) { $sv.Add([ordered]@{ n = 'LastReconcileCorrected'; v = [string]$mismatch.Count }) }
@@ -1671,7 +1900,7 @@ function Invoke-SICiBuild {
             Incomplete = $t.Incomplete; IncompleteKept = $t.IncompleteKept; IncompleteLeftOut = $t.IncompleteLeftOut; IncompleteCis = $heldNames.ToArray()
             ReconcileCorrected = $mismatch.Count; ReconcileCorrectedIds = $mismatch.ToArray(); Fingerprint = $fingerprint; IdentityLinked = $t.IdentityLinked
             # #642 the identity ledger's wrong merges this build split off, and the groups that still share an id (built as one CI)
-            WrongMergeSplit = $t.WrongMergeSplit; WrongMergeSplitIds = $wrongIds.ToArray(); SharedIdGroups = $t.Collisions; SharedIds = $collIds.ToArray(); DuplicateCis = $t.Duplicates
+            RetiredDeletedInEntra = $t.RetiredDeletedInEntra; WrongMergeSplit = $t.WrongMergeSplit; WrongMergeSplitIds = $wrongIds.ToArray(); SharedIdGroups = $t.Collisions; SharedIds = $collIds.ToArray(); DuplicateCis = $t.Duplicates
             # #493 / #496 the graph
             GraphCis = $gt.Cis; ServiceMemberships = $gt.Services; RelationClaims = $gt.Claims; ServiceChanges = $gt.ServiceChanges; GraphMissing = $graphMissing; Relations = $rel
             # the CIs no source records any more, retired this build

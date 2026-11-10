@@ -126,6 +126,44 @@ Describe 'REPRODUCED -- a lookup that cannot be read used to reach Defender unre
     }
 }
 
+Describe 'the enrichment read after the rows came back: only a table that does not exist reads as no rows' {
+    BeforeEach {
+        Reset-State
+        $script:Plans = @(@{ Var = '_x'; TableName = 'SI_X_Profile_CL'; ProjectionKql = 'SI_X_Profile_CL'; LeftKey = 'K'; RightKey = 'RK'; ColumnAliases = @{ NewCol = 'SrcCol' } })
+        $script:Rows = @([pscustomobject]@{ K = 'a' })
+    }
+    It 'a read too large ends the report -- never blank columns on a Complete report, nothing cached' {
+        Mock Invoke-LogAnalyticsKqlQueryParted { throw (New-RALaTooLargeError -Message "the lookup '_x' is more than Log Analytics can answer") }
+        $err = $null; try { $null = Invoke-ProfileAugment -Rows $script:Rows -Plans $script:Plans -WorkspaceResourceId $script:Ws } catch { $err = $_ }
+        $err | Should -Not -BeNullOrEmpty
+        Test-RAReportCannotRunError -Err $err | Should -BeTrue
+        $script:_ProfileAugmentLookups.Count | Should -Be 0 -Because 'only a read that succeeded is kept'
+        @($script:Warned | Where-Object { $_ -match 'columns stay empty' }).Count | Should -Be 0
+    }
+    It 'an error that already says "unavailable" ends the report as it is, nothing cached' {
+        Mock Invoke-LogAnalyticsKqlQueryParted { throw (New-RALookupUnavailableError -Message 'a lookup this report needs could not be read -- x') }
+        $err = $null; try { $null = Invoke-ProfileAugment -Rows $script:Rows -Plans $script:Plans -WorkspaceResourceId $script:Ws } catch { $err = $_ }
+        Test-RALookupUnavailableError -Err $err | Should -BeTrue
+        $script:_ProfileAugmentLookups.Count | Should -Be 0
+        @($script:Warned | Where-Object { $_ -match 'columns stay empty' }).Count | Should -Be 0
+    }
+    It 'any other failed read ends the report as "a lookup could not be read", nothing cached' {
+        Mock Invoke-LogAnalyticsKqlQueryParted { throw 'Request timed out' }
+        $err = $null; try { $null = Invoke-ProfileAugment -Rows $script:Rows -Plans $script:Plans -WorkspaceResourceId $script:Ws } catch { $err = $_ }
+        Test-RALookupUnavailableError -Err $err | Should -BeTrue
+        $script:_ProfileAugmentLookups.Count | Should -Be 0
+    }
+    It 'a table that does not exist still reads as no rows (control)' {
+        Mock Invoke-LogAnalyticsKqlQueryParted { throw "'project' operator: Failed to resolve table or column expression named 'SI_X_Profile_CL'" }
+        { $null = Invoke-ProfileAugment -Rows $script:Rows -Plans $script:Plans -WorkspaceResourceId $script:Ws } | Should -Not -Throw
+        @($script:Warned | Where-Object { $_ -match 'columns stay empty' }).Count | Should -Be 1
+    }
+    It 'the hunting layer passes every report-ending lookup error on, unretried (source)' {
+        $gh = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-GraphHunting.ps1'))
+        $gh | Should -Match ([regex]::Escape('(Test-RAReportCannotRunError -Err $_)) { $script:_LastGraphHuntingAllTimedOut = $false; throw }'))
+    }
+}
+
 Describe 'the bucket loop ends the report in one decision -- never retried, re-sized or split' {
     It 'the shared classifier says Fail (not Retry, not Split, not Absent)' {
         $e = New-RALookupUnavailableError -Message 'a lookup this report needs could not be read from Log Analytics (its lookups) -- 503'

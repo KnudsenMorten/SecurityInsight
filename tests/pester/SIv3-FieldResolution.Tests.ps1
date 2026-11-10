@@ -145,7 +145,7 @@ Describe 'a CI asks only for the fields its records carry -- and is the same CI 
     }
     It 'a device four providers see: the same fields, values, sources and order' {
         $ci = Should-BeTheSameCi -What 'device' -Records @(
-            (Rec 'mde' 'm1' $script:Now.AddDays(-1) @{ si_os_version = '10.0.20348'; si_hostname = 'srv01'; si_os_platform = 'windows_server'; si_internet_exposed = $true; si_ip_addresses = @('10.0.0.5', '10.0.0.6') }),
+            (Rec 'mde' 'm1' $script:Now.AddDays(-1) @{ si_asset_name = 'srv01'; si_os_version = '10.0.20348'; si_hostname = 'srv01'; si_os_platform = 'windows_server'; si_internet_exposed = $true; si_ip_addresses = @('10.0.0.5', '10.0.0.6') }),
             (Rec 'ad' 'a1' $script:Now.AddDays(-3) @{ si_os_version = '10.0.17763'; si_hostname = 'SRV01'; si_fqdn = 'srv01.contoso.local' }),
             (Rec 'entra' 'e1' $script:Now.AddDays(-2) @{ si_os_version = '10.0.20348'; si_account_enabled = $true }),
             (Rec 'eg' 'g1' $script:Now.AddDays(-200) @{ si_os_version = '6.3.9600'; si_internet_exposed = $false; si_ip_addresses = @('10.0.0.6', '10.0.0.7') }))
@@ -162,7 +162,7 @@ Describe 'a CI asks only for the fields its records carry -- and is the same CI 
     It 'records given as dictionaries, a name written in another case: found as Get-SIItemValue finds it' {
         $h = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal)
         foreach ($p in @(@('si_provider', 'mde'), @('si_record_type', 'device'), @('si_record_key', 'mde:m7'), @('si_class', 'device'), @('si_collection_time', $script:Now.AddHours(-1)),
-                @('si_collection_complete', $true), @('si_source_last_seen', $script:Now.AddDays(-1)), @('SI_OS_VERSION', '10.0.20348'), @('si_hostname', 'box7'))) { $h[$p[0]] = $p[1] }
+                @('si_collection_complete', $true), @('si_source_last_seen', $script:Now.AddDays(-1)), @('SI_OS_VERSION', '10.0.20348'), @('si_hostname', 'box7'), @('si_asset_name', 'box7'))) { $h[$p[0]] = $p[1] }
         $o = [ordered]@{ si_provider = 'entra'; si_record_type = 'device'; si_record_key = 'entra:e7'; si_class = 'device'; si_collection_time = $script:Now.AddHours(-1)
             si_collection_complete = $true; si_source_last_seen = $script:Now.AddDays(-2); Si_Hostname = 'BOX7'; si_account_enabled = $true }
         $ci = Should-BeTheSameCi -What 'dictionaries' -Records @($h, $o)

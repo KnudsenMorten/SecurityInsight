@@ -865,7 +865,8 @@ function Invoke-GraphHuntingQuery {
             if (Get-Command -Name Add-SIReportRetryAnswer -ErrorAction SilentlyContinue) { Add-SIReportRetryAnswer -Message $msg }
             # #674: a lookup the report needs could not be read after the rows came back (the post-query enrichment) --
             # never retried here, never classified as anything else: the report is not complete.
-            if ((Get-Command -Name Test-RALookupUnavailableError -ErrorAction SilentlyContinue) -and (Test-RALookupUnavailableError -Err $_)) { $script:_LastGraphHuntingAllTimedOut = $false; throw }
+            # (the same for a read no number of parts makes fit: Test-RAReportCannotRunError is both)
+            if ((Get-Command -Name Test-RAReportCannotRunError -ErrorAction SilentlyContinue) -and (Test-RAReportCannotRunError -Err $_)) { $script:_LastGraphHuntingAllTimedOut = $false; throw }
 
             # 🔒 'TaskCanceledException' is matched as TEXT as well as by type: since v2.2.452 the
             # error is raised by us as a short message rather than propagated as the SDK's exception

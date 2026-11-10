@@ -190,7 +190,17 @@ function New-RALaTooLargeError {
     param([Parameter(Mandatory)][string]$Message)
     $ex = New-Object System.InvalidOperationException($Message)
     $ex.Data['SIRALookupTooLarge'] = $true
-    $ex.Data['SIRACode'] = 'si-ra-0302'
+    return $ex
+}
+
+function New-RALaServiceBusyError {
+    <# The read stopped while Log Analytics was short of memory, also after the waits: the service's state at that moment, never
+       "too large". Marked as a lookup that cannot be read (Data SIRALookupUnavailable), so the report ends not complete in one
+       decision and the run goes on. Worded so it classifies as the platform's (temporarily unavailable), with no size word. #>
+    param([Parameter(Mandatory)][string]$What)
+    $lead = if ($What -eq 'the report''s query') { 'the report''s query could not be read' } else { 'a lookup this report needs could not be read ({0})' -f $What }
+    $ex = New-Object System.InvalidOperationException(('{0} -- Log Analytics is temporarily unavailable for it: it was short of memory each time it was asked, also after waiting. The findings are unknown for this run, not resolved.' -f $lead))
+    $ex.Data['SIRALookupUnavailable'] = $true
     return $ex
 }
 
@@ -198,9 +208,11 @@ function Invoke-RALaPartedRead {
     <#
         #690 (37). A Log Analytics read whose answer comes back SHORT for a limit (Test-RALaLimitPartialError) is read again
         in parts (Get-RALaPartQuery): 2, then 4, 8 ... -- every part must come back whole, and the rows of all parts are the
-        result. MEASURED stop, never a cap: when two counts in a row each had a part refused with NO rows at all, the limit
-        is the work of the query itself, which every part repeats -- more parts cannot help, and the read fails as too large
-        (si-ra-0302). A short answer that held rows is a result over the size limit, which more parts do shrink.
+        result. MEASURED stop, never a cap, on the refusals with NO rows: one inside the part refused at the previous count, or
+        at an earlier position, adds one; one that moved FORWARD out of that part (not inside it, and at a later position)
+        leaves the count as it is. Two (four for a source cut) say the work is the limit -- more parts cannot help, and the
+        read fails as too large (si-ra-0302). A short answer that held rows is a result over the size limit, which more parts
+        do shrink: it resets the count.
         Any other error is passed on as it is. -Read { param($Kql) rows } is the reader (and the seam for tests).
         Returns @{ Rows; Parts }.
     #>
@@ -217,9 +229,12 @@ function Invoke-RALaPartedRead {
     # #1107: a CI block is cut at its SOURCE (each part builds 1/N of it, so more parts DO shrink the work); any other query
     # keeps the result cut. The measured stop follows: a result cut repeats the whole work in every part, so two counts in a
     # row refused with no rows end it; a source cut halves the work with every doubling, so it ends only after FOUR such
-    # doublings in a row -- the work then is not the CIs' (measured, never a cap on the parts)
+    # doublings -- the work then is not the CIs'. Only a refusal that moved forward does not count, so this is a no-progress
+    # rule and never a cap on the parts or on the size of a tenant.
     $src = Get-RALaSourcePartition -Query $Query
     $stopAfter = if ($src.Can) { 4 } else { 2 }
+    # the part refused at the previous count: part $prevI of $prevN (no count yet: $prevN = 0)
+    $prevI = 0; $prevN = 0
     while ($true) {
         $acc = New-Object System.Collections.Generic.List[object]
         $refused = $null
@@ -261,8 +276,15 @@ function Invoke-RALaPartedRead {
             }
             return @{ Rows = $acc.ToArray(); Parts = $n }
         }
-        if ((Get-RALaPartialRowCount -Err $refused) -le 0) { $emptyRefusals++ } else { $emptyRefusals = 0 }
+        # A part is `hash % n == i` in both cuts, so part p of m is parts p and p + m of 2m: the refused part lies inside the one
+        # refused before when $i % $prevN is that part. Moved forward = not inside it and at a later position (i/n > prevI/prevN,
+        # compared without division). The first refusal of a read counts: its region is the whole read.
+        $movedForward = ($prevN -gt 0) -and (($i % $prevN) -ne $prevI) -and (([long]$i * $prevN) -gt ([long]$prevI * $n))
+        if ((Get-RALaPartialRowCount -Err $refused) -gt 0) { $emptyRefusals = 0 }
+        elseif (-not $movedForward) { $emptyRefusals++ }
+        $prevI = $i; $prevN = $n
         if ($emptyRefusals -ge $stopAfter) {
+            if ("$($refused.Exception.Message)" -match $busyRx) { throw (New-RALaServiceBusyError -What $What) }
             throw (New-RALaTooLargeError -Message ("{0} is more than Log Analytics can answer: read in {1} part(s), a part still stopped at the service's limit before it returned a row, so reading it in more parts cannot make it fit -- {2}" -f $What, $n, (($refused.Exception.Message -split "`n") | Select-Object -First 1)))
         }
         $n = $n * 2

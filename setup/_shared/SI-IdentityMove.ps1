@@ -27,7 +27,8 @@
       5 prove        the next REAL run of each re-pointed job succeeds on the new identity (an execution started after the
                      switch whose template names the new client id; the Entra managed-identity sign-in log with the new
                      object id when it may be read); a web / MCP app: a healthy revision made after the switch; the updater
-                     itself: an update that signed in AS the new identity
+                     itself: an update that signed in AS the new identity. A run that did not succeed is blamed on the new
+                     identity only when the pipeline recorded a refused right or sign-in for it; anything else waits
       6 clean-up     only after EVERY role at the install is proven: the old identity's rights removed (its SQL user only
                      after the new one reads back holding all of it), it is detached everywhere, the old identity deleted;
                      the updater's own old identity only by an update that runs as the new one
@@ -70,6 +71,8 @@ $script:SIMove = @{
     InstallStateMax = 400
     ChangedBy    = 'Invardia Support (identity move)'
     ExecDone     = @('Succeeded', 'Failed', 'Stopped', 'Degraded')
+    # the pipeline's error classes (engine\_shared\SI-ErrorClass.ps1) that mean a right or a sign-in was refused
+    RightsErrorClasses = @('graph-401', 'graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'sql-login', 'mi-unavailable')
     NameRx       = '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$'
     GuidRx       = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     Waits        = @{ Tries = 6; Seconds = 10; ProvisionTries = 60 }
@@ -592,8 +595,10 @@ function Get-SIIdentityMoveJobProof {
           proven   it Succeeded and its template names -NewClientId, or (-PulledWith) the job uses the new identity only to
                    pull its image -- a successful run pulled with it (seen live: the database setup job signs in with its
                    own identity and pulls with the engine's)
-          failed   it did not succeed (or ran without the new client id) -- rollback = the switch reversed
-          waiting  none has ended since the switch
+          waiting  none has ended since the switch; or the latest was stopped, or succeeded without the new client id: neither
+                   says anything about the identity's rights. A latest run that Failed / Degraded also waits, marked Suspect:
+                   Invoke-SIMoveProve looks up why it failed (Resolve-SIIdentityMoveRightsEvidence), and only a refused right
+                   or sign-in makes it 'failed'. A run that failed for any other reason is never blamed on the new identity
           idle     the job ran nothing in -IdleDays before the switch and nothing since: it does not hold the proof back
     #>
     param([Parameter(Mandatory)][string]$Name, [object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$SwitchedUtc,
@@ -610,13 +615,37 @@ function Get-SIIdentityMoveJobProof {
         $names = @(Find-SIIdentityMoveReferences -Node $e.Template -Values @($NewClientId)).Count -gt 0
         if ($e.Status -eq 'Succeeded' -and $names) { return [pscustomobject]@{ Name = $Name; State = 'proven'; Execution = $e.Name; Why = ('{0} succeeded on the new identity{1}' -f $e.Name, $tail) } }
         if ($e.Status -eq 'Succeeded' -and $PulledWith) { return [pscustomobject]@{ Name = $Name; State = 'proven'; Execution = $e.Name; Why = ('{0} succeeded with its image pulled by the new identity{1}' -f $e.Name, $tail) } }
-        if ($e.Status -eq 'Succeeded') { return [pscustomobject]@{ Name = $Name; State = 'failed'; Execution = $e.Name; Why = ('{0} succeeded but its template does not name the new client id' -f $e.Name) } }
-        return [pscustomobject]@{ Name = $Name; State = 'failed'; Execution = $e.Name; Why = ('{0} ended {1} after the switch' -f $e.Name, $e.Status) }
+        if ($e.Status -eq 'Succeeded') { return [pscustomobject]@{ Name = $Name; State = 'waiting'; Execution = $e.Name; Why = 'its latest run succeeded but did not start with the new identity; its next run decides' } }
+        if ($e.Status -eq 'Stopped') { return [pscustomobject]@{ Name = $Name; State = 'waiting'; Execution = $e.Name; Why = 'its latest run was stopped, which says nothing about its rights; its next run decides' } }
+        return [pscustomobject]@{ Name = $Name; State = 'waiting'; Execution = $e.Name; Suspect = $true; Why = 'its latest run did not finish successfully, and nothing shows that a right is missing. The old identity keeps every right until a later run succeeds' }
     }
     $before = @($ex | Where-Object { $_.Start -le $SwitchedUtc -and $_.Start -gt $SwitchedUtc.AddDays(-$IdleDays) })
     $since = @($ex | Where-Object { $_.Start -gt $SwitchedUtc })
     if (-not $before.Count -and -not $since.Count) { return [pscustomobject]@{ Name = $Name; State = 'idle'; Execution = ''; Why = ('no execution in the {0} days before the switch' -f $IdleDays) } }
     [pscustomobject]@{ Name = $Name; State = 'waiting'; Execution = ''; Why = 'its next run has not ended yet' }
+}
+
+function Get-SIIdentityMoveRightsEvidenceSql {
+    <# PURE. The read-only look-up of why these executions failed: the class the pipeline recorded for each of its steps. #>
+    param([Parameter(Mandatory)][string[]]$Executions)
+    $in = @($Executions | Where-Object { $_ } | Select-Object -Unique | ForEach-Object { ConvertTo-SIMoveSqlText $_ }) -join ', '
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.FlowStepRun') IS NOT NULL SELECT Execution, ErrorClass FROM cfg.FlowStepRun WHERE Execution IN ($in);"
+}
+
+function Resolve-SIIdentityMoveRightsEvidence {
+    <# PURE. -Items with every Suspect job whose execution the pipeline recorded under a refused right or sign-in (-Rows:
+       Execution, ErrorClass) turned to 'failed' (Rights). Every other item is returned as it is: a job with no such record
+       -- outside the pipeline, or failed for another reason -- keeps waiting. #>
+    param([object[]]$Items = @(), [object[]]$Rows = @())
+    $refused = @{}
+    foreach ($r in @($Rows | Where-Object { $_ })) {
+        if ([string](Get-SIMoveProp $r @('ErrorClass')) -in $script:SIMove.RightsErrorClasses) { $refused[([string](Get-SIMoveProp $r @('Execution'))).ToLowerInvariant()] = $true }
+    }
+    foreach ($i in @($Items | Where-Object { $_ })) {
+        if ([bool](Get-SIMoveProp $i @('Suspect')) -and $refused.ContainsKey(([string]$i.Execution).ToLowerInvariant())) {
+            [pscustomobject]@{ Name = $i.Name; State = 'failed'; Execution = $i.Execution; Rights = $true; Why = 'its latest run failed because a right or a sign-in was refused to the new identity' }
+        } else { $i }
+    }
 }
 
 function Get-SIIdentityMoveAppProof {
@@ -1595,8 +1624,23 @@ function Invoke-SIMoveProve {
             $again = @(Find-SIIdentityMoveReferences -Node $u.Resource -Values @(Get-SIIdentityMoveReferenceValues -Identity $sel.Old))
             if ($again.Count) { $p = [pscustomobject]@{ Name = $u.Name; State = 'waiting'; Execution = ''; Why =('it names the old identity {0} again ({1}) -- the next switch re-points it' -f $sel.Old.Name, ($again -join ', ')) } }
         }
-        $items.Add($p); $lines.Add(('{0}: {1} -- {2}' -f $p.Name, $p.State, $p.Why))
+        $items.Add($p)
     }
+    # a job whose latest run failed: was a right or a sign-in refused? Read only when there is such a run; what cannot be read
+    # is not known, and not known is never a failure
+    $suspects = @($items | Where-Object { [bool](Get-SIMoveProp $_ @('Suspect')) })
+    $evidence = @(); $evidenceRead = $true
+    if ($suspects.Count) {
+        if ($Ctx.SqlServer -and $Ctx.StateDatabase) {
+            try { $evidence = @(Invoke-SIMoveSql -Server $Ctx.SqlServer -Database $Ctx.StateDatabase -Query (Get-SIIdentityMoveRightsEvidenceSql -Executions @($suspects | ForEach-Object { [string]$_.Execution })) -Reason $Ctx.Reason) } catch { $evidenceRead = $false }
+        } else { $evidenceRead = $false }
+    }
+    $items = @(Resolve-SIIdentityMoveRightsEvidence -Items $items -Rows $evidence)
+    foreach ($p in @($items | Where-Object { -not $selfProof })) {
+        if ([bool](Get-SIMoveProp $p @('Suspect'))) { $lines.Add(('WARNING: {0}: {1}' -f $p.Name, $p.Why)) }
+        else { $lines.Add(('{0}: {1} -- {2}' -f $p.Name, $p.State, $p.Why)) }
+    }
+    if (-not $evidenceRead) { $lines.Add('why those runs failed could not be read, so they count as waiting') }
     # evidence: the new identity's own sign-ins (its object id) since the switch -- read when the Support app may
     $f = [uri]::EscapeDataString(("createdDateTime ge {0} and servicePrincipalId eq '{1}' and signInEventTypes/any(t: t eq 'managedIdentity')" -f $sw.ToString('yyyy-MM-ddTHH:mm:ssZ'), $sel.New.PrincipalId))
     $sg = Invoke-SIMoveGraph -Uri ("{0}/auditLogs/signIns?`$top=1&`$filter={1}" -f $script:SIMove.GraphBeta, $f) -Reason $Ctx.Reason
@@ -1609,8 +1653,13 @@ function Invoke-SIMoveProve {
         else { return New-SIIdentityMoveStepResult -Step prove -State stop -Lines ($lines.ToArray() + 'READ BACK FAILED: the move record') }
     }
     $state = switch ($verdict) { 'proven' { $(if ($Ctx.Apply) { 'done' } else { 'planned' }) } 'failed' { 'stop' } default { 'waits' } }
-    if ($verdict -eq 'failed') { $lines.Add('a run failed on the new identity: switch back with -Step switch -Rollback -Apply, then find the missing right') }
-    New-SIIdentityMoveStepResult -Step prove -State $state -Lines $lines -Data @{ Verdict = $verdict; Items = $items.ToArray() }
+    if ($verdict -eq 'failed') {
+        $bad = @($items | Where-Object State -eq 'failed')
+        # an app: the revision is named; its log says why, which need not be a right
+        foreach ($b in @($bad | Where-Object { -not [bool](Get-SIMoveProp $_ @('Rights')) })) { $lines.Add(('{0}: {1}. The old identity keeps every right until it is healthy' -f $b.Name, $b.Why)) }
+        if (@($bad | Where-Object { [bool](Get-SIMoveProp $_ @('Rights')) }).Count) { $lines.Add('a run was refused a right on the new identity: switch back with -Step switch -Rollback -Apply, then find the missing right') }
+    }
+    New-SIIdentityMoveStepResult -Step prove -State $state -Lines $lines -Data @{ Verdict = $verdict; Items = @($items) }
 }
 
 function Invoke-SIMoveCleanup {

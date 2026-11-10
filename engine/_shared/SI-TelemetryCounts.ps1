@@ -545,8 +545,8 @@ let t = SI_Identity_Profile_CL | where TimeGenerated > ago(8d);
 let lastColl = toscalar(t{{IDB}} | summarize _in = max(ingestion_time()) by CollectionTime | where _in < ago(30m) | summarize max(CollectionTime));
 t
 | where CollectionTime == lastColl
-| extend _id = tostring(column_ifexists("SI_AssetId", "")), _type = tostring(column_ifexists("IdentityType", "")), _ut = tostring(column_ifexists("UserType", "")), _en = tostring(column_ifexists("AccountEnabled", ""))
-| where isnotempty(_id) and _type =~ "User"
+| extend _id = tostring(column_ifexists("SI_AssetId", "")), _type = tostring(column_ifexists("IdentityType", "")), _ut = tostring(column_ifexists("UserType", "")), _en = tostring(column_ifexists("AccountEnabled", "")), _del = tostring(column_ifexists("DeletedDateTime", ""))
+| where isnotempty(_id) and _type =~ "User" and isempty(_del)
 | summarize _ut = take_any(_ut), _en = take_any(_en) by _id
 | summarize Users = countif(_ut =~ "Member" and _en =~ "true"), Guests = countif(_ut =~ "Guest"), Typed = countif(isnotempty(_ut)), Total = count()
 '@
@@ -581,6 +581,23 @@ t
 | extend _type = tostring(column_ifexists("IdentityType", "")), _sid = toupper(tostring(column_ifexists("OnPremSid", "")))
 | where _type =~ "User" and isnotempty(_sid)
 | distinct OnPremSid = _sid
+'@
+    $q.Replace('{{IDB}}', (Get-SICountCompleteFilter -Source identity -CompleteBy $CompleteBy))
+}
+
+function Get-SIEntraSyncedUserCountQuery {
+    <# The KQL for how many users of the latest identity collection are synchronised from on-prem AD (one row: Synced). With no
+       on-prem SID collected at all it says whether that is because there are no synced users, or because the SIDs are not
+       there yet -- then an AD number would count every synced user twice. #>
+    param([System.Collections.IDictionary]$CompleteBy = (Get-SICountCompleteByState))
+    $q = @'
+let t = SI_Identity_Profile_CL | where TimeGenerated > ago(8d);
+let lastColl = toscalar(t{{IDB}} | summarize _in = max(ingestion_time()) by CollectionTime | where _in < ago(30m) | summarize max(CollectionTime));
+t
+| where CollectionTime == lastColl
+| extend _type = tostring(column_ifexists("IdentityType", "")), _sync = tostring(column_ifexists("OnPremisesSyncEnabled", "")), _del = tostring(column_ifexists("DeletedDateTime", ""))
+| where _type =~ "User" and _sync =~ "true" and isempty(_del)
+| summarize Synced = count()
 '@
     $q.Replace('{{IDB}}', (Get-SICountCompleteFilter -Source identity -CompleteBy $CompleteBy))
 }
@@ -658,6 +675,16 @@ function Get-SIAdOnlyUserCount {
             try { $sids = & $RunQuery (Get-SIEntraOnPremSidQuery) }
             catch { return @{ Count = $null; Reason = ('the Entra on-prem SIDs to match synced users could not be read: {0}' -f (& $why $_.Exception.Message)) } }
             if ($null -eq $sids) { return @{ Count = $null; Reason = 'the Entra on-prem SIDs to match synced users could not be read' } }
+            # an EMPTY list is not "no synced users": before the identity collection has filled the SIDs nothing would match
+            # and every enabled AD user would be added as AD-only -- synced users counted twice
+            if (@($sids | Where-Object { $_ }).Count -eq 0) {
+                $synced = $null
+                try { $synced = @(& $RunQuery (Get-SIEntraSyncedUserCountQuery)) }
+                catch { return @{ Count = $null; Reason = ('whether this tenant has synced users could not be read: {0}' -f (& $why $_.Exception.Message)) } }
+                $nSynced = [long]0
+                foreach ($sr in @($synced)) { if ($null -ne $sr) { $v = ConvertTo-SITelemetryCount $sr.Synced; if ($null -ne $v -and $v -gt $nSynced) { $nSynced = $v } } }
+                if ($nSynced -gt 0) { return @{ Count = $null; Reason = ('{0} synced user(s) in the latest identity collection have no on-premises SID yet, so AD users cannot be told from synced ones; they are counted again after the next identity collection' -f $nSynced) } }
+            }
         }
         return (Get-SIAdOnlyUserCountFromRows -EgRows $eg -EntraSids @($sids))
     } catch { return @{ Count = $null; Reason = ('the Exposure Graph could not be read: {0}' -f (& $why $_.Exception.Message)) } }

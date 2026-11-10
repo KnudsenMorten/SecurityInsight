@@ -50,6 +50,11 @@ $script:_SIIdentityStats = $null
 # Every SI_AssetId this run knows about, so an id can be recognised as SI-authored rather than
 # merely guessed at from its shape. Feeds Get-SIAssetIdSource -- see the note above that function.
 $script:_SIIdentityIds   = $null
+# A table that could not be read this run (table -> the service's first line): empty = the map is whole. While one is
+# unread, what the other tables answered is kept (table -> rows), so only the unread one is asked again. Only a read that
+# succeeded is kept: a failed read is never remembered as "no assets".
+$script:_SIIdentityUnread = $null
+$script:_SIIdentityRows   = $null
 
 function Get-SIIdentityShortKey {
     param([string]$Name)
@@ -112,7 +117,11 @@ function Initialize-SIAssetIdentityMap {
         [string[]]$Tables = @('SI_Endpoint_Profile_CL','SI_Azure_Profile_CL','SI_Identity_Profile_CL'),
         [switch]$Force
     )
-    if ($script:_SIIdentityExact -and -not $Force) { return }
+    $wasUnread = ($null -ne $script:_SIIdentityUnread -and $script:_SIIdentityUnread.Count -gt 0)
+    if ($script:_SIIdentityExact -and -not $Force -and -not $wasUnread) { return }
+    $kept = @{}
+    if ($wasUnread -and -not $Force -and $null -ne $script:_SIIdentityRows) { $kept = $script:_SIIdentityRows }
+    $unread = @{}
 
     $ids   = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $exact = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -153,16 +162,28 @@ $tbl
         # carry it (Invoke-LogAnalyticsKqlQueryParted, RA-LaPartedRead.ps1); a cut answer is refused, never taken as every asset
         if (-not (Get-Command -Name Invoke-LogAnalyticsKqlQueryParted -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'RA-LaPartedRead.ps1'))) { . (Join-Path $PSScriptRoot 'RA-LaPartedRead.ps1') }
         try {
-            if (Get-Command -Name Invoke-LogAnalyticsKqlQueryParted -ErrorAction SilentlyContinue) { $rows = Invoke-LogAnalyticsKqlQueryParted -WorkspaceResourceId $WorkspaceResourceId -Query $q -What ('the asset identities of {0}' -f $tbl) }
+            if ($kept.ContainsKey($tbl)) { $rows = $kept[$tbl] }
+            elseif (Get-Command -Name Invoke-LogAnalyticsKqlQueryParted -ErrorAction SilentlyContinue) { $rows = Invoke-LogAnalyticsKqlQueryParted -WorkspaceResourceId $WorkspaceResourceId -Query $q -What ('the asset identities of {0}' -f $tbl) }
             else { $rows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $q }
         }
         catch {
             # A table that does not exist on this install is normal (publicip is optional; a
             # customer may not run every engine). Never fail the run for it.
-            Write-Warn2 ("[identity] {0}: unavailable -- {1}" -f $tbl, $_.Exception.Message)
+            if ((Get-Command -Name Test-RANoDataSource -ErrorAction SilentlyContinue) -and (Test-RANoDataSource -Message ([string]$_.Exception.Message))) {
+                Write-Warn2 ("[identity] {0}: unavailable -- {1}" -f $tbl, $_.Exception.Message)
+                $stats[$tbl] = 0
+                $kept[$tbl] = @()
+                continue
+            }
+            # Any other failure (too large, a timeout, the service busy) is NOT "this table has no assets": the reports that
+            # fill their asset ids from this map are not complete until it can be read (Assert-SIAssetIdentityMapRead).
+            $__unreadLine = @([string]$_.Exception.Message -split "`r?`n" | Where-Object { $_ }) | Select-Object -First 1
+            Write-Warn2 ("The asset identities of {0} could not be read in this run. The summary reports are not complete until they can be: {1}" -f $tbl, $__unreadLine)
+            $unread[$tbl] = [string]$__unreadLine
             $stats[$tbl] = 0
             continue
         }
+        $kept[$tbl] = $rows
         $stats[$tbl] = @($rows).Count
         foreach ($r in $rows) {
             $nm = [string]$r.SI_AssetName
@@ -216,6 +237,8 @@ $tbl
     foreach ($ak in $armCollisions) { [void]$byArm.Remove($ak) }
     foreach ($ek in $egCollisions) { [void]$byEg.Remove($ek) }
 
+    $script:_SIIdentityUnread = $unread
+    $script:_SIIdentityRows = $(if ($unread.Count -gt 0) { $kept } else { $null })
     $script:_SIIdentityExact = $exact
     $script:_SIIdentityShort = $short
     $script:_SIIdentityPath  = $path
@@ -272,6 +295,31 @@ function Resolve-SIAssetIdentity {
 }
 
 function Get-SIAssetIdentityStats { $script:_SIIdentityStats }
+
+function Test-SIAssetIdentityMapNeeded {
+    <# PURE. Does this report fill and merge its assets' ids from the map? The summary reports do (RA-RiskScore.ps1, the
+       same name rule); a detailed report keeps the ids its own query returned. #>
+    param([AllowEmptyString()][string]$ReportName)
+    [bool]($ReportName -and ($ReportName.EndsWith('_Summary', [StringComparison]::OrdinalIgnoreCase) -or $ReportName.IndexOf('_Summary_', [StringComparison]::OrdinalIgnoreCase) -ge 0))
+}
+
+function Assert-SIAssetIdentityMapRead {
+    <#
+        A report that needs the map, while a table of it could not be read: the unread table is asked again (a failed read is
+        never kept) and, still unread, the report ends NOT COMPLETE with the "lookup unavailable" error -- its last complete
+        result is kept and nothing of it closes. Never blank ids on a Complete report. A report that does not need the map,
+        or a whole map: nothing happens.
+    #>
+    param([AllowEmptyString()][string]$ReportName, [AllowEmptyString()][string]$WorkspaceResourceId)
+    if (-not (Test-SIAssetIdentityMapNeeded -ReportName $ReportName)) { return }
+    if ($null -eq $script:_SIIdentityUnread -or $script:_SIIdentityUnread.Count -eq 0) { return }
+    if ($WorkspaceResourceId) { Initialize-SIAssetIdentityMap -WorkspaceResourceId $WorkspaceResourceId }
+    if ($script:_SIIdentityUnread.Count -eq 0) { return }
+    $names = @($script:_SIIdentityUnread.Keys | Sort-Object)
+    $ex = New-Object System.InvalidOperationException(("a lookup this report needs could not be read from Log Analytics (the asset identities of {0}) -- the report is not run without it, because its assets would then be listed without their ids: {1}" -f ($names -join ', '), [string]$script:_SIIdentityUnread[$names[0]]))
+    $ex.Data['SIRALookupUnavailable'] = $true
+    throw $ex
+}
 
 # ================================================================================================
 # WHERE DID THIS ID COME FROM?  (operator, 2026-09-01: "so i know where it came from")

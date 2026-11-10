@@ -41,8 +41,9 @@ live in the internal test documentation — this doc only points at them.
   out-of-band. Asset tagging is the one engine that can write (machine tags, Azure tags, custom
   security attributes): it runs under its own identity and logs WOULD-APPLY intent only until a
   Pro setting turns writing on (see *Asset tagging*).
-- **PowerShell 5.1 runtime.** Engines run on Windows PowerShell 5.1 (no `?.`/`??`, no
-  `RSA.ImportFromPem`; `Set-Content` defaults to UTF-16; culture-safe DateTime parsing).
+- **PowerShell 7 in the containers.** Every container image runs PowerShell 7 on Linux and carries no Azure CLI and no
+  PowerShell module. Engine code stays compatible with Windows PowerShell 5.1 (no `?.`/`??`, no `RSA.ImportFromPem`,
+  culture-safe DateTime parsing), because a Community install can also run on a Windows server.
 - **No PowerShell modules -- native REST, ARM and .NET only.** Every engine, launcher and container runs
   without installing or loading a single PowerShell module (no Az.*, no AzLogDcrIngestPS, no Microsoft
   Graph SDK, no platform module): Azure Resource Manager, Resource Graph, Log Analytics, storage, Key
@@ -60,8 +61,8 @@ live in the internal test documentation — this doc only points at them.
 - **Bulk-fetch contract.** Detection rules never make external calls in the per-asset loop — all
   external data is fetched once during Discover/Collect, indexed, and looked up O(1). `external-calls`
   must not scale with asset count (lint-enforced).
-- **Hosts.** A plain Windows VM (Task Scheduler) or Azure Container Apps Jobs with KEDA
-  queue auto-scaling for large tenants. Same code on both.
+- **Hosts.** Azure Container Apps jobs with queue-scaled workers (KEDA) -- the only host for Pro and what the guided
+  install builds for Community -- or a plain Windows server (Task Scheduler; Community). Same engine code on both.
 
 ---
 
@@ -92,7 +93,7 @@ live in the internal test documentation — this doc only points at them.
 
 ## Architecture overview
 
-> Source of truth for the SecurityInsight v2.2 engine: folder layout, phase boundaries, plugin contracts, and performance rules. Code that does not match this document is wrong — either the code changes or the document changes, never both at once silently.
+> Source of truth for the SecurityInsight engine: folder layout, phase boundaries, plugin contracts, and performance rules. Code that does not match this document is wrong — either the code changes or the document changes, never both at once silently.
 
 ### Goals
 
@@ -189,7 +190,7 @@ These are non-negotiable. Lint should reject violations.
    - DCRs (`dcr-si-identity-profile`, …)
    - KV secrets (`SI_SPN_AppId`, `SI_SPN_Secret`, …)
    - Storage tables / containers / queues (`sitypeprofiles`, `sifingerprint`, `sistaging`, `si-<engine>-<stage>`)
-   - Container App Jobs (`caj-si-<engine>-*`), UAMI (`uami-si-<engine>`), ACR image (`si-orchestrator`)
+   - Container Apps jobs (`caj-si-<job>`), managed identities (`id-si-<role>`), the engine image (`si-orchestrator`)
 
    The prefix is real collision protection — these resources share namespaces with everything else in the customer's tenant.
 4. **Drop `SI_` / `SI` prefix from FIELD names within table definitions**: columns inside an LA table use unprefixed names (`Tier`, `Upn`, `DisplayName`, `PrimaryEntityId`, `Hostname`, `AssetName`, …). Inside a tenant-dedicated table the columns aren't sharing namespace with anything; the prefix is pure noise. Schema-driven row builders (`Build-IdentityProfileRow`, etc.) emit columns directly from `<engine>.schema.locked.json` `fields[].name` and already comply.
@@ -1562,6 +1563,23 @@ complete. And when the RECEIVING report (Azure_DefenderRecommendations_*) then f
 giver's list read empty, the giver is marked not complete (`Get-RAHandoffContradiction`). An intentionally empty hand-off
 (#278: the receiving report is not in the run, the block is emptied) is not looked at.
 
+**Only a table that does not exist reads as "no rows".** A lookup that exists and could not be read (too large for any
+number of parts, a timeout, the service busy) ends the report as not complete, and it keeps its last complete result. That
+holds for the enrichment added after a report's rows come back, and for the asset identity map the summary reports fill
+their asset ids from: a table of the map that could not be read is asked again by the next summary report that needs it,
+and until it reads, those reports are not complete. Only a read that succeeded is kept for the rest of the run.
+
+**A read too large for one answer goes on while it is getting somewhere.** It is read again in twice as many parts each
+time, and every part must come back whole. A part that is refused counts towards giving up, unless the refusal moved further
+along the result, which means the part refused before has become readable. After several such refusals the read gives up.
+There is no limit on the number of parts or on the size of a tenant. If the service was short
+of memory at the end, the report is said to be not complete because the service was temporarily unavailable, not because it
+is too large, and the next run reads it again.
+
+**A temporary answer from SecurityInsight's own database is the platform's.** A report that failed on one is reported as a
+temporary service failure, also when the answer did not pass through the retry that normally labels it. A database failure
+SecurityInsight does not recognise stays reported as not recognised.
+
 **#673 -- plan B for the Azure recommendation reports: the Defender de-duplication in the engine, against a list in SQL
 (SI_RA_DefenderFilterInEngine ON by default since rc2 -- owner 2026-10-16 "we need all out now", not set = on, 'off' = off; SI_RA_DefenderFilterCompare OFF by default; REMOVE-ME once plan B has held live).** Azure_Recommendations_*
 drop every (resource, recommendation) the Defender recommendation reports carry with three `join kind=leftanti (_dfcPairs)` on
@@ -2072,6 +2090,10 @@ field as 2.8 allows).
 Owner 2026-10-21: *"we need to be able to trust all data"* / *"default filter is active, so it should be active only"*. Risk
 Analysis keeps producing findings for CIs that are not seen or retired; what a view COUNTS is decided by the CI's lifecycle
 (`sidata.Ci.Lifecycle`, the CI build's, from the install's windows -- never a day count of the view's own, #859).
+
+The correlation decisions in `correlation-decisions.custom.yaml` (never-merge, force-merge, pin-id) apply to the CIs as well as to the correlation map, in every edition, and each one is said in the run log. When a never-merge separates a CI, one part keeps the CI id and the other becomes a new CI. A finding that moved with its record closes on the old CI as "rekeyed" and carries on under the new CI; a split never reads as fixed. The same holds when a "same machine" decision is removed. If decisions were in force at the last build and the file can no longer be read, no CIs are built until it can be, because building without them would undo them.
+
+A user that Entra ID lists as deleted (in its deleted items) is not an active identity. Its asset is retired at once and its findings close as "asset deleted in Entra ID", never as fixed; this does not depend on any setting. The asset stays active when another source still sees the identity, or when its Active Directory account is still active. A finding that only the deleted Entra user carried then closes as "report changed". A user restored in Entra ID is listed again and its asset is active again. The run log says how many identities were retired for this reason.
 
 - **The stamp (W10, the root).** The data sync stamps `sidata.Finding.CiLifecycle` from the finding's CI -- the CI id =
   AssetKey, else the CI that carries it as a linked object (`CiLink.NativeId`, primary and newest first; the key figures'
@@ -2595,6 +2617,8 @@ To override an existing column, repeat the locked entry's `name` in the custom f
 - **Hub join**: `exposureGraph` · **EG node labels in scope**: `user`, `group`, `serviceprincipal`, `managedidentity`
 
 **Identity / correlation / hashing**: `PrimaryEntityId`, `PrimaryEntityType`, `EntityIds` (merged entra+mdi+exposureGraph+derived), `RunId`, `CollectionTime`, `Upn`, `Mail`, `OnPremSid` (`onPremisesSecurityIdentifier`), `OnPremSamAccountName`, `OnPremObjectGuid` (mdi/EG ActiveDirectoryObjectGuid), `EmployeeId`, `CollectHash`/`EnrichHash`/`PostureHash`/`ClassifyHash`, `AssetName` (derived, profile, addedIn 2.2.0).
+
+A user synchronised from on-premises Active Directory carries its SID, account name and domain from Entra ID in the identity profile. The users count uses the SID to count such a user once. While the latest identity collection holds synced users but no SID yet, Active Directory accounts are left out of the count and the run log says so; they are counted again after the next identity collection.
 
 **Account posture (entra/EG/mdi)**: `AccountEnabled`, `UserType`, `CreationType`, `ExternalUserState`, `OnPremisesSyncEnabled`, `IsManagementRestricted`, `IsBreakGlass` (derived), `HasLeakedCredentials`, `HasAdLeakedCredentials`, `MdiIsLockedOut`, `MdiIsSensitive`, `IsAdSensitiveFlagged` (AD-side, ≠ MDI's), `AdminCount`, `UserAccountControl`, `SidHistory`, `HasSidHistory` (derived).
 
@@ -4679,131 +4703,57 @@ If you want to act on this audit (separate work):
 
 ## Container & KEDA deployment
 
-End-to-end recipe for a **VM-less** SecurityInsight install: everything runs as Azure Container App Jobs (ACR image + KEDA-scaled per-engine jobs). No launcher VM required. This is the procedure used for `rg-<suffix>` (Community flavour).
+How a container install is put together: every engine runs as an Azure Container Apps job from one image in the install's
+own registry, queue-scaled workers take the large collections, and Pro adds two container apps (the web app and its MCP
+server), an Azure SQL server and an updater job. No virtual machine is needed.
 
 ### 1. Prerequisites (one-time)
 
 | Requirement | Notes |
 |---|---|
-| Azure subscription with Owner / RBAC Admin | Needed to grant SPN RBAC and create Container Apps Env + ACR |
-| Tenant Global Admin (or Privileged Role Admin) | For `New-SISpn` Graph admin-consent step |
-| `az` CLI installed | `Bootstrap-ContainerAppJob` shells out to `az acr build` |
-| `Az` PowerShell + `Microsoft.Graph` modules | PS 5.1 or pwsh 7 |
-| Key Vault `kv-<suffix>` in target RG | Pre-create with **RBAC mode** (modern default); operator must have `Key Vault Administrator` on it |
+| The person installing | Contributor and Role Based Access Control Administrator on the install's resource group; subscription rights only to create the resource group or register resource providers. |
+| Rights in Entra | Application permissions for the identities need an administrator's consent. A grant the installer may not make is printed as an exact command for someone who can. |
+| Tools | Nothing to install: no Azure CLI and no PowerShell module. Setup runs in PowerShell 7 or Azure Cloud Shell and signs in by itself. |
 
-Pre-create the KV:
+### 2. The install
 
-```powershell
-function global:New-Guid { [System.Guid]::NewGuid() }   # PS 5.1 shim
-New-AzKeyVault -VaultName 'kv-<suffix>' `
-               -ResourceGroupName 'rg-<suffix>' `
-               -Location 'westeurope' `
-               -Sku Standard `
-               -EnablePurgeProtection `
-               -SoftDeleteRetentionInDays 7
-# Operator RBAC
-$me = (Get-AzADServicePrincipal -ApplicationId (Get-AzContext).Account.Id).Id
-New-AzRoleAssignment -ObjectId $me `
-                     -RoleDefinitionName 'Key Vault Administrator' `
-                     -Scope (Get-AzKeyVault -VaultName 'kv-<suffix>').ResourceId
-```
+The guided install (`setup\Install-SecurityInsight.ps1`, see *Guided install* and *The install launcher* under
+[Editions, configuration and updates](#editions-configuration-and-updates-30)) is the normal way: it asks its questions,
+shows the plan, checks the prerequisites before the first resource and then makes the install, one idempotent step at a
+time, so a stopped install continues where it stopped. It creates the resource group, the Log Analytics workspace and the
+data collection endpoint, the storage account and the Key Vault, and hands the container part to
+`Bootstrap-ContainerAppJob.ps1`. For Pro it also makes the SQL server and its databases, the web app and the MCP server,
+the updater job and the database setup job.
 
-### 2. Author `config/setup-unattended.json`
+`Bootstrap-ContainerAppJob.ps1` creates the container registry, builds the image inside the registry (ACR Tasks over Azure
+Resource Manager; no Docker and no Azure CLI), creates the Container Apps environment and the managed identity, and makes
+the jobs listed below with their queue scalers. Names follow *Naming* in chapter
+[Architecture and security](#a2-identities-and-secrets).
 
-Copy `config/setup-unattended.sample.json` → `config/setup-unattended.json` and edit. Minimum **cloud-only Community + Container** shape:
+### 3. Running the container setup by itself
 
-```jsonc
-{
-  "Flavour": "Community",
-  "Sub": {
-    "TenantId":       "<tenant-guid>",
-    "SubscriptionId": "<sub-guid>",
-    "Location":       "westeurope"
-  },
-  "Resources": {
-    "ResourceGroupName":  "rg-<suffix>",
-    "WorkspaceName":      "log-<suffix>",
-    "DceName":            "dce-<suffix>",
-    "StorageAccountName": "st<suffix>",
-    "NamingSuffix":       null
-  },
-  "Auth_Community": {
-    "DisplayName":  "sp-securityinsight",
-    "CredKind":     "Secret",
-    "CredStorage":  "KeyVault",
-    "KeyVaultName": "kv-<suffix>"
-  },
-  "Container": {
-    "Enabled":         true,
-    "AcrName":         "acr<suffix>",
-    "EnvName":         "cae-<suffix>",
-    "UseKEDA":         true,
-    "KedaMaxReplicas": 30
-  }
-}
-```
-
-Storage account names must be ≤24 chars, lowercase alphanumeric. Workspace and DCE names follow the standard rules.
-
-### 3. Run the unattended deploy
-
-Two ways to call `Setup-SecurityInsight-Unattended.ps1`:
-
-#### A. Interactive Community (browser auth) — the original path
-
-```powershell
-Connect-AzAccount -Tenant <tenant> -Subscription <sub>
-Connect-MgGraph   -TenantId <tenant>
-az login --tenant <tenant>
-cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight
-.\Setup-SecurityInsight-Unattended.ps1 -Flavour Community -Container_Enabled
-```
-
-#### B. Non-interactive Community (reuse existing SPN context) — container-test path
-
-Pre-connect Az PS + Mg Graph + az CLI with any high-privilege SPN, then call the unattended script with no extra flags. The script's Community block now detects an existing matching Az+Mg context and reuses it.
-
-```powershell
-function global:New-Guid { [System.Guid]::NewGuid() }
-Import-Module 'C:\SCRIPTS\AutomateIT\FUNCTIONS\AutomateITPS\AutomateITPS.psd1' -Force
-Connect-Platform  # connects Modern SPN to Az + Mg via the v1 KV
-
-az login --service-principal --tenant $global:AzureTenantId `
-         --username $global:HighPriv_Modern_ApplicationID_Azure `
-         --password $global:HighPriv_Modern_Secret_Azure --output none
-az account set --subscription '<sub-guid>'
-
-cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight
-.\Setup-SecurityInsight-Unattended.ps1 -Flavour Community -Container_Enabled
-```
-
-The script runs 5 phases:
-
-| Phase | Cmdlet | What it does |
-|---|---|---|
-| 1 | `New-SISpn` | Creates/reuses SPN + rotates client secret + grants Graph/MTP/MDE perms + tenant-root Reader RBAC + stores secret in KV |
-| 2 | `Initialize-SIInfra` | Log Analytics workspace + DCE + Storage account + DCR per Profile table + RBAC for SPN |
-| 2.5 | (Internal only) | Seed v1 KV with `SI-Shodan-ApiKey` + `OpenAI-ApiKey` |
-| 3 | `Write-SICustomConfig` | Renders `config/SecurityInsight.custom.ps1` (Community = inline values) |
-| 4 | `Set-SIEntraDiagnosticSetting` | Skipped unless `EntraDiag.Enabled = true` |
-| 5 | `Initialize-SIContainerInfra` | Provisions ACR, builds image via `az acr build`, creates Container Apps Env, creates 1-2 jobs per engine, sets up KEDA queue scalers |
-
-End state: 1 ACR + 1 CAE + per-engine Container App Jobs in the RG.
+`Bootstrap-ContainerAppJob.ps1` can be run on its own with the install's `config/SecurityInsight.custom.ps1`. It is
+idempotent: every step checks whether the resource exists and reuses it, and running it again never lowers a job's size.
+`Setup-SecurityInsight-Unattended.ps1` is the unattended server setup: it reads its answers from
+`config/setup-unattended.json` (start from `config/setup-unattended.sample.json`).
 
 ### 4. Jobs created (KEDA mode, default)
 
 The collection engines that discover into parts -- endpoint, identity and Azure -- get two jobs each; every other job is one scheduled (or manual) job. Queue scaling is the default for a container install; an install opts out with `SI_Bootstrap_UseKEDA = $false` (then endpoint, identity and Azure are one scheduled job each, and the producer and worker are removed). The producer and the workers sign in as the jobs' managed identity: an install still set up with a client secret moves to the managed identity when setup runs, once every grant the identity needs is in place -- until then nothing changes and setup lists the missing grants with the command for each.
 
-| Engine | Producer (cron-triggered) | Worker (KEDA queue-scaled) | Default cron (UTC) |
+| Engine | Producer | Worker (queue-scaled) | Timer in schedules mode (UTC) |
 |---|---|---|---|
+| privilege-tier-classifier | `caj-si-ptc` (single) | -- | 01:00 daily |
 | endpoint | `caj-si-endpoint-producer` | `caj-si-endpoint-worker` | 04:00 daily |
 | identity | `caj-si-identity-producer` | `caj-si-identity-worker` | 04:30 daily |
 | azure | `caj-si-azure-producer` | `caj-si-azure-worker` | 05:00 daily |
-| schema-discovery | `caj-si-schema-discovery` (single) | — | 03:00 every Sunday |
-| risk-analysis (Summary) | `caj-si-risk-analysis` (single, no worker) | — | 06:00 daily |
+| publicip | `caj-si-publicip` (single) | -- | 05:15 daily |
+| risk-analysis (Summary) | `caj-si-risk-analysis` (single, no worker) | -- | 06:00 daily |
 | risk-analysis (Detailed) | `caj-si-risk-analysis-detailed` (the run's producer) | `caj-si-raworker-detailed` (queue-scaled, up to 4) | 08:00 daily |
-| privilege-tier-classifier | `caj-si-ptc` (single) | — | 04:00 daily |
-| publicip | `caj-si-publicip` (single) | — | 04:00 daily |
+| schema-discovery | `caj-si-schema` (single) | -- | 03:00 every Sunday |
+
+In the default pipeline mode (section 7a) these jobs have no timer of their own; the pipeline starts them in order. The
+timers apply only in schedules mode.
 
 **Why only three in parts?** Parts need a discovery that writes every object into its part and a worker that runs from Collect on one part: endpoint, identity and Azure have both. Public IP reads a handful of addresses, the classifier builds one catalog, and the Pro engines (correlation, CMDB, vulnerabilities, data sync) work on the whole estate at once -- splitting them would change their results, not their size.
 
@@ -4811,9 +4761,9 @@ The collection engines that discover into parts -- endpoint, identity and Azure 
 
 The producer drops shard messages onto `si-<engine>-shards` Storage Queue. KEDA scales the worker from 0 to `KedaMaxReplicas` (default 30) based on queue depth, then scales back to zero when the queue drains.
 
-**Existing installs reach the same layout on update (#519).** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again.
+**Existing installs reach the same layout on update.** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again.
 
-**Risk Analysis Detailed on queue workers -- scale out, not only up (#742).** The Detailed reports used to run one after another in one job (a large tenant's run took over 12 hours). **On by default wherever it can run** (owner 2026-10-18: *"pls dont turn off things that improve time, why do that"*; it was off by default for one day as a review-gap closure): every install with queue scaling and the managed identity gets it, new and existing alike. Where it cannot run (queue scaling off, no managed identity, no storage account) nothing changes and one line says why. The customer's `SI_Bootstrap_RaScaleOut = $false` (or `SI_UPDATER_RA_SCALE_OUT = off` on the updater job; the config wins) switches it off. Then the Detailed Risk Analysis job is the run's PRODUCER and `caj-si-raworker-detailed` its WORKERS (`engine/risk-analysis/_shared/RA-ScaleOut.ps1`; the same queue, lease, heartbeat, poison and marker mechanics as the collection's parts):
+**Risk Analysis Detailed on queue workers -- scale out, not only up.** The Detailed reports used to run one after another in one job (a large tenant's run took over 12 hours). **On by default wherever it can run**: every install with queue scaling and the managed identity gets it, new and existing alike. Where it cannot run (queue scaling off, no managed identity, no storage account) nothing changes and one line says why. The customer's `SI_Bootstrap_RaScaleOut = $false` (or `SI_UPDATER_RA_SCALE_OUT = off` on the updater job; the config wins) switches it off. Then the Detailed Risk Analysis job is the run's PRODUCER and `caj-si-raworker-detailed` its WORKERS (`engine/risk-analysis/_shared/RA-ScaleOut.ps1`; the same queue, lease, heartbeat, poison and marker mechanics as the collection's parts):
 
 * **The producer** begins the run's collection in SQL as before, plans the run -- one work item per report of the template, in template order, each with the ordinal the single job would give it -- loads what more than one report shares ONCE (the run's Defender recommendation list; the CIs where the run builds them), writes the manifest (`collect/ra-detailed/<run>/manifest.json` in the install's state container) and queues the items on `si-ra-detailed-items`. It waits for every item's marker, with a progress line, and reads each item's HAND-OVER: everything the report loop knew about the report (its row count, column fill, verdict and note, query fingerprint, failures, lost buckets, bucket-count jumps, retry answers, columns and date columns, the KQL column types, the rows it handed to the Defender recommendation report). The hand-overs are merged in the single job's order, so every list and union reads as if one process had run the reports.
 * **A worker** takes an item, joins the run's collection (never begins one), runs that report exactly as the single job does -- the query in its slices, the scoring, the rows and the verdict written to SQL -- with the producer's ordinal and its own write numbers (`ordinal x 10^12`, so the final order is the single job's: score, then report, then write order), writes the hand-over and then the marker, and takes the next item. A worker never posts to Log Analytics. A worker drains the queue, so its start-up is paid once.
@@ -4821,13 +4771,51 @@ The producer drops shard messages onto `si-<engine>-shards` Storage Queue. KEDA 
 * **One unit, as before.** After the hand-overs the producer runs what spans reports exactly as the single job did: the run-level guards (row drop, emptied column, bucket jump), the hand-off between the Azure and Defender recommendation reports (a giver whose list read empty is NOT COMPLETE when a receiver that ran after it found rows -- decided over the whole run in the single job's order), the Log Analytics post (the whole run ONCE, read from SQL after every report is in -- the same post, the same rows in the same order, the same checks as the single job), the verdicts-final marker, the completion, the workbook, the AI summary and the mail.
 * **Same method for every size.** A small tenant's run is the same items, taken by one worker. Without a worker job (no managed identity, queue scaling switched off) the producer runs the worker in its own container, and again after a crashed attempt's hold has ended. The Summary reports still run in their own job.
 * **Setup and update (on by default).** A new install gets the worker (Bootstrap step 4c: the producer's image, settings, secrets, identity and size; up to `SI_Bootstrap_RaMaxWorkers`, default 4, at once; `SI_RA_WORKERS` tells each worker that count) and the producer's switches (`SI_RA_SCALE_OUT=on`, `SI_RA_WORKER_JOB`). Every update gives an existing install the same (`setup/_shared/SI-RaWorkerJobs.ps1`, update step 9b, `Invoke-SIUpdateRaWorkers`): the worker is created from the Risk Analysis job, read back, and only then the Risk Analysis job is told; a second update finds it present and changes nothing; any failure leaves it running its reports itself and the next update tries again -- never fatal. Switched off (`$false`): no worker is made and no role granted; a Risk Analysis job still told it is a producer is told it is not (its two switches removed, read back) and the idle worker job is left; setup with `$false` also removes the worker.
-* **Workers and Defender's limits (#753).** A Risk Analysis job asks the next query parts of a report ahead while it processes one, up to `SI_RA_PartsInParallel_Max` (default 6) at a time, adapting to Defender's answers. A worker runs the same report loop, so left alone four workers could ask four times that. The setting is therefore what ONE job may ask at a time and the queue workers SHARE it: each worker gets `floor(Max / SI_RA_WORKERS)`, at least 1 (`Get-RAPartsInParallelShare`) -- with the defaults one part at a time per worker, four in flight against the single job's six. Together the workers never ask Defender for more at a time than one job would (more workers than the budget = one request per worker, the reviewed worker design), and each worker's own adaptive rule still halves its share at once on a 429 / 503 / 504. A static share was chosen over one adaptive rule shared between the containers: it needs no cross-container state on every part (a blob or SQL round trip, a new failure mode) and its bound is provable offline. The producer's own worker in its container (no worker job) is the only one and keeps the whole budget. The Summary job beside it (#754) keeps its own budget, as without workers, and every writer still paces itself on the database's own load (#749).
-* **The last workers share the free budget (#831 A).** Measured at a large install: the queue was empty after 50 minutes, three of four workers stopped, and the last one ran its report alone for almost five hours at one request at a time -- its static share. Now a worker divides the budget by the number of the run's items that are still open (items without a marker -- its own included, read with ONE listing of the run's markers at the start of every report and every 5 minutes, `SI_RA_PartsShareRecheckSeconds`), never by more than the worker count: alone it gets the whole budget, two get half each. No lease, heartbeat or new shared state is read. The open count only falls during a run, so a worker that read it earlier holds a smaller share, never a larger one: together the workers still never ask Defender for more at a time than one job. When its share rises the worker's adaptive count climbs from 2 again; the halving on 429 / 503 / 504 is unchanged. A worker that cannot read the markers keeps its static share; the producer's own worker keeps the whole budget. This changes only how many Defender requests are on their way: each worker still writes to the database one slice at a time on its own thread, paced by the database's own load (#749).
-* **A big report in several parts (#831 B).** A work item used to be a whole report, so the last big report ran on one worker while the others had nothing to do. The producer now reads each report's remembered query-slice count (the bucket counts, `cfg.RaBucketState` / the AutoBucket cache) and splits a report that is large against the run into parts by ranges of its slices: with W workers and R slices remembered for the whole run, a fair share is R / W slices per worker, and a report of N slices above that share becomes ceil(N / share) parts -- never more than the workers and never a part of fewer than 2 slices; one worker (or the producer's own) never splits. Only a report the single job asks in remembered slices is split (its query has the slice block, slicing is not off, it is not staged, the on-demand bucket proof is off); a report without remembered state runs as one item, as before. Every part asks the SAME slice count (the remembered one, never sized again in a part) and only its own range, writes its rows with the report's ordinal in its own write-number bands (the main pass of part 1, 2, ..., then the late retries of part 1, 2, ..., then the sub-slices of part 1, 2, ... -- the single job's order), and removes only its own rows when it starts again. When its slices are in it writes its PARTIAL (`partial/item-NNNNN.json`: its list entries, rows retrieved, slice accounts, columns, row count, column fill, retry answers, lost slices and the bucket learning's evidence). The LAST part to finish (all partials there; a create-only claim `finish/report-NNNNN.json`, so exactly one) takes every partial into its process and finishes the report exactly as the single job does: the bucket learning once over all parts' slices (one coherent state written back), the lost-slice verdict, the findings two slices returned kept once, the shared trace names, the count, the completeness check and the verdict; its hand-over is the report's one hand-over. The other parts hand over only their counters and columns. A part never waits for another. The queue hands out the largest items first (by the query slices each asks: a part's range, a whole report's remembered count), so a big report or the parts of a split one start at once; only the order the workers take the items changes -- ordinals and write numbers, and so the result's order, stay the single job's. The producer knows the real worker count: setup and every update give the Risk Analysis job the same `SI_RA_WORKERS` its workers get (read back with its other switches; a producer made before is told it again); without it the producer falls back to `SI_Bootstrap_RaMaxWorkers` (default 4). The report is complete ONLY when every part has its marker and one part has put it together: a lost, failed or parked part, or parts that do not add up (#401: a later part returned the whole result in one slice when the first did not), make the whole report NOT COMPLETE with no rows kept, named once. A retry of a part whose partial is already written runs no slice again. More parts never mean more writers than workers: at most `SI_RA_WORKERS` processes write at once, as before, each paced by the database's load -- on a small database the pacing slows every writer while it is saturated; on a large one the parts finish the run's tail on every worker.
-* **The heartbeat signs in (#831).** The heartbeat that renews a worker's hold on its report runs in its own runspace, which does not see the sign-in the worker recorded; it is now handed the worker's sign-in (as the collection workers do) -- every renewal failed before and the workers fell back to the one long hold.
+* **Workers and Defender's limits.** A Risk Analysis job asks the next query parts of a report ahead while it processes one, up to `SI_RA_PartsInParallel_Max` (default 6) at a time, adapting to Defender's answers. A worker runs the same report loop, so left alone four workers could ask four times that. The setting is therefore what ONE job may ask at a time and the queue workers SHARE it: each worker gets `floor(Max / SI_RA_WORKERS)`, at least 1 (`Get-RAPartsInParallelShare`) -- with the defaults one part at a time per worker, four in flight against the single job's six. Together the workers never ask Defender for more at a time than one job would (more workers than the budget = one request per worker, the reviewed worker design), and each worker's own adaptive rule still halves its share at once on a 429 / 503 / 504. A static share was chosen over one adaptive rule shared between the containers: it needs no cross-container state on every part (a blob or SQL round trip, a new failure mode) and its bound is provable offline. The producer's own worker in its container (no worker job) is the only one and keeps the whole budget. The Summary job beside it keeps its own budget, as without workers, and every writer still paces itself on the database's own load.
+* **The last workers share the free budget.** Measured at a large install: the queue was empty after 50 minutes, three of four workers stopped, and the last one ran its report alone for almost five hours at one request at a time -- its static share. Now a worker divides the budget by the number of the run's items that are still open (items without a marker -- its own included, read with ONE listing of the run's markers at the start of every report and every 5 minutes, `SI_RA_PartsShareRecheckSeconds`), never by more than the worker count: alone it gets the whole budget, two get half each. No lease, heartbeat or new shared state is read. The open count only falls during a run, so a worker that read it earlier holds a smaller share, never a larger one: together the workers still never ask Defender for more at a time than one job. When its share rises the worker's adaptive count climbs from 2 again; the halving on 429 / 503 / 504 is unchanged. A worker that cannot read the markers keeps its static share; the producer's own worker keeps the whole budget. This changes only how many Defender requests are on their way: each worker still writes to the database one slice at a time on its own thread, paced by the database's own load.
+* **A big report in several parts.** A work item used to be a whole report, so the last big report ran on one worker while the others had nothing to do. The producer now reads each report's remembered query-slice count (the bucket counts, `cfg.RaBucketState` / the AutoBucket cache) and splits a report that is large against the run into parts by ranges of its slices: with W workers and R slices remembered for the whole run, a fair share is R / W slices per worker, and a report of N slices above that share becomes ceil(N / share) parts -- never more than the workers and never a part of fewer than 2 slices; one worker (or the producer's own) never splits. Only a report the single job asks in remembered slices is split (its query has the slice block, slicing is not off, it is not staged, the on-demand bucket proof is off); a report without remembered state runs as one item, as before. Every part asks the SAME slice count (the remembered one, never sized again in a part) and only its own range, writes its rows with the report's ordinal in its own write-number bands (the main pass of part 1, 2, ..., then the late retries of part 1, 2, ..., then the sub-slices of part 1, 2, ... -- the single job's order), and removes only its own rows when it starts again. When its slices are in it writes its PARTIAL (`partial/item-NNNNN.json`: its list entries, rows retrieved, slice accounts, columns, row count, column fill, retry answers, lost slices and the bucket learning's evidence). The LAST part to finish (all partials there; a create-only claim `finish/report-NNNNN.json`, so exactly one) takes every partial into its process and finishes the report exactly as the single job does: the bucket learning once over all parts' slices (one coherent state written back), the lost-slice verdict, the findings two slices returned kept once, the shared trace names, the count, the completeness check and the verdict; its hand-over is the report's one hand-over. The other parts hand over only their counters and columns. A part never waits for another. The queue hands out the largest items first (by the query slices each asks: a part's range, a whole report's remembered count), so a big report or the parts of a split one start at once; only the order the workers take the items changes -- ordinals and write numbers, and so the result's order, stay the single job's. The producer knows the real worker count: setup and every update give the Risk Analysis job the same `SI_RA_WORKERS` its workers get (read back with its other switches; a producer made before is told it again); without it the producer falls back to `SI_Bootstrap_RaMaxWorkers` (default 4). The report is complete ONLY when every part has its marker and one part has put it together: a lost, failed or parked part, or parts that do not add up (a later part returned the whole result in one slice when the first did not), make the whole report NOT COMPLETE with no rows kept, named once. A retry of a part whose partial is already written runs no slice again. More parts never mean more writers than workers: at most `SI_RA_WORKERS` processes write at once, as before, each paced by the database's load -- on a small database the pacing slows every writer while it is saturated; on a large one the parts finish the run's tail on every worker.
+* **The heartbeat signs in.** The heartbeat that renews a worker's hold on its report runs in its own runspace, which does not see the sign-in the worker recorded; it is now handed the worker's sign-in (as the collection workers do) -- every renewal failed before and the workers fell back to the one long hold.
 * **The same result as one job.** The rows, verdicts and order in SQL are identical, and so is what Log Analytics receives: a worker never posts, so a worker that dies part-way through a report, and the retry of that report, can never leave a row in Log Analytics twice -- the producer posts the run once from SQL (proven offline against SQL Server, a worker killed mid-report included, and a split report with a worker killed mid-part).
 
 **Discover once, into parts; the records published once.** The producer runs the engine's discovery (`SI_PRODUCER_DISCOVERS=1`), writes every object into its part (~10,000 objects a part, a stable hash of the object's key), hands the provider records discovery captured over to the state store (in buckets by record), writes the run's manifest and queues one message per part. Each worker runs its part from Collect on and hands its part's records over; the last worker to mark its part claims the run (a create-only blob, so exactly one worker does it), merges every bucket and publishes each record once -- to Log Analytics and the database -- and writes the run's records marker. The pipeline's Collect step follows the manifest, the part markers and that records marker: a failed part or a failed records publish fails the step with its reason; parts or records not finished after the step's timeout end it INCOMPLETE. The same parts run one after another inside one scheduled job when `SI_COLLECT_IN_PARTS = on` (no queue needed).
+
+### 4a. Every job -- what it does and how it starts
+
+In pipeline mode (the default for a new install) `caj-si-flow` starts each pipeline step; the steps have no timer of
+their own. Community installs have the jobs of their edition only. A job a feature does not need is not made (for
+example the ServiceNow connector where ServiceNow is not configured).
+
+| Job | What it does | How it starts |
+|---|---|---|
+| `caj-si-flow` | The pipeline runner: decides whether a run is due and starts and follows each step | Timer every 5 minutes (it only wakes the runner); the run itself starts at the pipeline's start time, by default 19:00 local time of the install's Azure region |
+| `caj-si-ptc` | Builds the role and permission tier catalog the profilers read | Pipeline, Collect |
+| `caj-si-identity-producer` / `-worker` | Identity profile: discovers into parts, workers collect each part | Producer: pipeline, Collect. Worker: the storage queue |
+| `caj-si-azure-producer` / `-worker` | Azure profile, in parts | Producer: pipeline, Collect. Worker: the storage queue |
+| `caj-si-endpoint-producer` / `-worker` | Endpoint profile, in parts | Producer: pipeline, Collect, started together with Azure. Worker: the storage queue |
+| `caj-si-publicip` | Public IP profile, optionally Shodan | Pipeline, Collect |
+| `caj-si-asset-correlation` | Builds the CIs: one asset across its sources | Pipeline, Correlate |
+| `caj-si-risk-analysis` | Risk Analysis Summary, optional | Pipeline, Correlate; the step is off by default |
+| `caj-si-risk-analysis-detailed` / `caj-si-raworker-detailed` | Risk Analysis Detailed: the producer plans the reports and posts the result, the workers run them | Producer: pipeline, Correlate. Worker: the storage queue |
+| `caj-si-asset-trend` | The daily trend row by hand; Risk Analysis writes it itself | Manual in pipeline mode |
+| `caj-si-asset-cmdb-sql` / `caj-si-asset-cmdb` | The CMDB connectors: SQL and ServiceNow | Pipeline, Deliver |
+| `caj-si-asset-vulnerabilities` / `caj-si-asset-vulns-servicenow` | The vulnerability close-loop connectors: SQL and ServiceNow | Pipeline, Deliver |
+| `caj-si-asset-datasync` | Loads the findings into SQL for the web app and marks the collection ready | Pipeline, Deliver |
+| `caj-si-data-out` | Sends the ServiceNow hand-off and the other outputs from the newest collection marked ready | Started by the data sync right after the mark; by a person or support for a resend |
+| `caj-si-close-loop-mail` | Department, governance, task and exemption mails | Pipeline, Deliver |
+| `caj-si-verification` | Data-collection gaps and the daily data health check | Pipeline, last step of Deliver |
+| `caj-si-asset-tagging` | Writes tags where allowed; report only by default | Its own timer, 05:50 UTC by default, unless added to the pipeline |
+| `caj-si-templates` | Publishes an accepted template release | Started by the web app after an Admin accepts it |
+| `caj-si-schema` | Refreshes the catalog of the tables and columns the tenant offers | Timer, Sundays 03:00 UTC |
+| `caj-si-config-backup` | The daily configuration backup | Timer, 18:00 UTC |
+| `caj-si-heartbeat` | The status report to Invardia; polls for an expedited update and starts the updater when asked | Timer every 15 minutes |
+| `caj-si-signin-methods` | Reads users' sign-in methods in the background | Timer every 15 minutes |
+| `caj-si-updater` | Updates the install (section 12f) | Timer, 18:30 local time of the install's Azure region. Also started for an expedited update, by the pipeline runner when an update waited for a run, by itself for its second pass, and by the web app for a short apply-settings run |
+| `caj-si-dbinit` | The database work that needs the SQL admin group | Manual: started by the install, by every update and by a support repair |
+| `caj-si-index-build` | Builds large indexes that did not fit in an update, in idle time | Manual: started by the pipeline runner's idle wake-up; it hands over at once when an update needs the install |
+| `caj-si-support-grant` | Opens and closes time-limited support access ([A4b](#a4b-time-limited-support-access)) | The storage queue `si-support-requests` |
+| `caj-si-supportsql`, `caj-si-insidecheck` | One-time jobs of a private install: support's database user, and the name check from inside the network | Created, run once and removed by the support or setup step |
+
+`asset-properties` is retired: the profilers publish the full asset metadata themselves and no step or timer runs it.
 
 ### 5. How to **start** a job manually (no waiting for cron)
 
@@ -4841,17 +4829,19 @@ Invoke-AzRestMethod -Method POST `
   -Path "/subscriptions/<sub>/resourceGroups/rg-<suffix>/providers/Microsoft.App/jobs/caj-si-endpoint-producer/start?api-version=2024-03-01"
 ```
 
-For a full Profilers + RA chain (run in order, wait between):
+Normally a person starts the whole pipeline, one stage or one step with **Run now** on Operations > Jobs. To follow the
+order by hand, start each job when the one before it has ended:
 
 ```powershell
 $rg = 'rg-<suffix>'
-foreach ($e in 'endpoint','identity','azure','publicip') {
+az containerapp job start --name 'caj-si-ptc' --resource-group $rg
+foreach ($e in 'identity','azure','endpoint') {
     az containerapp job start --name "caj-si-$e-producer" --resource-group $rg
 }
-# wait until the worker queues drain (see § 6), then:
-az containerapp job start --name 'caj-si-ptc-producer'             --resource-group $rg
-az containerapp job start --name 'caj-si-risk-analysis'            --resource-group $rg   # Summary
-az containerapp job start --name 'caj-si-risk-analysis-detailed'   --resource-group $rg   # Detailed
+# wait until the worker queues drain (see section 6), then:
+az containerapp job start --name 'caj-si-publicip'                 --resource-group $rg
+az containerapp job start --name 'caj-si-asset-correlation'        --resource-group $rg   # Pro
+az containerapp job start --name 'caj-si-risk-analysis-detailed'   --resource-group $rg
 ```
 
 **A start carries no template.** Every start SecurityInsight makes for a person (Run now on a pipeline, stage or step, a
@@ -4907,7 +4897,7 @@ $global:SI_Bootstrap_ScheduleSchemaDiscovery      = '0 3 * * 0'
 Then re-run the bootstrap (it's idempotent; only touches the cron field on existing jobs):
 
 ```powershell
-cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight
+cd <your SecurityInsight folder>
 .\Bootstrap-ContainerAppJob.ps1
 ```
 
@@ -4925,7 +4915,7 @@ az containerapp job update --name caj-si-risk-analysis --resource-group rg-<suff
 
 (blank cron disables auto-trigger; `az containerapp job start` still works)
 
-### 7a. The daily job FLOW -- one start, each job when the one before it has finished (#269, SCHED-1)
+### 7a. The daily job FLOW -- one start, each job when the one before it has finished
 
 > Operator 2026-10-04: *"define it as a flow and NOT timer based, so it starts job run and then job 2 start when 1
 > completes"*; *"i prefer the job flow queue, where i define an order and start time for the flow and then not control
@@ -5075,6 +5065,23 @@ unless the execution started more than 6 hours ago. Where it is asked: the pipel
 updater's own step-aside (an earlier update that is dead is stopped and this one goes on), and the flow job's execution
 guard (a dead flow execution is stopped and the wake-up runs the queue instead of only the clean-up).
 
+**The order of a wake-up and of a run's end (live 2026-11-09/10).** A run's end moves only the published run's pointer
+(`Invoke-SIDataPublishRun -SkipCopyCatchUp`, the install lock beaten right before it), then sends the run's report. The
+drain then closes the request, hands a waiting update over (the install lock released right before the updater is started)
+or runs what waits in the queue, and releases the lock. Only THEN comes the wake-up's **upkeep**
+(`Get-SIPipelineUpkeepDecision` / `Invoke-SIPipelineUpkeep`): the copies the pages show caught up (an install with nothing
+published gets its first publish here), the statistics refresh after a run, the clean-up of old data -- each part beaten.
+With the updater started there is no upkeep: the next wake-up does it, after the update. The copies are always refreshed by
+the engine's range driver (the runner's and the updater's database seams hand out connections), range by range, every
+copy table re-checked each time; `CopiedAt` moves only when all ten are done, so a refresh that was cut off leaves nothing
+half-claimed. **The liveness of a full wake-up:** it takes its own lock row (`cfg.PipelineLock` LockId `wakeup`; without a
+database `sistate/flow/wakeup.lock`) as its first act, beats it on progress (at most once a minute) through the upkeep and
+releases it at the end; while it runs the queue the install lock beats for it. A `wakeup` beat is judged like a clean-up
+pass (alive while beaten, never holds the next wake-up back; the alert keeps Job `housekeeping`). **A dead runner** that the
+execution guard stops has its install lock freed in the same step (`Exit-SIExecutionInstallLockOf`, only while it is still
+the holder), so the same wake-up takes the queue: a run that had ended gets its request closed (one plain line), a run that
+had not is resumed and finishes with its steps' own outcomes.
+
 **Bootstrap.** `caj-si-flow` is infrastructure (always deployed, never KEDA, 7-day replica timeout, the identity's grant
 on the jobs' resource group). A NEW job's trigger follows the mode (`Get-SIBootstrapTriggerPlan`): flow -> a step is
 created Manual with its timer remembered in `si-disabled-cron` (exactly what Disable leaves), the runner Scheduled;
@@ -5150,7 +5157,7 @@ releases it in Operations > Guards (safety checks). With the add-on off, the job
 cannot follow a queue's workers -- the flow is for non-KEDA installs. Pro is container-only, so a VM flow runs the
 launchers that exist on the VM.
 
-### 7b. PIPELINES and STAGES -- Collect -> Correlate -> Deliver, one lock, one queue (#306)
+### 7b. PIPELINES and STAGES -- Collect -> Correlate -> Deliver, one lock, one queue
 
 > Operator 2026-10-05: *"profiling + risk analyse is what takes data in. Then we have a part 2 with data correlation and
 > then we have a data out to sql, servicenow, etc."*; *"i want it to run as a single flow ... we can run subflows
@@ -5158,20 +5165,20 @@ launchers that exist on the VM.
 > flow is a **pipeline**, a subflow a **stage**. The flow of 7a is now the install's ONE pipeline, the **Daily pipeline**.
 
 **The Daily pipeline** (`config/job-flow.locked.json` `defaultPipeline`; `JobFlow.DefaultStages` in the web app -- a test
-fails when they differ). Each stage strictly one step after the other; a job that is not installed is left out:
+fails when they differ). A stage starts when the stage before it has ended; a step starts when the step above it has
+ended, except the steps marked "together" below. A job that is not installed is left out:
 
 | Stage | Steps | Why here |
 |---|---|---|
-| **Collect** (data in) | privilege tier classifier -> identity -> azure -> endpoint -> public IP -> Risk Analysis summary -> Risk Analysis detailed | Risk Analysis reads the profiles only -- no correlation output (verified: its engine and its query templates read neither `SI_ObjectMap_CL` nor `SI_AssetProperties_CL`) |
-| **Correlate** | asset correlation -> asset properties | asset properties READS the correlation map (`SI_ObjectMap_CL` -> `SI_CorrelationId`), so it runs after correlation, inside this stage |
-| **Deliver** (data out) | CMDB connector SQL -> CMDB connector ServiceNow -> vulnerability connector SQL -> vulnerability connector ServiceNow -> data sync -> mails | the CMDB connectors key every CI by the correlation map (they refuse to run without it); the data sync reads the vulnerability events and the correlation evidence; the mails read the data sync |
+| **Collect** (data in) | privilege tier classifier -> identity -> Azure, endpoint (together) -> public IP | the classifier's catalog is read by the profilers; identity's tiers are read by Azure and endpoint of the same day; public IP reads endpoint and Azure |
+| **Correlate** (data structure) | asset correlation -> Risk Analysis Summary, Risk Analysis Detailed (together) | Risk Analysis runs on the CIs the correlation has built. The Summary step is off by default; every Summary-shaped view is a grouping of the Detailed findings |
+| **Deliver** (data out) | CMDB connector SQL -> CMDB connector ServiceNow -> vulnerability connector SQL -> vulnerability connector ServiceNow -> data sync -> daily mail -> verification | the CMDB connectors key every CI by the correlation map; the data sync reads the vulnerability events; the mail reads the data sync. Most Deliver steps start as soon as what they read has ended, not after every step above them |
 
-**The updater is NEVER a step -- it runs on its own daily schedule (#393, framework UPDATE-1.6 (a)).** One updater per
-environment, daily at **03:00 UTC on its own timer**, plus started on a release; never inside the product's pipeline, in
-any mode. The map marks it `ownSchedule` (and `neverInFlow`); `Test-SIJobFlowOwnSchedule` / `JobFlow.OwnSchedule` say so
-for the updater whatever a map says. Why (found live on ring 1, 2026-10-06): the default pipeline had `caj-si-updater` as
-step 1 of Collect and the switch to pipeline mode turned its own timer to manual -- and the updater waits while any SI job
-runs (60 min, then defers), the running pipeline IS an SI job, so as a step it waited for itself and never updated.
+**The updater is NEVER a step -- it runs on its own daily schedule.** One updater per environment, daily at **18:30 in the
+local time of the install's Azure region** on its own timer (see *The nightly schedule* below), plus started on an
+expedited update; never inside the product's pipeline, in any mode. The map marks it `ownSchedule` (and `neverInFlow`);
+`Test-SIJobFlowOwnSchedule` / `JobFlow.OwnSchedule` say so for the updater whatever a map says: a running pipeline holds
+the update, so as a step it would wait for itself.
 - **Default + validator + editor:** not in `defaultPipeline` / `defaultFlow` / `JobFlow.DefaultStages`; a definition with
   it is refused ("the updater runs on its own daily schedule"); Operations > Jobs never offers "Add to the pipeline" for it
   and `JobFlow.Include` refuses it.
@@ -5181,27 +5188,31 @@ runs (60 min, then defers), the running pipeline IS an SI job, so as a step it w
   the next save stores it without the step.
 - **The mode switch keeps its timer in BOTH modes** (`Get-SIJobOrchestrationSwitchPlan` / `JobFlow.SwitchPlan`): on a
   timer -> `keep`; Manual with a remembered timer (`si-disabled-cron`, what an earlier switch left) -> `to-schedule` with
-  that timer (ring 1: `0 3 * * *`); Manual with none -> `keep`, and the row says to run `setup\Install-SIUpdaterJob.ps1`.
+  that timer; Manual with none -> `keep`, and the row says to run `setup\Install-SIUpdaterJob.ps1`.
 - **Bootstrap** never creates it Manual (`Get-SIBootstrapTriggerPlan`: not in the flow). **`Install-SIUpdaterJob.ps1`**
-  keeps `-Schedule '0 3 * * *'`; an existing updater found Manual is PATCHed back to Schedule (trigger + tags only,
+  keeps `-Schedule` (a timer of your own); an existing updater found Manual is PATCHed back to Schedule (trigger + tags only,
   `ConvertTo-SIArmJobTrigger`) BEFORE the `az containerapp job update` -- that command cannot change a trigger type.
 - **VM:** the flow task never disables the updater's scheduled task (`Get-SIFlowTaskReplacePlan`), and `Install-SIFlowTask.ps1
   -Apply` enables again an updater task an earlier setup disabled (and drops it from `replaced-tasks.json`).
-- **The order between an update and the pipeline -- neither waits on the other.** The updater installs an update at
-  once, also while an SI job runs: a job already running finishes on the version it started with, the next one starts on
-  the new version. Only a release that says it must be installed while nothing runs (a file `UPDATE-NEEDS-QUIET.txt` at
-  its root, holding the reason) waits for the running jobs (`Wait-SIUpdaterPipelineIdle`: up to
-  `SI_UPDATER_WAIT_MINUTES`, then deferred to the next updater run).
+- **The order between an update and the pipeline -- one at a time, and a run is never interrupted.** Before anything that
+  changes the install (the database step, the code roll, the size step, the template publish) the updater asks the **run
+  gate**, one transaction in the Pro database: a pipeline run that has not ended, or a step still Starting or Running,
+  means the update waits; otherwise it takes the install's one lock, so no run can start while it installs, and holds it to
+  the end of the update. An update never cancels a run. A waiting update leaves a mark on the updater job (the tag
+  `si-update-waits`): the pipeline runner then starts no new run, starts the updater once the run has ended, and the update
+  lands between two runs. When the run records cannot be read nothing is installed and the runner tries again at its next
+  wake-up. An index build holds no one up: the update takes its lock at once and the build pauses. In addition, a release
+  that must be installed while no SI job at all runs (a file `UPDATE-NEEDS-QUIET.txt` at its root, holding the reason) waits
+  for the running jobs, up to `SI_UPDATER_WAIT_MINUTES`, then is deferred to the next updater run.
   The pipeline never starts while an update runs: each wake-up of the runner asks first (`-UpdateRunning` of
-  `Invoke-SIPipelineDrain`; container: a `Running`/`Processing` execution of `caj-si-updater` younger than 6 h, via ARM;
-  VM: a PowerShell process running `Update-SecurityInsight.ps1`) and, when one runs, starts nothing and takes no lock --
-  what was queued stays queued, a due slot stays due, the next 5-minute wake-up tries again. It does not wait inside the
-  run, so nothing it holds blocks the updater. Whichever started first finishes first. A check that fails is said (WARN)
-  and the pipeline runs (the updater waits for it anyway).
+  `Invoke-SIPipelineDrain`; container: a running execution of the updater job that still shows signs of life; VM: a
+  PowerShell process running `Update-SecurityInsight.ps1`) and, when one runs, starts nothing and takes no lock -- what was
+  queued stays queued, a due slot stays due, the next 5-minute wake-up tries again. An updater execution that has stopped
+  showing signs of life is stopped, said and reported, and the waiting work goes on.
 
 The risk trend is no longer a step: the Pro web app draws its trends from the SQL history (Management > Trends, over the
-data sync's daily aggregates -- the estate queries too since #830), and the daily trend row (`SI_Trend_CL`, read by the
-Community workbook; part of the optional copy of the report rows to Log Analytics since #830, off by default) is written at the end of the Risk Analysis run, from the very rows it has just
+data sync's daily aggregates -- the estate queries too), and the daily trend row (`SI_Trend_CL`, read by the
+Community workbook; part of the optional copy of the report rows to Log Analytics, off by default) is written at the end of the Risk Analysis run, from the very rows it has just
 published -- the rows Log Analytics actually received (`engine/risk-analysis/_shared/RA-TrendAtEnd.ps1` dot-sources `Invoke-SITrend.ps1 -PublishedRows` in a child scope, so the shared functions keep the run's own settings): never from a Log Analytics
 snapshot that may still be yesterday's, never from a dry run or a partial run (a lost bucket, a partial profile -- the day
 is a gap, not a drop), never failing Risk Analysis. `SI_Trend_AtEndOfRiskAnalysis = $false` turns it off. The
@@ -5353,7 +5364,7 @@ pipeline / stage / step, move up / down (at the edge of a stage a step moves int
 enable / disable / on failure / timeout, and per stage "run even after a failure". The switch between the pipeline and
 per-job timers is unchanged.
 
-**Cancel the RUNNING run (#700).** A run that is going -- a wrong version, a hang -- is ended on purpose by ONE product
+**Cancel the RUNNING run.** A run that is going -- a wrong version, a hang -- is ended on purpose by ONE product
 action, `Invoke-SIPipelineCancelRun` (`engine/_shared/SI-Pipeline.ps1`). In this order, so nothing brings it back half-way:
 0. the runner that holds the install's lock for the run (another execution of `caj-si-flow`, or a runner process on a VM)
    is stopped first -- a runner of an older version knows no cancel and would save the run back and start its next step;
@@ -5383,7 +5394,7 @@ schema + grants step; a database without it yet answers Missing) -- then `caj-si
 `engine\flow\Invoke-SIJobFlowRun.ps1 -HostKind Vm -Cancel -CancelReason '<why>'`); no SQL by people. A cancel without a
 reason is refused.
 
-**A run never finishes on the wrong release (#700).** Every new run records the version it STARTED on
+**A run never finishes on the wrong release.** Every new run records the version it STARTED on
 (`cfg.FlowRun.Version`; the run record's `Version`). After the update has rolled the jobs to a new version
 (`setup/Invoke-SIContainerUpdate.ps1` step 4b, Pro), a run that is going and started on another version -- or on a
 version that did not record it -- is cancelled the same way, and one plain line says so ("pipeline run <id> started on
@@ -5392,7 +5403,7 @@ update does this, right after it installs (owner: "Updater only") -- the pipelin
 its version; a database that cannot keep versions (its schema not applied again) is left alone. Existing installs gain `Version` and `CancelledBy` (nullable) when the update applies the Pro schema,
 before any roll.
 
-**A job stopped from outside is not a platform error (#700).** An execution that ends `Stopped` (in Azure, by a person,
+**A job stopped from outside is not a platform error.** An execution that ends `Stopped` (in Azure, by a person,
 by a release tool) gets class `stopped`: it is never started again as a container that never started the engine (working
 rule 4 retries only `job-failed`), never restarted on a new install's first collection either (owner: "Stop is final"
 -- a failed step there is still restarted), and the run stops there (`Get-SIJobFlowBlocked`:
@@ -5401,7 +5412,7 @@ run does not go on by itself"). A run whose runner died is still resumed (a plat
 execution then ends it Stopped, a finished state that is never resumed again. A job stopped at its OWN run limit is still
 self-healed (that is judged by the time it ran).
 
-### 7c. Steps side by side, and the classifier's unchanged skip (#528)
+### 7c. Steps side by side, and the classifier's unchanged skip
 
 > Measured internal 2026-10-09: the 12 steps strictly one after the other took ~1 h 30 (ptc 15, identity 12, azure 22,
 > endpoint 1, publicip 2, correlation 1, RA 10, RA detailed 12, CMDB SQL 2, vulnerabilities 4, data sync 5, mails 1 min).
@@ -5601,7 +5612,7 @@ Two equivalent paths — both server-side via `az acr build`, both zero-downtime
 
 ```powershell
 # Path A: full bootstrap (also reconciles cron, env vars, KEDA caps)
-cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight
+cd <your SecurityInsight folder>
 .\Bootstrap-ContainerAppJob.ps1
 
 # Path B: image-only roll (faster — skips KEDA/cron reconcile): build the image server-side, then point the jobs at it
@@ -5664,19 +5675,27 @@ being built, it says so.
 |---|---|---|
 | Collection engines -- endpoint, identity, Azure, public IP -- and the privilege-tier classifier | Community + Pro | PowerShell engines that read Defender XDR, Entra ID, Azure Resource Graph / Resource Manager and Log Analytics, profile every asset and give it a tier. The public-IP engine can also ask Shodan about your own public IPs (optional, paid key). |
 | Risk Analysis and trend | Community + Pro | Turns the profiles into ranked findings (Identity, Endpoint, Azure, Public IP and cross-engine), writes them to Log Analytics, Excel, JSON and mail (optional AI summary), and keeps the daily trend. |
-| Pro engines | Pro | Cross-engine correlation (one CI across sources), asset properties, the data sync into SQL, the vulnerability close-loop and its connectors (SQL, ServiceNow, REST), the ServiceNow CMDB feed, the close-loop / exemption mail job, asset tagging, the template release job. |
-| Pro web app | Pro | ASP.NET Core in a Container App: findings, fifteen collection views, tier board, exemptions, management views, wall board, chat, settings, access, template releases, deviations, jobs. |
-| MCP server | Pro | A separate Container App with its own managed identity and read-only database access, offering the same curated read-only tools as the chat to MCP clients that present an Entra token. |
-| Updater job | Pro, containers | Pulls signed releases and template packs, requests and renews the licence, builds the image in your registry, rolls the jobs, verifies and rolls back. |
-| Azure SQL database | Pro | Settings and their history, templates and your overrides, exemptions, access mappings, the identity ledger, vulnerability state, and the copies of findings the web app reads. |
-| Log Analytics workspace | both | The SecurityInsight tables (profiles, Risk Analysis, trend, run health, tag activity). |
-| Key Vault | both | Licence, install key, connector secrets, optional keys (Azure OpenAI, Shodan, SMTP), magic-link key. |
-| Storage account and container registry | both (registry: containers) | Run logs and outputs, staging shards, shared customisation files; the container image. |
+| Pro engines | Pro | Cross-engine correlation (one CI across sources), the data sync into SQL, the vulnerability close-loop and its connectors (SQL, ServiceNow, REST), the ServiceNow CMDB feed, the data-out job, the close-loop / exemption mail job, asset tagging, the template release job, the verification service. |
+| Pipeline runner | both | The job `caj-si-flow` starts every step of the Daily pipeline in order: Collect, Correlate, Deliver. A step's job runs under the engine identity. |
+| Pro web app | Pro | ASP.NET Core in a Container App: findings, fifteen collection views, tier board, exemptions, management views, wall board, chat, settings, access, template releases, deviations, jobs. Its Azure name is `ca-si-management`. |
+| MCP server | Pro | A separate Container App (`ca-si-mcp`) with its own managed identity and read-only database access, offering the same curated read-only tools as the chat to MCP clients that present an Entra token. |
+| Updater job | containers | Pulls signed releases and template packs, requests and renews the licence (Pro), applies the database changes, builds the images in your registry, rolls the jobs and the apps, verifies and restores on failure. |
+| Database setup job | Pro | `caj-si-dbinit` does the database work that needs the SQL admin group, so no person needs database admin rights. |
+| Status and support jobs | Pro | `caj-si-heartbeat` reports status to Invardia; `caj-si-support-grant` opens and closes time-limited support access. |
+| Azure SQL database | Pro | Settings and their history, templates and your overrides, exemptions, access mappings, the identity ledger, vulnerability state, the provider records, the CIs and the findings the web app reads. |
+| Log Analytics workspace | both | What Risk Analysis's queries read (the profile tables, the CI table) and the run and troubleshooting tables (run health, guard events, tag activity). A copy of the records to Log Analytics is an option, off by default. |
+| Key Vault | both | Licence, install key, connector secrets, optional keys (Azure OpenAI, Shodan, SMTP), the keys that protect the web app's sign-in keys, magic-link key. |
+| Storage account and container registry | both (registry: containers) | Run state, run logs and outputs, staging parts, the shard and work queues, shared customisation files; the container images. |
 
 Engines run on a Windows server (Task Scheduler; an Azure VM or an Azure Arc-enabled server) or as Azure Container
 Apps jobs. Pro runs in containers. Everything is installed in the customer's own tenant and subscription.
 
-**The SQL database size (#507).** SecurityInsight's databases (`sqldb-si-pro`, `sqldb-si-identity`) are never on the
+**How a night runs.** At 18:30 local time of the install's Azure region the updater checks for a release. At 19:00 the
+pipeline starts: Collect (privilege tiers, identity, Azure and endpoint, public IP), Correlate (the CIs, then Risk
+Analysis on them), Deliver (the CMDB and vulnerability connectors, the data sync into SQL, the data-out job, the daily
+mail and the verification service). Sections 4a, 7a and 7b of *Container & KEDA deployment* hold the detail.
+
+**The SQL database size.** SecurityInsight's databases (`sqldb-si-pro`, `sqldb-si-identity`) are never on the
 Basic tier: measured on a tenant of about 23,000 users (97,000 records a run), Basic's 5 DTU averaged 14 % with log-write
 peaks up to 98 % while the records were written, and its 2 GB cap cannot hold a large tenant. One rule
 (`setup\_shared\SI-SqlTier.ps1`, `Get-SISqlDatabaseTier`) gives the size: **Standard S3 (100 DTU) for every Pro install,
@@ -5708,7 +5727,7 @@ install's config, or `SI_UPDATER_SQL_SERVICE_OBJECTIVE` on the updater job: a DT
   S2 73.61. A Pro install (two databases) since #509: S2 (Pro) + S1 (ledger) 103.04 at any tenant size (was S1 + S1
   58.87 for a small tenant).
 
-**The container job size, at install and on every update (#509).** Operator 2026-10-09: *"include these guidance rules
+**The container job size, at install and on every update.** Operator 2026-10-09: *"include these guidance rules
 for si and pim so you automatically adjust during installation. both si and pim are allowed to go to 4 cpu/8 gb if
 needed"*. ONE rule, `Get-SITenantSizedJobResources` (`container\_shared\SI-ContainerConfig.ps1`): below 5,000 objects the
 job kind's default (2 CPU / 4 GiB); from 5,000 **4 CPU / 8 GiB**. This rule sizes CPU and memory only -- the run limit
@@ -5978,7 +5997,7 @@ groups + service principals, endpoint = devices, the CI build (`asset-correlatio
   runs again at its own place. The run's note says where the first collection is: *"first collection running: nothing
   is shown before the asset build has finished whole ..."*, then *"... the merged assets are in the web app now ..."*,
   then *"first collection complete"*. A delivery at once that does not succeed is said and never fails the run.
-  *Two restarts.* A step that fails (never one whose execution was stopped on purpose -- "Stop is final", #700) is started again at once -- the step carries on from what it
+  *Two restarts.* A step that fails (never one whose execution was stopped on purpose -- "Stop is final") is started again at once -- the step carries on from what it
   finished -- up to two times (`SI_Pro_Pipeline_FirstRunRestarts`, 0 = never). Each restart is kept in the step's own
   record. After that the step stays failed, and the run ends as every run that went on after a failed step: with the
   warning that names the step, what is missing and who must act, reported as a warning that opens a fix request. Only
@@ -6049,17 +6068,27 @@ groups + service principals, endpoint = devices, the CI build (`asset-correlatio
 
 - **Managed identity first.** One setting, `SI_AuthMethod`, decides how every engine signs in: `ManagedIdentity`
   (default -- a container job's, an Azure VM's or an Azure Arc server's identity, system- or user-assigned),
-  `Certificate` (a service principal with a certificate, the recommended choice when a service principal is
-  needed) or `Secret` (a service principal with a client secret -- kept so community and existing installs keep
-  working). See *How SecurityInsight signs in* below.
-- **Separate identities.** The collection jobs share one identity that holds read permissions on your tenant
-  (Defender `Machine.Read.All`, never a write permission) plus write access only to SecurityInsight's own
-  workspace, rules and storage. Asset tagging has its **own** identity with exactly three tenant writes (Defender
-  machine tags, Tag Contributor at the tagging scope, Entra custom security attribute assignment), granted only
-  when you opt in. The web app and the MCP server each have their own user-assigned managed identity; the web app
-  uses its identity to read the database and to start, stop and read the Container Apps jobs.
-- **The updater job is the exception:** it signs in as a service principal with a certificate, held as a Key Vault
-  reference, with rights on the registry and the install's resource group.
+  `Certificate` (a service principal with a certificate) or `Secret` (a service principal with a client secret, kept so
+  Community and existing installs keep working). See *How SecurityInsight signs in* below.
+- **One identity per role.** Every container install uses these user-assigned managed identities:
+
+  | Identity | Runs | What it is for |
+  |---|---|---|
+  | `id-si-engine` | every pipeline job, the pipeline runner, the heartbeat, the mail and data-out jobs; it also pulls the image of the database setup job | Reads your tenant (read-only), writes to SecurityInsight's own workspace, storage and database, starts and follows the jobs |
+  | `id-si-web` | the web app | Reads and writes the application database as far as the web app needs, shows and starts jobs, the sign-in front's federated credential |
+  | `id-si-mcp` | the MCP server | Reads only |
+  | `id-si-updater` | the updater job | Applies updates to the install's own resource group |
+  | `id-si-tagging` | the asset-tagging job | Reads what its rules query; the only identity that can write tags, and only when you opt in |
+  | `id-si-dbinit` | the database setup job | Member of the SQL admin group: makes the other identities' database users and grants |
+  | `id-si-sql` | one-time support jobs of a private install | Reaches a private database from inside the network; no standing job carries it |
+  | `id-si-keys` | no job: storage, SQL and the Log Analytics cluster | Only with customer-managed keys: uses the key |
+
+- **Naming.** A new install gets these names. An install made earlier reaches them through the update: the updater's step
+  `identity-names` moves each role to a new identity (plan first, per install; the updater itself last). **Only identities
+  are renamed at an existing install.** Every other Azure resource keeps its name, and the web app is `ca-si-management`
+  at every install, new and existing. Display names in Entra are aligned by the update as well.
+- **The updater job** signs in as its own managed identity on a new install; an install set up earlier may still sign in as
+  a service principal with a certificate held as a Key Vault reference.
 - **No secret in settings or environment.** Containers receive non-secret settings as environment variables;
   anything that looks like a secret is skipped and reaches a job only as a job secret backed by Key Vault.
   Connectors and settings store only Key Vault secret *names*. The web app and the MCP server hold no secret at all.
@@ -6073,6 +6102,24 @@ groups + service principals, endpoint = devices, the CI build (`asset-correlatio
   resource group or register providers. Grants the installer cannot make are printed as exact commands for someone
   who can. `diagnostics/Test-SIInstall.ps1` checks that the install's identity holds no write role outside its
   resource group beyond the documented grants.
+
+### A2b. Rights per identity
+
+What setup and the updater give each identity. A right marked *(option)* exists only when that feature is on.
+
+| Identity | Azure | Microsoft Graph and Defender (application permissions) | Database, Key Vault and mail |
+|---|---|---|---|
+| `id-si-engine` | Reader at the collection scope (a subscription by default, or the management group or tenant root you chose). Monitoring Metrics Publisher on the data collection rules' resource group; With the guided install also Monitoring Contributor there and Log Analytics Contributor on the workspace, so the first run can create its tables and rules. Log Analytics Reader on SecurityInsight's workspace and on the Defender workspace when that is another one. Storage Blob, Queue and Table Data Contributor on SecurityInsight's storage account. AcrPull on the registry. Container Apps Jobs Contributor on the install's resource group, to start and follow the jobs. | Graph, read only: `User.Read.All`, `Group.Read.All`, `Directory.Read.All`, `Device.Read.All`, `Application.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.All`, `RoleManagement.Read.Directory`, `RoleManagementPolicy.Read.Directory`, `RoleEligibilitySchedule.Read.Directory`, `RoleAssignmentSchedule.Read.Directory`, `PrivilegedAccess.Read.AzureADGroup`, `IdentityRiskyUser.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyServicePrincipal.Read.All`, `ThreatHunting.Read.All`, `UserAuthenticationMethod.Read.All`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `AccessReview.Read.All`, `SecurityAlert.Read.All`, `SecurityEvents.Read.All`. Defender, read only: `Machine.Read.All`, `Vulnerability.Read.All`, `SecurityRecommendation.Read.All`, `Score.Read.All`; Microsoft Threat Protection `AdvancedHunting.Read.All`. | Pro database: role `si_engine` (object-level grants and denies), plus read and write on the identity ledger. May run the support grant procedures. Key Vault Secrets User on the vaults that hold its secrets. *(option)* `Application Mail.Send` limited to the sender mailbox, with shared-mailbox mail. |
+| `id-si-web` | AcrPull. Log Analytics Reader on the workspace. Container Apps Jobs Reader on the resource group and Operator on each job; Contributor on the jobs' resource group only in the direct change mode of the Jobs page. *(option)* Cognitive Services OpenAI User on your Azure OpenAI resource. | `User.ReadBasic.All`, `GroupMember.Read.All`, `Application.Read.All`. A federated credential on the web app's sign-in registration. | Pro database: read, the listed writes the web app needs, the audit trail, and the sign-in front's own schema. Key Vault Crypto Service Encryption User on two keys only (`SI-Web-KeyRing`, `signin-front-dp`). *(option)* Key Vault Secrets User for magic-link sign-in. `Application Mail.Send` limited to the sender mailbox where setup registered it. |
+| `id-si-mcp` | AcrPull. Log Analytics Reader on the workspace. | None. | Pro database: read only, the sign-in key table refused. |
+| `id-si-updater` | Contributor on the install's resource group and the registry. AcrPull. | `Directory.Read.All`, `GroupMember.Read.All`, `Application.Read.All`, `RoleManagementPolicy.Read.AzureADGroup`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, and `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`, which it uses only to keep the database setup job's membership of the SQL admin group. | Key Vault Secrets Officer and Crypto Officer on the install's vault. Pro database: read, write, `db_ddladmin` and the signed grant procedure, or `db_securityadmin` where signed grants are not on. *(option)* `Application Mail.Send` limited to the sender mailbox, for the licence notice. |
+| `id-si-tagging` | AcrPull. Reader at the collection scope. Log Analytics Reader on the workspace. Monitoring Metrics Publisher and Storage Blob Data Contributor for its own activity rows and log. *(option)* Tag Contributor at the tagging scope. | `ThreatHunting.Read.All`, `User.Read.All`, `Application.Read.All`. *(option)* `Machine.ReadWrite.All`, `CustomSecAttributeAssignment.ReadWrite.All`. | Key Vault Secrets User for the licence. Pro database: read, and insert into the audit trail. |
+| `id-si-dbinit` | None of its own; the engine identity pulls its image. | None. | Member of the SQL admin group, directly or by an active PIM-for-Groups assignment the updater renews. |
+| `id-si-sql` | None. | None. | *(option)* Member of the SQL admin group, on a private install. |
+| `id-si-keys` | None. | None. | *(option)* Key Vault Crypto Service Encryption User on the customer-managed key only. |
+
+The writes asset tagging can make are its own three options above; every other identity holds no write permission on
+your Defender, Entra or Azure estate outside SecurityInsight's own resources.
 
 ### A3. Network -- what is private and what is public
 
@@ -6117,8 +6164,7 @@ The steps are `private-network-subnets` (before the container setup) and `privat
 run); they are in the plan only when the option is chosen. Both are safe to run again. After the install, run setup
 commands from a machine in that network (for example Azure Cloud Shell in your virtual network).
 
-**The network preflight -- every prerequisite before the first resource (#1151 (2), INS-06 / INS-08, framework installer
-rule 8).** A private install has one more check before anything is created: `preflight-network` (in the plan only with
+**The network preflight -- every prerequisite before the first resource.** A private install has one more check before anything is created: `preflight-network` (in the plan only with
 `privateNetwork`, after `preflight-quota`, before `resource-group` -- the first write). It reads, with the installing
 account's own ARM rights and nothing else (`Get-SIPrivateNetworkPreflight` in `setup\_shared\SI-PrivateNetwork.ps1`, GET
 only, plus a Resource Graph query), everything the private steps will need, and lists **everything missing at once**, each
@@ -6145,7 +6191,7 @@ any change. Tests: `SIv3-NetworkPreflight.Tests.ps1`.
 
 **An existing install** moves with `setup\Set-SIPrivateNetworking.ps1`, run by Invardia support through the Support app,
 one environment at a time. It shows the plan first (nothing changes); `-Apply -Steps <list>` makes exactly those steps,
-each idempotent and read back: `subnets` (with `-VnetAddressPrefix`: its own network first), `peer-to-hub` (only when you name it -- that is your approval -- with `-HubVnetId`), `registry-premium`, `private-endpoints`, `private-dns`, `private-environment`,
+each idempotent and read back: `subnets` (with `-VnetAddressPrefix`: its own network first), `peer-to-hub` (only when you name it -- that is your approval -- with `-HubVnetId`), `return-route` (SecurityInsight's own spoke network only, when you name the ranges and the next hop), `registry-premium`, `private-endpoints`, `private-dns`, `private-environment`,
 `move-jobs`, `move-apps`, `sql-identity`, `support-sql`, `public-access-off`, `registry-agent-pool` and
 `registry-public-off` -- so a moved install ends in the same state as a new private one. Azure cannot move a Container Apps environment into a virtual network, so the cut-over makes a
 second, private environment (`cae-si-private`) and moves every job and app into it: each is removed and created again
@@ -6158,13 +6204,13 @@ rolled back only on your own decision to leave private networking (`-ReopenPubli
 changed. The vendor support identity's database access is never removed.
 Every later setup run finds `cae-si-private` and keeps using it.
 
-**Outbound: the Microsoft Security Update Guide (#772).** Risk Analysis reads the release date of each Microsoft update by its KB from
+**Outbound: the Microsoft Security Update Guide.** Risk Analysis reads the release date of each Microsoft update by its KB from
 `https://api.msrc.microsoft.com/cvrf/v3.0` (public, no sign-in, HTTPS 443; `/updates` once, then only the monthly / out-of-band
 release documents of the last 24 months that are new or revised), at most once a day, and keeps the dates in the install
 (Pro `sidata.KbReleaseDate`, Community `OUTPUT\msrc-kb-release-dates.json`) -- never per finding. A network that does not allow
 `api.msrc.microsoft.com` outbound (a private network's firewall, a proxy) is said in ONE line per run and the patch cycle uses the
 cached dates and, for the rest, the month the update's name says (its Patch Tuesday); `SI_PatchCycle_MsrcDates = off` makes no
-call at all. Add the host to the egress allow list where outbound traffic is restricted (#570).
+call at all. Add the host to the egress allow list where outbound traffic is restricted.
 
 ### A3c. Customer-managed keys -- an option, and how the key is rotated
 
@@ -6201,8 +6247,8 @@ protection stays on).
 
 ### A4. Sign-in and access layers
 
-1. **Entra sign-in.** Every user signs in with Entra ID (single sign-on, your MFA and Conditional Access). The app
-   registration requires assignment, so only people or groups given one of its app roles can sign in at all.
+1. **Entra sign-in.** Every user signs in with Entra ID (single sign-on, your MFA and Conditional Access). Who may then
+   work in the app is decided inside the app, by its roles (see *Access and roles* in section 6a).
    **Session: at most 8 hours, fixed.** The web app signs users in through the sign-in front SecurityInsight and PIM
    Manager share: the authorization-code flow with PKCE, the code redeemed with the web app's managed identity as a
    federated credential (no secret, no certificate), a session that ends 8 hours after the sign-in whatever the activity,
@@ -6261,7 +6307,7 @@ protection stays on).
 5. **How someone signed in is recorded** on every session (Entra, magic link, magic link confirmed with a one-time
    code), and a role can require the stronger forms for an action such as approving.
 
-**Departments and external advisors (#254 departments: built in v3, phase 1; #258 advisors: the v3 design).** Departments own assets and
+**Departments and external advisors (departments are built, phase 1; external advisors are a design).** Departments own assets and
 recommendations: an asset's department comes from a policy (platform tags first, then SecurityInsight rules,
 configurable), an override per asset, or an override per recommendation -- the recommendation override wins over
 the asset override, which wins over the policy; anything left is in an *Unassigned* queue. A department has
@@ -6279,6 +6325,33 @@ department. With a magic link they can view, comment and recommend; to **approve
 one-time code sent to the same mailbox, or an Entra sign-in as a B2B guest with their own company account, so the
 customer controls and revokes access in Entra and Conditional Access applies. Links are per person, short-lived,
 revocable, scoped to the department and audited; department owners may sign in either way.
+
+### A4b. Time-limited support access
+
+Invardia support has no standing administrator right in your databases. Its Support app is an app registration you create
+in your own tenant, and you choose its level.
+
+- **What it holds at all times.** A read-only database role (`si_support_read`: metadata and health, no data) in each
+  product database, and the right to put a message on one storage queue. It holds no right on any job.
+- **The levels you consent to.** *troubleshoot*: read access to the database while a session is open
+  (`db_datareader`), and Key Vault names and metadata without secret values. *setup*: database owner while a session is open
+  (`db_owner`), and Key Vault Secrets Officer. Your consent is recorded in the database (`cfg.SupportConsent`), written by
+  your administrator or set from the Invardia portal, and only the updater and the administrator can change it.
+- **Opened.** A support session puts one request on the queue `si-support-requests`; the queue starts the job
+  `caj-si-support-grant`. The request is data and is never run. The job first revokes anything past its end time, then
+  takes the newest request not older than 15 minutes. Signed procedures in the database grant **the lower of the asked and
+  the consented level** to the Support app's own user, for at most 8 hours, in the Pro database first and then in the other
+  product databases. If one fails, those already opened are closed again, so there is never a half grant.
+- **Read back.** What each procedure reads from the database catalog after the change decides the result, not the request.
+- **Closed.** Close removes exactly what the open added and nothing else. A grant also ends by itself: three independent
+  parts (the grant job at every start, the heartbeat at every tick, the web app every 5 minutes) revoke any grant past
+  its end time.
+- **Recorded.** Every open, close and expiry is one row in the database journal `cfg.SupportGrant`: who asked, why, the
+  ticket, the level asked and given, the end time and the outcome. The Support app's own calls are in your Azure and Entra
+  audit logs.
+- **A private database** is reached from inside your network only: see *Support access to a private database* in
+  [A3b](#a3b-private-networking----an-option-setup-builds).
+- **Your off-switch.** `setup\Grant-SISupportAccess.ps1 -Remove` takes the access away again.
 
 ### A5. Change control and approvals
 
@@ -6327,8 +6400,8 @@ revocable, scoped to the department and audited; department owners may sign in e
   - **No person asked.** A scheduled run, an expiry, the retention and the close-loop's own closes keep the job as
     the actor, and the row says so (`initiatedBy: no person`). A scheduled flow run also names who last set the flow
     (`flowSetBy`).
-  - **Honest limit:** the steps a manual flow run starts are separate job executions; their own rows name the job,
-    and the flow's `job.flow.run` row names the person.
+  - The steps a manual flow run starts are separate job executions: their own rows name the job, and the flow's
+    `job.flow.run` row names the person.
 - **Template releases by ring** (section 9b): template packs reach an install through its update ring, are checked
   against their SHA-256, and are released per detection method by a SuperAdmin through Review & commit; your
   overrides are never changed and any method can be rolled back.
@@ -6368,7 +6441,7 @@ revocable, scoped to the department and audited; department owners may sign in e
 |---|---|---|
 | **Licence request** (section 12b) | Pro: when there is no valid licence for the tenant, or it ends within 30 days | product, version, the tenant from the identity's token, an install id, optionally edition and a contact e-mail and the current licence's id / end date. The answer is verified offline before it is installed. |
 | **Update pull** (section 12c) | Pro updater, nightly | the licence and the install key (header); the install key is claimed automatically with the licence when the install has none. Nothing else about the estate. |
-| **Support app** | only when you create it | Invardia Support is an app registration the customer creates in their own tenant with Invardia's script, at a *troubleshoot* level (Key Vault metadata without secret values) or a *setup* level (Key Vault Secrets Officer); at both levels it becomes an owner of SecurityInsight's own app registrations and a member of the database admin group. That group is its one way in to the Pro databases: the database server's administrator is the group (recorded by the server as a group), the Support app is a member, and it has no database user of its own. The install adds the membership and never removes it; the end of the install reads the administrator back, and an install run as the Support app proves the sign-in. An install made earlier reaches the same state with `setup/Grant-SISupportAppDatabase.ps1` and with every update: a database user an earlier version made for the Support app is removed, but only in a run that has itself read back the group as administrator and the membership -- otherwise the user stays and the run says so. SecurityInsight's `setup/Grant-SISupportAccess.ps1` adds the SecurityInsight part and `-Remove` takes it back. It is never the engine's identity. |
+| **Support app** | only when you create it | Invardia Support is an app registration the customer creates in their own tenant with Invardia's script, at a *troubleshoot* or a *setup* level. It reaches the databases through the time-limited grant in [A4b](#a4b-time-limited-support-access). SecurityInsight's `setup/Grant-SISupportAccess.ps1` adds the SecurityInsight part and `-Remove` takes it back. It is never the engine's identity. |
 | **Status reports (telemetry)** | daily, and once per engine run; on by default, `SI_Telemetry_Enabled = $false` turns it off | Community: anonymous -- a random install id, the product, edition, version, hosting type, the kind of sign-in identity, licence state, and per run the job, outcome, duration, failed stage, an error class and counts as ranges; no tenant, host name or error text. Pro: the same, identified by the install key, with the tenant, the host and the error text (shortened, secrets removed). See "Status reports to Invardia (telemetry)" under Operations. |
 
 Apart from the status reports (which can be turned off), the Community edition never contacts Invardia.
@@ -6635,7 +6708,7 @@ the first image and every updated image behave the same.
 | **Community, VM** | `Update-SecurityInsight.ps1` takes the release its **update ring** approves from the signed release channel on GitHub, checks it, and applies it with a backup and an automatic restore (see "The Community update channel" below). No git needed. |
 | **Community, containers** | The same command; after the files it runs the NEW release's container update hook (below), and puts the files back too if the containers are rolled back. |
 | **Pro / managed** | The managed sync delivers the release the customer's ring is on; after a sync that changed SecurityInsight it runs the same container hook (`solution.deploy.json`). Rings are a platform mechanism, not SecurityInsight's own. |
-| **Pro, containers** | An updater job in the customer's subscription takes the release its ring has from **Invardia** -- a signed manifest, checked before anything changes (see 12c) -- and rolls the jobs. The vendor's own read-only feed (a revocable URL held as a job secret, decided from the ring map) remains as an internal test path. |
+| **Pro, containers** | An updater job in the customer's subscription takes the release its ring has from **Invardia** -- a signed manifest, checked before anything changes (see 12c and 12f) -- and rolls the jobs and apps. |
 
 Both editions run the same containers; they differ only in the licence (which features run) and in how an
 install is updated. The updater code ships in both editions — what Pro adds is the Invardia client and its updates (the
@@ -8146,7 +8219,7 @@ exactly the columns chosen. One mechanism, every view plugs into it:
 
 ### 6a. Access and roles (Pro web app)
 
-The web app has the same four roles as PIM Manager, so both products work alike.
+The web app has the same four roles as PIM Manager, so both products work alike. Who may sign in is decided only here, inside the app: the web app's enterprise application in Entra does not require an assignment, on every installation. A new installation sets this when it registers the app. Every update checks it and switches it off again; when the update may not change it, the update names the one step for the customer's administrator and carries on. A person who signs in but has no role here gets no page.
 
 | Role | What it can do |
 |---|---|
@@ -8553,7 +8626,7 @@ templates and your overrides (the same rules the **Templates** page shows).
 
 | | Collection jobs (every other engine) | Asset-tagging job |
 |---|---|---|
-| Identity | the shared job identity (`uami-securityinsight`) | its **own** user-assigned identity (`uami-securityinsight-tagging`) |
+| Identity | the shared job identity (`id-si-engine`) | its **own** user-assigned identity (`id-si-tagging`) |
 | Permissions | read only -- `Machine.Read.All`, never a write permission (locked) | reads what its rules query, plus exactly three writes: Defender `Machine.ReadWrite.All`, **Tag Contributor** at the tagging scope, Graph `CustomSecAttributeAssignment.ReadWrite.All` |
 | Granted by | `Bootstrap-ContainerAppJob.ps1 -GrantIdentityRoles` | `Bootstrap-ContainerAppJob.ps1 -GrantTaggingRoles` (opt-in), or `setup/Grant-SIIdentity.ps1 -Tagging -Apply`; the guided install asks |
 | Writes | never | only when the Pro setting `SI_Pro_AssetTagging_Apply` is on |
@@ -8796,12 +8869,12 @@ Decisions taken under this rule (owner, 2026-11-03):
   retention ends (90 days). It is one-way: Azure never switches it off again. Every existing install was switched on and
   read back; a new install creates its vault with it (a test install can opt out with
   `SI_SECURITY_BASELINE_KV_PURGE_PROTECTION=0`).
-- **The engine identities keep their subscription-level Contributor role.** Existing installs are not changed; the
-  least-privilege move stays available as an opt-in step and is not rolled out.
+- **The engine identity's Azure rights are the ones in [A2b](#a2b-rights-per-identity).** Setup gives it no Contributor role
+  on a subscription; a right an earlier setup gave at an existing install is kept unless that install's owner removes it.
 
-A release that brings a new permission brings its check and its step with it. Today the update result names a step that
-is missing; a coming release adds one state per step (done, missing, not needed, or not readable), checked for real on
-every update, so the vendor sees every install's state in one place.
+A release that brings a new permission brings its check and its step with it. Each step's state (done, missing, or the
+reason) is checked on the update and reported with the install's status, so the vendor sees every install's state in one
+place.
 
 ### 12c. Updates from Invardia (Pro)
 
@@ -9002,15 +9075,14 @@ hover and closes 250 ms after the pointer leaves, unless it was clicked open.
 environment and the user are visually hidden (still read by screen readers). A phone (<= 560 px) is the one width where
 the band may take two rows (the logo, then the controls); nothing scrolls sideways at any width.
 
-### 12e-3. The install's own resource names -- read from its record, never a literal (CR5 step 1, framework §12.11c item 6)
+### 12e-3. The install's own resource names -- read from its record, never a literal
 
 Every place SecurityInsight finds ITS OWN resource (the web app, its MCP server, the updater job, their identities, asset
-tagging's identity) reads the name from one resolver, `engine/_shared/SI-InstallNames.ps1`, so the names every install
-runs with today and the shorter names a NEW install gets in a later step work side by side. **Today's name is the
-default**: an install with no record and no variable resolves exactly what it runs with now -- nothing is renamed and
-nothing has to be set.
+tagging's identity) reads the name from one resolver, `engine/_shared/SI-InstallNames.ps1`, so the names an earlier
+install runs with and the standard names work side by side. An install with no record and no variable resolves the
+earlier names below; nothing has to be set.
 
-| Role | Today's name (the default) | Job variable |
+| Role | Default when nothing is recorded | Job variable |
 |---|---|---|
 | `web` | `ca-si-management` | `SI_UPDATER_WEB_APP` |
 | `mcp` | `ca-si-mcp` | `SI_UPDATER_MCP_APP` |
@@ -9038,11 +9110,10 @@ nothing has to be set.
   check (the updater's executions), the guided install. The web app reads the updater job from its own setting
   `Jobs__UpdaterJob` (today's name by default) to start the short "apply settings" run; a configured name only ADDS to the
   SuperAdmin-only lifecycle jobs, so a renamed job never loses that guard.
-- **The names a NEW install gets (CR5 step 2) -- behind the setting `SI_Setup_NewInstallNames`, OFF by default**
-  (REMOVE-ME once a fresh test install has proven them; read from the install's values, else the environment; only
-  true / 1 / yes / on turns it on). Off, a new install gets today's names, exactly as before. On:
+- **The names a NEW install gets -- the setting `SI_Setup_NewInstallNames`, ON by default** (read from the install's
+  values, else the environment; only false / 0 / no / off turns it off):
 
-  | Component | Today's name | New install (setting on) |
+  | Component | Name at an earlier install | New install |
   |---|---|---|
   | the web app | `ca-si-management` | `ca-si-management` (every install, new and existing: web app names are not aligned) |
   | its MCP server / the updater job | `ca-si-mcp` / `caj-si-updater` | unchanged |
@@ -9057,12 +9128,11 @@ nothing has to be set.
   tagging's identity, passed and written to the install's settings as `SI_Bootstrap_TaggingIdentityName` only when it is
   not today's name), the web app deploy (its app, identity, MCP server and `Jobs__UpdaterJob`), the sign-in credential
   step, the updater job (which records the names in the install record), the database grants.
-- **An existing install keeps today's names -- never renamed, never half-renamed** (`Resolve-SIInstallExistingNames`, run
-  before anything is checked or created): the names an earlier run of this install recorded win (state `facts.names`,
-  which now holds the component names and the sign-in display name as well); else, when the install's resource group
-  holds ANY component under today's name (an identity, the web app, the updater job), every component and the display
-  name keep today's names; else, when the group exists but cannot be read, today's names too; only an empty or new group
-  gets the new names. With the setting off this decides nothing.
+- **Setup never half-renames an install** (`Resolve-SIInstallExistingNames`, run before anything is checked or created):
+  the names an earlier run of this install recorded win (state `facts.names`); else, when the install's resource group holds
+  ANY component under an earlier name, every component and the display name keep those names; else, when the group exists
+  but cannot be read, the earlier names too; only an empty or new group gets the new names. Identities of an existing
+  install reach the standard names through the update's step `identity-names` (below), not through setup.
 - **The sign-in registration under the new name** ("SecurityInsight") shares its name with SecurityInsight's ENGINE app
   registration (a Community install's sign-in with a secret). Under any name but today's, an app found by name is taken
   only when it carries one of the web app's own stable app role ids, so the engine's app is never patched into the web
@@ -9070,17 +9140,15 @@ nothing has to be set.
 - **The web app deploy** (`pro-management/deploy/Deploy-SIManagement.ps1 -UpdaterJobName`) sets `Jobs__UpdaterJob` when
   it is given (the guided install always gives the install's updater job); the release command's ring defaults read
   today's names from the same table.
-- **Not built yet:** the display names of EXISTING installs (the sign-in app "SecurityInsight", the SQL admin group shown
-  as "SecurityInsight SQL admins") -- renamed by the update in a later step. Resources Azure cannot rename keep their
-  names on existing installs.
+- **Display names of existing installs** (the sign-in app, the engine application, the SQL admin group) are aligned by the
+  update (`setup/_shared/SI-DisplayNames.ps1`, or `setup/Set-SIDisplayNames.ps1` where the update may not rename them).
+  Resources Azure cannot rename keep their names on existing installs.
 
-### 12f. Every ring updates itself daily -- from Invardia, the ring SecurityInsight released to (#350, UPDATE-1.7)
+### 12f. Every ring updates itself daily -- from Invardia, the ring SecurityInsight released to
 
-Operator 2026-10-05: *"si must handle updates 100% like pim handles ring 1 updates. they run like ring 2, 3 -- but the
-only difference is that we also deploy/update manually, but the ring 1 env must be updated daily as other rings."*
-Operator 2026-10-06: *"I tell in the solution that the release is approved to ring 1 (sample) / the solution publishes to
-invardia backend / the solution pulls down and checks. solution owns the update engine and logic for this, but the source
-is invardia platform / we are not having separate platforms like a si storage account fo si updates. one solution:
+Every ring is updated in the same way: the install's own updater job pulls what SecurityInsight released to its ring from
+the Invardia platform. SecurityInsight decides which version goes to which ring and owns the update logic; Invardia holds
+the release and signs what it serves. There is no separate SecurityInsight update feed.
 invardia"*. **SecurityInsight's own update feed is RETIRED** (the storage container `si-src-*`, its read-only link, the
 ring map and `channel.json` in it, `Publish-SISourceArchive.ps1`, `Update-SISourceAccess.ps1`, `Publish-SITemplatePack.ps1`,
 the updater's feed and ring-channel paths). An updater still configured for it (`SI_UPDATER_SOURCE=feed`, or a feed link
@@ -9102,25 +9170,38 @@ first manifest never moves the jobs backward.
 A release whose version is recorded there (a manual deploy of exactly that build) counts as applied: nothing is built or
 rolled twice.
 
-**The update** (`_shared/SI-UpdaterInvardia.ps1`): verify and download the archive (size + SHA-256 from the signed
-manifest); then -- the waits below -- an SI job with an execution in progress does **not** hold the update (it finishes
-on the version it started with); only a release carrying `UPDATE-NEEDS-QUIET.txt` waits for the running jobs (up to
-`SI_UPDATER_WAIT_MINUTES`, 60; still busy = **deferred** to the next run); then
-the release's own template gate and `setup/Invoke-SIContainerUpdate.ps1 -Apply` (build, roll, verify, restore on failure)
-for the engine jobs -- ring 1 installs the release's templates directly (#405) -- then, Pro, `_shared/SI-UpdaterWebApp.ps1`:
-the web app and its MCP server (image built from the release, app rolled, healthy revision + `/healthz` 200 awaited,
-previous image restored on failure; a failure = exit 1); then the record, the updater itself (last), and the run's state.
+**What one updater run does, in order** (`container/updater/Start-SIUpdater.ps1`, `_shared/SI-UpdaterInvardia.ps1`). The job
+runs at 18:30 in the local time of the install's Azure region and whenever it is started for an expedited update, after
+a waited-for run, or for its own second pass.
 
-**Nothing but a running run holds an update** (owner 2026-11-09: "strict mode can never block an update" / "we have no
-guards anywhere that blocks updates"; framework 12.11b point 6). What may still stop or delay a code roll is a short,
-named list: a running pipeline run (the run gate), a manual deploy or a release that asks for quiet jobs (the waits
-above), Invardia's own `hold` action, the customer's opt-outs (`SI_UPDATER_BLOCK`, `SI_InvardiaUpdate_Enabled`), the
-**version rule**, and a failed database step. Nothing else does -- in particular not the install's guard mode: no
-updater file reads it, and an update decides exactly the same with Strict on and off (`SIv3-UpdateNoGuard.Tests.ps1`).
+1. Sign in; end at once if an earlier execution is still alive (two updates never change an install at once).
+2. Steps that run on every run and do not stop it: the install's names recorded; the secret hand-over; the web app's
+   sign-in keys; the support level set in the Invardia portal, the support queue and its job trigger; the index build job
+   kept present; the `identity-names` step; Key Vault purge protection.
+3. Pro: the licence request, the install's addresses, then the customer's switch for updates.
+4. Claim the install key if needed, then ask Invardia for the template and code manifests of the install's ring.
+5. A newer code release: download it, verify size and SHA-256 against the signed manifest, extract it, and wait while a
+   manual deploy is going or, only for a release carrying `UPDATE-NEEDS-QUIET.txt`, while jobs run.
+6. **The run gate**: while a pipeline run is going nothing is changed (below).
+7. **The roll**: the database setup job, the schema and grants (*The database first*, below), the template check, the build
+   and roll of the engine jobs (`setup/Invoke-SIContainerUpdate.ps1 -Apply`: build, roll, verify, restore on failure; ring 1
+   installs the release's templates directly), then, Pro, the web app and MCP server (image built from the release, app
+   rolled, a healthy revision and `/healthz` 200 awaited, the previous image restored on failure), the record, and the
+   updater itself last. A second pass then runs that release's own update steps.
+8. With no new code to roll: only the size steps. Then template packs from the template channel, then the web app's
+   sign-in owner and name checks, and the run's state and any failure report.
+
+**Nothing but a running run holds an update.** The run gate (`_shared/SI-UpdaterRunGate.ps1`) holds an update while a
+pipeline run has not ended, or one of its steps is still going, and the update lands between two runs. It never cancels
+a run. When the run records cannot be read, the update installs nothing until they can. Beyond that, what may stop or
+delay a code roll is a short, named list: a manual deploy or a release that asks for quiet jobs (the waits above),
+Invardia's own `hold` action, the customer's opt-outs (`SI_UPDATER_BLOCK`, `SI_InvardiaUpdate_Enabled`), the **version rule**, and a
+failed database step. Nothing else does -- in particular not the install's guard mode: no updater file reads it, and an
+update decides exactly the same with Strict on and off.
 - **The version rule** (`Get-SIUpdaterInvardiaCodeDecision`): a release whose `minFromVersion` is above the running
   version waits for an intermediate release, and the first manifest never moves the jobs backward (a later rollback is
   a new, higher sequence). Unchanged behaviour; it is a rule of the release, never called a guard.
-- **A template change waits alone** (`Invoke-SIUpdaterRoll`, `Invoke-SIUpdaterTemplateGate`): when the release's own
+- **A template change never holds the code** (`Invoke-SIUpdaterRoll`, `Invoke-SIUpdaterTemplateGate`): when the release's own
   templates would change the templates in force and no Admin has accepted the fingerprint, the CODE ROLLS ANYWAY; only
   the templates wait. The gate stages them (`cfg.TemplatePackStaged`, origin `shipped`) for the Template releases page,
   the roll publishes none of them and says one line ("the code is updated; the template change waits for an Admin
@@ -9130,11 +9211,11 @@ updater file reads it, and an update decides exactly the same with Strict on and
   the installed release's gate again, then the publish, read back). The pending record clears itself once the
   fingerprint in force (`cfg.InstallState 'TemplateFingerprint'`) is the one that waited. A template pack from the
   template channel holds only the pack, as before.
-- **A failed database step holds -- loudly, and only until the next run.** Never new code on an old schema: a database
+- **A failed database step holds only until the next run, and is reported.** Never new code on an old schema: a database
   setup job (`caj-si-dbinit`) run or a schema / grant step that fails rolls nothing and the installed version keeps
-  running. The failure is recorded for Invardia's failure uplink (step `database`), the reason says so, and the release
-  stays unapplied, so the next scheduled updater run starts the job again by itself -- no setting, no person; a
-  membership that is gone is made again by that run as on every update.
+  running. The failure is shown in the install's update state and sent to Invardia with the update's status report (step
+  `database`). The release stays unapplied, so the next scheduled updater run starts the job again by itself -- no setting, no
+  person; a membership that is gone is made again by that run as on every update.
 
 **The web sign-in app owned by the updater, then the web app under its standard name `ca-si-management`** (framework
 SECAUDIT-1a item 2 and the framework's name table; `_shared/SI-UpdaterWebApp.ps1`, `Invoke-SIUpdaterWebAppSteps`).
@@ -9248,15 +9329,13 @@ is `Invoke-SIUpdaterDatabase` (`container/updater/_shared/SI-UpdaterDatabase.ps1
 A refused set trips `schema.gate.refused`; a failed file or grant trips `update.schema.failed` (Guards view, mail,
 telemetry). Either way `Invoke-SIUpdaterRoll` returns Code 1 with the reason, nothing is built or rolled, and the run's
 `UpdateState` says *"the database was not updated, so nothing was rolled: ..."*. No Pro database (Community, VM) or a
-release without `SI-ProSchema.ps1` = skipped. **Rights:** the updater's identity needs db_datareader, db_datawriter,
-db_ddladmin and db_securityadmin on the Pro database -- given once by the server's Entra admin with
-`setup/Grant-SIUpdaterDatabase.ps1 -Apply` (or `Install-SIUpdaterJob.ps1 -GrantSql`); its user is found by SID, so an
-existing one is reused. *Honest limit:* db_securityadmin can revoke the append-only DENYs on the audit tables, so the
-updater identity is a deploy identity of the same trust as setup, never a runtime one (the jobs, the web app and the MCP
-server stay ordinary users bound by the DENYs). Still open: the sync-driven container update of a VM-managed install
-(`setup/Invoke-SIContainerUpdate.ps1` run by the sync engine, not by the updater) does not apply the schema itself.
+release without `SI-ProSchema.ps1` = skipped. **Rights:** the updater's identity is a deploy identity of the same trust as
+setup, never a runtime one (the jobs, the web app and the MCP server stay ordinary database users). Its database rights are
+in [A2b](#a2b-rights-per-identity); they are given by the database setup job, or once with
+`setup/Grant-SIUpdaterDatabase.ps1 -Apply` (or `Install-SIUpdaterJob.ps1 -GrantSql`). Its user is found by SID, so an
+existing one is reused.
 
-#### The security baseline quick wins -- registry password off, Key Vault purge protection, SQL auditing (framework §12.11f items 4 + 5, §12.23 P7 / P8)
+#### The security baseline quick wins -- registry password off, Key Vault purge protection, SQL auditing
 
 Three Azure settings of the install itself (`setup/_shared/SI-SecurityBaseline.ps1`, one library for both ways they reach
 an install). No SQL statement is involved: each is an ARM setting.
@@ -9288,15 +9367,15 @@ setup: a refusal is one line.
 app holds "Container Apps Jobs Contributor" on the resource group.
 **The updater** changes none of it.
 
-#### The database setup job `caj-si-dbinit` -- no person needs database admin rights (framework SEC-08)
+#### The database setup job `caj-si-dbinit` -- no person needs database admin rights
 
 The database work that needs the SQL server's admin group is done by the install's OWN job, never by a person in that group.
 `setup/_shared/SI-DbInitJob.ps1` holds the design; `container/Start-SIDbInit.ps1` is the job's entry point.
 - **The job.** ONE Container Apps job per install, `caj-si-dbinit`: manual trigger, one replica, no retry, 30 minutes. It runs
   the install's own engine image (`si-orchestrator` -- every update rolls it with the engine jobs; no new image to sign) with
-  its own entry point, as its OWN user-assigned identity `id-si-dbinit` -- a standing member of the install's SQL admin group
-  (the group that is the server's Entra administrator). The server's administrator is never switched for it. The job also
-  carries the engine jobs' pull identity, for the image only. No secret.
+  its own entry point, as its OWN user-assigned identity `id-si-dbinit` -- a member of the install's SQL admin group
+  (the group that is the server's Entra administrator), directly or by an active PIM-for-Groups assignment. The server's
+  administrator is never switched for it. The job also carries the engine jobs' pull identity, for the image only. No secret.
 - **What it does**, as `id-si-dbinit`, with the SQL the person-run scripts already send (their builders, never a second copy):
   the engine identity's user, the role `si_engine`, its grants (`Get-SIEngineDatabaseAccessSql`; the broad roles only while
   `SI_Setup_EngineLeastPrivilege` is off) and the identity ledger's user; the updater's user and rights
@@ -9320,12 +9399,15 @@ The database work that needs the SQL server's admin group is done by the install
   with what to do, never a failed install.
 - **Every update** (`Invoke-SIUpdaterDbJob`, before the database step): keeps the identity and the job present (the engine
   jobs' image, environment and pull identity; today's identities) -- existing installs reach the new-install state through
-  the update. The updater cannot read the directory, so it starts the job only once a row the JOB wrote proves the
-  membership; until then it writes a `waiting` row, the heartbeat's setup step `db-job` asks for the one membership
-  (Invardia support, or the customer), and the update keeps today's path. With the membership proven it starts the job and
-  counts the run only when the execution Succeeded AND the row carries THIS run's id with state ok. **A failed run holds the
-  update**: nothing is rolled and the installed version keeps running. What the updater may not do itself (an ARM refusal,
-  no engine job to take the image from) is one warning, never a hold.
+  the update. It checks its own Graph permissions, brings the identity's membership of the SQL admin group into place
+  (direct, else an active PIM-for-Groups assignment, read back) and renews an assignment that ends within 30 days. While the
+  membership is not proven it writes a `waiting` row, the heartbeat's setup step `db-job` asks for the one membership, and the
+  update keeps going without the job. With the membership proven it starts the job and counts the run only when the execution
+  Succeeded AND the row carries THIS run's id with state ok. A membership made in the same run may not have reached the
+  identity's token yet, so a run that could not sign in is started again after a growing wait. **Any other failed run holds
+  the update**: nothing is rolled, the installed version keeps running, the failure is reported, and the next updater run
+  starts the job again. What the updater may not do itself (an ARM refusal, no engine job to take the image from) is one
+  warning, never a hold.
 - **The support grant in EVERY product database** (found live 2026-11-04): its procedures are in the Pro database, the identity ledger and the data database, and each checks ITS OWN `cfg.SupportConsent`. The job lists the server's databases (in `master`) and, in every other one where the support grant's table is, makes the role `si_engine` with EXECUTE on `cfg.SupportGrantOpen` / `Close` / `Sweep` / `Status` and the engine's user in it, and the role `si_updater` with SELECT / INSERT / UPDATE / DELETE on `cfg.SupportConsent` and the updater's user in it (`Get-SIDbInitSupportDbSql`), copies the Pro database's consent row as it is (it is the owner there), reads each back and records the list (`cfg.InstallState 'SupportGrantDatabases'`).
   On every run the updater MIRRORS the Pro database's consent into those databases as its own identity (`Invoke-SISupportConsentMirror`, next to the portal's level), read back: the portal's row (Source `customer`, ConsentedBy `Invardia portal` -- the one row the consent trigger lets `si_updater` write) or no row. A consent the customer's admin gave is copied by the job. Never written by the Support app; never a failed update.
 - **A repair / an existing install's first run**: `setup/Start-SIDbInitJob.ps1`, through the Invardia Support session -- the
@@ -9346,7 +9428,7 @@ The database work that needs the SQL server's admin group is done by the install
   `Set-SISigninFront`, `Install-SIUpdaterJob -GrantSql`, `Deploy-SIManagement -GrantSql`); their help says the product does
   it now. `Initialize-SIDataSql` and `Initialize-SIVulnTargetSql` are not needed for the Pro database: the install and every
   update apply those schema files.
-- **Never beside a running update (#1146).** A support start of the job (`Start-SIDbInitJob.ps1`, also with
+- **Never beside a running update.** A support start of the job (`Start-SIDbInitJob.ps1`, also with
   `-Steps grants`) and `Grant-SISupportAppDatabase.ps1 -Apply` (which sends the same kind of grants itself) REFUSE while the
   updater runs and say to start them after the update: a running execution of the updater job (ARM, both scripts; a
   Running execution older than the job's run limit + 15 minutes is a leftover) or an updater lock row in `cfg.PipelineLock`
@@ -9354,16 +9436,16 @@ The database work that needs the SQL server's admin group is done by the install
   that cannot be read is said and never blocks. `Start-SIDbInitRun -By support` checks once more right before the start
   (`Status = Refused`). The updater's and the guided install's own starts are never checked. (Live: a support setup started
   the job 2 s after the update did; both wrote the one result row and the update was held.)
-- **Each caller's own result row (#1146).** The job writes its result to `DbJob` (as before: the heartbeat, the membership
+- **Each caller's own result row.** The job writes its result to `DbJob` (as before: the heartbeat, the membership
   proof) AND to the row of its caller -- `DbJobUpdater`, `DbJobSupport`, `DbJobInstaller` (`Get-SIDbInitCallerRecordName`).
   The updater counts a run only with ITS run id, read from `DbJobUpdater` first, then `DbJob`; another run's row is never
   taken -- the hold then names that run. The job runs the INSTALLED engine image, so the caller rows appear from the run after
   the release that carries them; until then the refusal above keeps support runs away from an update.
-- **A deadlock victim is sent again (#1146).** A statement SQL chose as a deadlock victim (1205: rolled back, nothing of it
+- **A deadlock victim is sent again.** A statement SQL chose as a deadlock victim (1205: rolled back, nothing of it
   stayed) is sent again after 2, 5 and 10 s, each said in the job's lines; any other error, or the fourth deadlock, fails the
   run as before. The grants are idempotent, so a second send converges.
 
-#### Every identity to its standard name -- the updater step `identity-names` (framework §5.5; #1145)
+#### Every identity to its standard name -- the updater step `identity-names`
 
 Every SecurityInsight identity carries its standard name at every install: `id-si-engine`, `id-si-web`, `id-si-mcp`,
 `id-si-updater`, `id-si-tagging` (and `id-si-dbinit`). A user-assigned managed identity cannot be renamed, so an install that
@@ -9392,6 +9474,14 @@ Support app may do.
   shows the new user holding every role and permission of it (`Test-SIIdentityMoveSqlCovered`,
   `setup/_shared/SI-IdentityMoveSql.ps1`), and the job refuses to drop its own identity, the Invardia Support app, or any
   identity an app or job of the install still signs in as. The server's Entra administrator is never touched.
+- **A run that did not succeed is not blamed on the new identity.** The proof is unchanged: the latest ended run of a job must
+  have succeeded on the new identity, and until then the old identity keeps every right and the clean-up waits. What changes
+  is what a run that did not succeed means. A stopped run, and a successful run that did not start with the new identity, say
+  nothing about its rights: the job waits for its next run. A run that failed is looked up in the pipeline's own record of
+  that run (`cfg.FlowStepRun`): only a refused right or sign-in stops the role, is reported as a failure and advises switching
+  back. Any other failure -- a platform timeout, a job outside the pipeline, or a reason that cannot be read -- is one warning
+  in the update's log; nothing is reported as a failure, and the names report stays `missing` until a later run succeeds. An
+  app's revision that is not healthy stops the role and names the revision; its log says why.
 - **The updater moves last.** Its rights are copied with the others, but its job is switched only when every other role is
   proven; the next update runs as the new identity and proves it with its own token (it signed in and read Azure and the
   state database); only an update that runs AS the new identity removes the old one.
@@ -9438,7 +9528,7 @@ Support app may do.
 - **Plan first, per install**: without the row `cfg.InstallState 'IdentityMoveMode'` the step PLANS -- the per-install plan in
   the update's log and the report row, nothing changed. `apply` (set and read back through the Support app once the
   install's plan is approved) lets the update act; `off` skips the step.
-#### Support-app cut-overs -- the shared pattern (framework §12.23 P8)
+#### Support-app cut-overs -- the shared pattern
 
 `setup/_shared/SI-SupportCutover.ps1`, used by `Set-SISecurityBaseline.ps1` and `Move-SIEngineToLeastPrivilege.ps1` (the
 pattern PIM used to move all its environments, 2026-10-14):
@@ -9463,7 +9553,7 @@ pattern PIM used to move all its environments, 2026-10-14):
 - **Only through the Support session**: ARM via `Invoke-InvardiaSupportArm`, SQL via `Invoke-InvardiaSupportSql`, Graph
   via `Invoke-InvardiaSupportGraph` -- all in the customer's audit log. Without a session the scripts refuse; tests pass
   their own seams.
-#### The Support app's standing admin taken away -- `setup/Remove-SISupportStandingAccess.ps1` (#1021, the last step)
+#### The Support app's standing admin taken away -- `setup/Remove-SISupportStandingAccess.ps1`
 
 Once the just-in-time support grant works at an install, the Support app's two STANDING rights go, in the cut-over pattern
 above (plan by default; `-Apply`; `-Rollback <record> -Apply`), one install at a time:
@@ -9482,7 +9572,7 @@ above (plan by default; `-Apply`; `-Rollback <record> -Apply`), one install at a
   just in time (not a member, the read-only role in every database) and a membership read after it is named "standing
   admin is back". The heartbeat's four fields keep their meaning: `group` = a member (as read), `dbUser` = its own user
   with the state's role in every database.
-#### No standing support admin by default -- the update takes it away once the just-in-time grant reads back (#1151 (1) SEC-01 / OPEN-01)
+#### No standing support admin by default -- the update takes it away once the just-in-time grant reads back
 
 Framework SECAUDIT-1a: the Invardia Support app keeps ONLY its read-only role standing; db_owner comes just in time through
 the signed support grant procedures (at most the consented level, at most 8 hours). Three parts, one model:
@@ -9510,14 +9600,12 @@ the signed support grant procedures (at most the consented level, at most 8 hour
   group stays the server's admin with another member (never lose SQL access).
 - **Heartbeat** -- setup step `support-grant-jit` is ok only when the grant is installed AND `SupportStanding` says no
   standing admin; 'missing' while db_owner or the membership is still there; no row yet = the grant alone (as before).
-#### The support grant job is started by its own queue; the Support app holds no right on any job (#1154, framework §5.5)
+#### The support grant job is started by its own queue; the Support app holds no right on any job
 
-`Microsoft.App/jobs/start/action` ALONE accepts a container override, so the earlier design (the Support app held Container
-Apps Jobs Operator on `caj-si-support-grant` and started it with an empty body) let it run a command of its own as the
-ENGINE identity. Now:
+The Support app holds no right on any container job. A support request reaches the install only as one message on a queue:
 - **The trigger** -- `caj-si-support-grant` is EVENT-triggered: the azure-queue scale rule `si-support-requests` on the queue
   of that name in the install's own storage account (`queueLength=1`), signed in as the ENGINE identity (the rule's
-  `identity`; no connection string, no key -- shared-key access is off, #307), at most one execution, polled every 10 s.
+  `identity`; no connection string, no key -- shared-key access is off), at most one execution, polled every 10 s.
   ONE definition: `Get-SISupportGrantTriggerArgs` / `ConvertTo-SISupportGrantEventCreateArgs`
   (`container/_shared/SI-ContainerConfig.ps1`) for Bootstrap (a new install) and the update's missing-jobs step
   (`Get-SIMissingJobSpec`, the donor's identity whose client id is its `SI_UAMI_CLIENTID`);
@@ -9544,7 +9632,7 @@ ENGINE identity. Now:
   line Invardia reads is the one answering its request. Only stale or bad messages still answer `result=no-request` /
   `bad-request` (exit 4).
 
-#### Invardia alignment (#1151 (5)-(7)): the head call, the environment name, purge protection at existing installs, the updater's rights in the security pack
+#### Alignment with the Invardia platform: the head call, the environment name, purge protection at existing installs, the updater's rights in the security pack
 
 - **(5) UPD-03 -- the head call ("Update now" / expedite; framework §8.18, Invardia DESIGN "The head call").** SI polls on the
   heartbeat job's 15-minute tick (the updater itself runs once a day, so the poll lives where §8.18 puts SI's: the heartbeat
@@ -9734,23 +9822,21 @@ so every update's schema AND grants are applied by the updater's OWN contained u
   re-points the server's Entra admin (ARM `administrators/ActiveDirectory`). That admin then runs
   `setup/Install-SIGrantProcedure.ps1` (or the guided install's database step) to re-sign / re-install the procedure, or
   `-Rollback` to give the updater db_securityadmin back. The Support app is added only on request, for troubleshooting.
-- **Honest limits.** db_ddladmin is itself powerful (a ddladmin can create a module in a dbo-owned schema and reach any
-  dbo-owned table through ownership chaining); the procedure limits who gets WHICH RIGHT, not what the updater's DDL can
-  do -- that is P4's accepted "DDL only". A product schema that appears only after the admin run (e.g. snowstage in the Pro
-  database) gets no CONTROL for the signer: the procedure REFUSES its rows with that reason (a warning, the update goes on) until an admin re-runs the
-  `rights` step. A new schema or a new component name beyond the reserved ones needs an admin (a changed procedure).
+- **Scope.** The procedure decides who gets which right. A product schema that appears after the admin run is granted
+  once an admin runs the `rights` step again (until then the update says so and goes on). A new schema or a new component
+  name beyond the reserved ones needs an admin.
 
 **What you see.** Every run writes the update state (12c: source `invardia`, the last manifest per kind with its ring,
 what was applied, holds, the reason, any error) to the Key Vault and `cfg.InstallState 'UpdateState'` -- the header's
 UPDATE RING and the Settings page read it -- and the ring is recorded as the install's ring (#308). Both of the customer's
 switches (12d) are stated on every run.
 
-**Sign-in.** `Install-SIUpdaterJob.ps1 -UseManagedIdentity` (#222): the job signs in as its own identity
-`uami-si-updater` (`SI_UPDATER_AUTH=ManagedIdentity`) -- no certificate in any vault, as PIM's update job; `-GrantSpnRoles`
+**Sign-in.** `Install-SIUpdaterJob.ps1 -UseManagedIdentity`: the job signs in as its own identity
+`id-si-updater` (`SI_UPDATER_AUTH=ManagedIdentity`) -- no certificate in any vault, as PIM's update job; `-GrantSpnRoles`
 grants that identity Contributor on the registry and resource group and Key Vault Secrets Officer on the vault. A Pro
 install also gives it a database user (read the settings, write `cfg.InstallState` and the template tables).
 
-**Schedule.** Daily at 03:00 UTC (`-Schedule`, a deploy parameter, the same for every ring -- PIM's default); clear of
+**Schedule.** Daily at 18:30 in the local time of the install's Azure region (`-Schedule` sets a timer of your own), before
 the evening pipeline. Ring 1 is also updated at once whenever a build is released to it.
 
 **Releasing a build to a ring** = `setup/Publish-SIRelease.ps1 -Ring <n>` (ring 2 / 3 with `-OperatorApproval`, the

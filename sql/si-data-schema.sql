@@ -2664,6 +2664,20 @@ CREATE TABLE sidata.CiDeletionProof (
     Evidence        NVARCHAR(400)  NULL,
     ProvedAt        DATETIME2(3)   NOT NULL CONSTRAINT DF_CiDeletionProof_ProvedAt DEFAULT SYSUTCDATETIME()
 );
+-- ---------------------------------------------------------------------------------------------
+-- A CI THAT WAS SPLIT (ADDED 2026-11-09). One row per split: a correlation decision (never-merge), a removed "same machine"
+-- decision or a proven wrong merge moved records off FromCiId onto ToCiId. The finding lifecycle reads it: a finding last seen
+-- on FromCiId before the split and absent since moved with its record -- it closes as 'rekeyed', never as 'remediated'.
+-- Written by the CI build (engine\data-model\SI-CiBuildSql.ps1 Get-SICiSplitWriteSql); no row while nothing is split.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CiSplit') IS NULL
+CREATE TABLE sidata.CiSplit (
+    FromCiId        NVARCHAR(64)   NOT NULL,
+    ToCiId          NVARCHAR(64)   NOT NULL,
+    SplitAt         DATETIME2(3)   NOT NULL,
+    Source          NVARCHAR(32)   NULL,
+    CONSTRAINT PK_CiSplit PRIMARY KEY (FromCiId, ToCiId)
+);
 IF OBJECT_ID('sidata.SourceState') IS NULL
 CREATE TABLE sidata.SourceState (
     Source          NVARCHAR(32)   NOT NULL CONSTRAINT PK_SourceState PRIMARY KEY,

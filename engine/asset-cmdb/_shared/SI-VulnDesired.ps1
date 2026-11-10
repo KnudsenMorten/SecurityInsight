@@ -1429,6 +1429,14 @@ GROUP BY o.CiId;
 '@
 }
 
+function Get-SIVulnSplitCiKeysSql {
+    <# The CIs split in the last 30 days (sidata.CiSplit): an item absent on one moved with its record, not a fix. The window is far longer than the runs a close waits for. Guarded (no table = no rows). #>
+    @'
+IF OBJECT_ID('sidata.CiSplit') IS NULL SELECT CAST(NULL AS NVARCHAR(64)) AS CiId WHERE 1 = 0;
+ELSE SELECT DISTINCT FromCiId AS CiId FROM sidata.CiSplit WHERE SplitAt >= DATEADD(day, -30, SYSUTCDATETIME());
+'@
+}
+
 function ConvertFrom-SIVulnReplacedRecordRows {
     <# PURE. Rows (CiId, Provider, Replaced) -> @{ '<CI key lower>' = '<evidence, plain>' }. #>
     param([AllowEmptyCollection()][object[]]$Rows = @())
@@ -1454,7 +1462,13 @@ function Read-SIVulnReplacedRecordKeys {
     if (-not $Invoke) { return [pscustomobject]@{ Keys = @{}; Known = $true } }
     try {
         $rows = @(& $Invoke (Get-SIVulnReplacedRecordKeysSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
-        return [pscustomobject]@{ Keys = (ConvertFrom-SIVulnReplacedRecordRows -Rows $rows); Known = $true }
+        $keys = ConvertFrom-SIVulnReplacedRecordRows -Rows $rows
+        foreach ($sr in @(& $Invoke (Get-SIVulnSplitCiKeysSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })) {
+            $sk = if ($sr -is [System.Collections.IDictionary]) { [string]$sr['CiId'] } else { [string]$sr.CiId }
+            $sk = $sk.Trim().ToLowerInvariant()
+            if ($sk -and -not $keys.ContainsKey($sk)) { $keys[$sk] = 'this asset was split, and the finding may have moved to the other part' }
+        }
+        return [pscustomobject]@{ Keys = $keys; Known = $true }
     } catch { return [pscustomobject]@{ Keys = @{}; Known = $false; Error = $_.Exception.Message } }
 }
 

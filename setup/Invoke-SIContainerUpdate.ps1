@@ -1049,11 +1049,19 @@ function Invoke-SIUpdatePublishedCopy {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
+                if ($Mode -eq 'scalar') { return $cmd.ExecuteScalar() }
                 $rd = $cmd.ExecuteReader()
                 try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $dataSrv, $dataDb come from this function
-        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly)
+        # live 2026-11-09/10: without connections to hand out, the copies were refreshed by the database's procedure in ONE call
+        # that never beat -- a long one is taken for a dead update. With them, the engine's range driver refreshes range by range,
+        # re-checks every copy table each time (a cut-off refresh leaves none behind: CopiedAt moves only when all ten are done),
+        # says its progress and beats this update's own row after every range (Invoke-SIUpdaterLockBeat).
+        $dataInfo = { $tok = ([string](Get-SIAzureToken -Resource 'https://database.windows.net/')).Trim(); @{ ConnectionString = "Server=tcp:$dataSrv,1433;Database=$dataDb;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"; AccessToken = $tok; CommandTimeout = 0 } }   # dynamic scope, as $dataSql (a closure could not see Get-SIAzureToken)
+        $dataSql | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $dataInfo
+        $copyBeat = { if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'the copies the pages show' } }
+        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat
         if (@($r.Lines).Count) { Step '9j. PUBLISHED COPIES' }
         foreach ($l in @($r.Lines)) { if ($r.Action -in @('failed', 'held')) { Warn $l } else { Info $l } }
         $global:SI_UpdatePublishedCopy = $r

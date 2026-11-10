@@ -123,6 +123,23 @@ Describe 'real failure texts -> their class' {
     }
 }
 
+Describe 'a SQL statement''s temporary answer without its tag' {
+    It 'the driver''s text and the engine''s own text are transient-sql when the statement retry''s test accepts them' {
+        Get-SIErrorClass -Message 'Exception calling "ExecuteScalar" with "3" argument(s): "The log for database ''x'' is not available."' | Should -Be 'transient-sql'
+        Get-SIErrorClass -Message 'SQL error 9001 (line 1): The log for database ''x'' is not available.' | Should -Be 'transient-sql'
+        Get-SIErrorClass -Message 'Exception calling "ExecuteNonQuery" with "0" argument(s): "A severe error occurred on the current command."' | Should -Be 'transient-sql'
+    }
+    It 'a SQL failure that test does not accept is not guessed at: a query defect, or an unknown text, stays what it was' {
+        Get-SIErrorClass -Message 'Exception calling "ExecuteScalar" with "0" argument(s): "Incorrect syntax near ''FROM''."' | Should -Be 'unknown'
+        Get-SIErrorClass -Message 'Exception calling "ExecuteScalar" with "0" argument(s): "The database did something this test has never seen."' | Should -Be 'unknown'
+        Get-SIErrorClass -Message 'SQL error 40544 (line 1): The database ''x'' has reached its size quota.' | Should -Be 'database-full'
+    }
+    It 'the same words from another service are not SQL''s: never transient-sql' {
+        Get-SIErrorClass -Message 'The connection reset while reading from the storage account' | Should -Not -Be 'transient-sql'
+        Get-SIErrorClass -Message 'Exception calling "Open": A transport-level error has occurred' | Should -Be 'platform-5xx'
+    }
+}
+
 Describe 'the run record' {
     It 'Outcome from ExitReason: success = ok, success-partial = warning, error / settings-error = failed; anything else refused' {
         Get-SITelemetryOutcome 'success' | Should -Be 'ok'
@@ -214,17 +231,23 @@ Describe 'the heartbeat record' {
 Describe 'the builders send nothing' {
     It 'the builders make no network call; the ONLY caller is the sender (SI-TelemetrySend.ps1, tested in SIv3-Telemetry)' {
         foreach ($f in 'SI-ErrorClass.ps1', 'SI-Telemetry.ps1') {
-            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $script:SIRoot "engine\_shared\$f"), [ref]$null, [ref]$null)
+            $path = [IO.Path]::Combine($script:SIRoot, 'engine', '_shared', $f)
+            Test-Path -LiteralPath $path -PathType Leaf | Should -BeTrue -Because "$f must be there, or this test checks nothing"
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
             $cmds = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
+            $cmds.Count | Should -BeGreaterThan 0 -Because "$f was parsed, or this test checks nothing"
             @($cmds | Where-Object { $_ -match '^(Invoke-RestMethod|Invoke-WebRequest|Send-AitUplink|Invoke-AzRestMethod|Send-SILogData|Send-SIRunHealthRow)$' }) | Should -BeNullOrEmpty -Because $f
         }
         # the Pro paths (the publish manifest's excludePaths; a public copy has neither the manifest nor those files) are left
         # out here: a Pro caller is guarded by its own Pro suite (#718: the hourly status report job, SIv3-HeartbeatJob)
         $proPaths = @()
         $man = Join-Path $script:SIRoot 'solution.publish.json'
-        if (Test-Path -LiteralPath $man) { $proPaths = @((Get-Content -Raw -LiteralPath $man | ConvertFrom-Json).excludePaths | ForEach-Object { ([string]$_).Replace('/', '\').TrimEnd('\') }) }
-        $isPro = { param($full) $rel = $full.Substring($script:SIRoot.TrimEnd('\').Length + 1); [bool](@($proPaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '\') }).Count) }
-        $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' | Where-Object { $_.FullName -notmatch '\\tests\\' -and $_.Name -notin 'SI-Telemetry.ps1' -and -not (& $isPro $_.FullName) } |
+        # every path compared with forward slashes, relative to the solution: the same on Windows and on the Linux test runner
+        if (Test-Path -LiteralPath $man) { $proPaths = @((Get-Content -Raw -LiteralPath $man | ConvertFrom-Json).excludePaths | ForEach-Object { ([string]$_).Replace('\', '/').TrimEnd('/') }) }
+        $rootLen = $script:SIRoot.Replace('\', '/').TrimEnd('/').Length + 1
+        $relOf = { param($full) ([string]$full).Replace('\', '/').Substring($rootLen) }
+        $isPro = { param($full) $rel = & $relOf $full; [bool](@($proPaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '/') }).Count) }
+        $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' | Where-Object { (& $relOf $_.FullName) -notmatch '(^|/)tests/' -and $_.Name -notin 'SI-Telemetry.ps1' -and -not (& $isPro $_.FullName) } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match 'New-SITelemetry(RunRecord|Heartbeat)' } | ForEach-Object { $_.Name })
         # the support grant (Community AND Pro) reports each grant / close on the uplink through the sender's own send (framework SECAUDIT-1a)
         @($callers | Sort-Object) | Should -Be @('Invoke-SISupportGrant.ps1', 'SI-TelemetrySend.ps1')

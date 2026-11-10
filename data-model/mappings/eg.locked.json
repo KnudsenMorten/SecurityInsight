@@ -737,6 +737,15 @@
       ]
     },
     {
+      "field": "si_primary_provider",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "node.NodeProperties.rawData.primaryProvider"
+      ]
+    },
+    {
       "field": "si_password_last_changed",
       "recordTypes": [
         "user"

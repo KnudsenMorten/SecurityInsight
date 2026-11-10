@@ -351,6 +351,40 @@ Describe 'GOLDEN: the same source data gives the same SI_*_Profile_CL row at bot
         $rows[0] | Should -Match 'ada@contoso.test'
     }
 
+    It 'a synced user: its on-premises SID, account name and domain reach the discovery record, the profile row and its entity ids' {
+        $saved = $script:User
+        try {
+            $script:User = $saved.PSObject.Copy()
+            $script:User | Add-Member -NotePropertyName onPremisesSyncEnabled -NotePropertyValue $true -Force
+            $script:User | Add-Member -NotePropertyName onPremisesSecurityIdentifier -NotePropertyValue 'S-1-5-21-1-2-3-1101' -Force
+            $script:User | Add-Member -NotePropertyName onPremisesSamAccountName -NotePropertyValue 'ada' -Force
+            $script:User | Add-Member -NotePropertyName onPremisesDomainName -NotePropertyValue 'contoso.test' -Force
+            script:AtLevel security identity
+            $u = @(Get-DiscoveryFromEntraUsers)[0]
+            $u['ENTRA_OnPremSID'] | Should -Be 'S-1-5-21-1-2-3-1101'
+            $u['ENTRA_OnPremSamAccountName'] | Should -Be 'ada'
+            $u['ENTRA_OnPremDomainName'] | Should -Be 'contoso.test'
+            $row = @(script:BuildRows -Builder 'Build-IdentityProfileRow.ps1' -Function 'Build-SIIdentityProfileRow' -Engine 'identity' -Records @((script:AsRecord $u $script:User.id)))[0]
+            $row | Should -Match '"OnPremSid":"S-1-5-21-1-2-3-1101"'
+            $row | Should -Match '"OnPremSamAccountName":"ada"'
+            $row | Should -Match '"OnPremDomainName":"contoso\.test"'
+            $row | Should -Match 'SecurityIdentifier' -Because 'the SID is one of the entity ids of the row'
+        } finally { $script:User = $saved }
+    }
+
+    It 'a cloud-only user: the on-premises fields stay empty, never a blank SID entity id' {
+        $saved = $script:User
+        try {
+            $script:User = $saved.PSObject.Copy()
+            $script:User | Add-Member -NotePropertyName onPremisesSamAccountName -NotePropertyValue $null -Force
+            script:AtLevel security identity
+            $u = @(Get-DiscoveryFromEntraUsers)[0]
+            $u['ENTRA_OnPremSID'] | Should -BeNullOrEmpty
+            $row = @(script:BuildRows -Builder 'Build-IdentityProfileRow.ps1' -Function 'Build-SIIdentityProfileRow' -Engine 'identity' -Records @((script:AsRecord $u $script:User.id)))[0]
+            $row | Should -Not -Match 'SecurityIdentifier'
+        } finally { $script:User = $saved }
+    }
+
     It 'azure (an ARM resource): every field of the row is the same' {
         script:AtLevel security azure
         $s = @(Get-DiscoveryFromAzureResources)[0]

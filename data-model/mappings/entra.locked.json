@@ -133,6 +133,18 @@
       ]
     },
     {
+      "field": "si_source_deleted_at",
+      "recordTypes": [
+        "user"
+      ],
+      "sources": [
+        "user.deletedDateTime"
+      ],
+      "normalize": [
+        "datetime_utc"
+      ]
+    },
+    {
       "field": "ad_object_guid",
       "recordTypes": [
         "user"

@@ -314,7 +314,8 @@ function Get-SICiLifecycle {
     foreach ($l in @($Links)) { if ($null -ne $l -and [string](Get-SILifecycleValue $l 'provider') -notin 'eg', 'cmdb', 'servicenow') { $hasOther = $true; break } }
     foreach ($l in @($Links)) {
         if ($null -eq $l) { continue }
-        if ($hasOther -and [string](Get-SILifecycleValue $l 'provider') -eq 'eg') { continue }
+        # (a link marked ad_account -- a live Active Directory account of a user Entra ID lists as deleted, New-SICiDocument -- is that account's own evidence, not a mirror of Entra ID)
+        if ($hasOther -and [string](Get-SILifecycleValue $l 'provider') -eq 'eg' -and -not (Get-SILifecycleValue $l 'ad_account')) { continue }
         switch ([string](Get-SILifecycleValue $l 'state')) { 'active' { $active.Add($l) } 'frozen' { $frozen.Add($l) } 'gone' { $gone.Add($l) } default { $notSeen.Add($l) } }
     }
     $newest = {

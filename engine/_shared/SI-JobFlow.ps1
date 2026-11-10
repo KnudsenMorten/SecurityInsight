@@ -3044,7 +3044,10 @@ function New-SIJobFlowVmSeams {
             $c = Get-SIJobFlowVmCommand -Job $Job -Root $this.Root -Flavour $this.Flavour
             if (-not $c) { throw ("{0} has no VM launcher (it runs as a container job only)" -f $Job) }
             $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $c.File)) + @($c.Arguments)
-            $p = Start-Process -FilePath $this.Exe -ArgumentList $argList -WorkingDirectory $this.Root -PassThru -WindowStyle Hidden
+            # -WindowStyle exists only on Windows (a VM host is Windows; elsewhere the process starts without it)
+            $spArgs = @{ FilePath = $this.Exe; ArgumentList = $argList; WorkingDirectory = $this.Root; PassThru = $true }
+            if ($IsWindows -or $PSVersionTable.PSEdition -ne 'Core') { $spArgs['WindowStyle'] = 'Hidden' }
+            $p = Start-Process @spArgs
             $name = '{0}@{1}' -f $p.Id, $p.StartTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)
             $this.Procs[$name] = $p
             $name

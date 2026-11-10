@@ -643,9 +643,14 @@ function Invoke-SIDataPublishRun {    <#
         wake-up only reads that something is published and catches up the shown run's copies when they are older than it
         (Invoke-SIPublishedCopyCatchUp). Returns @{ Published; Skipped (the run was not eligible -- the
         database was not asked); Reason; CollectionId; CollectionTime; Partial; Text }.
+        -SkipCopyCatchUp (the run's end, live 2026-11-09/10): only the decision and the pointer -- the copies are caught up by
+        the same wake-up AFTER the update hand-off and the lock release, under the wake-up's own beat (Invoke-SIJobFlowRun.ps1,
+        the upkeep). A long copy refresh at the run's end held the run's report, the lock and the waiting update back, and a
+        large install's runner was stopped as dead in it.
     #>
     param([scriptblock]$Invoke, $State, $Map, $Previous, [ValidateSet('run', 'schedules', 'update')][string]$Source = 'run', [string]$SolutionVersion = '',
-          [bool]$AllowPartial = (Test-SIPublishPartialRun), [int]$RetentionDays = 0, [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat)
+          [bool]$AllowPartial = (Test-SIPublishPartialRun), [int]$RetentionDays = 0, [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat,
+          [switch]$SkipCopyCatchUp)
     $res = [pscustomobject]@{ Published = $false; Skipped = $false; Reason = ''; CollectionId = $null; CollectionTime = $null; Partial = $false; Text = '' }
     try {
         if (-not $Invoke) { $res.Skipped = $true; $res.Reason = 'this install has no database'; $res.Text = Get-SIDataPublishText -Result $res; return $res }
@@ -654,7 +659,7 @@ function Invoke-SIDataPublishRun {    <#
             $n = @(& $Invoke "SELECT CASE WHEN OBJECT_ID(N'sidata.PublishedRun') IS NULL OR OBJECT_ID(N'sidata.PublishedRunSet') IS NULL THEN 1 ELSE (SELECT COUNT(*) FROM sidata.PublishedRun WHERE Name = N'current') END AS N" @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
             $has = if ($n.Count) { $v = if ($n[0] -is [System.Collections.IDictionary]) { $n[0]['N'] } else { $n[0].N }; [int]$v -gt 0 } else { $true }
             # a run is published: its copies of the merged assets caught up when they are older than it (one cheap read when not)
-            if ($has) { $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log; $res.Skipped = $true; $res.Reason = 'a run is published'; return $res }
+            if ($has) { $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log -Beat $Beat; $res.Skipped = $true; $res.Reason = 'a run is published'; return $res }
         }
         $prm = @{ Source = $Source; FlowRunId = ''; RunStartedUtc = ''; RunEndedUtc = ''; SolutionVersion = $SolutionVersion
                   Grains = 'Detailed,Summary'; NeedCiBuild = '0'; AllowPartial = $(if ($AllowPartial) { '1' } else { '0' }); RefuseWhy = ''
@@ -676,7 +681,7 @@ function Invoke-SIDataPublishRun {    <#
                     $prm.RefuseWhy = $el.Why
                     try { Write-SIDataPublishCopiesLine -Rows @(& $Invoke (Get-SIDataPublishSql) $prm 'rows') -Log $Log } catch { & $Log 'WARN' ('why this run is not shown could not be kept ({0})' -f $_.Exception.Message) }
                     # #881 the shown run's copies caught up when they are older than it (range by range)
-                    $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log -Beat $Beat
+                    if (-not $SkipCopyCatchUp) { $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log -Beat $Beat }
                 }
                 return $res
             }
@@ -697,7 +702,7 @@ function Invoke-SIDataPublishRun {    <#
         Write-SIDataPublishCopiesLine -Rows $rows -Log $Log
         # #881 the copies follow the pointer range by range, right after it moved (CopiedAt only when every range is done); an
         # attempt that did not publish catches up copies older than the shown run the same way
-        $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log -AfterPublish:$res.Published -Beat $Beat
+        if (-not $SkipCopyCatchUp) { $null = Invoke-SIPublishedCopyCatchUp -Invoke $Invoke -Log $Log -AfterPublish:$res.Published -Beat $Beat }
         # 'schedules': nothing newer is the normal answer of most wake-ups -- not said ('update': nothing complete yet, the same)
         if (($Source -in @('schedules', 'update')) -and -not $res.Published) { $res.Skipped = $true; $res.Text = ''; return $res }
         $res.Text = Get-SIDataPublishText -Result $res

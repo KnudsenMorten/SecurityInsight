@@ -13,7 +13,11 @@
       * updater      -- the install lock ('install', Holder caj-si-updater:<execution>, from its run gate on) or its own row
                         ('updater', from its first moment after the sign-in; every log line beats it);
       * flow         -- the install lock ('install', Holder = the execution name: the runner of a run);
-      * housekeeping -- its own row ('housekeeping'), taken by the container entry as its first act, beaten by the clean-up.
+      * housekeeping -- its own row ('housekeeping'), taken by the container entry as its first act, beaten by the clean-up;
+                        the upkeep of a full wake-up (the copies the pages show, the clean-up -- after the queue and the
+                        update hand-off) beats its own row ('wakeup'): judged as a clean-up, it never holds a wake-up back.
+    A DEAD RUNNER's install lock is released in the same step as its stop (Exit-SIExecutionInstallLockOf: only while that
+    execution is still its holder), so the next runner takes the queue at once.
     GRACE: an execution that beat before is DEAD 15 minutes after its last beat; one that has NEVER beaten is dead only 30
     minutes after it started (nothing runs before the image pull). An execution with neither a start time nor a beat is never
     judged dead. When the lock rows cannot be read the old rule holds (everything Running counts; nothing is stopped).
@@ -34,6 +38,7 @@ function Get-SIExecutionLivenessContract {
         InstallLock           = 'install'
         UpdaterLock           = 'updater'
         HousekeepingLock      = 'housekeeping'
+        WakeupLock            = 'wakeup'
         StopApi               = '2024-03-01'
         UpdaterHolderPrefix   = 'caj-si-updater:'
         ActionTextMax         = 500
@@ -123,7 +128,7 @@ function Get-SIExecutionLiveness {
     $age = if ($start) { [Math]::Max(0, ($now - $start).TotalMinutes) } else { $null }
     $since = if ($beat) { [Math]::Max(0, ($now - $beat.LastBeatUtc).TotalMinutes) } else { $null }
     $k = $Kind
-    if ($k -eq 'flow' -and $beat -and $beat.LockName -eq $c.HousekeepingLock) { $k = 'housekeeping' }
+    if ($k -eq 'flow' -and $beat -and $beat.LockName -in @($c.HousekeepingLock, $c.WakeupLock)) { $k = 'housekeeping' }
     $alive = if ($beat) { $since -lt $c.BeatStaleMinutes } elseif ($null -ne $age) { $age -lt $c.NeverBeatGraceMinutes } else { $true }
     [pscustomobject]@{
         Name = $name; Kind = $k; StartedUtc = $start
@@ -251,6 +256,7 @@ function ConvertTo-SIExecutionStoppedAlert {
         'install'      { 'its last beat was on the install lock' }
         'updater'      { 'its last beat was on the update''s own lock' }
         'housekeeping' { 'its last beat was on the clean-up''s own lock' }
+        'wakeup'       { 'its last beat was on the wake-up''s own lock' }
         default        { 'it never beat a lock' }
     }
     $at = ('SecurityInsight stopped the {0} execution {1}: Azure still showed it running, but {2}{3} -- {4}.' -f [string]$Event.Kind, [string]$Event.Execution, $lockWords,
@@ -417,7 +423,7 @@ function Read-SIExecutionLocks {
         return [pscustomobject]@{ Known = $true; Rows = $out.ToArray() }
     }
     $c = Get-SIExecutionLivenessContract
-    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
+    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock, $c.WakeupLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
     [pscustomobject]@{ Known = $true; Rows = @($docs | Where-Object { $_ -and $_.Holder }) }
 }
 
@@ -467,6 +473,33 @@ function Exit-SIExecutionLock {
         $cur = Read-SIExecLiveDoc -Store $Store -Lock $Lock
         if ($cur -and $cur.Holder -eq $Holder) { $Store.Docs.Delete((Get-SIExecLiveDocName $Lock)) }
     } catch { }
+}
+
+function Get-SIExecutionInstallReleaseSql {
+    <# PURE. The T-SQL that frees the INSTALL lock of ONE holder (a dead runner just stopped) -- only while that holder still
+       holds it; answers Released (rows). The run gate and the runner keep every other release. #>
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.PipelineLock') IS NULL BEGIN SELECT 0 AS Released; RETURN; END UPDATE cfg.PipelineLock SET Holder = NULL, What = NULL, FlowRunId = NULL, HeartbeatUtc = NULL WHERE LockId = N'install' AND Holder = @Holder; SELECT @@ROWCOUNT AS Released;"
+}
+
+function Exit-SIExecutionInstallLockOf {
+    <#
+        Live 2026-11-09/10: a dead runner was stopped, but its install lock stayed taken until its beat was 15 minutes old, and
+        the queue row of its finished run stayed 'Running'. The watchdog frees the install lock of the execution it has just
+        STOPPED, in the same step -- only while -Holder (that execution's name) still holds it; a lock another runner holds is
+        never touched. The next runner then takes the lock at once: it resumes a run that never finished and closes the
+        request of one that did (Invoke-SIPipelineDrain). $true = released. Never throws.
+    #>
+    param($Store, [string]$Holder)
+    if (-not $Store -or -not "$Holder".Trim()) { return $false }
+    try {
+        if ($Store.Kind -eq 'sql') {
+            $r = ConvertTo-SIExecLiveRows (& $Store.Invoke (Get-SIExecutionInstallReleaseSql) @{ Holder = [string]$Holder } 'reader')
+            return [bool]($r.Count -and [int](Get-SIExecLiveField $r[0] 'Released') -gt 0)
+        }
+        $cur = Read-SIExecLiveDoc -Store $Store -Lock 'install'
+        if ($cur -and (Test-SIExecutionHolder -Holder $cur.Holder -Name $Holder) -and $cur.Holder -eq $Holder) { $Store.Docs.Delete((Get-SIExecLiveDocName 'install')); return $true }
+        $false
+    } catch { $false }
 }
 
 function New-SIExecutionLockBlobDocs {

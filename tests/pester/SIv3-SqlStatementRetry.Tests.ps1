@@ -88,6 +88,15 @@ Describe 'SIv3-SqlStatementRetry: which SQL failures are Azure SQL''s temporary 
     }
 }
 
+Describe 'SIv3-SqlStatementRetry: SQL''s own error number can be read from a failure' {
+    It 'distinct and comma-joined, also from an inner exception; empty when it has none' {
+        Get-SISqlErrorNumbers -ErrorRecord (New-SqlError 'x' @(9001, 3314, 9001)) | Should -Be '9001,3314'
+        Get-SISqlErrorNumbers -ErrorRecord ([System.Exception]::new('outer', (New-SqlError 'inner' @(40613)))) | Should -Be '40613'
+        Get-SISqlErrorNumbers -ErrorRecord (New-SqlError 'no number') | Should -Be ''
+        Get-SISqlErrorNumbers -ErrorRecord $null | Should -Be ''
+    }
+}
+
 Describe 'SIv3-SqlStatementRetry: the data database seam runs a statement again on a new connection' {
     It 'a transient statement is run again after the pauses and answers; one connection per attempt' {
         $db = New-FakeDb -Plan @((New-SqlError 'The transaction log for database is not available.' @(9001)), (New-SqlError 'A severe error occurred on the current command.' @(3314)), 42)

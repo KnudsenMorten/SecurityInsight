@@ -27,6 +27,9 @@
 if (-not (Get-Command -Name Get-SIKqlErrorText -ErrorAction SilentlyContinue)) {
     . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-KqlError.ps1'))
 }
+if (-not (Get-Command -Name Test-SISqlShapedFailure -ErrorAction SilentlyContinue)) {
+    . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-SqlRetry.ps1'))
+}
 
 # The closed list, exactly as agreed (#226). Get-SIErrorClass returns one of these and nothing else.
 function Get-SIErrorClassesState {
@@ -283,6 +286,11 @@ function Get-SIErrorClass {
     # it -- its message ends "-- transient-sql" (SI-DataSql.ps1, the pipeline lock); the step's log carries that line, so the
     # pipeline's report of the step names the platform's class, never a product defect
     if ($t -match '(?i)--\s*transient-sql\b') { return 'transient-sql' }
+    # The same answer arriving untagged (a statement outside the retry, or a tag that only travels on the exception): a SQL
+    # statement's own failure that the statement retry's test accepts. Nothing is added to that test here: what it does not
+    # know stays unknown and is seen as such.
+    $__sqlErr = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord] -or $ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $t }
+    if ((Test-SISqlShapedFailure -Text $t -ErrorRecord $ErrorRecord) -and (Test-SISqlStatementTransient -ErrorRecord $__sqlErr)) { return 'transient-sql' }
     $svc =Get-SIErrorService -Text $t
     if (-not $svc -and $Service) { $svc = $Service.ToLowerInvariant() }
 

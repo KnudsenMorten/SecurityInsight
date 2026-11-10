@@ -446,7 +446,11 @@ function Resolve-SIObjectIdentity {
         # names for an identifier but that was merged away is NEVER used again: it resolves to the end of its merge chain
         # (Resolve-SISupersededId) and EVERY anchor it still holds is re-pointed there (owner 2026-11-05, a ring 1 install:
         # an old Exposure Graph node id of a VM still pointed at the merged twin, and the build brought the twin back)
-        [Parameter()][AllowNull()][hashtable]$MergedAway
+        [Parameter()][AllowNull()][hashtable]$MergedAway,
+        # the customer's pin-id decisions (ledger key -> the id that object must have, the plan's Pinned): the pinned id wins
+        # over whatever the ledger names; another id the object had is superseded by it. Two different pins on one object: none
+        # applied, PinConflict on its decision.
+        [Parameter()][AllowNull()][hashtable]$PinnedIdKeys
     )
 
     if ($null -eq $Ledger) { $Ledger = @{} }
@@ -517,6 +521,20 @@ function Resolve-SIObjectIdentity {
                 $cid = Resolve-SISupersededId -Id $cid -Map $MergedAway
                 if (-not $known.ContainsKey($cid)) { $known[$cid] = $e.FirstSeen }
             }
+        }
+
+        # pin-id: the operator's id for this object wins over every id the ledger knows (the oldest possible first seen)
+        $pinnedId = $null; $pinnedBy = $null; $pinConflict = $false
+        if ($null -ne $PinnedIdKeys -and $PinnedIdKeys.Count -gt 0) {
+            $pinHits = @{}
+            foreach ($id in $idsAll) {
+                $pk = Get-SILedgerKey -Type $id.Type -Value $id.Value
+                if ($PinnedIdKeys.ContainsKey($pk)) { $pinHits[[string]$PinnedIdKeys[$pk]] = $pk }
+            }
+            if ($pinHits.Keys.Count -eq 1) {
+                $pinnedId = @($pinHits.Keys)[0]; $pinnedBy = $pinHits[$pinnedId]
+                $known[$pinnedId] = [datetime]::MinValue
+            } elseif ($pinHits.Keys.Count -gt 1) { $pinConflict = $true }
         }
 
         $anchor = Get-SIObjectBirthAnchor -Identifiers $ids.ToArray()
@@ -593,7 +611,7 @@ function Resolve-SIObjectIdentity {
         # Decided per group from the ledger alone: a CI build batch that holds one of the objects decides exactly what a
         # batch holding all of them would.
         $idKeys = $null
-        if ($action -eq 'reuse') {
+        if ($action -eq 'reuse' -and -not $pinnedId) {
             if ($null -eq $keysById) { $keysById = Get-SILedgerKeysById -Ledger $Ledger }
             $idKeys = @(Get-SILedgerKeysOfId -Index $keysById -Ledger $Ledger -CorrelationId $cid)
             $wm = Test-SILedgerWrongMerge -Ids $ids.ToArray() -Ledger $Ledger -AnchorKeys $idKeys
@@ -650,7 +668,7 @@ function Resolve-SIObjectIdentity {
         [void]$decisions.Add([pscustomobject]@{
             Group = $g; CorrelationId = $cid; Action = $action
             BirthAnchor = $anchor; NewIdentifiers = $newIds.ToArray(); PriorIds = $priors
-            Identifiers = $ids.ToArray()
+            Identifiers = $ids.ToArray(); PinnedBy = $pinnedBy; PinConflict = $pinConflict
         })
     }
 

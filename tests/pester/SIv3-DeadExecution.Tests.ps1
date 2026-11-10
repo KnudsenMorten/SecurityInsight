@@ -235,8 +235,11 @@ Describe '(b) (c) the flow job''s execution guard' {
     }
     It 'the runner beats the clean-up''s own lock and releases it at the end' {
         $c = ((Get-Content -LiteralPath (Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1')) | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
-        $c | Should -Match "& \`$hkBeatFn -Store \`$hkLockStore -Lock 'housekeeping' -Holder \`$hkHolder"
-        $c | Should -Match "(?s)if \(\`$housekeepingOnly\) \{\s+if \(\`$hkLockStore\) \{ Exit-SIExecutionLock -Store \`$hkLockStore -Lock 'housekeeping' -Holder \`$hkHolder \}"
+        # live 2026-11-09/10: one beat for every wake-up -- the clean-up's row during a run, the wake-up's own row otherwise
+        $c | Should -Match "\`$wkLock = if \(\`$housekeepingOnly\) \{ 'housekeeping' \} else \{ 'wakeup' \}"
+        $c | Should -Match "& \`$wkBeatFn -Store \`$wkState\.Store -Lock \`$wkLock -Holder \`$wkHolder -What \`$wkWhat"
+        $c | Should -Match "(?s)if \(\`$housekeepingOnly\) \{\s+\`$null = Invoke-SIPipelineUpkeep -Beat \`$wkBeat -Cleanup \`$upkeepCleanup -Log \`$say\s+& \`$wkRelease"
+        $c | Should -Match "Exit-SIExecutionLock -Store \`$wkState\.Store -Lock \`$wkLock -Holder \`$wkHolder"
     }
 }
 

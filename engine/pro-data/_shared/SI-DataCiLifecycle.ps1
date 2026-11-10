@@ -184,8 +184,11 @@ IF OBJECT_ID('sidata.Ci') IS NOT NULL INSERT @ret (CiId, Why)
 DECLARE @rpl TABLE (CiId NVARCHAR(64) NOT NULL PRIMARY KEY);
 IF OBJECT_ID('sidata.CiLink') IS NOT NULL AND COL_LENGTH('sidata.CiLink', 'State') IS NOT NULL
     INSERT @rpl (CiId) SELECT DISTINCT o.CiId FROM sidata.CiLink AS o
-    WHERE o.State IN (N'not_seen', N'gone') AND o.RecordType <> N'child_resource'
-      AND EXISTS (SELECT 1 FROM sidata.CiLink AS c WHERE c.CiId = o.CiId AND c.Provider = o.Provider AND c.State IN (N'active', N'frozen'));
+    WHERE o.RecordType <> N'child_resource' AND ((o.State IN (N'not_seen', N'gone')
+      AND EXISTS (SELECT 1 FROM sidata.CiLink AS c WHERE c.CiId = o.CiId AND c.Provider = o.Provider AND c.State IN (N'active', N'frozen')))
+      -- a CI that stays active because another source still sees it, while Entra ID lists its user as deleted: a finding only
+      -- the deleted user's record carried leaves the report -- not a fix either
+      OR (o.State = N'gone' AND o.Provider = N'entra' AND o.RecordType = N'user'));
 DECLARE @reo TABLE (OwnerKey NVARCHAR(450) NOT NULL, FindingKey NVARCHAR(256) NOT NULL, WasReason NVARCHAR(64) NULL, PRIMARY KEY (OwnerKey, FindingKey));
 DECLARE @retiredClosed INT = 0, @rekeyed INT = 0;
 -- REKEYED: an open finding under an asset key ('asset:<id>', no CI) that this collection reports under a CI instead -- the
@@ -203,6 +206,16 @@ IF @complete = N'1' AND OBJECT_ID('sidata.CiFinding') IS NOT NULL
     JOIN #lcf f ON f.OwnerKey = cf.CiId AND f.FindingKey = cf.FindingKey
     WHERE s.State <> N'closed' AND s.OwnerKey LIKE N'asset:%' AND NULLIF(s.CiId, N'') IS NULL/*R:s.OwnerKey*/
       AND NOT EXISTS (SELECT 1 FROM #lcf x WHERE x.OwnerKey = s.OwnerKey AND x.FindingKey = s.FindingKey);
+-- A SPLIT IS NOT A FIX: an open finding on a CI that was split, last seen before the split and absent since, moved with its
+-- record to the CI that was split off -- 'rekeyed', never 'remediated'. A finding seen after the split stays that CI's own.
+IF @complete = N'1' AND OBJECT_ID('sidata.CiSplit') IS NOT NULL
+    INSERT #rk (OwnerKey, FindingKey)
+    SELECT DISTINCT s.OwnerKey, s.FindingKey
+    FROM sidata.CiFindingState s
+    JOIN (SELECT FromCiId, MAX(SplitAt) AS SplitAt FROM sidata.CiSplit GROUP BY FromCiId) sp ON sp.FromCiId = s.CiId
+    WHERE s.State <> N'closed' AND s.LastSeen <= sp.SplitAt/*R:s.OwnerKey*/
+      AND NOT EXISTS (SELECT 1 FROM #lcf x WHERE x.OwnerKey = s.OwnerKey AND x.FindingKey = s.FindingKey)
+      AND NOT EXISTS (SELECT 1 FROM #rk k WHERE k.OwnerKey = s.OwnerKey AND k.FindingKey = s.FindingKey);
 BEGIN TRANSACTION;
 /*SI_EQUIVALENCE*/
 -- SEEN AGAIN, in two parts (the end state is the one update of before): the times this collection moves, on every finding

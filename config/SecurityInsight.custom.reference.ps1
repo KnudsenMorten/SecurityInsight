@@ -6246,7 +6246,9 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   What it is for:   Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group
 #                     is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the
 #                     not-seen grace period.
-#   Default:          Off: a user, device or group Entra ID no longer lists waits the not-seen grace period, as before
+#   Default:          Off: a user Entra ID lists as deleted retires at once whatever this setting says, unless another
+#                     source still sees it. This setting only concerns a user, device or group that has disappeared
+#                     from a complete collection without being listed as deleted: those wait the not-seen grace period
 #   If you change it: Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups)
 #                     missing from a complete collection against Entra ID's deleted items; a proven one is recorded,
 #                     its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace

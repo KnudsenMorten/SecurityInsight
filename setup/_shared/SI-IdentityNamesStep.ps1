@@ -32,6 +32,13 @@
 
 function Get-SIIdentityNamesRoleOrder { <# PURE. The order the update moves the roles in: the updater itself last. #> @('engine', 'web', 'mcp', 'tagging', 'updater') }
 
+function Get-SIIdentityNamesLogLine {
+    <# PURE. One line of a step for the update's log: a warning keeps WARNING at the start of the line, where a reader looks. #>
+    param([Parameter(Mandatory)][string]$Role, [Parameter(Mandatory)][string]$Step, [AllowEmptyString()][string]$Line = '')
+    if ($Line -like 'WARNING: *') { return ('WARNING: identity names [{0}/{1}] {2}' -f $Role, $Step, $Line.Substring(9)) }
+    'identity names [{0}/{1}] {2}' -f $Role, $Step, $Line
+}
+
 function Test-SIIdentityNamesTaggingOn {
     <# PURE. Is asset tagging on (the customer setting SI_AssetTagging_Enabled, cfg.Setting scope 'solution')? Only a real
        true -- the same reading as the engine's (container\_shared\SI-ContainerConfig.ps1). -Rows: cfg.Setting rows. #>
@@ -182,7 +189,7 @@ function Invoke-SIUpdaterIdentityNames {
                 $results = @($run.Results)
             }
             foreach ($r in $results) {
-                foreach ($l in @($r.Lines)) { & $say ('identity names [{0}/{1}] {2}' -f $role, $r.Step, $l) }
+                foreach ($l in @($r.Lines)) { & $say (Get-SIIdentityNamesLogLine -Role $role -Step $r.Step -Line $l) }
                 foreach ($c in @($r.CustomerSteps)) { if ($c) { $support.Add(('{0}: {1}' -f $role, $c.What)) } }
                 if ($r.State -eq 'stop') { $failed.Add(('{0} {1}: {2}' -f $role, $r.Step, (@($r.Lines) | Select-Object -Last 1))) }
             }
@@ -200,7 +207,7 @@ function Invoke-SIUpdaterIdentityNames {
                 if ((Select-SIIdentityMoveIdentities -Identities $ctx.Identities -Role $role).State -ne 'move') { continue }
                 $run = Invoke-SIIdentityMove -Ctx $ctx -Steps @('inventory', 'prove', 'clean-up') -HoldHandles @() -Initialized
                 foreach ($r in @($run.Results)) {
-                    foreach ($l in @($r.Lines)) { & $say ('identity names [{0}/{1}] {2}' -f $role, $r.Step, $l) }
+                    foreach ($l in @($r.Lines)) { & $say (Get-SIIdentityNamesLogLine -Role $role -Step $r.Step -Line $l) }
                     foreach ($c in @($r.CustomerSteps)) { if ($c -and -not $support.Contains(('{0}: {1}' -f $role, $c.What))) { $support.Add(('{0}: {1}' -f $role, $c.What)) } }
                     if ($r.State -eq 'stop') { $failed.Add(('{0} {1}: {2}' -f $role, $r.Step, (@($r.Lines) | Select-Object -Last 1))) }
                 }

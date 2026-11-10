@@ -95,7 +95,11 @@ if (-not (Get-Command -Name Get-SICiCutoffRetireSql -ErrorAction SilentlyContinu
 # a generated name. CIs come out different, so every CI is rebuilt once -- that rebuild moves the records of a resurrected
 # twin to its survivor, and the merged-retire pass after it retires the twin (one-time repair; it also gives every merged
 # twin its plain-words reason and the id history its CI->CI merge event).
-$script:SICiBuildVersion = 14
+# Version 15 (2026-11-09): a user Entra ID lists as deleted is a GONE link, so its CI is retired at once (asset deleted in Entra ID),
+# unless another source still sees it or a live Active Directory account is linked. The same version: the customer's correlation
+# decisions (never-merge, force-merge, pin-id) reach the CI build, so the map and the CIs agree, and a split CI's moved findings are
+# never read as fixed. Both ship in one release, so ONE bump (14 -> 15) rebuilds every CI once. CIs come out different.
+$script:SICiBuildVersion = 15
 # The three context lanes merged on si-v3 (2026-10-11): the logic hash is set once for the combined code.
 # 2026-10-12: the build's last write fills the columns the CI views read (Pro) -- no CI comes out different, so the hash is
 # re-baselined and the version stays 7. (Same day: a failure of that step is said at INFO, never as a warning of the build.)
@@ -160,7 +164,10 @@ $script:SICiBuildVersion = 14
 # 2026-11-09 (a CI with two Defender device records): SI_CI_CL's linked objects carry each link's state -- the CI document
 # is the same (it always held the state); the post contract value moves instead, so every full row is posted once:
 # re-baselined, version 14.
-$script:SICiBuildLogicHash = '6d2e8ed1013a1b8a55d0b215ad2a14cfd91fc9b9893434fe9458bf3299cebdf6'
+# 2026-11-09 (version 15, one bump for both): a user Entra ID lists as deleted retires at once; the customer's correlation
+# decisions reach the CI build (force-merge an edge of the grouping, never-merge a re-split of only the groups it names, pin-id in
+# the identity ledger) and a split CI is recorded. With no decision every statement and the fingerprint are as before: re-baselined.
+$script:SICiBuildLogicHash = 'b85a1928a3897039c53384c4455238a8c37c0734eaa9eb9b750e3c8feba8254f'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -494,6 +501,9 @@ IF OBJECT_ID(N'sidata.CiSuspectDecision') IS NOT NULL AND OBJECT_ID(N'sidata.CiS
     INSERT @r SELECT DISTINCT x.CiId, d.SplitFromCiId, NULL, N'split' FROM sidata.CiSuspectDecision d
     JOIN sidata.CiSuspectDecisionRecord x ON x.DecisionId = d.DecisionId AND x.CiId IS NOT NULL AND x.CiId <> d.SplitFromCiId
     WHERE d.Verdict = N'same' AND d.Removed = 1 AND d.SplitFromCiId IS NOT NULL;
+-- a CI split by a correlation decision is not a merge either (the row goes when the two are merged again)
+IF OBJECT_ID(N'sidata.CiSplit') IS NOT NULL
+    INSERT @r SELECT FromCiId, ToCiId, NULL, N'split' FROM sidata.CiSplit;
 SELECT OldId, NewId, At, Kind FROM @r WHERE OldId IS NOT NULL AND NewId IS NOT NULL;
 '@
 }
@@ -556,6 +566,81 @@ function Remove-SICiSplitLedgerKeys {
     $n
 }
 
+function Get-SICiDecisionAnchorRows {
+    <# PURE. Decision anchor keys ('mdedeviceid|m1') -> @{ k; t (the identifier type as sidata.RecordIdentifier holds it); v }. #>
+    param([AllowEmptyCollection()][string[]]$Keys = @())
+    $types = @{}; foreach ($t in @(@((Get-SICiLedgerTypeMap).Values) + 'PublicIpAddress')) { $types[([string]$t).ToLowerInvariant()] = [string]$t }
+    foreach ($k in @($Keys)) {
+        $cut = ([string]$k).IndexOf('|'); if ($cut -lt 1) { continue }
+        $low = ([string]$k).Substring(0, $cut); $type = $low; if ($types.ContainsKey($low)) { $type = $types[$low] }
+        [ordered]@{ k = [string]$k; t = $type; v = ([string]$k).Substring($cut + 1) }
+    }
+}
+
+function Get-SICiForceEdgeSql {
+    <# A force-merge decision as one more shared identifier: every current record that carries one of its anchors (@a: [{ n; t; v }]) shares SiForceDecision|<n>, so the rounds join them the way any shared identifier does. Answers per decision how many records carry it. Run only when a force-merge exists. #>
+    @'
+SET NOCOUNT ON;
+INSERT sidata.CiGroupEdge (RecordKey, IdType, IdValue)
+SELECT DISTINCT ri.RecordKey, N'SiForceDecision', CONVERT(NVARCHAR(20), j.n)
+FROM OPENJSON(@a) WITH (n INT, t NVARCHAR(40), v NVARCHAR(400)) j
+JOIN sidata.RecordIdentifier ri ON ri.IdType = j.t AND ri.IdValue = j.v
+JOIN sidata.CiGroupMember m ON m.RecordKey = ri.RecordKey
+WHERE NOT EXISTS (SELECT 1 FROM sidata.CiGroupEdge e WHERE e.RecordKey = ri.RecordKey AND e.IdType = N'SiForceDecision' AND e.IdValue = CONVERT(NVARCHAR(20), j.n));
+SELECT e.IdValue AS N, COUNT(*) AS Records FROM sidata.CiGroupEdge e WHERE e.IdType = N'SiForceDecision' GROUP BY e.IdValue;
+'@
+}
+
+function Get-SICiDecisionGroupRowsSql {
+    <# The members and identifiers of ONLY the groups that hold a forbidden anchor (@a: [{ k; t; v }]) -- with the decision edges, which join records without a shared identifier. Run only when a never-merge exists. #>
+    @'
+SET NOCOUNT ON;
+;WITH g AS (SELECT DISTINCT m.GroupKey COLLATE Latin1_General_BIN2 AS GroupKey
+            FROM OPENJSON(@a) WITH (t NVARCHAR(40), v NVARCHAR(400)) j
+            JOIN sidata.RecordIdentifier ri ON ri.IdType = j.t AND ri.IdValue = j.v
+            JOIN sidata.CiGroupMember m ON m.RecordKey = ri.RecordKey)
+SELECT m.GroupKey, ri.RecordKey, ri.IdType, ri.IdValue
+FROM g JOIN sidata.CiGroupMember m ON m.GroupKey COLLATE Latin1_General_BIN2 = g.GroupKey
+JOIN sidata.RecordIdentifier ri ON ri.RecordKey = m.RecordKey
+UNION ALL
+SELECT m.GroupKey, e.RecordKey, e.IdType, e.IdValue
+FROM g JOIN sidata.CiGroupMember m ON m.GroupKey COLLATE Latin1_General_BIN2 = g.GroupKey
+JOIN sidata.CiGroupEdge e ON e.RecordKey = m.RecordKey AND e.IdType IN (N'SiMergeDecision', N'SiForceDecision');
+'@
+}
+
+function Get-SICiDecisionAnchorFoundSql {
+    <# Which of the anchors (@a: [{ k; t; v }]) a current record carries: k. Run only when a pin-id exists. #>
+    @'
+SET NOCOUNT ON;
+SELECT DISTINCT j.k FROM OPENJSON(@a) WITH (k NVARCHAR(500), t NVARCHAR(40), v NVARCHAR(400)) j
+JOIN sidata.RecordIdentifier ri ON ri.IdType = j.t AND ri.IdValue = j.v
+JOIN sidata.CiGroupMember m ON m.RecordKey = ri.RecordKey;
+'@
+}
+
+function Get-SICiGroupMoveSql {
+    <# The records a never-merge moved to a group of their own (@j: [{ r; g }]). The batch number stays: both halves are built in one batch, so the identity ledger decides them together. #>
+    @'
+SET NOCOUNT ON;
+UPDATE m SET GroupKey = x.g FROM sidata.CiGroupMember m JOIN OPENJSON(@j) WITH (r NVARCHAR(450), g NVARCHAR(450)) x ON x.r = m.RecordKey /* one-statement-ok: only the records of the groups a decision names */;
+SELECT @@ROWCOUNT AS Changed;
+'@
+}
+
+function Get-SICiSplitWriteSql {
+    <# The splits of one batch (@s: [{ f; t; k }]: records moved off CI f onto CI t) recorded, and the rows of two CIs merged again (@m: [{ o; n }]) removed. Written = -1: the database is not updated yet. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CiSplit') IS NULL BEGIN SELECT -1 AS Written; RETURN; END
+DELETE c FROM sidata.CiSplit c JOIN OPENJSON(@m) WITH (o NVARCHAR(64), n NVARCHAR(64)) x ON (c.FromCiId = x.o AND c.ToCiId = x.n) OR (c.FromCiId = x.n AND c.ToCiId = x.o) /* one-statement-ok: only the pairs of this batch */;
+DELETE c FROM sidata.CiSplit c JOIN OPENJSON(@s) WITH (f NVARCHAR(64), t NVARCHAR(64)) x ON c.FromCiId = x.f AND c.ToCiId = x.t /* one-statement-ok: only the pairs of this batch */;
+INSERT sidata.CiSplit (FromCiId, ToCiId, SplitAt, Source)
+SELECT x.f, x.t, SYSUTCDATETIME(), MAX(LEFT(x.k, 32)) FROM OPENJSON(@s) WITH (f NVARCHAR(64), t NVARCHAR(64), k NVARCHAR(64)) x WHERE x.f IS NOT NULL AND x.t IS NOT NULL GROUP BY x.f, x.t;
+SELECT @@ROWCOUNT AS Written;
+'@
+}
+
 function Invoke-SICiGrouping {
     <#
         Groups the records of the lookback into CIs in SQL -> sidata.CiGroupMember, step by step (Get-SICiGroupingStepSql):
@@ -570,8 +655,12 @@ function Invoke-SICiGrouping {
     param([Parameter(Mandatory)][scriptblock]$Sql, [int]$LookbackDays = 30, [int]$BatchCis = 2000, [int]$MaxRounds = 0,
           [int]$BudgetSeconds = 0, [scriptblock]$Log,
           # #1100 the one-time CI cut-off in force ($null = none): Get-SICiGroupingStepSql -CutoffUtc
-          [AllowNull()]$CutoffUtc = $null)
+          [AllowNull()]$CutoffUtc = $null,
+          # the customer's correlation decisions (Get-SICorrelationDecisionPlan); none or empty = every statement exactly as before
+          [AllowNull()]$DecisionPlan = $null)
     if (-not $Log) { $Log = { param($l, $m) } }
+    $hasDecisions = ($null -ne $DecisionPlan -and -not $DecisionPlan.IsEmpty)
+    $forceCounts = @{}; $decisionSplit = $null; $pinFound = @{}
     $all = [System.Diagnostics.Stopwatch]::StartNew(); $sw = [System.Diagnostics.Stopwatch]::new()
     $step = {
         param($name)
@@ -586,6 +675,11 @@ function Invoke-SICiGrouping {
     & $Log 'INFO' ("CIs: grouping -- {0} current record(s) ({1} new, {2} relabelled, {3} gone) in {4:N1} s" -f (Get-SIItemValue $p 'Records'), (Get-SIItemValue $p 'New'), (Get-SIItemValue $p 'Reset'), (Get-SIItemValue $p 'Gone'), $sw.Elapsed.TotalSeconds)
     $e = & $step 'edges'
     & $Log 'INFO' ("CIs: grouping -- {0} shared identifier row(s) link {1} record(s) in {2:N1} s" -f (Get-SIItemValue $e 'Edges'), (Get-SIItemValue $e 'Linked'), $sw.Elapsed.TotalSeconds)
+    if ($hasDecisions -and @($DecisionPlan.Force).Count -gt 0) {
+        $fa = New-Object System.Collections.Generic.List[object]
+        for ($fi = 0; $fi -lt @($DecisionPlan.Force).Count; $fi++) { foreach ($ar in @(Get-SICiDecisionAnchorRows -Keys ([string[]]@(@($DecisionPlan.Force)[$fi].AnchorKeys)))) { $fa.Add([ordered]@{ n = $fi; t = $ar.t; v = $ar.v }) } }
+        foreach ($fr in @(& $Sql (Get-SICiForceEdgeSql) @{ a = (ConvertTo-SIJsonArray $fa.ToArray()) } 'rows')) { if ($null -ne $fr) { $forceCounts[[int](Get-SIItemValue $fr 'N')] = [int](Get-SIItemValue $fr 'Records') } }
+    }
     $rounds = 0
     while ($true) {
         if ($MaxRounds -gt 0 -and $rounds -ge $MaxRounds) { throw ('the CI grouping did not settle within {0} rounds -- a chain of shared identifiers longer than the round limit' -f $MaxRounds) }
@@ -597,10 +691,21 @@ function Invoke-SICiGrouping {
     }
     $b = & $step 'batches'
     & $Log 'INFO' ("CIs: grouping -- {0} batch(es), {1} record(s) moved batch in {2:N1} s" -f (Get-SIItemValue $b 'Batches'), (Get-SIItemValue $b 'Changed'), $sw.Elapsed.TotalSeconds)
+    # never-merge: AFTER the batches, so both halves of a group stay in one batch and the identity ledger decides them together
+    if ($hasDecisions -and @($DecisionPlan.Forbid.Keys).Count -gt 0) {
+        $an = ConvertTo-SIJsonArray @(Get-SICiDecisionAnchorRows -Keys ([string[]]@($DecisionPlan.Forbid.Keys)))
+        $decisionSplit = Get-SICiDecisionSplit -Rows @(& $Sql (Get-SICiDecisionGroupRowsSql) @{ a = $an } 'rows') -Plan $DecisionPlan
+        if (@($decisionSplit.Moves).Count -gt 0) { $null = & $Sql (Get-SICiGroupMoveSql) @{ j = (ConvertTo-SIJsonArray @($decisionSplit.Moves)) } 'rows' }
+    }
+    if ($hasDecisions -and @($DecisionPlan.Pinned.Keys).Count -gt 0) {
+        $pa = ConvertTo-SIJsonArray @(Get-SICiDecisionAnchorRows -Keys ([string[]]@($DecisionPlan.Pinned.Keys)))
+        foreach ($pr in @(& $Sql (Get-SICiDecisionAnchorFoundSql) @{ a = $pa } 'rows')) { if ($null -ne $pr) { $pinFound[[string](Get-SIItemValue $pr 'k')] = $true } }
+    }
     $s = & $step 'stats'
+    $dAmb = $null; $dRef = @(); if ($null -ne $decisionSplit) { $dAmb = $decisionSplit.Ambiguous; $dRef = @($decisionSplit.Refused) }
     [pscustomobject]@{ Records = [int](Get-SIItemValue $s 'Records'); Groups = [int](Get-SIItemValue $s 'Groups'); Largest = [int](Get-SIItemValue $s 'Largest')
         Batches = [int](Get-SIItemValue $s 'Batches'); Unkeyable = [int](Get-SIItemValue $s 'Unkeyable'); Rounds = $rounds; Seconds = [Math]::Round($all.Elapsed.TotalSeconds, 1)
-        CutIgnored = [int](Get-SIItemValue $s 'CutIgnored') }
+        CutIgnored = [int](Get-SIItemValue $s 'CutIgnored'); DecisionAmbiguous = $dAmb; DecisionRefused = $dRef; ForceCounts = $forceCounts; PinFound = $pinFound }
 }
 
 function Get-SICiFeedLatestSql {
@@ -2044,10 +2149,13 @@ function Get-SICiBuildFingerprint {
           [int]$LookbackDays = 30, [int]$BuildVersion = $script:SICiBuildVersion, [string]$ExposedRanges = '',
           # 60.5.0d the collection scope per provider (Get-SICiCollectionScope): a scope change rebuilds every CI once, so every
           # record a provider last listed before the change is frozen at once
-          [string]$CollectionScope = '')
+          [string]$CollectionScope = '',
+          # the hash of the customer's correlation decisions (Get-SICiDecisionHash); '' = none, and the fingerprint is exactly as without them
+          [string]$DecisionsHash = '')
     $parts = New-Object System.Collections.Generic.List[string]
     $parts.Add('buildVersion=' + $BuildVersion); $parts.Add('owner=' + $CmdbOwner); $parts.Add('lookback=' + $LookbackDays); $parts.Add('ranges=' + $ExposedRanges)
     if ($CollectionScope) { $parts.Add('scope=' + $CollectionScope) }
+    if ($DecisionsHash) { $parts.Add('decisions=' + $DecisionsHash) }
     $parts.Add('thresholds=' + (@($Thresholds | Where-Object { $_ } | ForEach-Object { '{0}:{1}' -f $_.Field, $_.Seconds }) -join ','))
     if ($Model) {
         [string[]]$names = @($Model.Keys | ForEach-Object { [string]$_ }); [Array]::Sort($names, [StringComparer]::Ordinal)

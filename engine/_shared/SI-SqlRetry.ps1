@@ -74,6 +74,35 @@ function Test-SISqlStatementTransient {
     [bool]($t -match '(?i)a severe error occurred on the current command|transport-level error|connection was forcibly closed|forcibly closed by the remote host|connection reset|Connection reset by peer|broken pipe|Internal \.NET Framework Data Provider error 6|is not currently available|log for database .* is not available|connection was recovered and rowcount|\b(9001|3314|40613|40501|40197|49918|49919|49920|4083)\b')
 }
 
+function Test-SISqlShapedFailure {
+    <#
+        PURE. Is this failure a SQL statement's own: a SqlException in the error's chain, the driver's text ('Exception calling
+        "ExecuteScalar"', the reader, the non-query) or the engine's own 'SQL error <n>'? The words Test-SISqlStatementTransient
+        reads ("connection reset", "is not currently available") also occur in other services' answers, so a text is only held
+        against it when it is SQL's.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Text, [AllowNull()]$ErrorRecord)
+    $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $null }
+    while ($ex) { if ($ex -is [System.Data.SqlClient.SqlException]) { return $true }; $ex = $ex.InnerException }
+    [bool]("$Text" -match '(?i)Exception calling "Execute(Scalar|Reader|NonQuery)(Async)?"|\bSQL error -?\d+\b')
+}
+
+function Get-SISqlErrorNumbers {
+    <#
+        PURE. SQL's own error numbers in a failure's chain, distinct and comma-joined ('9001,3314'), '' when it has none. The
+        driver's message does not carry them. For the log and the uplink's Detail only: never the customer-visible reason.
+    #>
+    param([AllowNull()]$ErrorRecord)
+    $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord } else { $null }
+    $nums = New-Object System.Collections.Generic.List[int]
+    while ($ex) {
+        if ($ex -is [System.Data.SqlClient.SqlException]) { foreach ($er in @($ex.Errors)) { $nums.Add([int]$er.Number) } }
+        try { if ($ex.Data -and $ex.Data.Contains('SISqlNumbers')) { foreach ($n in @($ex.Data['SISqlNumbers'])) { $nums.Add([int]$n) } } } catch { }
+        $ex = $ex.InnerException
+    }
+    (@($nums | Select-Object -Unique) -join ',')
+}
+
 function Test-SISqlConnectTransient {
     <#
         PURE and SELF-CONTAINED (it travels as a value; it calls nothing by name). Did the CONNECTION fail at the network /

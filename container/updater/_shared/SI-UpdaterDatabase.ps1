@@ -711,6 +711,28 @@ function Invoke-SIUpdaterSupportStandingRecheck {
     } catch { Write-UpdLog ('support standing access: not re-checked ({0}) -- checked again at the next update' -f $_.Exception.Message); $null }
 }
 
+function Invoke-SIUpdaterSupportAppRecord {
+    <#
+        #1161 (agreed with Invardia 2026-11-10): on EVERY run of a Pro install, the Invardia Support app's client id is
+        recorded (cfg.InstallState 'SupportApp') where that record is missing -- read from the install's own Support app
+        database user (its SID), checked, written once (insert only), read back (setup\_shared\SI-SupportAppRecordUpdate.ps1).
+        RECORDS ONLY: never a role, a grant, a user or a group membership (the just-in-time cut-over holds). Runs before the
+        standing re-check, which reads that record. A Community install (no Pro database) = nothing done, nothing said.
+        -ExpectedClientId: an id Invardia names for the install -- Invardia sends none to the updater today, so Start-SIUpdater
+        passes none. Never throws, never holds the update.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [string]$Edition = [string]$global:SI_UpdaterEdition, [string]$ExpectedClientId = '')
+    try {
+        if ($Edition -ieq 'community' -or -not $Store -or -not $Store.Invoke) { return $null }
+        $lib = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-SupportAppRecordUpdate.ps1')
+        if (-not (Test-Path -LiteralPath $lib)) { return $null }
+        . $lib
+        $r = Invoke-SISupportAppRecordStep -Store $Store -ExpectedClientId $ExpectedClientId
+        foreach ($l in @($r.Lines)) { Write-UpdLog $l }
+        $r
+    } catch { Write-UpdLog ('support app record: not checked ({0}) -- checked again at the next update' -f $_.Exception.Message); $null }
+}
+
 function Invoke-SIUpdaterIndexBuildJob {
     <#
         #1111 (owner 2026-11-05: "why not split this into 2 jobs" / "we cannot have env that doesnt upd suddently"): THE INDEX

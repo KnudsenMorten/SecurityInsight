@@ -672,15 +672,42 @@ Describe 'both steps together, the switch, the state rows and the wiring' {
         (Get-SISetupComponentNames).WebApp | Should -Be 'ca-si-management'
         (Get-SISetupComponentNames -New).WebIdentity | Should -Be 'id-si-web'
     }
-    It 'SI_UPDATER_WEB_APP_MOVE=off: nothing is read or changed; one line says so' {
+    It 'SI_UPDATER_WEB_APP_MOVE=off: the owner step STILL runs (its rules as always); no name move; a fresh kept row' {
         $script:StepArgs.Env['SI_UPDATER_WEB_APP_MOVE'] = 'off'
+        $script:Saved['WebAppName'] = '{"state":"waiting-owner","from":"ca-si-management","to":"ca-si-web","checkedUtc":"2026-11-01T10:00:00Z"}'
         $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
-        $r.Owner | Should -BeNullOrEmpty; $r.Move | Should -BeNullOrEmpty
-        @($script:Calls).Count | Should -Be 0
-        $script:Saved.Count | Should -Be 0
-        @($script:Logged) | Should -Be @('web app: the sign-in app owner check and the web app name check are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked')
+        $r.Owner.State | Should -Be 'owned' -Because 'the owner of an app registration is not a URL: the switch does not govern it'
+        @(OwnerIds) | Should -Be @('sp-upd') -Because 'after the proof the Support app is removed, the updater left as the owner -- unchanged'
+        ($script:Saved['SignInAppOwner'] | ConvertFrom-Json).app | Should -Be $script:C
+        $r.Move | Should -BeNullOrEmpty
+        @($script:Calls | Where-Object { $_ -like 'ARM *' -or $_ -like 'SWITCH *' }).Count | Should -Be 0 -Because 'no name move: nothing made, switched or removed'
+        $script:Apps.ContainsKey('ca-si-management') | Should -BeFalse
+        $script:Cur | Should -Be 'ca-si-web'
+        $row = $script:Saved['WebAppName'] | ConvertFrom-Json
+        $row.state | Should -Be 'kept'; $row.app | Should -Be 'ca-si-web'
+        "$($row.checkedUtc)" | Should -Not -Match '2026-11-01' -Because 'the older row is replaced by a fresh one'
+        @($script:Logged) | Should -Contain 'web app name: kept as it is (SI_UPDATER_WEB_APP_MOVE=off) -- not moved'
         Test-SIUpdaterWebAppMoveOn -Value '' | Should -BeTrue
         Test-SIUpdaterWebAppMoveOn -Value 'OFF' | Should -BeFalse
+    }
+    It 'SI_UPDATER_WEB_APP_MOVE=off, the owner step needs a Support-app step: said and recorded as always; the name kept' {
+        $script:StepArgs.Env['SI_UPDATER_WEB_APP_MOVE'] = 'off'
+        $script:GS.DenyAdd = $true
+        $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r.Owner.State | Should -Be 'needs-support-step'
+        ($script:Saved['SignInAppOwner'] | ConvertFrom-Json).state | Should -Be 'needs-support-step'
+        ($script:Saved['WebAppName'] | ConvertFrom-Json).state | Should -Be 'kept'
+    }
+    It 'SI_UPDATER_WEB_APP_MOVE=off on ca-si-management: owner checked, kept; the setup step reads n/a, never missing' {
+        $script:Apps = @{ 'ca-si-management' = (New-WebApp 'ca-si-management') }
+        $script:Cur = 'ca-si-management'; $script:StepArgs.Env['SI_UPDATER_WEB_APP'] = 'ca-si-management'
+        $script:StepArgs.Env['SI_UPDATER_WEB_APP_MOVE'] = 'off'
+        $r = Invoke-SIUpdaterWebAppSteps @script:StepArgs
+        $r.Owner.State | Should -Be 'owned'
+        @($script:Calls | Where-Object { $_ -like 'ARM *' }).Count | Should -Be 0
+        . (Join-Path $script:SIRoot 'engine\_shared\SI-SetupSteps.ps1')
+        $rows = @([pscustomobject]@{ Name = 'WebAppName'; Value = $script:Saved['WebAppName']; UpdatedAt = $null })
+        (@(Get-SISetupSteps -StateRows $rows -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'n/a'
     }
     It 'the owner step needs a Support-app step: the move back waits, nothing is made, both rows say so' {
         $script:GS.DenyAdd = $true
@@ -751,13 +778,17 @@ Describe 'both steps together, the switch, the state rows and the wiring' {
 
 Describe 'the setup-step grid: the sign-in app owner and the web app name, per install' {
     BeforeAll { . (Join-Path $script:SIRoot 'engine\_shared\SI-SetupSteps.ps1') }
-    It 'waiting for the first sign-in on ca-si-web: web-app-name missing, said plainly; moved: ok; no row: left out' {
+    It 'an older row that moved toward ca-si-web or names no target: web-app-name n/a (names are not aligned); moved: ok; no row: left out' {
         $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }
         $s = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"awaiting-signin-proof","from":"ca-si-management","to":"ca-si-web","checkedUtc":"2026-11-07T10:00:00Z"}')) -SupportGrant $null)
         $e = @($s | Where-Object key -eq 'web-app-name')[0]
-        $e.state | Should -Be 'missing'; $e.how | Should -Be 'updater'
-        $e.detail | Should -Match '^The web app runs as ca-si-management again; ca-si-web sends people there and is removed after the first sign-in'
-        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'missing' -Because 'a row that does not say it targets ca-si-management'
+        $e.state | Should -Be 'n/a'; $e.how | Should -Be 'updater'
+        $e.detail | Should -Be 'This install keeps its web app name; nothing to move.'
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'n/a' -Because 'a row that does not say it targets ca-si-management'
+        foreach ($old in 'waiting-owner', 'create-failed', 'custom-domain', 'public-address', 'switch-failed', 'delete-failed', 'something-new') {
+            (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' ('{"state":"' + $old + '","from":"ca-si-management","to":"ca-si-web"}'))) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'n/a' -Because "an older row ($old) toward ca-si-web is never missing"
+            (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' ('{"state":"' + $old + '"}'))) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'n/a' -Because "a row ($old) without a target is never missing"
+        }
         # back on ca-si-management, ca-si-web only forwarding: the web app IS on its standard name -> ok (the forwarder's removal is clean-up)
         (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"forwarding","forwardSince":"2026-11-09T10:00:00Z","from":"ca-si-web","to":"ca-si-management"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
         (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"awaiting-signin-proof","from":"ca-si-web","to":"ca-si-management"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
@@ -765,12 +796,22 @@ Describe 'the setup-step grid: the sign-in app owner and the web app name, per i
         (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"moved","checkedUtc":"2026-11-07T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'ok'
         @(Get-SISetupSteps -StateRows @() -SupportGrant $null | Where-Object { $_.key -in 'web-app-name', 'signin-app-owner' }).Count | Should -Be 0
     }
-    It 'kept (an existing install keeps its web app name) = n/a; held (both apps, the new one not in use) = missing' {
+    It 'kept and held = n/a (an existing install keeps its web app name), with or without a target' {
         $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }
-        $k = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"kept","checkedUtc":"2026-11-09T10:00:00Z"}')) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
-        $k.state | Should -Be 'n/a'; $k.detail | Should -Be 'This install keeps its web app name; nothing to move.'
-        $h = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"held","checkedUtc":"2026-11-09T10:00:00Z"}')) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
-        $h.state | Should -Be 'missing'; $h.detail | Should -Match '^A second web app exists beside the web app but is not in use'
+        foreach ($v in '{"state":"kept","checkedUtc":"2026-11-09T10:00:00Z"}', '{"state":"kept","app":"ca-si-management","checkedUtc":"2026-11-09T10:00:00Z"}',
+                       '{"state":"held","checkedUtc":"2026-11-09T10:00:00Z"}', '{"state":"held","from":"ca-si-web","to":"ca-si-management"}', '{"state":"kept","from":"ca-si-web","to":"ca-si-management"}') {
+            $k = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' $v)) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
+            $k.state | Should -Be 'n/a' -Because $v; $k.detail | Should -Be 'This install keeps its web app name; nothing to move.'
+        }
+        (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"kept","checkedUtc":"2026-11-09T10:00:00Z"}')) -SupportGrant $null) | Where-Object key -eq 'web-app-name').checkedAt | Should -Be '2026-11-09T10:00:00Z'
+    }
+    It 'missing ONLY for a move back to ca-si-management that is under way and stuck, said plainly' {
+        $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }
+        $w = @(Get-SISetupSteps -StateRows @((& $row 'WebAppName' '{"state":"waiting-owner","from":"ca-si-web","to":"ca-si-management"}')) -SupportGrant $null | Where-Object key -eq 'web-app-name')[0]
+        $w.state | Should -Be 'missing'; $w.detail | Should -Match '^Waiting for the updater to own the web sign-in app'
+        foreach ($st in 'create-failed', 'switch-failed', 'delete-failed', 'custom-domain') {
+            (@(Get-SISetupSteps -StateRows @((& $row 'WebAppName' ('{"state":"' + $st + '","from":"ca-si-web","to":"ca-si-management"}'))) -SupportGrant $null) | Where-Object key -eq 'web-app-name').state | Should -Be 'missing' -Because $st
+        }
     }
     It 'the sign-in app owner: a Support-app step waited for = missing (how support-app); owned = ok; never a command in the detail' {
         $row = { param($n, $v) [pscustomobject]@{ Name = $n; Value = $v; UpdatedAt = $null } }

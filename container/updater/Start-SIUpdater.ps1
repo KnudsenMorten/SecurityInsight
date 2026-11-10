@@ -268,31 +268,46 @@ function Invoke-SIUpdaterSupportTrigger {
     <#
         #1154 (framework §5.5, 2026-11-08) THE SUPPORT GRANT JOB IS STARTED BY ITS QUEUE, AND THE INVARDIA SUPPORT APP HOLDS NO
         RIGHT ON ANY JOB (every run, after the queue step): caj-si-support-grant to the event trigger on si-support-requests
-        (the scaler signed in as the engine identity), read back; ONLY THEN every role assignment the Support app holds on a
-        caj-si-* job removed, read back (setup\_shared\SI-SupportGrantUpdate.ps1 Invoke-SISupportGrantQueueTrigger). The
+        (the scaler signed in as the engine identity), read back (setup\_shared\SI-SupportGrantUpdate.ps1
+        Invoke-SISupportGrantQueueTrigger). #1163: the updater REMOVES NO RIGHT -- a right an earlier release gave on a
+        caj-si-* job is kept and said once; the rights at the resource group or above are judged against the consented level
+        (cfg.SupportConsent), the ring and the tenant root -- a right above it is one note for the owner. The
         Support app is the one recorded on the install (cfg.InstallState 'SupportApp'). One line per change or failure,
         nothing when there is nothing to do. The library is dot-sourced and called HERE (never from a .GetNewClosure()
         scriptblock: see Invoke-SIUpdaterSupportQueue). NEVER throws, never fails the run.
         -Arm { param($Method, $Path, $Body) } / -SupportPrincipalId / -Sleep: test seams. Returns the step's result or $null.
     #>
-    param([string]$SubscriptionId, [string]$ResourceGroup, [string]$SIRoot, $Store, [scriptblock]$Arm, [AllowNull()]$SupportPrincipalId = $null, [scriptblock]$Sleep)
+    param([string]$SubscriptionId, [string]$ResourceGroup, [string]$SIRoot, $Store, [scriptblock]$Arm, [AllowNull()]$SupportPrincipalId = $null, [scriptblock]$Sleep,
+          [string]$TenantId = '', [AllowNull()]$Ring = $global:SI_UpdaterResolvedRing)
     try {
         $lib = Join-Path $SIRoot 'setup/_shared/SI-SupportGrantUpdate.ps1'
         if (-not (Test-Path -LiteralPath $lib)) { return $null }
         . $lib
         if (-not (Get-Command -Name Invoke-SISupportGrantQueueTrigger -ErrorAction SilentlyContinue)) { return $null }
         if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        # #1163: the consented level and the leftover rights said before -- read only from the Pro database
+        $consent = ''; $said = ''
+        $sqlSeam = $null
+        if ($Store -and $Store.Invoke) { $sqlSeam = { param($Query, $Params, $Mode) & $Store.Invoke $Query $null 'reader' | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } } } }
+        if ($sqlSeam) {
+            try { $row = @(& $sqlSeam (Get-SISupportGrantConsentReadSql) $null 'reader' | Where-Object { $null -ne $_ })[0]; if ($row -and $row.PSObject.Properties['Consent']) { $consent = Get-SISupportGrantConsentLevel ([string]$row.Consent) } } catch { $consent = '' }
+            try { $row = @(& $sqlSeam (Get-SISupportGrantLeftoverSql -Read) $null 'reader' | Where-Object { $null -ne $_ })[0]; if ($row -and $row.PSObject.Properties['Value']) { $said = [string]$row.Value } } catch { $said = '' }
+        }
         if ($null -eq $SupportPrincipalId) {
             $SupportPrincipalId = ''
-            if ($Store -and $Store.Invoke) {
-                $sqlSeam = { param($Query, $Params, $Mode) & $Store.Invoke $Query $null 'reader' | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } } }
+            if ($sqlSeam) {
                 $app = Get-SISupportGrantRecordedApp -Sql $sqlSeam
                 if ($app) { $SupportPrincipalId = Resolve-SISupportGrantPrincipal -Rest (Get-SIUpdaterRest) -AppId $app }
             }
         }
-        $how = 'the updater may not remove a role assignment: Invardia support removes it in its Support session (its support grant install step, roles), or the customer''s admin: Azure portal > the job > Access control (IAM) > Role assignments > remove the Invardia Support app'
-        $r = Invoke-SISupportGrantQueueTrigger -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -SupportPrincipalId ([string]$SupportPrincipalId) -RemoveHow $how -Sleep $Sleep
+        # #1163: the updater removes NO right in a customer tenant (-KeepJobRights); rights above the consent are notes
+        $r = Invoke-SISupportGrantQueueTrigger -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -SupportPrincipalId ([string]$SupportPrincipalId) -Sleep $Sleep `
+                 -ConsentLevel $consent -Ring $Ring -TenantId $TenantId -KeepJobRights -LeftoverSaid $said
         foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l.Level -eq 'warn') { 'WARNING: ' + $l.Text } else { $l.Text }) }
+        # the leftover set is said ONCE: its key recorded when it changed (cfg.InstallState 'SupportLeftoverRights')
+        if ($Store -and $Store.Invoke -and $r.LeftoverKey -and $r.LeftoverKey -ne $said) {
+            try { $null = & $Store.Invoke (Get-SISupportGrantLeftoverSql) @{ Value = [string]$r.LeftoverKey } 'nonquery' } catch { }
+        }
         $r
     } catch { Write-UpdLog ('WARNING: support requests: the queue trigger could not be checked ({0}) -- the next run tries again' -f $_.Exception.Message); $null }
 }
@@ -1310,7 +1325,13 @@ function Invoke-SIUpdaterCore {
         $null = Invoke-SIUpdaterSupportQueue -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot
         # #1154: the support grant job started by that queue, THEN the Support app's rights on the jobs removed (read back each)
         $global:SI_UpdaterStep = 'support-trigger'
-        $null = Invoke-SIUpdaterSupportTrigger -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot -Store $proStore
+        $null = Invoke-SIUpdaterSupportTrigger -SubscriptionId $sub -ResourceGroup $rg -SIRoot $siAutoRoot -Store $proStore -TenantId $tenant
+        # #1161: the Invardia Support app RECORDED where the record is missing (read from its own database user, insert only,
+        # read back) -- records only, never a right; before the re-check below, which reads that record
+        if (Get-Command -Name Invoke-SIUpdaterSupportAppRecord -ErrorAction SilentlyContinue) {
+            $global:SI_UpdaterStep = 'support-app-record'
+            $null = Invoke-SIUpdaterSupportAppRecord -SIRoot $siAutoRoot -Store $proStore
+        }
         # #1151 (1) SEC-01 step 4: the Support app's standing access re-checked on EVERY run, also one that installs nothing --
         # read only, no database setup job (the state row the heartbeat's support-grant-jit reads); never after a rollback
         if (Get-Command -Name Invoke-SIUpdaterSupportStandingRecheck -ErrorAction SilentlyContinue) {
@@ -1378,9 +1399,10 @@ function Invoke-SIUpdaterCore {
 function Invoke-SIUpdaterWebAppStepsAfter {
     <#
         The web app's two steps (_shared/SI-UpdaterWebApp.ps1, Invoke-SIUpdaterWebAppSteps): the sign-in app owned by this
-        install's updater, then the web app under the framework name ca-si-web -- AFTER the update, and only when it did not
-        fail (-Rc 0: a failed update never moves the web app; the next update checks again). SI_UPDATER_WEB_APP_MOVE=off on
-        the job switches both off. An image without them (the Community edition carries no web app roll file) = nothing.
+        install's updater, then the web app under its standard name ca-si-management -- AFTER the update, and only when it
+        did not fail (-Rc 0: a failed update never moves the web app; the next update checks again). SI_UPDATER_WEB_APP_MOVE=off
+        on the job switches off only the name move; the owner step runs on every update. An image without them (the
+        Community edition carries no web app roll file) = nothing.
         Never throws, never changes the exit code, writes nothing to the pipeline.
     #>
     param($Rc, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup)

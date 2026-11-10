@@ -13,6 +13,24 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.0.83 — Old identities are removed completely
+
+### Fixes
+
+- When SecurityInsight moves to its standard identities, the old updater identity is now removed too. A database
+  procedure still ran as the old identity and held it back; it now runs as the new one first.
+- The update no longer reports the Invardia support app's agreed access as too broad, and no longer tries to remove a
+  harmless leftover right it may not remove. Nothing is ever removed in your tenant by this check.
+## v3.0.82 — Older installs finish their alignment
+
+### Fixes
+
+- An update now removes the old single collection jobs that stayed behind after the collection was split in parts, once
+  the new jobs have run and nothing starts the old ones any more.
+- An older install now records which Invardia support app it trusts, so its support access is shown correctly. Nothing
+  about the app's access changes.
+- An install keeps its web app name and address. The update no longer reports the name as something to move, and the
+  check of who owns the sign-in app runs on every install.
 ## v3.0.81 — Large installs finish their runs and stay ready for the next one
 
 ### Fixes

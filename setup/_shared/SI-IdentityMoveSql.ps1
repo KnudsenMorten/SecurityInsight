@@ -151,6 +151,111 @@ function Test-SIIdentityMoveSqlCovered {
     [pscustomobject]@{ Drop = $true; Why = ('the new user {0} holds every right of the old user {1} (read back)' -f $c.NewUser, $c.OldUser); OldUser = $c.OldUser }
 }
 
+function Get-SIIdentityMoveSqlModuleNames {
+    <# PURE. The procedures SecurityInsight makes WITH EXECUTE AS SELF (by the marker in their text) -- the only modules the
+       move re-makes as the new user. Today one: sidata.StatisticsRefreshTable (sql\si-data-schema.sql), made by whoever
+       applies the schema -- on an existing install the updater, so it runs as the updater's user. #>
+    @('si-statistics-refresh v1')
+}
+
+function Get-SIIdentityMoveSqlModuleSql {
+    <#
+        PURE. #1164 (live 2026-11-10: the old updater user "is set as the execution context of one or more procedures ... and
+        cannot be dropped"). ONE batch, run by a database owner (the database setup job, or a Support session) BEFORE the
+        drop: every module whose execution context is the OLD user (sys.sql_modules.execute_as_principal_id) --
+          * an UNSIGNED procedure SecurityInsight makes (its marker, Get-SIIdentityMoveSqlModuleNames) is made again AS THE NEW
+            USER: EXECUTE AS USER = <new>, its own stored text as CREATE OR ALTER (permissions kept: ALTER keeps them), REVERT
+            -- then READ BACK in the same transaction: it runs as the new user, its marker is there, its permissions are
+            exactly those read before; anything else rolls it back;
+          * a SIGNED module (re-making it would lose its signature), one SecurityInsight does not make, or any module when
+            the new user is not here: KEPT -- nothing changed.
+        Returns rows (Module, Action moved | kept, Why) and a last row (Module = N'', Action = N'left', Why = the number of
+        modules still running as the old user). No GRANT, no ADD SIGNATURE, no DROP. -OldSid / -NewSid: SID literals (0x...).
+    #>
+    param([Parameter(Mandatory)][ValidatePattern('^0x[0-9A-Fa-f]{2,170}$')][string]$OldSid, [Parameter(Mandatory)][ValidatePattern('^0x[0-9A-Fa-f]{2,170}$')][string]$NewSid,
+          [string[]]$Markers = (Get-SIIdentityMoveSqlModuleNames))
+    $mk = (@($Markers | Where-Object { "$_".Trim() } | ForEach-Object { "SELECT N'{0}'" -f ([string]$_).Replace("'", "''") }) -join ' UNION ALL ')
+    if (-not $mk) { $mk = "SELECT CAST(NULL AS nvarchar(200)) WHERE 1 = 0" }
+    @"
+SET NOCOUNT ON; SET XACT_ABORT ON;
+DECLARE @old int = (SELECT principal_id FROM sys.database_principals WHERE sid = $OldSid);
+DECLARE @newId int = (SELECT principal_id FROM sys.database_principals WHERE sid = $NewSid);
+DECLARE @new sysname = USER_NAME(@newId), @me sysname = USER_NAME();
+DECLARE @out TABLE (N int IDENTITY(1, 1), Module nvarchar(400), Action nvarchar(10), Why nvarchar(2000));
+DECLARE @marks TABLE (M nvarchar(200));
+INSERT @marks (M) $mk;
+IF @old IS NOT NULL
+BEGIN
+    DECLARE @id int, @name nvarchar(400), @t nvarchar(max), @mark nvarchar(200), @before nvarchar(max), @after nvarchar(max), @p int;
+    DECLARE mods CURSOR LOCAL FAST_FORWARD FOR SELECT m.object_id FROM sys.sql_modules AS m WHERE m.execute_as_principal_id = @old;
+    OPEN mods; FETCH NEXT FROM mods INTO @id;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @name = QUOTENAME(OBJECT_SCHEMA_NAME(@id)) + N'.' + QUOTENAME(OBJECT_NAME(@id));
+        SET @t = OBJECT_DEFINITION(@id);
+        SET @mark = (SELECT TOP (1) M FROM @marks WHERE CHARINDEX(M, ISNULL(@t, N'')) > 0);
+        IF EXISTS (SELECT 1 FROM sys.crypt_properties WHERE major_id = @id AND class = 1)
+            INSERT @out (Module, Action, Why) VALUES (@name, N'kept', N'it is signed -- making it again would lose its signature');
+        ELSE IF @newId IS NULL
+            INSERT @out (Module, Action, Why) VALUES (@name, N'kept', N'the new identity has no user here');
+        ELSE IF @mark IS NULL OR OBJECTPROPERTY(@id, N'IsProcedure') <> 1
+            INSERT @out (Module, Action, Why) VALUES (@name, N'kept', N'it is not a procedure SecurityInsight makes');
+        ELSE
+        BEGIN
+            -- its own text, as CREATE OR ALTER (ALTER keeps its permissions)
+            SET @p = PATINDEX(N'%CREATE%PROC%', @t);
+            IF @p = 0 OR PATINDEX(N'%CREATE OR ALTER PROC%', @t) = @p
+                SET @p = 0;
+            IF @p > 0 SET @t = STUFF(@t, @p, 6, N'CREATE OR ALTER');
+            SET @before = ISNULL((SELECT STRING_AGG(CONVERT(nvarchar(max), CONCAT(p.grantee_principal_id, N':', p.permission_name, N':', p.state)), N',') WITHIN GROUP (ORDER BY p.grantee_principal_id, p.permission_name, p.state)
+                                  FROM sys.database_permissions AS p WHERE p.class = 1 AND p.major_id = @id), N'');
+            BEGIN TRY
+                BEGIN TRAN;
+                EXECUTE AS USER = @new;
+                EXEC (@t);
+                REVERT;
+                SET @after = ISNULL((SELECT STRING_AGG(CONVERT(nvarchar(max), CONCAT(p.grantee_principal_id, N':', p.permission_name, N':', p.state)), N',') WITHIN GROUP (ORDER BY p.grantee_principal_id, p.permission_name, p.state)
+                                     FROM sys.database_permissions AS p WHERE p.class = 1 AND p.major_id = @id), N'');
+                IF NOT EXISTS (SELECT 1 FROM sys.sql_modules WHERE object_id = @id AND execute_as_principal_id = @newId)
+                    THROW 50011, N'it does not read back running as the new user', 1;
+                IF CHARINDEX(@mark, ISNULL(OBJECT_DEFINITION(@id), N'')) = 0
+                    THROW 50012, N'its marker does not read back', 1;
+                IF @after <> @before
+                    THROW 50013, N'its permissions do not read back as they were', 1;
+                COMMIT;
+                INSERT @out (Module, Action, Why) VALUES (@name, N'moved', N'it now runs as ' + @new + N' (read back: the new user, its marker, its permissions)');
+            END TRY
+            BEGIN CATCH
+                IF USER_NAME() <> @me REVERT;
+                IF @@TRANCOUNT > 0 ROLLBACK;
+                INSERT @out (Module, Action, Why) VALUES (@name, N'kept', N'it could not be made as the new user: ' + ERROR_MESSAGE());
+            END CATCH
+        END
+        FETCH NEXT FROM mods INTO @id;
+    END
+    CLOSE mods; DEALLOCATE mods;
+END
+SELECT Module, Action, Why FROM @out
+UNION ALL
+SELECT N'', N'left', CONVERT(nvarchar(20), (SELECT COUNT(*) FROM sys.sql_modules WHERE @old IS NOT NULL AND execute_as_principal_id = @old))
+ORDER BY 1, 2;
+"@
+}
+
+function Resolve-SIIdentityMoveSqlModules {
+    <# PURE. The module batch's rows -> @{ Clear (no module runs as the old user any more); Moved = @(lines); Kept = @(lines) }. #>
+    param([object[]]$Rows = @())
+    $val = { param($r, $k) if ($null -eq $r) { '' } elseif ($r -is [System.Collections.IDictionary]) { [string]$r[$k] } elseif ($r.PSObject.Properties[$k]) { [string]$r.$k } else { '' } }
+    $moved = New-Object System.Collections.Generic.List[string]; $kept = New-Object System.Collections.Generic.List[string]; $left = -1
+    foreach ($r in @($Rows | Where-Object { $null -ne $_ })) {
+        $a = & $val $r 'Action'; $m = & $val $r 'Module'; $w = & $val $r 'Why'
+        if ($a -eq 'left') { $n = 0; if ([int]::TryParse($w, [ref]$n)) { $left = $n } }
+        elseif ($a -eq 'moved') { $moved.Add(('the procedure {0}: {1}' -f $m, $w)) }
+        elseif ($a -eq 'kept') { $kept.Add(('the procedure {0} runs as the old user and is kept ({1})' -f $m, $w)) }
+    }
+    [pscustomobject]@{ Clear = ($left -eq 0); Moved = $moved.ToArray(); Kept = $kept.ToArray() }
+}
+
 function Get-SIIdentityMoveSqlDropSql {
     <# PURE. Clean-up: the old identity's contained user dropped (found by SID); refused by SQL when it owns a schema. The
        caller runs it ONLY after Test-SIIdentityMoveSqlCovered said Drop on a read made just before. #>

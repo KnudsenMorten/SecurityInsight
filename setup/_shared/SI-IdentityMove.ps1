@@ -1709,6 +1709,11 @@ function Invoke-SIMoveCleanup {
             $cov = Test-SIIdentityMoveSqlCovered -Rows $rowsNow -KeepName $sel.New.Name -KeepClientId $sel.New.ClientId
             if (-not $cov.OldUser) { $lines.Add("removed: SQL user of $($old.Name) in $db (already gone)"); continue }
             if (-not $cov.Drop) { $stop = $true; $lines.Add(('KEPT: SQL user of {0} in {1}: {2}' -f $old.Name, $db, $cov.Why)); continue }
+            # #1164: a procedure SecurityInsight makes that runs AS the old user (it blocks the drop) is made again as the new
+            # user, read back; a signed or unknown one keeps the old user (Get-SIIdentityMoveSqlModuleSql)
+            $mods = Resolve-SIIdentityMoveSqlModules -Rows @(Invoke-SIMoveSql -Server $Ctx.SqlServer -Database $db -Query (Get-SIIdentityMoveSqlModuleSql -OldSid (ConvertTo-SIMoveSid $old.ClientId) -NewSid (ConvertTo-SIMoveSid $sel.New.ClientId)) -Reason $Ctx.Reason -Change)
+            foreach ($l in @($mods.Moved)) { $lines.Add(('done: SQL {0}: {1}' -f $db, $l)) }
+            if (-not $mods.Clear) { $stop = $true; $lines.Add(('KEPT: SQL user of {0} in {1}: {2}' -f $old.Name, $db, $(if (@($mods.Kept).Count) { @($mods.Kept) -join '; ' } else { 'a procedure still runs as it' }))); continue }
             $null = Invoke-SIMoveSql -Server $Ctx.SqlServer -Database $db -Query (Get-SIIdentityMoveSqlDropSql -OldClientId $old.ClientId) -Reason $Ctx.Reason -Change
             $lines.Add("removed: SQL user of $($old.Name) in $db ($($cov.Why))")
         } catch { $stop = $true; $lines.Add(('FAILED: SQL {0}: {1}' -f $db, (([string]$_.Exception.Message) -split "`n")[0])) }

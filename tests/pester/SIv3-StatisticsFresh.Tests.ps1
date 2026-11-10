@@ -336,4 +336,24 @@ WHERE s.object_id = OBJECT_ID(N'sidata.Finding') AND s.name = N'PK_Finding'
         [long]$s['Mods'] | Should -Be 0
         [string](& $script:Admin $script:Digest @{} 'scalar') | Should -Be $digest
     }
+    It '#1164 THE IDENTITY MOVE: the procedure is made again as the NEW updater user (read back), and only then the old user drops' {
+        . (Join-Path $script:SIRoot 'setup\_shared\SI-IdentityMoveSql.ps1')
+        & $script:Admin 'CREATE USER si_upd_new WITHOUT LOGIN;' @{} 'nonquery'
+        foreach ($r in 'db_datareader', 'db_datawriter', 'db_ddladmin') { & $script:Admin "ALTER ROLE [$r] ADD MEMBER [si_upd_new];" @{} 'nonquery' }
+        & $script:Admin 'GRANT VIEW DEFINITION ON OBJECT::sidata.StatisticsRefreshTable TO si_rd;' @{} 'nonquery'   # a permission that must survive
+        { & $script:Admin 'DROP USER si_upd;' @{} 'nonquery' } | Should -Throw '*execution context*' -Because 'the live defect, reproduced'
+        $sid = { param($u) [string](& $script:Admin "SELECT CONVERT(varchar(200), sid, 1) FROM sys.database_principals WHERE name = N'$u'" @{} 'scalar') }
+        $rows = @(& $script:Admin (Get-SIIdentityMoveSqlModuleSql -OldSid (& $sid 'si_upd') -NewSid (& $sid 'si_upd_new')) @{} 'rows' | ForEach-Object { $_ })
+        $m = Resolve-SIIdentityMoveSqlModules -Rows $rows
+        $m.Clear | Should -BeTrue -Because (@($m.Kept) -join ' | ')
+        ($m.Moved -join ' ') | Should -Match 'StatisticsRefreshTable\]: it now runs as si_upd_new'
+        [string](& $script:Admin "SELECT p.name FROM sys.sql_modules AS m JOIN sys.database_principals AS p ON p.principal_id = m.execute_as_principal_id WHERE m.object_id = OBJECT_ID(N'sidata.StatisticsRefreshTable')" @{} 'scalar') | Should -Be 'si_upd_new'
+        [int](& $script:Admin "SELECT COUNT(*) FROM sys.database_permissions WHERE major_id = OBJECT_ID(N'sidata.StatisticsRefreshTable') AND grantee_principal_id = USER_ID(N'si_rd') AND permission_name = N'VIEW DEFINITION'" @{} 'scalar') | Should -Be 1
+        [int](& $script:Admin "SELECT CHARINDEX(N'si-statistics-refresh v1', OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefreshTable')))" @{} 'scalar') | Should -BeGreaterThan 0
+        & $script:Admin 'DROP USER si_upd;' @{} 'nonquery'
+        [int](& $script:Admin "SELECT COUNT(*) FROM sys.database_principals WHERE name = N'si_upd'" @{} 'scalar') | Should -Be 0
+        # the refresh still runs, with the new user's rights
+        $r = Invoke-SIDataStatisticsRefresh -Invoke $script:AsEngine
+        $r.Stopped | Should -BeFalse -Because $r.Error
+    }
 }

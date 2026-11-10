@@ -35,6 +35,12 @@
                      gets them -- only a job SI's setup made that signs in with the managed identity, unless the install
                      switched queue scaling off. The old job loses its timer only after both new jobs are read back, and
                      is kept; any failure leaves it running. Never fails the update. -DetectOnly: the plan only.
+     9r. OLD COLLECTION JOBS -- (setup/_shared/SI-OldCollectJobs.ps1) the old caj-si-azure / -endpoint / -identity job the move
+                     above kept is removed by a later update -- only when, read live: SI's setup made it, its producer and
+                     worker exist and read back, it has no timer, the pipeline does not start it, no run of it is going on
+                     or started later than one hour after the producer was created, and the producer has completed a
+                     collection. One ARM DELETE, read back gone, one line per job; otherwise kept, and the line says why.
+                     Never another job; never fails the update. -DetectOnly: the plan only.
      9b. RISK ANALYSIS WORKERS -- (#742, setup/_shared/SI-RaWorkerJobs.ps1) ON BY DEFAULT where they can run (owner
                      2026-10-18): the Detailed Risk Analysis job gets its queue-scaled worker job (caj-si-raworker-detailed)
                      as a new install gets it, read back, and only then is told to hand its reports to it (SI_RA_SCALE_OUT /
@@ -734,6 +740,56 @@ function Invoke-SIUpdateOrchestration {
         try { Invoke-SIUpdateCollectProducers -Arm $arm } catch { Warn ("collect producers: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
     } catch { Warn ("pipeline schedule: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
 }
+# THE STORED PIPELINE (cfg.JobFlow), read for the steps that need it (the collect producers, the old collection jobs). A
+# folder install (no Pro database): Ok with no definition (the default pipeline over the installed jobs). A Pro install whose
+# row cannot be read: Ok = $false and the error -- the caller then changes nothing. Returns @{ Ok; Pro; Definition; Mode; Error }.
+function Read-SIUpdateStoredJobFlow {
+    # -Open: test seam { param($Server, $Database) } -> an open connection (default: the shared retry with this update's token)
+    param([scriptblock]$Open)
+    $def = $null; $storedMode = ''
+    $envOr = { param($n) $v = [Environment]::GetEnvironmentVariable($n); if ("$v".Trim()) { "$v".Trim() } else { '' } }
+    $gv = { param($n) if ($globals.ContainsKey($n) -and "$($globals[$n])".Trim()) { "$($globals[$n])".Trim() } else { '' } }
+    $proSrv = & $envOr 'SI_UPDATER_PRO_SQL_SERVER'; if (-not $proSrv) { $proSrv = & $gv 'SI_ProSqlServer' }
+    $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
+    if (-not ($proSrv -and $proDb)) { return [pscustomobject]@{ Ok = $true; Pro = $false; Definition = $null; Mode = ''; Error = '' } }
+    if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
+    try {
+        if (-not (Get-Command -Name Get-SIJobFlowSqlText -ErrorAction Ignore)) { . (Join-Path $solRoot 'engine/_shared/SI-JobFlow.ps1') }
+        # the open through the shared retry (engine\_shared\SI-SqlRetry.ps1: a failover or a resume is tried again with a fresh token)
+        if ($Open) { $cn = & $Open $proSrv $proDb }
+        else {
+            if (-not (Get-Command -Name Open-SISqlConnectionRetry -ErrorAction Ignore)) { . (Join-Path $solRoot 'engine/_shared/SI-SqlRetry.ps1') }
+            $cn = Open-SISqlConnectionRetry -Server $proSrv -Database $proDb -Token { param([bool]$Fresh) ([string](Get-SIAzureToken -Resource 'https://database.windows.net/' -ForceRefresh:$Fresh)).Trim() }
+        }
+        try {
+            $cmd = $cn.CreateCommand(); $cmd.CommandText = (Get-SIJobFlowSqlText -Name ReadDefinition); $cmd.CommandTimeout = 0
+            $rd = $cmd.ExecuteReader()
+            try { if ($rd.Read()) { if (-not $rd.IsDBNull(0)) { $def = ConvertFrom-SIJobFlowJson -Json ([string]$rd.GetValue(0)) }; if (-not $rd.IsDBNull(1)) { $storedMode = ([string]$rd.GetValue(1)).ToLowerInvariant() } } } finally { $rd.Dispose() }
+        } finally { $cn.Dispose() }
+    } catch { return [pscustomobject]@{ Ok = $false; Pro = $true; Definition = $null; Mode = ''; Error = $_.Exception.Message } }
+    [pscustomobject]@{ Ok = $true; Pro = $true; Definition = $def; Mode = $storedMode; Error = '' }
+}
+# THE OLD COLLECTION JOBS FROM BEFORE THE SPLIT (setup/_shared/SI-OldCollectJobs.ps1): the move to queue scaling (step 9) kept
+# the old caj-si-azure / -endpoint / -identity job on purpose, without a timer. Every update removes such a job only when
+# every condition holds, each read live: SI's own job (si-build tag), its producer and worker exist and read back, it has no
+# timer, the pipeline does not start it, no run of it is going on or started since the split (one hour after the producer was
+# created), and the producer has completed a collection. One ARM DELETE, read back gone, one plain line per job. Never any
+# other job; no identity or registry is touched. Never fails the update; the next update tries again.
+function Invoke-SIUpdateOldCollectJobs {
+    $lib = Join-Path $PSScriptRoot '_shared/SI-OldCollectJobs.ps1'
+    if (-not (Test-Path -LiteralPath $lib) -or -not $rest) { return }
+    try {
+        . $lib
+        $all = @(Get-SIArmJobList -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName)
+        if (-not @($all | Where-Object { $script:SIOldCollectJobNames -contains ([string]$_.name).ToLowerInvariant() }).Count) { return }
+        Step '9r. OLD COLLECTION JOBS (from before the collection was split in parts)'
+        $sf = Read-SIUpdateStoredJobFlow
+        $oc = Invoke-SIOldCollectJobRemoval -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Jobs $all `
+                -Definition $sf.Definition -DefinitionUnreadable:(-not $sf.Ok) -WhatIf:(-not $Apply -or $DetectOnly)
+        foreach ($l in @($oc.Lines)) { if ($l -match 'NOT removed|not checked') { Warn $l } else { Info $l } }
+        $global:SI_UpdateOldCollectJobs = $oc
+    } catch { Warn ("old collection jobs: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
 # #1096 THE COLLECT PRODUCERS IN THE PIPELINE (engine\_shared\SI-JobFlow.ps1 Invoke-SICollectProducerTrigger): the mode is the
 # stored one (cfg.JobFlow Mode), else caj-si-flow on its timer = the pipeline; the pipeline is the stored one, else the default
 # over the installed jobs. A Pro install whose stored pipeline cannot be read is left as it is (one line) -- a producer whose
@@ -742,24 +798,9 @@ function Invoke-SIUpdateCollectProducers {
     param([Parameter(Mandatory)][scriptblock]$Arm)
     $all = @(Get-SIArmJobList -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName)
     if (-not @($all | Where-Object { [string]$_.name -match '^caj-si-.+-producer$' }).Count) { return }
-    $def = $null; $storedMode = ''
-    $envOr = { param($n) $v = [Environment]::GetEnvironmentVariable($n); if ("$v".Trim()) { "$v".Trim() } else { '' } }
-    $gv = { param($n) if ($globals.ContainsKey($n) -and "$($globals[$n])".Trim()) { "$($globals[$n])".Trim() } else { '' } }
-    $proSrv = & $envOr 'SI_UPDATER_PRO_SQL_SERVER'; if (-not $proSrv) { $proSrv = & $gv 'SI_ProSqlServer' }
-    $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
-    if ($proSrv -and $proDb) {
-        if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
-        try {
-            # the open through the shared retry (engine\_shared\SI-SqlRetry.ps1: a failover or a resume is tried again with a fresh token)
-            if (-not (Get-Command -Name Open-SISqlConnectionRetry -ErrorAction Ignore)) { . (Join-Path $solRoot 'engine/_shared/SI-SqlRetry.ps1') }
-            $cn = Open-SISqlConnectionRetry -Server $proSrv -Database $proDb -Token { param([bool]$Fresh) ([string](Get-SIAzureToken -Resource 'https://database.windows.net/' -ForceRefresh:$Fresh)).Trim() }
-            try {
-                $cmd = $cn.CreateCommand(); $cmd.CommandText = (Get-SIJobFlowSqlText -Name ReadDefinition); $cmd.CommandTimeout = 0
-                $rd = $cmd.ExecuteReader()
-                try { if ($rd.Read()) { if (-not $rd.IsDBNull(0)) { $def = ConvertFrom-SIJobFlowJson -Json ([string]$rd.GetValue(0)) }; if (-not $rd.IsDBNull(1)) { $storedMode = ([string]$rd.GetValue(1)).ToLowerInvariant() } } } finally { $rd.Dispose() }
-            } finally { $cn.Dispose() }
-        } catch { Warn ("collect producers: the stored pipeline could not be read ({0}) -- nothing changed; the next update tries again." -f $_.Exception.Message); return }
-    }
+    $sf = Read-SIUpdateStoredJobFlow
+    if (-not $sf.Ok) { Warn ("collect producers: the stored pipeline could not be read ({0}) -- nothing changed; the next update tries again." -f $sf.Error); return }
+    $def = $sf.Definition; $storedMode = $sf.Mode
     $flowJob = @($all | Where-Object { [string]$_.name -eq 'caj-si-flow' })[0]
     $mode = if ($storedMode -in @('flow', 'schedules')) { $storedMode } elseif ($flowJob -and [string]$flowJob.properties.configuration.triggerType -eq 'Schedule') { 'flow' } else { 'schedules' }
     Step '9q. COLLECT PRODUCERS (started only by the pipeline)'
@@ -1557,7 +1598,7 @@ function Invoke-SIUpdateSigninStore {
         $r
     } catch { Warn ("sign-in front store: not checked ({0}) -- the update goes on; the front keeps what it runs; the next update tries again." -f $_.Exception.Message); $null }
 }
-function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
+function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateOldCollectJobs; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
 $script:SISqlTierJobs = @()
 
 # #756 THE CODE IS CURRENT, THE SIZES STILL FOLLOW THE SETTINGS (live 2026-10-19: SI_Bootstrap_SqlServiceObjective = S2 set,

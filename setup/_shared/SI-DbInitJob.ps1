@@ -283,6 +283,13 @@ function Invoke-SIDbInitMoves {
                 $cov = Test-SIIdentityMoveSqlCovered -Rows (& $rowsOf $d $x.ClientId $x.KeepClientId) -KeepName $x.KeepName -KeepClientId $x.KeepClientId
                 if (-not $cov.OldUser) { & $mark $x.Component 'none'; continue }
                 if (-not $cov.Drop) { & $mark $x.Component 'failed'; $problems.Add(('{0}: KEPT: {1}' -f $d, $cov.Why)); continue }
+                # #1164: a procedure SecurityInsight makes that runs AS the old user (it blocks the drop) is made again as the
+                # kept user, read back; a signed or unknown one keeps the old user (Get-SIIdentityMoveSqlModuleSql)
+                if (Get-Command -Name Get-SIIdentityMoveSqlModuleSql -ErrorAction SilentlyContinue) {
+                    $mods = Resolve-SIIdentityMoveSqlModules -Rows @(& $Sql $d (Get-SIIdentityMoveSqlModuleSql -OldSid (ConvertTo-SIMoveSid $x.ClientId) -NewSid (ConvertTo-SIMoveSid $x.KeepClientId)) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+                    foreach ($l in @($mods.Moved)) { $lines.Add(('done: {0}: {1}' -f $d, $l)) }
+                    if (-not $mods.Clear) { & $mark $x.Component 'failed'; $problems.Add(('{0}: KEPT: the old {1} user {2}: {3}' -f $d, $x.Component, $cov.OldUser, $(if (@($mods.Kept).Count) { @($mods.Kept) -join '; ' } else { 'a procedure still runs as it' }))); continue }
+                }
                 $null = & $Sql $d (Get-SIIdentityMoveSqlDropSql -OldClientId $x.ClientId) @{} 'nonquery'
                 $gone = Get-SIIdentityMoveSqlCopy -Rows (& $rowsOf $d $x.ClientId $x.KeepClientId) -NewName $x.KeepName -NewClientId $x.KeepClientId
                 if ($gone.OldUser) { & $mark $x.Component 'failed'; $problems.Add(('{0}: the old {1} user {2} is still there after the drop' -f $d, $x.Component, $gone.OldUser)); continue }

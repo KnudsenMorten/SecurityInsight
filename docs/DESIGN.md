@@ -4761,7 +4761,7 @@ timers apply only in schedules mode.
 
 The producer drops shard messages onto `si-<engine>-shards` Storage Queue. KEDA scales the worker from 0 to `KedaMaxReplicas` (default 30) based on queue depth, then scales back to zero when the queue drains.
 
-**Existing installs reach the same layout on update.** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again.
+**Existing installs reach the same layout on update.** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again. **The old job is removed by a later update** (`setup/_shared/SI-OldCollectJobs.ps1`, updater step 9r, right after step 9) when every one of these holds, each read live in that update: the job is one of `caj-si-azure` / `caj-si-endpoint` / `caj-si-identity` (never any other name) and carries SI's `si-build` tag; its producer and worker exist and read back (provisioned); it has no timer (trigger Manual); the pipeline does not start it (each step resolved by the runner's own rule -- a step whose producer exists starts the producer -- over the stored pipeline, else the default one; a stored pipeline that cannot be read keeps it); no execution of it is Running or Processing; none started after the split, which is **one hour after the producer's `systemData.createdAt`** -- an execution inside that hour belongs to the move itself (the old job loses its timer only after the producer is made), so it does not count; and the producer has at least one Succeeded execution (so the update that makes the split never removes its own fallback). Then one ARM DELETE of the job, read back until 404, and one line: "an old collection job from before the collection was split in parts is removed: <name>". Otherwise the job is kept and the line says which condition held it. No identity, registry or role is touched -- deleting the job is enough. Never fails the update; a failed delete is one warning and the next update tries again.
 
 **Risk Analysis Detailed on queue workers -- scale out, not only up.** The Detailed reports used to run one after another in one job (a large tenant's run took over 12 hours). **On by default wherever it can run**: every install with queue scaling and the managed identity gets it, new and existing alike. Where it cannot run (queue scaling off, no managed identity, no storage account) nothing changes and one line says why. The customer's `SI_Bootstrap_RaScaleOut = $false` (or `SI_UPDATER_RA_SCALE_OUT = off` on the updater job; the config wins) switches it off. Then the Detailed Risk Analysis job is the run's PRODUCER and `caj-si-raworker-detailed` its WORKERS (`engine/risk-analysis/_shared/RA-ScaleOut.ps1`; the same queue, lease, heartbeat, poison and marker mechanics as the collection's parts):
 
@@ -9226,13 +9226,21 @@ Container Apps environment -- its earlier address -- from `ca-si-web`'s spec, wi
 `ca-si-web` forwards every request there for **3 days** (the clock `forwardSince` is kept in the `WebAppName` row across
 updates and never restarted), and is removed after that and a first sign-in on `ca-si-management`. A half-done install
 (both apps, the install still naming `ca-si-management`) only forwards and then removes `ca-si-web`. The guided install
-names a new install's web app `ca-si-management` too. The setup step `web-app-name` is `ok` when the web app runs as
-`ca-si-management` -- also while `ca-si-web` still forwards (a row with `to = ca-si-management`; removing the forwarder
-is clean-up, not alignment); a row of an older release that moved the other way stays `missing`. Two
-idempotent steps at the END of every update that did not fail (Invardia and Community paths alike,
-`Invoke-SIUpdaterWebAppStepsAfter` in `Start-SIUpdater.ps1`), ON unless the updater job says `SI_UPDATER_WEB_APP_MOVE=off`.
-Neither ever throws or fails the update; each says one plain line per outcome and records its state in `cfg.InstallState`
-(`SignInAppOwner`, `WebAppName`: `{state, ..., why, checkedUtc}`).
+names a new install's web app `ca-si-management` too. **Web app names (= customer URLs) are not an alignment item**, so
+the setup step `web-app-name` is never `missing` for an install that keeps its name: `ok` when the web app runs as
+`ca-si-management` (`moved`, and also while `ca-si-web` still forwards -- `forwarding` / `awaiting-signin-proof` on a row
+with `to = ca-si-management`; removing the forwarder is clean-up, not alignment); `missing` ONLY for a move back to
+`ca-si-management` that is under way and stuck (a row with `to = ca-si-management` in any other state but `kept` /
+`held`); `n/a` ("This install keeps its web app name; nothing to move.") for everything else -- `kept`, `held`, a row
+without a target, and a row of an older release that moved toward `ca-si-web`. Two idempotent steps at the END of every
+update that did not fail (Invardia and Community paths alike, `Invoke-SIUpdaterWebAppStepsAfter` in `Start-SIUpdater.ps1`).
+**The owner step runs on every update; `SI_UPDATER_WEB_APP_MOVE=off` on the updater job switches off ONLY the name
+move** (an app registration's owner is not a URL): with it off, step 1 runs as always (its proof is not asked for just
+because `ca-si-web` exists, since nothing will move; the Support app being an owner still asks for it), then step 2 is
+not run and the name is recorded as a fresh `WebAppName` row `{state: kept, app, checkedUtc}` -- replacing any older row
+-- with one line "web app name: kept as it is (SI_UPDATER_WEB_APP_MOVE=off) -- not moved". The switch stays (installs
+carry it). Neither step ever throws or fails the update; each says one plain line per outcome and records its state in
+`cfg.InstallState` (`SignInAppOwner`, `WebAppName`: `{state, ..., why, checkedUtc}`).
 1. **Owner** (`Invoke-SIUpdaterSignInAppOwner`) -- the sign-in app is the application registration of the web app's
    `AzureAd__ClientId`. Is the updater's identity (`SI_UPDATER_CLIENT_ID`) an owner? If not it adds itself (possible only
    when it already holds the right); a refusal is ONE line that a Support-app step adds it -- never a customer action --
@@ -9271,8 +9279,7 @@ Neither ever throws or fails the update; each says one plain line per outcome an
    OWN row `cfg.InstallState 'WebAppSignedIn:<app>'` = `{"app":"<app>","at":"<utc>"}` only when it has none (one row per
    app name, never overwritten, nothing ever deleted -- the old app's row is harmless; EXECUTE through the shipped grant
    list `SI-ManagementGrants.ps1`, the role check `si_audit_writer`; a container app name is at most 32 characters, so
-   the key fits). The heartbeat's setupSteps carry `web-app-name` (`missing`, "Waiting for first sign-in on ca-si-web
-   ..." while it waits) and `signin-app-owner`. The switch: the updater job's
+   the key fits). The heartbeat's setupSteps carry `web-app-name` (states as above) and `signin-app-owner`. The switch: the updater job's
    own `SI_UPDATER_WEB_APP` (read before the install record, so it must change too), the install record
    (`InstallNames`), and the heartbeat's links (`Endpoints`), each read back; the heartbeat reads the record for the web
    app's name. Only then the old app is deleted (waited for) and its redirect URI and sign-out address removed from the
@@ -9474,6 +9481,14 @@ Support app may do.
   shows the new user holding every role and permission of it (`Test-SIIdentityMoveSqlCovered`,
   `setup/_shared/SI-IdentityMoveSql.ps1`), and the job refuses to drop its own identity, the Invardia Support app, or any
   identity an app or job of the install still signs in as. The server's Entra administrator is never touched.
+  **A procedure that runs AS the old user** (live 2026-11-10: `sidata.StatisticsRefreshTable`, `WITH EXECUTE AS SELF`, made by
+  the updater that applied the data schema -- SQL refuses to drop a user that is a module's execution context): after the
+  coverage gate and before the drop, both drop paths (the job's `SI_DBINIT_DROPS` and the Support-session clean-up) run ONE
+  batch (`Get-SIIdentityMoveSqlModuleSql`). An unsigned procedure SecurityInsight makes (its marker) is made again as the NEW
+  user (EXECUTE AS USER, its own text as CREATE OR ALTER -- permissions kept --, REVERT) and read back in the same
+  transaction (its execution context, its marker, its permissions; else rolled back). A signed module (re-making it would
+  drop its signature) or one SecurityInsight does not make keeps the old user, one plain line why. The old user is dropped
+  only when no module runs as it. The schema guard's marker is unchanged, so the next apply leaves the procedure as it is.
 - **A run that did not succeed is not blamed on the new identity.** The proof is unchanged: the latest ended run of a job must
   have succeeded on the new identity, and until then the old identity keeps every right and the clean-up waits. What changes
   is what a run that did not succeed means. A stopped run, and a successful run that did not start with the new identity, say
@@ -9598,6 +9613,21 @@ the signed support grant procedures (at most the consented level, at most 8 hour
   removes a member (it holds no right to change a role-assignable group) and never touches the server's Entra admin: while
   the Support app is still a member, ONE log line names `setup/Remove-SISupportStandingAccess.ps1`, which refuses unless the
   group stays the server's admin with another member (never lose SQL access).
+- **The record of WHICH Support app** (`cfg.InstallState 'SupportApp'`, agreed with Invardia 2026-11-10) -- an install whose
+  support access was set up before the record existed has the Support app's own database user but no record, so the heartbeat's
+  support SQL access and Invardia's setup step support-arm read "not known". The steps that write the record (Grant-SISupportAccess,
+  Grant-SISupportAppDatabase, the database setup job's support-user step) also add db_owner and the admin group membership
+  back, which would undo the cut-over -- so the UPDATER records it itself (`setup/_shared/SI-SupportAppRecordUpdate.ps1`,
+  `Invoke-SIUpdaterSupportAppRecord`; every run of a Pro install, step `support-app-record`, before the standing re-check that
+  reads the record; Pro only, a Community install does nothing), through its own Pro database seam (the same seam that writes
+  `SupportStanding`). The client id is READ from the Pro database: the contained Entra user (type E) in `si_support_read` or
+  named `invardia-support-app` -- its SID is the client id (16 bytes, checked by the round trip; the file ships in both
+  editions and loads no Pro file, so it writes the conversion out, held equal to `ConvertTo-SISqlSidFromClientId` by a test); it must agree with `cfg.SupportConsent.AppId` when there is one. Written ONCE (INSERT behind
+  NOT EXISTS: a record that is there is never replaced, also one that holds no id), READ BACK, one plain line. Nothing written,
+  one plain line why: the update's identity cannot see the users, no such user, more than one, a SID that is not an application
+  id, a mismatch. A valid record = nothing done, nothing said. RECORDS ONLY: no role, grant, user or group membership (a test
+  holds the text). `-ExpectedClientId` (an id Invardia names, checked against the SID) exists in the step, but **Invardia sends
+  no Support app id to the updater today**, so nothing passes it.
 - **Heartbeat** -- setup step `support-grant-jit` is ok only when the grant is installed AND `SupportStanding` says no
   standing admin; 'missing' while db_owner or the membership is still there; no row yet = the grant alone (as before).
 #### The support grant job is started by its own queue; the Support app holds no right on any job
@@ -9626,6 +9656,20 @@ The Support app holds no right on any container job. A support request reaches t
   the customer's admin), and the next run checks again. `Grant-SISupportAccess` removes Container Apps Jobs Operator on the
   job only once the job's trigger reads Event (`-Remove` always). Idempotent; a second run sends nothing and says nothing;
   never a failed update.
+- **The updater removes no right, and judges the rights by the consented level** (agreed with Invardia 2026-11-10) -- the
+  updater's step runs (b) with `-KeepJobRights`: NO delete is sent in a customer tenant. A right an earlier release gave on a
+  `caj-si-*` job (the leftover Container Apps Jobs Operator) is kept and said in ONE plain line ("a right an earlier release
+  gave is still there; it is not needed and is kept"), again only when that set changes (its key in `cfg.InstallState
+  'SupportLeftoverRights'`). The rights at the resource group or above are judged against the consented level
+  (`cfg.SupportConsent`, `Resolve-SISupportGrantRightNotes`): the reader set (Reader, Monitoring Reader, Log Analytics
+  Reader, Security Reader, Key Vault Reader) is expected at both levels; Setup = Contributor + User Access Administrator at the
+  install's subscription or resource group, expected; User Access Administrator at the tenant root management group is
+  expected at rings 0-2 (framework ROOT-RIGHTS-1) -- at ring 3 or an unknown ring it is a note, because the approval Invardia
+  records (`rootUaaApproval`) is not readable by the updater; anything else (Owner, Contributor at a broader management
+  group, anything beyond the reader set under Troubleshoot, any right with no consent recorded) is ONE note for the owner,
+  never removed, never a warning. The "broader than a job" warning is gone. The Support-session step and the person-run
+  update keep (b) as above and are not told about rights above the group (they read no consent). Invardia derives its setup
+  step support-arm itself; SI adds no step key.
 - **The job** -- reads the queue exactly as before (sweep, every message read and deleted, the newest one not older than 15
   minutes, the request never an instruction, the consent cap, the SUPPORT-GRANT line). One change: an EMPTY queue (the
   scaler may start a second execution while the first reads) is no request -- exit 0 and NO SUPPORT-GRANT line, so the only

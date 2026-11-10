@@ -41,8 +41,9 @@
       web-app-name       the web app under its standard name ca-si-management (an install moved to ca-si-web goes back;
                          'forwarding' = ca-si-web still forwards) -- cfg.InstallState 'WebAppName' { state, from, to, forwardSince?,
                          why?, checkedUtc }, written by the updater's move step; 'awaiting-signin-proof' = waiting for the
-                         first sign-in on the new web app (the old one redirects there until then); 'kept' = n/a (an
-                         existing install keeps its web app name); 'held' = missing (both apps, the new one not in use)
+                         first sign-in on the new web app (the old one redirects there until then). Web app names are
+                         not aligned: 'missing' ONLY for a move back to ca-si-management that is under way and stuck;
+                         'kept', 'held', a row without a target and a row that moved toward ca-si-web = n/a
     The Invardia Support app's own database access is NOT a step here: Invardia checks it itself from the heartbeat's
     supportSqlAccess (its step support-arm).
 
@@ -279,7 +280,12 @@ function Get-SISetupSteps {
         if ($wn -and $wn.PSObject.Properties['state']) {
             $at = ConvertTo-SISetupStepUtc $(if ($wn.PSObject.Properties['checkedUtc']) { $wn.checkedUtc } else { Get-SISetupStepRowValue $StateRows 'WebAppName' 'UpdatedAt' })
             $st = "$($wn.state)".Trim().ToLowerInvariant()
-            $detail = switch ($st) {
+            # web app names are not aligned (existing installs keep theirs): the step is 'missing' ONLY for a move back to
+            # ca-si-management that is under way and stuck; kept / held / a row without a target / a row of an older release
+            # that moved toward ca-si-web = n/a
+            $toMgmt = $wn.PSObject.Properties['to'] -and "$($wn.to)".Trim() -ieq 'ca-si-management'
+            $stepState = if ($st -eq 'moved') { 'ok' } elseif ($st -in 'forwarding', 'awaiting-signin-proof' -and $toMgmt) { 'ok' } elseif ($toMgmt -and $st -notin 'kept', 'held', '') { 'missing' } else { 'n/a' }
+            $detail = if ($stepState -eq 'n/a') { 'This install keeps its web app name; nothing to move.' } else { switch ($st) {
                 'moved'                 { 'The web app runs as ca-si-management.' }
                 'kept'                  { 'This install keeps its web app name; nothing to move.' }
                 'held'                  { 'A second web app exists beside the web app but is not in use; nothing is changed until the move is finished or undone.' }
@@ -289,12 +295,7 @@ function Get-SISetupSteps {
                 'custom-domain'         { 'ca-si-management is ready; the custom domain on ca-si-web is moved by a Support-app step first.' }
                 'public-address'        { 'ca-si-management is ready; the public address setting names a custom host, so ca-si-web stays until it is changed.' }
                 default                 { 'Not moved yet (' + $st + '); the old web app keeps serving and the next update tries again.' }
-            }
-            # back on ca-si-management with ca-si-web only forwarding = the web app IS on its standard name (removing the
-            # forwarder is clean-up, not alignment) -- ok; only for a row whose target is ca-si-management (a row of an older
-            # release that moved the other way stays missing)
-            $toMgmt = $wn.PSObject.Properties['to'] -and "$($wn.to)".Trim() -ieq 'ca-si-management'
-            $stepState = if ($st -eq 'moved') { 'ok' } elseif ($st -eq 'kept') { 'n/a' } elseif ($st -in 'forwarding', 'awaiting-signin-proof' -and $toMgmt) { 'ok' } else { 'missing' }
+            } }
             & $add (New-SISetupStep -Key 'web-app-name' -State $stepState -CheckedAt $at -Detail $detail)
         }
     } catch { }

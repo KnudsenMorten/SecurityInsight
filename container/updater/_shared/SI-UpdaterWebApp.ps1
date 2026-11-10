@@ -547,8 +547,9 @@ function Invoke-SIUpdaterAppRoll {
 # ---------------------------------------------------------------------------------------------------------------------------
 # THE SIGN-IN APP OWNED BY THE INSTALL'S UPDATER, THEN THE WEB APP UNDER ITS FRAMEWORK NAME ca-si-web
 # (framework SECAUDIT-1a item 2 and the framework's name table: Web = ca-si-web). Two idempotent steps at the end of an
-# update that did not fail (Invoke-SIUpdaterWebAppSteps, called from Start-SIUpdater.ps1). Both are ON unless the updater
-# job says SI_UPDATER_WEB_APP_MOVE=off. Neither ever throws or fails the update; each says ONE plain line per outcome and
+# update that did not fail (Invoke-SIUpdaterWebAppSteps, called from Start-SIUpdater.ps1). The owner step runs on every
+# update; SI_UPDATER_WEB_APP_MOVE=off on the updater job switches off only the name move (the name is then recorded
+# 'kept'). Neither ever throws or fails the update; each says ONE plain line per outcome and
 # records its state in cfg.InstallState ('SignInAppOwner', 'WebAppName'). What the updater may not do itself is said as a
 # Support-app step, never as a customer action.
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -563,7 +564,8 @@ function Get-SIUpdaterGraphRoleIds {
 }
 
 function Test-SIUpdaterWebAppMoveOn {
-    <# PURE. SI_UPDATER_WEB_APP_MOVE: both web app steps run unless it says off (off / 0 / false / no). Unset = ON. #>
+    <# PURE. SI_UPDATER_WEB_APP_MOVE: the web app name move runs unless it says off (off / 0 / false / no). Unset = ON.
+       The sign-in app owner step does not read it. #>
     param([AllowNull()][AllowEmptyString()][string]$Value)
     -not ("$Value".Trim() -match '^(?i)(off|0|false|no)$')
 }
@@ -1284,8 +1286,9 @@ function Invoke-SIUpdaterWebAppSteps {
     <#
         Both web app steps, in order, at the end of an update that did not fail: the sign-in app owned by the updater
         (Invoke-SIUpdaterSignInAppOwner), then the web app name: ca-si-management at every install -- an install moved to
-        ca-si-web is moved back (Invoke-SIUpdaterWebAppMove ca-si-web -> ca-si-management, forwarding 3 days). Off only
-        when the updater job says SI_UPDATER_WEB_APP_MOVE=off. One line per outcome, each step's state in cfg.InstallState
+        ca-si-web is moved back (Invoke-SIUpdaterWebAppMove ca-si-web -> ca-si-management, forwarding 3 days). The updater
+        job's SI_UPDATER_WEB_APP_MOVE=off switches off ONLY the name move: the owner step still runs, and the name is
+        recorded 'kept' (a fresh row; the setup step reads it n/a). One line per outcome, each step's state in cfg.InstallState
         ('SignInAppOwner', 'WebAppName'). Never throws, never fails the update. -GetApp { param($Name) } / -SaveState
         { param($Name, $Value) } / -Graph / -MoveSeams (Invoke-SIUpdaterWebAppMove's seams): tests.
     #>
@@ -1295,10 +1298,8 @@ function Invoke-SIUpdaterWebAppSteps {
     if (-not $Log) { $Log = { param($m) if (Get-Command -Name Write-UpdLog -ErrorAction SilentlyContinue) { Write-UpdLog $m } } }
     try {
         $get = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
-        if (-not (Test-SIUpdaterWebAppMoveOn -Value (& $get 'SI_UPDATER_WEB_APP_MOVE'))) {
-            & $Log 'web app: the sign-in app owner check and the web app name check are switched off on this install (SI_UPDATER_WEB_APP_MOVE=off) -- nothing was checked'
-            return $none
-        }
+        # the switch governs ONLY the name move; the sign-in app's owner (not a URL) is checked on every update
+        $moveOn = Test-SIUpdaterWebAppMoveOn -Value (& $get 'SI_UPDATER_WEB_APP_MOVE')
         if (-not $SaveState) { $SaveState = { param($n, $v) if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name $n -Value $v } } }
         if (-not $GetApp) { $GetApp = { param([string]$N) Get-SIUpdaterContainerApp -App $N -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } }
         # THE WEB APP IS ca-si-management AT EVERY INSTALL (framework 5.5, owner 2026-11-09: identities get standard names,
@@ -1312,10 +1313,17 @@ function Invoke-SIUpdaterWebAppSteps {
         $newApp = & $GetApp $newName
         $app = if ($oldApp) { $oldApp } else { $newApp }
         if (-not $app) { return $none }
+        # (the proof because the web app still has to move only when it may move; the Support app as an owner always asks for it)
         $o = Invoke-SIUpdaterSignInAppOwner -WebApp $(if ($oldApp) { $oldName } else { $newName }) -App $app -UpdaterClientId (& $get 'SI_UPDATER_CLIENT_ID') `
-                 -SupportAppId (Read-SIUpdaterSupportAppId -Store $Store) -ProveWrite:([bool]$oldApp) -Graph $Graph -WhoAmI $WhoAmI
+                 -SupportAppId (Read-SIUpdaterSupportAppId -Store $Store) -ProveWrite:([bool]$oldApp -and $moveOn) -Graph $Graph -WhoAmI $WhoAmI
         if ($o.Text) { & $Log $o.Text }
         if ($o.State) { & $SaveState 'SignInAppOwner' (ConvertTo-SIUpdaterStepStateValue -State $o.State -More @{ app = $o.ClientId } -Why $o.Why) }
+        if (-not $moveOn) {
+            # no name move: the install keeps its web app name -- a fresh 'kept' row replaces any older one (n/a)
+            & $Log 'web app name: kept as it is (SI_UPDATER_WEB_APP_MOVE=off) -- not moved'
+            & $SaveState 'WebAppName' (ConvertTo-SIUpdaterStepStateValue -State 'kept' -More @{ app = $(if ($oldApp) { $oldName } else { $newName }) } -Why '')
+            return [pscustomobject]@{ Owner = $o; Move = $null }
+        }
         # (pwsh's ConvertFrom-Json turns an ISO date into a DateTime -- written back in the row's own format)
         $since = ''
         if ($prev -and $prev.PSObject.Properties['forwardSince'] -and "$($prev.to)" -ieq $newName) {

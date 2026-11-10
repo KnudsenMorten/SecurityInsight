@@ -24,8 +24,11 @@
               own storage account, the scaler signed in as the ENGINE identity (no key: shared-key access is off) -- one
               merge PATCH of the trigger only, READ BACK with retries (ARM reads are eventually consistent);
            b. ONLY when the trigger reads back as Event: every role assignment the Support app holds AT a caj-si-* job is
-              removed (whatever its role -- no ARM right on any job), READ BACK. A right held on something broader (the
-              resource group, the subscription) that also starts jobs is SAID, never changed here.
+              removed (whatever its role -- no ARM right on any job), READ BACK -- by the Support-session step and the
+              person-run update; THE UPDATER (-KeepJobRights, #1163) sends no delete: a right an earlier release gave is
+              kept and said once. A right at the resource group or above is judged against the CONSENTED level (#1163:
+              Setup's Contributor + User Access Administrator at the subscription expected; root User Access Administrator
+              at rings 0-2 expected) -- anything above it is one note for the owner, never changed here.
          So support never loses its way in: the queue starts the job before the start right goes. The updater holds
          Contributor, which may not remove a role assignment: then the line says who can (the Support-session step or the
          customer's admin) and the next update checks again. Idempotent; never throws; a second run changes nothing.
@@ -49,7 +52,18 @@ $script:SISupportGrantUpdate = [ordered]@{
     PollingInterval = 10
     # the role names said in a line (a role assignment names its role only by id)
     RoleNames     = [ordered]@{ 'b9a307c4-5aa3-4b52-ba60-2b17c136cd7b' = 'Container Apps Jobs Operator'; '4e3d2b60-56ae-4dc6-a233-09c8e5a82e68' = 'Container Apps Jobs Contributor'
-                                'b24988ac-6180-42a0-ab88-20f7382dd24c' = 'Contributor'; '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' = 'Owner'; 'acdd72a7-3385-48ef-bd42-f606fba81ae7' = 'Reader' }
+                                'b24988ac-6180-42a0-ab88-20f7382dd24c' = 'Contributor'; '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' = 'Owner'; 'acdd72a7-3385-48ef-bd42-f606fba81ae7' = 'Reader'
+                                '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9' = 'User Access Administrator'; '43d0d8ad-25c7-4714-9337-8ba259a9fe05' = 'Monitoring Reader'
+                                '73c42c96-874c-492b-b04d-ab87d138a893' = 'Log Analytics Reader'; '39bc4728-0917-49c7-9d2c-d95423bc2eb4' = 'Security Reader'
+                                '21090545-7ca7-4776-b22c-e363652d74d2' = 'Key Vault Reader' }
+    # #1163 (agreed with Invardia 2026-11-10): the Support app's rights judged against the CONSENTED level (cfg.SupportConsent)
+    # -- the reader set is expected at both levels; Setup adds Contributor + User Access Administrator at the install's
+    # subscription; User Access Administrator at the tenant root management group is expected at rings 0-2 (framework
+    # ROOT-RIGHTS-1; at ring 3 only with an approval Invardia records, which the update cannot read)
+    ReaderRoles   = @('acdd72a7-3385-48ef-bd42-f606fba81ae7', '43d0d8ad-25c7-4714-9337-8ba259a9fe05', '73c42c96-874c-492b-b04d-ab87d138a893', '39bc4728-0917-49c7-9d2c-d95423bc2eb4', '21090545-7ca7-4776-b22c-e363652d74d2')
+    SetupRoles    = @('b24988ac-6180-42a0-ab88-20f7382dd24c', '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9')
+    RootUaaRole   = '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9'
+    LeftoverRow   = 'SupportLeftoverRights'
     # the built-in role definitions (their ids are the same in every tenant) -> the level they show
     LevelByRoleId = [ordered]@{ 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' = 'setup'; '21090545-7ca7-4776-b22c-e363652d74d2' = 'troubleshoot' }
 }
@@ -230,18 +244,75 @@ function Get-SISupportGrantTriggerPatch {
     [ordered]@{ properties = [ordered]@{ configuration = $c } }
 }
 
-function Test-SISupportGrantRoleStartsJobs {
-    <# PURE. Does a role definition's permissions (@(@{ actions; notActions })) allow Microsoft.App/jobs/start/action (a
-       wildcard such as *, Microsoft.App/* or Microsoft.App/jobs/* included; a notAction that covers it excluded)? #>
-    param([AllowEmptyCollection()][object[]]$Permissions = @())
-    $target = 'Microsoft.App/jobs/start/action'
-    $hit = { param($pat) $p = "$pat".Trim(); if (-not $p) { return $false }; $target -match ('^' + [regex]::Escape($p).Replace('\*', '.*') + '$') }
-    foreach ($perm in @($Permissions | Where-Object { $_ })) {
-        $in = @(@(Get-SISupportGrantProp $perm @('actions')) | Where-Object { & $hit $_ }).Count
-        $out = @(@(Get-SISupportGrantProp $perm @('notActions')) | Where-Object { & $hit $_ }).Count
-        if ($in -and -not $out) { return $true }
+function Get-SISupportGrantConsentLevel {
+    <# PURE. The consented level from the consent read's 'Consent' column ('<level>|<source>', '' = none, '-' = no table):
+       setup | troubleshoot | '' (none recorded, or not readable). #>
+    param([AllowNull()][AllowEmptyString()][string]$Consent)
+    $lv = ("$Consent".Trim() -split '\|')[0].Trim().ToLowerInvariant()
+    if ($lv -in 'setup', 'troubleshoot') { return $lv }
+    ''
+}
+
+function Resolve-SISupportGrantRightNotes {
+    <#
+        PURE. #1163: the Support app's rights at the install's resource group or above, judged against the consented level.
+        -Assignments: its role assignments whose scope is the resource group or an ancestor of it. -ConsentLevel: setup |
+        troubleshoot | '' (none recorded). -Ring: the install's ring (0-3; $null = not known). -TenantId: names the root
+        management group. Returns the notes for the owner (plain lines; '' never) -- nothing is ever removed for a note:
+          * the reader set: expected at both levels;
+          * Contributor / User Access Administrator at the install's subscription or resource group: expected at Setup;
+          * User Access Administrator at the tenant root management group: expected at rings 0-2; at ring 3 (or an unknown
+            ring) a note -- it needs an approval Invardia records, which the update cannot read;
+          * anything else: above the consented level -- a note.
+    #>
+    param([AllowEmptyCollection()][object[]]$Assignments = @(), [AllowEmptyString()][string]$ConsentLevel = '', [AllowNull()]$Ring = $null,
+          [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [AllowEmptyString()][string]$TenantId = '')
+    $c = $script:SISupportGrantUpdate
+    $sub = ('/subscriptions/{0}' -f $SubscriptionId).ToLowerInvariant()
+    $rg = ('{0}/resourcegroups/{1}' -f $sub, $ResourceGroup).ToLowerInvariant()
+    $root = if ("$TenantId".Trim()) { ('/providers/microsoft.management/managementgroups/{0}' -f "$TenantId".Trim()).ToLowerInvariant() } else { '' }
+    $r = -1; $ringKnown = ($null -ne $Ring -and [int]::TryParse("$Ring", [ref]$r) -and $r -ge 0 -and $r -le 3)
+    $lvWords = if ($ConsentLevel) { 'the consented level ({0})' -f $ConsentLevel } else { 'the consented level (no consent is recorded)' }
+    $notes = New-Object System.Collections.Generic.List[string]
+    foreach ($a in @($Assignments | Where-Object { $_ })) {
+        $scope = ([string](Get-SISupportGrantProp $a @('properties', 'scope'))).TrimEnd('/').ToLowerInvariant()
+        $rd = ([string](Get-SISupportGrantProp $a @('properties', 'roleDefinitionId')) -split '/')[-1].ToLowerInvariant()
+        if ($c.ReaderRoles -contains $rd) { continue }
+        $where = if ($scope -eq $sub) { 'the install''s subscription' } elseif ($scope -eq $rg) { 'the install''s resource group' } elseif ($root -and $scope -eq $root) { 'the tenant root management group' } else { [string](Get-SISupportGrantProp $a @('properties', 'scope')) }
+        $role = Get-SISupportGrantRoleName $rd
+        if ($ConsentLevel -eq 'setup' -and $c.SetupRoles -contains $rd -and $scope -in $sub, $rg) { continue }
+        if ($root -and $scope -eq $root -and $rd -eq $c.RootUaaRole) {
+            if ($ringKnown -and $r -le 2) { continue }
+            $notes.Add(('support access: a note for the owner -- the Invardia Support app holds {0} at {1}; {2} it is expected only with an approval Invardia records, which the update cannot read; it is kept' -f $role, $where, $(if ($ringKnown) { "at ring $r" } else { 'with the ring not known,' })))
+            continue
+        }
+        $notes.Add(('support access: a note for the owner -- the Invardia Support app holds {0} at {1}, above {2}; the update never removes it, the customer''s admin or Invardia decides' -f $role, $where, $lvWords))
     }
-    $false
+    $notes.ToArray()
+}
+
+function Get-SISupportGrantLeftoverKey {
+    <# PURE. One short key for a set of role assignment ids (order and case do not matter): each assignment's NAME (the last
+       part of its id, a GUID), sorted, joined by ','; '' for none. #>
+    param([AllowEmptyCollection()][string[]]$Ids = @())
+    $s = @($Ids | Where-Object { "$_".Trim() } | ForEach-Object { ("$_".Trim().TrimEnd('/') -split '/')[-1].ToLowerInvariant() } | Sort-Object -Unique)
+    if (-not $s.Count) { return '' }
+    [string]($s -join ',')
+}
+
+function Get-SISupportGrantLeftoverSql {
+    <# PURE. -Read: the said-before key (column Value, '' none); else ONE row written or replaced (@Value) -- the key only. #>
+    param([switch]$Read)
+    $n = $script:SISupportGrantUpdate.LeftoverRow
+    if ($Read) { return "SELECT CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN N'' ELSE ISNULL((SELECT Value FROM cfg.InstallState WHERE Name = N'$n'), N'') END AS Value;" }
+    @"
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = N'$n')
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'caj-si-updater' WHERE Name = N'$n';
+    ELSE INSERT cfg.InstallState (Name, Value, UpdatedBy) VALUES (N'$n', @Value, N'caj-si-updater');
+END
+"@
 }
 
 function Get-SISupportGrantRoleName {
@@ -282,17 +353,25 @@ function Invoke-SISupportGrantQueueTrigger {
         Invardia Support app's service principal (object id) in this tenant ('' = no Support app here: the trigger is still
         converted, nothing is removed). -RemoveHow: who can remove a right this identity may not (said in the line).
         -Tries / -WaitSeconds / -Sleep: the read-backs. -WhatIf: reads only, the plan said.
+        #1163 (agreed with Invardia 2026-11-10): -ConsentLevel (setup | troubleshoot | '' none recorded), -Ring, -TenantId --
+        the rights at the resource group or above are judged against the consented level (Resolve-SISupportGrantRightNotes):
+        one note for the owner per right above it, NEVER removed. -KeepJobRights (THE UPDATER: it may not, and does not, remove
+        a right in a customer tenant): a right an earlier release gave on a caj-si-* job is KEPT, no DELETE is sent -- ONE
+        plain line, only when that set differs from -LeftoverSaid (the key said before; Get-SISupportGrantLeftoverKey).
         Returns @{ Trigger (none | present | converted | planned | failed | cannot); Removal (none | removed | planned | failed |
-        held | skipped); Removed = @(ids); Kept = @(ids); Lines = @(@{ Level (info | warn); Text }) }. NEVER throws.
+        held | skipped | kept); Removed = @(ids); Kept = @(ids); Notes = @(texts); LeftoverKey; Lines = @(@{ Level (info |
+        warn); Text }) }. NEVER throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
           [AllowEmptyString()][string]$StorageAccount = '', [AllowEmptyString()][string]$SupportPrincipalId = '',
           [string]$RemoveHow = 'Invardia support removes it in its Support session (its support grant install step, roles), or the customer''s admin: Azure portal > the job > Access control (IAM) > Role assignments > remove the Invardia Support app',
-          [int]$Tries = 12, [int]$WaitSeconds = 10, [scriptblock]$Sleep, [switch]$WhatIf)
+          [int]$Tries = 12, [int]$WaitSeconds = 10, [scriptblock]$Sleep, [switch]$WhatIf,
+          [AllowEmptyString()][string]$ConsentLevel = '', [AllowNull()]$Ring = $null, [AllowEmptyString()][string]$TenantId = '',
+          [switch]$KeepJobRights, [AllowEmptyString()][string]$LeftoverSaid = '')
     $c = $script:SISupportGrantUpdate
-    $res = [ordered]@{ Trigger = 'none'; Removal = 'none'; Removed = @(); Kept = @(); Lines = (New-Object System.Collections.Generic.List[object]) }
+    $res = [ordered]@{ Trigger = 'none'; Removal = 'none'; Removed = @(); Kept = @(); Notes = @(); LeftoverKey = ''; Lines = (New-Object System.Collections.Generic.List[object]) }
     $say = { param($lv, $t) $res.Lines.Add([pscustomobject]@{ Level = $lv; Text = $t }) }
-    $done = { [pscustomobject]@{ Trigger = $res.Trigger; Removal = $res.Removal; Removed = @($res.Removed); Kept = @($res.Kept); Lines = $res.Lines.ToArray() } }
+    $done = { [pscustomobject]@{ Trigger = $res.Trigger; Removal = $res.Removal; Removed = @($res.Removed); Kept = @($res.Kept); Notes = @($res.Notes); LeftoverKey = [string]$res.LeftoverKey; Lines = $res.Lines.ToArray() } }
     if (-not $Sleep) { $Sleep = { param($s) if ($s -gt 0) { Start-Sleep -Seconds $s } } }
     $rg = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroup
     $jobPath = '{0}/providers/Microsoft.App/jobs/{1}?api-version={2}' -f $rg, $c.Job, $c.JobsApi
@@ -342,22 +421,27 @@ function Invoke-SISupportGrantQueueTrigger {
         try { $all = @(& $list) } catch { & $say 'warn' ('support access: the Invardia Support app''s rights could not be read ({0}) -- the next update checks again' -f $_.Exception.Message); $res.Removal = 'failed'; return (& $done) }
         $jobRx = '(?i)^' + [regex]::Escape($rg) + '/providers/Microsoft\.App/jobs/caj-si-[^/]+$'
         $onJob = @($all | Where-Object { [string](Get-SISupportGrantProp $_ @('properties', 'scope')) -match $jobRx })
-        # a right on something BROADER that also starts jobs (the resource group, the subscription, a management group) -- said
+        # #1163: the rights at the resource group or above, judged against the CONSENTED level -- a note for the owner each,
+        # never removed (Setup's Contributor + User Access Administrator at the subscription are expected, not "broader")
         $rgKey = $rg.ToLowerInvariant() + '/'
-        $defs = @{}
-        foreach ($a in @($all | Where-Object { $sc = [string](Get-SISupportGrantProp $_ @('properties', 'scope')); $sc -and $rgKey.StartsWith($sc.TrimEnd('/').ToLowerInvariant() + '/') })) {
-            $rd = [string](Get-SISupportGrantProp $a @('properties', 'roleDefinitionId'))
-            $starts = $null
-            try {
-                if (-not $defs.ContainsKey($rd)) { $defs[$rd] = & $Arm 'GET' ('{0}?api-version={1}' -f $rd, $c.AuthApi) $null }
-                $starts = Test-SISupportGrantRoleStartsJobs -Permissions @(Get-SISupportGrantProp $defs[$rd] @('properties', 'permissions'))
-            } catch { $starts = $null }
-            $scopeName = [string](Get-SISupportGrantProp $a @('properties', 'scope'))
-            if ($starts) { $res.Kept += [string](Get-SISupportGrantProp $a @('id')); & $say 'warn' ('support access: the Invardia Support app holds {0} on {1}, which also lets it start the jobs -- the update does not change a right broader than a job; the customer''s admin decides' -f (Get-SISupportGrantRoleName $rd), $scopeName) }
-            elseif ($null -eq $starts) { & $say 'warn' ('support access: whether the Invardia Support app''s {0} on {1} lets it start the jobs could not be read -- the next update checks again' -f (Get-SISupportGrantRoleName $rd), $scopeName) }
-        }
+        # (a management group is no string prefix of the group's path: any management-group scope the list returns is inherited)
+        $above = @($all | Where-Object { $sc = [string](Get-SISupportGrantProp $_ @('properties', 'scope')); $sc -and ($rgKey.StartsWith($sc.TrimEnd('/').ToLowerInvariant() + '/') -or $sc -match '(?i)^/providers/Microsoft\.Management/managementGroups/[^/]+/?$') })
+        # (judged only where the caller read the consent -- the updater; a caller that did not is never told "no consent")
+        if ($PSBoundParameters.ContainsKey('ConsentLevel')) { $res.Notes = @(Resolve-SISupportGrantRightNotes -Assignments $above -ConsentLevel $ConsentLevel -Ring $Ring -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -TenantId $TenantId) }
+        foreach ($n in $res.Notes) { & $say 'info' $n }
         if (-not $onJob.Count) { return (& $done) }
         $what = { param($a) '{0} on {1}' -f (Get-SISupportGrantRoleName ([string](Get-SISupportGrantProp $a @('properties', 'roleDefinitionId')))), ([string](Get-SISupportGrantProp $a @('properties', 'scope')) -split '/')[-1] }
+        if ($KeepJobRights) {
+            # #1163: the updater sends NO delete -- a right an earlier release gave on a job is kept, said once per set
+            [string[]]$keptIds = @($onJob | ForEach-Object { [string](Get-SISupportGrantProp $_ @('id')) })
+            [string]$key = Get-SISupportGrantLeftoverKey -Ids $keptIds
+            $res['Kept'] = $keptIds; $res['LeftoverKey'] = $key; $res['Removal'] = 'kept'
+            if ($key -ne ([string]$LeftoverSaid).Trim()) {
+                [string]$names = (@($onJob | ForEach-Object { [string](& $what $_) }) -join ', ')
+                & $say 'info' ('support access: a right an earlier release gave is still there ({0}); it is not needed and is kept' -f $names)
+            }
+            return (& $done)
+        }
         if ($WhatIf) {
             foreach ($a in $onJob) { & $say 'info' ('support access: the Invardia Support app''s {0} would be removed -- support asks through its queue only' -f (& $what $a)) }
             $res.Removal = 'planned'; return (& $done)

@@ -56,6 +56,20 @@ $log = {
     param([string]$level, [string]$msg)
     switch ($level) { 'OK' { Write-Host "[OK]   $msg" -ForegroundColor Green } 'WARN' { Write-Host "[WARN] $msg" -ForegroundColor Yellow } default { Write-Host "[INFO] $msg" -ForegroundColor Gray } }
 }
+# #1201 DATA HEALTH ON ITS OWN: the pipeline runner starts this job with SI_DATAHEALTH_ON_OWN=1 when the last data health report
+# is older than 24 h and the install is idle (engine\data-health\_shared\SI-DataHealthOnOwn.ps1). Then ONLY the data health
+# check runs, on the data already stored -- the verification checks, the ServiceNow check and the pipeline check run with the
+# pipeline's own verification step. Dot-sourced for the same reason as below; it never fails this job.
+. (Join-Path $siRoot 'engine\data-health\_shared\SI-DataHealthOnOwn.ps1')
+if (Test-SIDataHealthOnOwnRequested) {
+    & $log 'INFO' ('data health on its own: {0} -- only the data health check runs now; the verification checks run with the pipeline' -f $(if ("$env:SI_DATAHEALTH_ON_OWN_WHY".Trim()) { "$env:SI_DATAHEALTH_ON_OWN_WHY".Trim() } else { 'started by the pipeline runner' }))
+    $dhScript = Join-Path $siRoot 'engine\data-health\Invoke-SIDataHealth.ps1'
+    if (Test-Path -LiteralPath $dhScript) {
+        try { . $dhScript -DryRun:$DryRun }
+        catch { & $log 'WARN' ('The data health check could not finish: {0}' -f $_.Exception.Message) }
+    }
+    return
+}
 $catalog = Get-SIVerificationCatalog -Path (Join-Path $siRoot 'config\verification-checks.locked.json')
 $stale = 30
 if ("$($global:SI_ActiveStaleDays)" -match '^\d+$' -and [int]$global:SI_ActiveStaleDays -gt 0) { $stale = [int]$global:SI_ActiveStaleDays }

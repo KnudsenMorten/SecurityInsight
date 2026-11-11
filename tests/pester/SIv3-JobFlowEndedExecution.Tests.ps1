@@ -115,7 +115,7 @@ Describe '#945 the stores close one step only while it is Running with that exec
         (Get-SIJobFlowSqlText 'StepRow') | Should -Match '^SELECT State, Execution, EndedUtc, ErrorClass, Error FROM cfg\.FlowStepRun WHERE FlowRunId = @FlowRunId AND StepOrder = @StepOrder;$'
     }
     It 'a runner that never saw the close does not reopen it: SaveStep and the file / blob save keep an ended step with the same execution' {
-        (Get-SIJobFlowSqlText 'SaveStep') | Should -Match "AND NOT \(@State = N'Running' AND t\.Execution = @Execution AND t\.State IN \(N'Success', N'Failed', N'Interrupted', N'TimedOut'\)\)"
+        (Get-SIJobFlowSqlText 'SaveStep') | Should -Match "AND NOT \(@State = N'Running' AND t\.Execution = @Execution AND \(t\.State IN \(N'Success', N'Failed', N'Interrupted', N'TimedOut'\) OR \(t\.State = N'Skipped' AND t\.ErrorClass = N'classifier-skipped'\)\)\)"
         $stored = New-Run; $stored.Steps[1].State = 'Failed'; $stored.Steps[1].ErrorClass = 'job-failed'; $stored.Steps[1].Error = 'closed'; $stored.Steps[1].EndedUtc = $script:Now.AddDays(-1)
         $mem = New-Run
         $j = ConvertFrom-SIJobFlowRunJson -Json (Get-SIJobFlowSaveJson -State $mem -Stored $stored)
@@ -183,6 +183,71 @@ Describe '#945 the run goes on by the normal rules' {
             ($res.Steps | Where-Object { $_.Job -eq 'risk-analysis-detailed' }).State | Should -Be 'Skipped'
             $res.State | Should -BeIn @('Failed', 'Stopped')
             @($script:Started) | Should -Not -Contain 'asset-correlation' -Because 'a failed step is never started again by the close'
+        } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Describe 'the tier classifier whose end the runner never saw is closed SKIPPED, and the run is not failed for it (owner 2026-11-11)' {
+    BeforeAll {
+        $script:PtcLine = 'the privilege tier classifier''s end was not seen -- treated as skipped, the last known catalog is used'
+        function script:New-PtcRun {
+            $r = New-Run
+            $r.Steps = @(
+                [pscustomobject]@{ Order = 1; Group = 1; Job = 'ptc'; Stage = 'collect'; State = 'Running'; Execution = 'caj-si-ptc-x1'; StartedUtc = $script:Now.AddHours(-5); EndedUtc = $null; ErrorClass = ''; Error = ''; Attempts = 1; RetryReason = '' }
+                [pscustomobject]@{ Order = 2; Group = 2; Job = 'identity'; Stage = 'collect'; State = 'Waiting'; Execution = ''; StartedUtc = $null; EndedUtc = $null; ErrorClass = ''; Error = ''; Attempts = 0; RetryReason = '' })
+            $r
+        }
+    }
+    It 'a classifier execution that ended Failed -> Skipped, class classifier-skipped, the one line; Stopped and Succeeded stay as for every step' {
+        $old = $script:Now.AddHours(-3)
+        $c = @(Get-SIJobFlowEndedExecutionCloses -State (New-PtcRun) -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Failed' $old)) })
+        $c.Count | Should -Be 1
+        $c[0].State | Should -Be 'Skipped'; $c[0].ErrorClass | Should -Be 'classifier-skipped'; $c[0].Error | Should -Be $script:PtcLine
+        (Get-SIJobFlowEndedExecutionCloses -State (New-PtcRun) -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Degraded' $old)) })[0].State | Should -Be 'Skipped'
+        (Get-SIJobFlowEndedExecutionCloses -State (New-PtcRun) -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Succeeded' $old)) })[0].State | Should -Be 'Success'
+        (Get-SIJobFlowEndedExecutionCloses -State (New-PtcRun) -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Stopped' $old)) })[0].State | Should -Be 'Interrupted'
+        Test-SIPipelineClassifierSkipped $c[0] | Should -BeTrue
+    }
+    It 'every other step stays as today: a failed collection is still closed Failed' {
+        $c = @(Get-SIJobFlowEndedExecutionCloses -State (New-Run) -NowUtc $script:Now -ExecutionsByJob @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $script:Now.AddHours(-3))) })
+        $c[0].State | Should -Be 'Failed'; $c[0].ErrorClass | Should -Be 'job-failed'
+    }
+    It 'the stores keep the skipped close: the file store closes it, the save of a runner that never saw it does not reopen it' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('siptc-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); New-Item -ItemType Directory -Path $dir | Out-Null
+        try {
+            $store = New-SIJobFlowFileStore -Path (Join-Path $dir 'flow-run.json')
+            $store.Save((New-PtcRun))
+            $c = @(Get-SIJobFlowEndedExecutionCloses -State $store.Load() -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Failed' $script:Now.AddHours(-3))) })
+            $store.CloseOpenStep('b64fbc83', $c[0]) | Should -Be 1
+            $row = $store.StepRow('b64fbc83', 1)
+            $row.State | Should -Be 'Skipped'; $row.ErrorClass | Should -Be 'classifier-skipped'; $row.Error | Should -Be $script:PtcLine
+            $j = ConvertFrom-SIJobFlowRunJson -Json (Get-SIJobFlowSaveJson -State (New-PtcRun) -Stored $store.Load())
+            $j.Steps[0].State | Should -Be 'Skipped' -Because 'a runner that still had it Running never writes it back'
+        } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    It 'the runner takes the close over: what comes after the classifier runs, the run SUCCEEDS' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('siptcr-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); New-Item -ItemType Directory -Path $dir | Out-Null
+        try {
+            $store = New-SIJobFlowFileStore -Path (Join-Path $dir 'flow-run.json')
+            $def = New-SIDefaultJobFlow -Installed @('ptc', 'identity') -Map (Get-SIJobFlowMap)
+            $mkRun = {
+                $r = New-SIJobFlowRunState -Definition $def -NowUtc $script:Now.AddHours(-5) -FlowRunId 'b64fbc83'
+                foreach ($x in @($r.Steps)) { if ($x.Job -eq 'ptc') { $x.State = 'Running'; $x.Execution = 'caj-si-ptc-x1'; $x.StartedUtc = $script:Now.AddHours(-5); $x.Attempts = 1 } }
+                $r.HeartbeatUtc = $script:Now.AddHours(-1)
+                $r
+            }
+            $store.Save((& $mkRun))
+            $c = @(Get-SIJobFlowEndedExecutionCloses -State $store.Load() -NowUtc $script:Now -ExecutionsByJob @{ ptc = @((New-Exec 'caj-si-ptc-x1' 'Failed' $script:Now.AddHours(-3))) })
+            $store.CloseOpenStep('b64fbc83', $c[0]) | Should -Be 1
+            $script:Started = New-Object System.Collections.Generic.List[string]
+            $res = Invoke-SIJobFlow -Definition $def -Map (Get-SIJobFlowMap) -Previous (& $mkRun) -Store $store -Now { $script:Now } -Sleep { param($s) } -PollSeconds 0 -Log { param($l, $m) } `
+                -Start { param($j) $script:Started.Add($j); "caj-si-$j-new" } -Poll { param($j, $e) if ($j -eq 'ptc') { throw 'HTTP 404: job execution not found' }; 'Succeeded' }
+            $p = $res.Steps | Where-Object { $_.Job -eq 'ptc' }
+            $p.State | Should -Be 'Skipped'; $p.ErrorClass | Should -Be 'classifier-skipped'; $p.Error | Should -Be $script:PtcLine
+            ($res.Steps | Where-Object { $_.Job -eq 'identity' }).State | Should -Be 'Success'
+            $res.State | Should -Be 'Succeeded'
+            @($script:Started) | Should -Not -Contain 'ptc'
+            @($script:Started) | Should -Contain 'identity'
         } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

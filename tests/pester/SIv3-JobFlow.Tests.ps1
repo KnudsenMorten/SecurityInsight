@@ -196,13 +196,22 @@ Describe 'the runner: failures' {
         @($r.Steps | Where-Object Job -eq 'risk-analysis')[0].Error | Should -Match 'needs'
         $r.State | Should -Be 'Failed'
     }
-    It 'the tier classifier fails: every collection needs it, so nothing is collected and Correlate does not start' {
+    It 'the tier classifier fails: it never fails the pipeline -- its step is SKIPPED, the collections and Correlate run on the last known catalog (owner 2026-11-11)' {
         $arm = New-FakeArm -Outcome @{ ptc = 'Failed' }
         $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity', 'azure', 'endpoint', 'publicip', 'asset-correlation', 'risk-analysis', 'risk-analysis-detailed') -Map $script:Map
         $r = Invoke-Flow -Definition $d -Arm $arm
-        foreach ($k in 'identity', 'azure', 'endpoint', 'publicip') { (Get-StepState $r $k) | Should -Be 'Skipped' -Because "$k needs the tier classifier (directly or through another step)" }
+        (Get-StepState $r 'ptc') | Should -Be 'Skipped'
+        @($r.Steps | Where-Object Job -eq 'ptc')[0].ErrorClass | Should -Be 'classifier-skipped'
+        @($r.Steps | Where-Object Job -eq 'ptc')[0].Error | Should -Match 'never failed: the collections use the last known tier catalog'
+        foreach ($k in 'identity', 'azure', 'endpoint', 'publicip', 'asset-correlation', 'risk-analysis-detailed') { (Get-StepState $r $k) | Should -Be 'Success' -Because "$k runs on the last known catalog" }
+        $r.State | Should -Be 'Succeeded'
+    }
+    It 'every collection fails: nothing is collected and Correlate does not start (unchanged for every step but the tier classifier)' {
+        $arm = New-FakeArm -Outcome @{ identity = 'Failed'; azure = 'Failed'; endpoint = 'Failed' }
+        $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity', 'azure', 'endpoint', 'publicip', 'asset-correlation', 'risk-analysis', 'risk-analysis-detailed') -Map $script:Map
+        $r = Invoke-Flow -Definition $d -Arm $arm
+        (Get-StepState $r 'publicip') | Should -Be 'Skipped'
         @($r.Steps | Where-Object Job -eq 'publicip')[0].Error | Should -Match 'needs'
-        # #306: Correlate does not start after a Collect that did not succeed
         @($r.Steps | Where-Object Job -eq 'asset-correlation')[0].ErrorClass | Should -Be 'stage-blocked'
         $r.State | Should -Be 'Failed'
     }
@@ -226,19 +235,23 @@ Describe 'the runner: failures' {
         $r.StopReason | Should -Match 'identity failed'
     }
     It 'continue: the dependents run anyway' {
-        $arm = New-FakeArm -Outcome @{ ptc = 'Failed' }
-        $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity', 'azure') -Map $script:Map
-        $d.Steps[0].OnFailure = 'continue'
+        $arm = New-FakeArm -Outcome @{ 'asset-correlation' = 'Failed' }
+        $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity', 'asset-correlation', 'risk-analysis-detailed') -Map $script:Map
+        (@($d.Steps | Where-Object Job -eq 'asset-correlation')[0]).OnFailure = 'continue'
         $r = Invoke-Flow -Definition $d -Arm $arm
-        @($script:Arm.Starts) | Should -Be @('ptc', 'identity', 'azure')
+        @($script:Arm.Starts) | Should -Be @('ptc', 'identity', 'asset-correlation', 'risk-analysis-detailed')
         $r.State | Should -Be 'Failed'
     }
     It 'a step that cannot start (403) fails with start-failed, and skips its dependents' {
-        $arm = New-FakeArm -StartFails @('ptc')
-        $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity') -Map $script:Map
+        $arm = New-FakeArm -StartFails @('identity')
+        $d = New-SIDefaultJobFlow -Installed @('ptc', 'identity', 'publicip') -Map $script:Map
         $r = Invoke-Flow -Definition $d -Arm $arm
-        @($r.Steps)[0].ErrorClass | Should -Be 'start-failed'
-        (Get-StepState $r 'identity') | Should -Be 'Skipped'
+        @($r.Steps | Where-Object Job -eq 'identity')[0].ErrorClass | Should -Be 'start-failed'
+        # (the tier classifier that cannot start is skipped and holds nothing -- owner 2026-11-11)
+        $arm2 = New-FakeArm -StartFails @('ptc')
+        $r2 = Invoke-Flow -Definition (New-SIDefaultJobFlow -Installed @('ptc', 'identity') -Map $script:Map) -Arm $arm2
+        (Get-StepState $r2 'ptc') | Should -Be 'Skipped'
+        (Get-StepState $r2 'identity') | Should -Be 'Success'
     }
     It 'NO GIVE-UP ON ELAPSED TIME (owner 2026-10-13): a step over its step timeout is REPORTED once and keeps running -- it is not stopped and does not count as failed' {
         $arm = New-FakeArm -Polls @{ identity = 1000 }

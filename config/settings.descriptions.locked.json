@@ -1546,6 +1546,16 @@
       "advanced": true,
       "group": "Risk Analysis reports"
     },
+    "SI_RA_RecoveryBudgetMinutes": {
+      "label": "Risk Analysis retry time per report (most)",
+      "purpose": "When Microsoft Defender keeps refusing some query slices of a Risk Analysis report (busy, throttled or timed out), SecurityInsight asks them again after the other slices, and in smaller slices. This is the most time one report may spend on that, counted from its first retry.",
+      "defaultText": "90 minutes (0 = no time limit)",
+      "effect": "When the time is spent, no new retry starts for that report (a request already running finishes normally). The slices still refused are reported as not read: their findings are unknown, never resolved, the report is marked incomplete, and the run goes on with the next step. The next run reads the report again in full. A longer time can recover more on a slow tenant but can hold the whole run; a shorter one ends sooner with more of the report unknown.",
+      "whenToChange": "Most installs never should. Raise it if a report is often incomplete because its retries ran out of time while they were still recovering slices.",
+      "unit": "minutes",
+      "advanced": true,
+      "group": "Risk Analysis reports"
+    },
     "SI_BucketTransientRetries": {
       "label": "Risk Analysis transient error retries",
       "purpose": "How many times a Risk Analysis query slice is retried, after signing in again, when it fails with a temporary error such as an expired token or a gateway timeout.",
@@ -2260,10 +2270,23 @@
       "label": "AI for privilege tier catalog",
       "purpose": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the Azure OpenAI settings are set, unless this is off.",
       "defaultText": "On.",
-      "effect": "Turning it off sends nothing to Azure OpenAI: roles and permissions already in the catalog keep their tier, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
+      "effect": "Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
       "whenToChange": "Only to keep AI out of the privilege tier classifier while it is used elsewhere; or turn it off if you tier new roles yourself.",
       "advanced": true,
       "group": "AI"
+    },
+    "SI_PrivilegeTierCatalog_Source": {
+      "label": "Privilege tier catalog source",
+      "purpose": "Where the privilege tier catalog comes from -- the list that gives every Entra role, AD built-in group, API permission and Azure role its tier (0-3), which the identity tiers are computed from. Either it is built here by the privilege tier classifier with your Azure OpenAI deployment, or the daily classified catalog is downloaded from Invardia (public, no sign-in; Microsoft's own role and permission definitions, classified; no data of yours is sent).",
+      "defaultText": "Download: every install, new and existing, downloads the daily classified catalog -- also with Azure OpenAI configured.",
+      "effect": "Download: every built-in role, group and permission takes the tier of the newest daily catalog; it is checked (SHA-256, size, every tier present) before it replaces the local copy, a failed download keeps the last good copy and the run says how old it is, and no AI request is sent. Your custom catalog still wins. Build with AI (your opt-in, extra AI cost): the classifier asks your Azure OpenAI deployment and its result wins over the download; it is only used with AI integration on -- otherwise the catalog is downloaded and the run warns. Either way the classifier never fails a pipeline run: a failure keeps the last known classification, and on a first run without any catalog the step is skipped.",
+      "whenToChange": "Keep Download. Choose Build with AI only to classify every role with your own Azure OpenAI deployment, at your own AI cost.",
+      "advanced": true,
+      "group": "AI",
+      "hint": "Download is the default. Build with AI is an opt-in that needs AI integration and adds AI cost.",
+      "type": "enum",
+      "values": [ "invardia", "ai" ],
+      "valueLabels": { "invardia": "Download the daily classified catalog from Invardia", "ai": "Build it here with AI (your opt-in: needs AI integration, adds AI cost)" }
     },
     "SI_PrivilegeTierClassifier_RefreshDays": {
       "label": "Privilege tier catalog: days kept while unchanged",
@@ -5770,6 +5793,7 @@
         "SI_DisableAI",
         "SI_DisableAI_endpoint",
         "SI_PrivilegeTierClassifier_RunAI",
+        "SI_PrivilegeTierCatalog_Source",
         "BuildSummaryByAI",
         "SI_RiskAnalysis_BuildSummaryByAI"
       ]

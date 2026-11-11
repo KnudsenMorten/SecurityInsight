@@ -261,13 +261,21 @@ function Get-DiscoveryFromEntraUsers {
             try { Add-SIRecordPart -Provider 'mdi' -RecordType 'user' -Key ([string]$u.id) -Part 'identity' -Object $ii } catch { }
         }
 
-        # break-glass by the customer's extension attribute: which entry this user carries, if any (part 'breakGlass')
-        if ($bgRules.Count -gt 0 -and (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) {
+        # break-glass by the customer's extension attribute: which entry this user carries, if any (part 'breakGlass'), and
+        # on the record (ENTRA_BreakGlassAttribute) so the profile's break-glass tier source reads the same match
+        $bgMatch = ''
+        if ($bgRules.Count -gt 0) {
             try {
                 $bgHit = Get-SIBreakGlassAttributeMatch -User $u -Rules $bgRules
-                if ($bgHit) { Add-SIRecordPart -Provider 'entra' -RecordType 'user' -Key ([string]$u.id) -Part 'breakGlass' -Object ([pscustomobject]$bgHit) }
+                if ($bgHit) {
+                    $bgMatch = [string]$bgHit.match
+                    if (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue) { Add-SIRecordPart -Provider 'entra' -RecordType 'user' -Key ([string]$u.id) -Part 'breakGlass' -Object ([pscustomobject]$bgHit) }
+                }
             } catch { }
         }
+        # the names of the groups this run already knows the user reaches (no new read) -- the break-glass naming patterns
+        # are checked on them too
+        $reachNames = @($reach | ForEach-Object { $gid = [string]$_.GroupId; if ($gid -and $groupNames -and $groupNames.ContainsKey($gid)) { [string]$groupNames[$gid] } } | Where-Object { $_ } | Select-Object -Unique)
 
         # EG enrichment lookup (cached from Get-SIExposureGraphIdentities call above).
         # The full RawData blob lands on the record; the schema-driven row builder walks
@@ -347,6 +355,9 @@ function Get-DiscoveryFromEntraUsers {
             ENTRA_PasswordlessOnly         = if ($pw -and [bool]$pw.ReadComplete) { $pw.PasswordlessOnly } else { $null }
             # IdentityInfo (AD groups + Defender activity / risk signals)
             ENTRA_Groups                 = $adGroups
+            # break-glass inputs of the profile's tier source: the extension attribute entry the user carries, the group names
+            ENTRA_BreakGlassAttribute    = $bgMatch
+            ENTRA_GroupNames             = $reachNames
             ENTRA_IsMFARegistered        = if ($ii) { [bool]$ii.IsMFARegistered } else { $null }
             ENTRA_IsServiceAccount       = if ($ii) { [bool]$ii.IsServiceAccount } else { $null }
             ENTRA_RiskLevel              = if ($ii) { [string]$ii.RiskLevel } else { $null }

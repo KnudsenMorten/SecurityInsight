@@ -357,6 +357,7 @@ function ConvertTo-SICiEvidenceText {
         'si_device_roles' { return ('detected role {0}' -f ($s -replace '_', ' ')) }
         'si_group_memberships' { return "member of $s" }
         'si_frequent_user_tier' { return "its most frequent logon user is Tier $s" }
+        'si_is_break_glass' { return 'break-glass account' }
         'si_os_name' { return "operating system $s" }
         { @('si_ip_addresses', 'si_ip_address', 'si_public_ip') -contains $_ } { return "IP address $s" }
         'si_eg_query_rules' { return 'an Exposure Management detection' }

@@ -13,6 +13,47 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.8 — long steps say how far they are, and a ready path for base image security updates
+
+### What's new
+- **Every long step shows its progress.** The comparison of vulnerability findings, its paging and writing passes, and
+  the CI build's final "mark as built" pass now report how far they are (for example "mark built 140,000 of 310,000")
+  at least every few minutes. A long night no longer looks stuck to you or to support.
+- **Base image security updates are released the same day.** When Microsoft publishes a patched base image, the
+  release is built from the previous version's code on the new image only, tested, and released to every ring; if it
+  fails, the installations switch back to the image they ran before.
+## v3.1.7 — a current privilege tier catalog for every installation, and runs that never wait on one report
+
+### What's new
+- **Every installation tiers roles and permissions from a current catalog.** Until now an installation without AI
+  integration used the catalog that came with the product, which could be months old, and anything it did not list got a
+  default tier. Every installation now downloads the daily classified catalog by default -- checked before it is used, and
+  the last good one is kept if a download fails. Building the catalog yourself with AI stays possible as an opt-in when AI
+  integration is on (it adds AI cost); it is never switched on by itself. The catalog's Tier 0 / Tier 1 boundary is fixed by
+  reviewed rules, so a permission's tier does not change from day to day.
+- **The tier classifier never holds a night.** If the catalog cannot be read or built, the night goes on with the last
+  known classification (on a first run, with the shipped catalog) and says so.
+- **A break-glass account is always Tier 0**, whatever roles it holds right now.
+- **With AI integration on, built-in roles follow your own classification** instead of the shipped list.
+
+### Fixes
+- **One report's retries no longer hold a whole run.** When Microsoft's advanced hunting keeps timing out on one heavy
+  report, its recovery gets a time budget (90 minutes, a setting); after that, the parts not read are reported as unknown
+  -- never as resolved -- the run goes on, and the next run reads that report again in full.
+- **The data-health check reports even when runs do not finish**: when its last report is more than a day old and the
+  installation is idle, it runs on its own on the stored data.
+- **The "bucket count jump" warning only appears on a real jump** in a report's size, not after a query change.
+- **An old collection job from before the collection was split is removed after 14 days** even if it was once started
+  by hand.
+## v3.1.6 — the data-health check never reports a false loss
+
+### Fixes
+- **The data-health check no longer reports missing vulnerability data that is not missing.** On some installations the
+  check compared Defender's findings with a short read of the stored findings and reported the difference as an anomaly
+  ("last cycle was anomalous"), although the findings were stored. It now reads the stored findings of the same
+  collection the devices were sampled from, picks each device's record the same way every time, checks that it read
+  everything and reads again if not. If it still cannot read everything, that cycle says "the check could not read all
+  stored findings -- not a data anomaly" instead of reporting a loss. A real loss is still reported.
 ## v3.1.5 — the sign-in front of Pro installs on the .NET security update
 
 ### Fixes

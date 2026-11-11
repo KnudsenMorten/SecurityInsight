@@ -32,7 +32,9 @@ function Publish-SICatalogToBlob {
     <# Upload the local catalog. Returns $true when published, $false otherwise (never throws). #>
     param(
         [Parameter(Mandatory)][string]$LocalPath,
-        [string]$AccountName = [string]$global:SI_StorageAccount
+        [string]$AccountName = [string]$global:SI_StorageAccount,
+        # the downloaded daily catalog is shared the same way, under its own name (SI-TierCatalogDownload.ps1)
+        [string]$BlobName = $script:SICatalogBlobName
     )
     if ([string]::IsNullOrWhiteSpace($AccountName)) { return $false }
     if (-not (Test-Path -LiteralPath $LocalPath)) { return $false }
@@ -41,7 +43,7 @@ function Publish-SICatalogToBlob {
         if (-not (Get-SIAzStorageContainer -Name $script:SICatalogBlobContainer -Context $ctx -ErrorAction SilentlyContinue)) {
             New-SIAzStorageContainer -Name $script:SICatalogBlobContainer -Context $ctx -Permission Off -ErrorAction Stop | Out-Null
         }
-        Set-SIAzStorageBlobContent -File $LocalPath -Container $script:SICatalogBlobContainer -Blob $script:SICatalogBlobName `
+        Set-SIAzStorageBlobContent -File $LocalPath -Container $script:SICatalogBlobContainer -Blob $BlobName `
             -Context $ctx -Force -ErrorAction Stop | Out-Null
         return $true
     } catch {
@@ -57,14 +59,15 @@ function Update-SICatalogFromBlob {
     #>
     param(
         [Parameter(Mandatory)][string]$LocalPath,
-        [string]$AccountName = [string]$global:SI_StorageAccount
+        [string]$AccountName = [string]$global:SI_StorageAccount,
+        [string]$BlobName = $script:SICatalogBlobName
     )
     $localExists = Test-Path -LiteralPath $LocalPath
     $fallback    = $(if ($localExists) { 'local' } else { 'none' })
     if ([string]::IsNullOrWhiteSpace($AccountName)) { return $fallback }
     try {
         $ctx  = Get-SICatalogStorageContext -AccountName $AccountName
-        $blob = Get-SIAzStorageBlob -Container $script:SICatalogBlobContainer -Blob $script:SICatalogBlobName -Context $ctx -ErrorAction SilentlyContinue
+        $blob = Get-SIAzStorageBlob -Container $script:SICatalogBlobContainer -Blob $BlobName -Context $ctx -ErrorAction SilentlyContinue
         if (-not $blob) { return $fallback }                     # nothing published yet
         $blobTime = ([datetimeoffset]$blob.LastModified).UtcDateTime
         if ($localExists -and ((Get-Item -LiteralPath $LocalPath).LastWriteTimeUtc -ge $blobTime)) { return 'local' }
@@ -74,7 +77,7 @@ function Update-SICatalogFromBlob {
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
         $tmp = Join-Path $dir ('.catalog-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
         try {
-            Get-SIAzStorageBlobContent -Container $script:SICatalogBlobContainer -Blob $script:SICatalogBlobName -Context $ctx `
+            Get-SIAzStorageBlobContent -Container $script:SICatalogBlobContainer -Blob $BlobName -Context $ctx `
                 -Destination $tmp -Force -ErrorAction Stop | Out-Null
             $null = Get-Content -LiteralPath $tmp -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
             Move-Item -LiteralPath $tmp -Destination $LocalPath -Force

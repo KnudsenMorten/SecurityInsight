@@ -311,7 +311,8 @@ Describe '#882 THE LATE RETRY GOES ON WHILE THE RUN MAKES PROGRESS -- no clock, 
         Test-RASubSliceAskAgain -Rounds 40 -LateRounds 3 -RecoveredNow 90 -RecoveredAtAsk 89 | Should -BeTrue -Because 'no count of rounds'
     }
     It 'WIRING: the engine runs its late retry in these passes, and loses a slice only when a pass recovered nothing' {
-        $script:CodeNC | Should -Match 'while \(Step-RALatePasses -State \$__lp\) \{'
+        # (#1200: the passes also stop once the report's recovery time budget is spent)
+        $script:CodeNC | Should -Match 'while \(-not \(Test-RARecoveryBudgetSpent -Budget \$__rb\) -and \(Step-RALatePasses -State \$__lp\)\) \{'
         $script:CodeNC | Should -Match 'foreach \(\$db in @\(\$__lp\.Current\)\) \{'
         $script:CodeNC | Should -Match 'Set-RALatePassResult -State \$__lp -Index \(\[int\]\$db\) -Result \$dbResult'
         $script:CodeNC | Should -Match "(?s)\} elseif \(\`$dbAction -eq 'Retry'\) \{.{0,700}?\`$dbResult = 'retry'"

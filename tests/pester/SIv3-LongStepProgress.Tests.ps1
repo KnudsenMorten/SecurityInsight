@@ -299,7 +299,7 @@ Describe '(c) the data sync''s long parts write the step''s progress record' {
         $m.Count | Should -BeGreaterOrEqual 3
         for ($k = 1; $k -lt $script:mergeAt.Count; $k++) { ($script:mergeAt[$k] - $script:mergeAt[$k - 1]).TotalSeconds | Should -BeGreaterOrEqual 180 }
         @($m | ForEach-Object { [long]$_.P.Done }) | Should -Be @($m | ForEach-Object { [long]$_.P.Done } | Sort-Object)
-        $m[0].P.Phase | Should -Match "^the views' prepared context of collection 9: rows [0-9,]+ of 400,000$"
+        $m[0].P.Phase | Should -Match "^the views' prepared context of collection 9: field fill rows [0-9,]+ of 400,000$"
         $m[0].P.Total | Should -Be 400000
         $m[0].P.Execution | Should -Be 'caj-si-asset-datasync-t3'
     }

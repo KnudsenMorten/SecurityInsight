@@ -144,28 +144,28 @@ Describe 'the runner: a step whose container never started' {
         @(Get-SIGuardCallsForFlow -Result $r).Count | Should -Be 0 -Because 'a retry that worked trips no guard'
     }
     It 'the fallback (the store cannot tell, no run log, a short run) retries too' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $ev = New-Evidence -Rows @{ 'caj-si-ptc-e1' = $null } -Logs @{ 'caj-si-ptc-e1' = $false }
-        $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence $ev
-        $r.State | Should -Be 'Succeeded'; (Get-Step $r 'ptc').Attempts | Should -Be 2
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $null } -Logs @{ 'caj-si-endpoint-e1' = $false }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence $ev
+        $r.State | Should -Be 'Succeeded'; (Get-Step $r 'endpoint').Attempts | Should -Be 2
     }
     It 'does not start the second time either: the step fails as before, dependents are skipped, the guard fires (halted)' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Failed') }
-        $ev = New-Evidence -Rows @{ 'caj-si-ptc-e1' = $false; 'caj-si-ptc-e2' = $false } -Logs @{ 'caj-si-ptc-e1' = $false; 'caj-si-ptc-e2' = $false }
-        $r = Invoke-RetryFlow -Jobs @('ptc', 'identity', 'azure') -Arm $arm -Evidence $ev
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Failed') }
+        $ev = New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $false; 'caj-si-endpoint-e2' = $false } -Logs @{ 'caj-si-endpoint-e1' = $false; 'caj-si-endpoint-e2' = $false }
+        $r = Invoke-RetryFlow -Jobs @('endpoint', 'publicip') -Arm $arm -Evidence $ev
         $r.State | Should -Be 'Failed'
-        $s = Get-Step $r 'ptc'
+        $s = Get-Step $r 'endpoint'
         $s.State | Should -Be 'Failed'; $s.ErrorClass | Should -Be 'never-started'; $s.Attempts | Should -Be 2
         $s.Error | Should -Match 'also not when it was started again \(2 attempts\)'
-        @($script:Arm.Starts | Where-Object { $_ -eq 'ptc' }).Count | Should -Be 2 -Because 'once retried, never a third time'
-        (Get-Step $r 'identity').State | Should -Be 'Skipped'; (Get-Step $r 'azure').State | Should -Be 'Skipped'
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 2 -Because 'once retried, never a third time'
+        (Get-Step $r 'publicip').State | Should -Be 'Skipped'
         $calls = @(Get-SIGuardCallsForFlow -Result $r)
         $g = @($calls | Where-Object { $_.GuardId -eq 'flow.step.start-failed' })
         $g.Count | Should -Be 1
         $g[0].Outcome | Should -Be 'halted'
-        $g[0].Subject | Should -Be 'ptc'
-        $g[0].Detail | Should -Match 'ptc \(2 attempts\)'
-        $g[0].Detail | Should -Match '2 job\(s\) after it were skipped'
+        $g[0].Subject | Should -Be 'endpoint'
+        $g[0].Detail | Should -Match 'endpoint \(2 attempts\)'
+        $g[0].Detail | Should -Match '1 job\(s\) after it were skipped'
         @($calls.GuardId) | Should -Contain 'flow.step.skipped'
         # the guard id is in the closed catalog: the event is recorded (mail / telemetry / ticket go through it)
         $call = $g[0]
@@ -187,34 +187,34 @@ Describe 'the runner: a step whose container never started' {
 
 Describe 'the runner: everything else is a real failure and is never retried' {
     It 'an engine failure (its START record exists) is NOT started again' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $ev = New-Evidence -Rows @{ 'caj-si-ptc-e1' = $true }
-        $r = Invoke-RetryFlow -Jobs @('ptc', 'identity') -Arm $arm -Evidence $ev
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $true }
+        $r = Invoke-RetryFlow -Jobs @('endpoint', 'publicip') -Arm $arm -Evidence $ev
         $r.State | Should -Be 'Failed'
-        $s = Get-Step $r 'ptc'
+        $s = Get-Step $r 'endpoint'
         $s.State | Should -Be 'Failed'; $s.ErrorClass | Should -Be 'job-failed'; $s.Attempts | Should -Be 1; $s.RetryReason | Should -BeNullOrEmpty
-        @($script:Arm.Starts | Where-Object { $_ -eq 'ptc' }).Count | Should -Be 1
-        (Get-Step $r 'identity').State | Should -Be 'Skipped' -Because 'dependents are handled as before'
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 1
+        (Get-Step $r 'publicip').State | Should -Be 'Skipped' -Because 'dependents are handled as before'
         @(Get-SIGuardCallsForFlow -Result $r | Where-Object { $_.GuardId -eq 'flow.step.start-failed' }).Count | Should -Be 0
     }
     It '3.0.30: an engine failure with its own run log is named by the LAST ERROR line of that log, classified (never a bare job-failed)' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('ptc') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('endpoint') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
                 Save = { param($s) }; Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1
-                StartEvidence = (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $true } -Logs @{ 'caj-si-ptc-e1' = $true }) }
+                StartEvidence = (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $true } -Logs @{ 'caj-si-endpoint-e1' = $true }) }
         $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
         $script:LogReads = New-Object System.Collections.Generic.List[string]
         $p.StepLogs = { param($Job, $StartedUtc, $EndedUtc)
             $script:LogReads.Add([string]$Job)
-            [pscustomobject]@{ Name = 'run-logs/ptc/ptc_container_20261005T050000Z.log'; Lines = @(
-                '[INFO] ptc: reading',
-                '[ERROR] ptc: page 2 failed once: 429 Too Many Requests -- retried',
-                '[ERROR] ptc: the step failed: SQL error 40544 (line 1): The database ''sqldb-si'' has reached its size quota.') } }
+            [pscustomobject]@{ Name = 'run-logs/endpoint/endpoint_container_20261005T050000Z.log'; Lines = @(
+                '[INFO] endpoint: reading',
+                '[ERROR] endpoint: page 2 failed once: 429 Too Many Requests -- retried',
+                '[ERROR] endpoint: the step failed: SQL error 40544 (line 1): The database ''sqldb-si'' has reached its size quota.') } }
         $r = Invoke-SIJobFlow @p
-        $s = Get-Step $r 'ptc'
+        $s = Get-Step $r 'endpoint'
         $s.State | Should -Be 'Failed'
         $s.ErrorClass | Should -Be 'database-full' -Because 'the LAST ERROR line names the error, not the first'
-        $s.Error | Should -Match '^the execution ended failed: \[ERROR\] ptc: the step failed: SQL error 40544'
+        $s.Error | Should -Match '^the execution ended failed: \[ERROR\] endpoint: the step failed: SQL error 40544'
         $s.Attempts | Should -Be 1 -Because 'an engine failure is still never started again'
         @($script:LogReads).Count | Should -Be 1
         (Get-SIJobFlowStepFailure -Step $s -LogLines $null).ErrorClass | Should -Be 'database-full' -Because 'the pipeline''s report carries the step''s class'
@@ -224,22 +224,49 @@ Describe 'the runner: everything else is a real failure and is never retried' {
         (Get-SIJobFlowLogErrorClass -Lines @()).ErrorClass | Should -Be ''
         $x = Get-SIJobFlowLogErrorClass -Lines @('[ERROR] identity: Graph refused /users: Response status code does not indicate success: 403 (Forbidden). Authorization_RequestDenied graph.microsoft.com', '[INFO] done')
         $x.ErrorClass | Should -Be 'graph-403'; $x.Line | Should -Match '^\[ERROR\] identity: Graph refused'
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('ptc') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('endpoint') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
                 Save = { param($s) }; Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1
-                StartEvidence = (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $true }); StepLogs = { param($Job, $StartedUtc, $EndedUtc) $null } }
+                StartEvidence = (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $true }); StepLogs = { param($Job, $StartedUtc, $EndedUtc) $null } }
         $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
-        $s = Get-Step (Invoke-SIJobFlow @p) 'ptc'
+        $s = Get-Step (Invoke-SIJobFlow @p) 'endpoint'
         $s.ErrorClass | Should -Be 'job-failed'; $s.Error | Should -Be 'the execution ended failed'
+    }
+    It 'the tier classifier SKIPPED its run (no catalog at all) and ended successfully: its run log says so, the step is skipped, everything after it runs, the run succeeds (owner 2026-11-11)' {
+        foreach ($case in @(@{ Says = $true }, @{ Says = $false })) {
+            $arm = New-RetryArm
+            $says = [bool]$case.Says
+            $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('ptc', 'identity') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $arm)
+                    Save = { param($s) }; Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1
+                    StartEvidence = (New-Evidence) }
+            $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
+            $script:LogReads = New-Object System.Collections.Generic.List[string]
+            $script:Says = $says
+            $p.StepLogs = { param($Job, $StartedUtc, $EndedUtc)
+                $script:LogReads.Add([string]$Job)
+                $l = @('[INFO] reading the role definitions')
+                if ($script:Says) { $l += '[WARN] The daily classified tier catalog could not be downloaded, and this install has no tier catalog of its own yet: the step is skipped -- the collections use the catalog shipped with SecurityInsight, and the next run tries again.' }
+                [pscustomobject]@{ Name = 'run-logs/privilege-tier-classifier/x.log'; Lines = $l } }
+            $r = Invoke-SIJobFlow @p
+            $s = Get-Step $r 'ptc'
+            if ($says) {
+                $s.State | Should -Be 'Skipped'; $s.ErrorClass | Should -Be 'classifier-skipped'
+                $s.Error | Should -Match '^the tier classifier skipped this run'
+            } else { $s.State | Should -Be 'Success' }
+            (Get-Step $r 'identity').State | Should -Be 'Success'
+            $r.State | Should -Be 'Succeeded'
+            @($script:LogReads) | Should -Be @('ptc') -Because 'only the classifier''s successful step log is read, once'
+            $script:Ev.Probes.Count | Should -Be 0 -Because 'a run that succeeds is never probed'
+        }
     }
     It '3.0.30 WIRING: the container runner hands its step log reader to the step close' {
         $src = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'engine', 'flow', 'Invoke-SIJobFlowRun.ps1'))
         $src | Should -Match ([regex]::Escape('$retry.StepLogs = $stepLogs'))
     }
     It 'a run log in the window is a real failure too' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $null } -Logs @{ 'caj-si-ptc-e1' = $true })
-        (Get-Step $r 'ptc').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $null } -Logs @{ 'caj-si-endpoint-e1' = $true })
+        (Get-Step $r 'endpoint').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
     }
     It 'an EMPTY run-health store (no row of the engine) with the run logs unreadable is UNKNOWN: not retried' {
         $arm = New-RetryArm -Outcomes @{ 'asset-trend' = @('Failed', 'Succeeded') }
@@ -253,25 +280,25 @@ Describe 'the runner: everything else is a real failure and is never retried' {
         $r.State | Should -Be 'Failed'
     }
     It 'a store that says "no START row" while the run logs are unknown is not enough either' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $false })
-        (Get-Step $r 'ptc').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $false })
+        (Get-Step $r 'endpoint').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
     }
     It 'a probe that cannot read anything is unsure: not retried, said' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence (New-Evidence -Throw)
-        (Get-Step $r 'ptc').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence (New-Evidence -Throw)
+        (Get-Step $r 'endpoint').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
         ($script:Logs -join "`n") | Should -Match 'whether it started could not be checked'
     }
     It 'without a probe (the VM flow) nothing is retried and nothing waits' {
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
-        $r = Invoke-RetryFlow -Jobs @('ptc') -Arm $arm -Evidence $null
-        (Get-Step $r 'ptc').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence $null
+        (Get-Step $r 'endpoint').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
         $script:Sleeps | Should -Not -Contain 60
     }
     It 'a run that succeeds is never probed' {
         $arm = New-RetryArm
-        $null = Invoke-RetryFlow -Jobs @('ptc', 'identity') -Arm $arm -Evidence (New-Evidence)
+        $null = Invoke-RetryFlow -Jobs @('endpoint', 'publicip') -Arm $arm -Evidence (New-Evidence)
         $script:Ev.Probes.Count | Should -Be 0
     }
 }
@@ -333,11 +360,11 @@ Describe 'the evidence probe (container) and the record' {
         $sql = New-Object System.Collections.Generic.List[object]
         $inv = { param($q, $p, $mode) $sql.Add([pscustomobject]@{ Sql = $q; P = $p }); @() }.GetNewClosure()
         $store = New-SIJobFlowSqlStore -Invoke $inv
-        $arm = New-RetryArm -Outcomes @{ 'ptc' = @('Failed', 'Succeeded') }
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
         $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]
-        $d = New-SIDefaultJobFlow -Installed @('ptc') -Map $script:Map
+        $d = New-SIDefaultJobFlow -Installed @('endpoint') -Map $script:Map
         $null = Invoke-SIJobFlow -Definition $d -Seams (New-SIJobFlowArmSeams -SubscriptionId 's' -ResourceGroup 'r' -Arm $arm) -Store $store -Previous $null -Force `
-                    -Now $script:NowSb -Sleep $script:SleepSb -Log $script:LogSb -Map $script:Map -StartEvidence (New-Evidence -Rows @{ 'caj-si-ptc-e1' = $false } -Logs @{ 'caj-si-ptc-e1' = $false })
+                    -Now $script:NowSb -Sleep $script:SleepSb -Log $script:LogSb -Map $script:Map -StartEvidence (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $false } -Logs @{ 'caj-si-endpoint-e1' = $false })
         $last = @($sql | Where-Object { $_.Sql -match 'MERGE cfg.FlowStepRun' })[-1]
         $last.P.Attempts | Should -Be 2
         $last.P.RetryReason | Should -Match 'started again'
@@ -346,7 +373,7 @@ Describe 'the evidence probe (container) and the record' {
         # (the two columns in the Pro schema are proven by xunit FlowLocalSqlTests on a real SQL Server -- this free suite
         #  does not read Pro files: the Community edition does not contain them)
         # a record from before attempts were kept reads as 1 start (it has an execution) or 0
-        Get-SIJobFlowAttempts ([pscustomobject]@{ Execution = 'caj-si-ptc-a1' }) | Should -Be 1
+        Get-SIJobFlowAttempts ([pscustomobject]@{ Execution = 'caj-si-endpoint-a1' }) | Should -Be 1
         Get-SIJobFlowAttempts ([pscustomobject]@{ Execution = '' }) | Should -Be 0
         Get-SIJobFlowAttempts ([pscustomobject]@{ Execution = 'x'; Attempts = [DBNull]::Value }) | Should -Be 1
     }

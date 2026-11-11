@@ -17,7 +17,10 @@
           jobs; a stored pipeline that cannot be read keeps it;
       (c) no execution of it is Running or Processing;
       (d) no execution of it started after the split: later than one hour after the producer was created (an execution
-          in that first hour belongs to the move itself -- the old job loses its timer only after its producer is made);
+          in that first hour belongs to the move itself -- the old job loses its timer only after its producer is made).
+          Rule (d) holds only for a fixed time: until 14 days after the producer was created. After that, a run started
+          by hand after the split no longer keeps the job and the other conditions decide (a run going on now is still
+          kept by (c), always);
       (h) the producer has completed at least one collection (an execution that Succeeded) -- which also keeps the old
           job through the very update that made the split.
     Then ONE ARM DELETE of the job (the updater's own rights in its resource group), read back until it answers 404, and
@@ -38,6 +41,8 @@ $script:SIOldCollectJobNames = @('caj-si-azure', 'caj-si-endpoint', 'caj-si-iden
 $script:SIOldCollectArmApi = '2025-07-01'
 # an execution of the old job that started within this long after the producer was created belongs to the move itself
 $script:SIOldCollectAllowanceMinutes = 60
+# rule (d) -- a run after the split keeps the old job -- holds only this long after the producer was created
+$script:SIOldCollectAfterSplitHoldDays = 14
 
 function Get-SIOldCollectProp {
     <# PURE. A property of a parsed ARM object, $null when absent. #>
@@ -95,11 +100,13 @@ function Invoke-SIOldCollectJobRemoval {
     #>
     param([Parameter(Mandatory)][scriptblock]$Rest, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
           [AllowEmptyCollection()][object[]]$Jobs = @(), $Definition, [switch]$DefinitionUnreadable, $Map, [switch]$WhatIf,
-          [int]$PollSeconds = 5, [int]$PollMax = 24)
+          [int]$PollSeconds = 5, [int]$PollMax = 24, $Now)
     $results = New-Object System.Collections.Generic.List[object]
     $lines = New-Object System.Collections.Generic.List[string]
     $add = { param($j, $a, $l) $results.Add([pscustomobject]@{ Job = $j; Action = $a; Line = $l }); if ($l) { $lines.Add($l) } }
     try {
+        # -Now: the clock (tests); default the real UTC time
+        $nowUtc = $null; if ($null -ne $Now) { $nowUtc = ConvertTo-SIOldCollectUtc $Now }; if (-not $nowUtc) { $nowUtc = [datetime]::UtcNow }
         $arm = 'https://management.azure.com/'
         $call = {
             param([string]$Method, [string]$Uri)
@@ -165,7 +172,8 @@ function Invoke-SIOldCollectJobRemoval {
                 if (-not $created) { & $keep ('when {0} was created could not be read, so it is not known that the old job has not run since' -f $pName); continue }
                 $cut = $created.AddMinutes($script:SIOldCollectAllowanceMinutes)
                 $after = @($ox | Where-Object { $t = ConvertTo-SIOldCollectUtc (Get-SIOldCollectProp $_ @('properties', 'startTime')); $t -and $t -gt $cut })
-                if ($after.Count) { & $keep ('it has run since the collection was split in parts ({0}, started {1:yyyy-MM-dd HH:mm} UTC)' -f [string](Get-SIOldCollectProp $after[0] @('name')), (ConvertTo-SIOldCollectUtc (Get-SIOldCollectProp $after[0] @('properties', 'startTime')))); continue }
+                # (d) holds only until 14 days after the producer was created; after that the other conditions decide
+                if ($after.Count -and $nowUtc -le $created.AddDays($script:SIOldCollectAfterSplitHoldDays)) { & $keep ('it has run since the collection was split in parts ({0}, started {1:yyyy-MM-dd HH:mm} UTC)' -f [string](Get-SIOldCollectProp $after[0] @('name')), (ConvertTo-SIOldCollectUtc (Get-SIOldCollectProp $after[0] @('properties', 'startTime')))); continue }
                 # (h) the producer has completed a collection
                 $px = & $execs $pName
                 if ($null -eq $px) { & $keep ('the runs of {0} could not be read; the next update looks again' -f $pName); continue }

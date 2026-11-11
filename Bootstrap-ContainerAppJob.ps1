@@ -508,7 +508,7 @@ $cfgTooLarge = @($cfgPass.EnvArgs | Where-Object { $_.Length -gt 4096 } | ForEac
 Write-Host ('[config] {0} setting(s) from {1} go to every job{2}' -f $cfgEnvArgs.Count, (Split-Path -Leaf $customFile), $(if (@($cfgPass.Refused).Count) { "; NOT passed (secrets travel only as secrets): $(@($cfgPass.Refused) -join ', ')" } else { '' }))
 if ($cfgTooLarge.Count) { Write-Warning ('[config] too large for an environment variable, not passed: {0}' -f ($cfgTooLarge -join ', ')) }
 
-# The classifier only with Azure OpenAI (without it every role would become Tier 99 and replace the shipped catalog).
+# The classifier with or without Azure OpenAI: without it, it downloads the daily classified catalog (owner 2026-11-11).
 $engineSel = Select-SIBootstrapEngines -Engines $Engines -HaveOpenAi ([bool]$haveOpenAiSettings)
 $Engines = @($engineSel.Engines)
 if ($engineSel.Note) { Write-Host ('[engines] {0}' -f $engineSel.Note) -ForegroundColor Yellow }

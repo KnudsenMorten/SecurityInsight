@@ -15,7 +15,7 @@
   "defaultTimeoutMinutes": 240,
   "jobs": [
     { "key": "updater", "defaultCron": "30 16,17 * * *", "engine": "updater", "needs": [], "neverInFlow": true, "ownSchedule": true },
-    { "key": "ptc", "stage": "collect", "defaultCron": "0 1 * * *", "engine": "privilege-tier-classifier", "needs": [], "timeoutMinutes": 180 },
+    { "key": "ptc", "stage": "collect", "defaultCron": "0 1 * * *", "engine": "privilege-tier-classifier", "needs": [], "timeoutMinutes": 180, "required": true, "requiredWhy": "every pipeline runs it first -- it keeps the privilege tier catalog current (built with AI, or the daily classified catalog downloaded); a failed download keeps the last good catalog and the run goes on" },
     { "key": "identity", "stage": "collect", "defaultCron": "30 4 * * *", "engine": "identity", "needs": [ "ptc" ] },
     { "key": "azure", "stage": "collect", "defaultCron": "0 5 * * *", "engine": "azure", "needs": [ "ptc" ], "reads": [ "identity" ] },
     { "key": "endpoint", "stage": "collect", "defaultCron": "0 4 * * *", "engine": "endpoint", "needs": [ "ptc" ], "reads": [ "identity" ] },
@@ -31,7 +31,7 @@
     { "key": "asset-vulns-servicenow", "stage": "deliver", "defaultCron": "15 10 * * *", "engine": "asset-vulnerabilities-servicenow", "needs": [ "risk-analysis-detailed", "asset-cmdb" ], "startsWhenReady": true, "runsWithoutNiceToHave": true, "brings": "the vulnerability tickets" },
     { "key": "asset-datasync", "stage": "deliver", "defaultCron": "30 10 * * *", "engine": "asset-datasync", "needs": [ "risk-analysis-detailed", "asset-vulnerabilities" ], "startsWhenReady": true, "runsOnStored": true, "runsWithoutNiceToHave": true },
     { "key": "close-loop-mail", "stage": "deliver", "defaultCron": "45 10 * * *", "engine": "close-loop-mail", "needs": [ "asset-datasync", "asset-vulnerabilities", "asset-vulns-servicenow" ], "brings": "the daily mail" },
-    { "key": "verification", "stage": "deliver", "defaultCron": "0 11 * * *", "engine": "verification", "needs": [ "ptc", "identity", "azure", "endpoint", "publicip" ], "runsOnStored": true, "required": true },
+    { "key": "verification", "stage": "deliver", "defaultCron": "0 11 * * *", "engine": "verification", "needs": [ "ptc", "identity", "azure", "endpoint", "publicip" ], "runsOnStored": true, "required": true, "requiredWhy": "every pipeline has it -- it runs the daily data health check (its off switch is the setting SI_DataHealth_Enabled)" },
     { "key": "asset-tagging", "stage": "deliver", "defaultCron": "50 5 * * *", "engine": "asset-tagging", "needs": [ "endpoint" ] },
     { "key": "templates", "engine": "templates-publish", "needs": [], "neverInFlow": true },
     { "key": "schema", "defaultCron": "0 3 * * 0", "engine": "schema-discovery", "needs": [], "neverInFlow": true },

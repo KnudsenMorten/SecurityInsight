@@ -888,15 +888,18 @@ function Get-SIRaJobEnvArgs {
 
 function Select-SIBootstrapEngines {
     <#
-        PURE. The engines setup deploys. The privilege-tier classifier is left out when Azure OpenAI is not configured:
-        without it every role it classifies becomes Tier 99 (manual review), and that catalog would replace the shipped
-        one the profilers use. Returns @{ Engines; Note } -- Note is the one line setup prints, empty when nothing changed.
+        PURE. The engines setup deploys. The privilege-tier classifier is deployed with or without Azure OpenAI (owner
+        2026-11-11: every install tiers from a CURRENT classified catalog): without Azure OpenAI it downloads the daily
+        classified catalog (engine/_shared/SI-TierCatalogDownload.ps1) and keeps the tenant's own custom roles at the tier
+        they had. Earlier versions left it out without Azure OpenAI (every role would then have been Tier 99) -- which left
+        such an install on the shipped catalog for good. Returns @{ Engines; Note } -- Note is the one line setup prints,
+        empty when there is nothing to say.
     #>
     param([string[]]$Engines = @(), [bool]$HaveOpenAi)
     $list = @($Engines)
     if (-not $HaveOpenAi -and $list -contains 'privilege-tier-classifier') {
-        return [pscustomobject]@{ Engines = @($list | Where-Object { $_ -ne 'privilege-tier-classifier' })
-            Note = 'The privilege-tier classifier job is not deployed: Azure OpenAI is not configured, and without it every role would be classified Tier 99 (manual review). The shipped tier catalog is used; configure Azure OpenAI and run setup again to add the job.' }
+        return [pscustomobject]@{ Engines = $list
+            Note = 'Azure OpenAI is not configured: the privilege-tier classifier downloads the daily classified tier catalog instead of building it with AI.' }
     }
     [pscustomobject]@{ Engines = $list; Note = '' }
 }

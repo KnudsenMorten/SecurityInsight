@@ -4956,6 +4956,17 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
   # window has usually passed. Never split: splitting multiplies calls against a throttling API.
   $deferredBucketIndices = New-Object System.Collections.Generic.List[int]
   Reset-RABucketLoss   # audit #62 -- per-report, so one report's losses never leak into the next
+  # #1200: this report's own recovery time budget (late retries + smaller slices); its clock starts at its first retry-class recovery
+  $__rb = New-RARecoveryBudget -Minutes (Get-RARecoveryBudgetMinutes -Value $global:SI_RA_RecoveryBudgetMinutes)
+  # the clock starts once; with it the recovery's progress ticker (PROGRESS-TICK-1: at most every 3 minutes, while calls are made)
+  $__rbStart = {
+      if (Start-RARecoveryBudget -Budget $__rb) {
+          if ([int]$__rb.Minutes -gt 0) { Write-Info ("recovery of '{0}': its time budget is {1} min from now (late retries and smaller slices together)" -f $ReportName, $__rb.Minutes) }
+          if (Get-Command -Name New-RAProgressTicker -ErrorAction SilentlyContinue) {
+              $__rb.Ticker = New-RAProgressTicker -Stream $(if ($script:RAStreamOn) { $script:RAStream } else { $null }) -What ("recovery of report '{0}'" -f $ReportName) -Unit 'query slices asked again' -Log { param($l, $t) Write-Info $t }
+          }
+      }
+  }
 
   # #401 -- set once a bucket returned the COMPLETE result (see $bucketIsComplete below).
   $completeBucketDone = $false
@@ -5446,7 +5457,10 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       # is asked again in a next pass only while the pass before recovered a slice -- a pass that recovers nothing stops it
       $__lp = New-RALatePasses -Pending @($deferredBucketIndices.ToArray())
       $__lpErr = @{}; $__lpBusy = @{}
-      while (Step-RALatePasses -State $__lp) {
+      # #1200: the report's recovery clock starts at its first late retry; a spent budget starts no further pass or attempt
+      & $__rbStart
+      $__rbNotRead = @{}   # slice index -> its last error: left unread by the spent budget in the current pass
+      while (-not (Test-RARecoveryBudgetSpent -Budget $__rb) -and (Step-RALatePasses -State $__lp)) {
       if ($__lp.Pass -gt 1) {
           Write-Warn2 ("late retry: pass {0} of '{1}' -- {2} slice(s) still refused; the pass before recovered {3}, so they are asked again (a pass that recovers nothing ends it)" -f `
             $__lp.Pass, $ReportName, @($__lp.Current).Count, $__lp.RecoveredLastPass)
@@ -5457,14 +5471,19 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
           $dbQuery = Replace-BucketFilterBlock -Query $Query -BucketFilterKql (New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $db -ReportName $ReportName)
           $dbDone = $false
           $dbResult = 'gone'
+          $dbErr = [string]$__lpErr[[int]$db]
           for ($la = 1; $la -le $lateRetries -and -not $dbDone; $la++) {
+              # #1200: no NEW call once the report's recovery budget is spent (asked before the pause and again after it)
+              if (Test-RARecoveryBudgetSpent -Budget $__rb) { $__rbNotRead[[int]$db] = [string]$dbErr; $dbDone = $true; break }
               # Longer than the in-loop backoff on purpose: this bucket already failed its fast retries.
               $lateSleep = Get-RABucketRetryDelaySeconds -Attempt ($la + 1) -BaseSeconds 60 -MaxSeconds 600
               Write-Info ("late retry: bucket {0}/{1} attempt {2}/{3} after {4}s" -f $dbNo, $bucketCountToUse, $la, $lateRetries, $lateSleep)
               Start-Sleep -Seconds $lateSleep
+              if (Test-RARecoveryBudgetSpent -Budget $__rb) { $__rbNotRead[[int]$db] = [string]$dbErr; $dbDone = $true; break }
               Invoke-RABucketReauth
               $script:_CurrentBucketCount = $bucketCountToUse
               $script:_CurrentBucketIndex = $db
+              Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
               try {
                   $__abLateSw = [System.Diagnostics.Stopwatch]::StartNew()   # #880: a recovered slice is measured like every other
                   $dbResp = Invoke-GraphHuntingQuery -Query $dbQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
@@ -5525,6 +5544,16 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
           }
           Set-RALatePassResult -State $__lp -Index ([int]$db) -Result $dbResult
       }
+      }
+      # #1200: the budget was spent -- every slice still refused (queued for a next pass, or not asked again in this one) is a
+      # named loss now: never split into more calls, never read as resolved
+      if (Test-RARecoveryBudgetSpent -Budget $__rb) {
+          foreach ($db in @($__lp.Next.ToArray()) + @($__lp.Left)) { if (-not $__rbNotRead.ContainsKey([int]$db)) { $__rbNotRead[[int]$db] = [string]$__lpErr[[int]$db] } }
+          $__lp.Left = [int[]]@()
+          foreach ($db in @($__rbNotRead.Keys | Sort-Object)) {
+              Add-RABucketLoss (Format-RARecoveryBudgetLoss -Slice ('bucket {0}/{1}' -f ([int]$db + 1), $bucketCountToUse) -Minutes ([int]$__rb.Minutes) -LastError ([string]$__rbNotRead[$db]))
+              $__rb.Lost = [int]$__rb.Lost + 1
+          }
       }
       # #882: a whole pass recovered nothing -- what is still refused is a named loss (the report is NOT COMPLETE and keeps its
       # last complete result, #877); never fewer rows silently
@@ -5663,6 +5692,15 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
           $pRI     = if ($item.ContainsKey('RI')) { [long]$item.RI } else { 0L }
           $pAgain  = ($pHow -eq 'again')
           $pRounds = if ($item.ContainsKey('A')) { [int]$item.A } else { 0 }
+          # #1200: the report's recovery budget is spent -- this slice (queued to be asked again or split) is not asked: a named
+          # loss, its rows unknown. The queue is drained this way, so the report ends now and the step moves on.
+          if (Test-RARecoveryBudgetSpent -Budget $__rb) {
+              $__rbSl = if ($pRC -gt 1) { ('sub-bucket {0}/{1} row part {2}/{3} (depth {4}) of bucket {5}' -f $pN, $pT, $pRI, $pRC, $depth, ($root + 1)) } else { ('sub-bucket {0}/{1} (depth {2}) of bucket {3}' -f $pN, $pT, $depth, ($root + 1)) }
+              Add-RABucketLoss (Format-RARecoveryBudgetLoss -Slice $__rbSl -Minutes ([int]$__rb.Minutes))
+              $__rb.Lost = [int]$__rb.Lost + 1
+              if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }
+              continue
+          }
           $newT    = if ($pHow -eq 'row' -or $pAgain) { $pT } else { $pT * $subFanOut }
           $kids    = if ($pAgain) { 1 } else { $subFanOut }
           # #880: a deeper key split runs only while the split reduced the failure of this bucket (measured, see above) -- a
@@ -5735,7 +5773,16 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               $subAttempt = 0
               $subDone    = $false
               while (-not $subDone) {
+                  # #1200: no NEW call once the report's recovery budget is spent -- this smaller slice is a named loss
+                  if (Test-RARecoveryBudgetSpent -Budget $__rb) {
+                      Add-RABucketLoss (Format-RARecoveryBudgetLoss -Slice ('sub-bucket depth={0} parent={1}/{2} sub={3}/{4}' -f $depth, $pN, $pT, ($j + 1), $subFanOut) -Minutes ([int]$__rb.Minutes) -LastError $(if ($subAttempt -gt 0) { [string]$subErr } else { '' }))
+                      $__rb.Lost = [int]$__rb.Lost + 1
+                      if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }
+                      $subDone = $true
+                      continue
+                  }
                   $subAttempt++
+                  Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
                   $__abSubSw = [System.Diagnostics.Stopwatch]::StartNew()   # #737
                   try {
                       $subResp = Invoke-GraphHuntingQuery -Query $subQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
@@ -5819,7 +5866,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                       # #880: a busy answer is the backend's load -- counted as busy evidence for the bucket (never its size)
                       $__subBusy = ($subAction -eq 'Retry') -and (Test-RABucketBusyAnswer -Err $_)
                       if ($__subBusy) { $__abBusySlices++; if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Busy = [int]$__abSplitSlices[$root].Busy + 1 } }
+                      # #1200: a smaller slice refused as busy / throttled / timed out is retry-class recovery -- the clock runs from here
+                      # at the latest (a split only for size never starts it)
+                      if ($subAction -eq 'Retry') { & $__rbStart }
                       if ($subAction -eq 'Retry' -and $subAttempt -lt $subTransientRetries) {
+                          # #1200: a spent budget pauses for no retry -- the loop's top closes the slice as a named loss
+                          if (Test-RARecoveryBudgetSpent -Budget $__rb) { continue }
                           $subSleep = Get-RABucketRetryDelaySeconds -Attempt $subAttempt -Err $_
                           $__subWhyRetry = if ($__subBusy) { 'Defender is busy (preempted for its load, not refused for its size)' } else { 'the API is throttling or had an issue' }
                           Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {9} -- re-auth + retry {5}/{6} after {7}s (same size). Error: {8}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subAttempt, $subTransientRetries, $subSleep, $subErr, $__subWhyRetry)
@@ -5917,6 +5969,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       }   # v2.2.363 -- close `else` branch of $allOuterFailedWithEgSuppressed
   }
 
+  # #1200: the report's recovery budget ended its recovery -- said once, in plain words (the lost slices are named above and in
+  # the report's INCOMPLETE verdict; the report and the run are partial for it, and the next run asks the report in full)
+  if ([bool]$__rb.Spent -and [int]$__rb.Lost -gt 0) {
+      Write-Warn2 (Format-RARecoveryBudgetLine -ReportName $ReportName -ElapsedMinutes (Get-RARecoveryBudgetElapsedMinutes -Budget $__rb) -NotRead ([int]$__rb.Lost))
+  }
+
   # Success: all buckets executed (sub-bucketing pass handled any deterministic
   # timeouts). Even if some sub-bucket slices were given up at max depth, the
   # report is considered "as complete as possible" -- no point restarting.
@@ -6004,7 +6062,12 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
     $__abLower = 0
     if (-not $__abFar -and (Test-AutoBucketSqlActive) -and (Get-Command -Name Get-SIRaBucketCompleteLowerCount -ErrorAction SilentlyContinue)) {
       $__abFp = ''; $__abKp = Split-SIRaBucketKey -Key $queryKey; if ($__abKp) { $__abFp = [string]$__abKp.Fingerprint }
-      $__abLower = Get-SIRaBucketCompleteLowerCount -Count ([int]$bucketCountToUse) -History @($script:AutoBucketSql.History[$ReportName] | Where-Object { $_ }) -Fingerprint $__abFp
+      # #1202 (3): only complete runs that carried a request as large as this run's prove a lower count (an embedded lookup
+      # that grew since makes the lower count too small again -- the 4 <-> 8 swing)
+      $__abReqNow = Get-AutoBucketRequestMeasure -Measure $script:AutoBucketMeasure
+      $__abNow = [pscustomobject]@{ RequestRows = $__abReqNow.Rows; RequestBytesPerRow = $__abReqNow.BytesPerRow; RequestOverheadBytes = $__abReqNow.OverheadBytes
+                                    MaxRequestBytes = $(if ($script:AutoBucketMeasure -and $script:AutoBucketMeasure.PSObject.Properties['MaxRequestBytes']) { $script:AutoBucketMeasure.MaxRequestBytes } else { 0 }) }
+      $__abLower = Get-SIRaBucketCompleteLowerCount -Count ([int]$bucketCountToUse) -History @($script:AutoBucketSql.History[$ReportName] | Where-Object { $_ }) -Fingerprint $__abFp -Current $__abNow -CurrentSentAt ([int]$bucketCountToUse)
     }
     if ($__abFar -or $__abLower -gt 0) {
       $__abHalfFloor = if ($__abFar) { [int]$__abLearnFloor } else { [int][Math]::Max([int]$__abLearnFloor, $__abLower) }

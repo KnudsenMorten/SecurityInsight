@@ -105,6 +105,9 @@ function Get-SIDataHealthRaAssetsSql {
         Check (b)'s population: the in-scope assets of the newest complete Detailed collection that HOLD vulnerability
         findings, with their Defender for Endpoint device id (the CI's mde record, else the asset id Risk Analysis wrote),
         and the collection's time (CollectionTime -- what a change in Defender is judged against, #747).
+        The CI's mde record is picked in a FIXED order (Get-SIDataHealthMdeRecordApply): a CI can hold more than one Defender
+        device record (a device onboarded again), and an unordered TOP (1) could pick one record here and another in the
+        stored-findings read -- the device's findings then do not join and the device looks "not in any report" (#1185).
     #>
     @'
 SET NOCOUNT ON;
@@ -114,28 +117,99 @@ SELECT @c AS CollectionId, @ct AS CollectionTime, x.MdeId, MAX(x.AssetName) AS N
 FROM (
     SELECT LOWER(COALESCE(mr.MdeId, CASE WHEN f.RaAssetId LIKE N'[0-9a-f]%' AND LEN(f.RaAssetId) = 40 THEN f.RaAssetId END)) AS MdeId, f.AssetName
     FROM sidata.Finding AS f
-    OUTER APPLY (SELECT TOP (1) SUBSTRING(r.RecordKey, 5, 450) AS MdeId FROM sidata.CiRecord AS r WHERE r.CiId = f.AssetKey AND r.Provider = N'mde' AND r.RecordType = N'device') AS mr
+    {MDEAPPLY}
     WHERE f.CollectionId = @c AND f.Cve LIKE N'CVE-%' AND f.CarriedFrom IS NULL
 ) AS x
 WHERE x.MdeId IS NOT NULL
 GROUP BY x.MdeId;
-'@
+'@.Replace('{MDEAPPLY}', (Get-SIDataHealthMdeRecordApply))
+}
+
+function Get-SIDataHealthMdeRecordApply {
+    <# The CI's Defender device record, ONE and always the same one: the most recently seen, then the newest collected, then
+       by key. Both reads of check (b) use this text, so a device is the same device in both (#1185). #>
+    "OUTER APPLY (SELECT TOP (1) SUBSTRING(r.RecordKey, 5, 450) AS MdeId FROM sidata.CiRecord AS r WHERE r.CiId = f.AssetKey AND r.Provider = N'mde' AND r.RecordType = N'device' ORDER BY r.SourceLastSeen DESC, r.CollectionTime DESC, r.RecordKey) AS mr"
 }
 
 function Get-SIDataHealthRaFindingsSql {
-    <# The stored vulnerability findings of the sampled assets (@MdeIds: a JSON array) in the newest complete Detailed
-       collection, per report. #>
+    <# The stored vulnerability findings of the sampled assets (@MdeIds: a JSON array) per report, in the collection the
+       sampled assets were taken from (@CollectionId, from Get-SIDataHealthRaAssetsSql; NULL = the newest complete Detailed
+       collection). Re-resolving "the newest" here could land on another collection than the population's -- the Defender
+       reads in between take minutes (#1185). Every row carries Total: how many rows the statement returns (one statement,
+       one snapshot), so the reader can prove it read them all. #>
     @'
 SET NOCOUNT ON;
-DECLARE @c INT = (SELECT TOP (1) CollectionId FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = N'Complete' ORDER BY CollectionTime DESC);
+DECLARE @c INT = TRY_CONVERT(INT, @CollectionId);
+IF @c IS NULL SET @c = (SELECT TOP (1) CollectionId FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = N'Complete' ORDER BY CollectionTime DESC);
 DECLARE @ids TABLE (MdeId NVARCHAR(64) NOT NULL PRIMARY KEY);
 INSERT @ids SELECT DISTINCT LOWER(LEFT([value], 64)) FROM OPENJSON(@MdeIds) WHERE [value] IS NOT NULL;
-SELECT DISTINCT i.MdeId, f.ReportName AS Report, UPPER(f.Cve) AS Cve
-FROM sidata.Finding AS f
-OUTER APPLY (SELECT TOP (1) SUBSTRING(r.RecordKey, 5, 450) AS MdeId FROM sidata.CiRecord AS r WHERE r.CiId = f.AssetKey AND r.Provider = N'mde' AND r.RecordType = N'device') AS mr
-JOIN @ids AS i ON i.MdeId = LOWER(COALESCE(mr.MdeId, f.RaAssetId))
-WHERE f.CollectionId = @c AND f.Cve LIKE N'CVE-%' AND f.CarriedFrom IS NULL;
-'@
+SELECT d.MdeId, d.Report, d.Cve, COUNT_BIG(*) OVER () AS Total
+FROM (
+    SELECT DISTINCT i.MdeId, f.ReportName AS Report, UPPER(f.Cve) AS Cve
+    FROM sidata.Finding AS f
+    {MDEAPPLY}
+    JOIN @ids AS i ON i.MdeId = LOWER(COALESCE(mr.MdeId, f.RaAssetId))
+    WHERE f.CollectionId = @c AND f.Cve LIKE N'CVE-%' AND f.CarriedFrom IS NULL
+) AS d;
+'@.Replace('{MDEAPPLY}', (Get-SIDataHealthMdeRecordApply))
+}
+
+function Test-SIDataHealthStoredFindingsComplete {
+    <#
+        PURE (#1185). Did the stored-findings read come back WHOLE? -Rows: what the reader returned; -MdeIds: the sampled
+        devices asked about. Every sampled device holds findings in that collection (that is how it was picked), so:
+          * a row's Total (how many rows the statement returned) above the rows read = the reader ended early;
+          * a sampled device with no row at all = its findings were not read.
+        A read that is not whole proves nothing about the data. Returns @{ Complete; Read; Total ($null when the rows carry
+        none); DevicesMissing; Why }.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [AllowEmptyCollection()][string[]]$MdeIds = @())
+    $rs = @($Rows | Where-Object { $null -ne $_ })
+    $total = $null
+    foreach ($r in $rs) {
+        $t = Get-SIDataHealthItem $r 'Total'
+        if ($null -ne $t -and "$t" -match '^\d+$') { $total = [long]"$t"; break }
+    }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in $rs) { $m = [string](Get-SIDataHealthItem $r 'MdeId'); if ($m) { [void]$seen.Add($m.Trim()) } }
+    $want = @($MdeIds | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() } | Select-Object -Unique)
+    $absent = @($want | Where-Object { -not $seen.Contains($_) }).Count
+    $why = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $total -and $rs.Count -lt $total) { $why.Add(('{0:N0} of {1:N0} stored finding row(s) were read' -f $rs.Count, $total)) }
+    if ($absent -gt 0) { $why.Add(('{0} of {1} sampled device(s) came back without their stored findings' -f $absent, $want.Count)) }
+    [pscustomobject]@{ Complete = [bool]($why.Count -eq 0); Read = [long]$rs.Count; Total = $total; DevicesMissing = [long]$absent; Why = ($why.ToArray() -join '; ') }
+}
+
+function Read-SIDataHealthStoredFindings {
+    <#
+        Check (b)'s stored findings, read WHOLE or not at all (#1185). One read (Get-SIDataHealthRaFindingsSql) verified by
+        Test-SIDataHealthStoredFindingsComplete; a read that fails or comes back short is read again after a pause (-Waits,
+        seconds; one more read per pause). Still not whole: Complete = $false and the reason -- the caller says the check
+        could not read, never that data is missing. Returns @{ Complete; Rows; Attempts; Why }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [AllowEmptyCollection()][string[]]$MdeIds = @(), [AllowNull()]$CollectionId,
+          [int[]]$Waits = @(15, 60), [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          [scriptblock]$Log = { param($level, $msg) })
+    $cid = $null; if ($null -ne $CollectionId -and "$CollectionId" -match '^\d+$') { $cid = [int]"$CollectionId" }
+    $params = @{ MdeIds = (ConvertTo-SIDataHealthJsonArray -Items $MdeIds); CollectionId = $cid }
+    $attempts = 1 + @($Waits).Count
+    $why = ''
+    for ($a = 1; $a -le $attempts; $a++) {
+        try {
+            $rows = @(Read-SIDataHealthRows -Invoke $Invoke -Sql (Get-SIDataHealthRaFindingsSql) -Params $params)
+            $chk = Test-SIDataHealthStoredFindingsComplete -Rows $rows -MdeIds $MdeIds
+            if ($chk.Complete) { return [pscustomobject]@{ Complete = $true; Rows = $rows; Attempts = $a; Why = '' } }
+            $why = 'the read came back short: ' + $chk.Why
+        } catch {
+            $why = 'the read failed: ' + (([string]$_.Exception.Message) -split "`n")[0].Trim()
+        }
+        if ($a -lt $attempts) {
+            $w = [int]@($Waits)[$a - 1]
+            & $Log 'INFO' ('the stored vulnerability findings were not read whole ({0}) -- reading them again in {1} s ({2}/{3})' -f $why, $w, $a, ($attempts - 1))
+            if ($w -gt 0) { & $Sleep $w }
+        }
+    }
+    [pscustomobject]@{ Complete = $false; Rows = @(); Attempts = $attempts; Why = $why }
 }
 
 function ConvertTo-SIDataHealthJsonArray {

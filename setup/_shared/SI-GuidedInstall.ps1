@@ -4123,11 +4123,9 @@ function Invoke-SIGuidedInstallRun {
     }
     $ctx.Names = Get-SIInstallNames -Values $ctx.Values -Explicit $ctx.Explicit -Edition $edition -InstallId $ctx.InstallId
     $ctx.Engines = @($script:SIInstallCommunityEngines)
-    # The privilege-tier classifier needs Azure OpenAI: without it Bootstrap leaves the job out on purpose (every role
-    # would become Tier 99 and replace the shipped catalog -- Select-SIBootstrapEngines). An install without AI
-    # classification therefore never expects that job (live 2026-10-06, Community rehearsal: "These engine jobs were not
-    # created: caj-si-ptc").
-    if (-not [bool]$ctx.Values['aiClassification']) { $ctx.Engines = @($ctx.Engines | Where-Object { $_ -ne 'privilege-tier-classifier' }) }
+    # The privilege-tier classifier is made with or without AI classification (owner 2026-11-11: every install tiers from a
+    # CURRENT classified catalog): without Azure OpenAI it downloads the daily classified catalog (Select-SIBootstrapEngines
+    # keeps it). Earlier versions left it out without AI, and the install stayed on the shipped catalog.
     # owner 2026-11-02 ("license will come automatically when env is deployed. then i login and add"): the FULL package
     # creates the Pro engine jobs also without a licence -- each one checks the licence when it runs and skips until
     # SI-License is in the vault, so adding the licence later needs no second install (a later update re-creates only some).

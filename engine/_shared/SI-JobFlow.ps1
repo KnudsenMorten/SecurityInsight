@@ -106,6 +106,8 @@ function Get-SIJobFlowMap {
                                                    HeldBy = @($(if ($j.PSObject.Properties['heldBy']) { @($j.heldBy) | Where-Object { $_ } | ForEach-Object { [string]$_ } }))
                                                    # #748 'required': the update adds the step to a stored pipeline without it (where its job is installed)
                                                    Required = $(if ($j.PSObject.Properties['required']) { [bool]$j.required } else { $false })
+                                                   # 'requiredWhy': the plain words the update says when it adds that step (and the web app when it keeps it)
+                                                   RequiredWhy = $(if ($j.PSObject.Properties['requiredWhy']) { [string]$j.requiredWhy } else { '' })
                                                    # #636 'defaultEnabled': false = a new pipeline has the step switched off (Risk Analysis Summary)
                                                    DefaultEnabled = $(if ($j.PSObject.Properties['defaultEnabled']) { [bool]$j.defaultEnabled } else { $true })
                                                    # #1038 (1) 'manualOnly': only ever STARTED (the data-out job: by the data sync on its mark and by
@@ -735,7 +737,13 @@ function Add-SIJobFlowRequiredStep {
     $d.Steps = $steps.ToArray()
     $notes = New-Object System.Collections.Generic.List[string]
     if ($Definition.PSObject.Properties['MigrationNotes']) { foreach ($n in @($Definition.MigrationNotes)) { if ($n) { $notes.Add([string]$n) } } }
-    foreach ($k in $added) { $notes.Add(('{0} is now a step of the pipeline: every pipeline has it -- it runs the daily data health check (its off switch is the setting SI_DataHealth_Enabled)' -f $k)) }
+    # each step with its own words (the map's 'requiredWhy'; the privilege tier classifier, owner 2026-11-11, comes first in
+    # Collect: its default place, before the identity collection)
+    foreach ($k in $added) {
+        $why = [string]$Map.Jobs[$k].RequiredWhy
+        if (-not $why) { $why = 'every pipeline has it' }
+        $notes.Add(('{0} is now a step of the pipeline: {1}' -f $k, $why))
+    }
     $d | Add-Member -NotePropertyName Migrated -NotePropertyValue $true -Force
     $d | Add-Member -NotePropertyName MigrationNotes -NotePropertyValue $notes.ToArray() -Force
     $d
@@ -1046,6 +1054,8 @@ function Get-SIJobFlowBlocked {
             if (-not $stopped) { $stopped = $true; $why = Get-SIJobFlowStoppedText -Job ([string]$st.Job) -Run }
             continue
         }
+        # the tier classifier never fails the pipeline (owner 2026-11-11): what needs it runs on the last known catalog
+        if (Test-SIPipelineClassifierSkipped $st) { continue }
         $def = @(@($Definition.Steps) | Where-Object { $_.Job -eq $st.Job })[0]
         $mode = if ($def) { [string]$def.OnFailure } else { 'skip-dependents' }
         if ($mode -eq 'stop' -and -not $stopped) { $stopped = $true; $why = ('{0} {1} -- the flow stops there (on failure: stop)' -f $st.Job, $st.State.ToLowerInvariant()) }
@@ -1140,7 +1150,8 @@ function Get-SIJobFlowStartRecordQuery {
      "| summarize Mine = countif(TimeGenerated > datetime({0}) and Phase == 'Start' and Execution == '{1}' and not(Engine startswith 'flow')), " +
      "Stamped = countif(Engine == '{2}' and isnotempty(Execution)), " +
      "Throttled = countif(TimeGenerated > datetime({0}) and Phase == 'End' and Execution == '{1}' and not(Engine startswith 'flow') and tostring(ExitReason) == 'throttled'), " +
-     "EndOther = countif(TimeGenerated > datetime({0}) and Phase == 'End' and Execution == '{1}' and not(Engine startswith 'flow') and tostring(ExitReason) !in ('throttled', 'success'))") -f $from, $Execution, $Engine
+     "EndOther = countif(TimeGenerated > datetime({0}) and Phase == 'End' and Execution == '{1}' and not(Engine startswith 'flow') and tostring(ExitReason) !in ('throttled', 'success', 'skipped')), " +
+     "Skipped = countif(TimeGenerated > datetime({0}) and Phase == 'End' and Execution == '{1}' and not(Engine startswith 'flow') and tostring(ExitReason) == 'skipped')") -f $from, $Execution, $Engine
 }
 
 function Test-SIJobFlowTranscriptInWindow {
@@ -1191,7 +1202,9 @@ function New-SIJobFlowStartEvidence {
                         # #532: the engine of this execution recorded END 'throttled' and no other failure -- throttled
                         if ($r.Count -and $r[0].PSObject.Properties['Throttled']) {
                             $other = if ($r[0].PSObject.Properties['EndOther']) { [long]$r[0].EndOther } else { 0 }
-                            $endReason = if ([long]$r[0].Throttled -gt 0 -and $other -eq 0) { 'throttled' } elseif ($other -gt 0) { 'failed' } else { $null }
+                            $skp = if ($r[0].PSObject.Properties['Skipped']) { [long]$r[0].Skipped } else { 0 }
+                            # owner 2026-11-11: the tier classifier's END 'skipped' (the first run without any catalog)
+                            $endReason = if ([long]$r[0].Throttled -gt 0 -and $other -eq 0) { 'throttled' } elseif ($other -gt 0) { 'failed' } elseif ($skp -gt 0) { 'skipped' } else { $null }
                         }
                     }
                 } catch { $row = $null; $endReason = $null }
@@ -1763,6 +1776,12 @@ function Get-SIJobFlowEndedExecutionCloses {
             }
         }
         if (-not $s) { continue }
+        # the tier classifier never fails the pipeline (owner 2026-11-11): its failed execution whose end the runner never saw is
+        # closed SKIPPED -- what needs it runs on the last known catalog, and the run is not failed for it
+        if ($s -eq 'Failed' -and (Test-SIPipelineClassifierJob ([string]$st.Job))) {
+            $s = 'Skipped'; $cls = 'classifier-skipped'
+            $err = 'the privilege tier classifier''s end was not seen -- treated as skipped, the last known catalog is used'
+        }
         $out.Add([pscustomobject]@{ Order = [int]$st.Order; Job = [string]$st.Job; Execution = $ex; Status = $status; State = $s; ErrorClass = $cls; Error = $err; EndedUtc = $end })
     }
     $out.ToArray()
@@ -1793,7 +1812,7 @@ function Get-SIJobFlowSaveJson {
     foreach ($st in @($State.Steps)) {
         if (-not $st -or [string]$st.State -ne 'Running' -or -not [string]$st.Execution) { continue }
         $was = @($Stored.Steps | Where-Object { $_ -and [int]$_.Order -eq [int]$st.Order })[0]
-        if ($was -and [string]$was.Execution -eq [string]$st.Execution -and [string]$was.State -in @('Success', 'Failed', 'Interrupted', 'TimedOut')) { $keep[[int]$st.Order] = $was }
+        if ($was -and [string]$was.Execution -eq [string]$st.Execution -and ([string]$was.State -in @('Success', 'Failed', 'Interrupted', 'TimedOut') -or (Test-SIPipelineClassifierSkipped $was))) { $keep[[int]$st.Order] = $was }
     }
     if (-not $keep.Count) { return $json }
     $copy = ConvertFrom-SIJobFlowRunJson -Json $json
@@ -2424,10 +2443,13 @@ function Invoke-SIJobFlow {
         } catch {
             $st.State = 'Failed'; $st.ErrorClass = 'start-failed'; $st.Error = [string]$_.Exception.Message; $st.EndedUtc = ([datetime](& $Now)).ToUniversalTime()
             & $Log 'WARN' ('step {0} {1}: could not start -- {2}' -f $st.Order, $st.Job, $st.Error)
+            # the tier classifier never fails the pipeline (owner 2026-11-11): not started = skipped, the run goes on
+            $clsLine = Set-SIPipelineClassifierSkipped -Step $st
+            if ($clsLine) { & $Log 'WARN' ('step {0} {1}: {2}' -f $st.Order, $st.Job, $clsLine) }
             & $sourceEnded $st
         }
         & $saveNow
-        if ($OnStep) { try { & $OnStep $state $st 'Start' } catch { } ; if ($st.State -eq 'Failed') { try { & $OnStep $state $st 'End' } catch { } } }
+        if ($OnStep) { try { & $OnStep $state $st 'Start' } catch { } ; if ($st.State -in @('Failed', 'Skipped')) { try { & $OnStep $state $st 'End' } catch { } } }
     }
     # one poll of one running step ($st). Dot-sourced: it reads and sets this function's variables.
     $pollStep = {
@@ -2439,7 +2461,7 @@ function Invoke-SIJobFlow {
             # #475: a Collect step in parts answers @{ Status; Error } when its collection failed (the parts named)
             if ($null -ne $pr -and $pr -isnot [string] -and $pr.PSObject.Properties['Status']) { $status = [string]$pr.Status; $statusError = [string]$pr.Error } else { $status = [string]$pr }
         } catch { & $Log 'WARN' ('step {0} {1}: its status could not be read ({2}) -- trying again' -f $st.Order, $st.Job, $_.Exception.Message) }
-        $ended = $false
+        $ended = $false; $clsEndWhy = ''
         switch -Regex ($status) {
             '^(?i)succeeded$' { $st.State = 'Success'; $ended = $true }
             # #700: an execution STOPPED from outside the pipeline (in Azure, by a person, by a release tool) was ended on
@@ -2472,7 +2494,7 @@ function Invoke-SIJobFlow {
         if (-not $ended -and -not $status -and $Store -and $Store.PSObject.Methods['StepRow']) {
             $row = $null
             try { $row = $Store.StepRow([string]$state.FlowRunId, [int]$st.Order) } catch { $row = $null }
-            if ($row -and [string]$row.Execution -eq [string]$st.Execution -and [string]$row.State -in @('Success', 'Failed', 'Interrupted')) {
+            if ($row -and [string]$row.Execution -eq [string]$st.Execution -and ([string]$row.State -in @('Success', 'Failed', 'Interrupted') -or (Test-SIPipelineClassifierSkipped $row))) {
                 $st.State = [string]$row.State; $st.ErrorClass = [string]$row.ErrorClass; $st.Error = [string]$row.Error; $ended = $true
                 if ($row.EndedUtc) { $adoptedEnd = ([datetime]$row.EndedUtc).ToUniversalTime() }
                 & $Log 'WARN' ('step {0} {1}: its execution {2} had ended ({3}) -- closed by the pipeline''s wake-up check; the run goes on by the normal rules' -f $st.Order, $st.Job, $st.Execution, ([string]$row.State).ToLowerInvariant())
@@ -2592,6 +2614,7 @@ function Invoke-SIJobFlow {
                 }
                 # the step's REAL error text is kept (2026-10-22: it was replaced by "Microsoft throttled this run", and the
                 # real cause -- a storage timeout -- was gone from Operations > Jobs); the words only fill an empty one
+                $clsEndWhy = $endWhy
                 if ($endWhy -eq 'throttled') { $st.ErrorClass = 'throttled'; if ([string]::IsNullOrWhiteSpace([string]$st.Error)) { $st.Error = Get-SIThrottleText } }
                 # 3.0.30: the engine wrote its run log, so the job itself failed -- the step is named by ITS OWN error (the
                 # last ERROR line of that log, Get-SIErrorClass), not by the bare 'job-failed' that reached the report as
@@ -2641,6 +2664,23 @@ function Invoke-SIJobFlow {
                     $st.Error = ('{0} -- also after {1} restart(s) on this first collection' -f [string]$st.Error, $doneAgain)
                 }
             }
+        }
+        # THE TIER CLASSIFIER NEVER FAILS THE PIPELINE (owner 2026-11-11; SI-Pipeline.ps1 Set-SIPipelineClassifierSkipped): its
+        # step that did not succeed -- or that its engine says it skipped (the first run without any catalog) -- ends
+        # SKIPPED; what needs it runs on the last known catalog. Only this step; every other step is judged as before.
+        if ($ended -and (Test-SIPipelineClassifierJob ([string]$st.Job))) {
+            # a run the classifier SKIPPED (no catalog at all: the first run) ends its execution successfully and says so in
+            # its run log -- the step's own log, read here once (the same reader a failure's cause comes from); a failure's
+            # END 'skipped' comes with its evidence above
+            if ([string]$st.State -eq 'Success' -and $StepLogs) {
+                $began = if ($st.StartedUtc) { ([datetime]$st.StartedUtc).ToUniversalTime() } else { $tNow }
+                try {
+                    $csl = if ($StepLogs -is [scriptblock]) { & $StepLogs $st.Job $began $tNow } else { $StepLogs.Read([string]$st.Job, $began, $tNow) }
+                    if ($csl -and $csl.PSObject.Properties['Lines'] -and (Test-SIPipelineClassifierSkipLog -Lines @($csl.Lines))) { $clsEndWhy = 'skipped' }
+                } catch { & $Log 'WARN' ('step {0} {1}: its run log could not be read ({2})' -f $st.Order, $st.Job, $_.Exception.Message) }
+            }
+            $clsLine = Set-SIPipelineClassifierSkipped -Step $st -EndReason ([string]$clsEndWhy)
+            if ($clsLine) { & $Log 'WARN' ('step {0} {1}: {2}' -f $st.Order, $st.Job, $clsLine) }
         }
         if ($ended) {
             $st.EndedUtc = if ($adoptedEnd -and [string]$st.State -ne 'Starting' -and [string]$st.State -ne 'Running') { $adoptedEnd } else { $tNow }
@@ -3339,7 +3379,7 @@ MERGE cfg.FlowStepRun AS t
 USING (SELECT @FlowRunId AS FlowRunId, @StepOrder AS StepOrder,
               CASE WHEN @State IN (N'Starting', N'Running') AND EXISTS (SELECT 1 FROM cfg.FlowRun r WHERE r.FlowRunId = @FlowRunId AND r.State IN (N'Succeeded', N'Failed', N'Stopped', N'Cancelled')) THEN 1 ELSE 0 END AS RunEnded) AS s
     ON t.FlowRunId = s.FlowRunId AND t.StepOrder = s.StepOrder
-WHEN MATCHED AND s.RunEnded = 0 AND NOT (@State = N'Running' AND t.Execution = @Execution AND t.State IN (N'Success', N'Failed', N'Interrupted', N'TimedOut')) THEN UPDATE SET State = @State, Execution = @Execution, StartedUtc = @StartedUtc, EndedUtc = @EndedUtc, ErrorClass = @ErrorClass, Error = @Error
+WHEN MATCHED AND s.RunEnded = 0 AND NOT (@State = N'Running' AND t.Execution = @Execution AND (t.State IN (N'Success', N'Failed', N'Interrupted', N'TimedOut') OR (t.State = N'Skipped' AND t.ErrorClass = N'classifier-skipped'))) THEN UPDATE SET State = @State, Execution = @Execution, StartedUtc = @StartedUtc, EndedUtc = @EndedUtc, ErrorClass = @ErrorClass, Error = @Error
 WHEN NOT MATCHED AND s.RunEnded = 0 THEN INSERT (FlowRunId, StepOrder, GroupNo, Job, State, Execution, StartedUtc, EndedUtc, ErrorClass, Error)
      VALUES (@FlowRunId, @StepOrder, @GroupNo, @Job, @State, @Execution, @StartedUtc, @EndedUtc, @ErrorClass, @Error);
 IF COL_LENGTH(N'cfg.FlowStepRun', N'Attempts') IS NOT NULL AND COL_LENGTH(N'cfg.FlowStepRun', N'RetryReason') IS NOT NULL

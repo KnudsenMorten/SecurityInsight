@@ -71,6 +71,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             # #491: which controls the setup report (uplink Kind=setup) carries -- the framework minimum until Invardia has imported SI's extras
             SI_Telemetry_SetupControls = @{ type = 'enum'; values = @('minimum', 'all', 'off') }
             SI_AssetProperties_RetentionDays = @{ min = 1 }; SI_AssetProperties_ChangeGuardPercent = @{ min = 1; max = 100 }
+            # #1200: the most minutes one Risk Analysis report spends on its retries (Get-RARecoveryBudgetMinutes: 0 = no limit)
+            SI_RA_RecoveryBudgetMinutes = @{ min = 0 }
             # #528: how long the privilege tier catalog is kept while its inputs are unchanged (0 = rebuild every run)
             SI_PrivilegeTierClassifier_RefreshDays = @{ min = 0; max = 365 }
             # the users' sign-in methods read in the background (Get-SISignInMethodsChoice takes these ranges; anything else = the default)

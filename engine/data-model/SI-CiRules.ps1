@@ -501,10 +501,28 @@ function ConvertTo-SICiPrivilegeTierRules {
 }
 
 function Get-SICiPrivilegeTierRules {
-    <# The identity privilege tier rules from the shipped privilege tier catalog and the tenant's custom file beside it; none (and a warning) when the catalog cannot be read. #>
-    param([string]$Root)
+    <#
+        The identity privilege tier rules from the shipped privilege tier catalog and the tenant's custom file beside it; none
+        (and a warning) when the catalog cannot be read.
+        THE SAME CATALOG THE IDENTITY ENGINE READS (owner 2026-11-11): in a container this job's disk carries only the image's
+        shipped file (the tenant catalog is never baked into the image nor restored with the customisation files), so the
+        tenant catalog and the downloaded daily catalog are first refreshed from the storage account -- the classifier shares
+        both there (engine/_shared/SI-CatalogBlob.ps1), and the profilers refresh the same way. A newer storage copy replaces
+        the local one; any storage failure keeps the local copy and says so (a warning), never fails the build. No storage
+        account (a VM: the classifier writes beside this file) = unchanged.
+    #>
+    param([string]$Root, [string]$StorageAccount = [string]$global:SI_StorageAccount)
     if (-not $Root) { $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
     $dir = [System.IO.Path]::Combine($Root, 'privilege-tier-catalog')
+    if (-not [string]::IsNullOrWhiteSpace($StorageAccount)) {
+        try {
+            if (-not (Get-Command -Name Update-SICatalogFromBlob -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-CatalogBlob.ps1')) }
+            foreach ($bn in 'privilege-tier-catalog.custom.json', 'privilege-tier-catalog.downloaded.custom.json') {
+                $from = Update-SICatalogFromBlob -LocalPath ([System.IO.Path]::Combine($dir, $bn)) -AccountName $StorageAccount -BlobName $bn
+                if ($from -eq 'storage') { Write-Host (' [INFO] CI rules: {0} refreshed from the storage account (newer than the local copy).' -f $bn) }
+            }
+        } catch { Write-Warning ("CI rules: the privilege tier catalog could not be refreshed from the storage account ({0}) -- the local copy is used." -f $_.Exception.Message) }
+    }
     try {
         $cat = [System.IO.File]::ReadAllText([System.IO.Path]::Combine($dir, 'privilege-tier-catalog.locked.json')).TrimStart([char]0xFEFF) | ConvertFrom-Json
         $cus = $null
@@ -512,10 +530,50 @@ function Get-SICiPrivilegeTierRules {
         if (Test-Path -LiteralPath $cp) {
             try { $cus = [System.IO.File]::ReadAllText($cp).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { Write-Warning ("CI rules: the tenant's privilege tier catalog could not be read ({0}) -- the shipped catalog is used." -f $_.Exception.Message) }
         }
+        # the daily classified catalog: when the tenant's catalog was built from it, its built-in sections replace the
+        # shipped ones (as the identity engine does, IdentityCatalogTierComputer.ps1); the tenant's file still moves keys on top
+        $src = ''
+        if ($null -ne $cus -and $null -ne (Get-SIItemValue $cus 'Metadata')) { $src = [string](Get-SIItemValue (Get-SIItemValue $cus 'Metadata') 'CatalogSource') }
+        if ($src -eq 'invardia') {
+            $dp = [System.IO.Path]::Combine($dir, 'privilege-tier-catalog.downloaded.custom.json')
+            if (Test-Path -LiteralPath $dp) {
+                try {
+                    . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-TierCatalogDownload.ps1'))
+                    $dl = Get-SITierCatalogDownloadState -Path $dp
+                    if ($null -ne $dl -and @(Test-SITierCatalogSections $dl.Catalog).Count -eq 0) { $cat = Merge-SITierCatalogBuiltIns -Shipped $cat -Downloaded $dl.Catalog }
+                    else { Write-Warning 'CI rules: the downloaded privilege tier catalog is not usable -- the shipped built-in sections are used.' }
+                } catch { Write-Warning ("CI rules: the downloaded privilege tier catalog could not be read ({0}) -- the shipped built-in sections are used." -f $_.Exception.Message) }
+            }
+        }
         return @(ConvertTo-SICiPrivilegeTierRules -Catalog $cat -Custom $cus)
     } catch {
         Write-Warning ("CI rules: the privilege tier catalog could not be read ({0}) -- identities get no privilege tier this run." -f $_.Exception.Message)
         return @()
+    }
+}
+
+# ---------------------------------------------------------------------------------------------------
+# A break-glass account is Tier 0 (owner 2026-11-11: "Yes, always Tier 0"; framework PIM-DELEGATION-1 item 5)
+# ---------------------------------------------------------------------------------------------------
+
+function Get-SICiBreakGlassTierRules {
+    <#
+        PURE. One CI tier rule: an identity SI classifies as break-glass (si_is_break_glass true -- the provider, the naming
+        patterns, the emergency-access group, the extension attribute you define, or a permanent Tier 0 account excluded from
+        all Conditional Access policies: SI-BreakGlass.ps1, set BEFORE the rules run) is TIER 0, whatever roles it holds right
+        now. An emergency-access account exists to take over the tenant when everything else fails -- an attacker holding it
+        holds the tenant, even on a day it holds no role.
+        An observed claim of its own mechanism (break_glass, trusted in the trust list), never a fallback, never asserted: the
+        CI's tier is the MIN of every claim, so it sits beside the privilege rules and any rule of yours, and a manual override
+        still wins as everywhere. The explanation names it: "SI rule Break-glass account -> Tier 0 (break-glass account)".
+    #>
+    param([int]$StartOrder = 850000)
+    [pscustomobject][ordered]@{
+        id = 'identity-break-glass/tier0'; family = 'ci'; file = 'engine/data-model/SI-BreakGlass.ps1 (si_is_break_glass)'
+        name = 'Break-glass account -> Tier 0'; stage = 'production'; priority = 100; pack = 'IdentityBreakGlassTier'; order = ($StartOrder + 1)
+        classes = @('identity'); osScope = @(); fallback = $false; mechanism = 'break_glass'
+        when = [ordered]@{ all = @([ordered]@{ field = 'si_is_break_glass'; op = 'is_true' }) }
+        set = [ordered]@{ si_tier = 0 }; exclude = @(); native = $true; asserted = $false
     }
 }
 

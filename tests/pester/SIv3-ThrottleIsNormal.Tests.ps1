@@ -258,27 +258,28 @@ Describe 'the flow: a throttled step is amber, not failed, and mails nothing' {
         }
     }
     It 'the engine of the step recorded END throttled: the step is throttled, the run is throttled, no skipped-step mail' {
-        $arm = New-ThrottleArm @{ 'ptc' = 'Failed' }
-        $ev = { param($Job, $Execution, $StartedUtc, $EndedUtc) [pscustomobject]@{ HasStartRecord = $true; HasTranscript = $true; EndReason = $(if ($Job -eq 'ptc') { 'throttled' } else { $null }) } }
-        $r = Invoke-ThrottleFlow -Jobs @('ptc', 'identity') -Arm $arm -Evidence $ev
-        $s = @($r.Steps | Where-Object { $_.Job -eq 'ptc' })[0]
+        # (endpoint, a source with no other source this run, and publicip that needs it -- the tier classifier never fails a run)
+        $arm = New-ThrottleArm @{ 'endpoint' = 'Failed' }
+        $ev = { param($Job, $Execution, $StartedUtc, $EndedUtc) [pscustomobject]@{ HasStartRecord = $true; HasTranscript = $true; EndReason = $(if ($Job -eq 'endpoint') { 'throttled' } else { $null }) } }
+        $r = Invoke-ThrottleFlow -Jobs @('endpoint', 'publicip') -Arm $arm -Evidence $ev
+        $s = @($r.Steps | Where-Object { $_.Job -eq 'endpoint' })[0]
         $s.State | Should -Be 'Failed'
         $s.ErrorClass | Should -Be 'throttled'
         $s.Error | Should -Not -BeNullOrEmpty -Because 'the step keeps its own error text (filled with the throttle words only when it had none)'
         Get-SIJobFlowStepExitReason $s | Should -Be 'throttled'
         Test-SIJobFlowThrottledOnly -State $r | Should -BeTrue
         Get-SIJobFlowRunExitReason -State $r | Should -Be 'throttled'
-        Get-SIPipelineStatusText -State $r -Definition (New-SIDefaultJobFlow -Installed @('ptc', 'identity') -Map $script:Map) | Should -Match 'throttled$'
+        Get-SIPipelineStatusText -State $r -Definition (New-SIDefaultJobFlow -Installed @('endpoint', 'publicip') -Map $script:Map) | Should -Match 'throttled$'
         # the step that needs it was skipped (never built on a result that did not land) -- and that is not mailed
-        @($r.Steps | Where-Object { $_.Job -eq 'identity' })[0].State | Should -Be 'Skipped'
+        @($r.Steps | Where-Object { $_.Job -eq 'publicip' })[0].State | Should -Be 'Skipped'
         @(Get-SIGuardCallsForFlow -Result $r | Where-Object { $_.GuardId -eq 'flow.step.skipped' }).Count | Should -Be 0
     }
     It 'NEGATIVE: the engine recorded another failure (or no END record at all): the step fails as before and the skip is mailed' {
         foreach ($why in @('failed', $null)) {
-            $arm = New-ThrottleArm @{ 'ptc' = 'Failed' }
+            $arm = New-ThrottleArm @{ 'endpoint' = 'Failed' }
             $ev = { param($Job, $Execution, $StartedUtc, $EndedUtc) [pscustomobject]@{ HasStartRecord = $true; HasTranscript = $true; EndReason = $why } }.GetNewClosure()
-            $r = Invoke-ThrottleFlow -Jobs @('ptc', 'identity') -Arm $arm -Evidence $ev
-            @($r.Steps | Where-Object { $_.Job -eq 'ptc' })[0].ErrorClass | Should -Be 'job-failed'
+            $r = Invoke-ThrottleFlow -Jobs @('endpoint', 'publicip') -Arm $arm -Evidence $ev
+            @($r.Steps | Where-Object { $_.Job -eq 'endpoint' })[0].ErrorClass | Should -Be 'job-failed'
             Test-SIJobFlowThrottledOnly -State $r | Should -BeFalse
             Get-SIJobFlowRunExitReason -State $r | Should -Be 'error'
             @(Get-SIGuardCallsForFlow -Result $r | Where-Object { $_.GuardId -eq 'flow.step.skipped' }).Count | Should -Be 1

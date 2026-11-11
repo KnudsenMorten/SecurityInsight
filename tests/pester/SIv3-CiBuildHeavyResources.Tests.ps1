@@ -782,10 +782,12 @@ Describe 'One CI never holds the build: the rules of one CI have a time limit' {
         $run | Should -Match 'Incomplete = \$t\.Incomplete; IncompleteKept = \$t\.IncompleteKept; IncompleteLeftOut = \$t\.IncompleteLeftOut; IncompleteCis = \$heldNames\.ToArray\(\)'
         # what makes the next build take it up again: the hash its records were built from is gone (after the marks, same transaction)
         (Get-SICiMarkBatchBuiltSql) | Should -Match "(?s)SET @marked = @@ROWCOUNT;.*IF @h IS NOT NULL AND @h <> N'' AND @h <> N'\[\]'\s+UPDATE r SET BuiltHash = NULL, BuiltAt = NULL\s+FROM sidata\.CiRecord r JOIN OPENJSON\(@h\) WITH \(RecordKey NVARCHAR\(450\) '\$'\) x ON x\.RecordKey = r\.RecordKey;.*COMMIT TRANSACTION;"
-        # #881 the end-of-build marks run in key ranges (each its own transaction): a held record is never marked in any range,
-        # and loses the hash it was built from after the marks
+        # #881 the end-of-build marks run in key ranges (each its own transaction; PROGRESS-TICK-1: one call per range): a held
+        # record is never marked in any range, and loses the hash it was built from after the marks
         $mk = Get-SICiMarkBuiltSql
-        $mk | Should -Match "(?s)INSERT #held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*AND NOT EXISTS \(SELECT 1 FROM #held hk WHERE hk\.RecordKey = r\.RecordKey\);.*UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata\.CiRecord r JOIN #held x ON x\.RecordKey = r\.RecordKey;"
+        $mk | Should -Match "(?s)INSERT @held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*AND NOT EXISTS \(SELECT 1 FROM @held hk WHERE hk\.RecordKey = r\.RecordKey\);"
+        (Get-SICiMarkBuiltHeldSql) | Should -Match "(?s)INSERT @held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata\.CiRecord r JOIN @held x ON x\.RecordKey = r\.RecordKey;"
+        (Get-Command Invoke-SICiMarkBuilt).Definition | Should -Match '(?s)Get-SICiMarkBuiltSql -Thresholds \$Thresholds.*Get-SICiMarkBuiltHeldSql.*Get-SICiMarkBuiltClearSql' -Because 'the held records lose their hash after the marks, before the clean-up'
         $dirty = Get-SICiDirtySql -LookbackDays 30
         $dirty | Should -Match 'WHERE r\.BuiltGroupKey IS NULL OR r\.BuiltHash IS NULL OR m\.CurHash IS NULL OR r\.BuiltHash <> m\.CurHash' -Because 'a record without the hash it was built from makes its group one the next build builds'
         $dirty | Should -Match 'WHERE \(r\.BuiltAt IS NULL OR r\.BuiltAt < @since\)' -Because 'and a build that carries on a stopped rebuild takes it up too'

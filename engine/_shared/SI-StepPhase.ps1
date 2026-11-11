@@ -250,6 +250,20 @@ function Step-SIStepProgressTicker {
     } catch { return $false }
 }
 
+function Set-SIStepProgressTickerPhase {
+    <#
+        PROGRESS-TICK-1: the same ticker goes on with the NEXT count of one long phase (the vulnerability connector's compare,
+        then its first and second pass; the CI build's marking, then its clean-up): -Unit and -Total anew, the count from 0.
+        The least time between two words still counts from the ticker's last word, so two passes never write closer than
+        -EverySeconds. NEVER throws.
+    #>
+    param($Ticker, [Parameter(Mandatory)][string]$Unit, [long]$Total = -1)
+    try {
+        if ($null -eq $Ticker) { return }
+        $Ticker.Unit = $Unit; $Ticker.Total = $Total; $Ticker.LastDone = [long]0
+    } catch { }
+}
+
 function Get-SIStepProgressRowsSql {
     <# PURE. The progress records of one job's executions since a time whose phase starts with @PhasePrefix (an index-free
        read of a small table: one row per execution). #>

@@ -40,6 +40,9 @@ if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Jo
 # it is given, so a backslash literal survives into the path and fails only on Linux.
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'auth/Get-SIGraphToken.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared/SI-GraphRest.ps1')
+# #1194: the catalog's source and the checked download of the daily classified catalog; the storage-account sharing.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared/SI-TierCatalogDownload.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared/SI-CatalogBlob.ps1')
 
 # v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
 # Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
@@ -209,7 +212,7 @@ Apply this test for every item before assigning a tier:
 === TIER 0 - Immediate full environment compromise ===
 Qualifying path: single permission or role directly yields full identity plane control with no additional steps.
 Entra ID Roles: Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator, Partner / GDAP Delegated Admin, Directory Synchronization Accounts, Hybrid Identity Administrator (when Entra Connect is in password hash sync mode)
-Application Permissions (Graph / API): RoleManagement.ReadWrite.Directory, Directory.ReadWrite.All, AppRoleAssignment.ReadWrite.All, Policy.ReadWrite.AuthenticationMethod, PrivilegedAccess.ReadWrite.AzureAD, RoleManagement.ReadWrite.CloudPC, Organization.ReadWrite.All, Domain.ReadWrite.All, CrossTenantUserProfileSharing.ReadWrite.All, OnPremDirectorySynchronization.ReadWrite.All
+Application Permissions (Graph / API): RoleManagement.ReadWrite.Directory, Directory.ReadWrite.All, AppRoleAssignment.ReadWrite.All, Policy.ReadWrite.AuthenticationMethod, PrivilegedAccess.ReadWrite.AzureAD, RoleManagement.ReadWrite.CloudPC, Organization.ReadWrite.All, Domain.ReadWrite.All, OnPremDirectorySynchronization.ReadWrite.All, Application.ReadWrite.All, PrivilegedAccess.ReadWrite.AzureADGroup
 Azure Built-in Roles: Owner (root management group), User Access Administrator (root management group), Owner (tenant root subscription)
 Azure Permissions: Contributor + blueprint assign (root MG), Managed Identity Contributor (root scope), Entra ID joined device with Global Admin token cache, Subscription Owner with Az AD write federation
 AD Built-in Groups: Domain Admins, Enterprise Admins, Schema Admins, Administrators (builtin), Group Policy Creator Owners, Cert Publishers, Domain Controllers group
@@ -219,7 +222,7 @@ Accounts: krbtgt account, SYSTEM on DC, Entra Connect sync account (MSOL_), ADCo
 === TIER 1 - High impact, one or two reliable pivots to full compromise ===
 Qualifying path: permission enables a well-documented, reliable attack chain to full identity plane control (e.g. reset admin MFA, modify auth policy, write to privileged AD objects, manipulate app registrations that hold T0 permissions).
 Entra ID Roles: Authentication Administrator, Hybrid Identity Administrator, Exchange Administrator, Cloud App Administrator, Application Administrator, Security Administrator, Intune Administrator, Identity Governance Administrator, External Identity Provider Administrator, B2C IEF Policy Administrator, Domain Name Administrator, Password Administrator (when targeting admins), Helpdesk Administrator (when targeting admins), Billing Administrator, Azure DevOps Administrator, Windows 365 Administrator
-Application Permissions (Graph / API): Application.ReadWrite.All, Mail.ReadWrite (app  all users), User.ReadWrite.All, Group.ReadWrite.All, Sites.FullControl.All, DeviceManagementServiceConfig.ReadWrite.All, DeviceManagementApps.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, ServicePrincipalEndpoint.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Policy.ReadWrite.PermissionGrant, EntitlementManagement.ReadWrite.All, PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup, AuthenticationContext.ReadWrite.All, TrustFrameworkKeySet.ReadWrite.All, UserAuthenticationMethod.ReadWrite.All, IdentityProvider.ReadWrite.All, Organization.ReadWrite.All, Domain.ReadWrite.All, AccessReview.ReadWrite.All, Agreement.ReadWrite.All, RoleEligibilitySchedule.ReadWrite.Directory, RoleAssignmentSchedule.ReadWrite.Directory
+Application Permissions (Graph / API): User.ReadWrite.All, Group.ReadWrite.All, Sites.FullControl.All, DeviceManagementServiceConfig.ReadWrite.All, DeviceManagementApps.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, ServicePrincipalEndpoint.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Policy.ReadWrite.PermissionGrant, EntitlementManagement.ReadWrite.All, PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup, AuthenticationContext.ReadWrite.All, TrustFrameworkKeySet.ReadWrite.All, UserAuthenticationMethod.ReadWrite.All, IdentityProvider.ReadWrite.All, AccessReview.ReadWrite.All, Agreement.ReadWrite.All, RoleEligibilitySchedule.ReadWrite.Directory, RoleAssignmentSchedule.ReadWrite.Directory, AppFederatedCredentialIssuers.ReadWrite.All, AppCertTrustConfiguration.ReadWrite.All, DeviceManagementCloudCA.ReadWrite.All, CrossTenantIdentityMapping.ReadWrite.All, Policy.ReadWrite.Recovery
 AD Built-in Groups: Account Operators, Backup Operators, Server Operators, Print Operators
 AD Permissions: GPO edit rights on tier 0 OUs, AdminSDHolder write access, msDS-KeyCredentialLink write, WriteOwner on domain root, WriteDACL on domain root, GenericAll on tier 0 groups, GenericWrite on Domain Controllers OU, AllExtendedRights on domain root, ForceChangePassword on admin accounts, Manage CA (AD CS), Certificate enrollment agents, ESC1-ESC8 vulnerable certificate templates, SeBackupPrivilege holders, SeRestorePrivilege holders, SeTakeOwnershipPrivilege holders, SeDebugPrivilege on DC, SeImpersonatePrivilege on DC, Unconstrained delegation, Shadow Credentials write on admin accounts, SID History injection rights, GPO link rights on tier 0 OUs, OU owner on Domain Controllers OU
 Accounts: Entra Connect service account, High-privilege service principals with T0 Graph permissions, Admin-consented OAuth apps with T1 permissions, AD CS enrollment agent accounts, Service accounts with unconstrained delegation, Accounts with GenericAll on tier 0 objects, Federated identity credentials on high-privilege app registrations, Managed identities with Owner or UAA at subscription scope, Workload identities bound to high-privilege Azure RBAC roles, Azure Automation Run As accounts, Service principals with client secrets in Key Vault accessible to lower-trust identities
@@ -227,7 +230,7 @@ Accounts: Entra Connect service account, High-privilege service principals with 
 === TIER 2 - Significant data or workload impact, no direct identity plane path ===
 Qualifying path: permission enables mass data exfiltration across the tenant, manipulation of security-relevant settings short of identity plane control, or escalation only when additional unrelated misconfigurations are present.
 Entra ID Roles: User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator
-Application Permissions (Graph / API): Mail.Read (app  all users), Mail.ReadWrite (app  all users only when no better option exists), Calendars.ReadWrite (app  all users), Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, IMAP.AccessAsApp, POP.AccessAsApp, SMTP.Send (app  all users)
+Application Permissions (Graph / API): Mail.Read (app  all users), Mail.ReadWrite (app  all users; mailbox access is data plane, so it is Tier 2 and never Tier 0 or Tier 1), Calendars.ReadWrite (app  all users), Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, IMAP.AccessAsApp, POP.AccessAsApp, SMTP.Send (app  all users)
 Azure Built-in Roles: Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User
 Azure Permissions: Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud)
 AD Built-in Groups: DNS Admins
@@ -523,7 +526,9 @@ function Get-PTCInputFingerprint {
         minutes. Returns 'sha256:<hex>'.
     #>
     param([array]$EntraRoles = @(), [array]$APIPermissions = @(), [array]$AzureRoles = @(), [string[]]$ADGroups = @(),
-          [string]$EngineHash = '', [string]$RunAI = '', [string]$AIDeployment = '')
+          [string]$EngineHash = '', [string]$RunAI = '', [string]$AIDeployment = '',
+          # #1194: the catalog's source and the downloaded version ('invardia:2026.11.10' / 'ai') -- a new version rebuilds
+          [string]$CatalogSource = '')
     $s = { param($v) if ($null -eq $v) { '' } else { [string]$v } }
     $list = { param($v) (@(@($v) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ } | Sort-Object -Culture '' -CaseSensitive)) -join ',' }
     $lines = New-Object System.Collections.Generic.List[string]
@@ -532,7 +537,9 @@ function Get-PTCInputFingerprint {
     foreach ($r in @($AzureRoles | Where-Object { $_ })) { $lines.Add(('A|{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f (& $s $r.Id), (& $s $r.Name), (& $s $r.Description), [bool]$r.IsCustom, (& $list $r.Actions), (& $list $r.NotActions), (& $list $r.DataActions))) }
     foreach ($g in @($ADGroups | Where-Object { $_ } | Select-Object -Unique)) { $lines.Add(('G|{0}' -f $g)) }
     $sorted = @($lines | Sort-Object -Culture '' -CaseSensitive)
-    $text = (@('engine=' + $EngineHash, 'runAI=' + $RunAI, 'deployment=' + $AIDeployment) + $sorted) -join "`n"
+    $head = @('engine=' + $EngineHash, 'runAI=' + $RunAI, 'deployment=' + $AIDeployment)
+    if ($CatalogSource) { $head += ('catalog=' + $CatalogSource) }
+    $text = ($head + $sorted) -join "`n"
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { $h = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text)) } finally { $sha.Dispose() }
     'sha256:' + (($h | ForEach-Object { $_.ToString('x2') }) -join '')
@@ -553,7 +560,10 @@ function Get-PTCCatalogState {
     if ($null -eq $gen) { $gen = (Get-Item -LiteralPath $Path).LastWriteTimeUtc }
     [pscustomobject]@{ Fingerprint = $(if ($m.PSObject.Properties['InputFingerprint']) { [string]$m.InputFingerprint } else { '' })
                        GeneratedUtc = $gen
-                       Complete = [bool]($m.PSObject.Properties['Complete'] -and [bool]$m.Complete) }
+                       Complete = [bool]($m.PSObject.Properties['Complete'] -and [bool]$m.Complete)
+                       # #1194: the catalog source and downloaded version it was built from ('' for a catalog from before)
+                       CatalogSource = $(if ($m.PSObject.Properties['CatalogSource']) { [string]$m.CatalogSource } else { '' })
+                       CatalogVersion = $(if ($m.PSObject.Properties['CatalogVersion']) { [string]$m.CatalogVersion } else { '' }) }
 }
 
 function Get-PTCUnchangedDecision {
@@ -599,6 +609,200 @@ function Get-PTCRefreshDays {
     7
 }
 
+# ============================================================
+# THE CATALOG'S SOURCE (#1194, framework TIER-CATALOG-1): built here with AI, or the daily classified catalog downloaded
+# (engine/_shared/SI-TierCatalogDownload.ps1). The setting SI_PrivilegeTierCatalog_Source chooses; 'auto' = AI when the
+# classifier can use it, otherwise the download. With the download, every BUILT-IN role, group and permission takes the
+# downloaded tier (no AI request is sent for it); the tenant's own custom roles are still tiered here (AI when it can be
+# used, otherwise their tier from the previous catalog).
+# ============================================================
+
+function Get-PTCDownloadedTierMaps {
+    <# PURE. The downloaded catalog's built-in tiers per category: @{ ADGroups; EntraRoles; APIPerms; AzureRoles }, each a
+       case-insensitive key -> @{ Tier; Reason }. The keys are the ones the consumer uses. A *_CustomRoles_* section is never read. #>
+    param($Catalog)
+    $spec = @(
+        @{ Cat = 'ADGroups';   Key = 'Name';        Section = 'AD_BuiltInPermissionGroups' },
+        @{ Cat = 'EntraRoles'; Key = 'DisplayName'; Section = 'EntraID_BuiltInRoles' },
+        @{ Cat = 'APIPerms';   Key = 'Value';       Section = 'EntraID_APIPermissions' },
+        @{ Cat = 'AzureRoles'; Key = 'Name';        Section = 'Azure_BuiltInRoles' }
+    )
+    $maps = @{}
+    foreach ($s in $spec) {
+        $map = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        if ($null -ne $Catalog) {
+            foreach ($t in 0..3) {
+                $p = $Catalog.PSObject.Properties["$($s.Section)_Tier$t"]
+                if (-not $p) { continue }
+                foreach ($row in @($p.Value)) {
+                    if ($null -eq $row) { continue }
+                    $k = [string]$row.($s.Key)
+                    if (-not [string]::IsNullOrWhiteSpace($k) -and -not $map.ContainsKey($k.Trim())) {
+                        $map[$k.Trim()] = [pscustomobject]@{ Tier = $t; Reason = [string]$row.Reason }
+                    }
+                }
+            }
+        }
+        $maps[$s.Cat] = $map
+    }
+    $maps
+}
+
+function Test-PTCIsBuiltInItem {
+    <# PURE. Is this collected item a built-in one (the downloaded catalog speaks for it)? AD groups and API permissions
+       always are; an Entra role when IsBuiltIn, an Azure role when not IsCustom. #>
+    param([string]$Category, $Item)
+    if ($Category -eq 'EntraRoles') { return [bool]$Item.IsBuiltIn }
+    if ($Category -eq 'AzureRoles') { return -not [bool]$Item.IsCustom }
+    $true
+}
+
+function Get-PTCItemKey {
+    <# PURE. The key of a collected/tiered item in its category (the consumer's key). #>
+    param([string]$Category, $Item)
+    switch ($Category) {
+        'EntraRoles' { return [string]$Item.DisplayName }
+        'APIPerms'   { if ($Item.PSObject.Properties['Value']) { return [string]$Item.Value } return [string]$Item.Name }
+        default      { return [string]$Item.Name }
+    }
+}
+
+function Set-PTCTiersFromDownloaded {
+    <#
+        PURE. Every BUILT-IN item the downloaded catalog lists takes the downloaded tier and reason -- whatever the AI or the
+        previous catalog said (the daily classified catalog wins for built-ins). A custom role is never touched. Returns
+        the number of items set.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Tiered, [hashtable]$Maps)
+    if ($null -eq $Maps) { return 0 }
+    $n = 0
+    foreach ($cat in @('ADGroups', 'EntraRoles', 'APIPerms', 'AzureRoles')) {
+        $map = $Maps[$cat]
+        if ($null -eq $map) { continue }
+        foreach ($item in @($Tiered[$cat])) {
+            if ($null -eq $item -or -not (Test-PTCIsBuiltInItem -Category $cat -Item $item)) { continue }
+            $k = Get-PTCItemKey -Category $cat -Item $item
+            if ([string]::IsNullOrWhiteSpace($k)) { continue }
+            $hit = $null
+            if ($map.TryGetValue($k.Trim(), [ref]$hit)) {
+                $item.Tier   = [int]$hit.Tier
+                $item.Reason = [string]$hit.Reason
+                $n++
+            }
+        }
+    }
+    $n
+}
+
+function Write-PTCDownloadedTiers {
+    <# Main's step: Set-PTCTiersFromDownloaded over the tiered result, and the one line that says how many took the downloaded tier. #>
+    param([Parameter(Mandatory)][hashtable]$Tiered, [Parameter(Mandatory)]$Catalog)
+    $n = Set-PTCTiersFromDownloaded -Tiered $Tiered -Maps $Catalog.Maps
+    Write-Log ("{0} built-in role(s), group(s) and permission(s) take their tier from the daily catalog version {1}." -f $n, $Catalog.Version) "INFO"
+}
+
+function Get-PTCCatalogSourceNote {
+    <# PURE. The one line a run records about the catalog it used (the log and the run-health row). #>
+    param($Catalog)
+    if ($null -eq $Catalog -or $Catalog.Source -ne 'invardia') { return 'privilege tier catalog: built here with AI' }
+    if (-not $Catalog.Version) { return 'privilege tier catalog: the daily catalog could not be downloaded yet; the shipped catalog is used' }
+    $d = $(if ($Catalog.BuiltUtc) { ([datetime]$Catalog.BuiltUtc).ToUniversalTime().ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } else { '?' })
+    ('privilege tier catalog: downloaded version {0} (built {1})' -f $Catalog.Version, $d)
+}
+
+function Get-PTCFirstRunSkip {
+    <#
+        PURE. Owner 2026-11-11: the download failed on an install's FIRST run -- no downloaded catalog and no catalog of
+        the install's own -- so there is nothing to build from: the step is skipped (never failed), the collections use the
+        catalog shipped with SecurityInsight, and the next run tries again. Only for the download; with AI chosen the
+        classifier builds as before. @{ Skip; Line }.
+    #>
+    param($Catalog, [bool]$HaveOwnCatalog)
+    if ($null -eq $Catalog -or $Catalog.Source -ne 'invardia' -or $Catalog.Version -or $HaveOwnCatalog) { return [pscustomobject]@{ Skip = $false; Line = '' } }
+    [pscustomobject]@{ Skip = $true
+        Line = 'The daily classified tier catalog could not be downloaded, and this install has no tier catalog of its own yet: the step is skipped -- the collections use the catalog shipped with SecurityInsight, and the next run tries again.' }
+}
+
+function Get-PTCFailureOutcome {
+    <#
+        PURE. Owner 2026-11-11: a rebuild that failed (the download, the AI classification, a Graph or ARM read) never fails
+        the run. With a last known catalog: the run ends successfully on it, and the line says its date and age (ExitReason
+        'success'); with none: the step is skipped (ExitReason 'skipped') and the collections use the shipped catalog.
+        @{ ExitReason; Line }.
+    #>
+    param([string]$ErrorText, $Prior, [datetime]$NowUtc = [datetime]::UtcNow)
+    $why = ("$ErrorText").Trim(); if (-not $why) { $why = 'an unknown error' }
+    if ($null -ne $Prior -and $Prior.GeneratedUtc) {
+        $g = ([datetime]$Prior.GeneratedUtc).ToUniversalTime()
+        $days = [int][Math]::Floor(($NowUtc - $g).TotalDays)
+        $age = $(if ($days -lt 1) { 'less than a day old' } elseif ($days -eq 1) { '1 day old' } else { ('{0} days old' -f $days) })
+        $ver = $(if ($Prior.PSObject.Properties['CatalogVersion'] -and $Prior.CatalogVersion) { (' (the daily catalog version {0})' -f $Prior.CatalogVersion) } else { '' })
+        return [pscustomobject]@{ ExitReason = 'success'
+            Line = ('The privilege tier catalog could not be rebuilt ({0}). The last known classification is kept: built {1:yyyy-MM-dd}{2}, {3} -- the collections use it, and the next run tries again.' -f $why, $g, $ver, $age) }
+    }
+    [pscustomobject]@{ ExitReason = 'skipped'
+        Line = ('The privilege tier catalog could not be built ({0}), and this install has no tier catalog of its own yet: the step is skipped -- the collections use the catalog shipped with SecurityInsight, and the next run tries again.' -f $why) }
+}
+
+function Test-PTCCatalogSourceMoved {
+    <# PURE. Was the previous catalog built from another source or another downloaded version than this run has? Then
+       it is rebuilt now, whatever its age (a catalog from before records no source: rebuilt once). #>
+    param($Prior, $Catalog)
+    if ($null -eq $Catalog) { return $false }
+    if ($null -eq $Prior) { return $true }
+    if ([string]$Prior.CatalogSource -ne [string]$Catalog.Source) { return $true }
+    ($Catalog.Source -eq 'invardia' -and [string]$Prior.CatalogVersion -ne [string]$Catalog.Version)
+}
+
+function Invoke-PTCCatalogSource {
+    <#
+        Resolve the source and, for the download, bring the local copy up to date: in a container the last good copy
+        lives in the storage account (this job's disk is new every run), so it is taken from there first; then the
+        published version is checked and downloaded when newer, and a new copy is shared back to storage. Never throws.
+        A dry run downloads nothing and uses the local copy it has.
+        Returns @{ Source; Setting; Version; BuiltUtc; Catalog (parsed, $null when none); Maps; Note }.
+    #>
+    param([Parameter(Mandatory)][string]$DownloadPath, [bool]$DryRun = $false)
+    $src = Resolve-SITierCatalogSource -Value $global:SI_PrivilegeTierCatalog_Source -AIAvailable (Test-SITierCatalogAIAvailable)
+    if ($src.Warning) { Write-Log $src.Warning "WARN" }
+    $out = [pscustomobject]@{ Source = $src.Source; Setting = $src.Setting; Version = ''; BuiltUtc = $null; Catalog = $null; Maps = $null; Note = ''; Warning = '' }
+    if ($src.Source -eq 'invardia') {
+        try {
+            if (-not $DryRun) {
+                if (-not (Test-Path -LiteralPath $DownloadPath) -and -not [string]::IsNullOrWhiteSpace([string]$global:SI_StorageAccount)) {
+                    $null = Update-SICatalogFromBlob -LocalPath $DownloadPath -BlobName $script:SITierCatalogFileName
+                }
+                $dl = Update-SITierCatalogDownload -LocalPath $DownloadPath
+                if ($dl.Warning) { Write-Log $dl.Warning "WARN"; $out.Warning = [string]$dl.Warning }
+                if ($dl.Updated) {
+                    Write-Log ("The daily privilege tier catalog version {0} was downloaded and passed its checks." -f $dl.Version) "SUCCESS"
+                    if (Publish-SICatalogToBlob -LocalPath $DownloadPath -BlobName $script:SITierCatalogFileName) {
+                        Write-Log ("The downloaded catalog is shared to storage account {0}." -f $global:SI_StorageAccount) "INFO"
+                    }
+                }
+            }
+            $state = Get-SITierCatalogDownloadState -Path $DownloadPath
+            if ($state) {
+                $bad = @(Test-SITierCatalogSections $state.Catalog)
+                if ($bad.Count -gt 0) {
+                    Write-Log ("The local downloaded privilege tier catalog is not used: {0}." -f ($bad -join '; ')) "WARN"
+                    $state = $null
+                }
+            }
+            if ($state) {
+                $out.Version = [string]$state.Version; $out.BuiltUtc = $state.BuiltUtc; $out.Catalog = $state.Catalog
+                $out.Maps = Get-PTCDownloadedTierMaps -Catalog $state.Catalog
+            }
+        } catch {
+            Write-Log ("The daily privilege tier catalog could not be used ({0}); the shipped catalog and the previous tiers are used." -f $_.Exception.Message) "WARN"
+        }
+    }
+    $out.Note = Get-PTCCatalogSourceNote -Catalog $out
+    $age = $(if ($out.BuiltUtc) { ', ' + (Format-SITierCatalogAge $out.BuiltUtc ([datetime]::UtcNow)) } else { '' })
+    Write-Log ("Privilege tier catalog source: {0} (setting SI_PrivilegeTierCatalog_Source = {1}){2}." -f $(if ($out.Source -eq 'ai') { 'built here with AI' } elseif ($out.Version) { "the daily classified catalog, version $($out.Version)" } else { 'the daily classified catalog -- not downloaded yet' }), $out.Setting, $age) "INFO"
+    $out
+}
+
 function Invoke-AISingleChunk {
     param(
         [string]$CategoryName,
@@ -614,6 +818,14 @@ function Invoke-AISingleChunk {
     # OpenAI for a customer who had switched AI off. This is the single place a request is built,
     # so the check lives here. Items come back unresolved; Main then keeps the tier each one had
     # in the previous catalog (Restore-PTCPriorTiers), so turning AI off never erases a known tier.
+    # #1194 (owner 2026-11-11): building with AI is the customer's explicit opt-in (it costs them) -- with the downloaded
+    # catalog NOTHING is sent, also when Azure OpenAI is configured: what the download does not list keeps its known tier.
+    if ($script:PtcNoAI) {
+        if (-not $script:PtcNoAISaid) { $script:PtcNoAISaid = $true; Write-Log "The tier catalog is downloaded (building it with AI is not chosen) -- no AI request is sent; what the downloaded catalog does not list keeps the tier it had." "INFO" }
+        return $Chunk | ForEach-Object {
+            [PSCustomObject]@{ Name = $_.Name; Tier = 99; Reason = 'Not in the downloaded catalog; building with AI is not chosen.'; Unresolved = $true }
+        }
+    }
     if ($global:SI_PrivilegeTierClassifier_RunAI -eq $false) {
         Write-Log "[$label] AI is turned off (SI_PrivilegeTierClassifier_RunAI = `$false) -- nothing sent; known tiers are kept from the previous catalog." "INFO"
         return $Chunk | ForEach-Object {
@@ -1011,22 +1223,30 @@ function Invoke-AllAITiering {
     param(
         [array]$EntraRoles,
         [array]$APIPermissions,
-        [array]$AzureRoles
+        [array]$AzureRoles,
+        # #1194: the downloaded catalog's built-in tiers (Get-PTCDownloadedTierMaps). A built-in item it lists is NOT sent
+        # to the AI -- Main sets its downloaded tier afterwards (Set-PTCTiersFromDownloaded). $null = everything is sent.
+        [hashtable]$Known = $null
     )
 
     Write-Log "=== AI TIERING: Preparing batch inputs ===" "INFO"
+    $isKnown = {
+        param([string]$Cat, [string]$Key, [bool]$BuiltIn)
+        if ($null -eq $Known -or -not $BuiltIn -or [string]::IsNullOrWhiteSpace($Key) -or $null -eq $Known[$Cat]) { return $false }
+        $Known[$Cat].ContainsKey($Key.Trim())
+    }
 
     # ---- 1. AD Groups ----
     # Input is just the group name -- the AI has enough signal in Windows
     # built-in group names (Domain Admins, Enterprise Admins, DnsAdmins,
     # Account Operators, etc.) to classify tier without a member snapshot.
     # Membership analysis happens at query time via the Exposure Graph.
-    $adGroupSummary = $BuiltInADGroups | Select-Object -Unique | ForEach-Object {
+    $adGroupSummary = $BuiltInADGroups | Select-Object -Unique | Where-Object { -not (& $isKnown 'ADGroups' $_ $true) } | ForEach-Object {
         [PSCustomObject]@{ Name = $_ }
     }
 
     # ---- 2. Entra Roles ----
-    $entraRoleInput = $EntraRoles | ForEach-Object {
+    $entraRoleInput = $EntraRoles | Where-Object { -not (& $isKnown 'EntraRoles' ([string]$_.DisplayName) ([bool]$_.IsBuiltIn)) } | ForEach-Object {
         $sample = if ($_.Permissions.Count -gt 0) { ($_.Permissions | Select-Object -First 8) -join "; " } else { "no explicit permissions" }
         [PSCustomObject]@{
             Name        = $_.DisplayName
@@ -1037,7 +1257,7 @@ function Invoke-AllAITiering {
 
     # ---- 3. API Permissions ----
     # Deduplicate by Value  same permission name from different SPs is one evaluation
-    $apiPermInput = $APIPermissions | Sort-Object Value -Unique | ForEach-Object {
+    $apiPermInput = $APIPermissions | Sort-Object Value -Unique | Where-Object { -not (& $isKnown 'APIPerms' ([string]$_.Value) $true) } | ForEach-Object {
         [PSCustomObject]@{
             Name        = $_.Value
             Type        = $_.PermissionType
@@ -1049,7 +1269,7 @@ function Invoke-AllAITiering {
     # ---- 4. Azure Roles ----
     # Sanitize description and actions  Azure role descriptions frequently contain
     # special characters (backslashes, quotes, control chars) that break JSON body parsing
-    $azureRoleInput = $AzureRoles | ForEach-Object {
+    $azureRoleInput = $AzureRoles | Where-Object { -not (& $isKnown 'AzureRoles' ([string]$_.Name) (-not [bool]$_.IsCustom)) } | ForEach-Object {
         $actionSample = ($_.Actions | Select-Object -First 8) -join "; "
         [PSCustomObject]@{
             Name        = Sanitize-ForJson $_.Name
@@ -1172,7 +1392,13 @@ function Export-TieredJSON {
         # the run's input fingerprint (Get-PTCInputFingerprint) and whether every item was tiered this run -- the next run
         # skips the AI pass only when both say nothing changed and nothing was left open (Get-PTCUnchangedDecision)
         [string]$InputFingerprint = '',
-        [bool]$Complete = $false
+        [bool]$Complete = $false,
+        # #1194: which catalog the built-in tiers came from -- 'ai' (built here) or 'invardia' (the daily download) -- and
+        # the downloaded version and its build date. The identity engine reads them (which built-in sections apply) and
+        # records them with every identity.
+        [string]$CatalogSource = '',
+        [string]$CatalogVersion = '',
+        [string]$CatalogBuiltUtc = ''
     )
 
     Write-Log "=== Building and Exporting JSON ===" "INFO"
@@ -1208,6 +1434,9 @@ function Export-TieredJSON {
             GeneratedAtUtc  = ([datetime]::UtcNow).ToString('o', [Globalization.CultureInfo]::InvariantCulture)
             InputFingerprint = $InputFingerprint
             Complete        = [bool]$Complete
+            CatalogSource   = $CatalogSource
+            CatalogVersion  = $CatalogVersion
+            CatalogBuiltUtc = $CatalogBuiltUtc
         }
 
         # ---- AD Built-in Permission Groups ----
@@ -1353,7 +1582,31 @@ function Main {
             Write-Log ("No local catalog -- using the copy shared in storage account {0} (its age decides whether to rebuild)." -f $global:SI_StorageAccount) "INFO"
         }
     }
-    if (-not $_forceRebuild -and (Test-Path -LiteralPath $OutputFile)) {
+    # ---- The catalog's source (#1194): built here with AI, or the daily classified catalog downloaded ----
+    # Resolved and (for the download) brought up to date BEFORE the age checks below: a newer downloaded version, or a
+    # changed source, rebuilds the catalog now instead of after its age runs out.
+    $_downloadPath = Join-Path $OutputFolder $script:SITierCatalogFileName
+    $script:PtcCatalog = Invoke-PTCCatalogSource -DownloadPath $_downloadPath -DryRun $script:PtcWhatIf
+    $_phRH_Err = $script:PtcCatalog.Note
+    if ($script:PtcCatalog.Warning) { $_phRH_Err = ('{0}; {1}' -f $_phRH_Err, $script:PtcCatalog.Warning) }
+    # building with AI is the customer's opt-in (owner 2026-11-11): with the downloaded catalog nothing is sent to AI
+    $script:PtcNoAI = ($script:PtcCatalog.Source -ne 'ai')
+    # THE FIRST RUN WITHOUT A CATALOG (owner 2026-11-11: "if the download from prio 1 fails on initial, it must skip the step
+    # in the pipeline for next run, but not fail the pipeline"): no downloaded catalog and no catalog of this install's own
+    # -> the step is SKIPPED (run health 'skipped'; the pipeline shows the step skipped), the collections use the catalog
+    # shipped with SecurityInsight, and the next run tries again.
+    $_skip = Get-PTCFirstRunSkip -Catalog $script:PtcCatalog -HaveOwnCatalog (Test-Path -LiteralPath $OutputFile)
+    if ($_skip.Skip) {
+        Write-Log $_skip.Line "WARN"
+        $_phRH_Exit = 'skipped'; $_phRH_Err = $_skip.Line
+        return
+    }
+    $_sourceMoved = Test-PTCCatalogSourceMoved -Prior (Get-PTCCatalogState -Path $OutputFile) -Catalog $script:PtcCatalog
+    if ($_sourceMoved -and (Test-Path -LiteralPath $OutputFile)) {
+        Write-Log "The catalog's source or the downloaded version changed since the previous catalog -- rebuilding now." "INFO"
+    }
+
+    if (-not $_forceRebuild -and -not $_sourceMoved -and (Test-Path -LiteralPath $OutputFile)) {
         $_lastWrite = (Get-Item -LiteralPath $OutputFile).LastWriteTimeUtc
         $_ageHours = ([datetime]::UtcNow - $_lastWrite).TotalHours
         if ($_ageHours -lt 24) {
@@ -1382,26 +1635,29 @@ function Main {
     $_engineHash = ''
     try { if ($PSCommandPath) { $_engineHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } } catch { $_engineHash = '' }
     $_fingerprint = Get-PTCInputFingerprint -EntraRoles @($entraRoles) -APIPermissions @($apiPermissions) -AzureRoles @($azureRoles) -ADGroups @($BuiltInADGroups) `
-                        -EngineHash $_engineHash -RunAI ([string]$global:SI_PrivilegeTierClassifier_RunAI) -AIDeployment ([string]$global:OpenAI_Deployment)
+                        -EngineHash $_engineHash -RunAI ([string]$global:SI_PrivilegeTierClassifier_RunAI) -AIDeployment ([string]$global:OpenAI_Deployment) `
+                        -CatalogSource ('{0}:{1}' -f $script:PtcCatalog.Source, $script:PtcCatalog.Version)
     $_collectionOk = (@($entraRoles).Count -gt 0) -and (@($apiPermissions).Count -gt 0) -and (@($azureRoles).Count -gt 0)
     if (-not $script:PtcWhatIf) {
         $_unchanged = Get-PTCUnchangedDecision -Prior (Get-PTCCatalogState -Path $OutputFile) -Fingerprint $_fingerprint -NowUtc ([datetime]::UtcNow) `
                           -MaxAgeDays (Get-PTCRefreshDays) -Force $_forceRebuild -CollectionOk $_collectionOk
         if ($_unchanged.Skip) {
             Write-Log $_unchanged.Reason "SUCCESS"
-            $_phRH_Err = $_unchanged.Reason
+            $_phRH_Err = $_unchanged.Reason + '; ' + $script:PtcCatalog.Note
             return
         }
         Write-Log ("Rebuilding the catalog: {0}." -f $_unchanged.Reason) "INFO"
     }
 
     # ---- Single AI pass  4 batch calls (AD group names tiered from hardcoded list) ----
+    # With the downloaded catalog (#1194) the built-in items it lists are not sent to the AI; right after, they take its
+    # tier (Write-PTCDownloadedTiers); then known tiers are kept for anything still unresolved.
     $tiered = Invoke-AllAITiering `
         -EntraRoles        $entraRoles `
         -APIPermissions    $apiPermissions `
         -AzureRoles        $azureRoles `
-
-    # ---- Keep known tiers for anything the AI did not resolve this run ----
+        -Known             $script:PtcCatalog.Maps
+    if ($script:PtcCatalog.Maps) { Write-PTCDownloadedTiers -Tiered $tiered -Catalog $script:PtcCatalog }
     $keptFromPrior = Restore-PTCPriorTiers -Tiered $tiered -PriorPath $OutputFile
     if ($keptFromPrior -gt 0) {
         Write-Log ("{0} item(s) were not re-evaluated this run; their tier from the previous catalog is kept." -f $keptFromPrior) "WARN"
@@ -1421,7 +1677,10 @@ function Main {
         -RawAPIPermissions $apiPermissions `
         -RawAzureRoles     $azureRoles `
         -InputFingerprint  $_fingerprint `
-        -Complete          ($_collectionOk -and $keptFromPrior -eq 0 -and (Get-PTCOpenItemCount -Tiered $tiered) -eq 0)
+        -Complete          ($_collectionOk -and $keptFromPrior -eq 0 -and (Get-PTCOpenItemCount -Tiered $tiered) -eq 0) `
+        -CatalogSource     ([string]$script:PtcCatalog.Source) `
+        -CatalogVersion    ([string]$script:PtcCatalog.Version) `
+        -CatalogBuiltUtc   $(if ($script:PtcCatalog.BuiltUtc) { ([datetime]$script:PtcCatalog.BuiltUtc).ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } else { '' })
 
     Write-Log "" "INFO"
     Write-Log "============================================" "SUCCESS"
@@ -1429,8 +1688,12 @@ function Main {
     Write-Log "Output: $outputPath" "SUCCESS"
     Write-Log "============================================" "SUCCESS"
     } catch {
-        $_phRH_Exit = 'failure'; $_phRH_Err = $_.Exception.Message
-        throw
+        # NEVER FAILS THE PIPELINE (owner 2026-11-11: "if it fails a normal run, it uses last known classification"): a
+        # failed rebuild -- the download, the AI classification, a Graph or ARM read -- keeps the last known catalog (its
+        # date and age said) and the run goes on; with no catalog at all the step is skipped (the shipped catalog is used).
+        $kept = Get-PTCFailureOutcome -ErrorText ([string]$_.Exception.Message) -Prior (Get-PTCCatalogState -Path $OutputFile) -NowUtc ([datetime]::UtcNow)
+        Write-Log $kept.Line "WARN"
+        $_phRH_Exit = $kept.ExitReason; $_phRH_Err = $kept.Line
     } finally {
         try {
             Send-SIRunHealthRow -RunContext $script:_RunHealthCtx -Phase 'End' `

@@ -2760,11 +2760,78 @@ not picked up is still reported. The optional CVE content filters (`SI_CVE_MinSe
 |---|---|---|
 | `privilege-tier-catalog/privilege-tier-catalog.locked.json` | Shipped baseline (AI-classified, reviewed) — every release can update it | shipped; never written on a customer install |
 | `privilege-tier-catalog/privilege-tier-catalog.custom.json` (optional) | Your tenant's catalog: the classifier's output, including your custom AD groups and Entra / Azure custom roles. Laid over the baseline — same key = this file wins, keys only in the baseline still apply | `Invoke-PrivilegeTierClassifier.ps1` **rewrites it on every run** — do not edit it by hand |
+| `privilege-tier-catalog/privilege-tier-catalog.downloaded.custom.json` (when the catalog is downloaded) | The last good copy of the daily classified catalog — the built-in sections only | the classifier, only after the download passed every check — never by hand |
 
 `Initialize-SIIdentityCatalog` (`IdentityCatalogTierComputer.ps1`) reads the baseline and, when present, the
 `.custom.json` beside it; absence is silent. In a container, a newer copy shared through the storage account is
 taken first. **No other overlay file is read.** In particular `asset-profiling-enrichment/identity/PrivilegeTierClassifier.json`
 (named by older versions of this document) has not been read since 2.2.25.
+
+### Where the catalog comes from: built here with AI, or the daily classified catalog downloaded
+
+The shipped baseline is only as new as the release that carried it, and an install without AI used to keep the tiers of
+its previous catalog — a role or permission Microsoft added since fell to the default tier. The catalog is therefore also
+**built daily, classified and published for download** (public, no sign-in: Microsoft's own role and permission
+definitions, classified; nothing of yours is sent). **Every install downloads it by default** -- new and existing, Community
+and Pro, also when Azure OpenAI is configured. Building the catalog with your own AI is an **opt-in**: it adds AI cost
+for you, so it is never switched on for you. One setting chooses:
+
+| `SI_PrivilegeTierCatalog_Source` | Source |
+|---|---|
+| `invardia` (default) | the daily classified catalog is downloaded; the classifier sends no AI request |
+| `ai` | your opt-in: built here with your Azure OpenAI deployment, and its result wins over the download (extra AI cost). Only valid with AI integration on (and the classifier's own AI switch, `SI_PrivilegeTierClassifier_RunAI`, not off, the Azure OpenAI settings set): otherwise the run downloads the catalog and warns |
+
+An empty value or the earlier `auto` means the download. The classifier's own AI switch on its own never chooses AI.
+
+**It never blocks a night.** The classifier never fails the pipeline, in either mode. On an install's first run, when the
+download fails and the install has no catalog of its own yet, the classifier step is **skipped** with one plain line: the
+collections run on the catalog shipped with SecurityInsight, and the next run tries again. The container itself ends
+successfully, and the pipeline reads the step's own run log to show it as skipped. On any later run a failed
+download -- or, when you build with AI, a failed AI classification or directory read -- keeps the **last known
+classification**: the step ends successfully, its line says the catalog's date and age, and everything after it runs as
+usual. The pipeline shows a classifier step that could not finish as skipped, never failed -- also when the pipeline
+did not see its end and closes it later: the step is skipped with the line "the privilege tier classifier's end was not
+seen -- treated as skipped, the last known catalog is used", and the run is not failed for it. Every other step is judged
+as before.
+
+**The download** (`engine/_shared/SI-TierCatalogDownload.ps1`, run by the privilege tier classifier at the start of each
+run). It reads `https://invardia.com/catalog/privilege-tier/manifest.json` (schema `si-privilege-tier-catalog/2`, the
+version `YYYY.MM.DD`, its build time, SHA-256, byte count, counts per section and the changes since the previous one).
+Only when the manifest names a **newer** version than the local copy is `<version>.json` downloaded, and it replaces the
+local copy only after every check passed: the manifest's schema, the byte count, the SHA-256, the file's own version, and
+**every tier section present and non-empty** (AD built-in groups, Entra built-in roles, API permissions and Azure built-in
+roles, Tier 0 to 3). It is written beside the copy and then moved over it, so a reader never sees half a file. A failed
+download or a failed check **keeps the last good copy and says how old it is** — a warning, never a failed run; with no
+copy yet, the shipped baseline is used and the run says so. An older published version never replaces a newer local
+one. The call is plain REST through SecurityInsight's shared HTTP seam (transient answers retried), no PowerShell module.
+In a container the downloaded copy is also shared through the storage account (its own blob next to the tenant catalog),
+so the next run — on a new disk — still has its last good copy, and so do the profilers.
+
+**How it is applied.** With the download, every BUILT-IN role, group and permission the downloaded catalog lists takes its
+tier, and no AI request is sent at all: anything the download does not list (your own custom Entra and Azure roles among
+them) keeps the tier it had. When you build with AI, the classifier tiers everything, as before. The identity engine then replaces the baseline's built-in
+sections with the downloaded ones — the baseline's custom sections stay, a custom-role section in a download is never
+taken — and lays your `.custom.json` over the result exactly as before, so **your custom catalog still wins** over both.
+A changed source or a newer downloaded version rebuilds the catalog on the next classifier run, whatever its age. The
+CI build's identity tier rules read the same catalogs the same way -- and, like the profilers, the CI build first
+refreshes both (the tenant catalog and the downloaded copy) from the storage account: in a container its disk carries
+only the image's shipped file, because the tenant catalog is never baked into the image nor restored with the
+customisation files. A newer storage copy replaces the local one; a storage failure keeps the local copy and says so,
+never failing the build. Without a storage account (a VM) the classifier writes beside the CI build and nothing changes.
+
+**Tier classification wins, in both modes.** The tenant's classified catalog (`.custom.json` -- built here with AI, or
+from the download) places every BUILT-IN entry it lists -- AD built-in groups, Entra built-in roles, API permissions,
+Azure built-in roles -- PER ENTRY: the entry leaves the tier the base gave it and takes the classified tier, also when
+that is a less privileged one. An entry the classified catalog does not list keeps the shipped (or downloaded) tier, and
+the custom-role sections are merged on top exactly as before, so your own entries still win (as everywhere, the most
+privileged of several claims). Earlier versions read the Entra and Azure built-in roles from the shipped file only and
+laid the API permissions and AD groups over it per tier.
+
+**What every run records.** The classifier's log and its run-health row say which catalog it used, its version and its
+build date (`privilege tier catalog: downloaded version 2026.11.10 (built 2026-11-10)` / `built here with AI`); the tenant
+catalog's `Metadata` carries `CatalogSource`, `CatalogVersion` and `CatalogBuiltUtc`; the identity engine logs the same
+when it loads the catalog, and every identity row records it in `IdentityTieringCatalogVersion` (for example *the daily
+classified catalog version 2026.11.10, built 2026-11-10*), so tiers from an old catalog are visible, never silent.
 
 ### Tier scale (attacker-centric)
 
@@ -2801,6 +2868,9 @@ taken first. **No other overlay file is read.** In particular `asset-profiling-e
 | `TenantId` | string (GUID) | yes | docs only — sanitize to `<tenant-id>` in shared docs |
 | `TieringModel` | string | yes | docs only |
 | `AICallsUsed` | int | yes | docs only — one Azure OpenAI batch per provider category (typically 4) |
+| `CatalogSource` | string (`ai` / `invardia`) | tenant catalog only | the identity engine: `invardia` = the built-in sections come from the downloaded catalog |
+| `CatalogVersion`, `CatalogBuiltUtc` | string | tenant catalog only | the classifier (a newer downloaded version rebuilds) and the run record |
+| `version` | string `YYYY.MM.DD` | downloaded catalog | the download check (must equal the manifest's version) |
 
 ### Per-entry shape (per section)
 
@@ -2862,6 +2932,8 @@ on the Tier board.
 4. **Stage D** — enumerate Azure RBAC role definitions (built-in + custom).
 
 Each stage POSTs name + description to Azure OpenAI with the attacker-centric framework prompt; the classifier returns `Tier` (0..3) and an optional `Reasoning`, written into the appropriate `*_Tier{0..3}` arrays. Re-run when: a new custom AD group / Entra role / Azure RBAC role is created; new tenant onboarding; Microsoft adds new built-in roles. Requires Azure OpenAI credentials — defaults `AI_ChunkSize=50`, `AI_MaxRetries=5`, `AI_MaxTokens=16384` (set silently at script top). A throttled request waits as long as the service asks (`Retry-After`), otherwise backs off 5 → 10 → 20 → 40 seconds.
+
+**The prompt's tier lists are fixed by SI, not left to the model** (consistency over day-to-day AI changes). The Tier 0 application-permission list names, besides the role-assignment and directory-write permissions, `Organization.ReadWrite.All`, `Domain.ReadWrite.All`, `Application.ReadWrite.All` and `PrivilegedAccess.ReadWrite.AzureADGroup`; `CrossTenantUserProfileSharing.ReadWrite.All` is not on it (profile sharing is not identity-plane control). The Tier 1 list adds `AppFederatedCredentialIssuers.ReadWrite.All`, `AppCertTrustConfiguration.ReadWrite.All`, `DeviceManagementCloudCA.ReadWrite.All`, `CrossTenantIdentityMapping.ReadWrite.All` and `Policy.ReadWrite.Recovery`. `Mail.ReadWrite` (application, all users) is on the Tier 2 list only: mailbox access is data plane, never Tier 0 or Tier 1 by the prompt's own rules. No permission is on two tier lists. Changing the lists changes the classifier file, so the first run after an update rebuilds the catalog once (the unchanged skip keys on the engine file's hash, see section 7c).
 
 **A known tier is never lost to a bad AI run.** Items the AI could not evaluate this run — retries exhausted, OpenAI not configured, or AI turned off with `$global:SI_PrivilegeTierClassifier_RunAI = $false` — keep the tier they had in the previous catalog, and their reason says so. Only a role or permission that has never been tiered stays at 99 (manual review). With AI turned off, nothing is sent to Azure OpenAI; the catalog still refreshes the role and permission inventory.
 
@@ -3103,6 +3175,27 @@ sign-in name, the display name or a group's name (an emergency-access group), OR
 Conditional Access (`si_ca_excluded_policies`) while holding a permanent Tier 0 role". `si_break_glass_reasons` says which.
 `si_ca_excluded_policies` carries `needsRead` (the Conditional Access read is not built yet) -- until then that signal is
 unknown and never classifies. The customer overrides the patterns (Community `lists.custom.json`; Pro the list's override).
+
+**A break-glass account is Tier 0.** An emergency-access account exists to take the tenant back when everything else
+fails, so whoever holds it holds the tenant -- also on a day it holds no role. The CI build therefore has one tier rule
+of its own, `identity-break-glass/tier0` (*Break-glass account -> Tier 0*, `Get-SICiBreakGlassTierRules`): every identity
+classified break-glass (`si_is_break_glass` true, by any of the rules above) claims Tier 0. It is an observed claim of its
+own mechanism, `break_glass`, trusted in the trust list right after the privilege tier catalog -- never a default and
+never asserted -- so it sits beside the privilege rules and any rule of yours, and the CI's tier stays the MIN of every
+claim: a rule of yours that says Tier 2 for the same account is recorded beside it, Tier 0 wins. A manual override of the
+tier still wins, as everywhere. The tier explanation names it: *Tier 0 -- SI rule Break-glass account -> Tier 0
+(break-glass account)*. An account that is not break-glass, or whose classification is unknown, gets no claim from it.
+
+The identity profile row's tier (the `Tier` that Risk Analysis reads as an identity's criticality) says the same: break
+glass is one more of its tier sources, beside the Entra roles, API permissions, Azure roles and AD groups, and the tier
+is the MIN over them. The profile classifies with the same rules and lists as the CI build (`SI-BreakGlass.ps1`): the
+naming patterns on the sign-in name, the display name and the group names the collection already has, the extension
+attribute you define (the collection records the entry the user carries), and the collection's own signal (a permanent
+Global Administrator named like an emergency account and not used for 30 days). A break-glass account is Tier 0 there too,
+with a proof that gives the reason in the CI build's own words (*Break-glass account -> Tier 0. Break-glass because its
+sign-in name matches a break-glass naming pattern.*); `IsBreakGlass` on the profile row is that same verdict. Two signals
+only the CI build has: the account's every Entra group (the profile sees the groups the role read reaches and the AD
+groups) and "excluded from all Conditional Access policies".
 
 **The extension attribute you define, and the Break glass page (Pro).** An account that carries the extension attribute
 and value you define is a break-glass account. The rule is the data-model list `break_glass_attribute` -- entries
@@ -3792,6 +3885,24 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
   - Query defect: not retried, the report fails (existed).
   - A slice that still fails after its recoveries: counted as a bucket loss, and the report is incomplete, never
     silently short (existed: #62 / #641).
+  - **A time budget per report for its recovery** (#1200, setting `SI_RA_RecoveryBudgetMinutes`, default 90 minutes,
+    0 = no limit). The recovery is everything after the report's first normal pass: the late-retry passes and the
+    smaller-slice passes at any depth. Neither of those has a clock of its own: the late passes go on while a pass
+    recovers a slice, and the smaller slices go deeper while splitting reduces the failure. A report whose slices time out
+    at the gateway on every call (each call several minutes with its own retries) could therefore hold the whole run for
+    hours. The budget's clock starts at the report's first retry: the first late retry, or the first smaller slice refused
+    as busy, throttled or timed out. A report that only splits slices because they are too large, and whose smaller slices
+    answer, never starts it. The budget is asked **before** every new recovery call (each late attempt, before and after
+    its pause; each queued smaller slice; each smaller-slice call and its retry pause). A call already running is never
+    cut, and the per-call attempts and the first pass are never shortened. When the budget is spent, every slice still
+    refused or not yet asked is closed as a named bucket loss ("not read -- the recovery time budget of this report (90
+    min) was spent; its rows are unknown, not resolved"). The report is marked incomplete and the run partial for it,
+    exactly as for any other lost slice, and the step goes on with the next report. One line says it: `recovery for
+    '<report>' stopped after N min (budget): K bucket(s) not read -- their findings are unknown, the next run reads
+    this report again`. The next run asks the report in full: a report is never carried forward, and a report that ended
+    incomplete keeps its slice count (it is not raised from partial answers). While the recovery runs, it reports its
+    progress (query slices asked again) at most every 3 minutes through the step's progress ticker. In a report split over
+    several workers, each part has its own budget.
 - **The log says what the state keeps** (#833). Live 2026-10-20, the log said "16 bucket(s) kept for the next run" while
   the state and the history held 8. The early save (#713) writes a count as soon as a slice has succeeded at it, so a run
   stopped part-way does not lose it, and its line said "for the next run". The end of the same report then halved the count
@@ -3810,6 +3921,21 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
 - **Step 2 — the jump warning.** A count of at least 4 × the report's usual count (the median of its earlier runs; at
   least 3 runs needed), or above 256, is flagged. The run raises one warning event, guard `ra.bucket.count-jump`. It is on
   by default, shows on the Guards page and goes to the report to Invardia; the run completes.
+  The warning trips only on a real jump (#1202):
+  - The usual count is the median over the earlier runs of the report's **current query version** only (the history
+    keeps the query fingerprint per run; a row written before it was kept still counts). With fewer than 3 runs of the
+    current version there is no usual count and no 4 × judgement. Before, the usual spanned a changed query and the growth
+    of an embedded lookup, and warned on every run while the result stayed flat.
+  - A count **sized from a measurement after a changed query** (and not raised during the run) warns only when the
+    report's result rows or its whole request grew at least 2 × against its previous measured run. The count is the next
+    power of two of the measured need, so an input that grew just over 2 × can already give a count 4 × higher; less
+    growth is rounding of an unchanged input, not a sign that the query or its data is wrong.
+  - A real jump (rows or request 4 × or more on the same query version, or a count above 256) warns as before.
+- **A lower count is proved only by a run that carried as large a request** (#1202). A report that ran complete at
+  fewer slices before, on the same query, comes back towards that count by halving (#880). That earlier run now proves
+  its count only when its whole request (the inlined lookup rows plus the part no slice count shrinks) was at most 15 %
+  smaller than this run's. A run from before an embedded lookup grew is not used, so a report whose lookup grew no
+  longer swings between two counts (down on the old proof, raised again by the larger request).
 
 **Configuration** is read from the database settings like every setting: `AutoBucketCount`, `AutoBucketMax`,
 `AutoBucketCache`, `ResetCache`, and the challenger's `AutoBucketChallenger_MedianMultiplier`, `_MinEntries` and
@@ -4777,7 +4903,7 @@ timers apply only in schedules mode.
 
 The producer drops shard messages onto `si-<engine>-shards` Storage Queue. KEDA scales the worker from 0 to `KedaMaxReplicas` (default 30) based on queue depth, then scales back to zero when the queue drains.
 
-**Existing installs reach the same layout on update.** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again. **The old job is removed by a later update** (`setup/_shared/SI-OldCollectJobs.ps1`, updater step 9r, right after step 9) when every one of these holds, each read live in that update: the job is one of `caj-si-azure` / `caj-si-endpoint` / `caj-si-identity` (never any other name) and carries SI's `si-build` tag; its producer and worker exist and read back (provisioned); it has no timer (trigger Manual); the pipeline does not start it (each step resolved by the runner's own rule -- a step whose producer exists starts the producer -- over the stored pipeline, else the default one; a stored pipeline that cannot be read keeps it); no execution of it is Running or Processing; none started after the split, which is **one hour after the producer's `systemData.createdAt`** -- an execution inside that hour belongs to the move itself (the old job loses its timer only after the producer is made), so it does not count; and the producer has at least one Succeeded execution (so the update that makes the split never removes its own fallback). Then one ARM DELETE of the job, read back until 404, and one line: "an old collection job from before the collection was split in parts is removed: <name>". Otherwise the job is kept and the line says which condition held it. No identity, registry or role is touched -- deleting the job is enough. Never fails the update; a failed delete is one warning and the next update tries again.
+**Existing installs reach the same layout on update.** An install made before queue scaling runs endpoint, identity and Azure as one scheduled job each. Every update (`setup/Invoke-SIContainerUpdate.ps1` step 9, `setup/_shared/SI-KedaConvert.ps1`) moves such a job to the producer + worker -- only a job SI's setup made (`si-build` tag) that signs in with the managed identity (or the certificate), and only when the install has not switched queue scaling off (`SI_Bootstrap_UseKEDA = $false`, or `SI_UPDATER_USE_KEDA = false` on the updater job). The two jobs are built by the same definitions Bootstrap uses (`Get-SIKedaWorkerCreateArgs` / `Get-SIKedaProducerCreateArgs` in `container/_shared/SI-ContainerConfig.ps1`, translated to the ARM resource by `ConvertFrom-SIJobCreateArgs`), from the old job: its image, settings, secrets (ARM `listSecrets`), identity, registry, size and schedule. No az CLI and no module: ARM and the queue data plane over REST (`engine/_shared/SI-AzRest.ps1`), signed in as the updater job's identity. The producer is created without a timer; once both jobs read back, the old job loses its timer (it is kept, its schedule remembered) and the producer takes the same schedule -- two schedules never run the same engine. A job of the daily job flow stays in the flow, now as its producer. Any failure leaves the old job running as before, says so in one line, and the next update tries again. **The old job is removed by a later update** (`setup/_shared/SI-OldCollectJobs.ps1`, updater step 9r, right after step 9) when every one of these holds, each read live in that update: the job is one of `caj-si-azure` / `caj-si-endpoint` / `caj-si-identity` (never any other name) and carries SI's `si-build` tag; its producer and worker exist and read back (provisioned); it has no timer (trigger Manual); the pipeline does not start it (each step resolved by the runner's own rule -- a step whose producer exists starts the producer -- over the stored pipeline, else the default one; a stored pipeline that cannot be read keeps it); no execution of it is Running or Processing; none started after the split, which is **one hour after the producer's `systemData.createdAt`** -- an execution inside that hour belongs to the move itself (the old job loses its timer only after the producer is made), so it does not count (this rule holds only until **14 days after the producer was created**: after that, a run started by hand after the split no longer keeps the job and the other conditions decide -- a run going on now still keeps it, always); and the producer has at least one Succeeded execution (so the update that makes the split never removes its own fallback). Then one ARM DELETE of the job, read back until 404, and one line: "an old collection job from before the collection was split in parts is removed: <name>". Otherwise the job is kept and the line says which condition held it. No identity, registry or role is touched -- deleting the job is enough. Never fails the update; a failed delete is one warning and the next update tries again.
 
 **Risk Analysis Detailed on queue workers -- scale out, not only up.** The Detailed reports used to run one after another in one job (a large tenant's run took over 12 hours). **On by default wherever it can run**: every install with queue scaling and the managed identity gets it, new and existing alike. Where it cannot run (queue scaling off, no managed identity, no storage account) nothing changes and one line says why. The customer's `SI_Bootstrap_RaScaleOut = $false` (or `SI_UPDATER_RA_SCALE_OUT = off` on the updater job; the config wins) switches it off. Then the Detailed Risk Analysis job is the run's PRODUCER and `caj-si-raworker-detailed` its WORKERS (`engine/risk-analysis/_shared/RA-ScaleOut.ps1`; the same queue, lease, heartbeat, poison and marker mechanics as the collection's parts):
 
@@ -5469,6 +5595,16 @@ says so; any other pipeline is left as it is. Either way it is marked the curren
 never made again: a person who then runs azure and endpoint one after the other keeps that. Read-time, like the other
 stored-pipeline migrations (the updater step, a moved Risk Analysis): the runner reads the definition on every wake-up,
 so no updater step is needed; the next save stores it.
+
+**Required steps.** A job the map marks `required` is a step every pipeline has: the update adds it to a stored pipeline
+that lacks it, where its job is installed (`Add-SIJobFlowRequiredStep`, stored once by the update's pipeline layout step
+and read back), at its place in the default order with the map's timeout and its stage's on-failure default, and one
+line in the map's own words (`requiredWhy`) says so. A step that is there -- switched on or off, anywhere -- is left as
+it is, and the customer's other steps, their order and their settings are never touched. The Jobs page does not remove a
+required step. Two jobs are required: the verification service (the daily data health check) and the privilege tier
+classifier, first in Collect before the identity collection -- it keeps the tier catalog current (built with AI, or the
+daily classified catalog downloaded). The classifier never fails the pipeline: a step that could not finish is skipped
+and what needs it runs on the last known catalog (or the shipped one on a first run); see *It never blocks a night*.
 
 **The classifier's unchanged skip.** The privilege tier classifier's inputs cost seconds (2 Graph lists, 14
 service-principal lookups, 2 ARM lists); its AI pass is the minutes. Each run collects the inputs and fingerprints them
@@ -6689,10 +6825,12 @@ exact name: the AI token limits (`AI_MaxTokens`, `AI_MaxTokensPerRequest`, `Open
 
 **Schedules.** Each job has its own schedule. The privilege-tier classifier runs first (default 01:00 UTC), because the
 profilers read the tier catalog it builds; publicip runs after the endpoint and Azure profilers (05:15 UTC), because it
-reads their results. Set them with `SI_Bootstrap_ScheduleClassifier` / `SI_Bootstrap_SchedulePublicIp`. Without Azure
-OpenAI the classifier job is not created — it would classify every role as Tier 99 (manual review) and replace the
-shipped catalog — and setup says so in one line. In a container the classifier reads the catalog it shared last time,
-so it skips a rebuild within 24 hours exactly as on a VM.
+reads their results. Set them with `SI_Bootstrap_ScheduleClassifier` / `SI_Bootstrap_SchedulePublicIp`. The
+classifier job is created at every install: by default it downloads the daily classified
+catalog (see *Where the catalog comes from* under the privilege-tier catalog) and setup says so in one line. Earlier
+versions left the job out without Azure OpenAI; an existing install without it gets it from the next update (the update
+creates the jobs a newer version needs, from a collection job of the install). In a container the classifier reads the
+catalog it shared last time, so it skips a rebuild within 24 hours exactly as on a VM.
 
 **Job sizes.** Replica timeout, CPU and memory are settings per engine: `SI_Bootstrap_ReplicaTimeout_<Engine>` (seconds,
 300–604800, that is up to 7 days), `SI_Bootstrap_Cpu_<Engine>` (0.25–4) and `SI_Bootstrap_Memory_<Engine>` (for example `4Gi`), where `<Engine>`
@@ -6813,6 +6951,19 @@ and the same archive always gives the same SBOM. Because it is inside the archiv
 covers it; a copy (`securityinsight-<version>.cdx.json`) is published with the release notes. `setup\Test-SIReleaseSbom.ps1`
 checks an archive (with `-ExpectedSha256` = the signed value first) or an installed SecurityInsight folder against it. The
 packages those packages bring in are resolved when the install builds its images and are not listed.
+
+**Base image security updates.** Every SecurityInsight image is built from a Microsoft base image pinned by digest, so
+an install never builds from a base nobody tested. When Microsoft publishes a newer base image, the update platform
+tells SecurityInsight which tag and digest moved, and the vendor's release tooling (`setup\Release-SIImagePatch.ps1`)
+makes an image-only release from it -- the same steps every product on the platform follows: it starts from the code of
+the last release (never from unreleased work), moves only the matching `FROM` digests (and the shared sign-in front's
+pin, once that component carries the new digest), and numbers the release with a fourth part on the release it is built
+on (3.1.6 -> 3.1.6.1), so it sorts above it and below the next code release. Its changes are checked to be digests and
+version strings only. It then goes through the normal test gate and release rings, internal rings first; the customer
+rings follow once the platform has verified that only base images changed and the first rings proved the version. The
+release is then watched for a limited time; if an install reports a failed update or an app that stops answering on it,
+every ring it reached is switched back to the version that ran before -- the same code on the previous base image, never
+a code rollback and never more than one version -- and a new base image update waits until the cause is fixed.
 
 **Guided install as a command.** `setup/Install-SecurityInsight.psd1` exports `Install-SecurityInsight`, which forwards every parameter unchanged to `setup/Install-SecurityInsight.ps1` and leaves its exit code in `$LASTEXITCODE` (0 installed, 1 a step failed, 2 a check failed, 3 config.json not valid). Every event's action carries both a text and a command; a note without a command is part of the message, and a failure without a command of its own gets the resume command. Paths are built for Linux (Azure Cloud Shell) as well as Windows.
 
@@ -11344,6 +11495,26 @@ requests). If the receiver refuses the heartbeat with these keys, it is sent aga
 rest of the record is never lost to them; anything that cannot be read or does not pass the agreed shape is left out with
 one plain line and the heartbeat still goes.
 
+**Every long loop says how far it is.** Any loop that can run longer than ten minutes moves its step's `lastProgressUtc` /
+`progress` while it works -- at most every 3 minutes, and only when its count moved, so a loop that really stands still
+still looks still. One progress ticker does it for every loop (it writes the step's progress record and, where the step
+has no line of its own, one plain log line). The loops and their words:
+
+| loop | `progress` reads |
+|---|---|
+| the CI build's batches | `batch 161 of 266` |
+| the CI build's end-of-build marks (every record of the built CIs marked as built, then the marks of records that are gone cleared) -- run as one short statement per key range, each range its own transaction, so each range can say how far the pass is | `mark built 140,000 of 310,000`, then `clear built ...` |
+| the data sync's context field fill | `field fill rows 629,554 of 1,582,849` |
+| the data sync's other long parts (grouped Summary rows, key figures, findings per CI) | `collections 3 of 5`, `findings read ...`, `rows ...` |
+| the vulnerability connector's set-based compare (after every range of about 250,000 rows) | `compare rows 2,500,000 of 4,412,000` |
+| the connector's first pass over the CI keys (measure), then its second pass (plan, writes, closes) | `first pass CI keys 120,000`, `second pass CI keys 120,000 of 437,000` |
+| the second pass's writes of new and changed findings | `records written 52,000` |
+| the risk analysis's long reads (query slices of the running reports, the AI summary and key figures) | `query slices 412 of 544 done`, `rows ...` |
+
+A loop whose total is not known says what it has done; a pass that does more than the total it was given says its count
+alone. The progress is measurement only: it never changes a row of product data, a decision or the order of the work, and
+a progress record that cannot be written is said once in the log and the step goes on.
+
 **A run stopped or cancelled before its end.** Such a run never reads as finished: `stepsDone` counts only the steps that
 ran to their end (a run cancelled at step 8 of 12 reads 7 of 12, not 12 of 12), and `step` / `stepSinceUtc` name the step
 it was stopped at (the step closed while it ran, else the first step that ended without success). Its `state` is `idle`
@@ -11638,6 +11809,23 @@ remains the contract for the record sent to Invardia and the promotion hold Inva
 **What is checked (read-only, as the engine identity).** Every day, inside the verification job (after the verification
 checks, never failing them; its own run-health records, engine `data-health`), `engine/data-health/Invoke-SIDataHealth.ps1`:
 
+**It never depends on a finished run.** The verification job is the pipeline's last step, so an install whose runs end earlier
+(a failed step, a run stopped for an update) would get no report. At the end of every full wake-up -- after the queue and the
+upkeep, never on a wake-up during a run -- the pipeline runner asks `engine/data-health/_shared/SI-DataHealthOnOwn.ps1`: when the
+newest finished data health cycle is older than **24 hours** (or there is none), the runner starts the verification job once
+with `SI_DATAHEALTH_ON_OWN=1`, and that execution runs **only** the data health check, on the data already stored (the
+verification checks, the ServiceNow check and the pipeline check stay with the pipeline's own verification step). It starts only
+when the check is on and its tables exist; the install is idle by the same rule the clean-up and the index build use (no
+pipeline run, no open step, no data sync, no data out) -- so it never competes with a step that works the database; no update
+runs or waits; and the verification job neither runs now nor started in the last **6 hours** (the pipeline's verification or an
+earlier start that has not reported yet). A run that reaches verification reports there, so the rule then finds a fresh report
+and starts nothing. Every outcome is one line in the runner's log; anything that cannot be read starts nothing, and the rule
+never fails or holds the wake-up. The pipeline check (an execution of a step's job outside a pipeline run) does not count an
+execution whose template carries `SI_DATAHEALTH_ON_OWN=1`. **Either way the check says which collection it judged**: one line
+naming the newest complete Detailed collection (its id and time; each source is compared with its own newest good collection)
+and why it ran (after the run's verification, or on its own with the reason), kept in the cycle's summary (`trigger`,
+`collectionId`, `collectionTime`).
+
 | Source (wire id) | Read from the source | Looked up in the newest collection (`sidata.CiRecord`) | Key fields compared | Margin |
 |---|---|---|---|---|
 | Entra users (`entra-users`) | Graph `/users` (id, UPN, enabled, created) | `entra:<id>`, user | UPN, enabled | 1 % |
@@ -11655,13 +11843,25 @@ of the feed's newest good collection (`sidata.RecordCollection`); one whose key 
 Check (b) samples the devices that hold vulnerability findings in the newest complete Detailed collection (their Defender id from
 the CI's `mde` record) and asks Defender for each one; a device Defender could not answer for is left out and said. **Like with like:** each report's OWN exclusions apply before anything counts as missing -- its excluded CVEs, its CVE minimum age (judged by the vulnerability's last update in Defender) and its excluded configuration ids -- read through Risk Analysis's one scope reader (`Get-RAReportActiveScope`: the report's scope template, then its exclusion document, a Pro install's database copy first) and judged by `Test-RAInScopeFinding`, the PowerShell form of the scope block's `SI_InScopeCve` / `SI_InScopeConfiguration`, kept beside it. A CVE a report leaves out by rule is never "missing"; for the `vulnerabilities` source a CVE counts when at least one of the device's reports would keep it. Exclusions that cannot be read = every CVE is expected (said).
 
+**Check (b) reads the stored findings whole, or does not judge them.** A stored-findings read that came back short would show
+present findings as missing -- a false loss, as damaging to trust as a missed one. So: the stored findings are read from the
+SAME collection the sampled devices were taken from (the population read hands its collection id on; nothing re-resolves "the
+newest" minutes later); a CI's Defender device record is picked in one fixed order in both reads (most recently seen, then
+newest collected, then by key -- a CI can hold more than one device record when a device is onboarded again); and the read
+proves it is whole: every row carries the number of rows the statement returns (`COUNT_BIG(*) OVER ()`, one statement, one
+snapshot) and every sampled device must come back with its findings (each was picked because it holds some). A read that fails
+or comes back short is read again after a pause (15 s, then 60 s). Still not whole: the `vulnerabilities` source is
+**not-checked** with the reason *"the check could not read all stored findings -- not a data anomaly"*, no report is judged,
+nothing is listed as missing and Defender is not asked. The stored findings are read before Defender is asked.
+
 **The margin.** `allowed = max(minimum, floor(checked x percent / 100))`; a source or report is **anomalous** when more than
 that differ (missing + field mismatches; for a report missing + extra). The percents are the approved defaults above, editable
 by an Admin (`SI_DataHealth_Margin_EntraUsers`, `_EntraApps`, `_Devices`, `_Azure`, `_DefenderForCloud`, `_Vulnerabilities`,
 `_RiskAnalysis`); the minimum is `SI_DataHealth_MarginMinimum` (5). A source that answers empty while the newest collection
 holds its records is anomalous.
 
-**Verdicts.** `ok` | `anomalous` | `not-checked` (the source could not be read, or the Pro database could not: never ok) |
+**Verdicts.** `ok` | `anomalous` | `not-checked` (the source could not be read, or the Pro database could not, or the stored
+findings could not be read whole: never ok, never anomalous) |
 `not-used` (this install holds no collection of a source that has records, or a part of the check is not set up -- neither good
 nor missing).
 
@@ -11692,7 +11892,8 @@ known), tenantId, sentUtc, state, since, cycle { id, startedUtc, finishedUtc, an
 notChecked }, sources [ { source, sampled, found, missing, fieldMismatches, margin { percent, minimum }, verdict } ], reports
 [ { report, sampled, matched, missing, extra, margin, verdict } ], dataOut { held, overrides [ { channel, byRole, sinceUtc,
 reason } ] }`. Counts only: a not-checked / not-used source is left out of the lists (the wire knows ok | anomalous) and
-counted in `cycle.notChecked`; an override's channel is SecurityInsight's own connector name or `connector` (a name the
+counted in `cycle.notChecked` (a stored-findings read that was not whole thus reaches Invardia as `complete: false`,
+`notChecked` +1, `anomalous: false`, and no `vulnerabilities` source or report -- never as an anomaly); an override's channel is SecurityInsight's own connector name or `connector` (a name the
 customer gave), its reason only `given`; never a record key, name or person. Identified installs only; at most 50 sources and
 200 reports and 32 KB (reports cut first, `truncated` said). Sent at the end of every daily cycle -- the cycle that changes the
 state included. **Behind `SI_Telemetry_SendHealth`, OFF by default**: switched on per ring after Invardia has confirmed the kind

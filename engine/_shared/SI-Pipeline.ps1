@@ -48,8 +48,15 @@ $script:SIPipeline = @{
     RunFinished     = @('Succeeded', 'Failed', 'Stopped', 'Cancelled')
     # THE SOURCES: the Collect steps that each read one family of sources and write its records. A failed one is a DROPOUT
     # (the run goes on with its last good collection). The tier classifier (ptc) is NOT a source: it writes no records --
-    # it builds the tier catalog every collection reads, so it stays a prerequisite (its failure skips the collections).
+    # it keeps the tier catalog every collection reads current.
     SourceJobs      = @('identity', 'azure', 'endpoint', 'publicip')
+    # THE TIER CLASSIFIER NEVER FAILS THE PIPELINE (owner 2026-11-11: "if the download from prio 1 fails on initial, it must
+    # skip the step in the pipeline for next run, but not fail the pipeline. if it fails a normal run, it uses last known
+    # classification"). Its step that did not succeed ends SKIPPED (class 'classifier-skipped', Set-SIPipelineClassifierSkipped)
+    # -- never Failed: what needs it runs on the last known catalog (or the shipped one), the stage counts it as fine, and the
+    # next run tries again. Until 2026-11-11 its failure skipped the collections (a prerequisite). No other step changes.
+    ClassifierJobs  = @('ptc')
+    ClassifierSkippedClass = 'classifier-skipped'
 }
 
 # =====================================================================================================================
@@ -319,8 +326,60 @@ function Get-SIPipelineStageOutcome {
         if (@($mine | Where-Object { $_.State -ne 'Waiting' -and $_.State -ne 'Disabled' }).Count) { return 'Running' }
         return 'Waiting'
     }
-    if (@($mine | Where-Object { $_.State -notin @('Success', 'Disabled') }).Count) { return 'Failed' }
+    if (@($mine | Where-Object { $_.State -notin @('Success', 'Disabled') -and -not (Test-SIPipelineClassifierSkipped $_) }).Count) { return 'Failed' }
     'Succeeded'
+}
+
+function Test-SIPipelineClassifierJob {
+    <# PURE. Is -Job the privilege tier classifier (a step that never fails the pipeline)? #>
+    param([AllowEmptyString()][AllowNull()][string]$Job)
+    $k = ([string]$Job).Trim().ToLowerInvariant()
+    if ($k.StartsWith('caj-si-')) { $k = $k.Substring(7) }
+    $script:SIPipeline.ClassifierJobs -contains $k
+}
+
+function Test-SIPipelineClassifierSkipped {
+    <# PURE. A tier classifier step that ended without success under the never-fail rule -- skipped by it, or (a record a
+       runner had not judged yet) failed / timed out / ended at its limit, never stopped on purpose: it counts as fine for
+       its stage and holds nothing. #>
+    param($Step)
+    if ($null -eq $Step) { return $false }
+    if ([string]$Step.State -eq 'Skipped' -and [string]$Step.ErrorClass -eq $script:SIPipeline.ClassifierSkippedClass) { return $true }
+    (Test-SIPipelineClassifierJob ([string]$Step.Job)) -and ([string]$Step.State -in @('Failed', 'TimedOut') -or ([string]$Step.State -eq 'Interrupted' -and [string]$Step.ErrorClass -ne 'stopped'))
+}
+
+function Test-SIPipelineClassifierSkipLog {
+    <# PURE. Does the classifier's run log say it SKIPPED this run (no catalog at all: Get-PTCFirstRunSkip /
+       Get-PTCFailureOutcome write this sentence)? Its execution then ended successfully; the runner shows the step skipped. #>
+    param([AllowEmptyCollection()][string[]]$Lines = @())
+    foreach ($l in @($Lines)) { if ([string]$l -match 'the step is skipped -- the collections use the catalog shipped with SecurityInsight') { return $true } }
+    $false
+}
+
+function Set-SIPipelineClassifierSkipped {
+    <#
+        PURE. The never-fail rule for the tier classifier's step (owner 2026-11-11), applied when the step has ended:
+          * it failed or timed out (or Azure ended it at its run limit) -> SKIPPED, with its own error kept in the words;
+          * it succeeded and its engine recorded END 'skipped' (-EndReason; the first run without any catalog: the download
+            failed and the install has none of its own) -> SKIPPED.
+        A step STOPPED from outside on purpose stays as it is (a stop is final). Changes the step; returns the line said, or
+        '' when nothing changed. Any other step: ''.
+    #>
+    param([Parameter(Mandatory)]$Step, [AllowEmptyString()][AllowNull()][string]$EndReason = '')
+    if (-not (Test-SIPipelineClassifierJob ([string]$Step.Job))) { return '' }
+    $line = ''
+    $saidSkip = ([string]$EndReason).Trim() -eq 'skipped'
+    $skipLine = 'the tier classifier skipped this run: there is no tier catalog of this install''s own yet and none could be made (the daily classified catalog could not be downloaded) -- the collections use the catalog shipped with SecurityInsight, and the next run tries again'
+    if ([string]$Step.State -in @('Failed', 'TimedOut') -or ([string]$Step.State -eq 'Interrupted' -and [string]$Step.ErrorClass -ne 'stopped')) {
+        $was = ([string]$Step.Error).Trim()
+        if ($saidSkip) { $line = $skipLine }
+        else { $line = ('the tier classifier did not finish{0} -- the step is skipped, never failed: the collections use the last known tier catalog (or the one shipped with SecurityInsight), and the next run tries again' -f $(if ($was) { ' (' + $was + ')' } else { '' })) }
+    } elseif ([string]$Step.State -eq 'Success' -and $saidSkip) {
+        $line = $skipLine
+    }
+    if (-not $line) { return '' }
+    $Step.State = 'Skipped'; $Step.ErrorClass = $script:SIPipeline.ClassifierSkippedClass; $Step.Error = $line
+    $line
 }
 
 function Test-SIPipelineSourceJob {
@@ -349,7 +408,8 @@ function Get-SIPipelineCollectVerdict {
     $failed = @($sources | Where-Object { [string]$_.State -in @('Failed', 'TimedOut', 'Interrupted') })
     $ok = @($sources | Where-Object { [string]$_.State -eq 'Success' })
     $failedJobs = @($failed | ForEach-Object { [string]$_.Job })
-    $other = @($mine | Where-Object { [string]$_.State -notin @('Success', 'Disabled') -and $failedJobs -notcontains [string]$_.Job })
+    # the tier classifier skipped by the never-fail rule is fine (owner 2026-11-11)
+    $other = @($mine | Where-Object { [string]$_.State -notin @('Success', 'Disabled') -and $failedJobs -notcontains [string]$_.Job -and -not (Test-SIPipelineClassifierSkipped $_) })
     $stop = $false
     if ($Definition) {
         foreach ($f in $failed) {

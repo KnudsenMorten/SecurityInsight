@@ -281,7 +281,7 @@ Describe 'THE RUN GOES ON WITHOUT ONE SOURCE: a failed collection does not stop 
         Get-SIPipelineWentOnText -State $r | Should -Be $sentence
         [string]$r.Note | Should -Be $sentence
         @($script:SrcCalls | Sort-Object) | Should -Be @('dropped endpoint', 'good azure', 'good identity', 'good publicip')
-        @($script:SrcCalls) | Should -Not -Contain 'good ptc' -Because 'the tier classifier is a prerequisite, not a source'
+        @($script:SrcCalls) | Should -Not -Contain 'good ptc' -Because 'the tier classifier is not a source'
     }
     It 'without a source state the date is the run before''s, when that collection succeeded in it' {
         $prev = [pscustomobject]@{ FlowRunId = 'prev'; State = 'Succeeded'; StartedUtc = $script:T0.AddDays(-1); EndedUtc = $script:T0.AddDays(-1).AddHours(3); HeartbeatUtc = $script:T0.AddDays(-1).AddHours(3); LastSlotUtc = $null
@@ -321,11 +321,12 @@ Describe 'THE RUN GOES ON WITHOUT ONE SOURCE: a failed collection does not stop 
         Get-SIPipelineWentOnText -State $r | Should -Be ''
         Get-SIPipelineHeldBackText -State $r | Should -Match '^this run was held back: identity \(Collect\) did not succeed, so 9 step\(s\) after it did not run and nothing was delivered from this run'
     }
-    It 'the tier classifier failed (a prerequisite, not a source) -> held back as before' {
+    It 'the tier classifier failed (not a source) -> nothing held back (owner 2026-11-11): its step is skipped, everything after it runs' {
         $r = Invoke-HealFlow -Arm (New-HealArm -Outcomes @{ 'ptc' = @('Failed') } -Durations @{ 'ptc' = @(900) })
-        foreach ($k in 'identity', 'azure', 'endpoint', 'publicip', 'asset-correlation', 'risk-analysis', 'asset-datasync', 'close-loop-mail') { (Get-Step $r $k).State | Should -Be 'Skipped' }
+        (Get-Step $r 'ptc').State | Should -Be 'Skipped'
+        foreach ($k in 'identity', 'azure', 'endpoint', 'publicip', 'asset-correlation', 'asset-datasync') { (Get-Step $r $k).State | Should -Be 'Success' }
         Get-SIPipelineWentOnText -State $r | Should -Be ''
-        Get-SIPipelineHeldBackText -State $r | Should -Match '^this run was held back: ptc \(Collect\) did not succeed'
+        Get-SIPipelineHeldBackText -State $r | Should -Be ''
     }
     It 'a source dropped AND the CI build failed -> everything that needs the CI build is held at it as before, and the sentence names the CI build (not the source)' {
         $r = Invoke-HealFlow -Arm (New-HealArm -Outcomes @{ 'endpoint' = @('Failed'); 'asset-correlation' = @('Failed') } -Durations @{ 'endpoint' = @(900); 'asset-correlation' = @(900) })
@@ -380,7 +381,8 @@ Describe 'THE RUN GOES ON WITHOUT ONE SOURCE: a failed collection does not stop 
         (Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Success'; identity = 'Success'; endpoint = 'Failed' })).GoesOn | Should -BeTrue
         (Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Success'; identity = 'Success'; endpoint = 'TimedOut' })).GoesOn | Should -BeTrue
         (Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Success'; identity = 'Failed'; endpoint = 'Failed' })).GoesOn | Should -BeFalse -Because 'no collection succeeded'
-        (Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Failed'; identity = 'Success'; endpoint = 'Failed' })).GoesOn | Should -BeFalse -Because 'the tier classifier is not a source'
+        (Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Failed'; identity = 'Success'; endpoint = 'Failed' })).GoesOn | Should -BeTrue -Because 'the tier classifier never fails the pipeline (owner 2026-11-11)'
+        @((Get-SIPipelineCollectVerdict -State (& $st @{ ptc = 'Failed'; identity = 'Success'; endpoint = 'Failed' })).Dropouts.Job) | Should -Be @('endpoint') -Because 'it is not a source either'
         (Get-SIPipelineCollectVerdict -State (& $st @{ identity = 'Success'; endpoint = 'Failed'; 'my-step' = 'Failed' })).GoesOn | Should -BeFalse -Because 'a custom step is not a source'
         (Get-SIPipelineCollectVerdict -State (& $st @{ identity = 'Success'; endpoint = 'Success' })).GoesOn | Should -BeFalse -Because 'nothing dropped'
         (Get-SIPipelineCollectVerdict -State (& $st @{ identity = 'Success'; endpoint = 'Disabled'; azure = 'Failed' })).Dropouts.Job | Should -Be 'azure'
@@ -419,18 +421,21 @@ Describe 'BLOCKING: a failed CI build, or a Collect with nothing collected, lets
         }
         Get-SIPipelineHeldBackText -State $r | Should -Match '^this run was held back: asset-correlation \(Correlate\) did not succeed, so 7 step\(s\) after it did not run and nothing was delivered from this run'
     }
-    It 'a step of Collect that is not a collection (the tier classifier) set to "carry on" when it fails still blocks the stages after it (the stage did not succeed)' {
+    It 'the tier classifier set to "carry on" when it fails blocks nothing either (owner 2026-11-11: it never fails the pipeline)' {
         $arm = New-HealArm -Outcomes @{ 'ptc' = @('Failed') } -Durations @{ 'ptc' = @(900) }
         $r = Invoke-HealFlow -Arm $arm -Change { param($d) (@($d.Steps | Where-Object { $_.Job -eq 'ptc' })[0]).OnFailure = 'continue' }
+        (Get-Step $r 'ptc').State | Should -Be 'Skipped'
         (Get-Step $r 'endpoint').State | Should -Be 'Success' -Because 'inside Collect the collections still run'
-        foreach ($k in 'asset-correlation', 'risk-analysis', 'asset-datasync', 'close-loop-mail') { (Get-Step $r $k).State | Should -Be 'Skipped' }
+        foreach ($k in 'asset-correlation', 'risk-analysis-detailed', 'asset-datasync') { (Get-Step $r $k).State | Should -Be 'Success' }
     }
     It 'a choice the customer saved stays theirs, and still lets no data out by itself: Deliver set to "run anyway" starts after a failed CI build, but every step that needs the CI build is skipped -- and it NEVER starts after a Collect in which nothing was collected' {
         $anyway = { param($d) (@(Get-SIPipelineStages -Definition $d | Where-Object { [string]$_.Id -eq 'deliver' })[0]).RunIfPreviousFailed = $true }
         $r = Invoke-HealFlow -Arm (New-HealArm -Outcomes @{ 'asset-correlation' = @('Failed') } -Durations @{ 'asset-correlation' = @(900) }) -Change $anyway
         (Get-Step $r 'verification').State | Should -Be 'Success' -Because 'the stage runs anyway; verification needs no CI build'
         foreach ($k in 'asset-cmdb-sql', 'asset-vulnerabilities', 'asset-datasync', 'close-loop-mail') { (Get-Step $r $k).State | Should -Be 'Skipped' -Because "$k needs the CI build, directly or through another step" }
-        $r = Invoke-HealFlow -Arm (New-HealArm -Outcomes @{ 'ptc' = @('Failed') } -Durations @{ 'ptc' = @(900) }) -Change $anyway
+        # a Collect in which nothing was collected: every collection failed
+        $none = @{ 'identity' = @('Failed'); 'azure' = @('Failed'); 'endpoint' = @('Failed') }
+        $r = Invoke-HealFlow -Arm (New-HealArm -Outcomes $none -Durations @{ 'identity' = @(900); 'azure' = @(900); 'endpoint' = @(900) }) -Change $anyway
         foreach ($k in 'verification', 'asset-cmdb-sql', 'asset-datasync') { (Get-Step $r $k).State | Should -Be 'Skipped' -Because 'nothing is delivered from a partial collection, whatever the stage is set to' }
         # the one saved choice that DOES let a later step run on the previous CI build: the CI build step itself set to "carry on"
         $carry = { param($d) (@($d.Steps | Where-Object { $_.Job -eq 'asset-correlation' })[0]).OnFailure = 'continue' }

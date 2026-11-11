@@ -353,7 +353,7 @@ Describe 'no managed-identity branch without the switch (WIRING over the engine 
     It 'only the container entry points and the one sign-in decision (#222) turn the switch on' {
         # Real assignments only (the AST), not prose in a comment.
         $setters = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' |
-            Where-Object { $_.FullName -notmatch '\\tests\\' } |
+            Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' } |
             Where-Object {
                 $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null)
                 @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -481,7 +481,8 @@ Describe 'the X509Store fallback where there is no Cert: drive' {
         $p.AzAppCertificateThumbprint | Should -Be 'AB12'
         Should -Invoke Get-SICertStoreLocation -Times 1 -Exactly
     }
-    It 'EXECUTED: with the drive present the resolver never touches the fallback' {
+    # the certificate store (Cert: drive) exists on Windows only: tagged so the Linux test runner leaves it out (framework 12.1 rule 6)
+    It 'EXECUTED: with the drive present the resolver never touches the fallback' -Tag 'Windows' {
         . (Join-Path $script:SIRoot 'engine\_shared\SI-LogIngest.ps1')
         Mock Get-SICertStoreLocation { 'CurrentUser' }
         $global:SI_SPN_AppId = 'app'; $global:SI_SPN_TenantId = 'ten'; $global:SI_SPN_CertThumbprint = '0000NOTINSTALLED0000'

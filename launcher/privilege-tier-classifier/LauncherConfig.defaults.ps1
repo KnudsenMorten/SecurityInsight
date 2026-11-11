@@ -37,6 +37,11 @@ if ($null -eq $global:SI_PrivilegeTierClassifier_RunAI) { $global:SI_PrivilegeTi
 # unchanged: the AI pass is skipped and the catalog kept. 0 = rebuild on every run. Rebuilt at least this often.
 if ($null -eq $global:SI_PrivilegeTierClassifier_RefreshDays) { $global:SI_PrivilegeTierClassifier_RefreshDays = 7 }
 
+# Where the privilege tier catalog comes from (owner 2026-11-11): 'invardia' = the daily classified catalog is downloaded --
+# every install, new and existing, also with Azure OpenAI configured; 'ai' = the customer's explicit opt-in to build it with
+# AI (costs AI calls; valid only with AI integration on -- otherwise downloaded, with a warning). Never inferred.
+if ($null -eq $global:SI_PrivilegeTierCatalog_Source) { $global:SI_PrivilegeTierCatalog_Source = 'invardia' }
+
 # OpenAI API version default. Engine reads this to build the chat-completions
 # URL. Setup-SecurityInsight's OpenAI phase will overwrite if it provisioned
 # the AOAI deployment; this default protects ad-hoc classifier runs that

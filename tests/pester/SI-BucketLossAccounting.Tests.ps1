@@ -41,6 +41,8 @@ BeforeAll {
         $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $n.Name
     }, $true)
     foreach ($f in $fns) { . ([scriptblock]::Create($f.Extent.Text)) }
+    # #1200: the recovery budget's loss lines build their text with Format-RARecoveryBudgetLoss (RA-AutoBucketing.ps1)
+    . (Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-AutoBucketing.ps1')
 
     # Capture what the verdict prints instead of writing to the host.
     $script:Emitted = New-Object System.Collections.Generic.List[string]
@@ -141,7 +143,7 @@ Describe '🔑 WIRING -- every loss path must actually report' {
         # remaining buckets after a 900s ceiling) keyed on a flag nothing ever set, so it could never run;
         # the branch was removed with its recording line (SIv3-NoUnwiredRiskAnalysisCode).
         $calls = [regex]::Matches($script:CodeNC, '(?m)^\s*Add-RABucketLoss ')
-        $calls.Count | Should -Be 14   # (merged 2026-10-22: - the futile-prune, one mechanism) #882 (2026-10-22): the late retry's slices still refused when a pass recovers nothing are named apart from its defect / unrecognised failure; #880 (2026-10-22): a sub-slice not split further because splitting did not reduce its bucket's failure; #641 (2026-10-13): a slice that stays SHORT against the source's count of it -- main loop and sub-buckets; #803 (2026-10-19): a sub-slice too large for memory even at the deepest split
+        $calls.Count | Should -Be 17   # #1200 (2026-11-11): + the three slices a spent recovery time budget leaves unread (a late-retry bucket, a queued smaller slice, a smaller slice about to be asked); (merged 2026-10-22: - the futile-prune, one mechanism) #882 (2026-10-22): the late retry's slices still refused when a pass recovers nothing are named apart from its defect / unrecognised failure; #880 (2026-10-22): a sub-slice not split further because splitting did not reduce its bucket's failure; #641 (2026-10-13): a slice that stays SHORT against the source's count of it -- main loop and sub-buckets; #803 (2026-10-19): a sub-slice too large for memory even at the deepest split
     }
 
     It 'LOSS PATH 2 -- a throttled/unavailable API survived BOTH the in-loop and the late retries' {
@@ -286,10 +288,15 @@ Describe '🔴 EXECUTION -- every recording line is RUN from the shipped source,
         $script:__lpErr                = @{ 11 = '504 Gateway Timeout' }
         $script:__lateWhy              = 'API throttling/unavailable survived'
         $script:__lp                   = [pscustomobject]@{ Pass = 3 }
+        # #1200: the slices a spent recovery time budget leaves unread
+        $script:__rb                   = [pscustomobject]@{ Minutes = 90; Lost = 0 }
+        $script:__rbNotRead            = @{ 11 = '504 Gateway Timeout' }
+        $script:__rbSl                 = 'sub-bucket 41/128 (depth 2) of bucket 10'
+        $script:subAttempt             = 3
     }
 
     It 'every recording line was lifted out of the engine' {
-        $script:LossLines.Count | Should -Be 14   # (merged 2026-10-22: - the futile-prune, one mechanism) #882: + the late retry's slices still refused after a pass that recovered nothing; #880: + a sub-slice not split further (splitting did not reduce the failure); #803: + a sub-slice too large for memory at the deepest split; #641: + the two short-slice paths; loss path 1 was unreachable and is removed (see the call-site count)
+        $script:LossLines.Count | Should -Be 17   # #1200: + the three recovery-budget losses; (merged 2026-10-22: - the futile-prune, one mechanism) #882: + the late retry's slices still refused after a pass that recovered nothing; #880: + a sub-slice not split further (splitting did not reduce the failure); #803: + a sub-slice too large for memory at the deepest split; #641: + the two short-slice paths; loss path 1 was unreachable and is removed (see the call-site count)
     }
 
     It '🔴 EVERY one of them, executed verbatim, records exactly one loss' {

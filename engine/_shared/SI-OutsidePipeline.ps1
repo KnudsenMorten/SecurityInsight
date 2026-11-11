@@ -9,7 +9,8 @@
     count through their producer's run and are not read) -- must belong to
       * a pipeline run: its execution name is a step record of a run (cfg.FlowStepRun.Execution), or it started inside the
         window of that step's record in a run (an earlier attempt the runner started again, working rule 4); or
-      * a person's start: cfg.JobTriggerRequest.ExecutionName (the web app's start with its own values, claimed by the job).
+      * a person's start: cfg.JobTriggerRequest.ExecutionName (the web app's start with its own values, claimed by the job); or
+      * the runner's start of the data health check on its own (#1201): SI_DATAHEALTH_ON_OWN=1 in the execution's template.
     Any other execution "ran outside the pipeline: <job> <execution> <start>". In schedules mode (every job on its own
     timer) nothing is checked. ARM or the database not read = said in one line, nothing concluded.
 
@@ -78,6 +79,22 @@ function Get-SIOutsidePipelineStepJobs {
     })
 }
 
+function Test-SIOutsidePipelineDataHealthOnOwn {
+    <# PURE. Was this execution (ARM shape) started with SI_DATAHEALTH_ON_OWN=1 in its template -- the runner's start of the
+       data health check on its own (engine\data-health\_shared\SI-DataHealthOnOwn.ps1)? #>
+    param($Execution)
+    if ($null -eq $Execution) { return $false }
+    $p = if ($Execution.PSObject.Properties['properties']) { $Execution.properties } else { $Execution }
+    if ($null -eq $p -or -not $p.PSObject.Properties['template'] -or $null -eq $p.template) { return $false }
+    foreach ($c in @($p.template.containers)) {
+        if ($null -eq $c -or -not $c.PSObject.Properties['env']) { continue }
+        foreach ($e in @($c.env)) {
+            if ($e -and [string]$e.name -eq 'SI_DATAHEALTH_ON_OWN' -and ("$($e.value)".Trim().ToLowerInvariant()) -in @('1', 'true', 'yes')) { return $true }
+        }
+    }
+    $false
+}
+
 function Get-SIOutsidePipelineExecutions {
     <#
         PURE. THE RULE (see the top of this file). -StepJobs: Get-SIOutsidePipelineStepJobs; -Executions: job name -> its
@@ -107,6 +124,9 @@ function Get-SIOutsidePipelineExecutions {
             $st = ([datetime]$p.startTime).ToUniversalTime()
             if ($st -lt $since) { continue }
             if ($known.Contains($name)) { continue }
+            # #1201: the verification job started by the runner to run ONLY the data health check (SI_DATAHEALTH_ON_OWN=1 in
+            # its template) is the product's own start, not a run outside the pipeline
+            if (Test-SIOutsidePipelineDataHealthOnOwn -Execution $x) { continue }
             if (@($windows | Where-Object { $st -ge $_.From -and $st -le $_.To }).Count) { continue }
             $out.Add([pscustomobject]@{ Job = [string]$sj.Job; Execution = $name; StartUtc = $st; Status = [string]$p.status
                                         Line = ('ran outside the pipeline: {0} {1} {2:yyyy-MM-ddTHH:mm:ssZ}' -f $sj.Job, $name, $st) })

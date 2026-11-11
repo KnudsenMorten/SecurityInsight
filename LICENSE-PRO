@@ -106,6 +106,8 @@ These paths are delivered only to licensed customers through the private Automat
   setup/Publish-SICommunityRelease.ps1
   setup/_shared/SI-ReleaseGateProof.ps1
   setup/Release-SI.ps1
+  setup/Release-SIImagePatch.ps1
+  setup/_shared/SI-ImagePatch.ps1
   setup/Get-SIFixRequests.ps1
   ops/support-worker
   ops/report-certification

@@ -21,7 +21,9 @@
     in the Pro database (cfg.DataHealth*). A source that cannot be read is NOT CHECKED with the reason -- never "ok".
 
     Runs inside the verification job (caj-si-verification), after the verification checks; its own run-health records
-    (engine 'data-health'). Settings: SI_DataHealth_Enabled (default on), SI_DataHealth_Margin_* / _MarginMinimum,
+    (engine 'data-health'). Also ON ITS OWN (#1201): the pipeline runner starts the verification job with
+    SI_DATAHEALTH_ON_OWN=1 when the last report is older than 24 h and the install is idle -- then only this check runs
+    (_shared\SI-DataHealthOnOwn.ps1). Either way it says which collection it judged. Settings: SI_DataHealth_Enabled (default on), SI_DataHealth_Margin_* / _MarginMinimum,
     SI_Telemetry_SendHealth (the health record to Invardia; on by default, $false turns it off, framework §12.22).
 .PARAMETER DryRun
     Run the checks and print the result; store nothing, send nothing.
@@ -66,6 +68,14 @@ foreach ($pair in @(@('SI_ProSqlServer', 'SI_ProSqlDatabase'), @('SI_Pro_DataSql
 $invoke = $null
 if ($server -and $database) { $invoke = New-SIDataSqlInvoke -Server $server -Database $database -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint }
 else { & $log 'WARN' 'No Pro database (SI_ProSqlServer / SI_ProSqlDatabase) -- the newest collection cannot be read; nothing is checked.' }
+
+# ---- #1201: WHICH COLLECTION IT JUDGES, and why it runs now (after the run's verification, or on its own because the last
+#      report is older than 24 h -- SI-DataHealthOnOwn.ps1). Said in one line and kept with the cycle (its summary). ----
+if (-not (Get-Command -Name Get-SIDataHealthJudged -ErrorAction SilentlyContinue)) { . (Join-Path $here '_shared\SI-DataHealthOnOwn.ps1') }
+$judgedRow = $null; $judgedErr = ''
+if ($invoke) { try { $judgedRow = @(Read-SIDataHealthRows -Invoke $invoke -Sql (Get-SIDataHealthJudgedCollectionSql)) | Select-Object -First 1 } catch { $judgedErr = $_.Exception.Message } }
+$judged = Get-SIDataHealthJudged -Row $judgedRow -OnOwn (Test-SIDataHealthOnOwnRequested) -Why "$env:SI_DATAHEALTH_ON_OWN_WHY" -ReadError $judgedErr
+& $log 'INFO' $judged.Line
 
 # ---- THE READS (each one source; read-only). A partial read is NOT a read: it would show every record it missed as missing ----
 $paged = {
@@ -203,7 +213,7 @@ $sendHealth = {
 $rhEnd = @{ Exit = 'failed'; Message = '' }
 & $sendHealth 'Start' '' ''
 try {
-    $res = Invoke-SIDataHealthCycle -Sources $sources -Defender $defender -Invoke $invoke -InScope $inScope -DryRun:$DryRun -Seed $Seed -TelemetryContext $tctx -SendTelemetry $send -TelemetrySkipReason $tskip -Log $log
+    $res = Invoke-SIDataHealthCycle -Sources $sources -Defender $defender -Invoke $invoke -InScope $inScope -DryRun:$DryRun -Seed $Seed -TelemetryContext $tctx -SendTelemetry $send -TelemetrySkipReason $tskip -Judged $judged -Log $log
     $rhEnd = Get-SIDataHealthOutcome -Result $res
     & $log $(if ($res.Coverage) { 'WARN' } else { 'OK' }) ('data health done: {0}{1}{2}{3}' -f $res.State.State, $(if ($res.Coverage) { " -- $($res.Coverage)" } else { '' }), $(if ($res.Written) { " -- stored as cycle $($res.CycleId)" } elseif ($DryRun) { ' (DRY RUN -- nothing stored)' } else { '' }),
         $(if ($res.Telemetry -ne 'not-sent') { " -- health record to Invardia: $($res.Telemetry)" } else { '' }))

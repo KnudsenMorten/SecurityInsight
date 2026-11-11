@@ -764,9 +764,13 @@ function Invoke-SIDataViewContext {
                 $workersNow = $maxWorkers
                 if ($maxWorkers -gt 1) { & $Log 'INFO' ("context     : collection {0} -- the field fill runs {1} range(s) at a time (the database's cores)" -f $cid, $maxWorkers) }
                 # #1180: the step's progress record (rows filled of all) moves with the fill, every few minutes -- the stall
-                # check sees a long fill moving; the progress line above stays the log's word
+                # check sees a long fill moving; the progress line above stays the log's word. PROGRESS-TICK-1 (#1195): the
+                # record's count says what it is ("field fill rows 629,554 of 1,582,849" in the heartbeat's
+                # runningSteps[].progress), and a record that cannot be written is said once in the log, never silently (its
+                # warning only: the fill's own line above already says the rows once a minute)
                 $ctxTick = $null
-                if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $ctxTick = New-SIStepProgressTicker -What ("the views' prepared context of collection {0}" -f $cid) -Unit 'rows' -Total $total -Invoke $Invoke }
+                $ctxWarn = { param($l, $m) if ([string]$l -ne 'INFO') { & $Log $l $m } }.GetNewClosure()
+                if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $ctxTick = New-SIStepProgressTicker -What ("the views' prepared context of collection {0}" -f $cid) -Unit 'field fill rows' -Total $total -Invoke $Invoke -Log $ctxWarn }
                 while ($after -lt $hi) {
                     # the database's own load paces the ranges (SI-SqlPacing.ps1): a pause, a smaller range and fewer ranges
                     # at once only while it is saturated -- every range is still filled, with the same values

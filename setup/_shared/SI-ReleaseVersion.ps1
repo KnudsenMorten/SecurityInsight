@@ -110,8 +110,10 @@ function Get-SINextReleaseVersion {
     param([Parameter(Mandatory)][string]$BaseVersion, [string[]]$Released = @(), [string]$Commit = '', [object[]]$Assigned = @())
     $no = { param($why, $hi, $free) [pscustomobject]@{ Ok = $false; Version = ''; Reason = $why; Highest = $hi; NextFree = $free } }
     $base = ConvertTo-SIReleaseVersionParts $BaseVersion
-    if ($null -eq $base -or $base.Count -ne 3) { return (& $no ("VERSION '{0}' is not major.minor.patch" -f $BaseVersion) '' '') }
-    $baseText = '{0}.{1}.{2}' -f $base[0], $base[1], $base[2]
+    # #1204: an IMAGE PATCH carries a fourth part on the release it is built on (3.1.6 -> 3.1.6.1, setup\Release-SIImagePatch.ps1)
+    # (a small counter -- a date stamp such as 3.0.0.202610272235 is the retired numbering and stays refused)
+    if ($null -eq $base -or $base.Count -lt 3 -or $base.Count -gt 4 -or ($base.Count -eq 4 -and $base[3] -gt 9999)) { return (& $no ("VERSION '{0}' is not major.minor.patch (or major.minor.patch.n for an image patch)" -f $BaseVersion) '' '') }
+    $baseText = ($base | ForEach-Object { [string]$_ }) -join '.'
     $rel = @(@($Released) + @(@($Assigned) | Where-Object { $_ } | ForEach-Object { [string]$_.Version }) | Where-Object { $null -ne (ConvertTo-SIReleaseVersionParts $_) })
     $hi = ''; foreach ($v in $rel) { if (-not $hi -or (Compare-SIReleaseVersion $v $hi) -gt 0) { $hi = $v } }
     if ($hi -and (Test-SIReleaseMajorJump -From $hi -To $baseText)) {

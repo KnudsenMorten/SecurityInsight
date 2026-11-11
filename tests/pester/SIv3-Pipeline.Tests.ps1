@@ -163,9 +163,9 @@ Describe 'schema 2 and the migration of a schema-1 flow' {
 }
 
 Describe 'the stage gate' {
-    It 'Collect failed (the tier classifier, so no collection ran): Correlate and Deliver do not start (nothing delivered from a partial collection)' {
+    It 'Collect failed (every collection failed): Correlate and Deliver do not start (nothing delivered from a partial collection)' {
         $d = New-SIDefaultJobFlow -Installed $script:All -Map $script:Map
-        $r = Invoke-Pipe -Definition $d -Outcome @{ 'ptc' = 'Failed' }
+        $r = Invoke-Pipe -Definition $d -Outcome @{ identity = 'Failed'; azure = 'Failed'; endpoint = 'Failed'; publicip = 'Failed' }
         foreach ($k in 'asset-correlation', 'asset-cmdb-sql', 'asset-datasync', 'close-loop-mail') {
             (Get-Step $r $k).State | Should -Be 'Skipped'; (Get-Step $r $k).ErrorClass | Should -Be 'stage-blocked'
         }
@@ -196,7 +196,7 @@ Describe 'the stage gate' {
     It 'Deliver set to run anyway still never runs after a failed Collect' {
         $d = New-SIDefaultJobFlow -Installed $script:All -Map $script:Map
         $d.Stages[1].RunIfPreviousFailed = $true; $d.Stages[2].RunIfPreviousFailed = $true
-        $r = Invoke-Pipe -Definition $d -Outcome @{ 'ptc' = 'Failed' }
+        $r = Invoke-Pipe -Definition $d -Outcome @{ identity = 'Failed'; azure = 'Failed'; endpoint = 'Failed'; publicip = 'Failed' }
         @($script:Arm.Starts | Where-Object { $_ -in @('asset-cmdb-sql', 'asset-cmdb', 'asset-vulnerabilities', 'asset-vulns-servicenow', 'asset-datasync', 'close-loop-mail') }).Count | Should -Be 0
     }
     It 'one collection failed while the others succeeded: the run goes on -- Correlate and Deliver start, the step stays failed' {

@@ -431,6 +431,95 @@ function Test-RASubSliceAskAgain {
   return ($RecoveredNow -gt $RecoveredAtAsk)
 }
 
+# #1200 ONE REPORT'S RECOVERY NEVER HOLDS THE WHOLE RUN (owner-approved 2026-11-11). Live: at two large installs the last of 72
+# Detailed reports sat for hours in its late retries and smaller slices on advanced-hunting 504s (each call ~3.3 min with its
+# own 4 attempts), holding every later step. The late passes go on while a pass recovers a slice (#882) and the smaller slices
+# go deeper while splitting reduces the failure (#880) -- neither has a clock. A TIME BUDGET per report now bounds the
+# RECOVERY phase: everything after the report's first normal pass (the late-retry passes and the smaller-slice passes at any
+# depth). Its clock starts at the report's first RETRY-CLASS recovery -- the first late retry, or the first smaller slice
+# refused as busy / throttled / timed out -- so a report that only splits slices because they are too large (and whose
+# smaller slices answer) never starts it. When the budget is spent no NEW recovery call starts for that report (a call in
+# flight finishes or times out normally -- never cut, and its own attempts are never shortened); every slice still refused
+# or not yet asked is closed as a named loss (Add-RABucketLoss: its rows are UNKNOWN, never resolved), the report and the
+# run are partial for it exactly as for any other lost slice, and the step moves on. The next run asks the report in full
+# (a report is never carried forward, and a report that ended not complete keeps its slice count, #880).
+#   $b = New-RARecoveryBudget -Minutes (Get-RARecoveryBudgetMinutes -Value $global:SI_RA_RecoveryBudgetMinutes)
+#   Start-RARecoveryBudget -Budget $b                         # at the first retry-class recovery (later calls: no-op)
+#   if (Test-RARecoveryBudgetSpent -Budget $b) { Add-RARecoveryBudgetLoss ... }   # before every NEW recovery call
+#   Step-RARecoveryBudgetCall -Budget $b                      # after every recovery call (counts it, ticks progress)
+$script:RARecoveryBudgetDefaultMinutes = 90
+
+function Get-RARecoveryBudgetMinutes {
+  <# #1200 PURE. The recovery budget of one report in minutes: SI_RA_RecoveryBudgetMinutes when it is a whole number >= 0
+     (0 = no budget: the recovery goes on while it makes progress, as before), else the default 90. #>
+  param([AllowNull()][object]$Value)
+  $d = if ($script:RARecoveryBudgetDefaultMinutes) { [int]$script:RARecoveryBudgetDefaultMinutes } else { 90 }
+  if ($null -eq $Value -or ($Value -is [string] -and [string]::IsNullOrWhiteSpace($Value))) { return $d }
+  $n = 0
+  if (-not [int]::TryParse(([string]$Value).Trim(), [ref]$n) -or $n -lt 0) { return $d }
+  return $n
+}
+
+function New-RARecoveryBudget {
+  <# #1200. One report's recovery budget (not started). -Now: the clock (tests; else $global:SI_RARecoveryNow when it is a
+     scriptblock, else UtcNow). -Ticker: a progress ticker (New-RAProgressTicker / New-SIStepProgressTicker) or $null. #>
+  param([int]$Minutes = 90, [scriptblock]$Now, $Ticker = $null)
+  if (-not $Now) { if ($global:SI_RARecoveryNow -is [scriptblock]) { $Now = $global:SI_RARecoveryNow } else { $Now = { [datetime]::UtcNow } } }
+  [pscustomobject]@{ Minutes = [Math]::Max(0, $Minutes); Now = $Now; StartUtc = $null; Spent = $false; Calls = 0L; Lost = 0; Ticker = $Ticker }
+}
+
+function Start-RARecoveryBudget {
+  <# #1200. Starts the clock at the report's first retry-class recovery; a clock already running is left as it is.
+     $true when this call started it. #>
+  param($Budget)
+  if ($null -eq $Budget -or $null -ne $Budget.StartUtc) { return $false }
+  $Budget.StartUtc = [datetime](& $Budget.Now)
+  return $true
+}
+
+function Get-RARecoveryBudgetElapsedMinutes {
+  <# #1200 PURE (over -Budget). Whole minutes since the clock started (0 when it has not). #>
+  param($Budget)
+  if ($null -eq $Budget -or $null -eq $Budget.StartUtc) { return 0 }
+  [int][Math]::Floor(([datetime](& $Budget.Now) - [datetime]$Budget.StartUtc).TotalMinutes)
+}
+
+function Test-RARecoveryBudgetSpent {
+  <# #1200. $true when the report's recovery budget is spent: its clock runs and -Minutes have passed (0 = no budget, never).
+     Once spent it stays spent for the report. Asked BEFORE a new recovery call -- never during one. #>
+  param($Budget)
+  if ($null -eq $Budget) { return $false }
+  if ([bool]$Budget.Spent) { return $true }
+  if ([int]$Budget.Minutes -le 0 -or $null -eq $Budget.StartUtc) { return $false }
+  if (([datetime](& $Budget.Now) - [datetime]$Budget.StartUtc).TotalMinutes -ge [double]$Budget.Minutes) { $Budget.Spent = $true }
+  return [bool]$Budget.Spent
+}
+
+function Step-RARecoveryBudgetCall {
+  <# #1200. One recovery call was made: counted, and the progress ticker told (at most every 3 minutes, framework
+     PROGRESS-TICK-1 -- Step-SIStepProgressTicker). Never throws. #>
+  param($Budget)
+  try {
+    if ($null -eq $Budget) { return }
+    $Budget.Calls = [long]$Budget.Calls + 1
+    if ($null -ne $Budget.Ticker -and (Get-Command -Name Step-SIStepProgressTicker -ErrorAction SilentlyContinue)) { $null = Step-SIStepProgressTicker -Ticker $Budget.Ticker -Done ([long]$Budget.Calls) }
+  } catch { }
+}
+
+function Format-RARecoveryBudgetLoss {
+  <# #1200 PURE. The named-loss reason of one slice the spent budget left unread (-Slice: 'bucket 10/32',
+     'sub-bucket depth=1 parent=10/32 sub=3/4', ...). #>
+  param([Parameter(Mandatory)][string]$Slice, [int]$Minutes = 90, [AllowEmptyString()][string]$LastError = '')
+  $tail = if ([string]::IsNullOrWhiteSpace($LastError)) { '' } else { ' -- last error: ' + $LastError }
+  ('{0}: not read -- the recovery time budget of this report ({1} min) was spent; its rows are unknown, not resolved{2}' -f $Slice, $Minutes, $tail)
+}
+
+function Format-RARecoveryBudgetLine {
+  <# #1200 PURE. The one plain line when the budget ended a report's recovery. #>
+  param([Parameter(Mandatory)][string]$ReportName, [int]$ElapsedMinutes, [int]$NotRead)
+  ("recovery for '{0}' stopped after {1} min (budget): {2} bucket(s) not read -- their findings are unknown, the next run reads this report again" -f $ReportName, $ElapsedMinutes, $NotRead)
+}
+
 function Get-RABucketOverflowStep {
   <#
     #722 PURE. What the main bucket loop does with a slice the service has just answered as TOO LARGE (Test-IsBucketOverflowError:
@@ -1707,16 +1796,17 @@ function Complete-AutoBucketReport {
   if (-not (Get-Variable -Name AutoBucketJumps -Scope Script -ErrorAction SilentlyContinue) -or $null -eq $script:AutoBucketJumps) { $script:AutoBucketJumps = New-Object System.Collections.Generic.List[object] }
   $why = ''
   try {
-    $earlier = @(@($script:AutoBucketSql.History[$ReportName]) | Where-Object { $_ } | ForEach-Object { [int]$_.BucketCount })
-    $usual = Get-SIRaBucketUsual -Counts $earlier
-    $why = Test-SIRaBucketJump -Count $FinalCount -Usual $usual
+    $hist = @(@($script:AutoBucketSql.History[$ReportName]) | Where-Object { $_ })
+    $parts = Split-SIRaBucketKey -Key $QueryKey
+    # #1202 (1): the usual count is over the runs of the report's CURRENT query version only (fewer than 3: no usual, no
+    # 4 x judgement) -- a usual spanning a query change compared the new query's count with the old query's
+    $usual = Get-SIRaBucketUsual -Counts (Get-SIRaBucketSameQueryCounts -History $hist -Fingerprint $(if ($parts) { [string]$parts.Fingerprint } else { '' }))
     $decided = if ($Incomplete) { 'incomplete' } elseif ($FinalCount -gt $StartCount) { 'raised' } elseif ($FinalCount -lt $StartCount) { 'down' } else {
       switch ($Source) { 'memo' { 'cache' } 'cache' { 'cache' } 'hint' { 'cache' } 'probe' { 'probe' } 'measured' { 'measured' } 'down' { 'down' } default { 'configured' } }
     }
     $m = if ((Get-Variable -Name AutoBucketMeasure -Scope Script -ErrorAction SilentlyContinue) -and $script:AutoBucketMeasure) { $script:AutoBucketMeasure } else { $null }
     $slices = if ($m -and $m.PSObject.Properties['Slices']) { [int]$m.Slices } else { 0 }
     $secs = if ($slices -gt 0 -and $m.PSObject.Properties['MaxBucketSeconds']) { [int][Math]::Max(1, [Math]::Ceiling([double]$m.MaxBucketSeconds)) } else { $null }
-    $parts = Split-SIRaBucketKey -Key $QueryKey
     $row = [pscustomobject]@{
       ReportName = $ReportName; Fingerprint = $(if ($parts) { $parts.Fingerprint } else { $null }); RunId = $script:AutoBucketSql.RunId
       StartCount = $StartCount; BucketCount = $FinalCount; Decided = $decided
@@ -1725,9 +1815,19 @@ function Complete-AutoBucketReport {
       RequestRows = $(if ($m -and $m.MaxRequestBytes -gt 0 -and $RequestRows -gt 0) { $RequestRows } else { $null })
       RequestBytesPerRow = $(if ($m -and $m.MaxRequestBytes -gt 0 -and $RequestBytesPerRow -gt 0) { $RequestBytesPerRow } else { $null })
       RequestOverheadBytes = $(if ($m -and $m.MaxRequestBytes -gt 0 -and $RequestOverheadBytes -gt 0) { $RequestOverheadBytes } else { $null })
-      UsualCount = $usual; Jump = [bool]$why
+      UsualCount = $usual; Jump = $false
       MaxBucketSeconds = $secs; RanCount = $(if ($null -ne $secs -and $RanCount -ge 1) { $RanCount } else { $null })
     }
+    # #1202 (2): a count SIZED FROM A MEASUREMENT after a changed query (and kept, not raised in the run) warns only when the
+    # result rows or the request grew materially against the report's previous measured run (Test-SIRaBucketInputGrew)
+    $sized = ([string]$Source -eq 'measured' -and $FinalCount -le $StartCount -and -not $Incomplete)
+    $grew = $true
+    if ($sized) {
+      $prev = $hist | Where-Object { [string]$_.Decided -ne 'incomplete' -and ([double]('0' + [string]$_.ResultRows) -gt 0 -or (Get-SIRaBucketRequestTotal -Run $_) -gt 0) } | Select-Object -First 1
+      $grew = Test-SIRaBucketInputGrew -Current $row -Previous $prev -CurrentSentAt $RanCount
+    }
+    $why = Test-SIRaBucketJump -Count $FinalCount -Usual $usual -SizedFromMeasure:$sized -InputGrew $grew
+    $row.Jump = [bool]$why
     if ($why) { $script:AutoBucketJumps.Add([pscustomobject]@{ Report = $ReportName; Count = $FinalCount; Usual = $usual; Why = $why }) }
     if (-not $script:AutoBucketSql.Offline -and $script:AutoBucketSql.Invoke -and (Test-AutoBucketWriteAllowed)) { Add-SIRaBucketHistory -Invoke $script:AutoBucketSql.Invoke -Template $script:AutoBucketSql.Template -Row $row }
   } catch {

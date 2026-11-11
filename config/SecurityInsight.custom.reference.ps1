@@ -411,6 +411,13 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # catalog is younger than this. 0 = rebuild on every run.
 # $global:SI_PrivilegeTierClassifier_RefreshDays = 7
 
+# Where the privilege tier catalog comes from. 'invardia' (default, every install): the
+# daily classified catalog is downloaded and checked; no AI request is sent. 'ai': your
+# opt-in to build it here with your Azure OpenAI deployment (extra AI cost; only with AI
+# integration on -- otherwise it is downloaded, with a warning). Your custom roles and
+# your custom catalog always win over both. The classifier never fails a pipeline run.
+# $global:SI_PrivilegeTierCatalog_Source = 'invardia'
+
 
 # ============================================================================
 # 10. ENGINE: SCHEMA-DISCOVERY  --  weekly XDR schema sweep + AI rule proposals
@@ -765,6 +772,11 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # while a part is processed). Adapts by itself: starts at 2, more while Defender answers quickly, fewer when it asks to
 # slow down. 1 = one part at a time.
 # $global:SI_RA_PartsInParallel_Max = 6
+# Minutes one Risk Analysis report may spend asking again for query slices the service kept refusing (its late retries and
+# its smaller slices together), counted from its first retry. When they are spent, the slices still refused are reported
+# as not read (their findings are unknown, never resolved), the report is marked incomplete and the run goes on; the next
+# run reads the report again in full. A call already running is never cut. 0 = no time limit. Default 90.
+# $global:SI_RA_RecoveryBudgetMinutes = 90
 
 # --- AI executive summary (RA) ---------------------------------------------
 # HOW THE SUMMARY AND DETAILED REPORTS RELATE TO EACH OTHER.
@@ -5058,6 +5070,25 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     or -ReportTemplate, instead.
 #   More info:        https://invardia.com/docs/si/settings/ReportTemplate/
 #
+# Risk Analysis retry time per report (most)  [SI_RA_RecoveryBudgetMinutes]  (advanced, minutes)
+#   What it is for:   When Microsoft Defender keeps refusing some query slices of a Risk Analysis report (busy,
+#                     throttled or timed out), SecurityInsight asks them again after the other slices, and in smaller
+#                     slices. This is the most time one report may spend on that, counted from its first retry.
+#   Default:          90 minutes (0 = no time limit)
+#   If you change it: When the time is spent, no new retry starts for that report (a request already running finishes
+#                     normally). The slices still refused are reported as not read: their findings are unknown, never
+#                     resolved, the report is marked incomplete, and the run goes on with the next step. The next run
+#                     reads the report again in full. A longer time can recover more on a slow tenant but can hold the
+#                     whole run; a shorter one ends sooner with more of the report unknown.
+#   When to change:   Most installs never should. Raise it if a report is often incomplete because its retries ran out
+#                     of time while they were still recovering slices.
+#   Risk:             Only changes how long one report keeps asking again for the query slices Defender refused.
+#                     Shorter: the run ends sooner, and more of that report can be unknown (never shown as fixed).
+#                     Longer or 0: a report whose slices keep failing can hold the whole run for hours. Reversible at
+#                     once.
+#   Recommended:      Keep 90 (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_RA_RecoveryBudgetMinutes/
+#
 # Risk Analysis stale device filter  [SI_RA_StaleDeviceFilter]  (advanced)
 #   What it is for:   Optionally removes devices not seen recently from the heavy attack-path Risk Analysis reports:
 #                     off, lenient or strict.
@@ -5631,8 +5662,10 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the
 #                     Azure OpenAI settings are set, unless this is off.
 #   Default:          On.
-#   If you change it: Turning it off sends nothing to Azure OpenAI: roles and permissions already in the catalog keep
-#                     their tier, and new ones are left unresolved for manual review. Removes AI cost for this engine.
+#   If you change it: Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then
+#                     take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog
+#                     source); your own custom roles keep the tier they had, and new ones are left unresolved for
+#                     manual review. Removes AI cost for this engine.
 #   When to change:   Only to keep AI out of the privilege tier classifier while it is used elsewhere; or turn it off
 #                     if you tier new roles yourself.
 #   Risk:             With the Azure OpenAI settings set, new role and permission names are sent to YOUR Azure OpenAI
@@ -5762,6 +5795,32 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     deployment, and it costs per call. Reversible at once; results already produced stay.
 #   Recommended:      Keep the default. Change it when: Never at present; it is kept for future use.
 #   More info:        https://invardia.com/docs/si/settings/SI_SystemPrompt_identity/
+#
+# Privilege tier catalog source  [SI_PrivilegeTierCatalog_Source]  (engine: privilege-tier-classifier, advanced)
+#   What it is for:   Where the privilege tier catalog comes from -- the list that gives every Entra role, AD built-in
+#                     group, API permission and Azure role its tier (0-3), which the identity tiers are computed from.
+#                     Either it is built here by the privilege tier classifier with your Azure OpenAI deployment, or
+#                     the daily classified catalog is downloaded from Invardia (public, no sign-in; Microsoft's own
+#                     role and permission definitions, classified; no data of yours is sent).
+#   Choices:          'invardia' (Download the daily classified catalog from Invardia); 'ai' (Build it here with AI
+#                     (your opt-in: needs AI integration, adds AI cost))
+#   Default:          Download: every install, new and existing, downloads the daily classified catalog -- also with
+#                     Azure OpenAI configured.
+#   If you change it: Download: every built-in role, group and permission takes the tier of the newest daily catalog;
+#                     it is checked (SHA-256, size, every tier present) before it replaces the local copy, a failed
+#                     download keeps the last good copy and the run says how old it is, and no AI request is sent.
+#                     Your custom catalog still wins. Build with AI (your opt-in, extra AI cost): the classifier asks
+#                     your Azure OpenAI deployment and its result wins over the download; it is only used with AI
+#                     integration on -- otherwise the catalog is downloaded and the run warns. Either way the
+#                     classifier never fails a pipeline run: a failure keeps the last known classification, and on a
+#                     first run without any catalog the step is skipped.
+#   When to change:   Keep Download. Choose Build with AI only to classify every role with your own Azure OpenAI
+#                     deployment, at your own AI cost.
+#   Risk:             Changes which tiers the built-in roles, groups and permissions get from the next privilege tier
+#                     classifier run, and so the identity tiers. Your custom roles and custom catalog are not
+#                     affected. Reversible at once.
+#   Recommended:      Keep Download; build with AI only when you want to classify every role yourself (extra AI cost).
+#   More info:        https://invardia.com/docs/si/settings/SI_PrivilegeTierCatalog_Source/
 #
 # Privilege tier catalog: days kept while unchanged  [SI_PrivilegeTierClassifier_RefreshDays]  (engine: privilege-tier-classifier, advanced, days)
 #   What it is for:   How long the privilege tier classifier keeps its catalog while nothing it is made from changed.

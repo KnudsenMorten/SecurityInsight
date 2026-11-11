@@ -347,10 +347,10 @@ Describe 'the classifier and publicip have their own schedules' {
         $s20.ScheduleClassifier | Should -Be '0 17 * * *'
         $s20.SchedulePublicIp | Should -Be '15 21 * * *'
     }
-    It 'without Azure OpenAI the classifier job is not deployed, and setup says why in one line' {
+    It 'without Azure OpenAI the classifier job IS deployed (it downloads the daily classified catalog), and setup says so in one line' {
         $r = Select-SIBootstrapEngines -Engines @('endpoint', 'privilege-tier-classifier', 'risk-analysis') -HaveOpenAi $false
-        @($r.Engines) | Should -Be @('endpoint', 'risk-analysis')
-        $r.Note | Should -Match 'Tier 99'
+        @($r.Engines) | Should -Be @('endpoint', 'privilege-tier-classifier', 'risk-analysis')
+        $r.Note | Should -Match 'downloads the daily classified tier catalog'
         ($r.Note -split "`n").Count | Should -Be 1
     }
     It 'NEGATIVE -- with Azure OpenAI, or without a classifier in the list, nothing changes' {

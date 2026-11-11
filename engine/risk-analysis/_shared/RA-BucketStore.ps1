@@ -25,6 +25,18 @@ $script:SIRaBucketJumpAbove     = 256
 $script:SIRaBucketJumpMinRuns   = 3
 $script:SIRaBucketDownFraction  = 0.25
 $script:SIRaBucketHistoryKeep   = 30
+# #1202 A JUMP IS JUDGED ONLY ON A REAL CHANGE OF THE INPUT.
+#  * GrewFactor 2: a count that was SIZED FROM A MEASUREMENT (after a changed query) warns only when the report's result
+#    rows or its request grew at least 2 x against its previous measured run. Why 2 and not 4: the count is the next power
+#    of two of the measured need, so an input that grew just over 2 x can already land on a count 4 x higher (e.g. a need of
+#    4.1 -> 8 against an earlier 2.0 -> 2); half of the 4 x warning factor is the smallest growth that can explain a 4 x
+#    count, and anything below it is the rounding of a flat input, not a jump.
+#  * RequestSameFactor 1.15: an earlier run that "ran complete at N slices" proves N only for the request it carried; a
+#    slice's request grows with the whole inlined lookup, so once the request is more than 15 % larger than then (the same
+#    allowance the request sizing already adds for row-width variation, the 1.15 in Get-SIRaBucketCountFromMeasure), that
+#    run no longer proves N and the count does not come down to it.
+$script:SIRaBucketGrewFactor        = 2
+$script:SIRaBucketRequestSameFactor = 1.15
 # #833: the client ceiling of one advanced-hunting request -- a slice's TIME is measured against half of it like its rows
 # and bytes (the same value as RA-AutoBucketing.ps1's $script:RASliceCeilingSeconds; this file loads standalone too).
 $script:SIRaBucketSliceSeconds  = 900
@@ -341,13 +353,83 @@ function Get-SIRaBucketUsual {
     return [int][Math]::Floor(([int]$c[$mid - 1] + [int]$c[$mid]) / 2)
 }
 
+function Get-SIRaBucketSameQueryCounts {
+    <#
+        #1202 PURE. The counts of the report's earlier runs of the SAME query version (-Fingerprint; the history keeps it per
+        run). A row without a fingerprint (written before it was recorded) still counts, like in Get-SIRaBucketProvenCount;
+        without -Fingerprint every row counts (as before). Live 2026-11-11: a "usual" over the report NAME spanned a query
+        change and the growth of an embedded lookup, so "16 is 4 x its usual 1" warned on every run while the result stayed
+        flat at 8-11 rows. With fewer than 3 runs of the current version there is no usual and so no 4 x judgement.
+    #>
+    param([object[]]$History = @(), [string]$Fingerprint = '')
+    @(foreach ($x in @($History | Where-Object { $_ })) {
+        if ($Fingerprint) {
+            $xf = if ($x.PSObject.Properties['Fingerprint']) { [string]$x.Fingerprint } else { '' }
+            if ($xf -and $xf -ne $Fingerprint) { continue }
+        }
+        [int]$x.BucketCount
+    })
+}
+
+function Get-SIRaBucketRequestTotal {
+    <#
+        #1202 PURE. The size of a run's whole request, independent of its slice count: the inlined lookup rows split across
+        the slices (RequestRows x RequestBytesPerRow) plus the part no slice count shrinks (RequestOverheadBytes); without
+        those, the largest request it sent times the count it was sent at (an upper bound). 0 when nothing was measured.
+        -SentAt overrides the count the largest request was sent at (the current run passes the count its slices ran at).
+    #>
+    param($Run, [int]$SentAt = 0)
+    if ($null -eq $Run) { return 0.0 }
+    $rows = [double]('0' + [string](Get-SIRaBucketValue $Run 'RequestRows'))
+    $bpr = [double]('0' + [string](Get-SIRaBucketValue $Run 'RequestBytesPerRow'))
+    $over = [double]('0' + [string](Get-SIRaBucketValue $Run 'RequestOverheadBytes'))
+    if ($rows -gt 0 -and $bpr -gt 0) { return ($rows * $bpr + $over) }
+    $sent = [double]('0' + [string](Get-SIRaBucketValue $Run 'MaxRequestBytes'))
+    if ($sent -le 0) { return 0.0 }
+    $at = $SentAt
+    if ($at -lt 1) { $at = [int]('0' + [string](Get-SIRaBucketValue $Run 'RanCount')) }
+    if ($at -lt 1) { $at = [int]('0' + [string](Get-SIRaBucketValue $Run 'BucketCount')) }
+    if ($at -lt 1) { $at = 1 }
+    return ($sent * $at)
+}
+
+function Test-SIRaBucketInputGrew {
+    <#
+        #1202 PURE. Whether the report's input grew MATERIALLY (at least $script:SIRaBucketGrewFactor = 2 x, see there) from
+        its previous measured run (-Previous) to this run (-Current): its result rows or its whole request
+        (Get-SIRaBucketRequestTotal). Only what both runs measured is compared; with nothing comparable (no previous
+        measurement) the answer is $true -- the jump is then judged as before.
+    #>
+    param($Current, $Previous, [int]$CurrentSentAt = 0)
+    if ($null -eq $Current -or $null -eq $Previous) { return $true }
+    $compared = $false
+    $rNow = [double]('0' + [string](Get-SIRaBucketValue $Current 'ResultRows'))
+    $rThen = [double]('0' + [string](Get-SIRaBucketValue $Previous 'ResultRows'))
+    if ($rThen -gt 0) {
+        $compared = $true
+        if ($rNow -ge ($script:SIRaBucketGrewFactor * $rThen)) { return $true }
+    }
+    $qNow = Get-SIRaBucketRequestTotal -Run $Current -SentAt $CurrentSentAt
+    $qThen = Get-SIRaBucketRequestTotal -Run $Previous
+    if ($qThen -gt 0 -and $qNow -gt 0) {
+        $compared = $true
+        if ($qNow -ge ($script:SIRaBucketGrewFactor * $qThen)) { return $true }
+    }
+    return (-not $compared)
+}
+
 function Test-SIRaBucketJump {
     <#
         PURE. The jump warning (owner, wizard 2026-10-13: "4x usual or over 256"): a count of at least 4 x the report's usual
         count (known only with 3 earlier runs), or above 256 -- the query or its data is likely wrong. Returns the reason in
         plain words, or '' for no jump.
+        #1202 -SizedFromMeasure with -InputGrew $false: the count came from the sizing after a changed query
+        (Get-SIRaBucketCountFromMeasure) and neither the result rows nor the request grew materially -- the new count is the
+        measured need of an unchanged input, not a sign that the query or its data is wrong: no warning. -Usual is expected
+        over the runs of the SAME query version (Get-SIRaBucketSameQueryCounts).
     #>
-    param([int]$Count, $Usual)
+    param([int]$Count, $Usual, [switch]$SizedFromMeasure, [bool]$InputGrew = $true)
+    if ($SizedFromMeasure -and -not $InputGrew) { return '' }
     if ($Count -gt $script:SIRaBucketJumpAbove) { return ('{0} buckets is above {1}' -f $Count, $script:SIRaBucketJumpAbove) }
     if ($null -ne $Usual -and [int]$Usual -ge 1 -and $Count -ge ($script:SIRaBucketJumpFactor * [int]$Usual)) {
         return ('{0} buckets is {1} x or more its usual {2}' -f $Count, $script:SIRaBucketJumpFactor, [int]$Usual)
@@ -501,8 +583,16 @@ function Get-SIRaBucketCompleteLowerCount {
         than the slices of 2. A complete run at the lower count is the measured proof that the report fits it. The count
         comes down one halving per run (Get-RACountAfterSmallRun), never below this count; a slice that no longer fits at the
         smaller count is split in that run and raises it again.
+        #1202 -Current: this run's measurement (request numbers as in a history row; -CurrentSentAt the count its slices ran
+        at). An earlier complete run proves its count only for the request it carried: a run whose whole request
+        (Get-SIRaBucketRequestTotal) was more than 15 % smaller than this run's ($script:SIRaBucketRequestSameFactor) is from
+        BEFORE the embedded lookup grew and is not used. Live 2026-11-11: a report whose inlined lookup grew 0.25 MB -> 4.2 MB
+        came down from 8 to 4 every other run on a complete run at 1 slice from when the lookup was small, and was raised
+        to 8 again by the larger request at 4 -- a 4 <-> 8 swing. A run without request numbers, or no -Current, is used as
+        before (nothing says it was smaller).
     #>
-    param([int]$Count, [object[]]$History = @(), [string]$Fingerprint = '')
+    param([int]$Count, [object[]]$History = @(), [string]$Fingerprint = '', $Current = $null, [int]$CurrentSentAt = 0)
+    $now = if ($null -ne $Current) { Get-SIRaBucketRequestTotal -Run $Current -SentAt $CurrentSentAt } else { 0.0 }
     $best = 0
     foreach ($x in @($History | Where-Object { $_ })) {
         if ($Fingerprint) {
@@ -510,6 +600,10 @@ function Get-SIRaBucketCompleteLowerCount {
             if ($xf -and $xf -ne $Fingerprint) { continue }
         }
         if ([string]$x.Decided -in @('raised', 'incomplete')) { continue }
+        if ($now -gt 0) {
+            $then = Get-SIRaBucketRequestTotal -Run $x
+            if ($then -gt 0 -and $now -gt ($script:SIRaBucketRequestSameFactor * $then)) { continue }
+        }
         $c = [int]$x.BucketCount
         if ($c -lt 1 -or $c -ge $Count -or [int]$x.StartCount -ne $c) { continue }
         $ran = if ($x.PSObject.Properties['RanCount']) { [int]('0' + [string]$x.RanCount) } else { 0 }

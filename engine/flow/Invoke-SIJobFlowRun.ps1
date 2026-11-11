@@ -918,6 +918,34 @@ if ($upkeepDo.Run) {
     if ($upkeepMine) { $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -CatchUp $upkeepCatchUp -Statistics $upkeepStats -Stats ([bool]$upkeepDo.Stats) -Cleanup $upkeepCleanup -Log $say }
 } elseif ($upkeepDo.Why) { & $say 'INFO' $upkeepDo.Why }
 & $wkRelease
+# ---- #1201 DATA HEALTH NEVER DEPENDS ON A FINISHED RUN (engine\data-health\_shared\SI-DataHealthOnOwn.ps1): the check runs in the
+# verification job, the pipeline's last step -- an install whose runs end earlier (failed, stopped for an update) never reported.
+# After the queue, on a wake-up that holds no run: when the last report is older than 24 h and the install is idle (no run, no
+# open step, no data sync, no data out), no update runs or waits, and the verification job neither runs nor started in the last
+# 6 h, the verification job is started ONCE with SI_DATAHEALTH_ON_OWN=1 -- only the data health check, on the stored data.
+# Never during a run; never fails or holds this wake-up.
+if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and $drain -and [string]$drain.Outcome -notin @('Busy', 'Blocked')) {
+    try {
+        if (-not (Get-Command -Name Invoke-SIDataHealthOnOwnCheck -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/data-health/_shared/SI-DataHealthOnOwn.ps1') }
+        if (-not (Get-Command -Name Get-SIDataHousekeepingBusy -ErrorAction SilentlyContinue)) {
+            . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
+            . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataSql.ps1')
+        }
+        if (-not (Get-Command -Name New-SIJobStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
+        $dhJobs = @('asset-datasync', 'data-out')
+        if (@($installed).Count) { $dhJobs = @($dhJobs | Where-Object { @($installed) -contains ('caj-si-' + $_) }) }
+        $dhJobRunning = if ($seams -and $seams.PSObject.Methods['Running']) { { param($j) $seams.Running($j) } } else { $null }
+        $dhJobName = Get-SIJobFlowJobName $script:SIDataHealthOnOwn.Job
+        $null = Invoke-SIDataHealthOnOwnCheck -Invoke $proStore.Invoke -Log $say `
+            -Busy { Get-SIDataHousekeepingBusy -SettingsInvoke $proStore.Invoke -JobRunning $dhJobRunning -Jobs $dhJobs } `
+            -UpdaterRunning $updateRunning -UpdateWaits $updateWaits `
+            -Executions { $r = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $dhJobName) $null; @($r.value) } `
+            -Start { param($StartEnv)
+                $dhJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $dhJobName) $null
+                $dhR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $dhJobName) (New-SIJobStartTemplate -Job $dhJob -Env $StartEnv -What 'the verification job')
+                if ($dhR -and $dhR.PSObject.Properties['name']) { [string]$dhR.name } else { '' } }
+    } catch { & $say 'WARN' ('data health: whether it must run on its own was not looked at by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
+}
 # #277: a busy wake-up is normal operation (every 5 minutes of a long run) -- one INFO line, no row, not a guard. A Run now
 # that waits in the queue is recorded once ("queued") so it is visible.
 if ($drain.Outcome -in @('Busy', 'Blocked')) {

@@ -418,10 +418,22 @@ function Invoke-SIClassify {
         if (Test-Path $catModule) {
             try {
                 . $catModule
+                # the break-glass tier source (a break-glass account is Tier 0): the CI build's own classification and its
+                # lists (break_glass_patterns, break_glass_attribute), read once; unreadable = only the collection's signal
+                $bgLists = @{}
+                try {
+                    $dmDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data-model'
+                    if (-not (Get-Command -Name Get-SIBreakGlassClassification -ErrorAction SilentlyContinue)) { . (Join-Path $dmDir 'SI-BreakGlass.ps1') }
+                    if (-not (Get-Command -Name Get-SIDataModelTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $dmDir 'SI-DataModelTemplates.ps1') }
+                    foreach ($bgL in @((Get-SIDataModelTemplate -Name 'lists' -OverlayRoot $global:SI_DataModelOverlayRoot).Document.lists)) { if ($bgL -and $bgL.id) { $bgLists[[string]$bgL.id] = $bgL } }
+                } catch {
+                    Write-Warning ('Identity tier: the break-glass lists could not be read ({0}) -- break-glass accounts are recognised by the collection''s own signal only this run.' -f $_.Exception.Message)
+                }
                 $catInfo = Initialize-SIIdentityCatalog
                 # detailed per-tier breakdown so operators can see the
                 # catalog's current shape (helps spot stale catalogs, missing tiers).
-                Write-SIInfo ('identity catalog loaded -- dated {0}' -f $catInfo.GeneratedAt)
+                # #1194: which catalog -- the daily classified download (version + build date), built here, or the shipped one
+                Write-SIInfo ('identity catalog loaded -- {0}' -f $(if ($catInfo.PSObject.Properties['Label'] -and $catInfo.Label) { $catInfo.Label } else { 'dated ' + $catInfo.GeneratedAt }))
                 Write-SIInfo ('  Entra roles    T0/T1/T2/T3 : {0,3} / {1,3} / {2,4} / {3,4}' -f $catInfo.EntraRoleCounts.T0, $catInfo.EntraRoleCounts.T1, $catInfo.EntraRoleCounts.T2, $catInfo.EntraRoleCounts.T3)
                 Write-SIInfo ('  Graph perms    T0/T1/T2/T3 : {0,3} / {1,3} / {2,4} / {3,4}' -f $catInfo.APIPermCounts.T0,   $catInfo.APIPermCounts.T1,   $catInfo.APIPermCounts.T2,   $catInfo.APIPermCounts.T3)
                 Write-SIInfo ('  AD groups      total       : {0,3}' -f $catInfo.ADGroupCount)
@@ -510,9 +522,21 @@ function Invoke-SIClassify {
             # tier is justified by something other than the bogus empty Azure RBAC proof.
             $isOnPremUser = ($r.Metadata.ENTRA_OnPrem -eq $true -and $r.Metadata.ENTRA_AssetType -eq 'User')
             if ($null -eq $adTier -and $isOnPremUser) { $adTier = 3 }
-            $effective = Get-SIMinTier -Tiers @($entraRoleTier, $apiPermTier, $azureTier, $adTier)
+            # a break-glass account is Tier 0 whatever it holds (owner 2026-11-11): one more tier source. The collection's
+            # own signal (a permanent Global Administrator named like an emergency account, not used for 30 days) plus the
+            # CI build's classification on what the profile has (naming patterns, group names, the extension attribute).
+            $lastSignInDays = if ($null -ne $r.Metadata.ENTRA_LastSignInDays) { [int]$r.Metadata.ENTRA_LastSignInDays } else { -1 }
+            $bgProvider = (
+                ($r.Metadata.ENTRA_DirectoryRolesPermanent -contains 'Global Administrator') -and
+                ($r.Metadata.ENTRA_DisplayName -and ([string]$r.Metadata.ENTRA_DisplayName) -match '(?i)break|emergency|glass|bg-') -and
+                ($lastSignInDays -lt 0 -or $lastSignInDays -gt 30)
+            )
+            $breakGlass = Get-SIProfileBreakGlass -Metadata $r.Metadata -Lists $bgLists -ProviderSignal $bgProvider
+            $breakGlassTier = Get-SITierFromBreakGlass -IsBreakGlass ([bool]$breakGlass.IsBreakGlass)
+            $effective = Get-SIMinTier -Tiers @($entraRoleTier, $apiPermTier, $azureTier, $adTier, $breakGlassTier)
 
             $proofs = New-Object System.Collections.ArrayList
+            if ($null -ne $breakGlassTier) { [void]$proofs.Add((Get-SIBreakGlassProof -BreakGlass $breakGlass)) }
             foreach ($m in (Get-SIEntraRoleMatches -Roles $entraRoles)) {
                 [void]$proofs.Add(@{
                     Source      = 'Catalog:EntraRoles'
@@ -636,21 +660,19 @@ function Invoke-SIClassify {
                     Assignments      = @($azDelegs)
                     HighestRisk      = ($azDelegs | Sort-Object EffectiveTier | Select-Object -First 1)
                 }
+                BreakGlass             = [ordered]@{
+                    Tier             = $breakGlassTier
+                    Reasons          = @($breakGlass.Reasons)
+                    Reason           = [string]$breakGlass.Reason
+                }
             }
 
             # Per-asset boolean flags + callouts (precomputed once -> no KQL runtime work)
             $isManagedIdentity = ($r.Metadata.ENTRA_SPType -eq 'ManagedIdentity')
             $isMultiTenant     = ($r.Metadata.ENTRA_SPSignInAudience -in 'AzureADMultipleOrgs','AzureADandPersonalMicrosoftAccount')
             $isFirstParty      = ($r.Metadata.ENTRA_SPAppOwnerTenant -eq 'f8cdef31-a31e-4b4a-93e4-5f571e91255a')
-            # IsBreakGlass full gate -- GA permanent + display matches
-            # break/emergency/glass/bg- + last sign-in > 30 days (or never).
-            $lastSignInDays = if ($null -ne $r.Metadata.ENTRA_LastSignInDays) { [int]$r.Metadata.ENTRA_LastSignInDays } else { -1 }
-            $isInactive30   = ($lastSignInDays -lt 0 -or $lastSignInDays -gt 30)
-            $isBreakGlass   = (
-                ($r.Metadata.ENTRA_DirectoryRolesPermanent -contains 'Global Administrator') -and
-                ($r.Metadata.ENTRA_DisplayName -and ([string]$r.Metadata.ENTRA_DisplayName) -match '(?i)break|emergency|glass|bg-') -and
-                $isInactive30
-            )
+            # IsBreakGlass = the break-glass tier source above (the collection's signal OR the CI build's classification)
+            $isBreakGlass   = [bool]$breakGlass.IsBreakGlass
             # IsActive: sign-in within last 30 days (-1 = unknown -> false)
             $isActive = ($lastSignInDays -ge 0 -and $lastSignInDays -le 30)
             $isHighValueTarget = ($effective -in 0,1)

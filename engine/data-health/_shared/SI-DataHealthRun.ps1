@@ -9,6 +9,8 @@
     -Defender: { param([string[]]$MdeIds) } -> MdeId -> the CVEs (ids, or @{ Cve; LastModified; Published }; a machine whose read failed: $null). Left out = check (b)
     and the 'vulnerabilities' source are not checked.
     -Invoke: the Pro database (stored records, the population of (b), the state, the writes).
+    The stored findings of (b) are read WHOLE or the 'vulnerabilities' source is NOT CHECKED (#1185): a read that ends early
+    is never compared, so it can never show present findings as missing.
 #>
 
 function Invoke-SIDataHealthCycle {
@@ -25,6 +27,10 @@ function Invoke-SIDataHealthCycle {
           [scriptblock]$InScope,
           # why the caller built no -TelemetryContext (Get-SIDataHealthSendSkipReason) -- said in the log, never silent
           [AllowNull()][AllowEmptyString()][string]$TelemetrySkipReason,
+          # #1185: the pauses (seconds) before the stored findings are read again after a short or failed read; -Sleep the pause (tests)
+          [int[]]$StoredReadWaits = @(15, 60), [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          # #1201: what the check judged and why it ran (Get-SIDataHealthJudged) -- kept in the cycle's summary; $null = not said
+          [AllowNull()]$Judged,
           [scriptblock]$Log = { param($level, $msg) Write-Host ("[{0}] {1}" -f $level, $msg) })
     $margins = Get-SIDataHealthMargins -Globals $Globals
     $results = New-Object System.Collections.Generic.List[object]
@@ -90,13 +96,22 @@ function Invoke-SIDataHealthCycle {
                 $script:dhSeedN++
                 $sample = @(Select-SIDataHealthSample -Items $pop -Size (Get-SIDataHealthSampleSize -Count $pop.Count) -Seed (& $nextSeed))
                 $ids = @($sample | ForEach-Object { ([string](Get-SIDataHealthItem $_ 'MdeId')).ToLowerInvariant() })
-                $def = & $Defender $ids
-                if ($null -eq $def) { $def = @{} }
-                $stored = @(Read-SIDataHealthRows -Invoke $Invoke -Sql (Get-SIDataHealthRaFindingsSql) -Params @{ MdeIds = (ConvertTo-SIDataHealthJsonArray -Items $ids) })
-                # the stored collection's time (#747): a CVE Defender published after it is drift, not a miss
-                $collAt = $null; foreach ($p0 in $pop) { $collAt = Get-SIDataHealthItem $p0 'CollectionTime'; if ($null -ne $collAt) { break } }
-                $vc = Compare-SIDataHealthVulnerabilities -Assets $sample -Defender $def -Stored $stored -InScope $InScope -CollectionTime $collAt
-                if ($vc.Assets -eq 0) {
+                # the collection the population was taken from: the stored findings are read from THAT one (#1185)
+                $collId = $null; foreach ($p0 in $pop) { $v0 = Get-SIDataHealthItem $p0 'CollectionId'; if ($null -ne $v0 -and "$v0" -match '^\d+$') { $collId = [int]"$v0"; break } }
+                # the stored findings first, and WHOLE (#1185): a short or failed read is read again; still not whole = the
+                # check could not read -- never "missing data" (a short read showed 43,791 present findings as missing)
+                $sr = Read-SIDataHealthStoredFindings -Invoke $Invoke -MdeIds $ids -CollectionId $collId -Waits $StoredReadWaits -Sleep $Sleep -Log $Log
+                $vc = $null
+                if ($sr.Complete) {
+                    $def = & $Defender $ids
+                    if ($null -eq $def) { $def = @{} }
+                    # the stored collection's time (#747): a CVE Defender published after it is drift, not a miss
+                    $collAt = $null; foreach ($p0 in $pop) { $collAt = Get-SIDataHealthItem $p0 'CollectionTime'; if ($null -ne $collAt) { break } }
+                    $vc = Compare-SIDataHealthVulnerabilities -Assets $sample -Defender $def -Stored @($sr.Rows) -InScope $InScope -CollectionTime $collAt
+                }
+                if (-not $sr.Complete) {
+                    & $addResult 'source' 'vulnerabilities' $vLabel 0 0 0 0 $vm 'not-checked' ('the check could not read all stored findings -- not a data anomaly ({0}; read {1} time(s))' -f $sr.Why, $sr.Attempts)
+                } elseif ($vc.Assets -eq 0) {
                     & $addResult 'source' 'vulnerabilities' $vLabel 0 0 0 0 $vm 'not-checked' ('Defender answered for none of the {0} sampled device(s)' -f $sample.Count)
                 } else {
                     $why = ''; if ($vc.NotRead -gt 0) { $why = ('{0} of {1} sampled device(s) could not be read from Defender and were left out' -f $vc.NotRead, $sample.Count) }
@@ -155,8 +170,14 @@ function Invoke-SIDataHealthCycle {
         # the reason text) -- never a failed cycle over a column (#747)
         if (-not $hasDrift -and @($results | Where-Object { $_.Drift -gt 0 }).Count) { & $Log 'INFO' 'cfg.DataHealthResult has no Drift column yet (the update adds it) -- the drift is stored in the reason text only.' }
         [void](& $Invoke (Get-SIDataHealthResultWriteSql -WithDrift:$hasDrift) @{ CycleId = $cid; Json = $rj; MissingJson = $mj } 'nonquery')
-        $sum = ConvertTo-Json -InputObject ([ordered]@{ anomalous = $cycle.Anomalous; complete = $cycle.Complete; notChecked = $cycle.NotChecked; from = $state.From
-            drift = [long](@($results | ForEach-Object { [long]$_.Drift }) | Measure-Object -Sum).Sum }) -Compress
+        $sumObj = [ordered]@{ anomalous = $cycle.Anomalous; complete = $cycle.Complete; notChecked = $cycle.NotChecked; from = $state.From
+            drift = [long](@($results | ForEach-Object { [long]$_.Drift }) | Measure-Object -Sum).Sum }
+        if ($Judged) {
+            $sumObj.trigger = [string]$Judged.Trigger
+            $sumObj.collectionId = $Judged.CollectionId
+            $sumObj.collectionTime = $(if ($Judged.CollectionTime) { ([datetime]$Judged.CollectionTime).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } else { $null })
+        }
+        $sum = ConvertTo-Json -InputObject $sumObj -Compress
         [void](& $Invoke (Get-SIDataHealthCycleEndSql) @{ CycleId = $cid; Anomalous = [bool]$cycle.Anomalous; Complete = [bool]$cycle.Complete; State = [string]$state.State
             Changed = [bool]$state.Changed; Consecutive = [int]$state.ConsecutiveAnomalous; Since = $state.Since; SummaryJson = $sum } 'nonquery')
         $out.Written = $true; $out.CycleId = $cid

@@ -147,8 +147,12 @@ public static class JobFlow
     /// #748: a step every pipeline has (config\job-flow.locked.json 'required'): the verification service runs the daily data
     /// health check (CR2). The update adds it to a stored pipeline without it where its job is installed; the Jobs page does not
     /// remove it -- its off switch is the setting SI_DataHealth_Enabled.
-    public static bool Required(string key) => JobSchedule.Key(key) == "verification";
-    public const string RequiredWhy = "every pipeline runs it -- it runs the daily data health check; switch the check off with the setting SI_DataHealth_Enabled";
+    /// Owner 2026-11-11: the privilege tier classifier too -- it keeps the tier catalog current (built with AI, or the daily
+    /// classified catalog downloaded), first in Collect, before the identity collection.
+    public static bool Required(string key) => JobSchedule.Key(key) is "verification" or "ptc";
+    public static string RequiredWhy(string key) => JobSchedule.Key(key) == "ptc"
+        ? "every pipeline runs it first -- it keeps the privilege tier catalog current (built with AI, or the daily classified catalog downloaded)"
+        : "every pipeline runs it -- it runs the daily data health check; switch the check off with the setting SI_DataHealth_Enabled";
 
     /// The same order flattened (config\job-flow.locked.json defaultFlow).
     public static readonly string[] DefaultOrder = DefaultStages.SelectMany(s => s.Jobs).ToArray();
@@ -723,7 +727,7 @@ public static class JobFlow
 
     public static FlowDefinition Remove(FlowDefinition d, string job)
     {
-        if (Required(job)) throw new ArgumentException($"{JobSchedule.Label(JobSchedule.Key(job))} is not removed from the pipeline -- {RequiredWhy}");
+        if (Required(job)) throw new ArgumentException($"{JobSchedule.Label(JobSchedule.Key(job))} is not removed from the pipeline -- {RequiredWhy(job)}");
         var steps = d.Steps.Where(s => s.Job != StepKey(job)).ToList();
         return d with { Steps = FixGroups(steps), Stages = d.StageList };
     }
@@ -922,6 +926,10 @@ public static class JobFlow
         public TimeSpan? Duration => Started is { } a && Ended is { } b && b >= a ? b - a : null;
     }
 
+    /// The runner's class for a tier classifier step that ended skipped by the never-fail rule (SI-Pipeline.ps1).
+    public const string ClassifierSkippedClass = "classifier-skipped";
+    public static bool IsClassifierSkipped(FlowStepRun x) => x.State == "Skipped" && x.ErrorClass == ClassifierSkippedClass;
+
     public static StageStatus StageSummary(IEnumerable<FlowStepRun?> steps)
     {
         var s = steps.Where(x => x is not null).Select(x => x!).ToList();
@@ -929,11 +937,13 @@ public static class JobFlow
         var started = s.Where(x => x.StartedUtc is not null).Select(x => x.StartedUtc!.Value).DefaultIfEmpty().Min();
         var ended = s.Where(x => x.EndedUtc is not null).Select(x => x.EndedUtc!.Value).DefaultIfEmpty().Max();
         DateTimeOffset? a = started == default ? null : started, b = ended == default ? null : ended;
+        // the tier classifier never fails the pipeline (owner 2026-11-11; the runner's Set-SIPipelineClassifierSkipped): its step
+        // skipped by that rule is fine for its stage -- the step itself still shows skipped with its reason
         var state = s.Any(x => x.State is "Running" or "Starting") ? "running"
             : s.Any(x => x.State is "Failed" or "TimedOut" or "Interrupted" && !IsThrottled(x)) ? "failed"
             : s.Any(IsThrottled) ? "throttled"
-            : s.Any(x => x.State == "Skipped") ? "skipped"
-            : s.All(x => x.State is "Success" or "Disabled") ? "succeeded"
+            : s.Any(x => x.State == "Skipped" && !IsClassifierSkipped(x)) ? "skipped"
+            : s.All(x => x.State is "Success" or "Disabled" || IsClassifierSkipped(x)) ? "succeeded"
             : "waiting";
         return new(state, a, state == "running" ? null : b);
     }

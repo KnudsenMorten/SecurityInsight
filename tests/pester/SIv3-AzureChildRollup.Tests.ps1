@@ -334,6 +334,6 @@ Describe 'retirement: a CI no current record builds is retired, never deleted' {
         $t = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\data-model\SI-CiBuildRun.ps1'))
         $i = $t.IndexOf('Get-SICiRetireSql -FloorDays (Get-SICiRetireDays)')
         $i | Should -BeGreaterThan $t.IndexOf('Invoke-SICiRelationStep @relArgs')
-        $i | Should -BeLessThan $t.IndexOf('Get-SICiMarkBuiltSql -Thresholds $thresholds')
+        $i | Should -BeLessThan $t.IndexOf('Invoke-SICiMarkBuilt -Sql $sql -Thresholds $thresholds')
     }
 }

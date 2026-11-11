@@ -167,7 +167,9 @@ $script:SICiBuildVersion = 15
 # 2026-11-09 (version 15, one bump for both): a user Entra ID lists as deleted retires at once; the customer's correlation
 # decisions reach the CI build (force-merge an edge of the grouping, never-merge a re-split of only the groups it names, pin-id in
 # the identity ledger) and a split CI is recorded. With no decision every statement and the fingerprint are as before: re-baselined.
-$script:SICiBuildLogicHash = 'ec784b4a3e29488609f848101e124599d6005aaf66bd905465520b67216fa4c3'
+# 2026-11-11 (PROGRESS-TICK-1): the end-of-build marks run one key range per call from PowerShell (Invoke-SICiMarkBuilt) --
+# the same statement per range, the same marks and rows (proven against the one batch on SQL Server): re-baselined, version 15.
+$script:SICiBuildLogicHash = '4ae6814acbf9dc7131a4fa513cbbaa61d947b026e20d12260d63c7c0beef55d8'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -1503,9 +1505,10 @@ function Get-SICiMarkBuiltSql {
         #534 after a build that finished: what every record of a BUILT group was (BuiltHash / BuiltGroupKey / BuiltState /
         BuiltTimeSig = this build's Cur*) and its NextDueAt -- the earliest moment after this build at which one of its day
         thresholds (-Thresholds, Get-SICiTimeThresholds: its source's last seen and the date fields of its JSON) flips; only
-        the records being built are read here. The built marks of records gone from the lookback are cleared. @all = '1'
-        marks every current record (a full build). A record whose group's CI was not written (no CiId) stays unmarked -- it
-        is built again. Answers Marked, Cleared.
+        the records being built are read here. @all = '1' marks every current record (a full build). A record whose group's
+        CI was not written (no CiId) stays unmarked -- it is built again. Without -Batch: ONE KEY RANGE of those marks
+        (@nowAt, @all, @h, @after, @isFirst, @take; answers Hi, Marked, Ms, Walked) -- Invoke-SICiMarkBuilt runs the ranges,
+        then clears the built marks of records gone from the lookback (Get-SICiMarkBuiltClearSql) and answers Marked, Cleared.
         -Batch: the same marks for ONE batch (@b), written when that batch is finished -- a rebuild of every CI that is
         stopped later is carried on from there by the next build (Test-SICiCarryOn). With them, in the same transaction,
         the batch's posted marks (@p = [{ CiId; Hash }], the CIs whose full row reached SI_CI_CL -- else they ride in the
@@ -1545,61 +1548,162 @@ COMMIT TRANSACTION;
 SELECT @marked AS Marked, 0 AS Cleared;
 "@
     }
+    # #881 + PROGRESS-TICK-1 (Invardia 2026-11-11: a large install sat 6.4 h in ONE silent batch here): ONE KEY RANGE of the
+    # end-of-build marks. The ranges are run from PowerShell, one call each (Invoke-SICiMarkBuilt), so every range can say how
+    # far the pass is; each range is the statement the T-SQL loop ran, in its own short transaction, and answers its upper key,
+    # the records it marked, its time (the next range's size) and the members it walked.
+    # KEEP IT OUT UNTIL FULLY EVALUATED: the records of a CI the rules' time limit stopped in this build (@h = [ "record key" ])
+    # are never marked in any range (so a build stopped between two ranges cannot leave one counted as built), and lose the hash
+    # they were built from (and BuiltAt) after the last range (Get-SICiMarkBuiltHeldSql) -- the next build finds their group
+    # changed and builds it again with every rule
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
-DECLARE @now DATETIME2(3) = ISNULL(TRY_CONVERT(DATETIME2(3), NULLIF(@nowText, N''), 127), SYSUTCDATETIME());
-DECLARE @marked INT = 0, @cleared INT = 0;
--- #881 IN KEY RANGES, each its own short transaction (every record of the build in ONE transaction filled the log at the
--- largest tenants); a range's size follows the measured time of the one before (about two seconds, at most double).
--- KEEP IT OUT UNTIL FULLY EVALUATED: the records of a CI the rules' time limit stopped in this build (@h = [ "record key" ])
--- are never marked here (so a build stopped between two ranges cannot leave one counted as built), and lose the hash they
--- were built from (and BuiltAt) below -- the next build finds their group changed and builds it again with every rule
-CREATE TABLE #held (RecordKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+DECLARE @now DATETIME2(3) = CONVERT(DATETIME2(3), @nowAt, 126);
+DECLARE @lo NVARCHAR(450) = @after, @hi NVARCHAR(450) = NULL, @first BIT = CONVERT(BIT, @isFirst), @n BIGINT = CONVERT(BIGINT, @take), @walked BIGINT = 0, @t0 DATETIME2(3), @ms BIGINT, @marked INT = 0;
+SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) g.RecordKey FROM sidata.CiGroupMember g WHERE (@first = 1 OR g.RecordKey > @lo) ORDER BY g.RecordKey) k;
+IF @hi IS NULL
+BEGIN
+    SELECT CAST(NULL AS NVARCHAR(450)) AS Hi, 0 AS Marked, CAST(0 AS BIGINT) AS Ms, CAST(0 AS BIGINT) AS Walked;
+    RETURN;
+END
+DECLARE @held TABLE (RecordKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
 IF @h IS NOT NULL AND @h <> N'' AND @h <> N'[]'
-    INSERT #held (RecordKey) SELECT DISTINCT x.RecordKey FROM OPENJSON(@h) WITH (RecordKey NVARCHAR(450) '$') x WHERE x.RecordKey IS NOT NULL;
-DECLARE @lo NVARCHAR(450) = N'', @hi NVARCHAR(450), @first BIT = 1, @n BIGINT = 10000, @t0 DATETIME2(3), @ms BIGINT;
-WHILE 1 = 1
-BEGIN
-    SET @hi = NULL;
-    SELECT @hi = MAX(k.RecordKey) FROM (SELECT TOP (@n) g.RecordKey FROM sidata.CiGroupMember g WHERE (@first = 1 OR g.RecordKey > @lo) ORDER BY g.RecordKey) k;
-    IF @hi IS NULL BREAK;
-    SET @t0 = SYSUTCDATETIME();
-    BEGIN TRANSACTION;
-    UPDATE r SET BuiltHash = m.CurHash, BuiltGroupKey = m.GroupKey, BuiltState = m.CurState, BuiltTimeSig = m.CurTimeSig, BuiltAt = @now, NextDueAt = d.Due
-    FROM sidata.CiRecord r JOIN sidata.CiGroupMember m ON m.RecordKey = r.RecordKey
-    $($ts.Apply)
-    $due
-    WHERE (m.Dirty = 1 OR @all = N'1') AND r.CiId IS NOT NULL AND (@first = 1 OR m.RecordKey > @lo) AND m.RecordKey <= @hi
-      AND NOT EXISTS (SELECT 1 FROM #held hk WHERE hk.RecordKey = r.RecordKey);
-    SET @marked += @@ROWCOUNT;
-    COMMIT TRANSACTION;
-    SELECT @first = 0, @lo = @hi, @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
-    SET @n = CASE WHEN @ms <= 0 THEN 2 * @n WHEN @n * 2000 / @ms > 2 * @n THEN 2 * @n ELSE @n * 2000 / @ms END;
-    IF @n < 1 SET @n = 1;
-    IF @n > 2147483647 SET @n = 2147483647;
-END
-UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata.CiRecord r JOIN #held x ON x.RecordKey = r.RecordKey;
--- the built marks of records gone from the lookback: in key ranges of the records too
-SELECT @lo = N'', @first = 1, @n = 10000;
-WHILE 1 = 1
-BEGIN
-    SET @hi = NULL;
-    SELECT @hi = MAX(k.RecordKey) FROM (SELECT TOP (@n) r.RecordKey FROM sidata.CiRecord r WHERE (@first = 1 OR r.RecordKey > @lo) ORDER BY r.RecordKey) k;
-    IF @hi IS NULL BREAK;
-    SET @t0 = SYSUTCDATETIME();
-    UPDATE r SET BuiltHash = NULL, BuiltGroupKey = NULL, BuiltState = NULL, BuiltTimeSig = NULL, NextDueAt = NULL
-    FROM sidata.CiRecord r
-    WHERE (@first = 1 OR r.RecordKey > @lo) AND r.RecordKey <= @hi
-      AND r.BuiltGroupKey IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = r.RecordKey);
-    SET @cleared += @@ROWCOUNT;
-    SELECT @first = 0, @lo = @hi, @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
-    SET @n = CASE WHEN @ms <= 0 THEN 2 * @n WHEN @n * 2000 / @ms > 2 * @n THEN 2 * @n ELSE @n * 2000 / @ms END;
-    IF @n < 1 SET @n = 1;
-    IF @n > 2147483647 SET @n = 2147483647;
-END
-SELECT @marked AS Marked, @cleared AS Cleared;
+    INSERT @held (RecordKey) SELECT DISTINCT x.RecordKey FROM OPENJSON(@h) WITH (RecordKey NVARCHAR(450) '$') x WHERE x.RecordKey IS NOT NULL;
+SET @t0 = SYSUTCDATETIME();
+BEGIN TRANSACTION;
+UPDATE r SET BuiltHash = m.CurHash, BuiltGroupKey = m.GroupKey, BuiltState = m.CurState, BuiltTimeSig = m.CurTimeSig, BuiltAt = @now, NextDueAt = d.Due
+FROM sidata.CiRecord r JOIN sidata.CiGroupMember m ON m.RecordKey = r.RecordKey
+$($ts.Apply)
+$due
+WHERE (m.Dirty = 1 OR @all = N'1') AND r.CiId IS NOT NULL AND (@first = 1 OR m.RecordKey > @lo) AND m.RecordKey <= @hi
+  AND NOT EXISTS (SELECT 1 FROM @held hk WHERE hk.RecordKey = r.RecordKey);
+SET @marked = @@ROWCOUNT;
+COMMIT TRANSACTION;
+SET @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
+SELECT @hi AS Hi, @marked AS Marked, @ms AS Ms, @walked AS Walked;
 "@
+}
+
+function Get-SICiMarkBuiltStartSql {
+    <# PURE. The end-of-build marks' moment, resolved ONCE for every range (@nowText, else the database's own now -- as the
+       one batch did), and -- @count = '1', for the progress words only -- the members and records the two passes walk. #>
+    @'
+SET NOCOUNT ON;
+DECLARE @members BIGINT = NULL, @records BIGINT = NULL;
+IF @count = N'1'
+    SELECT @members = (SELECT COUNT_BIG(*) FROM sidata.CiGroupMember), @records = (SELECT COUNT_BIG(*) FROM sidata.CiRecord);
+SELECT CONVERT(NVARCHAR(30), ISNULL(TRY_CONVERT(DATETIME2(3), NULLIF(@nowText, N''), 127), SYSUTCDATETIME()), 126) AS NowAt, @members AS Members, @records AS Records;
+'@
+}
+
+function Get-SICiMarkBuiltHeldSql {
+    <# PURE. After the last range: the records of the CIs kept out until they are fully evaluated (@h) lose the hash they were
+       built from and BuiltAt -- the next build finds their group changed. #>
+    @'
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @held TABLE (RecordKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+IF @h IS NOT NULL AND @h <> N'' AND @h <> N'[]'
+    INSERT @held (RecordKey) SELECT DISTINCT x.RecordKey FROM OPENJSON(@h) WITH (RecordKey NVARCHAR(450) '$') x WHERE x.RecordKey IS NOT NULL;
+UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata.CiRecord r JOIN @held x ON x.RecordKey = r.RecordKey;
+'@
+}
+
+function Get-SICiMarkBuiltClearSql {
+    <# PURE. ONE key range of the records (as Get-SICiMarkBuiltSql): the built marks of records gone from the lookback are
+       cleared. Answers Hi, Cleared, Ms, Walked. #>
+    @'
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @lo NVARCHAR(450) = @after, @hi NVARCHAR(450) = NULL, @first BIT = CONVERT(BIT, @isFirst), @n BIGINT = CONVERT(BIGINT, @take), @walked BIGINT = 0, @t0 DATETIME2(3), @ms BIGINT, @cleared INT = 0;
+SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) r.RecordKey FROM sidata.CiRecord r WHERE (@first = 1 OR r.RecordKey > @lo) ORDER BY r.RecordKey) k;
+IF @hi IS NULL
+BEGIN
+    SELECT CAST(NULL AS NVARCHAR(450)) AS Hi, 0 AS Cleared, CAST(0 AS BIGINT) AS Ms, CAST(0 AS BIGINT) AS Walked;
+    RETURN;
+END
+SET @t0 = SYSUTCDATETIME();
+UPDATE r SET BuiltHash = NULL, BuiltGroupKey = NULL, BuiltState = NULL, BuiltTimeSig = NULL, NextDueAt = NULL
+FROM sidata.CiRecord r
+WHERE (@first = 1 OR r.RecordKey > @lo) AND r.RecordKey <= @hi
+  AND r.BuiltGroupKey IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = r.RecordKey);
+SET @cleared = @@ROWCOUNT;
+SET @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
+SELECT @hi AS Hi, @cleared AS Cleared, @ms AS Ms, @walked AS Walked;
+'@
+}
+
+function Get-SICiMarkBuiltNextRange {
+    <#
+        PURE. #881 the next key range's size from the measured time of the one before -- the rule the T-SQL loop applied, with
+        its integer arithmetic: double when the range took no time, else the size that takes about -TargetMs (2 s), at most
+        double; never under 1 or over 2,147,483,647.
+    #>
+    param([long]$Current, [long]$Ms, [long]$TargetMs = 2000)
+    if ($Ms -le 0) { $n = 2 * $Current }
+    else {
+        $want = [long][Math]::Floor(([decimal]$Current * [decimal]$TargetMs) / [decimal]$Ms)
+        $n = if ($want -gt 2 * $Current) { 2 * $Current } else { $want }
+    }
+    if ($n -lt 1) { $n = 1L }
+    if ($n -gt 2147483647) { $n = 2147483647L }
+    [long]$n
+}
+
+function Invoke-SICiMarkBuilt {
+    <#
+        #534 / #881 THE END-OF-BUILD MARKS, a key range per call (PROGRESS-TICK-1, Invardia 2026-11-11: the pass was ONE batch
+        with a T-SQL loop and said nothing for 6.4 h at a large install -- a loop inside one statement cannot tick). The same
+        work as that batch, range by range: the moment resolved once (Get-SICiMarkBuiltStartSql); the marks over the key ranges
+        of sidata.CiGroupMember (Get-SICiMarkBuiltSql -- the same statement, the same first size 10,000 and the same adaptive
+        size, Get-SICiMarkBuiltNextRange; each range its own transaction; the held records (@h) never marked); the held
+        records' hashes taken off after the last range (Get-SICiMarkBuiltHeldSql); then the built marks of records gone from
+        the lookback cleared over the key ranges of sidata.CiRecord (Get-SICiMarkBuiltClearSql). -Params: @{ nowText; all; h }
+        as the batch took them. -Sql: the build's seam (sql, params, 'rows' | 'nonquery'). -Progress: a progress ticker
+        (SI-StepPhase.ps1) or $null -- after every range it is told the members (then the records) walked of all ("mark built
+        140,000 of 310,000", then "clear built ..."), at most every few minutes. Answers ONE row @{ Marked; Cleared } -- the
+        row the batch answered. A database error ends the call with that error, as the batch did (the ranges before it stay
+        committed, as before); a database that answers no row ends the pass there (a record left unmarked is built again).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Sql, [AllowEmptyCollection()][object[]]$Thresholds = @(), [hashtable]$Params = @{}, $Progress = $null, [long]$FirstRange = 10000)
+    $val = { param($o, [string]$n) if ($null -eq $o) { $null } elseif ($o -is [System.Collections.IDictionary]) { $o[$n] } else { $o.$n } }
+    $num = { param($v) if ($null -eq $v -or $v -is [System.DBNull]) { -1L } else { [long]$v } }
+    $h = [string]$Params['h']
+    $tick = ($null -ne $Progress) -and [bool](Get-Command -Name Step-SIStepProgressTicker -ErrorAction SilentlyContinue)
+    $st = @(& $Sql (Get-SICiMarkBuiltStartSql) @{ nowText = [string]$Params['nowText']; count = $(if ($tick) { '1' } else { '0' }) } 'rows')
+    $nowAt = if ($st.Count) { [string](& $val $st[0] 'NowAt') } else { '' }
+    if ([string]::IsNullOrWhiteSpace($nowAt)) {
+        # (a database that answered no start row: the moment the build passed, as the batch read it)
+        $d = [datetime]::UtcNow; $pt = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$Params['nowText'], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$pt)) { $d = $pt }
+        $nowAt = $d.ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $walk = {
+        param([string]$Text, [hashtable]$More, [string]$CountName)
+        $lo = ''; $first = $true; $n = [long][Math]::Max(1L, $FirstRange); $sum = 0L; $walked = 0L; $ranges = 0
+        while ($true) {
+            $p = @{ after = $lo; isFirst = $(if ($first) { '1' } else { '0' }); take = $n.ToString([Globalization.CultureInfo]::InvariantCulture) }
+            foreach ($k in $More.Keys) { $p[$k] = $More[$k] }
+            $r = @(& $Sql $Text $p 'rows')
+            # every range answers one row (its upper key, or none when the keys are done); no row = nothing more to walk --
+            # the safe direction: a record left unmarked is built again by the next build
+            if ($r.Count -eq 0) { break }
+            $hi = & $val $r[0] 'Hi'
+            if ($null -eq $hi -or $hi -is [System.DBNull]) { break }
+            $sum += [long](& $num (& $val $r[0] $CountName)); $walked += [long](& $num (& $val $r[0] 'Walked')); $ranges++
+            if ($tick) { $null = Step-SIStepProgressTicker -Ticker $Progress -Done $walked }
+            $lo = [string]$hi; $first = $false
+            $n = Get-SICiMarkBuiltNextRange -Current $n -Ms ([long](& $num (& $val $r[0] 'Ms')))
+        }
+        [pscustomobject]@{ Sum = $sum; Ranges = $ranges; Walked = $walked }
+    }
+    if ($tick) { Set-SIStepProgressTickerPhase -Ticker $Progress -Unit 'mark built' -Total (& $num (& $val $st[0] 'Members')) }
+    $m = & $walk (Get-SICiMarkBuiltSql -Thresholds $Thresholds) @{ nowAt = $nowAt; all = [string]$Params['all']; h = $h } 'Marked'
+    if ($h.Trim() -and $h.Trim() -ne '[]') { $null = & $Sql (Get-SICiMarkBuiltHeldSql) @{ h = $h } 'nonquery' }
+    if ($tick) { Set-SIStepProgressTickerPhase -Ticker $Progress -Unit 'clear built' -Total (& $num (& $val $st[0] 'Records')) }
+    $c = & $walk (Get-SICiMarkBuiltClearSql) @{} 'Cleared'
+    [pscustomobject]@{ Marked = [int]$m.Sum; Cleared = [int]$c.Sum; MarkRanges = $m.Ranges; ClearRanges = $c.Ranges }
 }
 
 function Get-SICiMarkBatchBuiltSql {

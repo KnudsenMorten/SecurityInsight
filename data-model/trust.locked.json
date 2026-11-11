@@ -35,6 +35,11 @@
       "description": "The privilege tier catalog (roles and permissions to tier)."
     },
     {
+      "id": "break_glass",
+      "trusted": true,
+      "description": "SecurityInsight's break-glass classification (the provider, the naming patterns, the emergency-access group, your extension attribute, or a permanent Tier 0 account excluded from all Conditional Access policies): a break-glass account is Tier 0."
+    },
+    {
       "id": "azure.resource_tag",
       "trusted": true,
       "description": "Azure resource tags."

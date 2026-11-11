@@ -370,7 +370,8 @@ function Get-SICiBuildRules {
     if (@($native.Problems).Count -gt 0) { & $Log 'WARN' ("CIs: {0} native rule(s) skipped: {1}" -f @($native.Problems).Count, ((@($native.Problems) | Select-Object -First 5) -join '; ')) }
     # the operator's tier tag, low priority (asserted, last in the trust list) -- the profile has always used it
     # #690 (48) an identity's tier = the tier of the highest privilege it holds today (the privilege tier catalog)
-    @($conv.Rules) + @($native.Rules) + @(Get-SICiTagTierRules) + @(Get-SICiPrivilegeTierRules)
+    # a break-glass account is Tier 0 whatever it holds today (owner 2026-11-11)
+    @($conv.Rules) + @($native.Rules) + @(Get-SICiTagTierRules) + @(Get-SICiPrivilegeTierRules) + @(Get-SICiBreakGlassTierRules)
 }
 
 function Get-SICmdbOwner {
@@ -1792,7 +1793,11 @@ function Invoke-SICiBuild {
         if (-not $DryRun) {
             # (@h: the records of the CIs kept out until they are fully evaluated lose their marks -- the next build, whatever
             # kind it is, finds their groups changed and builds them again with every rule)
-            $mk = @(& $sql (Get-SICiMarkBuiltSql -Thresholds $thresholds) @{ nowText = $now.ToString('o'); all = $(if ($buildAll) { '1' } else { '0' }); h = (ConvertTo-SIJsonArray $heldRecords.ToArray()) } 'rows')
+            # PROGRESS-TICK-1 (a large install: 6.4 h silent here): the marks run a key range per call, and say the records
+            # walked of all in the log and the step's progress record at most every 3 minutes ("mark built 140,000 of 310,000")
+            $markTick = $null
+            if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $markTick = New-SIStepProgressTicker -What 'CIs: the CI build' -Unit 'mark built' -Invoke $sql -Log $Log }
+            $mk = @(Invoke-SICiMarkBuilt -Sql $sql -Thresholds $thresholds -Progress $markTick -Params @{ nowText = $now.ToString('o'); all = $(if ($buildAll) { '1' } else { '0' }); h = (ConvertTo-SIJsonArray $heldRecords.ToArray()) })
             if ($mk.Count -gt 0) { $t.Marked = [int](Get-SIItemValue $mk[0] 'Marked') }
             $sv = New-Object System.Collections.Generic.List[object]
             $sv.Add([ordered]@{ n = 'LastBuildStatus'; v = $(if ($t.PostFailed -eq 0) { 'ok' } else { 'partial' }) })

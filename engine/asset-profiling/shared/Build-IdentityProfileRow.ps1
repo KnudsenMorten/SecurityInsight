@@ -84,6 +84,12 @@ function Get-SIIdentitySchema {
 
 function Get-SIIdentityCatalogVersion {
     if ($script:_SISchemaCache.ContainsKey('IdentityCatalogVersion')) { return $script:_SISchemaCache['IdentityCatalogVersion'] }
+    # #1194: the catalog the tiers really came from -- the daily classified download (version + build date), built here
+    # with AI, or the shipped one -- as Initialize-SIIdentityCatalog loaded it. Before it ran: the shipped file's date.
+    if (Get-Command -Name Get-SIIdentityCatalogLabel -ErrorAction SilentlyContinue) {
+        $label = [string](Get-SIIdentityCatalogLabel)
+        if ($label) { $script:_SISchemaCache['IdentityCatalogVersion'] = $label; return $label }
+    }
     $catPath = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'privilege-tier-catalog/privilege-tier-catalog.locked.json'
     if (-not (Test-Path $catPath)) { return 'unknown' }
     try {

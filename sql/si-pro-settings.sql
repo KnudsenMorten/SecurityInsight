@@ -624,6 +624,13 @@ IF COL_LENGTH('cfg.DataOutBatch', 'PagesSent') IS NULL ALTER TABLE cfg.DataOutBa
 
 IF COL_LENGTH('cfg.DataOutBatch', 'LastProgressUtc') IS NULL ALTER TABLE cfg.DataOutBatch ADD LastProgressUtc DATETIME2(3) NULL;
 
+-- #1188 THE ROWS KEPT OPEN -- NOT SEEN THIS RUN (ADDED 2026-11-11, engine/data-out/SI-DataOutContract.ps1): a finding sent
+-- before and absent from this run's collection is SENT with u_action 'held' (the target keeps the record; SecurityInsight
+-- closes it only after enough complete runs without it). It is counted here, apart from HeldRows / RowsHeld, which now count
+-- only the real holds (no CI key, CI not delivered yet, a column too short, a batch held whole). Written at the end of a batch
+-- and with the progress. Additive: HeldRows and RowsHeld keep their names; a batch written before this has NULL.
+IF COL_LENGTH('cfg.DataOutBatch', 'KeptOpenRows') IS NULL ALTER TABLE cfg.DataOutBatch ADD KeptOpenRows BIGINT NULL;
+
 -- =============================================================================================
 -- THE CMDB (#256): business services, the assets that belong to them, and which source is authoritative.
 --   cfg.CmdbService       one row per service. Source = the CMDB the row came from:

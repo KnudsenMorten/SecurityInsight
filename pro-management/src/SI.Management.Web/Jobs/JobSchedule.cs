@@ -13,7 +13,13 @@ public static class JobSchedule
 {
     public sealed record Described(string Cadence, DateTimeOffset? NextUtc, int? SortMinute);
 
-    private static readonly string[] Days = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
+    /// SUPPORT-LINK-1 (framework rule, owner 2026-11-10: "must go into all solutions"): the telemetry job to Invardia is
+    /// shown to customers by this name and line -- on the Jobs page, in mails, setup and docs. The job's own name
+    /// (caj-si-heartbeat) and key stay. Never worded as a link to a partner or another tenant.
+    public const string SupportLinkName = "Invardia support link";
+    public const string SupportLinkLine = "Sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll out.";
+
+    private static readonly string[] Days =["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
 
     /// The readable name of an SI job, from its Container Apps name; an unknown job keeps its own name.
     public static string Label(string jobName)
@@ -46,7 +52,8 @@ public static class JobSchedule
             "schema-discovery" => "Schema discovery",
             "updater" => "Updates",
             "config-backup" => "Configuration backup",
-            "heartbeat" => "Status report to Invardia (hourly)",
+            // SUPPORT-LINK-1 (framework, owner 2026-11-10): the customer's name of the telemetry job (caj-si-heartbeat)
+            "heartbeat" => SupportLinkName,
             "signin-methods" => "Users' sign-in methods (background read)",
             "data-out" => "Data out (ServiceNow and the other outputs)",
             "support-grant" => "Invardia support access (just in time)",
@@ -88,7 +95,7 @@ public static class JobSchedule
         "asset-tagging" => new("Writes tier tags back to Defender devices (opt-in, its own write identity).", ["endpoint"], "device tags in Defender"),
         "templates" => new("Publishes an accepted template release. Started by the web app, not on a schedule.", [], "configuration templates"),
         "config-backup" => new("Backs up every configuration you made (settings, departments, access, exemptions, overrides, connectors, the CMDB service model, the pipeline, reports, saved views) once a day, records a day without changes as no change, and removes backups older than the retention (pinned ones stay). Never a step of the pipeline.", [], "configuration backups (" + SI.Management.Web.Navigation.NavModel.PathOf("/Admin/Backups") + ")"),
-        "heartbeat" => new("Sends the install's status report to Invardia once an hour, whether or not the pipeline runs -- so a long report or correlation never looks like a stopped install. It only reads; it never changes anything. Never a step of the pipeline.", [], "the hourly status report"),
+        "heartbeat" => new(SupportLinkLine + " Every half hour, whether or not the pipeline runs; it only reads and never changes anything. A report it cannot deliver is retried next cycle. Never a step of the pipeline.", [], "the reports to Invardia support"),
         "signin-methods" => new("Reads each user's sign-in methods in full -- every method with its details and the device a Windows Hello or Authenticator key lives on -- in slices every 15 minutes, privileged users first, and keeps them for the identity collection. One read per user, which Microsoft throttles: the first full read of a large tenant takes many hours, spread over the day; later runs read only users whose methods changed. Collections never wait for it; never a step of the pipeline. Setting: Users' sign-in methods in full.", [], "the users' sign-in methods in full"),
         "data-out" => new("Sends the ServiceNow hand-off, the vulnerable items and the other outputs from the newest collection the data sync marked ready. The data sync starts it the moment it has stored the findings per CI, so the push never waits for the summaries, the clean-up or the views; start it to send again. Never a step of the pipeline.", [], "the outputs (" + SI.Management.Web.Navigation.NavModel.PathOf("/Collection/Connectors") + ")"),
         "support-grant" => new("Opens or closes the Invardia Support app's database access for a support session, at most at the level you consented to and for at most 8 hours, and removes it on its own when the time is up. Started only by the Invardia Support session; never a step of the pipeline.", [], "the Support app's database access"),

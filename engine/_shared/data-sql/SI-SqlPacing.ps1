@@ -296,9 +296,14 @@ function Invoke-SISqlPacingHousekeeping {
         background work: it GIVES WAY to the database instead of slowing a little.
           * the FIRST statement of the process (one wake-up) is never held back -- the removal always moves on, even on a
             database that is never calm (a floor on progress, never a limit on the work);
-          * the load (the highest of data IO, CPU and log write) at or above HIGH: the next statement is asked to be smaller
-            and the removal WAITS, re-reading the load every 15 s (the DMV's own step), until it is below LOW -- no ceiling
-            tied to the statement's time; between the marks a wait in progress goes on (hysteresis), else the usual pace;
+          * the load (the highest of data IO, CPU and log write) at or above the housekeeping HIGH mark: the next statement
+            is asked to be smaller and the removal WAITS, re-reading the load every 15 s (the DMV's own step), until it is
+            below the housekeeping LOW mark -- no ceiling tied to the statement's time; between the marks a wait in progress
+            goes on (hysteresis), else the usual pace. The housekeeping marks sit BELOW the writers' (a support ticket
+            "database at its limit", 2026-11-10: stopping only at the writers' 85 % let every resume drive the database to
+            96-99 %): it stops at the writers' LOW mark (70 %) and goes on only below LOW - 20 (50 %), so a database never sits
+            at its limit for the clean-up and a collection always finds room; Calm on the result = the load is known and
+            below the housekeeping LOW mark (the caller widens only then);
           * only the writer's own measured statement time is known: the pause doubles from the statement's own time while
             statements stay slow (no 4 x / 60 s ceiling), none once one is back at its usual time;
           * unknown load: no wait (today's behaviour);
@@ -327,7 +332,12 @@ function Invoke-SISqlPacingHousekeeping {
     }
     $sleep = { param([long]$Ms) if ($Ms -le 0) { return }; if ($P.Sleep) { & $P.Sleep $Ms } else { Start-Sleep -Milliseconds ([int][Math]::Min([long][int]::MaxValue, $Ms)) }; $P.PausedMs += $Ms }
     # Deadline = the wait reached -DeadlineUtc on the pacer's own clock: the caller starts no new statement
-    $result = { param([long]$W, [bool]$S, [string]$St, $L, [bool]$D = $false) [pscustomobject]@{ WaitedMs = $W; Shrink = $S; State = $St; Load = $L; Deadline = $D } }
+    # the housekeeping marks: below the writers' -- stop at their LOW, go on only 20 points under it
+    $hkHigh = [double]$P.Low
+    $hkLow = [Math]::Max(0.0, [double]$P.Low - 20.0)
+    $result = { param([long]$W, [bool]$S, [string]$St, $L, [bool]$D = $false)
+        $calm = ($null -ne $L -and [string]$L.Source -ne 'measured' -and [double]$L.Max -lt $hkLow)
+        [pscustomobject]@{ WaitedMs = $W; Shrink = $S; State = $St; Load = $L; Deadline = $D; Calm = $calm } }
     # the first statement of this wake-up always runs
     if (-not $P.HkRan) {
         $P.HkRan = $true
@@ -357,13 +367,13 @@ function Invoke-SISqlPacingHousekeeping {
         return (& $result $ms $shrink $(if ($want -gt 0) { 'waited' } else { 'normal' }) $load ($want -gt 0 -and [double]$want -ge $leftMs))
     }
     $shrink = $false
-    if ([double]$load.Max -ge $P.High) { $P.HkWaiting = $true; $shrink = $true }
+    if ([double]$load.Max -ge $hkHigh) { $P.HkWaiting = $true; $shrink = $true }
     if (-not $P.HkWaiting) {
         if ($P.SaidState -eq 'pacing' -and $since -ge 60) { & $say (Format-SISqlPacingLine -State 'normal' -Load $load); $P.SaidState = 'normal' }
         return (& $result 0L $false 'normal' $load)
     }
     if (($P.SaidState -ne 'pacing' -and $since -ge 60) -or $since -ge 300) {
-        & $say ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'pacing: the database is at {0:0} % {1} -- the clean-up of older collections waits until it is below {2:0} %', [double]$load.Max, $load.What, $P.Low))
+        & $say ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'pacing: the database is at {0:0} % {1} -- the clean-up of older collections waits until it is below {2:0} %', [double]$load.Max, $load.What, $hkLow))
         $P.SaidState = 'pacing'
     }
     $waited = 0L; $P.Pauses++; $hit = $false
@@ -375,9 +385,9 @@ function Invoke-SISqlPacingHousekeeping {
         $load = & $read
         # the source is lost while waiting: unknown -- today's behaviour
         if ($null -eq $load) { $P.HkWaiting = $false; break }
-        if ([double]$load.Max -lt $P.Low) { $P.HkWaiting = $false; break }
+        if ([double]$load.Max -lt $hkLow) { $P.HkWaiting = $false; break }
         if (([double](& $P.Clock) - $P.SaidAt) -ge 300) {
-            & $say ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'pacing: the database is still at {0:0} % {1} -- the clean-up of older collections waits until it is below {2:0} %', [double]$load.Max, $load.What, $P.Low))
+            & $say ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'pacing: the database is still at {0:0} % {1} -- the clean-up of older collections waits until it is below {2:0} %', [double]$load.Max, $load.What, $hkLow))
         }
     }
     if (-not $P.HkWaiting -and $null -ne $load -and $P.SaidState -eq 'pacing' -and ([double](& $P.Clock) - $P.SaidAt) -ge 60) {

@@ -2095,6 +2095,8 @@ function Invoke-SIDataCiSync {
             }
         } elseif ($expected -gt 0) {
             $planned = Get-SIDataPartitionCount -Rows $expected -Bytes $bytes
+            $fpcTick = $null
+            if (-not $DryRun -and (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue)) { $fpcTick = New-SIStepProgressTicker -What 'v3 model    : the findings per CI read from the collection' -Unit 'rows' -Total ([long]$expected) -Invoke $Invoke -Log $Log }
             $pageRead = {
                 param([string]$kql)
                 if ($LaQuery) { @(& $LaQuery $kql) }
@@ -2118,6 +2120,8 @@ function Invoke-SIDataCiSync {
                     $pageItems.Add($it)
                 }
                 $state.Read += $pageItems.Count
+                # #1180: rows read of all, said and recorded as the step's progress every few minutes
+                if ($fpcTick) { $null = Step-SIStepProgressTicker -Ticker $fpcTick -Done ([long]$state.Read) }
                 if (-not $state.Snap -and $pageItems.Count) { $state.Snap = [string]$pageItems[0]['CollectionTime'] }
                 if (-not $DryRun -and $pageItems.Count) {
                     $arr = $pageItems.ToArray(); $pageItems.Clear()

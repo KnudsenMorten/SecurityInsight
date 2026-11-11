@@ -49,3 +49,5 @@ else { <p class="lede">@Model.Lede</p> }
 @if (partialNotice is not null) { <partial name="~/Pages/Shared/_PartialNotice.cshtml" model="partialNotice" /> }
 @foreach (var srcNote in srcShow) { <div class="notice warn" role="status" data-utc data-collection-source="@srcNote.Source">When this collection was calculated: @(srcNote.Text(t => Fmt.When(t)))</div> }
 @if (Model.Notice is not null) { <div class="notice warn" role="status">@Model.Notice</div> }
+@* #1189: what the search matched (the fast search off an index) and the way to search anywhere in the text -- never a narrowed answer shown as the whole one *@
+@if (Model.SearchNote is { } sn) { <div class="notice" role="status" data-search-note="@(sn.Anywhere ? "anywhere" : "fast")">@sn.Text <a href="@sn.Href" data-search-anywhere="@(sn.Anywhere ? "off" : "on")">@sn.LinkText</a></div> }

@@ -176,7 +176,7 @@ public sealed class RequestModel : PageModel
                 foreach (var kv in vis.Parameters) parameters[kv.Key] = kv.Value;
                 scope += "|" + vis.Key;
             }
-            var q = new GridQuery(spec, parameters, scope, new GridRequest { Search = Get("q"), Filters = filters, Selected = sel, Size = 50 });
+            var q = new GridQuery(spec, parameters, scope, new GridRequest { Search = Get("q"), Filters = filters, Selected = sel, Size = 50, SearchAnywhere = GridRequest.IsAnywhere(Get(GridRequest.AnywhereKey)) });
             var page = (await _views.ExportAsync(q, ct)).Data;
             if (All && ExemptionBulkGuard.Check(true, page.Total, max) is { Allowed: false } v && page.Total > 0) return Refuse(v.Reason!, page.Total);
             if (page.Total > max) { Error = $"{Fmt.Int(page.Total)} findings match -- at most {Fmt.Int(max)} can be requested at once. Narrow the filter."; return (Array.Empty<FindingRef>(), page.Total); }

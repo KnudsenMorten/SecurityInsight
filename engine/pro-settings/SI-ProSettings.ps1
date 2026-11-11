@@ -334,7 +334,9 @@ function ConvertFrom-SIProSettingRows {
 #   SIWeb_CmdbSource                                                the ONE CMDB owner the CI build takes CMDB values from
 #                                                                   (engine\data-model\SI-CiBuildRun.ps1 Get-SICmdbOwner)
 #   SIWeb_NumberFormatDefault                                       the number format of the guard mails (SI-Guard.ps1)
-$script:SIProWebSettingsForEngines = @('SIWeb_EnvironmentName', 'SIWeb_TenantName', 'SIWeb_PublicBaseUrl', 'SIWeb_CmdbSource', 'SIWeb_NumberFormatDefault')
+#   SIWeb_MailRecipientsConfirmed                                   the list of people is confirmed: each report goes to its
+#                                                                   own list exactly (engine\_shared\SI-MailRecipients.ps1)
+$script:SIProWebSettingsForEngines = @('SIWeb_EnvironmentName', 'SIWeb_TenantName', 'SIWeb_PublicBaseUrl', 'SIWeb_CmdbSource', 'SIWeb_NumberFormatDefault', 'SIWeb_MailRecipientsConfirmed')
 
 # the names, one by one (a ', @()' here made @(Get-SIProWebSettingsForEngines) ONE item holding the whole list)
 function Get-SIProWebSettingsForEngines { foreach ($n in @($script:SIProWebSettingsForEngines)) { $n } }

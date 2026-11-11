@@ -113,6 +113,21 @@ function Test-SIStepProgressDue {
     [bool](($NowUtc.ToUniversalTime() - ([datetime]$Last.AtUtc).ToUniversalTime()).TotalSeconds -ge $EverySeconds)
 }
 
+function Get-SIStepProgressTarget {
+    <# The seam cfg.StepProgress is written / read through: -Invoke itself, or -- when -Invoke's database is not the SETTINGS
+       database (SI_ProSqlServer / SI_ProSqlDatabase) -- a seam of the settings database, opened once for the process. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    $t = if ($Invoke.PSObject.Properties['SISqlTarget']) { $Invoke.SISqlTarget } else { $null }
+    $ps = [string]$global:SI_ProSqlServer; $pd = [string]$global:SI_ProSqlDatabase
+    if ($t -and $ps -and $pd -and -not ([string]$t.Server -eq $ps -and [string]$t.Database -eq $pd)) {
+        if (-not ($global:SI_StepProgressInvoke -is [scriptblock]) -and (Get-Command -Name New-SIDataSqlInvoke -ErrorAction SilentlyContinue)) {
+            $global:SI_StepProgressInvoke = New-SIDataSqlInvoke -Server $ps -Database $pd -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint
+        }
+        if ($global:SI_StepProgressInvoke -is [scriptblock]) { return $global:SI_StepProgressInvoke }
+    }
+    $Invoke
+}
+
 function Write-SIStepProgress {
     <#
         THIS job execution's progress (cfg.StepProgress), through -Invoke (sql, params, mode). NEVER throws; returns $true when a
@@ -142,15 +157,7 @@ function Write-SIStepProgress {
             if (-not $Force -and $last -is [datetime] -and ($Now - $last).TotalSeconds -lt (Get-SIStepProgressBeatSeconds)) { return $false }
             $global:SI_StepProgressAt = $Now
         }
-        $target = $Invoke
-        $t = if ($Invoke.PSObject.Properties['SISqlTarget']) { $Invoke.SISqlTarget } else { $null }
-        $ps = [string]$global:SI_ProSqlServer; $pd = [string]$global:SI_ProSqlDatabase
-        if ($t -and $ps -and $pd -and -not ([string]$t.Server -eq $ps -and [string]$t.Database -eq $pd)) {
-            if (-not ($global:SI_StepProgressInvoke -is [scriptblock]) -and (Get-Command -Name New-SIDataSqlInvoke -ErrorAction SilentlyContinue)) {
-                $global:SI_StepProgressInvoke = New-SIDataSqlInvoke -Server $ps -Database $pd -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint
-            }
-            if ($global:SI_StepProgressInvoke -is [scriptblock]) { $target = $global:SI_StepProgressInvoke }
-        }
+        $target = Get-SIStepProgressTarget -Invoke $Invoke
         if ($isPhase) {
             $p = @{ Execution = $Execution; Job = $Job; Phase = $Phase
                     Done = $(if ($Done -ge 0) { [long]$Done } else { [DBNull]::Value }); Total = $(if ($Total -ge 0) { [long]$Total } else { [DBNull]::Value }) }
@@ -181,6 +188,91 @@ IF OBJECT_ID(N'cfg.StepPhaseTime') IS NOT NULL AND @Execution <> N''
     SELECT @f = MAX(AtUtc) FROM cfg.StepPhaseTime WHERE Execution = @Execution AND AtUtc >= @since;
 SELECT CASE WHEN @m IS NULL THEN @f WHEN @f IS NULL OR @m >= @f THEN @m ELSE @f END AS LastUtc;
 '@
+}
+
+# =====================================================================================================================
+#  #1180 A LONG PHASE SHOWS IT IS MOVING (Invardia 2026-11-11: six false "a step is not moving" tickets in one night -- every
+#  step was moving, but a long phase said nothing until it ended). A PROGRESS TICKER: a long phase counts what it has done
+#  out of how much (rows, query slices, batches) and, AT MOST every -EverySeconds (default 3 minutes) AND only when the count
+#  moved since its last word, says so in ONE plain log line and writes it as the step's progress (cfg.StepProgress: what it
+#  does now + done / total -- Write-SIStepProgress, which also moves the step's newest sign of progress, the mark the stall
+#  check reads). A count that did not move writes nothing, so a phase that really stands still is still seen as still.
+#  Progress only: it never changes a row of product data and never fails the step.
+# =====================================================================================================================
+function Format-SIStepProgressText {
+    <# PURE. "rows 1,203,400 of 1,703,142" / "batch 161 of 266" / "query slices 412 of 544"; total unknown (< 0): "rows 1,203,400". #>
+    param([Parameter(Mandatory)][string]$Unit, [long]$Done, [long]$Total = -1)
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    if ($Total -ge 0) { return ('{0} {1} of {2}' -f $Unit, $Done.ToString('N0', $inv), $Total.ToString('N0', $inv)) }
+    '{0} {1}' -f $Unit, $Done.ToString('N0', $inv)
+}
+
+function New-SIStepProgressTicker {
+    <#
+        A progress ticker for one long phase. -What: the phase in plain words (the log line and the progress record start with
+        it); -Unit: what is counted (rows / query slices / batch); -Total: out of how many (-1 = not known). -Invoke: the step's
+        SQL seam (none = log lines only); -Job: the job name the progress record carries (empty = the container job's own).
+        -EverySeconds: the least time between two words. -Log { param($Level, $Text) }; -Now { [datetime]::UtcNow } (tests).
+    #>
+    param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][string]$Unit, [long]$Total = -1, [scriptblock]$Invoke, [string]$Job = '',
+          [int]$EverySeconds = 180, [scriptblock]$Log, [scriptblock]$Now, [string]$Execution = [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME)
+    # (a test's clock for a ticker made deep inside a step: $global:SI_StepProgressTickerNow)
+    if (-not $Now) { if ($global:SI_StepProgressTickerNow -is [scriptblock]) { $Now = $global:SI_StepProgressTickerNow } else { $Now = { [datetime]::UtcNow } } }
+    $t0 = [datetime](& $Now)
+    @{ What = $What; Unit = $Unit; Total = $Total; Invoke = $Invoke; Job = $Job; Execution = $Execution; EverySeconds = [Math]::Max(1, $EverySeconds); Log = $Log; Now = $Now
+       StartUtc = $t0; LastAt = $t0; LastDone = [long]0; Lines = 0; Marks = 0 }
+}
+
+function Step-SIStepProgressTicker {
+    <#
+        The phase has done -Done (of -Total when given, else the ticker's). Says it and writes it when -EverySeconds have passed
+        since the last word AND the count moved since then (-Force: now, when it moved). NEVER throws. $true when it said it.
+    #>
+    param($Ticker, [long]$Done, [long]$Total = -2, [switch]$Force)
+    try {
+        if ($null -eq $Ticker) { return $false }
+        if ($Total -ge -1) { $Ticker.Total = $Total }
+        $now = [datetime](& $Ticker.Now)
+        if (-not $Force -and ($now - [datetime]$Ticker.LastAt).TotalSeconds -lt [double]$Ticker.EverySeconds) { return $false }
+        if ($Done -le [long]$Ticker.LastDone) { return $false }
+        $text = Format-SIStepProgressText -Unit ([string]$Ticker.Unit) -Done $Done -Total ([long]$Ticker.Total)
+        $min = [Math]::Floor(($now - [datetime]$Ticker.StartUtc).TotalMinutes)
+        if ($Ticker.Log) { try { & $Ticker.Log 'INFO' ('{0}: {1} done ({2} min so far)' -f $Ticker.What, $text, $min) } catch { } }
+        $Ticker.Lines = [int]$Ticker.Lines + 1
+        if ($Ticker.Invoke) {
+            $wp = @{ Invoke = $Ticker.Invoke; Phase = ('{0}: {1}' -f $Ticker.What, $text); Done = $Done; Total = [long]$Ticker.Total; Now = $now; Force = $true; Execution = [string]$Ticker.Execution }
+            if ("$($Ticker.Job)".Trim()) { $wp['Job'] = [string]$Ticker.Job }
+            if ($Ticker.Log) { $wp['Log'] = $Ticker.Log }
+            if (Write-SIStepProgress @wp) { $Ticker.Marks = [int]$Ticker.Marks + 1 }
+        }
+        $Ticker.LastAt = $now; $Ticker.LastDone = $Done
+        return $true
+    } catch { return $false }
+}
+
+function Get-SIStepProgressRowsSql {
+    <# PURE. The progress records of one job's executions since a time whose phase starts with @PhasePrefix (an index-free
+       read of a small table: one row per execution). #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.StepProgress') IS NOT NULL
+    SELECT Execution, Phase, Done, Total, LastUtc FROM cfg.StepProgress
+    WHERE Job = @Job AND LastUtc >= TRY_CONVERT(datetime2(3), @SinceUtc, 126) AND Phase LIKE @PhasePrefix + N'%';
+'@
+}
+
+function Get-SIStepProgressRows {
+    <# The progress records (Get-SIStepProgressRowsSql) through the settings database seam, as @(@{ Execution; Phase; Done;
+       Total }) -- Done / Total -1 when not counted. NEVER throws: not readable = @(). #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Job, [Parameter(Mandatory)][datetime]$SinceUtc, [string]$PhasePrefix = '')
+    try {
+        $target = Get-SIStepProgressTarget -Invoke $Invoke
+        $p = @{ Job = $Job; PhasePrefix = $PhasePrefix; SinceUtc = $SinceUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture) }
+        $num = { param($v) if ($null -eq $v -or $v -is [System.DBNull]) { -1L } else { [long]$v } }
+        @(@(& $target (Get-SIStepProgressRowsSql) $p 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ } | ForEach-Object {
+            $g = $_; $val = { param($n) if ($g -is [System.Collections.IDictionary]) { $g[$n] } else { $g.$n } }
+            @{ Execution = [string](& $val 'Execution'); Phase = [string](& $val 'Phase'); Done = (& $num (& $val 'Done')); Total = (& $num (& $val 'Total')) } })
+    } catch { @() }
 }
 
 function Get-SIStepProgressLast {

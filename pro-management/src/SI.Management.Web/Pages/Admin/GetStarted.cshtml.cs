@@ -36,11 +36,14 @@ public sealed class GetStartedModel : PageModel
     private readonly IConfiguration _config;
     private readonly Microsoft.Extensions.Options.IOptions<JobsOptions> _jobOptions;
     private readonly ILogger<GetStartedModel> _log;
+    private readonly SI.Management.Web.Notify.NotificationService _notify;
 
     public GetStartedModel(GetStartedService svc, SettingsCatalog catalog, ISettingsStoreReader reader, SettingsSaver saver, IAccessStore access,
         IDirectoryNames names, IFlowStore flow, IJobsClient jobs, MailOverviewLoader mail, ISignInMailer mailer, ConnectorRepository connectors,
-        SI.Management.Web.Audit.IChangeAttributionWriter attribution, AiKeyStore aiKeys, IConfiguration config, Microsoft.Extensions.Options.IOptions<JobsOptions> jobOptions, ILogger<GetStartedModel> log)
+        SI.Management.Web.Audit.IChangeAttributionWriter attribution, AiKeyStore aiKeys, IConfiguration config, Microsoft.Extensions.Options.IOptions<JobsOptions> jobOptions, ILogger<GetStartedModel> log,
+        SI.Management.Web.Notify.NotificationService notify)
     {
+        _notify = notify;
         _svc = svc; _catalog = catalog; _reader = reader; _saver = saver; _access = access; _names = names; _flow = flow; _jobs = jobs; _mail = mail; _mailer = mailer;
         _connectors = connectors; _attribution = attribution; _aiKeys = aiKeys; _config = config; _jobOptions = jobOptions; _log = log;
     }
@@ -82,6 +85,9 @@ public sealed class GetStartedModel : PageModel
     /// Per card (<see cref="GetStartedConnector.Slots"/>): what is set up now, or what a refused save posted.
     public IReadOnlyDictionary<string, GetStartedConnector.Form>? ConnectorForms { get; private set; }
     public bool ConnectorTableMissing { get; private set; }
+    /// #1172 the "Who gets the reports" step: the list of people as it stands, and the fingerprint its confirmation is checked against.
+    public SI.Management.Web.Notify.RecipientGrid? RecipientGrid { get; private set; }
+    public string RecipientVersion { get; private set; } = "";
 
     /// The permissions step: this install's names for the prefilled fix commands (settings + the Jobs section).
     public PermissionFixInstall PermissionInstall => GetStartedPermissionFix.Resolve(Result.Facts?.Settings, _jobOptions.Value);
@@ -148,6 +154,33 @@ public sealed class GetStartedModel : PageModel
             }
             ConnectorForms ??= GetStartedConnector.PrefillAll(ConnectorRows);
         }
+        if (step.Form == "recipients")
+        {
+            var s = await _notify.ReadAsync(ct);
+            if (s.Error is not null) Problem ??= s.Error;
+            RecipientGrid = SI.Management.Web.Notify.RecipientGrid.Build(s, _notify.Now);
+            RecipientVersion = SI.Management.Web.Notify.RecipientGrid.Fingerprint(s);
+        }
+    }
+
+    /// #1172: confirms the list of people exactly as it stands (each report's own list written, the confirmation recorded) --
+    /// the same save as Reports and alerts; refused when the list changed since the step was opened.
+    private async Task<(bool Ok, string Message)> ConfirmRecipientsAsync(IFormCollection form, CancellationToken ct)
+    {
+        var s = await _notify.ReadAsync(ct);
+        if (s.Error is not null) return (false, s.Error);
+        if (!string.Equals(form["Fingerprint"].ToString(), SI.Management.Web.Notify.RecipientGrid.Fingerprint(s), StringComparison.Ordinal))
+            return (false, "Someone changed the list of people since you opened this step -- check it again and confirm.");
+        var g = SI.Management.Web.Notify.RecipientGrid.Build(s, _notify.Now);
+        if (SI.Management.Web.Audit.AuditScope.Current is { } audit)
+        {
+            audit.Target = "/Admin/GetStarted?step=recipients";
+            audit.AfterJson = System.Text.Json.JsonSerializer.Serialize(g.Columns.ToDictionary(c => c.Id, c => g.Receivers.TryGetValue(c.Id, out var l) ? l : Array.Empty<string>()));
+        }
+        var r = await _notify.SaveGridAsync(s, g, null, User.ChangeName(), "list of people confirmed on Get Started", ct);
+        return r.Ok
+            ? (true, g.People.Count == 0 ? "The list is confirmed: no one at your organisation receives a report or alert." : $"The list of people is confirmed: {g.People.Count} {(g.People.Count == 1 ? "person receives" : "people receive")} the reports and alerts ticked for them.")
+            : (false, "Not confirmed: " + r.Message);
     }
 
     /// #633: the label a field carries in this step (null = the catalog's) -- the mail step names each field for what it is
@@ -220,6 +253,13 @@ public sealed class GetStartedModel : PageModel
                 saved = (saved is null ? "" : saved + " ") + (slot is null ? "Nothing was started: that connector is not one this step sets up." : await RunConnectorAsync(slot, ct));
                 dir = "stay";
             }
+        }
+
+        else if (step.Form == "recipients" && action == "confirmrecipients")
+        {
+            var (ok, msg) = await ConfirmRecipientsAsync(form, ct);
+            if (!ok) { Problem = msg; await LoadFormAsync(ct); return Page(); }
+            saved = msg;
         }
 
         if (action == "run")

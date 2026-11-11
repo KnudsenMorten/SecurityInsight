@@ -27,6 +27,12 @@
     No PowerShell module: the statements run through the data sync's own SQL seam.
 #>
 
+# #1181: which failures of a range are a brief network / platform failure (tried again) -- the one shared classification
+if (-not (Get-Command -Name Test-SISqlConnectTransient -ErrorAction SilentlyContinue)) {
+    $__siSqlRetry = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) (Join-Path '_shared' 'SI-SqlRetry.ps1')
+    if (Test-Path -LiteralPath $__siSqlRetry) { . $__siSqlRetry }
+}
+
 $script:SIViewStoredColumnsPath = [System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))),
     'pro-management', 'src', 'SI.Management.Core', 'ProData', 'DataModel', 'view-stored-columns.json')
 
@@ -433,6 +439,39 @@ function Get-SIDataFillWorkers {
     [Math]::Max(1, $n)
 }
 
+function Get-SIDataRangeRetryWait {
+    <#
+        PURE. #1181: the pause (seconds) before range attempt -Attempt + 1, or $null when the range is not tried again. A range is
+        tried again only when its error is a brief PLATFORM failure -- the connection could not be opened at the network level
+        (Test-SISqlConnectTransient: "No such host is known", "network-related or instance-specific", a reset, 40613 ...) or the
+        statement met one of Azure SQL's platform answers / lost its session (Test-SISqlStatementTransient) -- and -Attempt (the
+        number of retries this range has had so far + 1) is within -Waits. A query defect (a syntax error, a type mismatch, a
+        permission, a full database) is never tried again (rule 4). Without the shared classification loaded: never.
+    #>
+    param([AllowNull()]$ErrorRecord, [int]$Attempt, [int[]]$Waits)
+    if ($null -eq $ErrorRecord -or $Attempt -lt 1 -or $Attempt -gt @($Waits).Count) { return $null }
+    $net = (Get-Command -Name Test-SISqlConnectTransient -ErrorAction SilentlyContinue) -and (Test-SISqlConnectTransient -ErrorRecord $ErrorRecord)
+    $stmt = (Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue) -and (Test-SISqlStatementTransient -ErrorRecord $ErrorRecord)
+    if (-not ($net -or $stmt)) { return $null }
+    [int]@($Waits)[$Attempt - 1]
+}
+
+function Get-SIDataRangeErrorLine {
+    <# PURE. #1181: a range's error in one short line for the log: the innermost message (the driver's own words, without
+       PowerShell's 'Exception calling "Open"' wrapper), its first line; a long one keeps its start and its end (the cause). #>
+    param([AllowNull()]$ErrorRecord)
+    $ex = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord }
+    $msg = ''
+    if ($ex -is [System.Exception]) { while ($ex) { if ([string]$ex.Message) { $msg = [string]$ex.Message }; $ex = $ex.InnerException } }
+    else { $msg = [string]$ErrorRecord }
+    $line = (($msg -split "`n")[0]).Trim()
+    # a wrapper that carries the driver's words only in its text (no inner exception): those words
+    while ($line -match '^Exception calling "[^"]+" with "\d+" argument\(s\): "(.*)"$') { $line = $Matches[1].Trim() }
+    # long: its start and its END (the driver says the cause last: "... error: 0 - No such host is known.)")
+    if ($line.Length -gt 240) { $line = $line.Substring(0, 110) + ' ... ' + $line.Substring($line.Length - 125) }
+    $line
+}
+
 function Invoke-SIDataParallelRanges {
     <#
         Runs -Sql (parameters @CollectionId, @After, @Upto; answers a row count) for every range of -Ranges (@(after, upto)
@@ -450,9 +489,28 @@ function Invoke-SIDataParallelRanges {
     # waiting on a lock / is blocked, or its session has gone) is cancelled and filled again (a range is idempotent); a
     # range stalled a second time ends the call with an error naming what it waited on -- the caller's step then says so and
     # goes on, never a silent hang.
+    # A BRIEF NETWORK FAILURE IS TRIED AGAIN (#1181, a large install 2026-11-11: a range lost its session, its new connection
+    # then failed with "No such host is known" -- a name look-up that failed for a moment -- and the whole field fill was given
+    # up; the next step ran an hour longer reading what was not prepared). Rule 4: a PLATFORM failure is retried in the run. A
+    # range whose connection cannot be opened at the network level, or whose statement lost its session / met one of Azure
+    # SQL's platform answers (Get-SIDataRangeRetryWait), starts again on a new connection after a pause (-RetryWaits, default
+    # Get-SISqlConnectRetryWaits: 4 more attempts over about 1.5 minutes), and the log says so in one plain line. A range is
+    # idempotent, so this is safe; the other ranges keep running meanwhile. A query defect is never tried again; past the last
+    # attempt the error ends the call exactly as before.
     param([Parameter(Mandatory)][scriptblock]$ConnectionInfo, [Parameter(Mandatory)][string]$Sql, [Parameter(Mandatory)][long]$CollectionId,
           [Parameter(Mandatory)][object[]]$Ranges, [hashtable]$Params, [string]$UpperName = 'Upto',
-          [scriptblock]$Log, [int]$StallSeconds = 900, [int]$WatchSeconds = 60)
+          [scriptblock]$Log, [int]$StallSeconds = 900, [int]$WatchSeconds = 60,
+          # what the ranges do and the watch's name in its lines (the clean-up of old data uses this helper too)
+          [string]$What = 'the field fill', [string]$Watch = 'fill watch  ',
+          # #1181 the pauses (seconds) before each new attempt of a range after a brief network failure
+          [int[]]$RetryWaits,
+          # TESTS ONLY: the text of a script block run for each range in place of the database statement (the same
+          # parameters as the range's own work); never set by the product
+          [string]$RangeRunner)
+    if (-not $PSBoundParameters.ContainsKey('RetryWaits')) {
+        $RetryWaits = if (Get-Command -Name Get-SISqlConnectRetryWaits -ErrorAction SilentlyContinue) { @(Get-SISqlConnectRetryWaits) } else { @(5, 10, 20, 45) }
+    }
+    if ($Log -and $Watch -cne 'fill watch  ') { $watchLog = $Log; $watchName = $Watch; $Log = { param($l, $m) & $watchLog $l (([string]$m) -replace '^fill watch  :', ($watchName + ':') -replace ' is filled again ', ' runs again ') }.GetNewClosure() }
     $info = & $ConnectionInfo
     $more = @{}; if ($Params) { foreach ($k in $Params.Keys) { if ([string]$k -notin 'CollectionId', 'After', $UpperName) { $more[[string]$k] = $Params[$k] } } }
     $tag = 'SI-fill-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -495,28 +553,43 @@ function Invoke-SIDataParallelRanges {
     $pool = [runspacefactory]::CreateRunspacePool(1, [Math]::Max(1, $Ranges.Count))
     $pool.Open()
     $jobs = New-Object System.Collections.Generic.List[object]
+    $rangeScript = if ($RangeRunner) { $RangeRunner } else { $work.ToString() }
     $start = {
-        param($i, $try)
-        $r = $Ranges[$i]; $app = '{0}-{1}-{2}' -f $tag, $i, $try
+        # $try: the watchdog's attempt (a stall); $net: the retries after a brief network failure so far (#1181)
+        param($i, $try, $net)
+        $r = $Ranges[$i]; $app = '{0}-{1}-{2}-{3}' -f $tag, $i, $try, [int]$net
         $ps = [powershell]::Create(); $ps.RunspacePool = $pool
-        $null = $ps.AddScript($work.ToString()).AddArgument([string]$info.ConnectionString).AddArgument([string]$info.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName).AddArgument($app).AddArgument($live).AddArgument($lockMs)
-        [pscustomobject]@{ I = $i; Try = $try; App = $app; Ps = $ps; Ar = $ps.BeginInvoke(); Since = [datetime]::UtcNow; StallSince = $null; Wait = ''; Cancelled = $false; CancelledAt = $null }
+        $null = $ps.AddScript($rangeScript).AddArgument([string]$info.ConnectionString).AddArgument([string]$info.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName).AddArgument($app).AddArgument($live).AddArgument($lockMs)
+        [pscustomobject]@{ I = $i; Try = $try; Net = [int]$net; App = $app; Ps = $ps; Ar = $ps.BeginInvoke(); Since = [datetime]::UtcNow; StallSince = $null; Wait = ''; Cancelled = $false; CancelledAt = $null }
     }
     try {
-        for ($i = 0; $i -lt $Ranges.Count; $i++) { $jobs.Add((& $start $i 1)) }
+        for ($i = 0; $i -lt $Ranges.Count; $i++) { $jobs.Add((& $start $i 1 0)) }
         $out = @{}; $err = $null; $lastDone = $null
         $open = New-Object System.Collections.Generic.List[object]; foreach ($j in $jobs) { $open.Add($j) }
-        while ($open.Count -gt 0) {
-            # wait for any range, at most one watch interval
+        # #1181 ranges waiting out their pause after a brief network failure: @{ I; Try; Net; Due }
+        $retry = New-Object System.Collections.Generic.List[object]
+        while ($open.Count -gt 0 -or $retry.Count -gt 0) {
+            # a range whose pause is over starts again on a new connection (none once the call already has its error)
+            foreach ($q in @($retry | Where-Object { [datetime]::UtcNow -ge $_.Due })) {
+                $null = $retry.Remove($q)
+                if ($null -eq $err) { $n = & $start $q.I $q.Try $q.Net; $jobs.Add($n); $open.Add($n) }
+            }
+            if ($open.Count -eq 0) {
+                if ($retry.Count -gt 0) { $nextMs = [Math]::Max(50, [int][Math]::Ceiling((@($retry | ForEach-Object { $_.Due } | Sort-Object)[0] - [datetime]::UtcNow).TotalMilliseconds)); Start-Sleep -Milliseconds $nextMs }
+                continue
+            }
+            # wait for any range, at most one watch interval (or until the next pause is over)
+            $waitMs = [Math]::Max(1, $WatchSeconds) * 1000
+            if ($retry.Count -gt 0) { $waitMs = [Math]::Max(50, [Math]::Min($waitMs, [int][Math]::Ceiling((@($retry | ForEach-Object { $_.Due } | Sort-Object)[0] - [datetime]::UtcNow).TotalMilliseconds))) }
             $handles = @($open | ForEach-Object { $_.Ar.AsyncWaitHandle })
-            $null = [System.Threading.WaitHandle]::WaitAny([System.Threading.WaitHandle[]]$handles, [Math]::Max(1, $WatchSeconds) * 1000)
+            $null = [System.Threading.WaitHandle]::WaitAny([System.Threading.WaitHandle[]]$handles, $waitMs)
             # a cancelled range that has still not come back two minutes later (its cancel / close did not end it: a dead
             # connection) is given up -- handled as cancelled, never waited on again
             foreach ($j in @($open | Where-Object { $_.Cancelled -and -not $_.Ar.IsCompleted -and $_.CancelledAt -and ([datetime]::UtcNow - $_.CancelledAt).TotalSeconds -ge 120 })) {
                 $null = $open.Remove($j)
                 if ($Log) { & $Log 'WARN' ('fill watch  : range {0} did not end after its cancel -- given up' -f ($j.I + 1)) }
-                if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of the field fill made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait)) } }
-                else { $n = & $start $j.I 2; $jobs.Add($n); $open.Add($n) }
+                if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of {3} made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait, $What)) } }
+                else { $n = & $start $j.I 2 $j.Net; $jobs.Add($n); $open.Add($n) }
             }
             foreach ($j in @($open | Where-Object { $_.Ar.IsCompleted })) {
                 $null = $open.Remove($j); $lastDone = [datetime]::UtcNow
@@ -533,17 +606,30 @@ function Invoke-SIDataParallelRanges {
                     if ($Log) { & $Log 'WARN' ('fill watch  : range {0} waited {1} min for a lock and was stopped by the database ({2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) }
                 }
                 if (-not $j.Cancelled) {
-                    if ($rangeErr -and $null -eq $err) { $err = $rangeErr }
-                    if ($res.Count) { $out[$j.I] = $res[-1] }
+                    # #1181 a brief network failure (the open, or the session lost under the statement): the same range again
+                    # after a pause, on a new connection -- while the call has no error yet and the range has attempts left
+                    $pause = $null
+                    if ($rangeErr -and $null -eq $err) { $pause = Get-SIDataRangeRetryWait -ErrorRecord $rangeErr -Attempt ($j.Net + 1) -Waits $RetryWaits }
+                    if ($null -ne $pause) {
+                        $retry.Add([pscustomobject]@{ I = $j.I; Try = $j.Try; Net = $j.Net + 1; Due = [datetime]::UtcNow.AddSeconds($pause) })
+                        if ($Log) { & $Log 'WARN' ('fill watch  : range {0} of {1} met a brief network failure reaching the database ({2}) -- tried again in {3} s (attempt {4} of {5})' -f ($j.I + 1), $What, (Get-SIDataRangeErrorLine $rangeErr), $pause, ($j.Net + 1), @($RetryWaits).Count) }
+                    } else {
+                        if ($rangeErr -and $null -eq $err) {
+                            $err = $rangeErr
+                            if ($j.Net -gt 0 -and $Log) { & $Log 'WARN' ('fill watch  : range {0} of {1} still could not reach the database after {2} attempt(s) -- given up for this run ({3})' -f ($j.I + 1), $What, ($j.Net + 1), (Get-SIDataRangeErrorLine $rangeErr)) }
+                        }
+                        if ($res.Count) { $out[$j.I] = $res[-1] }
+                    }
                 }
                 if ($j.Cancelled) {
                     # the stalled range again, on a fresh connection; a second stall is the end of this call
-                    if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of the field fill made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait)) } }
-                    else { $n = & $start $j.I 2; $jobs.Add($n); $open.Add($n); if ($Log) { & $Log 'WARN' ('fill watch  : range {0} is filled again on a fresh connection (it had made no progress for {1} min: {2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) } }
+                    if ($j.Try -ge 2) { if ($null -eq $err) { $err = [System.TimeoutException]::new(('range {0} of {3} made no progress for {1} min twice: {2}' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait, $What)) } }
+                    else { $n = & $start $j.I 2 $j.Net; $jobs.Add($n); $open.Add($n); if ($Log) { & $Log 'WARN' ('fill watch  : range {0} is filled again on a fresh connection (it had made no progress for {1} min: {2})' -f ($j.I + 1), [Math]::Round($StallSeconds / 60), $j.Wait) } }
                 }
                 $j.Ps.Dispose()
             }
-            if ($open.Count -eq 0) { break }
+            # nothing out: done, or only ranges waiting out their pause (the loop starts them when it is over)
+            if ($open.Count -eq 0) { continue }
             # what the ranges still out are waiting on, from the database's own views (a separate connection)
             $seen = @{}
             try {
@@ -677,6 +763,10 @@ function Invoke-SIDataViewContext {
                 if ($ci -and $Workers -ne 1) { $maxWorkers = $(if ($Workers -gt 1) { $Workers } else { Get-SIDataFillWorkers -Invoke $Invoke }) }
                 $workersNow = $maxWorkers
                 if ($maxWorkers -gt 1) { & $Log 'INFO' ("context     : collection {0} -- the field fill runs {1} range(s) at a time (the database's cores)" -f $cid, $maxWorkers) }
+                # #1180: the step's progress record (rows filled of all) moves with the fill, every few minutes -- the stall
+                # check sees a long fill moving; the progress line above stays the log's word
+                $ctxTick = $null
+                if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $ctxTick = New-SIStepProgressTicker -What ("the views' prepared context of collection {0}" -f $cid) -Unit 'rows' -Total $total -Invoke $Invoke }
                 while ($after -lt $hi) {
                     # the database's own load paces the ranges (SI-SqlPacing.ps1): a pause, a smaller range and fewer ranges
                     # at once only while it is saturated -- every range is still filled, with the same values
@@ -699,6 +789,7 @@ function Invoke-SIDataViewContext {
                     }
                     $sw.Stop(); $lastMs = $ms
                     $rows += $n; $mine += $n
+                    if ($ctxTick) { $null = Step-SIStepProgressTicker -Ticker $ctxTick -Done $mine }
                     $after = $from
                     # the wave is whole: everything up to $after is filled -- the next run starts from there
                     try { $null = & $Invoke (Get-SIDataContextMarkWriteSql) @{ Name = $mark; Value = [string]$after } 'nonquery' } catch { }

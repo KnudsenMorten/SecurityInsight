@@ -4807,7 +4807,7 @@ example the ServiceNow connector where ServiceNow is not configured).
 | `caj-si-templates` | Publishes an accepted template release | Started by the web app after an Admin accepts it |
 | `caj-si-schema` | Refreshes the catalog of the tables and columns the tenant offers | Timer, Sundays 03:00 UTC |
 | `caj-si-config-backup` | The daily configuration backup | Timer, 18:00 UTC |
-| `caj-si-heartbeat` | The status report to Invardia; polls for an expedited update and starts the updater when asked | Timer every 15 minutes |
+| `caj-si-heartbeat` | The Invardia support link: sends SecurityInsight's health and run results to Invardia support; polls for an expedited update and starts the updater when asked | Timer every 15 minutes |
 | `caj-si-signin-methods` | Reads users' sign-in methods in the background | Timer every 15 minutes |
 | `caj-si-updater` | Updates the install (section 12f) | Timer, 18:30 local time of the install's Azure region. Also started for an expedited update, by the pipeline runner when an update waited for a run, by itself for its second pass, and by the web app for a short apply-settings run |
 | `caj-si-dbinit` | The database work that needs the SQL admin group | Manual: started by the install, by every update and by a support repair |
@@ -5681,7 +5681,7 @@ being built, it says so.
 | MCP server | Pro | A separate Container App (`ca-si-mcp`) with its own managed identity and read-only database access, offering the same curated read-only tools as the chat to MCP clients that present an Entra token. |
 | Updater job | containers | Pulls signed releases and template packs, requests and renews the licence (Pro), applies the database changes, builds the images in your registry, rolls the jobs and the apps, verifies and restores on failure. |
 | Database setup job | Pro | `caj-si-dbinit` does the database work that needs the SQL admin group, so no person needs database admin rights. |
-| Status and support jobs | Pro | `caj-si-heartbeat` reports status to Invardia; `caj-si-support-grant` opens and closes time-limited support access. |
+| Status and support jobs | Pro | `caj-si-heartbeat` is the Invardia support link (health and run results to Invardia support); `caj-si-support-grant` opens and closes time-limited support access. |
 | Azure SQL database | Pro | Settings and their history, templates and your overrides, exemptions, access mappings, the identity ledger, vulnerability state, the provider records, the CIs and the findings the web app reads. |
 | Log Analytics workspace | both | What Risk Analysis's queries read (the profile tables, the CI table) and the run and troubleshooting tables (run health, guard events, tag activity). A copy of the records to Log Analytics is an option, off by default. |
 | Key Vault | both | Licence, install key, connector secrets, optional keys (Azure OpenAI, Shodan, SMTP), the keys that protect the web app's sign-in keys, magic-link key. |
@@ -6442,7 +6442,7 @@ in your own tenant, and you choose its level.
 | **Licence request** (section 12b) | Pro: when there is no valid licence for the tenant, or it ends within 30 days | product, version, the tenant from the identity's token, an install id, optionally edition and a contact e-mail and the current licence's id / end date. The answer is verified offline before it is installed. |
 | **Update pull** (section 12c) | Pro updater, nightly | the licence and the install key (header); the install key is claimed automatically with the licence when the install has none. Nothing else about the estate. |
 | **Support app** | only when you create it | Invardia Support is an app registration the customer creates in their own tenant with Invardia's script, at a *troubleshoot* or a *setup* level. It reaches the databases through the time-limited grant in [A4b](#a4b-time-limited-support-access). SecurityInsight's `setup/Grant-SISupportAccess.ps1` adds the SecurityInsight part and `-Remove` takes it back. It is never the engine's identity. |
-| **Status reports (telemetry)** | daily, and once per engine run; on by default, `SI_Telemetry_Enabled = $false` turns it off | Community: anonymous -- a random install id, the product, edition, version, hosting type, the kind of sign-in identity, licence state, and per run the job, outcome, duration, failed stage, an error class and counts as ranges; no tenant, host name or error text. Pro: the same, identified by the install key, with the tenant, the host and the error text (shortened, secrets removed). See "Status reports to Invardia (telemetry)" under Operations. |
+| **Invardia support link (telemetry)** | health (Pro every half hour, Community daily) and once per engine run; on by default, `SI_Telemetry_Enabled = $false` turns it off | Community: anonymous -- a random install id, the product, edition, version, hosting type, the kind of sign-in identity, licence state, and per run the job, outcome, duration, failed stage, an error class and counts as ranges; no tenant, host name or error text. Pro: the same, identified by the install key, with the tenant, the host and the error text (shortened, secrets removed). See "The Invardia support link (telemetry)" under Operations. |
 
 Apart from the status reports (which can be turned off), the Community edition never contacts Invardia.
 
@@ -8000,6 +8000,37 @@ rule now.
     never holds it); a wake-up that finds it held does nothing and records nothing, and a lease that cannot be read = nothing
     removed. A request or a cancel is never housekeeping-only; the data out's busy start still ends at once; a VM runner
     (one scheduled task, no entry guard) always reached the clean-up.
+    **The clean-up finishes before the next run (2026-11-10).** The owner: *"data sync is prio 1, and data clean-up happens
+    when idle"* / *"the data clean-up can be millions of rows"* / *"just make sure that it finishes before next runs so we
+    dont get to far behind"*. One Azure SQL database cannot reserve cores per caller, so the clean-up controls WHEN it runs
+    and HOW HARD it pushes -- inside the pipeline runner's own wake-ups (no job of its own: no updater, rights or setup
+    change at any install):
+    * *The budget* (`Get-SIDataHousekeepingWindow`): a wake-up removes up to almost its NEXT wake-up -- the runner's own
+      schedule, read from its job (one GET; not readable or a VM: the schedule a new install gets) -- instead of a fixed
+      2 minutes, so back-to-back wake-ups remove nearly all the time. It ends two range aims (2 x 5 s) plus the time the
+      last wake-up needed after its removal before the next wake-up, so that wake-up finds it gone and runs its queue on
+      time. Also while a run goes (still one range at a time then). The lease is held for the wake-up interval + 15 min,
+      longer than any budget, and the wake-up beats its own liveness row before every range and batch.
+    * *The width* (`Invoke-SIDataRetireRangesWide`, a wake-up with nothing going): the large tables of a marked collection
+      go in waves of disjoint key ranges, several at once, each on its own connection -- the data sync's field-fill helper
+      (`Invoke-SIDataParallelRanges`) with its watchdog. Each range is the same guarded statement as one range at a time:
+      the mark (and the data sync's mark before the run start), never the published collection (refused inside the DELETE
+      under the publisher's own lock), never more rows than the lock-escalation cap -- idempotent. The ranges at once:
+      what the deadline asks (`Get-SIDataHousekeepingPacePlan`: the same pace per range as measured), never more than the
+      database's cores (`Get-SIDataFillWorkers`), one fewer each time the database's load holds it back (the housekeeping
+      pacing: it waits until the database is calm), back up once it is calm. With no scheduled run (no deadline) or a seam
+      without connections: one range at a time, as before. Several ranges that fail are said, and the rest of the
+      wake-up goes one range at a time.
+    * *The deadline* (`Get-SIDataHousekeepingVerdict`): after each wake-up with nothing going, the rows left / the minutes
+      to the next scheduled run (the runner's own rule) = the pace needed, against the pace reached (rows removed over the
+      wake-up interval). Short and not yet at its widest: the next wake-up goes wider (said). Short at its widest, held
+      back by the load, or on the last wake-up before the run: *"housekeeping: the clean-up of old data cannot keep up ..."*
+      (WARN, with the rows left, the paces and the ranges) and `behind` in cfg.InstallState 'Housekeeping', which the
+      hourly heartbeat raises as **si-data-1405** (support, P2, the ticket opens). It clears once a wake-up keeps up or
+      nothing is left. The progress record also carries `ranges`, `rate`, `need` and `tail` (under its 400 characters).
+      The heartbeat's Pipeline still sends only `housekeepingRowsLeft`: the paces are not keys of the closed wire contract.
+    * *The data sync always first*: before every wave the clean-up asks again whether a data sync or a data out started,
+      and gives way between two waves; during a run it removes nothing while either runs (unchanged).
   - *The security owners' categories* are read from the Risk Analysis row's Category stored on the finding when its
     views' columns are derived (`sidata.Finding.RaCategory`, the same expression the pairs read, NULL for a row that is
     not JSON) through a narrow index, instead of one `SELECT DISTINCT` over every finding's JSON (239 s per collection on
@@ -8414,8 +8445,11 @@ the department's business owner.
 3. *Absence is not removal.* A CI that is no longer seen is counted absent once per new snapshot of its kind and retired
    after `SI_Pro_CmdbSql_RetireAfterRuns` complete runs in a row (default 2). Reading the same snapshot again counts
    nothing; a kind taken out of scope keeps its CIs as they are.
-4. *A collapsed estate is refused.* An empty seen set, or a kind that suddenly sees less than half of its active CIs,
-   stops the run.
+4. *A collapsed estate removes nothing on one run's word.* An empty seen set stops the run. A kind that suddenly sees
+   less than half of its active CIs is written in full -- creates, updates and absences -- but none of its CIs is
+   retired on this run alone; a second complete run that sees the same confirms them. When that held at least one
+   retire, the run ends as a warning with the catalogue code `si-cmdb-0702` (information only: nobody acts, no ticket);
+   when nothing was due to be retired anyway, the run log says so in an information line and the run is a plain success.
 5. *Never delete; one transaction.* The plan is staged and applied in one transaction under an application lock; a run
    that finds another run applied after it read the table writes nothing and plans again next time.
 6. *One CI per asset (#1082).* A first sync of a kind waits while the correlation map carries a ledger id for fewer than
@@ -8890,7 +8924,7 @@ the install's **install key** (it says which environment, and so which ring, you
 automatically: when the install has none, it claims one from Invardia with its licence and the tenant taken from its
 own sign-in token -- never from a setting -- and keeps it as one secret in the install's Key Vault
 (`SI-Invardia-InstallKey`). The guided install stores the key from your installation page when it has one, and
-claims none then. The key is never printed or logged. (The same key identifies the install's status reports -- see "Status reports to Invardia (telemetry)"; updates need only the licence and the key.) If a
+claims none then. The key is never printed or logged. (The same key identifies the install's status reports -- see "The Invardia support link (telemetry)"; updates need only the licence and the key.) If a
 claim is refused because a key already exists (for example after it was reset), the install says so and does not
 keep asking: ask Invardia support to reset it.
 
@@ -10315,14 +10349,71 @@ act). Informational counts (staged changes, tasks) keep the warning colour. A re
   summary) -- the browser's own print to PDF through a print stylesheet (A4, page numbers, "Confidential", logo, no menu).
   Attaching a PDF to the report mail needs a renderer in the mail job: open.
 
+### Who gets which mail: ONE list of people (Pro web app + jobs, #1172)
+
+Before, a person could sit in five places (the default list `MailTo`, each report's own `*_To` with fallbacks, the daily
+vulnerability list, the safety-check list / the licence contact, the Notifications page), and a person added on
+Notifications was counted as a recipient but mailed nothing. Now:
+
+- **The list** (Configuration > Reports and alerts, `#people`; `Notify/NotifyCatalog.cs` `RecipientGrid`): a row per
+  mail address, a tick column per report and alert of the catalog -- the Risk Analysis Summary and Detailed reports, the
+  daily vulnerability mail, the safety-check alert, the Waiting for you reminder and each management summary. Ticked =
+  receives it. The people are everyone on any list plus everyone with notification choices, so a person added on
+  Notifications is a row ("receives nothing yet" until ticked). For a mail the web app composes, a tick also means "not
+  switched off on Notifications" -- a tick is never shown for someone who gets nothing; ticking it switches it back on.
+  The exemption mails have no list (the owners and approvers of each domain): a read-only line with its Domain roles link.
+  "Add a person" (address + what they receive; added as Reader when not a user yet, like Notifications) and "Remove" (off
+  every list, their choices forgotten, their role untouched). The "Recipients" tile counts exactly the rows.
+- **Storage does not change.** Each entry's OWN list is the first name of its recipient settings: `RiskAnalysis_Summary_To`,
+  `RiskAnalysis_Detailed_To`, `Mail_CloseLoop_Daily_To`, `SI_GuardMail_To`, `SIWeb_GetStartedReminder_To` (new web list
+  for the reminder, which used to borrow the safety-check list) and `MgmtReport.Recipients`. A save (`NotificationService.
+  SaveGridAsync`) writes each own list EXACTLY as ticked -- an empty list as `[]` -- in every row it is stored in (solution
+  and each engine scope, so no scope keeps an old list), through `SettingsWriter` (validation, the version read, the change
+  log; a row already holding exactly that list is not rewritten), the management summaries through their store, the
+  notification choices when they change, and LAST `SIWeb_MailRecipientsConfirmed` = `<time UTC>|<who>`. A stale or refused
+  write stops the save there and says how far it got; the confirmation is never written for a half-saved list. The page
+  posts a fingerprint of what it was read from (every list row's version, the summaries' recipients, the choices'
+  version): a save over a changed list is refused before anything is written. Audited `notify.recipient.save` (Remove: `notify.recipient.remove`), the same actions as Notifications.
+- **"Nobody ticked" really means nobody -- the choice for `MailTo`.** Readers of the default list today: the Risk Analysis
+  routing (own list, else the older `Mail_SecurityInsight_*_To`, else `MailTo`; with mail on and no list anywhere the run
+  STOPPED at start), the safety-check / data-quality / updater licence mails (`Get-SIGuardMailRecipients`: `SI_GuardMail_To`,
+  else `MailTo`, else the SuperAdmins), the guided install and the ConfigWizard (writers). Two things together make an
+  empty choice stick without breaking any of them: (1) the save writes `MailTo = []` -- the default list is never a place
+  people are chosen any more, and an empty row also overrides a value from the install's configuration file; every
+  reader that fell back to it now reaches its own list first, and that own list was written with exactly the people it
+  reached through the fallback before, so nobody loses a mail; (2) the Risk Analysis honours the confirmation
+  (`engine/_shared/SI-MailRecipients.ps1`, `Test-SIMailRecipientsExact` / `Resolve-SIReportRecipients`; the setting reaches
+  every job through `Get-SIProWebSettingsForEngines`): each report goes to its own list only -- no older name, no default
+  list -- and an empty list turns that report's mail off with one plain line in the log instead of stopping the run
+  (both the start check and the routing check). A report template's own `Mail_To` still wins, as before. The safety-check
+  alert with nobody ticked still reaches the SuperAdmins: that is its safety net, not a default list, and the page says so
+  on that line. Before the confirmation everything works exactly as before.
+- **The web app reads the same rule** (`NotifyCatalog.RecipientsOf`): before the confirmation, the first non-empty list of
+  the entry's chain (the safety-check alert's chain now names `MailTo` too, as the job does); after it, the own list only.
+  The reminder (`GetStartedReminderPlan.Recipients`) uses the catalog entry: its own list; until confirmed, the alert
+  recipients, else the licence contact.
+- **Get Started "Who gets the reports"** (`GetStartedGuide`, required, after "Who can manage SecurityInsight"; a Pro step):
+  done exactly when `SIWeb_MailRecipientsConfirmed` is set (who and when shown). Until then it says how many people
+  receive a report today (the jobs' own fallbacks) or that no one does, the Waiting for you reminder names it, and every
+  Reports-and-alerts line with no recipient says "no one at your organisation receives this yet". The step shows the list
+  (person -> what they receive) with "Change who gets what" (the grid) and "Confirm this list", which saves it exactly as
+  shown through the same `SaveGridAsync` (refused when the list changed since the step was opened). An existing install
+  opens it with today's effective addresses; a new install opens it empty -- the grid's "Add a person" box only SUGGESTS the
+  signed-in person's address, nothing is written by looking.
+- **Never the installer's address by default** (`setup/_shared/SI-GuidedInstall.ps1` `Get-SIInstallMailRecipients`): the
+  report lists the guided install writes are ONLY the addresses given for that purpose (`mailTo` / `-MailTo`); with none
+  they stay empty and the customer chooses the people in Get Started. Existing installs' values are not changed by setup.
+- Settings > E-mail's "Who gets which mail" points at the list; its per-setting Edit links remain (the same settings).
+
 ### A daily mail while Get Started is not finished (Pro web app, framework MAIL-2 item 8, #489)
 
 `Notify/GetStartedReminder.cs`. A web-app background pass every 15 minutes evaluates Get Started from the install's data
 (the same `GetStartedService` as the page) and, from `SIWeb_GetStartedReminderHourUtc` (default 07:00 UTC) while a
 REQUIRED step is open, queues ONE mail per audience group in the existing outbox `cfg.ReportMail` (ReportId 0, period
 `gs-<date>`; the insert runs only when no row of that day exists, under a range lock -- two replicas never send twice) and
-wakes the mail job. Recipients: the customer's alert recipients (`SI_GuardMail_To`), else the installing admin
-(`SI_LicenseRequest_ContactEmail`) -- never Invardia; minus those who switched it off on Notifications. The mail lists
+wakes the mail job. Recipients: its own list in the list of people (`SIWeb_GetStartedReminder_To`); until that list is
+confirmed, the customer's alert recipients (`SI_GuardMail_To`), else the installing admin (`SI_LicenseRequest_ContactEmail`)
+-- never Invardia; minus those who switched it off on Notifications. The mail lists
 each open required step with why it matters and a blue button to `/Admin/GetStarted?step=<id>`; optional steps are listed
 apart as optional and never make it go out. Mail step open = no working mail = nothing queued. Stops by itself when every
 required step is done. Off with `SIWeb_GetStartedReminder`. Audited `getstarted.reminder.send` (source job). SI's Get
@@ -11135,7 +11226,7 @@ did no check). The Community edition has no database area. In the Pro web app, *
 newest check of each engine from the last 7 days: done when nothing is missing; it lists the gaps per identity with the
 fix.
 
-### Status reports to Invardia (telemetry)
+### The Invardia support link (telemetry)
 
 At the same END moment, the run-health sender also hands the run to the telemetry sender (`engine/_shared/SI-TelemetrySend.ps1`),
 which reports it to Invardia through the framework's uplink client. SecurityInsight carries its own, byte-identical copy of that
@@ -11167,6 +11258,27 @@ hour's first half hour, and the update moves a job still on the old hourly timer
 anonymous install sends nothing from it (its one heartbeat a day stays with its engine runs). One attempt, the 5-second
 timeout; a failure is said once and the job still ends well.
 
+**Its name for customers: the Invardia support link (framework SUPPORT-LINK-1).** Everywhere a customer reads it -- the Jobs
+page, the job's own log lines, the update's lines, the permission notes, the environment report and the documentation -- the
+job is the **Invardia support link**: *"Sends SecurityInsight's health and run results to Invardia support, so support can see
+problems and updates can roll out."* The job's name (`caj-si-heartbeat`), its key (`heartbeat`) and its type stay. The same name is the label of the setting `SI_Telemetry_Enabled` (its id stays): turning it off stops ALL reports to Invardia support -- the health reports, the run results and what update rollout relies on. The run reports, the one-time notice, the configurator, the security pack and the drawings use the same name.
+
+**Its delivery states.** The job always ends well, so its executions alone are always green. Each claimed half hour ends
+*sent* (the receiver answered 2xx) or *failed* (anything else, also a send that threw); the tick records it in the Pro
+database, `cfg.InstallState` row `HeartbeatDelivery` = `{ failedInRow, lastFailedSlot, lastFailedUtc, lastSentUtc }`
+(`Update-SIHeartbeatDelivery`, the pure `Get-SIHeartbeatDeliveryNext`). `failedInRow` counts the half hours in a row that
+were not delivered: a half hour counts once however many ticks retry it, and a delivered one sets it to 0. The Jobs page
+reads the row (`Jobs/SupportLinkDelivery.cs`) and shows it on the support link's row:
+
+| Undelivered cycles in a row | The row shows |
+|---|---|
+| 0 | green, *delivering* |
+| 1-2 | green, *delivering*, with "1 report could not be delivered; it is retried next cycle" (or "2 reports ... they are retried next cycle"; the count in the viewer's number format) |
+| 3 or more | amber, *not delivering*, "The last N reports could not be delivered to Invardia support; they are retried every cycle. SecurityInsight itself keeps running." |
+
+Nothing recorded yet (a half hour not claimed since the update) shows the row as before. A report that cannot be delivered
+never sends a mail to the customer: the page line is the only place it shows.
+
 Two optional fields are built and tested but go out only where a switch allows them, because the receiver refuses a record
 with a field it does not know: `runProgress` (`SI_Uplink_SendRunProgress`) -- `{ state: running | idle | stalled, runId,
 stage, step, stepSinceUtc, runSinceUtc }` from the pipeline's run record -- and `Collections` (`SI_Uplink_SendCollections`) --
@@ -11185,13 +11297,17 @@ them is sent again once without them, so a heartbeat is never lost to a new fiel
 customer portal can show where every install's pipeline is and when it should be done (refreshed every half hour, not in
 real time), the `Pipeline` field of the heartbeat -- `{ runId, state, startedUtc, step, stepSinceUtc, lastEndedUtc,
 nextStartUtc }` -- carries seven more keys, behind their own switch `SI_Uplink_SendPipelineEta` (on by default on every
-ring; `off` or a ring list as for every other field):
+ring; `off` or a ring list as for every other field). `nextStartUtc` is the next SCHEDULED start in UTC -- the pipeline's
+daily (weekdays / weekly) time in its own time zone, by the runner's own rule, so a daylight-saving change moves it with
+the clock. While a run is going it is the first scheduled start after now; it is empty for a pipeline whose jobs run on
+their own schedules, for an interval cadence while a run is going, and whenever it cannot be worked out -- never a guess
+(so the receiver can judge a source against its schedule instead of a flat 24 hours). The seven keys:
 
 | key | type | what it is |
 |---|---|---|
 | `stepsDone` | whole number or null | the run's steps that ended (succeeded, failed or skipped); for a run stopped or cancelled before its end, only the steps that ran to their end (succeeded, failed or timed out) -- never the step it was stopped in, nor the steps it never started |
 | `stepsTotal` | whole number or null | the run's steps that are not switched off |
-| `runningSteps` | array, at most 12 | each step running now: `{ step, sinceUtc, prevMin, endUtc, estimate }` |
+| `runningSteps` | array, at most 12 | each step running now: `{ step, sinceUtc, prevMin, endUtc, estimate }`, then -- each only when known -- `lastProgressUtc` (when the step's own progress last moved; never in the future) and `progress` (what it has done in words, e.g. `batch 161 of 266`; letters, digits, space and `. , : % ( ) / _ -`, at most 80) |
 | `remainingSteps` | array, at most 30 | each step still waiting: `{ step, group, estimateMin }` |
 | `estimatedEndUtc` | ISO-8601 UTC or null | when the run should end |
 | `estimateConfidence` | `known` / `partial` / `overdue` or null | how sure that end is |

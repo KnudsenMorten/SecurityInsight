@@ -590,14 +590,14 @@ function Send-SITelemetryRecordWithFallback {
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
     if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog') }).Count) {
-        if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the status report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
+        if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the Invardia support link's report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
     $held = $false
     if (Get-Command -Name Save-SIReleaseControlHold -ErrorAction SilentlyContinue) { $held = Save-SIReleaseControlHold -Invoke $Invoke -NowUtc $NowUtc -Why (ConvertTo-AitUplinkRedacted -Text $first) }
     if (-not $global:SI_ReleaseControlWarned) {
         $global:SI_ReleaseControlWarned = $true
-        try { Write-Warning ("Invardia did not take the status report with the release fields (wave, release mode) -- it was sent without them{0}. To turn them off: SI_Telemetry_ReleaseControl = off." -f $(if ($held) { ', and they are held back for 24 hours' } else { '' })) } catch { }
+        try { Write-Warning ("Invardia did not take the Invardia support link's report with the release fields (wave, release mode) -- it was sent without them{0}. To turn them off: SI_Telemetry_ReleaseControl = off." -f $(if ($held) { ', and they are held back for 24 hours' } else { '' })) } catch { }
     }
     [pscustomobject]@{ Result = $r2; Record = $Record; Held = $held }
 }
@@ -1015,7 +1015,7 @@ function Initialize-SITelemetryLastingInstallId {
         $id = Resolve-SIInvardiaInstallId -ReadSecret $ReadSecret -WriteSecret $WriteSecret -ReadVersions $ReadVersions
         if (-not $id -and -not [bool](Get-Variable -Name SI_LastingInstallIdWarned -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) {
             $global:SI_LastingInstallIdWarned = $true
-            Write-Host '  [telemetry] the install''s lasting id (SI-InstallId) could not be read or kept in the Key Vault -- the status reports go without it this time'
+            Write-Host '  [telemetry] the install''s lasting id (SI-InstallId) could not be read or kept in the Key Vault -- the Invardia support link''s reports go without it this time'
         }
         $Context | Add-Member -NotePropertyName LastingInstallId -NotePropertyValue $id -Force
     } catch { }
@@ -1363,7 +1363,7 @@ function Send-SITelemetryRunEnd {
             [bool](Add-SIUplinkOutboxRecord -Invoke $obInvoke -Job $job -Json $runJson -Answer $Why -NowUtc $nowUtc) }
         if ($halted) {
             $keptRun = & $keepRun 'not sent: an earlier report of this process was not taken'
-            return (& $out 'halted' @() ('an earlier report in this process was not accepted -- nothing more is sent from it{0}' -f $(if ($keptRun) { '; the run report is kept and goes with a later status report' } else { '' })))
+            return (& $out 'halted' @() ('an earlier report in this process was not accepted -- nothing more is sent from it{0}' -f $(if ($keptRun) { '; the run report is kept and goes with a later report of the Invardia support link' } else { '' })))
         }
         # #491 / framework §8.7: the setup report (the control list) once a day with the heartbeat -- identified installs only,
         # LAST in the queue so a refused setup report never costs the heartbeat or the run report. SI_Telemetry_SetupControls:
@@ -1411,7 +1411,7 @@ function Send-SITelemetryRunEnd {
                 $keptRun = & $keepRun $why
                 if (-not $global:SI_TelemetryWarned) {
                     $global:SI_TelemetryWarned = $true
-                    Write-Warning ("The status report to Invardia was not sent ({0}). The run is not affected; nothing more is sent from this run{1}. To turn these reports off, set `$global:SI_Telemetry_Enabled = `$false." -f $why, $(if ($keptRun) { ' -- the run report is kept in this install''s database and goes with a later status report' } else { '' }))
+                    Write-Warning ("The Invardia support link could not deliver this run's report ({0}). The run is not affected; nothing more is sent from this run{1}. To turn the Invardia support link off, set `$global:SI_Telemetry_Enabled = `$false." -f $why, $(if ($keptRun) { ' -- the run report is kept in this install''s database and goes with a later report of the Invardia support link' } else { '' }))
                 }
                 return (& $out 'failed' $sent $why)
             }
@@ -1437,7 +1437,7 @@ function Send-SITelemetryRunEnd {
                 Set-SITelemetryLastHeartbeat -StateDirectory $Context.StateDirectory -NowUtc $nowUtc
                 try {
                     $how = if ($anon) { 'anonymous: no tenant, host name or error text' } else { 'identified by this install''s key' }
-                    Write-Host (" [INFO] Sent today's status report to Invardia ({0}). To turn these reports off, set `$global:SI_Telemetry_Enabled = `$false." -f $how)
+                    Write-Host (" [INFO] The Invardia support link sent today's health report ({0}). To turn the Invardia support link off, set `$global:SI_Telemetry_Enabled = `$false." -f $how)
                 } catch { }
             }
         }
@@ -1459,7 +1459,7 @@ function Send-SITelemetryRunEnd {
         if (-not $global:SI_TelemetryWarned) {
             $global:SI_TelemetryWarned = $true
             # si-upl-0601: the run record could not be built (data-model/errors.locked.json)
-            try { Write-Warning ("The status report to Invardia could not be prepared (si-upl-0601: {0}). The run is not affected." -f (ConvertTo-AitUplinkRedacted -Text $prepErr.Exception.Message)) } catch { }
+            try { Write-Warning ("The Invardia support link's report could not be prepared (si-upl-0601: {0}). The run is not affected." -f (ConvertTo-AitUplinkRedacted -Text $prepErr.Exception.Message)) } catch { }
         }
         return (& $out 'error' @() ("si-upl-0601: $($prepErr.Exception.Message)"))
     }
@@ -1574,11 +1574,11 @@ function Send-SIReleaseModeReport {
             $why = ConvertTo-AitUplinkRedacted -Text ("$($s.Result.Reason)")
             if (-not $global:SI_TelemetryWarned) {
                 $global:SI_TelemetryWarned = $true
-                Write-Warning ("The release-mode status report to Invardia was not sent ({0}). The run is not affected; nothing more is sent from this run." -f $why)
+                Write-Warning ("The Invardia support link could not deliver the release-mode report ({0}). The run is not affected; nothing more is sent from this run." -f $why)
             }
             return (& $out 'failed' $why)
         }
-        try { Write-Host (" [INFO] Sent a release-mode status report to Invardia (release {0}: every {1} minutes until {2}; counts only)." -f $(if ($mode.Version) { $mode.Version } else { 'with engine changes' }), $script:SIReleaseControl.EveryMinutes, (Format-SIGuardStrictUntil $mode.Until)) } catch { }
+        try { Write-Host (" [INFO] The Invardia support link sent a release-mode report (release {0}: every {1} minutes until {2}; counts only)." -f $(if ($mode.Version) { $mode.Version } else { 'with engine changes' }), $script:SIReleaseControl.EveryMinutes, (Format-SIGuardStrictUntil $mode.Until)) } catch { }
         & $out 'sent' ("slot {0} of release {1}" -f $slot, $mode.Version)
     } catch {
         & $out 'error' ("$($_.Exception.Message)")

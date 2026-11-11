@@ -1690,7 +1690,7 @@ function Close-SIDataOutSnowBatch {
     }
     $row = New-SISnowStagingStatusRow -BatchId $s.BatchId -Output ([string]$s.Entry.output) -State $state -Connector $s.Connector -TargetTable $s.Table -SourceRun $s.RunId -Started $s.BatchStarted `
             -Finished ([datetime]::UtcNow) -Planned ([long]$s.Delta) -Sent ([long]$s.Sent) -Failed $notSent -ImportSets @($s.ImportSets) -Reason $reason -SiVersion (Get-SISnowSiVersion) `
-            -ContractVersion (Get-SIDataOutContractVersion) -Mode ([string]$s.Mode) -Counts $s.Counts
+            -ContractVersion (Get-SIDataOutContractVersion) -Mode ([string]$s.Mode) -Counts (Get-SIDataOutWireCounts $s.Counts)   # #1188 the wire: kept open is u_action held
     $w = Write-SISnowStagingStatusRow -Connection $s.Connection -Table $s.StatusTable -Row $row
     $s.EndReason = $reason
     if ($w.Ok) { $s.BatchState = $state; Write-SIDataOutBatchRecord -Session $s -State $state -Reason $reason -Failed $notSent }
@@ -1798,10 +1798,15 @@ function Select-SIDataOutSentPage {
     $hk = New-Object System.Collections.Generic.List[string]; $hn = New-Object System.Collections.Generic.List[string]; $rp = New-Object System.Collections.Generic.List[string]
     $counts = New-SIDataOutActionCounts
     $droppedHeld = 0L
+    # #1188 the count of each row as the page counted it (held / kept_open / ...); a page without it: its u_action
+    $pk = @(); if ($Page.ContainsKey('RowKinds') -and $null -ne $Page.RowKinds) { $pk = @($Page.RowKinds) }
+    $byKind = ($pk.Count -eq $rows.Count)
+    $keepKinds = New-Object System.Collections.Generic.List[string]
     for ($i = 0; $i -lt $rows.Count; $i++) {
         $r = $rows[$i]
+        $kind = $(if ($byKind) { [string]$pk[$i] } elseif ($r.Contains('u_action')) { [string]$r['u_action'] } else { '' })
         if ($set.Contains($i)) {
-            if ($r.Contains('u_action') -and [string]$r['u_action'] -eq 'held') { $droppedHeld++ }
+            if ($kind -eq 'held') { $droppedHeld++ }
             $k = $(if ($parallel -and $state[$i]) { [string]$state[$i]['k'] } else { '' })
             if ($k) { $hk.Add($k) }
             $nm = $(if ($NameCol -and $r.Contains($NameCol)) { [string]$r[$NameCol] } else { '' })
@@ -1810,13 +1815,15 @@ function Select-SIDataOutSentPage {
             continue
         }
         $keepRows.Add($r); if ($parallel) { $keepState.Add($state[$i]) }
-        if ($r.Contains('u_action') -and [string]$r['u_action']) { Add-SIDataOutActionCount -Counts $counts -Action ([string]$r['u_action']) }
+        $keepKinds.Add($kind)
+        if ($kind) { Add-SIDataOutActionCount -Counts $counts -Action $kind }
     }
     # 'held' also counts the records the contract itself held without a row (a CI not delivered yet): kept as the page said
     if ($Page.Counts -and $Page.Counts.Contains('held')) { $counts['held'] = [long]$Page.Counts['held'] - $droppedHeld }
     $hkSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal); foreach ($k in $hk) { [void]$hkSet.Add($k) }
     $p2 = @{}; foreach ($k in @($Page.Keys)) { $p2[$k] = $Page[$k] }
     $p2.Rows = $keepRows.ToArray()
+    $p2.RowKinds = $keepKinds.ToArray()
     $p2.State = $(if ($parallel) { $keepState.ToArray() } else { @($state | Where-Object { $_ -and -not $hkSet.Contains([string]$_['k']) }) })
     $p2.Changes = @(@($Page.Changes) | Where-Object { $_ -and -not $hkSet.Contains([string]$_.ObjectKey) })
     $p2.Counts = $counts
@@ -2083,6 +2090,7 @@ function Invoke-SIDataOutContractPage {
     if ($grain -eq 'ci_finding' -and $W.CiCheck) { $ciOk = Get-SIDataOutContractCiDelivered -Store $W.Store -CiKeys ([string[]]@($ciOf | Where-Object { $_ } | Select-Object -Unique)) }
     if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'ci-check' -Watch $pw }
     $rows = New-Object System.Collections.Generic.List[object]
+    $kinds = New-Object System.Collections.Generic.List[string]   # #1188 the count of each row (parallel to $rows)
     $state = New-Object System.Collections.Generic.List[object]
     $chs = New-Object System.Collections.Generic.List[object]
     $counts = New-SIDataOutActionCounts
@@ -2152,7 +2160,10 @@ function Invoke-SIDataOutContractPage {
         if (-not [string]$row['u_row_hash']) { $row['u_row_hash'] = Get-SIDataOutRowHashText -Row $row }
         if ($lifeReason) { $row['u_row_hash'] = Add-SIDataOutReasonToHash -Hash ([string]$row['u_row_hash']) -Reason $lifeReason }
         $rows.Add($row)
-        Add-SIDataOutActionCount -Counts $counts -Action $dec.Action
+        # #1188 a row sent 'held' because the finding is not in this run (absence counted) counts as kept open, not held
+        $kind = Get-SIDataOutCountKind -Now $now -Action $dec.Action
+        $kinds.Add($kind)
+        Add-SIDataOutActionCount -Counts $counts -Action $kind
         $hash = [string]$row['u_row_hash']
         $prevHash = $(if ($meta.Cells.Contains('u_row_hash')) { [string]$meta.Cells['u_row_hash'] } else { '' })
         if ($dec.Action -eq 'update' -and $prevHash -eq $hash) { $unchanged++ }
@@ -2169,7 +2180,7 @@ function Invoke-SIDataOutContractPage {
         }
     }
     if ($pp) { Add-SIDataOutProgressPart -Progress $pp -Part 'rows' -Watch $pw }
-    @{ Rows = $rows.ToArray(); State = $state.ToArray(); Changes = $chs.ToArray(); Counts = $counts; Unchanged = $unchanged }
+    @{ Rows = $rows.ToArray(); RowKinds = $kinds.ToArray(); State = $state.ToArray(); Changes = $chs.ToArray(); Counts = $counts; Unchanged = $unchanged }
 }
 
 function Invoke-SIDataOutContractGonePage {
@@ -2196,6 +2207,7 @@ function Invoke-SIDataOutContractGonePage {
     $car = Find-SIDataOutKeys -Set $W.CarrySet -Keys $keys
     $rows = New-Object System.Collections.Generic.List[object]; $state = New-Object System.Collections.Generic.List[object]; $gone = New-Object System.Collections.Generic.List[string]
     $chs = New-Object System.Collections.Generic.List[object]; $counts = New-SIDataOutActionCounts
+    $kinds = New-Object System.Collections.Generic.List[string]   # #1188 the count of each row (parallel to $rows)
     foreach ($r in $rs) {
         $k = [string]$r['ItemKey']
         if ($seen.Contains($k)) { continue }
@@ -2235,14 +2247,16 @@ function Invoke-SIDataOutContractGonePage {
         if ($ciRetire) { if ($row.Contains($script:SIDataOutCiStateColumn)) { $row[$script:SIDataOutCiStateColumn] = 'retired' } }
         $null = Set-SIDataOutEnvelope -Row $row -Output $W.OutputId -Action $dec.Action -BatchId ([string]$W.BatchId) -Reason $reason
         if ($ciRetire) { $row['u_row_hash'] = Add-SIDataOutReasonToHash -Hash (Get-SIDataOutRowHashText -Row $row) -Reason $ciRetire }
-        $rows.Add($row); Add-SIDataOutActionCount -Counts $counts -Action $dec.Action
+        # #1188 one 'held' row of a record no longer in SecurityInsight's data: kept open (the target keeps it), not held
+        $kind = Get-SIDataOutCountKind -Now $now -Action $dec.Action
+        $rows.Add($row); $kinds.Add($kind); Add-SIDataOutActionCount -Counts $counts -Action $kind
         $cells = [ordered]@{}; foreach ($ck2 in $row.Keys) { $cells[$ck2] = Get-SIDataOutRowText $row[$ck2] }
         $h = [string]$row['u_row_hash']; if (-not $h) { $h = Get-SIDataOutRowHashText -Row $row }
         $state.Add([ordered]@{ k = $k; h = $h; r = (ConvertTo-SIDataOutStateJson -Cells $cells -Class $dec.Class -Base $meta.Base -Action $dec.Action) })
         if ($ciRetire -and $meta.Class -ne 'closed') { $chs.Add([pscustomobject]@{ At = [datetime]::UtcNow; Action = 'closed'; ObjectName = $(if ($W.NameCol -and $cells.Contains($W.NameCol)) { [string]$cells[$W.NameCol] } else { '' }); ObjectKey = $k; Finding = ''; TargetKey = $k; Fields = $null; Reason = $reason; Error = '' }) }
         if ($now -eq 'gone') { $chs.Add([pscustomobject]@{ At = [datetime]::UtcNow; Action = 'removed'; ObjectName = $(if ($W.NameCol -and $cells.Contains($W.NameCol)) { [string]$cells[$W.NameCol] } else { '' }); ObjectKey = $k; Finding = ''; TargetKey = $k; Fields = $null; Reason = $reason; Error = '' }) }
     }
-    @{ Rows = $rows.ToArray(); State = $state.ToArray(); Gone = $gone.ToArray(); Changes = $chs.ToArray(); Counts = $counts }
+    @{ Rows = $rows.ToArray(); RowKinds = $kinds.ToArray(); State = $state.ToArray(); Gone = $gone.ToArray(); Changes = $chs.ToArray(); Counts = $counts }
 }
 
 function Add-SIDataOutContractCommit {
@@ -2269,6 +2283,10 @@ function Add-SIDataOutContractCounts {
     $W.Res.Updated += [int]$c['update'] + [int]$c['reopen'] - $(if ($Page.ContainsKey('Unchanged')) { [int]$Page.Unchanged } else { 0 })
     $W.Res.Unchanged += $(if ($Page.ContainsKey('Unchanged')) { [int]$Page.Unchanged } else { 0 })
     $W.Res.Removed += [int]$c['out_of_scope']
+    # #1188 for the end line: the real holds of the contract (u_action held: no CI key, CI not delivered yet, a disabled or
+    # not-completed source's record) and the rows kept open because they are not in this run -- two counts, two words
+    if ($c.Contains('held') -and [long]$c['held'] -ne 0) { $W.Res['HeldItems'] = $(if ($W.Res.Contains('HeldItems')) { [long]$W.Res['HeldItems'] } else { 0L }) + [long]$c['held'] }
+    if ($c.Contains('kept_open') -and [long]$c['kept_open'] -ne 0) { $W.Res['KeptOpen'] = $(if ($W.Res.Contains('KeptOpen')) { [long]$W.Res['KeptOpen'] } else { 0L }) + [long]$c['kept_open'] }
 }
 
 function Send-SIDataOutContractTestBatch {
@@ -2286,7 +2304,9 @@ function Send-SIDataOutContractTestBatch {
     $saveBid = $W.BatchId; $W.BatchId = $t.BatchId
     try { $pg = Invoke-SIDataOutContractPage -W $W -Items @($Items) -NoState } finally { $W.BatchId = $saveBid }
     $rows = @(); if ($pg) { $rows = @($pg.Rows | Select-Object -First $Max) }
-    foreach ($r in $rows) { Add-SIDataOutActionCount -Counts $t.Counts -Action ([string]$r['u_action']) }
+    # #1188 each row's count as the page counted it (kept open apart from held); the end row still says u_action held for both
+    $tk = @(); if ($pg -and $pg.ContainsKey('RowKinds')) { $tk = @($pg.RowKinds) }
+    for ($ti = 0; $ti -lt $rows.Count; $ti++) { Add-SIDataOutActionCount -Counts $t.Counts -Action $(if ($ti -lt $tk.Count -and $tk[$ti]) { [string]$tk[$ti] } else { [string]$rows[$ti]['u_action'] }) }
     $null = Send-SIDataOutSnowPage -Session $t -Rows $rows
     Close-SIDataOutSnowBatch -Session $t
     & $W.Log 'INFO' ('{0}: test batch {1} -- {2} row(s), {3} (u_si_mode = test: your importer never imports it)' -f $W.Label, $t.BatchId, $rows.Count, $t.BatchState)
@@ -2421,7 +2441,9 @@ function Invoke-SIDataOutSnowContract {
         # #1043 counted in memory: the rows the target took, the rows this page holds (u_action held, the push held, or --
         # #1042 -- a row held for a value too long for its column)
         $cutN = $(if ($pr.PSObject.Properties['HeldIndex']) { @($pr.HeldIndex).Count } else { 0 })
-        if ($prog) { Step-SIDataOutProgress -Progress $prog -PagesSent 1 -RowsSent ([long]$sn.Sent - $sent0) -RowsHeld ([long]$pg.Counts['held'] + $cutN + $(if ($pr.Held) { @($pg.Rows).Count } else { 0 })) }
+        # #1188 a row sent 'held' because its finding is not in this run is KEPT OPEN (sent), never counted held -- unless the
+        # push held the page (then nothing of it was sent)
+        if ($prog) { Step-SIDataOutProgress -Progress $prog -PagesSent 1 -RowsSent ([long]$sn.Sent - $sent0) -RowsHeld ([long]$pg.Counts['held'] + $cutN + $(if ($pr.Held) { @($pg.Rows).Count } else { 0 })) -RowsKeptOpen $(if ($pr.Held -or -not $pg.Counts.Contains('kept_open')) { 0L } else { [long]$pg.Counts['kept_open'] }) }
         # a page that LANDED WHOLE is recorded; a held page, or one with rows not accepted, is not (the batch ends failed or
         # held and its rows go again)
         if ($pr.Ok -and @($pr.Errors).Count -eq 0) {
@@ -2787,7 +2809,11 @@ function Invoke-SIDataOutWriter {
     }
     if (-not $res.Contains('Carried')) { $res['Carried'] = 0 }
     if ($res.Contains('StoppedAfterPages')) { $res.Why = (@($res.Why, ('the push stopped after {0} page(s); no further page was read -- {1} row(s) built were not sent' -f $res.StoppedAfterPages, $res.NotSent)) | Where-Object { $_ }) -join ' | ' }
-    $line = '{0}: {1} row(s); {2} new, {3} changed, {4} no longer sent, {5} unchanged{6}' -f $Entry.label, $res.Rows, $res.Written, $res.Updated, $res.Removed, $res.Unchanged, $(if ($res.Target) { ' -> ' + $res.Target } else { '' })
+    # #1188 the held items (real holds) and the rows kept open because not seen this run: said apart, each only when there is one
+    $hk = ''
+    if ($res.Contains('HeldItems') -and [long]$res.HeldItems -gt 0) { $hk += (', {0} held' -f $res.HeldItems) }
+    if ($res.Contains('KeptOpen') -and [long]$res.KeptOpen -gt 0) { $hk += (', {0} {1}' -f $res.KeptOpen, (Get-SIDataOutKeptOpenText)) }
+    $line = '{0}: {1} row(s); {2} new, {3} changed, {4} no longer sent, {5} unchanged{7}{6}' -f $Entry.label, $res.Rows, $res.Written, $res.Updated, $res.Removed, $res.Unchanged, $(if ($res.Target) { ' -> ' + $res.Target } else { '' }), $hk
     $heldInPart = ($res.Contains('HeldInPart') -and $res.HeldInPart)
     $heldByCheck = ($res.Outcome -eq 'held') -and -not $heldInPart
     if ($res.Outcome -eq 'failed') { & $Log 'WARN' ('{0}: not written -- {1}' -f $Entry.label, $res.Why) }

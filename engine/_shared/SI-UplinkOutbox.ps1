@@ -406,13 +406,13 @@ function Invoke-SIUplinkOutboxTick {
         # the drops not said yet -- ONCE, in this tick's line (the count keeps growing; "said" remembers how far it was said)
         $newDrops = $dropped - $saidBefore
         if ($newDrops -gt 0) {
-            $lines.Add(('uplink outbox: {0} unsent run report(s) were dropped -- older than {1} days or beyond {2:N0} kept (the oldest go first); {3} dropped in all' -f $newDrops, $c.MaxDays, $c.MaxRows, $dropped))
+            $lines.Add(('Invardia support link, run results: {0} unsent run report(s) were dropped -- older than {1} days or beyond {2:N0} kept (the oldest go first); {3} dropped in all' -f $newDrops, $c.MaxDays, $c.MaxRows, $dropped))
             $said = $dropped
         }
-        if (-not $leased) { $lines.Add('uplink outbox: another execution is sending the kept run reports -- nothing sent from here'); return (& $out 'busy' 0 $null $newDrops) }
+        if (-not $leased) { $lines.Add('Invardia support link, run results: another execution is sending the kept run reports -- nothing sent from here'); return (& $out 'busy' 0 $null $newDrops) }
         if ($HeartbeatStatus -in @('failed', 'error')) {
             $left = Get-SIUplinkOutboxBacklog -Invoke $Invoke -NowUtc $nowUtc
-            if ($left -and $left.pending -gt 0) { $lines.Add(('uplink outbox: {0} run report(s) kept; not sent this tick -- Invardia did not take the heartbeat' -f $left.pending)) }
+            if ($left -and $left.pending -gt 0) { $lines.Add(('Invardia support link, run results: {0} run report(s) kept; not sent this tick -- Invardia did not take the heartbeat' -f $left.pending)) }
             return (& $out 'held' 0 $(if ($left) { $left.pending } else { $null }) $newDrops)
         }
         if (-not $Send) {
@@ -432,16 +432,16 @@ function Invoke-SIUplinkOutboxTick {
         $left = Get-SIUplinkOutboxBacklog -Invoke $Invoke -NowUtc $nowUtc
         $leftN = if ($left) { $left.pending } else { $null }
         if ($d.Stopped) {
-            $lines.Add(('uplink outbox: {0} kept run report(s) sent, then Invardia did not take the next ({1}) -- the rest stay for the next tick ({2} kept)' -f $d.Sent, $d.Why, $(if ($null -ne $leftN) { $leftN } else { 'unknown' })))
+            $lines.Add(('Invardia support link, run results: {0} kept run report(s) sent, then Invardia did not take the next ({1}) -- the rest stay for the next tick ({2} kept)' -f $d.Sent, $d.Why, $(if ($null -ne $leftN) { $leftN } else { 'unknown' })))
             return (& $out 'stopped' $d.Sent $leftN $newDrops)
         }
         if ($d.Sent -gt 0) {
-            $lines.Add(('uplink outbox: {0} kept run report(s) sent in {1} round(s){2}' -f $d.Sent, $d.Rounds, $(if ($leftN) { ('; {0} left for the next tick' -f $leftN) } else { '; caught up' })))
+            $lines.Add(('Invardia support link, run results: {0} kept run report(s) sent in {1} round(s){2}' -f $d.Sent, $d.Rounds, $(if ($leftN) { ('; {0} left for the next tick' -f $leftN) } else { '; caught up' })))
             return (& $out 'drained' $d.Sent $leftN $newDrops)
         }
         & $out 'caught-up' 0 $leftN $newDrops
     } catch {
-        $lines.Add(('uplink outbox: not sent this tick ({0})' -f (ConvertTo-SIUplinkOutboxAnswer $_.Exception.Message)))
+        $lines.Add(('Invardia support link, run results: not sent this tick ({0})' -f (ConvertTo-SIUplinkOutboxAnswer $_.Exception.Message)))
         & $out 'error' 0 $null 0
     } finally {
         if ($leased -or $null -ne $said) {

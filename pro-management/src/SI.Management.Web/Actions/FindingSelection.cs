@@ -250,7 +250,7 @@ public sealed class FindingSelectionResolver
                 return ResolvedSelection.Fail(why);
             }
             var page = (await _views.ExportAsync(new GridQuery(map.Spec, map.Parameters(cur, sel), cur.Version + "|act",
-                new GridRequest { Search = sel.Get("q"), Filters = sel.GridFilters.ToDictionary(kv => kv.Key, kv => kv.Value), Size = 50 }), ct)).Data;
+                new GridRequest { Search = sel.Get("q"), Filters = sel.GridFilters.ToDictionary(kv => kv.Key, kv => kv.Value), Size = 50, SearchAnywhere = GridRequest.IsAnywhere(sel.Get(GridRequest.AnywhereKey)) }), ct)).Data;
             if (page.Total > max)
             {
                 var why = $"{Rows(page.Total)} match the filter -- that is more than the {Fmt.Int(max)} findings \"{action.Label}\" may change at once, before they are even counted. Narrow the filter.";
@@ -447,7 +447,7 @@ public sealed class FindingSelectionResolver
             return (rows, rows.Count);
         }
         var g = (await GridAsync(sel, access, ct))!.Value;
-        var page = (await _views.ExportAsync(new GridQuery(g.Spec, g.Params, g.Scope, new GridRequest { Search = sel.Get("q"), Filters = sel.GridFilters.ToDictionary(kv => kv.Key, kv => kv.Value), Size = 50 }), ct)).Data;
+        var page = (await _views.ExportAsync(new GridQuery(g.Spec, g.Params, g.Scope, new GridRequest { Search = sel.Get("q"), Filters = sel.GridFilters.ToDictionary(kv => kv.Key, kv => kv.Value), Size = 50, SearchAnywhere = GridRequest.IsAnywhere(sel.Get(GridRequest.AnywhereKey)) }), ct)).Data;
         if (page.Total > max) return (Array.Empty<FindingRow>(), page.Total);
         return (await RowsOfAsync(page.Rows, sel.CollectionId, ct), page.Total);
     }

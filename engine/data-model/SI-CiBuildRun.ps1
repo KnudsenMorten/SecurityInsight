@@ -58,6 +58,8 @@ if (-not (Get-Command -Name Select-SIDisabledForStage -ErrorAction SilentlyConti
 # the customer's correlation decisions (never-merge, force-merge, pin-id): the CI build reads and applies them itself, in every edition
 if (-not (Get-Command -Name Get-SICorrelationGroups -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-correlation\_shared\SI-CorrelationCore.ps1') }
 if (-not (Get-Command -Name Import-SICorrelationDecisions -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-correlation\_shared\SI-CorrelationDecisions.ps1') }
+# #1180 the step's progress record while the batches run (the progress ticker)
+if (-not (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-StepPhase.ps1')) }
 
 function Select-SICiGroupsEnabled {
     <#
@@ -1314,12 +1316,17 @@ function Invoke-SICiBuild {
             if (([datetime]::UtcNow - $said.At).TotalSeconds -ge 120) { & $Log 'INFO' ("CIs: batch {0} of {1} -- {2}" -f $b, $nBatches, $What); $said.At = [datetime]::UtcNow }
         }
         $ciWatch = Start-SICiWatch
+        # #1180: the step's progress record (batches done of all) moves with the batches -- the stall check sees a long build
+        # moving; the batch lines stay the log's word (progress only)
+        $ciTick = $null
+        if ($null -ne $sql -and (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue)) { $ciTick = New-SIStepProgressTicker -What 'the CI build' -Unit 'batch' -Total ([long]$nBatches) -Invoke $sql -EverySeconds 60 }
         for ($b = 1; $b -le $nBatches; $b++) {
             # an incremental build -- and a build that carries on a stopped rebuild -- reads only the batches that hold a
             # dirty group, and of them only the dirty groups. In batch order: the identity batches first, and the batches a
             # stopped build finished hold nothing to read, so what is left is done first.
             if (-not $buildAll -and -not ($batchDirty[$b] -gt 0)) { continue }
             $bw.Restart()
+            if ($ciTick) { $null = Step-SIStepProgressTicker -Ticker $ciTick -Done ($b - 1) }
             & $Log 'INFO' ("CIs: batch {0} of {1} started -- reading its records ({2} CI(s) built so far)" -f $b, $nBatches, $t.Cis); $said.At = [datetime]::UtcNow
             $batchRows = @(& $sql (Get-SICiBatchSql) @{ b = [string]$b; only = $(if ($buildAll) { '0' } else { '1' }) } 'rows')
             $dirtyRec = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)

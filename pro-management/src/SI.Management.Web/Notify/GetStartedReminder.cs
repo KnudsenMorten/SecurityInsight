@@ -37,14 +37,10 @@ public static class GetStartedReminderPlan
     /// The period of a day: "gs-2026-10-10" (fits cfg.ReportMail.PeriodKey, 16 characters).
     public static string PeriodKey(DateTime nowUtc) => "gs-" + nowUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    /// Who gets it: the alert recipients, else the installing admin's address.
-    public static IReadOnlyList<string> Recipients(IReadOnlyList<SettingRow> rows)
-    {
-        if (NotifyCatalog.ListOf(rows, "SI_GuardMail_To") is { Count: > 0 } alert) return alert;
-        var contact = rows.Where(r => r.Name.Equals("SI_LicenseRequest_ContactEmail", StringComparison.OrdinalIgnoreCase) && r.ValueJson is not null)
-            .Select(r => r.ValueJson!.Trim().Trim('"').Trim()).FirstOrDefault(NotificationPrefs.IsAddress);
-        return contact is null ? Array.Empty<string>() : new[] { contact };
-    }
+    /// Who gets it -- the catalog's entry, so the list of people decides (#1172): its own list; until the list is confirmed,
+    /// the alert recipients, else the installing admin's address. Once confirmed, its own list exactly (empty = nobody).
+    public static IReadOnlyList<string> Recipients(IReadOnlyList<SettingRow> rows) =>
+        NotifyCatalog.RecipientsOf(NotifyCatalog.Fixed.Single(e => e.Id == NotifyCatalog.GetStartedReminder), rows);
 
     /// The subject: the open required steps alone keep the Get Started wording; anything waiting for a decision makes it
     /// the "Waiting for you" mail. MAIL-3 (#653): the severity word "Action needed" first (a step or a decision the customer
@@ -77,7 +73,9 @@ public static class GetStartedReminderPlan
         if (gs.Steps.Any(s => s.Id == "mail" && !s.Done)) return No("mail is not set up yet -- Get Started shows that step");
         if (open.Count == 0 && decisions == 0) return No("nothing waits: every required Get Started step is done and no decision is pending");
         var to = Recipients(rows);
-        if (to.Count == 0) return No("no alert recipient (SI_GuardMail_To) and no installing admin's address (SI_LicenseRequest_ContactEmail) is set");
+        if (to.Count == 0) return No(Confirmation.Of(rows) is not null
+            ? "nobody is ticked for the Waiting for you reminder in the list of people (Reports and alerts)"
+            : "no alert recipient (SI_GuardMail_To) and no installing admin's address (SI_LicenseRequest_ContactEmail) is set");
         var groups = prefs.Route(to, NotifyCatalog.GetStartedReminder);
         if (groups.Count == 0) return No("every recipient switched the Waiting for you reminder off on the Notifications page");
         return new Plan(true, "", groups, subject, key);

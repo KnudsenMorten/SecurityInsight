@@ -99,6 +99,45 @@ BeforeAll {
             [pscustomobject]@{ Execution = ('caj-si-{0}-x1' -f $Job); StartedUtc = $at } }.GetNewClosure()
         [pscustomobject]@{ Fn = $fn; State = $st }
     }
+    # 2026-11-10 the data database for several key ranges at once (Get-SIDataRetireBoundsSql / Get-SIDataRetireSpanSql): each
+    # collection's finding ids; -Marked collections may be removed, -Published never; -SpanMs: each range takes that long
+    function script:New-WideData([hashtable]$Rows = @{}, [long]$Cap = 3, [string[]]$Marked = @(), [string]$Published = '', [int]$SpanMs = 0, [object[]]$State = @()) {
+        $left = @{}
+        foreach ($k in $Rows.Keys) { $l = New-Object System.Collections.Generic.List[long]; for ($i = 1L; $i -le [long]$Rows[$k]; $i++) { $l.Add([long]$k * 100000 + $i) }; $left[[string]$k] = $l }
+        $sent = New-Object System.Collections.ArrayList; $gone = New-Object System.Collections.Generic.List[long]
+        $inv = { param([string]$sql, $p, [string]$mode)
+            [void]$sent.Add([pscustomobject]@{ Sql = $sql; P = $(if ($p) { $p.Clone() } else { @{} }) })
+            $id = if ($p -and $p.ContainsKey('CollectionId')) { [string]$p['CollectionId'] } else { '' }
+            if ($sql -match 'AS Lo') {
+                if ($Marked -notcontains $id) { return , @(@{ Hi = $null; Refused = 1; Cap = 0; Lo = 0 }) }
+                if ($sql -notmatch 'FindingId > @lo' -or -not $left.ContainsKey($id) -or -not $left[$id].Count) { return , @() }
+                $after = [long]$p['After']; $take = [long][Math]::Min([long]$Cap, [Math]::Max(1L, [long]$p['Batch'])); $n = [long][Math]::Max(1, [int]$p['Ranges'])
+                $lo = if ($after -le 0) { [long]($left[$id] | Measure-Object -Minimum).Minimum - 1 } else { $after }
+                $mine = @($left[$id] | Where-Object { $_ -gt $lo } | Select-Object -First ([int]($n * $take)))
+                $o = New-Object System.Collections.Generic.List[object]
+                for ($i = 0; $i -lt $mine.Count; $i++) { if ((($i + 1) % $take) -eq 0 -or $i -eq $mine.Count - 1) { $o.Add(@{ Hi = $mine[$i]; Refused = 0; Cap = $Cap; Lo = $lo }) } }
+                return , $o.ToArray()
+            }
+            if ($sql -match 'CONVERT\(bigint, @Upto\)') {
+                if ($Marked -notcontains $id -or $id -eq $Published) { return [long]-1 }
+                if ($sql -notmatch 'FindingId <= @hi' -or -not $left.ContainsKey($id)) { return 0L }
+                if ($SpanMs -gt 0) { Start-Sleep -Milliseconds $SpanMs }
+                $mine = @($left[$id] | Where-Object { $_ -gt [long]$p['After'] -and $_ -le [long]$p['Upto'] } | Select-Object -First ([int]$Cap))
+                foreach ($x in $mine) { [void]$left[$id].Remove($x); $gone.Add($x) }
+                return [long]$mine.Count
+            }
+            if ($sql -match 'AS HasRows') { return , @($State) }
+            if ($sql -match 'CollectionReportCarry') { return , @() }
+            if ($sql -match 'SET RetiredAt = SYSUTCDATETIME\(\)') { return 1 }
+            if ($sql -match 'AS Collections') {
+                $c = @($left.Keys | Where-Object { $Marked -contains $_ -and $left[$_].Count -gt 0 }).Count
+                $r = 0L; foreach ($k in $left.Keys) { if ($Marked -contains $k) { $r += $left[$k].Count } }
+                return , @(@{ Collections = $c; Rows = $r })
+            }
+            if ($mode -eq 'scalar') { return 0 }
+            , @() }.GetNewClosure()
+        [pscustomobject]@{ Invoke = $inv; Sent = $sent; Left = $left; Gone = $gone }
+    }
 }
 
 Describe 'is anything going? (Get-SIDataHousekeepingBusy)' {
@@ -289,12 +328,12 @@ Describe 'every removal goes through the one function (Remove-SIDataCollectionRo
     It 'no other function in the engine calls the range or batch removal of a collection' {
         $calls = foreach ($file in Get-ChildItem -Path (Join-Path $script:Root 'engine') -Recurse -Filter '*.ps1') {
             $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$null)
-            foreach ($c in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'Invoke-SIDataRetireRangeDelete', 'Get-SIDataRetireBatchSql', 'Remove-SIDataCollectionRows' }, $true)) {
+            foreach ($c in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'Invoke-SIDataRetireRangeDelete', 'Invoke-SIDataRetireRangesWide', 'Get-SIDataRetireSpanSql', 'Get-SIDataRetireBatchSql', 'Remove-SIDataCollectionRows' }, $true)) {
                 $fn = $c.Parent; while ($fn -and -not ($fn -is [System.Management.Automation.Language.FunctionDefinitionAst])) { $fn = $fn.Parent }
                 '{0}>{1}' -f $(if ($fn) { $fn.Name } else { '' }), $c.GetCommandName()
             }
         }
-        @($calls | Sort-Object -Unique) | Should -Be @('Invoke-SIDataCollectionRetention>Remove-SIDataCollectionRows', 'Remove-SIDataCollectionRows>Get-SIDataRetireBatchSql', 'Remove-SIDataCollectionRows>Invoke-SIDataRetireRangeDelete')
+        @($calls | Sort-Object -Unique) | Should -Be @('Invoke-SIDataCollectionRetention>Remove-SIDataCollectionRows', 'Invoke-SIDataRetireRangesWide>Get-SIDataRetireSpanSql', 'Remove-SIDataCollectionRows>Get-SIDataRetireBatchSql', 'Remove-SIDataCollectionRows>Invoke-SIDataRetireRangeDelete', 'Remove-SIDataCollectionRows>Invoke-SIDataRetireRangesWide')
     }
 }
 
@@ -551,6 +590,342 @@ Describe 'on a real SQL Server' {
             foreach ($id in 2, 3, 4) { & $cnt "SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = $id" | Should -Be 300 }
             & $cnt 'SELECT COUNT_BIG(*) FROM sidata.Collection WHERE CollectionId IN (2, 3, 4) AND RetiredAt IS NULL' | Should -Be 3
         } finally {
+            [void](& $master "ALTER DATABASE [$db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$db]" @{} 'nonquery')
+        }
+    }
+}
+
+# =====================================================================================================================
+#  2026-11-10 (owner: "data sync is prio 1, and data clean-up happens when idle" / "the data clean-up can be millions of rows" /
+#  "just make sure that it finishes before next runs so we dont get to far behind"): the budget up to almost the next wake-up,
+#  several key ranges at once, the deadline and its warning (si-data-1405) -- inside the runner's own wake-ups, no new job.
+# =====================================================================================================================
+Describe 'the clean-up finishes before the next run: the budget' {
+    It 'a wake-up removes up to almost the NEXT wake-up of the runner''s own schedule, ending two range aims (and the last tail) before it' {
+        $w = Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:02:30', 'Utc')) -ReserveSeconds 10
+        $w.IntervalSeconds | Should -Be 300; $w.Source | Should -Be 'schedule'
+        $w.NextWakeUtc | Should -Be ([datetime]::SpecifyKind([datetime]'2026-11-10T10:05:00', 'Utc'))
+        $w.BudgetSeconds | Should -Be 140 -Because '150 s to the next wake-up, less the reserve'
+        (Get-SIDataHousekeepingWindow -Cron '*/10 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:00:05', 'Utc')) -ReserveSeconds 10).BudgetSeconds | Should -Be 585
+        (Get-SIDataHousekeepingWindow -Cron '0 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:59:00', 'Utc'))).IntervalSeconds | Should -Be 3600
+        (Get-SIDataHousekeepingWindow -Cron '0,10,40 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:41:00', 'Utc'))).NextWakeUtc | Should -Be ([datetime]::SpecifyKind([datetime]'2026-11-10T11:00:00', 'Utc'))
+        (Get-SIDataHousekeepingWindow -Cron '0,10,40 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:41:00', 'Utc'))).IntervalSeconds | Should -Be 600
+        # a cron that does not wake every hour, or none: the schedule a new install gets
+        $d = Get-SIDataHousekeepingWindow -Cron '0 2 * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:02:30', 'Utc'))
+        $d.Source | Should -Be 'default'; $d.IntervalSeconds | Should -Be 300
+        # the first range always runs: never a budget of 0 (0 would mean "no budget")
+        (Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::SpecifyKind([datetime]'2026-11-10T10:04:58', 'Utc')) -ReserveSeconds 10).BudgetSeconds | Should -Be 1
+        (Get-SIDataCronMinutes -Cron '*/15 * * * *') -join ',' | Should -Be '0,15,30,45'
+        (Get-SIDataCronMinutes -Cron '5-20/5 * * * *') -join ',' | Should -Be '5,10,15,20'
+        Get-SIDataCronMinutes -Cron 'x * * * *' | Should -BeNullOrEmpty
+    }
+    It 'wired: with the runner''s schedule the removal gets that budget -- idle and during a run -- and the lease outlasts it; without it, 120 s as before' {
+        $script:Budgets = New-Object System.Collections.ArrayList
+        Mock Invoke-SIDataCollectionRetention {
+            [void]$script:Budgets.Add([pscustomobject]@{ Budget = $TimeBudgetSeconds; FinishOnly = [bool]$FinishOnly; Pace = $Pace })
+            [pscustomobject]@{ Status = 'ok'; Plan = @(); Removed = @(); Refused = @(); Stopped = $false; Paused = ''; Text = ''; Error = ''
+                               Rows = [ordered]@{ findings = 0L; recommendations = 0L; issueRows = 0L; stagedRows = 0L; defenderKeys = 0L; summaryRows = 0L; summaryAssets = 0L } }
+        }
+        $leases = New-Object System.Collections.ArrayList
+        $base = New-Settings
+        $inv = { param([string]$sql, $p, [string]$mode) if ($sql -match "SELECT N'taken'") { [void]$leases.Add([int]$p['LeaseSeconds']); return 'taken' }; & $base.Invoke $sql $p $mode }.GetNewClosure()
+        $d = New-HkData -State @()
+        $e1 = (Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::UtcNow)).BudgetSeconds
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $inv -JobRunning { param($j) $null } -NowUtc (T 7 8) -WakeCron '*/5 * * * *' -Log $script:Quiet
+        $e2 = (Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::UtcNow)).BudgetSeconds
+        $script:Budgets.Count | Should -Be 1
+        $script:Budgets[0].Budget | Should -BeGreaterOrEqual ([Math]::Min($e1, $e2) - 2)
+        $script:Budgets[0].Budget | Should -BeLessOrEqual ([Math]::Max($e1, $e2) + 1)
+        $script:Budgets[0].Pace | Should -Not -BeNullOrEmpty -Because 'a wake-up with nothing going hands its pace to the removal'
+        $leases[0] | Should -Be 1200 -Because 'the wake-up interval + 15 min: longer than any budget'
+        # without the runner's schedule: the fixed budget, no pace, the old lease
+        $script:Budgets.Clear(); $leases.Clear()
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $inv -JobRunning { param($j) $null } -NowUtc (T 7 8) -Log $script:Quiet
+        $script:Budgets[0].Budget | Should -Be 120; $script:Budgets[0].Pace | Should -BeNullOrEmpty; $leases[0] | Should -Be 1020
+        # during a run (no data sync, no data out): the removal of what was marked before the run gets the same budget
+        $script:Budgets.Clear()
+        $run = New-Settings -Runs 1 -RunStart (T 25)
+        $e1 = (Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::UtcNow)).BudgetSeconds
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $run.Invoke -RaRunning { $null } -JobRunning { param($j) $null } -NowUtc (T 7 8) -WakeCron '*/5 * * * *' -Log $script:Quiet
+        $e2 = (Get-SIDataHousekeepingWindow -Cron '*/5 * * * *' -NowUtc ([datetime]::UtcNow)).BudgetSeconds
+        $fin = @($script:Budgets | Where-Object FinishOnly)
+        $fin.Count | Should -Be 1
+        $fin[0].Budget | Should -BeGreaterOrEqual ([Math]::Min($e1, $e2) - 3)
+        $fin[0].Budget | Should -BeLessOrEqual ([Math]::Max($e1, $e2) + 1)
+        $fin[0].Pace | Should -BeNullOrEmpty -Because 'while a run goes it removes one range at a time, as before'
+    }
+    It 'the runner hands its own schedule (one GET of its job), the next scheduled run and its beat to the clean-up' {
+        $script:Runner | Should -Match ([regex]::Escape('-WakeCron $cleanCron -NextRunUtc $cleanNext -Beat $Beat'))
+        $script:Runner | Should -Match ([regex]::Escape("& `$armSeams.Arm 'GET'"))
+        $script:Runner | Should -Match ([regex]::Escape('Get-SIJobFlowDue -Definition $cleanDef -Previous $cleanFlow.Load()'))
+        $script:Runner | Should -Match ([regex]::Escape('$cleanCron = [string]$script:SIJobFlow.TickCron'))
+    }
+}
+
+Describe 'the clean-up finishes before the next run: the width and the deadline (pure)' {
+    It 'the width: the ranges the deadline asks for, from the pace reached -- never above the database''s cores; no deadline = one range' {
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 3 -PrevRate 100 -NeedPerMin $null | Should -Be 1 -Because 'no scheduled run: today''s pace'
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 3 -PrevRate 100 -NeedPerMin 0 | Should -Be 1
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 2 -PrevRate 100 -NeedPerMin 200 | Should -Be 4 -Because 'the same pace per range'
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 2 -PrevRate 100 -NeedPerMin 900 | Should -Be 8 -Because 'never above the cores'
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 4 -PrevRate 400 -NeedPerMin 90 | Should -Be 1 -Because 'ahead: narrower, less load on the database'
+        Get-SIDataHousekeepingPacePlan -Max 8 -PrevRanges 3 -PrevRate $null -NeedPerMin 90 | Should -Be 3 -Because 'not measured yet: the ranges of last time'
+        Get-SIDataHousekeepingPacePlan -Max 1 -PrevRanges 6 -PrevRate 10 -NeedPerMin 90 | Should -Be 1 -Because 'a seam without connections: one at a time'
+    }
+    It 'the deadline: short and not at its widest = wider next time; short at its widest, held back by the load or on the last wake-up = behind; ahead = narrower' {
+        # 6,000 rows left, 60 minutes to the run: 100 a minute needed; 1,000 removed over a 5-minute interval = 200 a minute
+        $ok = Get-SIDataHousekeepingVerdict -Removed 1000 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 60 -Width 4 -Max 8 -RanFull $true
+        $ok.Rate | Should -Be 200; $ok.Need | Should -Be 100; $ok.Short | Should -BeFalse; $ok.Behind | Should -BeFalse; $ok.Ranges | Should -Be 2
+        $short = Get-SIDataHousekeepingVerdict -Removed 250 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 60 -Width 2 -Max 8 -RanFull $true
+        $short.Short | Should -BeTrue; $short.Behind | Should -BeFalse; $short.Ranges | Should -Be 4 -Because '50 a minute at 2 ranges, 100 needed'
+        $atMax = Get-SIDataHousekeepingVerdict -Removed 250 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 60 -Width 8 -Max 8 -RanFull $true
+        $atMax.Behind | Should -BeTrue; $atMax.Ranges | Should -Be 8
+        (Get-SIDataHousekeepingVerdict -Removed 250 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 60 -Width 2 -Max 8 -HeldBack $true -RanFull $true).Behind | Should -BeTrue -Because 'the load held it back: it cannot go wider'
+        (Get-SIDataHousekeepingVerdict -Removed 250 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 4 -Width 2 -Max 8 -RanFull $true).Behind | Should -BeTrue -Because 'no wake-up is left before the run'
+        # not judged: paused / not a full wake-up, no deadline, nothing left
+        (Get-SIDataHousekeepingVerdict -Removed 10 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext 60 -Width 8 -Max 8 -RanFull $false).Behind | Should -BeNullOrEmpty
+        $nod = Get-SIDataHousekeepingVerdict -Removed 10 -IntervalSeconds 300 -RowsLeft 6000 -MinutesToNext $null -Width 1 -Max 8 -RanFull $true
+        $nod.Behind | Should -BeFalse; $nod.Need | Should -BeNullOrEmpty
+        (Get-SIDataHousekeepingVerdict -Removed 10 -IntervalSeconds 300 -RowsLeft 0 -MinutesToNext 60 -Width 8 -Max 8 -RanFull $true -Done $true).Behind | Should -BeFalse
+    }
+    It 'the record carries the pace and stays under 400 characters; behind keeps its first time and goes once nothing is left' {
+        $v = Get-SIDataHousekeepingValue -State removing -CollectionsLeft 12 -RowsLeft 123456789012 -RemovedRows 1234567890 -LastRemovedAtUtc (T 22) -Why ('a data sync is running ' * 20) -AtUtc (T 23) `
+                -Ranges 12 -RatePerMin 1234567 -NeedPerMin 1234567 -BehindSinceUtc (T 22) -TailSeconds 12
+        $v.Length | Should -BeLessThan 400
+        $o = $v | ConvertFrom-Json
+        $o.ranges | Should -Be 12; $o.rate | Should -Be 1234567; $o.need | Should -Be 1234567; $o.tail | Should -Be 12
+        $o.behind | Should -Not -BeNullOrEmpty
+        $prev = Get-SIDataHousekeepingValue -State removing -CollectionsLeft 2 -RowsLeft 900 -Ranges 3 -RatePerMin 50 -BehindSinceUtc (T 7 6) -AtUtc (T 7 7)
+        $s = New-Settings -Previous $prev
+        $null = Write-SIDataHousekeepingProgress -SettingsInvoke $s.Invoke -State removing -Left @{ Collections = 2; Rows = 800 } -RemovedRows 100 -Log $script:Quiet -NowUtc (T 7 8) -Pace @{ Behind = $true; Need = 80 }
+        $r = $s.Recorded[0] | ConvertFrom-Json
+        ([datetime]$r.behind).ToUniversalTime() | Should -Be (T 7 6) -Because 'behind keeps its first time'
+        $r.ranges | Should -Be 3; $r.rate | Should -Be 50; $r.need | Should -Be 80
+        $null = Write-SIDataHousekeepingProgress -SettingsInvoke $s.Invoke -State done -Left @{ Collections = 0; Rows = 0 } -RemovedRows 800 -Log $script:Quiet -NowUtc (T 7 9)
+        ($s.Recorded[1] | ConvertFrom-Json).PSObject.Properties['behind'] | Should -BeNullOrEmpty -Because 'nothing left: never behind'
+    }
+    It 'the statements of several ranges: the bounds and each range carry the one mark, the range refuses the published run under its lock and is cut to the cap' {
+        $b = Get-SIDataRetireBoundsSql -Table Finding
+        $s = Get-SIDataRetireSpanSql -Table Finding
+        $mark = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run'))))"
+        $b | Should -Match ([regex]::Escape($mark)); $s | Should -Match ([regex]::Escape($mark))
+        (Get-SIDataRetireRangeSql -Table Finding) | Should -Match ([regex]::Escape($mark)) -Because 'the range driver carries the same mark'
+        $s | Should -Match ([regex]::Escape("sp_getapplock @Resource = N'sidata.PublishedRun', @LockMode = N'Shared'"))
+        $s | Should -Match ([regex]::Escape("AND NOT EXISTS (SELECT 1 FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.DetailedCollectionId = @c)"))
+        $s | Should -Match ([regex]::Escape('SELECT TOP (@cap) FindingId AS k FROM sidata.Finding WHERE CollectionId = @c AND FindingId > @lo AND FindingId <= @hi ORDER BY FindingId'))
+        $s | Should -Match 'SELECT CAST\(-1 AS bigint\)'
+        $b | Should -Match ([regex]::Escape('SELECT TOP (@n * @take) FindingId AS k'))
+        { Get-SIDataRetireSpanSql -Table SummaryRow } | Should -Throw
+    }
+}
+
+Describe 'several key ranges at once (Invoke-SIDataRetireRangesWide)' {
+    BeforeAll {
+        # the parallel helper's seam: each range of a wave through the fake, the waves recorded
+        if (-not (Get-Command -Name Invoke-SIDataParallelRanges -ErrorAction SilentlyContinue)) {
+            function Invoke-SIDataParallelRanges { param($ConnectionInfo, $Sql, $CollectionId, $Ranges, $Params, $UpperName, $Log, $StallSeconds, $WatchSeconds, $What, $Watch) }
+        }
+        $script:Waves = New-Object System.Collections.ArrayList
+        $script:WaveData = $null
+        Mock Invoke-SIDataParallelRanges {
+            [void]$script:Waves.Add(@($Ranges).Count)
+            , @(foreach ($r in @($Ranges)) {
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $n = & $script:WaveData.Invoke $Sql @{ CollectionId = [string]$CollectionId; After = [long]$r[0]; Upto = [long]$r[1]; MarkedBefore = $Params['MarkedBefore'] } 'scalar'
+                [pscustomobject]@{ N = [long]$n; Ms = [long]$sw.ElapsedMilliseconds } })
+        }
+    }
+    BeforeEach { $script:Waves.Clear() }
+    It 'removes exactly the rows one range at a time removes -- in waves as wide as asked, never wider than the cores' {
+        $serial = New-WideData -Rows @{ 1 = 40 } -Marked @('1')
+        $one = [long]3
+        $rs = Invoke-SIDataRetireRangesWide -Invoke $serial.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$one) -Pace @{ Width = 1; Target = 1; Max = 1 }
+        $rs.Done | Should -BeTrue; $rs.Rows | Should -Be 40
+        $script:Waves.Count | Should -Be 0 -Because 'one range at a time goes through the seam itself'
+        $wide = New-WideData -Rows @{ 1 = 40 } -Marked @('1'); $script:WaveData = $wide
+        $pace = @{ Width = 3; Target = 3; Max = 3; ConnectionInfo = { @{ ConnectionString = 'x'; AccessToken = '' } }; Log = $script:Quiet }
+        $three = [long]3
+        $rw = Invoke-SIDataRetireRangesWide -Invoke $wide.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $pace
+        $rw.Done | Should -BeTrue; $rw.Refused | Should -BeFalse; $rw.Rows | Should -Be 40
+        @($wide.Gone | Sort-Object) | Should -Be @($serial.Gone | Sort-Object) -Because 'the same rows, whatever the width'
+        $pace.WidthUsed | Should -Be 3
+        @($script:Waves | Where-Object { $_ -gt 3 }).Count | Should -Be 0
+        # never more ranges than the cores, whatever the deadline asks
+        $script:Waves.Clear(); $w2 = New-WideData -Rows @{ 1 = 40 } -Marked @('1'); $script:WaveData = $w2
+        $p2 = @{ Width = 9; Target = 9; Max = 2; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $null = Invoke-SIDataRetireRangesWide -Invoke $w2.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $p2
+        @($script:Waves | Where-Object { $_ -gt 2 }).Count | Should -Be 0; $w2.Left['1'].Count | Should -Be 0
+    }
+    It 'gives way to the data sync between two waves: no range after it starts, the rows left stay for the next wake-up' {
+        $d = New-WideData -Rows @{ 1 = 60 } -Marked @('1'); $script:WaveData = $d
+        $asked = [ref]0
+        $stop = { $asked.Value++; if ($asked.Value -gt 2) { 'the data sync is running -- it goes first' } else { '' } }.GetNewClosure()
+        $three = [long]3
+        $r = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -ShouldStop $stop -Pace @{ Width = 2; Target = 2; Max = 2; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $r.Stopped | Should -BeTrue; $r.StopWhy | Should -Be 'the data sync is running -- it goes first'; $r.Done | Should -BeFalse
+        $script:Waves.Count | Should -Be 2 -Because 'two waves before the data sync started, none after'
+        $r.Rows | Should -Be 12; $d.Left['1'].Count | Should -Be 48
+    }
+    It 'never the published run''s collection, never an unmarked one: refused and said, nothing counted as removed' {
+        $d = New-WideData -Rows @{ 2 = 9; 3 = 9 } -Marked @('2') -Published '2'; $script:WaveData = $d
+        $three = [long]3
+        $r = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '2' -BatchSize ([ref]$three) -Pace @{ Width = 3; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $r.Refused | Should -BeTrue; $r.Rows | Should -Be 0; $d.Left['2'].Count | Should -Be 9
+        $r3 = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '3' -BatchSize ([ref]$three) -Pace @{ Width = 3; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $r3.Refused | Should -BeTrue; $d.Left['3'].Count | Should -Be 9
+    }
+    It 'several ranges at once that fail: said, and the rest of the wake-up goes one range at a time from the last whole wave -- every row still goes' {
+        $d = New-WideData -Rows @{ 1 = 30 } -Marked @('1'); $script:WaveData = $d
+        Mock Invoke-SIDataParallelRanges { throw 'a connection was refused' }
+        $lines = New-Object System.Collections.ArrayList
+        $pace = @{ Width = 3; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = { param($l, $m) [void]$lines.Add("$l $m") }.GetNewClosure() }
+        $three = [long]3
+        $r = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $pace
+        $r.Done | Should -BeTrue; $r.Rows | Should -Be 30; $d.Left['1'].Count | Should -Be 0
+        $pace.Max | Should -Be 1
+        @($lines | Where-Object { $_ -match '^WARN housekeeping: several key ranges at once did not work \(a connection was refused\) -- this wake-up goes on one range at a time' }).Count | Should -Be 1
+    }
+    It 'the database''s load holds it back: the next wave is a range narrower, and it is said as held back' {
+        if (-not (Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)) { function Invoke-SISqlPacing { param($Invoke, $LastBatchMs, $Log, [switch]$Housekeeping, $DeadlineUtc) } }
+        $script:PaceCalls = 0
+        Mock Invoke-SISqlPacing { $script:PaceCalls++; [pscustomobject]@{ WaitedMs = 0L; Shrink = ($script:PaceCalls -eq 2); State = $(if ($script:PaceCalls -eq 2) { 'waited' } else { 'normal' }); Load = $null; Deadline = $false; Calm = ($script:PaceCalls -ne 2) } }
+        $d = New-WideData -Rows @{ 1 = 60 } -Marked @('1'); $script:WaveData = $d
+        $pace = @{ Width = 3; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $three = [long]3
+        $r = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $pace
+        $r.Done | Should -BeTrue; $d.Left['1'].Count | Should -Be 0
+        $pace.HeldBack | Should -BeTrue
+        $script:Waves[0] | Should -Be 3; $script:Waves[1] | Should -Be 2 -Because 'one range fewer after the load held it back'
+        ($script:Waves | Measure-Object -Maximum).Maximum | Should -Be 3 -Because 'back up to the width the deadline asks once it is calm'
+        $script:Waves[2] | Should -Be 3
+    }
+    It 'support ticket 2026-11-10 (database at its limit): from ONE range it widens one a wave only on a calm database -- an unknown or middling load keeps it at one' {
+        if (-not (Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue)) { function Invoke-SISqlPacing { param($Invoke, $LastBatchMs, $Log, [switch]$Housekeeping, $DeadlineUtc) } }
+        $three = [long]3
+        # not calm (unknown, or between the marks): it stays at one range -- through the seam itself, no wave
+        Mock Invoke-SISqlPacing { [pscustomobject]@{ WaitedMs = 0L; Shrink = $false; State = 'normal'; Load = $null; Deadline = $false; Calm = $false } }
+        $d = New-WideData -Rows @{ 1 = 30 } -Marked @('1'); $script:WaveData = $d
+        $pace = @{ Width = 1; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $r = Invoke-SIDataRetireRangesWide -Invoke $d.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $pace
+        $r.Done | Should -BeTrue; $d.Left['1'].Count | Should -Be 0
+        $script:Waves.Count | Should -Be 0 -Because 'never wider than one range on a database that is not calm'
+        $pace.Width | Should -Be 1
+        # calm: one range wider a wave, up to the target
+        $script:Waves.Clear()
+        Mock Invoke-SISqlPacing { [pscustomobject]@{ WaitedMs = 0L; Shrink = $false; State = 'normal'; Load = $null; Deadline = $false; Calm = $true } }
+        $d2 = New-WideData -Rows @{ 1 = 60 } -Marked @('1'); $script:WaveData = $d2
+        $p2 = @{ Width = 1; Target = 3; Max = 3; ConnectionInfo = { @{} }; Log = $script:Quiet }
+        $null = Invoke-SIDataRetireRangesWide -Invoke $d2.Invoke -Table Finding -CollectionId '1' -BatchSize ([ref]$three) -Pace $p2
+        $d2.Left['1'].Count | Should -Be 0
+        $script:Waves[0] | Should -Be 2 -Because 'one wider than the start, never straight to the target'
+        $script:Waves[1] | Should -Be 3
+    }
+    It 'every wake-up starts the clean-up at ONE range, never at the planned width' {
+        $src = Get-Content -Raw -LiteralPath (Join-Path $script:Root 'engine\_shared\data-sql\SI-DataSql.ps1')
+        $src | Should -Match '\$pace = @\{ Width = 1; Target = \$target;'
+    }
+}
+
+Describe 'the deadline end to end: a clean-up that cannot keep up says so (the heartbeat''s si-data-1405: SIv3-HeartbeatFields)' {
+    It 'falls short at its widest before the next run: a WARN line, behind recorded (what the heartbeat raises as si-data-1405)' {
+        $state = @((Row 1 (T 1) Complete -Retired), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete))
+        $d = New-WideData -Rows @{ 1 = 600; 3 = 4; 4 = 4 } -Cap 2 -Marked @('1') -SpanMs 150 -State $state
+        # the last wake-up measured little and needed a long time after its removal: this one has a budget of one second
+        $prev = Get-SIDataHousekeepingValue -State removing -CollectionsLeft 1 -RowsLeft 600 -Ranges 1 -RatePerMin 1 -TailSeconds 100000 -AtUtc ([datetime]::UtcNow.AddMinutes(-5))
+        $s = New-Settings -Previous $prev
+        $lines = New-Object System.Collections.ArrayList
+        $say = { param($l, $m) [void]$lines.Add("$l $m") }.GetNewClosure()
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -JobRunning { param($j) $null } -NowUtc ([datetime]::UtcNow) -WakeCron '*/5 * * * *' -NextRunUtc { [datetime]::UtcNow.AddMinutes(10) } -Log $say
+        $r.Status | Should -Be 'ok'
+        $r.Window.BudgetSeconds | Should -Be 1
+        $r.Verdict.Short | Should -BeTrue; $r.Verdict.Behind | Should -BeTrue -Because 'one range is all this seam has (no connections): it cannot go wider'
+        $d.Left['1'].Count | Should -BeGreaterThan 0; $d.Left['1'].Count | Should -BeLessThan 600
+        $d.Left['3'].Count | Should -Be 4; $d.Left['4'].Count | Should -Be 4 -Because 'the newest two keep every row'
+        @($lines | Where-Object { $_ -match '^WARN housekeeping: the clean-up of old data cannot keep up -- about [\d,]+ row\(s\) are left and the next run starts .*Support is told\.$' }).Count | Should -Be 1
+        $rec = $s.Recorded[$s.Recorded.Count - 1]
+        $o = $rec | ConvertFrom-Json
+        $o.state | Should -Be 'removing'; $o.behind | Should -Not -BeNullOrEmpty; $o.need | Should -BeGreaterThan 0; $o.ranges | Should -Be 1
+    }
+    It 'nothing scheduled after it (no deadline): never behind, one range at a time' {
+        $state = @((Row 1 (T 1) Complete -Retired), (Row 3 (T 3) Complete), (Row 4 (T 4) Complete))
+        $d = New-WideData -Rows @{ 1 = 30 } -Cap 2 -Marked @('1') -State $state
+        $s = New-Settings
+        $r = Invoke-SIDataStoppedRunCleanup -Invoke $d.Invoke -SettingsInvoke $s.Invoke -JobRunning { param($j) $null } -NowUtc ([datetime]::UtcNow) -WakeCron '*/5 * * * *' -NextRunUtc { $null } -Log $script:Quiet
+        $r.Status | Should -Be 'ok'; $d.Left['1'].Count | Should -Be 0
+        $o = $s.Recorded[$s.Recorded.Count - 1] | ConvertFrom-Json
+        $o.state | Should -Be 'done'; $o.PSObject.Properties['behind'] | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'several key ranges at once on a real SQL Server' {
+    BeforeAll {
+        # the parallel helper and the database's cores (the discovery's flag is not there at run time: the environment is asked)
+        if ($env:SI_TEST_LOCALSQL) { . (Join-Path $script:Root 'engine\pro-data\_shared\SI-DataViewContext.ps1') }
+        function script:New-LocalSeam([string]$Db) {
+            $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$Db;$($env:SI_TEST_SQL_AUTH);TrustServerCertificate=True"
+            $inv = {
+                param([string]$sql, $p, [string]$mode)
+                $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()
+                try {
+                    $c = $cn.CreateCommand(); $c.CommandTimeout = 600; $c.CommandText = $sql
+                    if ($p) { foreach ($k in $p.Keys) { [void]$c.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [DBNull]::Value } else { $p[$k] })) } }
+                    if ($mode -eq 'scalar') { return $c.ExecuteScalar() }
+                    if ($mode -eq 'nonquery') { return $c.ExecuteNonQuery() }
+                    $r = $c.ExecuteReader(); $rows = New-Object System.Collections.Generic.List[object]
+                    while ($r.Read()) { $h = @{}; for ($i = 0; $i -lt $r.FieldCount; $i++) { $h[$r.GetName($i)] = $(if ($r.IsDBNull($i)) { $null } else { $r.GetValue($i) }) }; $rows.Add($h) }
+                    $r.Close(); return , $rows.ToArray()
+                } finally { $cn.Close() }
+            }.GetNewClosure()
+            $inv | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue ({ @{ ConnectionString = $cs; AccessToken = '' } }.GetNewClosure())
+            $inv
+        }
+    }
+    It 'the same rows as one range at a time; the newest two and the published one keep every row; the published one is refused; a data sync stops it between waves' -Skip:(-not $script:LocalSql) {
+        $db = 'si1174hk_' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $master = New-LocalSeam 'master'
+        [void](& $master "CREATE DATABASE [$db]" @{} 'nonquery')
+        try {
+            $inv = New-LocalSeam $db
+            [void](& $inv $script:Schema @{} 'nonquery')
+            $add = { param([int]$Id, [string]$At, [int]$Rows)
+                [void](& $inv ("SET IDENTITY_INSERT sidata.Collection ON; INSERT sidata.Collection (CollectionId, CollectionTime, Kind, Status) VALUES ({0}, '{1}', 'Detailed', 'Complete'); SET IDENTITY_INSERT sidata.Collection OFF;" -f $Id, $At) @{} 'nonquery')
+                [void](& $inv ("INSERT sidata.Finding (CollectionId, AssetKey, ReportName, Severity, Tier, RiskScore) SELECT TOP ({1}) {0}, CONCAT(N'a', ROW_NUMBER() OVER (ORDER BY (SELECT NULL))), N'R', N'High', 1, 5 FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b" -f $Id, $Rows) @{} 'nonquery') }
+            # 1 and 5: twins, marked; 6: marked, for the give-way; 2: marked AND published; 3, 4: the newest two
+            & $add 1 '2026-10-01T08:00:00' 5000
+            & $add 5 '2026-10-01T09:00:00' 5000
+            & $add 6 '2026-10-01T10:00:00' 5000
+            & $add 2 '2026-10-02T08:00:00' 300
+            & $add 3 '2026-10-03T08:00:00' 300
+            & $add 4 '2026-10-04T08:00:00' 300
+            [void](& $inv "UPDATE sidata.Collection SET RetiredAt = '2026-10-06T09:00:00', RetiredWhy = N'superseded' WHERE CollectionId IN (1, 2, 5, 6); INSERT sidata.PublishedRun (Name, DetailedCollectionId, Source, PublishedAt) VALUES (N'current', 2, N'run', '2026-10-02T12:00:00')" @{} 'nonquery')
+            $cnt = { param($q) [long](& $inv $q @{} 'scalar') }
+            $keep = @(& $inv 'SELECT FindingId FROM sidata.Finding WHERE CollectionId IN (2, 3, 4) ORDER BY FindingId' @{} 'reader' | ForEach-Object { [long]$_['FindingId'] })
+            # one range at a time (the range driver) and several at once (the cores of this server, at least 2)
+            $b1 = [long]5000
+            $serial = Invoke-SIDataRetireRangeDelete -Invoke $inv -Table Finding -CollectionId '1' -BatchSize ([ref]$b1)
+            $cores = [Math]::Max(2, (Get-SIDataFillWorkers -Invoke $inv))
+            $pace = @{ Width = $cores; Target = $cores; Max = $cores; ConnectionInfo = $inv.SIConnectionInfo; Log = $script:Quiet }
+            $b2 = [long]5000
+            $wide = Invoke-SIDataRetireRangesWide -Invoke $inv -Table Finding -CollectionId '5' -BatchSize ([ref]$b2) -Pace $pace
+            $serial.Done | Should -BeTrue; $wide.Done | Should -BeTrue
+            $wide.Rows | Should -Be $serial.Rows; $wide.Rows | Should -Be 5000
+            $pace.WidthUsed | Should -BeGreaterThan 1 -Because 'several ranges ran at once'
+            & $cnt 'SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId IN (1, 5)' | Should -Be 0
+            # the published one: refused by the database, every row stays
+            $b3 = [long]5000
+            (Invoke-SIDataRetireRangesWide -Invoke $inv -Table Finding -CollectionId '2' -BatchSize ([ref]$b3) -Pace @{ Width = $cores; Target = $cores; Max = $cores; ConnectionInfo = $inv.SIConnectionInfo; Log = $script:Quiet }).Refused | Should -BeTrue
+            # the data sync starts after two waves: nothing after it, the rest stays for the next wake-up
+            $asked = [ref]0
+            $stop = { $asked.Value++; if ($asked.Value -gt 2) { 'the data sync is running -- it goes first' } else { '' } }.GetNewClosure()
+            $b4 = [long]100
+            $gw = Invoke-SIDataRetireRangesWide -Invoke $inv -Table Finding -CollectionId '6' -BatchSize ([ref]$b4) -ShouldStop $stop -Pace @{ Width = 2; Target = 2; Max = 2; ConnectionInfo = $inv.SIConnectionInfo; Log = $script:Quiet }
+            $gw.StopWhy | Should -Be 'the data sync is running -- it goes first'
+            $left6 = & $cnt 'SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = 6'
+            $left6 | Should -Be (5000 - $gw.Rows); $left6 | Should -BeGreaterThan 0
+            # the published and the newest two: exactly the same rows
+            @(& $inv 'SELECT FindingId FROM sidata.Finding WHERE CollectionId IN (2, 3, 4) ORDER BY FindingId' @{} 'reader' | ForEach-Object { [long]$_['FindingId'] }) | Should -Be $keep
+        } finally {
+            [System.Data.SqlClient.SqlConnection]::ClearAllPools()
             [void](& $master "ALTER DATABASE [$db] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$db]" @{} 'nonquery')
         }
     }

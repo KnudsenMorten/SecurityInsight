@@ -2113,13 +2113,14 @@ function Get-SIInstallMailbox {
 }
 
 function Get-SIInstallMailRecipients {
-    <# PURE. The report recipients: the answer mailTo, else the person installing. #>
+    <#
+        PURE. The report recipients: ONLY the addresses given for that purpose (the answer mailTo). Never the person
+        installing (owner 2026-11-10: the installer's own address ended up on a customer's report lists): with no answer
+        the lists stay empty, and the customer chooses the people in Get Started (Who gets the reports), where the
+        signed-in person's address is at most suggested.
+    #>
     param([Parameter(Mandatory)]$Ctx)
-    $to = @(@($Ctx.Values['mailTo']) | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() })
-    if ($to.Count) { return $to }
-    $upn = "$($Ctx.Facts['userPrincipalName'])".Trim()
-    if ($upn -match '@') { return @($upn) }
-    @()
+    @(@($Ctx.Values['mailTo']) | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() })
 }
 
 function Update-SIInstallConfigFile {    <#

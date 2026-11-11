@@ -337,8 +337,10 @@ function Invoke-RAKpiPass {
         (Test-RAKpiStateComplete) it IS the tally -- no row is read again. Otherwise the pass runs exactly as it always did:
         a fresh state (New-RAKpiState) and its own pager (-NewPager returns New-RARowPager ...) over every row.
         Returns @{ State; FromAiPass; Rows; FetchSec; DecodeSec } (FetchSec / DecodeSec = -1 when no row was read here).
+        #1180 -Progress: a progress ticker (New-SIStepProgressTicker / New-RAProgressTicker) told the rows read so far before
+        every page -- a long read says how far it is every few minutes; progress only, never fails the pass.
     #>
-    param($FromAiPass, [Parameter(Mandatory)][scriptblock]$NewPager, [datetime]$Now = [datetime]::UtcNow)
+    param($FromAiPass, [Parameter(Mandatory)][scriptblock]$NewPager, [datetime]$Now = [datetime]::UtcNow, $Progress = $null)
     $out = @{ State = $null; FromAiPass = $false; Rows = 0L; FetchSec = -1.0; DecodeSec = -1.0 }
     if (Test-RAKpiStateComplete -State $FromAiPass) {
         $out.State = $FromAiPass; $out.FromAiPass = $true; $out.Rows = [long]$FromAiPass.Rows
@@ -346,7 +348,9 @@ function Invoke-RAKpiPass {
     }
     $st = New-RAKpiState -Now $Now
     $pager = & $NewPager
+    $tick = ($null -ne $Progress) -and [bool](Get-Command -Name Step-SIStepProgressTicker -ErrorAction SilentlyContinue)
     while ($null -ne ($page = $pager.Next())) {
+        if ($tick) { $null = Step-SIStepProgressTicker -Ticker $Progress -Done ([long]$st.Rows) }
         foreach ($r in $page) { Add-RAKpiRow -State $st -Row $r }
         $page = $null
     }

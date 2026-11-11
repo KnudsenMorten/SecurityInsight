@@ -522,11 +522,57 @@ function Get-RAScaleOutStarted {
 }
 
 function Format-RAScaleOutProgress {
-    <# PURE. One progress line: done / failed / started / waiting of the run's items. #>
-    param([int]$Items, [int]$Done, [int]$Failed, [int]$Started)
+    <# PURE. One progress line: done / failed / started / waiting of the run's items. #1180: -SlicesDone / -SlicesTotal (the
+       query slices of the reports still running, when known) are added to it: one large report no longer holds the line
+       still for hours. #>
+    param([int]$Items, [int]$Done, [int]$Failed, [int]$Started, [long]$SlicesDone = -1, [long]$SlicesTotal = -1)
     $running = [Math]::Max(0, $Started - $Done - $Failed)
     $waiting = [Math]::Max(0, $Items - $Done - $Failed - $running)
-    '[scale-out] {0} of {1} report(s) done{2}, {3} running, {4} waiting for a worker' -f $Done, $Items, $(if ($Failed) { ', {0} failed' -f $Failed } else { '' }), $running, $waiting
+    $line = '[scale-out] {0} of {1} report(s) done{2}, {3} running, {4} waiting for a worker' -f $Done, $Items, $(if ($Failed) { ', {0} failed' -f $Failed } else { '' }), $running, $waiting
+    if ($SlicesTotal -gt 0 -and $SlicesDone -ge 0) {
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        $line += ('; the running reports: query slices {0} of {1} done' -f $SlicesDone.ToString('N0', $inv), $SlicesTotal.ToString('N0', $inv))
+    }
+    $line
+}
+
+function Get-RAScaleOutOpenReports {
+    <# PURE. #1180: the report names of the run's items that have no marker yet (done or failed) -- the reports still running
+       or waiting. -Markers: the part markers (Part = the item). #>
+    param([Parameter(Mandatory)]$Manifest, [object[]]$Markers = @())
+    $marked = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($mk in @($Markers)) { if ($null -ne $mk -and $null -ne $mk.Part) { [void]$marked.Add([int]$mk.Part) } }
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($it in @($Manifest.Items)) {
+        if ($null -eq $it) { continue }
+        $item = if ($it -is [System.Collections.IDictionary]) { $it['Item'] } else { $it.Item }
+        $rep = if ($it -is [System.Collections.IDictionary]) { $it['Report'] } else { $it.Report }
+        if ($null -ne $item -and -not $marked.Contains([int]$item) -and "$rep") { [void]$names.Add([string]$rep) }
+    }
+    @($names)
+}
+
+function Get-RAScaleOutSliceProgress {
+    <#
+        PURE. #1180: the query slices done / in all of the reports still running, from the workers' progress records (each
+        worker writes 'report <name>', query slice done / total, to cfg.StepProgress as it goes -- Write-RAStepProgressRow).
+        -Rows: @(@{ Phase; Done; Total }) (Get-SIStepProgressRows); -OpenReports: Get-RAScaleOutOpenReports. A record of a
+        report that has its marker is left out. Returns @{ Done; Total } or $null when no running report has a record.
+    #>
+    param([object[]]$Rows = @(), [string[]]$OpenReports = @())
+    $open = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in @($OpenReports)) { if ("$r") { [void]$open.Add([string]$r) } }
+    $d = 0L; $t = 0L; $n = 0
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $ph = [string]$r.Phase
+        if (-not $ph.StartsWith('report ', [StringComparison]::Ordinal)) { continue }
+        if (-not $open.Contains($ph.Substring(7))) { continue }
+        if ([long]$r.Total -le 0 -or [long]$r.Done -lt 0) { continue }
+        $d += [Math]::Min([long]$r.Done, [long]$r.Total); $t += [long]$r.Total; $n++
+    }
+    if ($n -eq 0) { return $null }
+    @{ Done = $d; Total = $t }
 }
 
 function Wait-RAScaleOutItems {
@@ -540,17 +586,23 @@ function Wait-RAScaleOutItems {
                            queueing, the local worker runs (said), then the wait goes on.
         -TimeoutMinutes 0 = no give-up on elapsed time (as the collection's step). Returns @{ State; Markers; Text }.
         Seams: -Sleep (param($Seconds)), -Now (scriptblock), -Log (param($Level, $Text)).
+        #1180 (progress only -- nothing here changes what is waited for or when the wait ends): -SliceProgress
+        { param([string[]]$OpenReports) } answers the query slices done / in all of the reports still running (@{ Done; Total },
+        Get-RAScaleOutSliceProgress) and is added to the progress line; -OnProgress { param($ReportsDone, $Reports,
+        $SlicesDone, $SlicesTotal) } is called with that line (the step's progress record) -- only when the reports done or the
+        slices done MOVED since its last call, so a run that really stands still still shows as still. Neither ever fails the wait.
     #>
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$Manifest, [scriptblock]$LocalWorker, [bool]$UseKeda = $true,
           [int]$StartGraceMinutes = $script:RAScaleOut.StartGraceMinutes, [int]$TimeoutMinutes = 0, [int]$PollSeconds = $script:RAScaleOut.PollSeconds,
           [int]$ProgressSeconds = $script:RAScaleOut.ProgressSeconds, [int]$MaxLocalRuns = ($script:RAScaleOut.MaxDequeue + 1), [int]$LeaseSeconds = 660,
-          [scriptblock]$Sleep, [scriptblock]$Now, [scriptblock]$Log)
+          [scriptblock]$Sleep, [scriptblock]$Now, [scriptblock]$Log, [scriptblock]$SliceProgress, [scriptblock]$OnProgress)
     if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
     if (-not $Now) { $Now = { [datetime]::UtcNow } }
     if (-not $Log) { $Log = { param($l, $t) Write-Host $t } }
     $engine = [string]$Manifest.Engine; $runId = [string]$Manifest.RunId; $n = [int]$Manifest.Parts
     $t0 = & $Now
     $lastProgress = [datetime]::MinValue
+    $progReports = 0; $progSlices = 0L
     $localRuns = 0; $graceUsed = $false; $nextLocalAt = [datetime]::MinValue
     while ($true) {
         $markers = @(Read-SICollectPartMarkers -Store $Store -Engine $engine -RunId $runId)
@@ -563,8 +615,21 @@ function Wait-RAScaleOutItems {
         $started = Get-RAScaleOutStarted -Store $Store -Manifest $Manifest
         $nowT = & $Now
         if (($nowT - $lastProgress).TotalSeconds -ge $ProgressSeconds) {
-            & $Log 'INFO' (Format-RAScaleOutProgress -Items $n -Done $done -Failed $failed -Started $started.Count)
+            $sd = -1L; $st = -1L
+            if ($SliceProgress) {
+                try {
+                    $sp = & $SliceProgress @(Get-RAScaleOutOpenReports -Manifest $Manifest -Markers $markers)
+                    if ($sp) { $sd = [long]$sp.Done; $st = [long]$sp.Total }
+                } catch { $sd = -1L; $st = -1L }
+            }
+            & $Log 'INFO' (Format-RAScaleOutProgress -Items $n -Done $done -Failed $failed -Started $started.Count -SlicesDone $sd -SlicesTotal $st)
             $lastProgress = $nowT
+            # #1180: the step's progress record moves only when something was done since the last one
+            if ($OnProgress -and (($done + $failed) -gt $progReports -or $sd -gt $progSlices)) {
+                try { & $OnProgress ($done + $failed) $n $sd $st } catch { }
+                # (a report that ends leaves the running ones: their slices count from what is running now)
+                $progReports = $done + $failed; $progSlices = $sd
+            }
         }
         $runLocal = $false
         if ($LocalWorker) {

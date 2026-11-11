@@ -95,7 +95,7 @@
 .PARAMETER MailboxCreate
     With sharedMailbox: create the mailbox when it does not exist ($true, the default; -MailboxCreate $false = it must exist).
 .PARAMETER MailTo
-    Who receives the reports (default: you). A list, or one text with commas.
+    Who receives the reports: only the addresses given here (a list, or one text with commas). Not given: no one yet -- the people are chosen in Get Started (Who gets the reports); the person installing is never added by default.
 .PARAMETER SmtpServer
     With -MailMode smtp: the SMTP server.
 .PARAMETER SmtpPort

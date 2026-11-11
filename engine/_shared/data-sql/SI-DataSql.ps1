@@ -2646,6 +2646,13 @@ function Get-SIDataRetireBatchSql {
 # <row id>): each statement works out the end of its range first, then removes exactly that range -- so a batch never scans
 # the ghost rows of the batches before it, and a removal that is stopped goes on from the collection's first row left.
 $script:SIDataRetireRangeKeys = [ordered]@{ Finding = 'FindingId'; Recommendation = 'RecommendationRowId' }
+# the mark every range statement carries (the collection marked; with @mb, only a mark the data sync made before it) -- the range
+# driver's own text (kept byte for byte in its statement; a test holds the two equal), used by the bounds of several ranges and each
+# of those ranges (@c, @mb declared by the statement)
+$script:SIDataRetireMarkExpr = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run'))))"
+# the time one range (or one wave of ranges at once) aims at: the next range's size follows it (Get-SIDataNextSize); a wake-up's
+# removal ends two of them before the next wake-up (Get-SIDataHousekeepingWindow)
+$script:SIDataRetireAimMs = 5000
 
 function Get-SIDataRetireRangeSql {
     <#
@@ -2757,6 +2764,198 @@ function Invoke-SIDataRetireRangeDelete {
     [pscustomobject]@{ Rows = $total; Done = $done; Refused = $refused; Stopped = [bool]$stopWhy; StopWhy = $stopWhy }
 }
 
+# ------------------------------------------------------------------------------------------------------------------
+#  SEVERAL KEY RANGES AT ONCE (owner 2026-11-10: "the data clean-up can be millions of rows" / "maybe it can run on different
+#  cores ... or can scale. just make sure that it finishes before next runs so we dont get to far behind"). One Azure SQL
+#  database cannot reserve cores per caller, so the removal decides WHEN it runs (the wake-ups with nothing going) and HOW
+#  HARD it pushes: the large tables of a marked Detailed collection go in disjoint key ranges, several at once, each on its
+#  own connection (Invoke-SIDataParallelRanges, the field fill's helper with its watchdog), as many as the deadline asks
+#  (Get-SIDataHousekeepingPacePlan) and never more than the database's cores (Get-SIDataFillWorkers); one fewer each time
+#  the database's load holds the clean-up back (the housekeeping pacing), back up again once it is calm. Each range is the
+#  same guarded statement as the range driver's: marked, the data sync's mark before the run start, never the published
+#  one, under the publisher's lock, below lock escalation -- idempotent, so a range done twice removes nothing more.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataRetireBoundsSql {
+    <#
+        The ends of the next ranges of ONE marked Detailed collection's rows of -Table (Finding | Recommendation): at most
+        @Ranges ranges after @After (0 = the collection's first row), each of at most @Batch rows and never more than the
+        database's cap (below lock escalation, one lock in every index -- the range driver's rule). Rows: Hi (a range's last
+        key, in order), Refused (1 = not marked as asked: no range), Cap, Lo (where the first range starts). No row = nothing
+        left. A read only.
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Finding', 'Recommendation')][string]$Table)
+    $k = $script:SIDataRetireRangeKeys[$Table]
+    $mark = $script:SIDataRetireMarkExpr
+    @"
+SET NOCOUNT ON;
+DECLARE @c int = CONVERT(int, @CollectionId); DECLARE @lo bigint = CONVERT(bigint, @After);
+DECLARE @mb datetime2(0) = TRY_CONVERT(datetime2(0), NULLIF(@MarkedBefore, N''), 126);
+IF OBJECT_ID('sidata.$Table') IS NULL OR NOT $mark
+BEGIN SELECT CAST(NULL AS bigint) AS Hi, CAST(1 AS int) AS Refused, CAST(0 AS int) AS Cap, CAST(0 AS bigint) AS Lo; RETURN; END
+DECLARE @ix int = (SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('sidata.$Table') AND index_id > 0 AND is_hypothetical = 0 AND is_disabled = 0);
+DECLARE @cap int = 4000 / CASE WHEN @ix < 1 THEN 1 ELSE @ix END;
+IF @cap < 1 SET @cap = 1;
+DECLARE @take int = TRY_CONVERT(int, @Batch);
+IF @take IS NULL OR @take < 1 OR @take > @cap SET @take = @cap;
+DECLARE @n int = TRY_CONVERT(int, @Ranges);
+IF @n IS NULL OR @n < 1 SET @n = 1;
+IF @lo <= 0 SELECT @lo = ISNULL(MIN($k) - 1, 0) FROM sidata.$Table WHERE CollectionId = @c;
+SELECT x.k AS Hi, CAST(0 AS int) AS Refused, @cap AS Cap, @lo AS Lo
+FROM (SELECT a.k, ROW_NUMBER() OVER (ORDER BY a.k) AS rn, COUNT(*) OVER () AS cnt
+      FROM (SELECT TOP (@n * @take) $k AS k FROM sidata.$Table WHERE CollectionId = @c AND $k > @lo ORDER BY $k) AS a) AS x
+WHERE x.rn % @take = 0 OR x.rn = x.cnt
+ORDER BY x.k;
+"@
+}
+
+function Get-SIDataRetireSpanSql {
+    <#
+        ONE range (@After, @Upto] of ONE marked Detailed collection's rows of -Table -- the statement each of several ranges at
+        once runs (Invoke-SIDataParallelRanges: @CollectionId, @After, @Upto, @MarkedBefore). Answers ONE number: the rows
+        removed, or -1 = the database refused (not marked as asked, the published run's collection, or the publisher's lock
+        not had). The same guards as the range driver's statement: the mark (and the data sync's mark before @MarkedBefore),
+        the published collection refused inside the DELETE under the publisher's own lock (shared), and never more rows than
+        the cap below lock escalation -- the range is cut to the cap's first rows by the database itself.
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Finding', 'Recommendation')][string]$Table)
+    $k = $script:SIDataRetireRangeKeys[$Table]
+    $mark = $script:SIDataRetireMarkExpr
+    $markQ = $mark.Replace("'", "''")
+    @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @c int = CONVERT(int, @CollectionId); DECLARE @lo bigint = CONVERT(bigint, @After); DECLARE @hi bigint = CONVERT(bigint, @Upto); DECLARE @n bigint = 0;
+DECLARE @mb datetime2(0) = TRY_CONVERT(datetime2(0), NULLIF(@MarkedBefore, N''), 126);
+IF OBJECT_ID('sidata.$Table') IS NULL OR NOT $mark BEGIN SELECT CAST(-1 AS bigint); RETURN; END
+IF @hi <= @lo BEGIN SELECT CAST(0 AS bigint); RETURN; END
+DECLARE @ix int = (SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('sidata.$Table') AND index_id > 0 AND is_hypothetical = 0 AND is_disabled = 0);
+DECLARE @cap int = 4000 / CASE WHEN @ix < 1 THEN 1 ELSE @ix END;
+IF @cap < 1 SET @cap = 1;
+SELECT @hi = MAX(x.k) FROM (SELECT TOP (@cap) $k AS k FROM sidata.$Table WHERE CollectionId = @c AND $k > @lo AND $k <= @hi ORDER BY $k) AS x;
+IF @hi IS NULL BEGIN SELECT CAST(0 AS bigint); RETURN; END
+BEGIN TRANSACTION;
+IF OBJECT_ID('sidata.PublishedRun') IS NOT NULL
+BEGIN
+    DECLARE @lk int;
+    EXEC @lk = sp_getapplock @Resource = N'sidata.PublishedRun', @LockMode = N'Shared', @LockOwner = N'Transaction', @LockTimeout = 10000;
+    IF @lk < 0 BEGIN ROLLBACK TRANSACTION; SELECT CAST(-1 AS bigint); RETURN; END
+    DECLARE @pub int = 0;
+    EXEC sp_executesql N'SELECT @p = COUNT(*) FROM sidata.PublishedRun WHERE Name = N''current'' AND DetailedCollectionId = @c', N'@c int, @p int OUTPUT', @c = @c, @p = @pub OUTPUT;
+    IF @pub > 0 BEGIN ROLLBACK TRANSACTION; SELECT CAST(-1 AS bigint); RETURN; END
+    EXEC sp_executesql N'DELETE FROM sidata.$Table WHERE CollectionId = @c AND $k > @lo AND $k <= @hi
+  AND $markQ
+  AND NOT EXISTS (SELECT 1 FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.DetailedCollectionId = @c);
+SET @n = @@ROWCOUNT;', N'@c int, @lo bigint, @hi bigint, @mb datetime2(0), @n bigint OUTPUT', @c = @c, @lo = @lo, @hi = @hi, @mb = @mb, @n = @n OUTPUT;
+END
+ELSE
+BEGIN
+    DELETE FROM sidata.$Table WHERE CollectionId = @c AND $k > @lo AND $k <= @hi AND $mark;
+    SET @n = @@ROWCOUNT;
+END
+COMMIT TRANSACTION;
+SELECT @n;
+"@
+}
+
+function Invoke-SIDataRetireRangesWide {
+    <#
+        Removes one marked Detailed collection's rows of -Table in WAVES of key ranges (Get-SIDataRetireBoundsSql, then each
+        range Get-SIDataRetireSpanSql): a wave of more than one range runs at once, each on its own connection
+        (Invoke-SIDataParallelRanges -- its watchdog says what a range waits on and cancels a range held up on a lock); a wave
+        of one runs through -Invoke. Until nothing is left, the database refuses, -DeadlineUtc, or -ShouldStop answers why
+        (asked before EVERY wave: a data sync or a data out that starts makes it stop between two waves).
+        -Pace (a hashtable the caller keeps for the whole wake-up): Width (the ranges of the next wave), Target (the ranges the
+        deadline asks for), Max (the database's cores), ConnectionInfo (the seam's; none = one range at a time), Log; this
+        function sets HeldBack ($true once the database's load held the clean-up back) and WidthUsed (the most ranges of one
+        wave). The housekeeping pacing before each wave: the database's load at the housekeeping HIGH mark -> it waits, the next
+        ranges are smaller and the wave one range narrower; a load READ below the housekeeping LOW mark (Calm) -> one range
+        wider again, up to Target (an unknown or middling load keeps the width). Never more
+        ranges than the database's cores, never more rows in one statement than its cap.
+        A failure of several ranges at once is said and the rest of the wake-up goes one range at a time from where the last
+        whole wave ended (a range is idempotent). Returns the range driver's shape: @{ Rows; Done; Refused; Stopped; StopWhy }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('Finding', 'Recommendation')][string]$Table,
+          [Parameter(Mandatory)][string]$CollectionId, [ref]$BatchSize, [long]$TargetMs = 0, [datetime]$DeadlineUtc = [datetime]::MaxValue,
+          $MarkedBeforeUtc = $null, [scriptblock]$ShouldStop, [Parameter(Mandatory)][hashtable]$Pace)
+    if ($TargetMs -le 0) { $TargetMs = [long]$script:SIDataRetireAimMs }
+    $bsql = Get-SIDataRetireBoundsSql -Table $Table
+    $ssql = Get-SIDataRetireSpanSql -Table $Table
+    $mbText = if ($null -ne $MarkedBeforeUtc) { Format-SIDataSqlTime -Time ([datetime]$MarkedBeforeUtc).ToUniversalTime() } else { '' }
+    $size = [long]5000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
+    $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
+    $log = $Pace['Log']
+    foreach ($kn in 'Width', 'Target', 'Max') { if (-not $Pace.ContainsKey($kn) -or [int]$Pace[$kn] -lt 1) { $Pace[$kn] = 1 } }
+    if (-not $Pace.ContainsKey('WidthUsed')) { $Pace['WidthUsed'] = 0 }
+    $after = 0L; $total = 0L; $done = $false; $refused = $false; $stopWhy = ''
+    $g = { param($r, [string]$n) $v = $null
+           if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } }
+           elseif ($r -is [System.Data.DataRow]) { $v = $r[$n] }
+           elseif ($null -ne $r -and $r.PSObject.Properties[$n]) { $v = $r.$n }
+           if ($v -is [System.DBNull]) { $null } else { $v } }
+    while ($true) {
+        $shrink = $false; $st = ''; $calm = -not $paced
+        if ($paced) {
+            $pc = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Housekeeping -DeadlineUtc $DeadlineUtc
+            $st = [string]$pc.State
+            $calm = ($st -eq 'off') -or ($pc.PSObject.Properties['Calm'] -and [bool]$pc.Calm)
+            if ($pc.Shrink) { $shrink = $true; $size = [Math]::Max(1L, [long][Math]::Floor($size / 2)); $Pace['Width'] = [Math]::Max(1, [int]$Pace['Width'] - 1); $Pace['HeldBack'] = $true }
+            if ($pc.PSObject.Properties['Deadline'] -and $pc.Deadline) { break }
+        }
+        if ([datetime]::UtcNow -ge $DeadlineUtc) { break }
+        # the data sync is always first: no new wave once it (or a data out) started -- asked right before the wave
+        if ($ShouldStop) {
+            $w = ''; try { $w = [string](& $ShouldStop) } catch { $w = ('whether a job started could not be read ({0})' -f $_.Exception.Message) }
+            if ($w) { $stopWhy = $w; break }
+        }
+        # back up towards the width the deadline asks for, one range a wave, only while the database is calm: its load READ
+        # and below the housekeeping low mark (support ticket 2026-11-10: an unknown or middling load never widens)
+        if (-not $shrink -and $calm -and $st -ne 'waited' -and [int]$Pace['Width'] -lt [Math]::Min([int]$Pace['Target'], [int]$Pace['Max'])) { $Pace['Width'] = [int]$Pace['Width'] + 1 }
+        $width = [int][Math]::Max(1, [Math]::Min([int]$Pace['Width'], [int]$Pace['Max']))
+        $ci = $Pace['ConnectionInfo']
+        if (-not $ci -or -not (Get-Command -Name Invoke-SIDataParallelRanges -ErrorAction SilentlyContinue)) { $width = 1 }
+        $rows = @(@(& $Invoke $bsql @{ CollectionId = $CollectionId; After = $after; Batch = $size; Ranges = $width; MarkedBefore = $mbText } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+        if (-not $rows.Count) { $done = $true; break }
+        $rf = & $g $rows[0] 'Refused'
+        if ($null -ne $rf -and [int]$rf -eq 1) { $refused = $true; break }
+        $cap = & $g $rows[0] 'Cap'; $from = [long](& $g $rows[0] 'Lo')
+        $wave = New-Object System.Collections.Generic.List[object]
+        foreach ($r in $rows) { $hi = & $g $r 'Hi'; if ($null -ne $hi -and [long]$hi -gt $from) { $wave.Add(@($from, [long]$hi)); $from = [long]$hi } }
+        if (-not $wave.Count) { $done = $true; break }
+        if ($wave.Count -gt [int]$Pace['WidthUsed']) { $Pace['WidthUsed'] = $wave.Count }
+        $sw = [Diagnostics.Stopwatch]::StartNew(); $n = 0L; $ms = 0L; $bad = $false
+        if ($wave.Count -gt 1) {
+            try {
+                # a range held up on a lock is cancelled before the wake-up's end (half of what is left, at least the watch's
+                # own minute), filled again once, then the wave fails and the rest goes one range at a time
+                $leftS = if ($DeadlineUtc -eq [datetime]::MaxValue) { 900.0 } else { ($DeadlineUtc - [datetime]::UtcNow).TotalSeconds }
+                $res = Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $ssql -CollectionId ([long]$CollectionId) -Ranges $wave.ToArray() -Params @{ MarkedBefore = $mbText } -Log $log -StallSeconds ([int][Math]::Max(60, $leftS / 2)) -What 'the clean-up of old data' -Watch 'clean-up watch'
+                foreach ($x in @($res)) { if ($null -eq $x) { continue }; if ([long]$x.N -lt 0) { $bad = $true } else { $n += [long]$x.N }; if ([long]$x.Ms -gt $ms) { $ms = [long]$x.Ms } }
+            } catch {
+                if ($log) { & $log 'WARN' ('housekeeping: several key ranges at once did not work ({0}) -- this wake-up goes on one range at a time' -f $_.Exception.Message) }
+                $Pace['Max'] = 1; $Pace['Width'] = 1; $Pace['Target'] = 1
+                $lastMs = $sw.ElapsedMilliseconds
+                continue
+            }
+        } else {
+            $v = & $Invoke $ssql @{ CollectionId = $CollectionId; After = $wave[0][0]; Upto = $wave[0][1]; MarkedBefore = $mbText } 'scalar'
+            $x = if ($null -eq $v -or $v -is [System.DBNull]) { 0L } else { [long]$v }
+            if ($x -lt 0) { $bad = $true } else { $n = $x }
+            $ms = $sw.ElapsedMilliseconds
+        }
+        $sw.Stop()
+        $total += $n
+        # review M3: a range the database refused is never counted as removed -- the collection is said as refused
+        if ($bad) { $refused = $true; break }
+        $lastMs = [Math]::Max(1L, $ms)
+        $after = $from
+        $size = Get-SIDataNextSize -Current $size -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 1
+        if ($null -ne $cap -and [long]$cap -gt 0 -and $size -gt [long]$cap) { $size = [long]$cap }
+    }
+    if ($BatchSize) { $BatchSize.Value = $size }
+    [pscustomobject]@{ Rows = $total; Done = $done; Refused = $refused; Stopped = [bool]$stopWhy; StopWhy = $stopWhy }
+}
+
 function Remove-SIDataCollectionRows {
     <#
         THE ONE REMOVAL of a MARKED collection's rows (#1038 part 3: every caller that removes collection rows goes through
@@ -2789,7 +2988,13 @@ function Remove-SIDataCollectionRows {
         if ($Grain -eq 'Detailed' -and $script:SIDataRetireRangeKeys.Contains($t) -and $CollectionId) {
             # #892 the large tables in key ranges; a range cut short leaves the collection unfinished
             $rb = if ($State['Range'].ContainsKey($t)) { [long]$State['Range'][$t] } else { [long][Math]::Max(1L, $BatchSize) }
-            $rr = Invoke-SIDataRetireRangeDelete -Invoke $Invoke -Table $t -CollectionId $CollectionId -BatchSize ([ref]$rb) -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore -ShouldStop $ShouldStop
+            # 2026-11-10: a wake-up with nothing going hands its pace (State.Pace): several key ranges at once, as many as its
+            # deadline asks and the database's load allows; without it one range at a time, as before
+            $rr = if ($State.ContainsKey('Pace') -and $State['Pace'] -is [hashtable]) {
+                Invoke-SIDataRetireRangesWide -Invoke $Invoke -Table $t -CollectionId $CollectionId -BatchSize ([ref]$rb) -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore -ShouldStop $ShouldStop -Pace $State['Pace']
+            } else {
+                Invoke-SIDataRetireRangeDelete -Invoke $Invoke -Table $t -CollectionId $CollectionId -BatchSize ([ref]$rb) -DeadlineUtc $deadline -MarkedBeforeUtc $markedBefore -ShouldStop $ShouldStop
+            }
             $State['Range'][$t] = $rb
             $rows[$t] += [long]$rr.Rows
             # review M3: a range the database refused is never counted as removed
@@ -2891,7 +3096,10 @@ function Invoke-SIDataCollectionRetention {
           # #1038 part 3 -ShouldStop: asked before EVERY range and batch of the removal (Remove-SIDataCollectionRows); a
           # non-empty answer (why: a pipeline run, a data sync or a data out started) stops the removal there -- Stopped, and
           # Paused carries the why. The collection stays marked with its rows left; the next wake-up goes on.
-          [scriptblock]$ShouldStop)
+          [scriptblock]$ShouldStop,
+          # 2026-11-10 -Pace (the wake-up with nothing going, Invoke-SIDataStoppedRunCleanup): the large tables go in several key
+          # ranges at once (Invoke-SIDataRetireRangesWide); the hashtable is kept by the caller and tells it how wide it went
+          [hashtable]$Pace)
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $staleText = if ($StaleDays -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddDays(-$StaleDays)) } else { '' }
     $idleText = if ($null -ne $IdleBeforeUtc) { Format-SIDataSqlTime -Time (([datetime]$IdleBeforeUtc).ToUniversalTime()) } elseif ($IdleStaleHours -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddHours(-$IdleStaleHours)) } else { '' }
@@ -2946,6 +3154,7 @@ function Invoke-SIDataCollectionRetention {
         # what the removal carries from one collection to the next: the batch size, each large table's range size (#892,
         # each starts at -BatchSize) and each batched table's lock-escalation bound (Get-SIDataRetireBatchBound)
         $rmState = @{ Batch = [long][Math]::Max(1L, $BatchSize); Range = @{}; Bound = @{} }
+        if ($Pace) { $rmState['Pace'] = $Pace }
         $marked = New-Object System.Collections.Generic.List[object]
         foreach ($p in @($plan | Where-Object { $_.Action -in 'Retire', 'Finish' } | Sort-Object CollectionTime)) {
             # #834 -MarkOnly: a collection marked already (Finish) is left as it is; a new one is only marked
@@ -3210,13 +3419,30 @@ function Get-SIDataHousekeepingValue {
         PURE. The recorded progress: compact JSON under 400 characters -- { state (removing | paused | done | failed),
         collectionsLeft, rowsLeft (null = not known), removedRows (this wake-up), lastRemovedAt (the last wake-up that removed
         rows; kept from the record before), why (at most 160 characters), at }.
+        2026-11-10 the pace, each only when known: ranges (the key ranges the next wake-up removes at once), rate (rows a
+        minute the last full wake-up with nothing going reached, over its whole wake-up interval), need (rows a minute that
+        finish before the next scheduled run), behind (since when the clean-up cannot keep up at the pace the database's load
+        allows -- the heartbeat's si-data-1405), tail (seconds the last wake-up needed after its removal). The why is cut
+        further when the whole value would not fit its 400 characters.
     #>
     param([ValidateSet('removing', 'paused', 'done', 'failed')][string]$State = 'done', $CollectionsLeft = $null, $RowsLeft = $null, [long]$RemovedRows = 0,
-          $LastRemovedAtUtc = $null, [string]$Why = '', [datetime]$AtUtc = [datetime]::UtcNow)
+          $LastRemovedAtUtc = $null, [string]$Why = '', [datetime]$AtUtc = [datetime]::UtcNow,
+          $Ranges = $null, $RatePerMin = $null, $NeedPerMin = $null, $BehindSinceUtc = $null, $TailSeconds = $null)
     $iso = { param($t) if ($null -eq $t) { $null } else { ([datetime]$t).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } }
     $w = if ($Why.Length -gt 160) { $Why.Substring(0, 157) + '...' } else { $Why }
-    ([ordered]@{ state = $State; collectionsLeft = $(if ($null -ne $CollectionsLeft) { [int]$CollectionsLeft } else { $null }); rowsLeft = $(if ($null -ne $RowsLeft) { [long]$RowsLeft } else { $null })
-                 removedRows = $RemovedRows; lastRemovedAt = (& $iso $LastRemovedAtUtc); why = $w; at = (& $iso $AtUtc) } | ConvertTo-Json -Compress)
+    $o = [ordered]@{ state = $State; collectionsLeft = $(if ($null -ne $CollectionsLeft) { [int]$CollectionsLeft } else { $null }); rowsLeft = $(if ($null -ne $RowsLeft) { [long]$RowsLeft } else { $null })
+                     removedRows = $RemovedRows; lastRemovedAt = (& $iso $LastRemovedAtUtc); why = $w; at = (& $iso $AtUtc) }
+    if ($null -ne $Ranges) { $o['ranges'] = [int]$Ranges }
+    if ($null -ne $RatePerMin) { $o['rate'] = [long][Math]::Round([double]$RatePerMin) }
+    if ($null -ne $NeedPerMin) { $o['need'] = [long][Math]::Ceiling([double]$NeedPerMin) }
+    if ($null -ne $BehindSinceUtc) { $o['behind'] = (& $iso $BehindSinceUtc) }
+    if ($null -ne $TailSeconds) { $o['tail'] = [int][Math]::Ceiling([double]$TailSeconds) }
+    $j = $o | ConvertTo-Json -Compress
+    while ($j.Length -ge 400 -and ([string]$o['why']).Length -gt 3) {
+        $cut = [string]$o['why']; $o['why'] = $cut.Substring(0, [Math]::Max(0, $cut.Length - 23)) + '...'
+        $j = $o | ConvertTo-Json -Compress
+    }
+    $j
 }
 
 function Read-SIDataHousekeepingRecord {
@@ -3238,12 +3464,23 @@ function Write-SIDataHousekeepingProgress {
         row ($null = not read now: the record before keeps its counts -- a paused wake-up never reads the data database).
         Says one line through -Log when rows were removed, and on the first wake-up of each hour while rows wait. Never
         throws. Returns the value recorded.
+        2026-11-10 -Pace (a wake-up with nothing going that judged its pace): @{ Ranges; Rate; Need; Behind ($true / $false /
+        $null = not judged); Tail } -- what it does not give is kept from the record before; behind keeps its first time while
+        it stays behind, and goes once nothing is left.
     #>
     param([scriptblock]$SettingsInvoke, [string]$State, $Left = $null, [long]$RemovedRows = 0, [string]$Why = '', [scriptblock]$Log,
-          [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow')
+          [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow', [hashtable]$Pace)
     $inv = [Globalization.CultureInfo]::InvariantCulture
     $prev = Read-SIDataHousekeepingRecord -SettingsInvoke $SettingsInvoke
     $pv = { param($n) if ($prev -and $prev.PSObject.Properties[$n]) { $prev.$n } else { $null } }
+    $asTime = { param($t) if ($null -eq $t) { $null } elseif ($t -is [datetime]) { ([datetime]$t).ToUniversalTime() } else { try { [datetime]::Parse([string]$t, $inv, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) } catch { $null } } }
+    $pk = { param($n) if ($Pace -and $Pace.ContainsKey($n)) { $true } else { $false } }
+    $ranges = if (& $pk 'Ranges') { $Pace['Ranges'] } else { & $pv 'ranges' }
+    $rate = if ((& $pk 'Rate') -and $null -ne $Pace['Rate']) { $Pace['Rate'] } else { & $pv 'rate' }
+    $need = if (& $pk 'Need') { $Pace['Need'] } else { & $pv 'need' }
+    $tail = if ((& $pk 'Tail') -and $null -ne $Pace['Tail']) { $Pace['Tail'] } else { & $pv 'tail' }
+    $behind = & $asTime (& $pv 'behind')
+    if ((& $pk 'Behind') -and $null -ne $Pace['Behind']) { if ([bool]$Pace['Behind']) { if ($null -eq $behind) { $behind = $NowUtc } } else { $behind = $null } }
     $cl = & $pv 'collectionsLeft'; $rl = & $pv 'rowsLeft'
     if ($null -ne $Left) {
         $g = { param($n) $x = if ($Left -is [System.Collections.IDictionary]) { $Left[$n] } elseif ($Left.PSObject.Properties[$n]) { $Left.$n } else { $null }; if ($x -is [System.DBNull]) { $null } else { $x } }
@@ -3257,7 +3494,10 @@ function Write-SIDataHousekeepingProgress {
     if ($State -ne 'failed' -and $null -ne $cl -and [int]$cl -eq 0) { $State = 'done' }
     # rows left after a wake-up that ended without a stop (a refused collection): still being removed
     if ($State -eq 'done' -and $null -ne $cl -and [int]$cl -gt 0) { $State = 'removing' }
-    $v = Get-SIDataHousekeepingValue -State $State -CollectionsLeft $cl -RowsLeft $rl -RemovedRows $RemovedRows -LastRemovedAtUtc $last -Why $Why -AtUtc $NowUtc
+    # nothing left: never behind
+    if ($State -eq 'done') { $behind = $null }
+    $v = Get-SIDataHousekeepingValue -State $State -CollectionsLeft $cl -RowsLeft $rl -RemovedRows $RemovedRows -LastRemovedAtUtc $last -Why $Why -AtUtc $NowUtc `
+            -Ranges $ranges -RatePerMin $rate -NeedPerMin $need -BehindSinceUtc $behind -TailSeconds $tail
     if ($SettingsInvoke) { try { $null = & $SettingsInvoke (Get-SIDataHousekeepingRecordSql) @{ Value = $v; By = $By } 'nonquery' } catch { if ($Log) { & $Log 'INFO' ('housekeeping: its progress could not be recorded ({0})' -f $_.Exception.Message) } } }
     if ($Log -and ($RemovedRows -gt 0 -or ($NowUtc.ToUniversalTime().Minute -lt 5 -and $null -ne $cl -and [int]$cl -gt 0))) {
         $leftText = if ($null -ne $cl) { [string]::Format($inv, '{0} collection(s){1} left', [int]$cl, $(if ($null -ne $rl) { [string]::Format($inv, ', about {0:N0} row(s)', [long]$rl) } else { '' })) } else { 'what is left is not known yet' }
@@ -3328,6 +3568,128 @@ function Exit-SIDataHousekeepingLease {
     try { $null = & $SettingsInvoke (Get-SIDataHousekeepingLeaseSql -Action Release) @{ Holder = $Holder; By = $By } 'nonquery' } catch { }
 }
 
+# ------------------------------------------------------------------------------------------------------------------
+#  THE CLEAN-UP FINISHES BEFORE THE NEXT RUN (owner 2026-11-10: "data sync is prio 1, and data clean-up happens when idle" /
+#  "just make sure that it finishes before next runs so we dont get to far behind"). Three parts, all inside the pipeline
+#  runner's own wake-ups (no job of its own):
+#    * THE BUDGET (Get-SIDataHousekeepingWindow): a wake-up with nothing blocking the clean-up removes up to almost the next
+#      wake-up of the runner's own schedule, so back-to-back wake-ups remove nearly all the time -- and it ends before that
+#      wake-up, which then runs its queue on time;
+#    * THE WIDTH (Get-SIDataHousekeepingPacePlan): the key ranges at once that the deadline asks for, from the pace the last
+#      wake-ups reached, never more than the database's cores, narrower while the database's load holds it back;
+#    * THE DEADLINE (Get-SIDataHousekeepingVerdict): rows left / the minutes to the next scheduled run = the pace needed,
+#      against the pace reached. Short and not yet at its widest: wider next time. Short at its widest (or the load held it
+#      back, or no wake-up is left before the run): it says so and the heartbeat raises si-data-1405 (the support ticket) --
+#      a backlog never grows unseen.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataCronMinutes {
+    <#
+        PURE. The minutes of the hour a five-field cron wakes at when it wakes EVERY hour of every day ('<minutes> * * * *';
+        the minutes as *, */N, a, a-b, a-b/N or a list of them), sorted and distinct. $null for any other cron (an hour, a
+        day, a month or a weekday of its own): not known here.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Cron)
+    $f = @(("$Cron").Trim() -split '\s+' | Where-Object { $_ })
+    if ($f.Count -ne 5) { return $null }
+    foreach ($x in $f[1..4]) { if ($x -ne '*') { return $null } }
+    $set = New-Object 'System.Collections.Generic.SortedSet[int]'
+    foreach ($part in ($f[0] -split ',')) {
+        $step = 1; $range = $part
+        if ($part -match '^(.+)/(\d+)$') { $range = $Matches[1]; $step = [int]$Matches[2] }
+        if ($step -lt 1) { return $null }
+        if ($range -eq '*') { $lo = 0; $hi = 59 }
+        elseif ($range -match '^(\d+)-(\d+)$') { $lo = [int]$Matches[1]; $hi = [int]$Matches[2] }
+        elseif ($range -match '^\d+$') { $lo = [int]$range; $hi = $(if ($part -match '/') { 59 } else { $lo }) }
+        else { return $null }
+        if ($lo -lt 0 -or $hi -gt 59 -or $lo -gt $hi) { return $null }
+        for ($m = $lo; $m -le $hi; $m += $step) { [void]$set.Add($m) }
+    }
+    if ($set.Count -eq 0) { return $null }
+    , [int[]]@($set)
+}
+
+function Get-SIDataHousekeepingWindow {
+    <#
+        PURE. How long ONE wake-up of the pipeline runner removes old data: up to almost its NEXT wake-up, from the runner's
+        own schedule (-Cron: the flow job's cron; one that does not wake every hour: -DefaultCron, the schedule the runner
+        gets at install). The removal ends -ReserveSeconds before that wake-up (the caller: two range aims, plus what the last
+        wake-up needed after its removal) -- a wake-up still running when the next one starts makes that one a clean-up-only
+        pass, and its queue (a scheduled run) would wait a wake-up. Returns @{ IntervalSeconds (the shortest gap between two
+        wake-ups); NextWakeUtc; DeadlineUtc; BudgetSeconds (whole seconds, at least 1: the first range of a wake-up always
+        runs); Source ('schedule' | 'default') }.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Cron, [Parameter(Mandatory)][datetime]$NowUtc, [double]$ReserveSeconds = 10, [string]$DefaultCron = '*/5 * * * *')
+    $src = 'schedule'
+    $mins = Get-SIDataCronMinutes -Cron $Cron
+    if ($null -eq $mins) { $src = 'default'; $mins = Get-SIDataCronMinutes -Cron $DefaultCron }
+    if ($null -eq $mins) { $mins = [int[]]@(0) }
+    $now = $NowUtc.ToUniversalTime()
+    $gap = 60
+    for ($i = 0; $i -lt $mins.Count; $i++) {
+        $nx = if ($i + 1 -lt $mins.Count) { $mins[$i + 1] } else { $mins[0] + 60 }
+        if (($nx - $mins[$i]) -lt $gap) { $gap = $nx - $mins[$i] }
+    }
+    $hour = [datetime]::new($now.Year, $now.Month, $now.Day, $now.Hour, 0, 0, [DateTimeKind]::Utc)
+    $next = $null
+    foreach ($m in $mins) { $t = $hour.AddMinutes($m); if ($t -gt $now) { $next = $t; break } }
+    if ($null -eq $next) { $next = $hour.AddHours(1).AddMinutes($mins[0]) }
+    $deadline = $next.AddSeconds(-[Math]::Max(0.0, $ReserveSeconds))
+    [pscustomobject]@{ IntervalSeconds = [int]($gap * 60); NextWakeUtc = $next; DeadlineUtc = $deadline
+                       BudgetSeconds = [int][Math]::Max(1, [Math]::Floor(($deadline - $now).TotalSeconds)); Source = $src }
+}
+
+function Get-SIDataHousekeepingPacePlan {
+    <#
+        PURE. How many key ranges at once THIS wake-up removes (1..-Max, the database's cores): from the ranges the last
+        wake-up used (-PrevRanges) and the pace it reached with them (-PrevRate, rows a minute), the pace the deadline needs
+        (-NeedPerMin). Needed and measured: the same pace per range, so ceil(ranges x needed / reached) -- wider when it falls
+        short, narrower when it is ahead (less load on a database the web app shares). Needed, not measured yet: the ranges of
+        last time. No deadline known (no scheduled run) or nothing needed: one range -- today's pace.
+    #>
+    param([int]$Max = 1, $PrevRanges = $null, $PrevRate = $null, $NeedPerMin = $null)
+    $mx = [Math]::Max(1, $Max)
+    $w = 1; if ($null -ne $PrevRanges) { try { $w = [int]$PrevRanges } catch { $w = 1 } }
+    $w = [Math]::Min($mx, [Math]::Max(1, $w))
+    if ($null -eq $NeedPerMin -or [double]$NeedPerMin -le 0) { return 1 }
+    $t = $w
+    if ($null -ne $PrevRate -and [double]$PrevRate -gt 0) { $t = [int][Math]::Ceiling($w * [double]$NeedPerMin / [double]$PrevRate) }
+    [int][Math]::Min($mx, [Math]::Max(1, $t))
+}
+
+function Get-SIDataHousekeepingVerdict {
+    <#
+        PURE. After a wake-up with nothing going: will the clean-up finish before the next scheduled run?
+          -Removed        rows this wake-up removed (findings, recommendations, Summary rows)
+          -IntervalSeconds the runner's wake-up interval: the pace reached = -Removed over it (each wake-up covers one)
+          -RowsLeft       the rows left now (Get-SIDataHousekeepingLeftSql); -MinutesToNext: to the next scheduled run
+          -Width / -Max   the most key ranges this wake-up ran at once / the database's cores; -HeldBack: the database's load
+                          held the clean-up back in this wake-up
+          -RanFull        the wake-up removed until its budget ended (not paused, not failed, not done) -- only such a
+                          wake-up measures a pace; -Done: nothing is left; -PrevRate: the pace measured before
+        Returns @{ Rate (this wake-up's, or $null); Need; Short ($true = falls short at the pace reached); Behind ($true = it
+        cannot keep up: short at its widest, held back by the load, or no wake-up left before the run; $false; $null = not
+        judged); Ranges (the next wake-up's ranges) }.
+    #>
+    param([long]$Removed = 0, [double]$IntervalSeconds = 300, $RowsLeft = $null, $MinutesToNext = $null, [int]$Width = 1, [int]$Max = 1,
+          [bool]$HeldBack = $false, [bool]$RanFull = $false, [bool]$Done = $false, $PrevRate = $null)
+    $w = [Math]::Max(1, $Width); $mx = [Math]::Max(1, $Max)
+    $rate = $null; if ($RanFull -and $IntervalSeconds -gt 0) { $rate = [double][Math]::Round($Removed / ($IntervalSeconds / 60.0)) }
+    $o = { param($r, $n, $s, $b, $rg) [pscustomobject]@{ Rate = $r; Need = $n; Short = $s; Behind = $b; Ranges = [int][Math]::Min($mx, [Math]::Max(1, $rg)) } }
+    if ($Done -or ($null -ne $RowsLeft -and [long]$RowsLeft -le 0)) { return (& $o $rate 0 $false $false 1) }
+    if ($null -eq $RowsLeft -or $null -eq $MinutesToNext -or [double]$MinutesToNext -le 0) { return (& $o $rate $null $false $false $w) }
+    $need = [double][Math]::Ceiling([double]$RowsLeft / [double]$MinutesToNext)
+    $r = if ($null -ne $rate) { $rate } elseif ($null -ne $PrevRate) { [double]$PrevRate } else { $null }
+    if (-not $RanFull -or $null -eq $r) { return (& $o $rate $need $null $null $w) }
+    if ($r -lt $need) {
+        $last = [double]$MinutesToNext -le ($IntervalSeconds / 60.0)
+        if ($w -ge $mx -or $HeldBack -or $last) { return (& $o $rate $need $true $true $w) }
+        $wider = if ($r -gt 0) { [int][Math]::Ceiling($w * $need / $r) } else { $mx }
+        return (& $o $rate $need $true $false ([Math]::Max($w + 1, $wider)))
+    }
+    & $o $rate $need $false $false $(if ($r -gt 0) { [int][Math]::Ceiling($w * $need / $r) } else { $w })
+}
+
 function Invoke-SIDataStoppedRunCleanup {
     <#
         THE PIPELINE RUNNER'S CALL (#816). -Invoke: the data database (sql, params, mode 'reader' | 'nonquery' | 'scalar');
@@ -3353,22 +3715,46 @@ function Invoke-SIDataStoppedRunCleanup {
         SI_FLOW_HOUSEKEEPING_ONLY) -- ONE clean-up at a time: the lease (Enter-SIDataHousekeepingLease, -Holder = this
         execution, held at most -TimeBudgetSeconds + 15 min); a wake-up that finds it held does nothing (Status skipped,
         LeaseHeld) and records nothing -- the holder records the progress.
+        2026-11-10 (owner: "just make sure that it finishes before next runs") -WakeCron (the flow job's own schedule; '' =
+        the fixed -TimeBudgetSeconds, as before): THE BUDGET -- a wake-up removes up to almost the next wake-up
+        (Get-SIDataHousekeepingWindow), also one during a run; the lease is held for that interval + 15 min, longer than any
+        budget. A wake-up with NOTHING going also gets THE WIDTH (several key ranges at once, Get-SIDataHousekeepingPacePlan,
+        when the seam hands out connections) and THE DEADLINE (-NextRunUtc { } -> the next scheduled run, or $null when none
+        is known): the pace needed against the pace reached (Get-SIDataHousekeepingVerdict), recorded in the progress
+        (ranges, rate, need, behind) and said; falling short at the widest the load allows = a WARN line and 'behind', which the
+        heartbeat raises as si-data-1405. While a run goes it removes one range at a time, as before, and judges nothing.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$SettingsInvoke, [double]$IdleStaleHours = 24,
           [int]$TimeBudgetSeconds = 120, [scriptblock]$Log, [datetime]$NowUtc = [datetime]::UtcNow, [string]$By = 'caj-si-flow',
           [scriptblock]$RaRunning, [string]$RaJob = 'risk-analysis-detailed',
           [scriptblock]$JobRunning, [string[]]$Jobs = @('asset-datasync', 'data-out'),
-          [string]$Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { '{0}:{1}' -f [Environment]::MachineName, $PID }))
+          [string]$Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { '{0}:{1}' -f [Environment]::MachineName, $PID }),
+          [string]$WakeCron = '', [scriptblock]$NextRunUtc,
+          # the wake-up's own beat (no fresh beat = dead), called before every range and batch -- at most once a minute by the caller
+          [scriptblock]$Beat)
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = ''; LeaseHeld = $false }
     $hkStarted = [datetime]::UtcNow
     $leaseTaken = $false
+    $inv = [Globalization.CultureInfo]::InvariantCulture
     try {
         if (-not $SettingsInvoke) { $out.Why = 'the run records cannot be read here -- nothing is removed'; return [pscustomobject]$out }
+        # 2026-11-10 THE BUDGET: up to almost the next wake-up of the runner's own schedule (the lease outlasts it)
+        $win = $null; $leaseFor = [Math]::Max(0, $TimeBudgetSeconds)
+        if ($WakeCron) { $leaseFor = [int](Get-SIDataHousekeepingWindow -Cron $WakeCron -NowUtc ([datetime]::UtcNow)).IntervalSeconds }
         # #1063 (3.0.30): one clean-up at a time -- the lease first; held by another wake-up = this one does nothing
-        $lease = Enter-SIDataHousekeepingLease -SettingsInvoke $SettingsInvoke -Holder $Holder -LeaseSeconds ([Math]::Max(0, $TimeBudgetSeconds) + 900) -By $By
+        $lease = Enter-SIDataHousekeepingLease -SettingsInvoke $SettingsInvoke -Holder $Holder -LeaseSeconds ($leaseFor + 900) -By $By
         if (-not $lease.Taken) { $out.LeaseHeld = $true; $out.Why = ('{0} -- this wake-up removes nothing' -f $lease.Why); return [pscustomobject]$out }
         $leaseTaken = $true
+        $prevRec = $null
+        if ($WakeCron) {
+            # it ends two range aims before the next wake-up, and the time the last wake-up needed after its removal earlier
+            $prevRec = Read-SIDataHousekeepingRecord -SettingsInvoke $SettingsInvoke
+            $tail = 0.0; if ($prevRec -and $prevRec.PSObject.Properties['tail'] -and $null -ne $prevRec.tail) { try { $tail = [double]$prevRec.tail } catch { $tail = 0.0 } }
+            $win = Get-SIDataHousekeepingWindow -Cron $WakeCron -NowUtc ([datetime]::UtcNow) -ReserveSeconds (2.0 * $script:SIDataRetireAimMs / 1000.0 + $tail)
+            $TimeBudgetSeconds = [int]$win.BudgetSeconds
+            $out['Window'] = $win
+        }
         $busy = Get-SIDataHousekeepingBusy -SettingsInvoke $SettingsInvoke -JobRunning $JobRunning -Jobs $Jobs
         $out['Busy'] = $busy
         if (-not $busy.Known) {
@@ -3413,13 +3799,19 @@ function Invoke-SIDataStoppedRunCleanup {
                 if ($rs -is [datetime]) { $runStart = [datetime]::SpecifyKind([datetime]$rs, [DateTimeKind]::Utc) }
             } catch { $runStart = $null }
             $left = if ($TimeBudgetSeconds -gt 0) { [int][Math]::Floor($TimeBudgetSeconds - ([datetime]::UtcNow - $hkStarted).TotalSeconds) } else { 0 }
+            # 2026-11-10: with the runner's schedule (a budget up to the next wake-up) the first range of a wake-up always runs, as
+            # when nothing is going -- a wake-up that reached the clean-up just before the next one still moves it on (the next
+            # wake-up during a run is a clean-up-only pass anyway, so one range past it holds nothing back)
+            if ($win -and $left -lt 1) { $left = 1 }
             $fin = $null
             # owner 2026-11-10 (the most critical install: its data sync waited 4 h while the in-run removal shared its tables):
             # "data sync is prio 1, and data clean-up happens when idle" -- while a run goes, rows are removed ONLY while no data
             # sync and no data out is running: asked before the first range and before every range and batch; a host that cannot
             # read the jobs removes nothing during a run (the data sync always wins). Marking (above) is unchanged.
-            $hkJobRunning = $JobRunning
+            $hkJobRunning = $JobRunning; $hkBeat = $Beat
             $doStop = {
+                # asked before every range and batch: the wake-up's own beat goes with it (a long budget is never taken as dead)
+                if ($hkBeat) { try { $null = & $hkBeat } catch { } }
                 if (-not $hkJobRunning) { return 'whether a data sync runs cannot be read on this host' }
                 foreach ($jk in @('asset-datasync', 'data-out')) {
                     $x = $null
@@ -3460,9 +3852,42 @@ function Invoke-SIDataStoppedRunCleanup {
         # nothing is going: plan, mark and remove -- asked again before EVERY range and batch whether something started
         # (no GetNewClosure: a closure's own module scope cannot see functions dot-sourced into a script; the names are this
         # function's own, so the ranges' callers never shadow them)
-        $hkSettings = $SettingsInvoke; $hkJobRunning = $JobRunning; $hkJobs = @($Jobs)
-        $stop = { $hkB = Get-SIDataHousekeepingBusy -SettingsInvoke $hkSettings -JobRunning $hkJobRunning -Jobs $hkJobs; if ($hkB.Busy) { [string]$hkB.Why } else { '' } }
-        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds -ShouldStop $stop
+        $hkSettings = $SettingsInvoke; $hkJobRunning = $JobRunning; $hkJobs = @($Jobs); $hkBeat = $Beat
+        $stop = { if ($hkBeat) { try { $null = & $hkBeat } catch { } }; $hkB = Get-SIDataHousekeepingBusy -SettingsInvoke $hkSettings -JobRunning $hkJobRunning -Jobs $hkJobs; if ($hkB.Busy) { [string]$hkB.Why } else { '' } }
+        # 2026-11-10 THE DEADLINE AND THE WIDTH (a wake-up with nothing going): the next scheduled run, the rows left now, the
+        # pace that finishes before it -- and the key ranges at once that pace asks for, never more than the database's cores
+        $pace = $null; $plan = @{ Next = $null; Need = $null }
+        $pg = { param($n) if ($prevRec -and $prevRec.PSObject.Properties[$n]) { $prevRec.$n } else { $null } }
+        if ($win) {
+            if ($NextRunUtc) {
+                try { $nx = & $NextRunUtc; if ($nx -is [datetime] -and ([datetime]$nx).ToUniversalTime() -gt [datetime]::UtcNow) { $plan.Next = ([datetime]$nx).ToUniversalTime() } } catch { $plan.Next = $null }
+            }
+            if ($plan.Next) {
+                try {
+                    $l0 = @(@(& $Invoke (Get-SIDataHousekeepingLeftSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+                    $r0 = $null; if ($l0) { $r0 = if ($l0 -is [System.Collections.IDictionary]) { $l0['Rows'] } else { $l0.Rows } }
+                    if ($null -ne $r0 -and -not ($r0 -is [System.DBNull])) { $plan.Need = [Math]::Ceiling([double]$r0 / [Math]::Max(1.0, ($plan.Next - [datetime]::UtcNow).TotalMinutes)) }
+                } catch { $plan.Need = $null }
+            }
+            $max = 1; $ci = $null
+            if ($null -ne $plan.Need -and $plan.Need -gt 0) {
+                # the database's cores, and the helper that runs several ranges at once on their own connections (the data
+                # sync's field fill: SI-DataViewContext.ps1, in both editions); a seam without connections: one at a time
+                if ($Invoke.PSObject.Properties['SIConnectionInfo'] -and $Invoke.SIConnectionInfo) { $ci = $Invoke.SIConnectionInfo }
+                if ($ci -and -not (Get-Command -Name Invoke-SIDataParallelRanges -ErrorAction SilentlyContinue)) {
+                    try { $vc = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'pro-data', '_shared', 'SI-DataViewContext.ps1'); if (Test-Path -LiteralPath $vc) { . $vc } } catch { }
+                }
+                if ($ci -and (Get-Command -Name Invoke-SIDataParallelRanges -ErrorAction SilentlyContinue) -and (Get-Command -Name Get-SIDataFillWorkers -ErrorAction SilentlyContinue)) {
+                    try { $max = [int](Get-SIDataFillWorkers -Invoke $Invoke) } catch { $max = 1 }
+                } else { $ci = $null }
+            }
+            $target = Get-SIDataHousekeepingPacePlan -Max $max -PrevRanges (& $pg 'ranges') -PrevRate (& $pg 'rate') -NeedPerMin $plan.Need
+            # every wake-up starts at ONE range and widens one a wave only on a calm database (support ticket 2026-11-10:
+            # starting at the planned width drove the database to its limit before the first load reading)
+            $pace = @{ Width = 1; Target = $target; Max = [Math]::Max(1, $max); ConnectionInfo = $ci; HeldBack = $false; WidthUsed = 0; Log = $Log }
+        }
+        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds -ShouldStop $stop -Pace $pace
+        $retEnd = [datetime]::UtcNow
         $out.Retention = $ret
         $out.Status = if ($ret.Status -eq 'failed') { 'failed' } else { 'ok' }
         $removed = @($ret.Removed).Count; $removedRows = if ($ret.Rows) { [long]$ret.Rows['findings'] } else { 0L }
@@ -3472,7 +3897,6 @@ function Invoke-SIDataStoppedRunCleanup {
         $allRows = 0L; if ($ret.Rows) { foreach ($k in @($ret.Rows.Keys)) { $allRows += [long]$ret.Rows[$k] } }
         $hkState = if ($ret.Status -eq 'failed') { 'failed' } elseif ($ret.PSObject.Properties['Paused'] -and $ret.Paused) { 'paused' } elseif ($ret.Stopped) { 'removing' } else { 'done' }
         $hkWhy = if ($hkState -eq 'failed') { [string]$ret.Error } elseif ($hkState -eq 'paused') { [string]$ret.Paused } elseif ($hkState -eq 'removing') { 'this wake-up''s time budget ended -- the next one goes on' } else { '' }
-        $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State $hkState -Left $hkLeft -RemovedRows $allRows -Why $hkWhy -Log $Log -NowUtc $NowUtc -By $By
         # the rows of what is still loading are counted on the first wake-up of each hour, or when something was removed --
         # never every five minutes on a database that may be at its limit
         $withRows = ($NowUtc.ToUniversalTime().Minute -lt 5 -or $removed -gt 0 -or $removedRows -gt 0)
@@ -3485,6 +3909,31 @@ function Invoke-SIDataStoppedRunCleanup {
             try { $null = & $SettingsInvoke (Get-SIDataStoppedRunsRecordSql) @{ Value = $v; By = $By } 'nonquery' } catch { & $Log 'INFO' ('collections : the state of stopped runs could not be recorded ({0})' -f $_.Exception.Message) }
             if ($out.Loading -gt 0) { & $Log 'INFO' ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'collections : {0} Risk Analysis collection(s) still loading ({1:N0} finding rows) -- removed once they are older than {2:0.#} h with no run running, or a newer run is complete', $out.Loading, $out.LoadingRows, $IdleStaleHours)) }
         }
+        # 2026-11-10 THE DEADLINE: the pace reached against the pace that finishes before the next scheduled run
+        $hkPace = $null
+        if ($win) {
+            $leftEnd = $null
+            if ($hkLeft) { $le = if ($hkLeft -is [System.Collections.IDictionary]) { $hkLeft['Rows'] } else { $hkLeft.Rows }; if ($null -ne $le -and -not ($le -is [System.DBNull])) { $leftEnd = [long]$le } }
+            $counted = 0L; if ($ret.Rows) { foreach ($k in 'findings', 'recommendations', 'summaryRows') { if ($ret.Rows.Contains($k)) { $counted += [long]$ret.Rows[$k] } } }
+            $minutes = if ($plan.Next) { ($plan.Next - [datetime]::UtcNow).TotalMinutes } else { $null }
+            $used = if ($pace) { [Math]::Max([int]$pace.WidthUsed, 1) } else { 1 }
+            $vd = Get-SIDataHousekeepingVerdict -Removed $counted -IntervalSeconds $win.IntervalSeconds -RowsLeft $leftEnd -MinutesToNext $minutes -Width $used -Max $(if ($pace) { [int]$pace.Max } else { 1 }) `
+                    -HeldBack ([bool]($pace -and $pace.HeldBack)) -RanFull ($hkState -eq 'removing') -Done ($hkState -eq 'done') -PrevRate (& $pg 'rate')
+            $out['Verdict'] = $vd
+            $wasBehind = [bool](& $pg 'behind')
+            $nextText = if ($plan.Next) { [string]::Format($inv, '{0:yyyy-MM-dd HH:mm} UTC', $plan.Next) } else { '' }
+            if ($vd.Behind -eq $true) {
+                if (-not $wasBehind -or $NowUtc.ToUniversalTime().Minute -lt 5) {
+                    & $Log 'WARN' ([string]::Format($inv, 'housekeeping: the clean-up of old data cannot keep up -- about {0:N0} row(s) are left and the next run starts {1}; at the pace the database''s load allows ({2:N0} row(s) a minute, {3} key range(s) at a time) it would need {4:N0} a minute. Support is told.', $leftEnd, $nextText, $(if ($null -ne $vd.Rate) { $vd.Rate } else { & $pg 'rate' }), $used, $vd.Need))
+                }
+            } elseif ($vd.Short -eq $true) {
+                & $Log 'OK' ([string]::Format($inv, 'housekeeping: at {0:N0} row(s) a minute the old data would not all be removed before the next run ({1}, {2:N0} a minute needed) -- the next wake-up removes {3} key range(s) at a time', $vd.Rate, $nextText, $vd.Need, $vd.Ranges))
+            } elseif ($wasBehind -and $vd.Behind -eq $false) {
+                & $Log 'OK' 'housekeeping: the clean-up of old data keeps up again -- it finishes before the next run at the pace reached'
+            }
+            $hkPace = @{ Ranges = $vd.Ranges; Rate = $vd.Rate; Need = $vd.Need; Behind = $vd.Behind; Tail = ([datetime]::UtcNow - $retEnd).TotalSeconds + 1 }
+        }
+        $out.Housekeeping = Write-SIDataHousekeepingProgress -SettingsInvoke $SettingsInvoke -State $hkState -Left $hkLeft -RemovedRows $allRows -Why $hkWhy -Log $Log -NowUtc $NowUtc -By $By -Pace $hkPace
     } catch {
         $out.Status = 'failed'; $out.Why = $_.Exception.Message
         & $Log 'WARN' ('collections : stopped runs were not removed this time ({0}) -- nothing current is affected; the next wake-up tries again' -f $_.Exception.Message)

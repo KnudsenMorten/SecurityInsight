@@ -89,8 +89,36 @@ public abstract class CollectionPageModel : PageModel
             Search = q["q"],
             Filters = filters,
             Selected = q["sel"].Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToList(),
+            SearchAnywhere = GridRequest.IsAnywhere(q[GridRequest.AnywhereKey]),
         };
     }
+
+    // ---- #1189: the search off an index, and what it says --------------------------------------------------------------
+
+    /// What the grid's search matched when it was served off an index (the fast search), the columns it did not search, and
+    /// the link that searches anywhere in the text; or, on the search anywhere, the link back. Null = nothing to say.
+    public SearchNoteModel? SearchNote { get; private set; }
+
+    /// One sentence about the search and its link.
+    public sealed record SearchNoteModel(string Text, string LinkText, string Href, bool Anywhere);
+
+    /// PURE (given the links). The note of a request on a spec: the fast search's words, or the search anywhere's.
+    public static SearchNoteModel? NoteFor(GridSpec spec, GridState st, string anywhereHref, string fastHref)
+    {
+        if (spec.Indexed is not { } ix) return null;
+        if (st.Anywhere)
+        {
+            var any = st.Search is not null || st.Filters.Any(f => f.Kind == GridFilter.Contains && f.Text is not null && ix.Columns.ContainsKey(f.Key));
+            return any ? new SearchNoteModel("Searched anywhere in the text of every finding of the collection (slower).", "Back to the fast search", fastHref, true) : null;
+        }
+        if (GridSql.SearchWords(spec, st) is not { } w) return null;
+        var text = "Fast search -- " + string.Join("; ", w.Matched) + "."
+            + (w.NotSearched.Count > 0 ? " Not searched: " + string.Join(", ", w.NotSearched) + "." : "");
+        return new SearchNoteModel(text, "Search anywhere in the text (slower)", anywhereHref, false);
+    }
+
+    /// The words of a search anywhere that ran out of time: what to do instead.
+    public const string AnywhereTimeoutText = "Searching anywhere in the text reads every finding of the collection, and it did not finish in time. Use the fast search (a device name, a CVE or a configuration id), or narrow the view with a column filter first.";
 
     /// This page's URL with the current query, some parameters overridden (null removes one). A change of anything but
     /// the page number starts at page 1. Values of a multi-valued parameter (sel, f.*) are kept.
@@ -477,8 +505,11 @@ public abstract class CollectionPageModel : PageModel
             if (Plan is null) return;
             await ApplyLayoutAsync(ct);
             GridRequest req;
-            try { req = ReadGrid(Plan); GridSql.Normalize(Plan.Spec, req); }
+            GridState state;
+            try { req = ReadGrid(Plan); state = GridSql.Normalize(Plan.Spec, req); }
             catch (ArgumentException ex) { Error = "The filter is not valid: " + ViewerError.Text(ex); return; }
+            // #1189: said before the read, so a search anywhere that runs out of time still offers the way back
+            SearchNote = NoteFor(Plan.Spec, state, Link((GridRequest.AnywhereKey, "1")), Link((GridRequest.AnywhereKey, null)));
             var g = await Views.GridAsync(new GridQuery(Plan.Spec, Plan.Parameters, Plan.Scope, req), ct);
             // #589: the extra columns of the shown rows, read for the page's rows only
             Grid = g.Data with { Rows = await FillAsync(DisplayColumns, g.Data.Rows, ct) };
@@ -492,7 +523,16 @@ public abstract class CollectionPageModel : PageModel
             ErrorRef = Reference();
             TimedOut = true;
             Log.LogWarning(ex, "collection view {Page} grid {Grid} timed out after {Seconds}s (reference {Reference})", PagePath, Plan?.Spec.Name, ex.Limit.TotalSeconds, ErrorRef);
-            Error = TimeoutText(ex.Limit, ErrorRef);
+            Error = (SearchNote is { Anywhere: true } ? AnywhereTimeoutText + " " : "") + TimeoutText(ex.Limit, ErrorRef);
+        }
+        // #1189 (a ring-1 customer: "A slow page read: 45.0 s, then stopped" and HTTP 500): a read stopped by anything but the
+        // browser going away is a view that took too long -- said in the page, never the error page
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && !(HttpContext?.RequestAborted.IsCancellationRequested ?? false))
+        {
+            ErrorRef = Reference();
+            TimedOut = true;
+            Log.LogWarning(ex, "collection view {Page} grid {Grid} was stopped (reference {Reference})", PagePath, Plan?.Spec.Name, ErrorRef);
+            Error = (SearchNote is { Anywhere: true } ? AnywhereTimeoutText + " " : "") + StoppedText(ErrorRef);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -514,6 +554,12 @@ public abstract class CollectionPageModel : PageModel
         $"This view took too long and was stopped: the Pro database did not answer within {limit.TotalSeconds:0} seconds. " +
         "Narrow the view (a column filter, a search, or fewer rows per page) and apply it again, or pick another collection. " +
         "If even a narrow view times out, give your administrator this reference" + (reference is null ? "." : ": " + reference + ".");
+
+    /// #1189: a read that was stopped before it answered (not by the time limit the page knows).
+    public static string StoppedText(string? reference) =>
+        "This view took too long and was stopped before the Pro database answered. " +
+        "Narrow the view (a column filter, a search, or fewer rows per page) and apply it again, or pick another collection. " +
+        "If even a narrow view is stopped, give your administrator this reference" + (reference is null ? "." : ": " + reference + ".");
 
     /// The SQL error number of a database error (null for anything else).
     public static int? SqlNumber(Exception ex)

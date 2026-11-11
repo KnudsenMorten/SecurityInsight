@@ -77,6 +77,8 @@ $script:SIMove = @{
     GuidRx       = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     Waits        = @{ Tries = 6; Seconds = 10; ProvisionTries = 60 }
 }
+# the refused Graph permissions, read once from setup\_shared\SI-DbInitJob.ps1 (Get-SIIdentityMoveRefusedGraphRoleNames)
+$script:SIMoveRefusedGraph = $null
 
 # =====================================================================================================================
 #  ROLES -- the standard names come from SI's naming code, never a second list
@@ -461,10 +463,45 @@ function Get-SIIdentityMoveAzureAssignmentPath {
     ('{0}/providers/Microsoft.Authorization/roleAssignments/{1}?api-version={2}' -f "$Scope".Trim().TrimEnd('/'), $Name, $script:SIMove.RoleApi)
 }
 
+function Get-SIIdentityMoveRefusedGraphRoleNames {
+    <# The Graph application permissions SecurityInsight NEVER grants (framework G5) -- the ONE list is
+       setup\_shared\SI-DbInitJob.ps1 Get-SIDbInitRefusedGraphRoleNames. Loaded or not, it is read from that file (only that
+       function's body, nothing else of the file is loaded). A copy without the file: none known (today's behaviour). #>
+    if (Get-Command -Name Get-SIDbInitRefusedGraphRoleNames -CommandType Function -ErrorAction SilentlyContinue) { return @(Get-SIDbInitRefusedGraphRoleNames) }
+    if ($null -eq $script:SIMoveRefusedGraph) {
+        $script:SIMoveRefusedGraph = @()
+        $f = [IO.Path]::Combine($script:SIMoveRoot, 'setup', '_shared', 'SI-DbInitJob.ps1')
+        if (Test-Path -LiteralPath $f) {
+            $tok = $null; $err = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tok, [ref]$err)
+            $fd = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-SIDbInitRefusedGraphRoleNames' }, $true)
+            if ($fd) { $script:SIMoveRefusedGraph = @(& ($fd.Body.GetScriptBlock()) | ForEach-Object { [string]$_ } | Where-Object { $_ }) }
+        }
+    }
+    @($script:SIMoveRefusedGraph)
+}
+
+function Test-SIIdentityMoveAppRoleRefused {
+    <# PURE. Is this Graph app role assignment a REFUSED permission? Only when its value is known (appRoleValue, resolved by
+       the inventory from the resource's appRoles); an assignment whose value could not be resolved is not judged. #>
+    param($Assignment, [string[]]$Refused = @())
+    if (-not $Assignment -or -not $Assignment.PSObject.Properties['appRoleValue']) { return $false }
+    $v = "$($Assignment.appRoleValue)".Trim()
+    [bool]($v -and @($Refused | Where-Object { "$_" -ieq $v }).Count)
+}
+
+function Get-SIIdentityMoveRefusedAppRoles {
+    <# PURE. The old identity's Graph app roles that are REFUSED for SecurityInsight: never copied, and said (#1183). #>
+    param([object[]]$Old = @(), [string[]]$Refused = @(Get-SIIdentityMoveRefusedGraphRoleNames))
+    foreach ($a in @($Old | Where-Object { $_ })) { if (Test-SIIdentityMoveAppRoleRefused -Assignment $a -Refused $Refused) { $a } }
+}
+
 function Get-SIIdentityMoveAppRoleCopyPlan {
-    <# PURE. Graph app role assignments of the old service principal the new one lacks (same resource, same app role). #>
-    param([object[]]$Old = @(), [object[]]$New = @())
+    <# PURE. Graph app role assignments of the old service principal the new one lacks (same resource, same app role) --
+       never a REFUSED permission (#1183: a refused permission is granted by no path, the identity move included). #>
+    param([object[]]$Old = @(), [object[]]$New = @(), [string[]]$Refused = @(Get-SIIdentityMoveRefusedGraphRoleNames))
     foreach ($a in @($Old | Where-Object { $_ })) {
+        if (Test-SIIdentityMoveAppRoleRefused -Assignment $a -Refused $Refused) { continue }
         if (@($New | Where-Object { $_ -and "$($_.resourceId)" -ieq "$($a.resourceId)" -and "$($_.appRoleId)" -ieq "$($a.appRoleId)" }).Count) { continue }
         $a
     }
@@ -968,6 +1005,27 @@ function Read-SIMoveAzureRoles {
     [pscustomobject]@{ Items = @($items | Where-Object { $_.PrincipalId -ieq $PrincipalId }); Unknown = $unknown.ToArray() }
 }
 
+function Add-SIMoveAppRoleValues {
+    <# Each Graph app role assignment gets appRoleValue (e.g. 'User.Read.All') from its resource service principal's appRoles,
+       so a REFUSED permission is known by name (#1183). One read per resource; one that cannot be read leaves its
+       assignments without a value (they are then copied as before). Read only. #>
+    param([Parameter(Mandatory)][hashtable]$Ctx, [object[]]$Assignments = @())
+    $byRes = @{}
+    foreach ($a in @($Assignments | Where-Object { $_ -and "$($_.resourceId)".Trim() })) {
+        $rid = "$($a.resourceId)".Trim().ToLowerInvariant()
+        if (-not $byRes.ContainsKey($rid)) {
+            $map = @{}
+            $sp = Invoke-SIMoveGraph -Uri ("servicePrincipals/{0}?`$select=id,appRoles" -f "$($a.resourceId)".Trim()) -Reason $Ctx.Reason
+            if ($sp -and $sp.Status -eq 200) {
+                foreach ($r in @(Get-SIMoveProp $sp.Body @('appRoles'))) { if ($r -and "$($r.id)" -and "$($r.value)") { $map["$($r.id)".ToLowerInvariant()] = [string]$r.value } }
+            }
+            $byRes[$rid] = $map
+        }
+        $k = "$($a.appRoleId)".ToLowerInvariant()
+        if ($byRes[$rid].ContainsKey($k)) { $a | Add-Member -NotePropertyName appRoleValue -NotePropertyValue $byRes[$rid][$k] -Force }
+    }
+}
+
 function Read-SIMoveRights {
     <# Step 1's read of ONE identity's rights (-Identity @{ Name; ClientId; PrincipalId }), and -Other's SQL rows for the diff.
        Returns @{ Azure; AppRoles; DirRoles; Fic (+ SignInAppObjectId); Sql (per database rows); Kv; Unknown }. #>
@@ -977,6 +1035,7 @@ function Read-SIMoveRights {
     foreach ($u in $az.Unknown) { if ($u -notmatch '^management groups') { $unknown.Add("Azure roles: $u") } }
     $ar = Get-SIMoveGraphList -Uri ("servicePrincipals/{0}/appRoleAssignments" -f $Identity.PrincipalId) -Reason $Ctx.Reason
     if (-not $ar.Ok) { $unknown.Add("Graph app roles (HTTP $($ar.Status))") }
+    else { Add-SIMoveAppRoleValues -Ctx $Ctx -Assignments @($ar.Items) }
     $dr = Get-SIMoveGraphList -Uri ("roleManagement/directory/roleAssignments?`$filter=" + [uri]::EscapeDataString("principalId eq '$($Identity.PrincipalId)'")) -Reason $Ctx.Reason
     if (-not $dr.Ok) { $unknown.Add("Entra directory roles (HTTP $($dr.Status))") }
     $fic = @(); $appObj = ''
@@ -1296,6 +1355,10 @@ function Invoke-SIMoveCopyRights {
         } else { $stop = $true; $lines.Add(('FAILED: {0}: HTTP {1} {2}' -f $line, $st, ($txt -split "`n")[0])) }
     }
     $missingGraph = New-Object System.Collections.Generic.List[string]
+    # #1183: a REFUSED permission the old identity holds is never copied -- and the move says so (the plan leaves it out)
+    foreach ($a in @(Get-SIIdentityMoveRefusedAppRoles -Old @(Get-SIMoveProp $Inventory @('OldRights', 'AppRoles')))) {
+        $lines.Add(('not copied: {0} is refused for SecurityInsight (Graph app role {1} on {2}, held by {3})' -f $a.appRoleValue, $a.appRoleId, $(if ($a.resourceDisplayName) { $a.resourceDisplayName } else { $a.resourceId }), $sel.Old.Name))
+    }
     foreach ($a in $plans.AppRoles) {
         $line = 'Graph app role {0} on {1}' -f $a.appRoleId, $(if ($a.resourceDisplayName) { $a.resourceDisplayName } else { $a.resourceId })
         if (-not $Ctx.Apply) { $lines.Add("plan: $line"); continue }

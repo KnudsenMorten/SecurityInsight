@@ -60,10 +60,10 @@ $script:SIPermissionNoteText = @{
                                                    Empty = 'the exploit detail columns of the vulnerability findings stay empty' }
     'SecurityRecommendation.Read.All'         = @{ For = 'the exposure impact and the active alert of a Defender recommendation'
                                                    Empty = 'the exposure impact and active alert columns of the vulnerability and configuration findings stay empty' }
-    'SecurityEvents.Read.All'                 = @{ For = 'the Microsoft Secure Score of the tenant, sent with the hourly status report'
-                                                   Empty = 'the hourly status report carries no Secure Score' }
-    'Score.Read.All'                          = @{ For = 'the Defender exposure score of the tenant, sent with the hourly status report'
-                                                   Empty = 'the hourly status report carries no exposure score' }
+    'SecurityEvents.Read.All'                 = @{ For = 'the Microsoft Secure Score of the tenant, sent with the Invardia support link'
+                                                   Empty = 'the Invardia support link carries no Secure Score' }
+    'Score.Read.All'                          = @{ For = 'the Defender exposure score of the tenant, sent with the Invardia support link'
+                                                   Empty = 'the Invardia support link carries no exposure score' }
     'DeviceManagementManagedDevices.Read.All' = @{ For = 'Intune devices: serial numbers and MAC addresses for the full asset details'
                                                    Empty = 'the serial number and MAC address columns from Intune stay empty' }
     'UserAuthenticationMethod.Read.All'       = @{ For = 'the sign-in methods of each user'

@@ -88,6 +88,7 @@
     }
 
     <h3>Who gets which mail</h3>
+    <p class="hint" data-mail-recipients-grid>Who gets which report and alert is one list of people -- a row per person, a tick per report -- on <a href="/Admin/Settings/Reports#people">Reports and alerts</a>. Change it there: saving that list sets each report's own recipients exactly as ticked.</p>
     @if (Model.Recipients.Count == 0) { <p class="muted">This install's settings catalog has no recipient settings.</p> }
     else
     {

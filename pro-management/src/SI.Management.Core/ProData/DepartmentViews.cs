@@ -49,7 +49,8 @@ WHERE {CollectionViewSql.ThisCollection} AND {ActiveFindings}
         new("Department", "Department", Filter: GridFilter.Values),
         new("ResponsibilitySource", "Placed by", Filter: GridFilter.Values),
         new("ResponsibilityDetail", "Why", Filter: GridFilter.Contains, Search: true),
-    }, "RiskScoreWeighted", true, "FindingId", ["CollectionId", "DepartmentId", "Unassigned"], Immutable: false));
+    }, "RiskScoreWeighted", true, "FindingId", ["CollectionId", "DepartmentId", "Unassigned"], Immutable: false,
+        Indexed: CollectionViewSql.FindingSearch()));   // #1189: a device / CVE / id search off an index, as the raw rows
 
     /// The responsibility sources as the data sync writes them, in precedence order.
     public static readonly IReadOnlyList<string> Sources = ["recommendation-override", "asset-override", "tag", "rule", "default", "unassigned"];

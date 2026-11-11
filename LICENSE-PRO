@@ -104,6 +104,7 @@ These paths are delivered only to licensed customers through the private Automat
   setup/_shared/SI-MissingJobs.ps1
   setup/Publish-SIRelease.ps1
   setup/Publish-SICommunityRelease.ps1
+  setup/_shared/SI-ReleaseGateProof.ps1
   setup/Release-SI.ps1
   setup/Get-SIFixRequests.ps1
   ops/support-worker

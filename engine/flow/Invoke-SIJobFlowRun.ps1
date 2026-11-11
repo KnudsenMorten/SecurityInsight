@@ -305,7 +305,29 @@ $upkeepCleanup = {
         if (@($installed).Count) { $cleanJobs = @($cleanJobs | Where-Object { @($installed) -contains ('caj-si-' + $_) }) }
         $cleanJob = $null
         if ($seams -and $seams.PSObject.Methods['Running']) { $cleanJob = { param($j) $seams.Running($j) } }
-        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs
+        # 2026-11-10 (owner: "just make sure that it finishes before next runs"): a wake-up removes up to almost the NEXT wake-up
+        # -- the runner's own schedule, read from its job (one GET); not readable / a VM: the schedule a new install gets.
+        # And the next scheduled run, by the runner's own rule (Get-SIJobFlowDue): the deadline the clean-up's pace is held to
+        # (none on an install that runs its jobs on their own schedules).
+        $cleanCron = ''
+        if ($armSeams) {
+            try {
+                $fj = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $(if ($env:CONTAINER_APP_JOB_NAME) { [string]$env:CONTAINER_APP_JOB_NAME } else { 'caj-si-flow' })) $null
+                if ($fj -and $fj.properties -and $fj.properties.configuration -and [string]$fj.properties.configuration.triggerType -eq 'Schedule' -and $fj.properties.configuration.scheduleTriggerConfig) {
+                    $cleanCron = [string]$fj.properties.configuration.scheduleTriggerConfig.cronExpression
+                }
+            } catch { $cleanCron = '' }
+        }
+        if (-not $cleanCron) { $cleanCron = [string]$script:SIJobFlow.TickCron }
+        # (not a cron at all: the window takes the schedule a new install gets -- Get-SIDataHousekeepingWindow -DefaultCron)
+        if (-not $cleanCron) { $cleanCron = 'default' }
+        $cleanFlow = $sqlFlow; $cleanDef = $pipeDefinition
+        $cleanNext = {
+            if (-not $cleanFlow -or -not $cleanDef -or [string]$cleanDef.Mode -eq 'schedules') { return $null }
+            $d = Get-SIJobFlowDue -Definition $cleanDef -Previous $cleanFlow.Load() -NowUtc ([datetime]::UtcNow)
+            if ($d.Action -eq 'Wait' -and $d.NextUtc) { ([datetime]$d.NextUtc).ToUniversalTime() } else { $null }
+        }
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs -WakeCron $cleanCron -NextRunUtc $cleanNext -Beat $Beat
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
 # #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) does its one job -- the clean-up; it starts nothing

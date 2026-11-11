@@ -167,7 +167,7 @@ $script:SICiBuildVersion = 15
 # 2026-11-09 (version 15, one bump for both): a user Entra ID lists as deleted retires at once; the customer's correlation
 # decisions reach the CI build (force-merge an edge of the grouping, never-merge a re-split of only the groups it names, pin-id in
 # the identity ledger) and a split CI is recorded. With no decision every statement and the fingerprint are as before: re-baselined.
-$script:SICiBuildLogicHash = 'b85a1928a3897039c53384c4455238a8c37c0734eaa9eb9b750e3c8feba8254f'
+$script:SICiBuildLogicHash = 'ec784b4a3e29488609f848101e124599d6005aaf66bd905465520b67216fa4c3'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')

@@ -158,6 +158,38 @@
                         <p class="hint">Leave it empty and press Save &amp; next to go on without adding anyone.</p>
                         break;
 
+                    case "recipients":
+                        @* #1172: the ONE list of people (Reports and alerts) -- shown here as it stands, confirmed once *@
+                        var rg = Model.RecipientGrid;
+                        <input type="hidden" name="Fingerprint" value="@Model.RecipientVersion" />
+                        <p data-gs-recipients>Each report and alert goes exactly to the people ticked for it on <a href="/Admin/Settings/Reports#people">Reports and alerts</a> -- nobody else, and never to the person who installed SecurityInsight unless they are on the list.</p>
+                        if (rg is null || rg.People.Count == 0)
+                        {
+                            <p class="hint" data-gs-recipients-empty>No one at your organisation receives a report or alert yet. Add the people who should on Reports and alerts, then confirm the list here.</p>
+                        }
+                        else
+                        {
+                            <table class="gs-tiers" data-sortable data-gs-recipient-list>
+                                <thead><tr><th>Person</th><th>Receives</th></tr></thead>
+                                <tbody>
+                                    @foreach (var person in rg.People)
+                                    {
+                                        var gets = rg.Of(person);
+                                        <tr data-gs-person="@person"><td>@person</td><td class="wrap">@(gets.Count == 0 ? "nothing yet" : string.Join(", ", gets.Select(e => e.Title)))</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                            foreach (var col in rg.Columns.Where(c => (rg.Receivers.TryGetValue(c.Id, out var rl) ? rl.Count : 0) == 0))
+                            {
+                                <p class="hint" data-gs-nobody="@col.Id"><strong>@col.Title</strong>: no one at your organisation receives this yet.</p>
+                            }
+                        }
+                        <div class="gs-inline">
+                            <a class="button secondary" href="/Admin/Settings/Reports#people" data-gs-recipients-edit>Change who gets what</a>
+                            <button type="submit" name="__action" value="confirmrecipients" data-gs-confirm-recipients>Confirm this list</button>
+                        </div>
+                        break;
+
                     case "run":
                         if (r.Facts?.RunStartedUtc is { } runSince)
                         {

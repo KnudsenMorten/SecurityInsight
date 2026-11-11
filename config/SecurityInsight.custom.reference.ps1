@@ -894,17 +894,18 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # and put back if it does not take. On by default; $false leaves the names as they are (the update only says what it would do).
 # $global:SI_Update_RenameDisplayNames = $true
 
-# ---- Status reports to Invardia (telemetry) -----------------------------------
-# One status report a day and one short report per engine run (which engine, ok / warning / failed, how long, the
+# ---- Invardia support link (telemetry) ----------------------------------------
+# Sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll
+# out: the install's health and one short report per engine run (which engine, ok / warning / failed, how long, the
 # stage and the kind of error). Community: anonymous -- a random install id, no tenant, no host name, no error text,
 # counts only as ranges. Pro: identified by the install key, with the error text shortened and secrets removed.
-# On by default; $false sends nothing at all.
+# On by default; $false stops ALL reports to Invardia support (health, run results and what update rollout relies on).
 # $global:SI_Telemetry_Enabled = $true
 # Which controls the daily setup report to Invardia carries (Pro, with an install key): 'all' (default) = the framework's
 # minimum control list and SecurityInsight's own controls (when Invardia does not take that report, it goes again once
 # with only the minimum list); 'minimum' = only the framework's minimum list; 'off' = no setup report.
 # $global:SI_Telemetry_SetupControls = 'all'   # 'all' (default)|'minimum'|'off'
-# Whether the daily status report (Pro, with an install key) carries this install's own links -- the web app's and the
+# Whether the Invardia support link's health report (Pro, with an install key) carries this install's own links -- the web app's and the
 # MCP server's addresses -- so Invardia's mails about this environment can open it. On by default; switch it off to
 # send no links.
 # $global:SI_Telemetry_SendEndpoints = $true
@@ -1618,8 +1619,9 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     example when far more vulnerabilities would close than usual.
 #   Default:          On
 #   If you change it: Off sends no such mail: the event is still recorded in run health, on the Guards page of the Pro
-#                     web app and in the audit trail, and still reported to Invardia when status reports are on. While
-#                     a check keeps tripping, at most one mail a day is sent, saying how many times it happened.
+#                     web app and in the audit trail, and still reported to Invardia while the Invardia support link
+#                     is on. While a check keeps tripping, at most one mail a day is sent, saying how many times it
+#                     happened.
 #   When to change:   Leave it on. Turn it off only if another system already watches these events for you.
 #   Risk:             No check mails anyone any more: a held or stopped step is seen only on the Guards page, in run
 #                     health and in the audit trail. Reversible at once.
@@ -6117,6 +6119,26 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     them.
 #   More info:        https://invardia.com/docs/si/settings/SI_Sinks_Identity/
 #
+# Invardia support link  [SI_Telemetry_Enabled]
+#   What it is for:   Sends SecurityInsight's health and run results to Invardia support, so support can see problems
+#                     and updates can roll out: the install's health (every half hour on Pro, once a day on Community)
+#                     and one short report per engine run -- which engine ran, whether it ended ok, with warnings or
+#                     failed, how long it took, the stage and the kind of error. Community reports are anonymous (a
+#                     random install id; no tenant, host name or error text; counts only as ranges). Pro reports are
+#                     identified by the install key and carry the error text with secrets removed.
+#   Default:          On
+#   If you change it: Off stops ALL reports to Invardia support -- the health reports, the run results and what update
+#                     rollout relies on: no report is built, no file is written and Invardia is never contacted for
+#                     this. Invardia support then cannot see failed or silent runs and warn you about them, and cannot
+#                     see that a new release works at your install before it rolls out further.
+#   When to change:   Turn it off only if your organisation does not allow these reports to leave the environment.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Turn it off only if your organisation does not allow these
+#                     reports to leave the environment.
+#   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_Enabled/
+#
 # Public IP collection outputs  [SI_Sinks_PublicIp]  (engine: publicip)
 #   What it is for:   Chooses where the public IP collection writes its results: Log Analytics (LA), JSON files and/or
 #                     Excel files.
@@ -6143,23 +6165,6 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     undone.
 #   Recommended:      30 days.
 #   More info:        https://invardia.com/docs/si/settings/SI_LogRetentionDays/
-#
-# Status reports to Invardia  [SI_Telemetry_Enabled]
-#   What it is for:   Whether the install sends Invardia one status report a day and one short report per engine run:
-#                     which engine ran, whether it ended ok, with warnings or failed, how long it took, the stage and
-#                     the kind of error. Community reports are anonymous (a random install id; no tenant, host name or
-#                     error text; counts only as ranges). Pro reports are identified by the install key and carry the
-#                     error text with secrets removed.
-#   Default:          On
-#   If you change it: Off sends nothing at all: no report is built, no file is written and Invardia is never contacted
-#                     for this. For Pro, Invardia then cannot see failed or silent runs and warn you about them.
-#   When to change:   Turn it off if your organisation does not allow status reports to leave the environment.
-#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
-#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
-#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
-#   Recommended:      Keep the default. Change it when: Turn it off if your organisation does not allow status reports
-#                     to leave the environment.
-#   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_Enabled/
 #
 # Asset detail level  [SI_PayloadProfile]  (advanced)
 #   What it is for:   Chooses how much detail is kept per asset: everything collected (cmdb) or only the columns the
@@ -6301,13 +6306,13 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #
 # Send this install's links to Invardia  [SI_Telemetry_SendEndpoints]  (advanced)
 #   What it is for:   Pro installs with an install key can send Invardia this install's own links -- the web app's and
-#                     the MCP server's addresses -- with the daily status report, so every mail Invardia sends about
-#                     this environment carries an Open SecurityInsight button. Only the addresses are sent: no names,
-#                     no secrets.
+#                     the MCP server's addresses -- with the Invardia support link's health report, so every mail
+#                     Invardia sends about this environment carries an Open SecurityInsight button. Only the addresses
+#                     are sent: no names, no secrets.
 #   Default:          On -- switch it off to send no links
-#   If you change it: On: the daily status report carries the web app's and the MCP server's addresses (read from the
-#                     install's own hosting). Off: it carries no links. A failed run's report links to the run health
-#                     page either way.
+#   If you change it: On: the Invardia support link's health report carries the web app's and the MCP server's
+#                     addresses (read from the install's own hosting). Off: it carries no links. A failed run's report
+#                     links to the run health page either way.
 #   When to change:   Switch it off only if Invardia should not see this install's web app and MCP addresses.
 #   Risk:             Changes only what Invardia sees: the web app's and the MCP server's addresses; nothing in your
 #                     tenant changes. Reversible at once.
@@ -6326,14 +6331,14 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     controls (SQL database reachable, job layout, run limits, last daily run, data sources, last CI
 #                     build, Log Analytics ingestion, licence edition); when Invardia does not take that report, it is
 #                     sent again once with only the minimum list, and the run log says so. 'minimum' sends only the
-#                     minimum list. 'off' sends no setup report; the daily status report and the run reports are not
-#                     affected. Status reports to Invardia off (SI_Telemetry_Enabled) turns this off too.
+#                     minimum list. 'off' sends no setup report; the Invardia support link's health and run reports
+#                     are not affected. The Invardia support link off (SI_Telemetry_Enabled) turns this off too.
 #   When to change:   Keep 'all'. Choose 'minimum' to send only the shared list, or 'off' if your organisation does
 #                     not allow the setup state to leave the environment.
 #   Risk:             Changes only what Invardia sees about this install's setup; nothing in your tenant changes. When
 #                     Invardia does not take the full list ('all'), the report goes again once with the minimum list;
-#                     the daily status report and the run reports are not affected. 'off' means Invardia cannot see a
-#                     missing setting and offer help.
+#                     the Invardia support link's health and run reports are not affected. 'off' means Invardia cannot
+#                     see a missing setting and offer help.
 #   Recommended:      Keep the default (all).
 #   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_SetupControls/
 #
@@ -7427,6 +7432,17 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Off.
 #   More info:        https://invardia.com/docs/si/settings/AutomationFramework/
 #
+# Invardia support link address  [SI_Telemetry_Endpoint]  (advanced)
+#   What it is for:   The https address the Invardia support link sends its reports to.
+#   Default:          Invardia's report address (https://invardia.com/api/uplink/v1/report)
+#   If you change it: Reports go to this address instead. Only https addresses are used; anything else sends nothing.
+#   When to change:   Practically never; only if Invardia tells you to use another address.
+#   Risk:             A tuning or diagnostic setting: it mostly changes run time, cost or log detail. Leave it at the
+#                     default unless support asks. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Practically never; only if Invardia tells you to use another
+#                     address.
+#   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_Endpoint/
+#
 # Keep stage data in memory  [SI_SingleProcess]  (advanced)
 #   What it is for:   Makes the profiling engines pass data between stages in memory instead of through the staging
 #                     storage account.
@@ -7624,17 +7640,6 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Never in normal use; only for scale testing. Usually set by
 #                     the launcher's asset-simulation option.
 #   More info:        https://invardia.com/docs/si/settings/SI_SimulateCLRowCount/
-#
-# Status report address  [SI_Telemetry_Endpoint]  (advanced)
-#   What it is for:   The https address the status reports are sent to.
-#   Default:          Invardia's report address (https://invardia.com/api/uplink/v1/report)
-#   If you change it: Reports go to this address instead. Only https addresses are used; anything else sends nothing.
-#   When to change:   Practically never; only if Invardia tells you to use another address.
-#   Risk:             A tuning or diagnostic setting: it mostly changes run time, cost or log detail. Leave it at the
-#                     default unless support asks. Reversible at once.
-#   Recommended:      Keep the default. Change it when: Practically never; only if Invardia tells you to use another
-#                     address.
-#   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_Endpoint/
 #
 # Summary report mail on (older name)  [Mail_SecurityInsight_Summary_SendMail]  (advanced)
 #   What it is for:   Older name for switching e-mail of the Summary Risk Analysis report on or off.

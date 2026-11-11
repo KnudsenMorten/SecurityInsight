@@ -560,7 +560,9 @@ if ($global:SendMail -eq $true) {
       ($global:Mail_SecurityInsight_Detailed_To -and @($global:Mail_SecurityInsight_Detailed_To).Count -gt 0) -or
       ($global:Mail_SecurityInsight_Summary_To  -and @($global:Mail_SecurityInsight_Summary_To).Count  -gt 0)
   )
-  if (-not $__hasFlatMailTo -and -not $__hasPerTmplTo) {
+  # #1172: once the install's list of people is confirmed (SIWeb_MailRecipientsConfirmed), "nobody ticked" is a choice --
+  # the report is simply not mailed (said at the mail step), never a stopped run
+  if (-not $__hasFlatMailTo -and -not $__hasPerTmplTo -and [string]::IsNullOrWhiteSpace([string]$global:SIWeb_MailRecipientsConfirmed)) {
     throw "Global:SendMail is true, but no recipients are set. Populate Global:MailTo, or a per-template `$global:RiskAnalysis_(Detailed|Summary)_To / `$global:Mail_SecurityInsight_(Detailed|Summary)_To."
   }
 }
@@ -2073,19 +2075,31 @@ if ([bool]$global:AutomationFramework) {
     $__summaryTo    = if ($global:RiskAnalysis_Summary_To)                                  { @($global:RiskAnalysis_Summary_To) }
                       elseif ($global:Mail_SecurityInsight_Summary_To)                      { @($global:Mail_SecurityInsight_Summary_To) }
                       else                                                                  { @() }
+    # #1172: once the install's list of people is confirmed (engine\_shared\SI-MailRecipients.ps1), each report goes to its
+    # OWN list exactly -- no older name, no default list; an empty list is nobody
+    $__exactTo = $false
+    $__mrLib = [System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-MailRecipients.ps1')
+    if (Test-Path -LiteralPath $__mrLib) {
+        if (-not (Get-Command -Name Resolve-SIReportRecipients -ErrorAction SilentlyContinue)) { . $__mrLib }
+        $__exactTo = [bool](Test-SIMailRecipientsExact)
+    }
+    if ($__exactTo) {
+        $__detailedTo = @(Resolve-SIReportRecipients -Own $global:RiskAnalysis_Detailed_To -Exact $true)
+        $__summaryTo  = @(Resolve-SIReportRecipients -Own $global:RiskAnalysis_Summary_To -Exact $true)
+    }
 
     if ([bool]$global:Detailed) {
         Write-Info "Mail mode selected: Detailed"
         $global:Report_SendMail = if ($null -ne $__detailedSend) { $__detailedSend } else { [bool]$global:SendMail }
-        $global:Report_To       = if ($__detailedTo.Count -gt 0) { $__detailedTo }   else { @($global:MailTo) }
+        $global:Report_To       = if ($__detailedTo.Count -gt 0 -or $__exactTo) { $__detailedTo }   else { @($global:MailTo) }
     } elseif ([bool]$global:Summary) {
         Write-Info "Mail mode selected: Summary"
         $global:Report_SendMail = if ($null -ne $__summarySend)  { $__summarySend } else { [bool]$global:SendMail }
-        $global:Report_To       = if ($__summaryTo.Count -gt 0)  { $__summaryTo }   else { @($global:MailTo) }
+        $global:Report_To       = if ($__summaryTo.Count -gt 0 -or $__exactTo)  { $__summaryTo }   else { @($global:MailTo) }
     } else {
         Write-Info "Mail mode selected: Default (neither Detailed nor Summary set)"
         $global:Report_SendMail = [bool]$global:SendMail
-        $global:Report_To       = @($global:MailTo)
+        $global:Report_To       = if ($__exactTo) { $__detailedTo } else { @($global:MailTo) }
     }
     # #636: the Summary mail settings move to the management mail (this Detailed report's mail) while the Summary step is
     # not on (engine\_shared\SI-SummaryStep.ps1 -- config\job-flow.custom.json, else the shipped default: off)
@@ -2093,7 +2107,7 @@ if ([bool]$global:AutomationFramework) {
     if ([bool]$global:Detailed -and (Test-Path -LiteralPath ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-SummaryStep.ps1')))) {
         $__ssLib = [System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-SummaryStep.ps1'); if (-not (Get-Command -Name Resolve-SIManagementMailRouting -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $__ssLib)) { . $__ssLib }
         $__sumSend = if ($null -ne $__summarySend) { [bool]$__summarySend } else { $false }
-        $__sumTo = if ($__summaryTo.Count -gt 0) { $__summaryTo } else { @($global:MailTo) }
+        $__sumTo = if ($__summaryTo.Count -gt 0 -or $__exactTo) { $__summaryTo } else { @($global:MailTo) }
         $script:RAMgmtMail = @{ DetailedSend = [bool]$global:Report_SendMail; DetailedTo = @($global:Report_To); SummarySend = $__sumSend; SummaryTo = @($__sumTo) }
         $script:RAMgmtMailEarly = Get-SISummaryStepState
         $__mm = Resolve-SIManagementMailRouting @script:RAMgmtMail -SummaryStep $script:RAMgmtMailEarly
@@ -2101,7 +2115,13 @@ if ([bool]$global:AutomationFramework) {
     }
 
     if ($global:Report_SendMail -and (-not $global:Report_To -or @($global:Report_To).Count -eq 0)) {
-        throw "SendMail was enabled, but no recipients were provided (MailTo empty and no matching per-template _To)."
+        # #1172: with the confirmed list of people, nobody ticked for this report is a choice -- not mailed, the run goes on
+        if ($__exactTo) {
+            Write-Info "Mail: no one at your organisation is ticked for this report on Reports and alerts -- it is not mailed."
+            $global:Report_SendMail = $false
+        } else {
+            throw "SendMail was enabled, but no recipients were provided (MailTo empty and no matching per-template _To)."
+        }
     }
 
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))
@@ -4222,7 +4242,12 @@ function Invoke-RAScaleOutProducerPass {
     $script:RAScaleQueued = [int]$queued
     $useKeda = -not [string]::IsNullOrWhiteSpace([string]$global:SI_RA_WorkerJob)
     Write-Info ('[scale-out] {0} report(s) handed to queue workers ({1}{2}); this job waits for them and then finishes the run' -f $queued, $queue, $(if ($useKeda) { ', worker job ' + [string]$global:SI_RA_WorkerJob } else { ', run by a worker in this job' }))
-    $w = Wait-RAScaleOutItems -Store $store -Manifest $m -UseKeda $useKeda -LocalWorker { Invoke-RAScaleOutLocalWorker } -Log { param($l, $t) if ($l -eq 'WARN') { Write-Warn2 $t } else { Write-Info $t } }
+    # #1180: the wait shows it moves -- the query slices of the reports still running (the workers' progress records) are in
+    # its line, and the step's progress record moves with them (progress only: nothing about the wait changes)
+    $__soSince = [datetime]::UtcNow.AddMinutes(-5)
+    $w = Wait-RAScaleOutItems -Store $store -Manifest $m -UseKeda $useKeda -LocalWorker { Invoke-RAScaleOutLocalWorker } -Log { param($l, $t) if ($l -eq 'WARN') { Write-Warn2 $t } else { Write-Info $t } } `
+            -SliceProgress { param($open) Get-RAScaleOutSliceProgress -Rows (Get-RAWorkerSliceRows -Stream $script:RAStream -SinceUtc $__soSince) -OpenReports $open } `
+            -OnProgress { param($rd, $rn, $sd, $st) Write-RAStepProgressRow -Stream $script:RAStream -Phase $(if ($st -gt 0) { 'reports {0} of {1} done; the running reports: query slices {2} of {3} done' -f $rd, $rn, $sd, $st } else { 'reports {0} of {1} done' -f $rd, $rn }) -Done $rd -Total $rn }
     $handovers = Read-RAScaleOutHandovers -Store $store -Manifest $m
     $state = Get-RAScaleOutEngineState
     $merged = Merge-RAScaleOutHandovers -State $state -Manifest $m -Handovers $handovers
@@ -8107,6 +8132,8 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         $__aiPager = if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source View } else { New-RARowPager -Rows $topRows }
         $__aiRows = 0L
         $__phAiSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
+        # #1180: this pass reads every row (1-4 h over 1-2 M rows): rows read of all, said and recorded every few minutes
+        $__aiTick = if ($script:RAStreamOn) { New-RAProgressTicker -Stream $script:RAStream -What 'the AI summary and key figures read the rows' -Unit 'rows' -Total ([long]$script:RAViewCount) -Log { param($l, $t) Write-Info $t } } else { $null }
         while ($null -ne ($__aiPage = $__aiPager.Next())) {
         foreach ($r in $__aiPage) {
             $i++
@@ -8184,6 +8211,7 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
             }
         }
         $__aiPage = $null
+        if ($null -ne $__aiTick) { $null = Step-SIStepProgressTicker -Ticker $__aiTick -Done $__aiRows }
         }
         # the pager returned its last page: every View row is in the key figures' state -- only now may they use it
         $script:RAKpiFromAiPass = Get-RAKpiAiPassState -State $__aiKpi -PagerDone ([bool]$__aiPager.State.Done) -Rows $__aiRows
@@ -8725,7 +8753,7 @@ try {
     $__phKpiSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
     $__kpiPass = Invoke-RAKpiPass -FromAiPass $script:RAKpiFromAiPass -NewPager {
         if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source View } else { New-RARowPager -Rows @($global:RA_ReportRows | Where-Object { $null -ne $_ }) }
-    }
+    } -Progress $(if ($script:RAStreamOn) { New-RAProgressTicker -Stream $script:RAStream -What 'the key figures read the rows' -Unit 'rows' -Total ([long]$script:RAViewCount) -Log { param($l, $t) Write-Info $t } } else { $null })   # #1180
     $script:RAKpiFromAiPass = $null
     $__patch = $__kpiPass.State.Patch
     $__prot  = $__kpiPass.State.Prot

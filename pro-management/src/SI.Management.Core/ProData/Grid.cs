@@ -44,10 +44,28 @@ public sealed record GridColumn(string Key, string Label, GridType Type = GridTy
 /// may be cached long; otherwise (close-loop, connector, exemption state) it is cached briefly.
 /// </summary>
 public sealed record GridSpec(string Name, string Ctes, string Source, IReadOnlyList<GridColumn> Columns, string DefaultSort, bool DefaultDesc,
-    string KeyColumn, IReadOnlyList<string> SourceParameters, bool Immutable, GridLate? Late = null, GridKeyset? Keyset = null, string? KeySortSql = null)
+    string KeyColumn, IReadOnlyList<string> SourceParameters, bool Immutable, GridLate? Late = null, GridKeyset? Keyset = null, string? KeySortSql = null,
+    GridIndexedSearch? Indexed = null)
 {
     public GridColumn? Column(string? key) => Columns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
 }
+
+/// <summary>
+/// #1189 (a ring-1 customer, 2026-11-11: a device search on the Detailed findings view ran 40-45 s and was stopped): the
+/// INDEX-SERVED search of a grid over one collection's finding rows. The free-text search and a "contains" column filter were
+/// a LIKE '%text%' over every searchable column of every finding of the collection -- no index can serve that. For the columns
+/// named here the search reads the matching findings' keys off an index instead:
+///   <see cref="Columns"/>: column key -> a statement selecting the matching findings' keys as K. It may use {any} (the
+///   parameter holding '%text%', for a lookup in a SMALL table -- the CIs) and {start} ('text%', a sargable starts-with on an
+///   index whose first column is the collection).
+///   <see cref="Narrow"/>: (source, key-set name) -> the source restricted to the findings of that key set (a seek on the
+///   clustered (CollectionId, FindingId)); returns the source unchanged when it cannot (the plain search then runs).
+///   <see cref="Words"/>: column key -> how that column is matched, in the page's words ("whose asset name contains").
+/// The searchable columns NOT named here are not searched by the fast search: the page says so and offers "search anywhere in
+/// the text" (<see cref="GridState.Anywhere"/>), which is the plain LIKE over every column, under the page's time limit.
+/// </summary>
+public sealed record GridIndexedSearch(IReadOnlyDictionary<string, string> Columns, Func<string, string, string> Narrow,
+    IReadOnlyDictionary<string, string> Words);
 
 /// <summary>
 /// #812 (a large customer, 1,117,524 findings per collection): the INDEX-ORDERED page of a grid over one collection's finding
@@ -84,6 +102,14 @@ public sealed record GridRequest
     /// column key -> the raw filter text (Values / Tokens: values separated by '|'; Range: "lo..hi")
     public IReadOnlyDictionary<string, string> Filters { get; init; } = new Dictionary<string, string>();
     public IReadOnlyList<string> Selected { get; init; } = Array.Empty<string>();
+    /// #1189: the search and the "contains" filters read every finding's text (slower) instead of the index-served search.
+    public bool SearchAnywhere { get; init; }
+
+    /// #1189: the address parameter that asks for <see cref="SearchAnywhere"/> ("qa=1").
+    public const string AnywhereKey = "qa";
+
+    /// Whether an address value of <see cref="AnywhereKey"/> asks for the search anywhere.
+    public static bool IsAnywhere(string? v) => v is not null && (v.Trim() == "1" || v.Trim().Equals("true", StringComparison.OrdinalIgnoreCase));
 }
 
 /// A normalised filter of one column.
@@ -93,7 +119,8 @@ public sealed record GridFilterValue(string Key, GridFilter Kind, IReadOnlyList<
     DateTime? From = null, DateTime? Before = null);
 
 /// The validated request: only known columns, whitelisted sort, bounded paging.
-public sealed record GridState(string Sort, bool Desc, int Page, int Size, string? Search, IReadOnlyList<GridFilterValue> Filters, IReadOnlyList<string> Selected)
+public sealed record GridState(string Sort, bool Desc, int Page, int Size, string? Search, IReadOnlyList<GridFilterValue> Filters, IReadOnlyList<string> Selected,
+    bool Anywhere = false)
 {
     public int Skip => (Page - 1) * Size;
 
@@ -107,6 +134,7 @@ public sealed record GridState(string Sort, bool Desc, int Page, int Size, strin
               .Append("..").Append(f.High?.ToString("R", CultureInfo.InvariantCulture)).Append('~').Append(f.Text)
               .Append('~').Append(f.From?.ToString("o", CultureInfo.InvariantCulture)).Append("..").Append(f.Before?.ToString("o", CultureInfo.InvariantCulture));
         if (Selected.Count > 0) sb.Append("|sel=").Append(string.Join("\u001f", Selected.OrderBy(s => s, StringComparer.Ordinal)));
+        if (Anywhere) sb.Append("|qa");
         return sb.ToString();
     }
 }
@@ -201,7 +229,7 @@ public static partial class GridSql
         }
         var sel = r.Selected.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => ProDataFilters.Text(s)!).Distinct(StringComparer.Ordinal).ToList();
         if (sel.Count > MaxSelected) throw new ArgumentException($"at most {MaxSelected} rows can be selected");
-        return new GridState(sortCol, desc, page, size, ProDataFilters.Text(r.Search), filters, sel);
+        return new GridState(sortCol, desc, page, size, ProDataFilters.Text(r.Search), filters, sel, r.SearchAnywhere);
     }
 
     /// "7" = at least 7; "..5" = at most 5; "4..6.9" = between. Invariant numbers only.
@@ -324,7 +352,9 @@ OPTION (RECOMPILE);
     public static SqlQuery Page(GridSpec s, GridState st, IReadOnlyDictionary<string, object?> sourceParams, bool export = false, int max = ProDataFilters.MaxExport)
     {
         if (UsesKeyset(s, st, sourceParams)) return KeysetPage(s, st, sourceParams, export, max);
-        if (LatePage(s, st, sourceParams, export, max) is { } late) return late;
+        var ix = IndexedSearch(s, st);
+        if (ix is not null) s = ix.Spec;
+        else if (LatePage(s, st, sourceParams, export, max) is { } late) return late;
         var cols = string.Join(", ", s.Columns.Select(c => Col(c.Key)));
         var text = $"""
 {With(s)}
@@ -337,9 +367,106 @@ OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY
 OPTION (RECOMPILE);
 """;
         var p = Params(s, st, sourceParams);
+        ix?.Apply(p);
         p["Skip"] = export ? 0 : st.Skip;
         p["Take"] = export ? Math.Clamp(max, 1, ProDataFilters.MaxExport) : st.Size;
         return new SqlQuery(text, p);
+    }
+
+    /// <summary>
+    /// #1189: a grid statement's index-served search -- the spec with the key sets of its search and its "contains" filters
+    /// (CTEs ixq / ixf1..n) and its source narrowed to them, and what to set in the parameters: the plain LIKE parameters of
+    /// what the key sets serve are NULL (their predicate is off), the key sets' own patterns are added.
+    /// </summary>
+    public sealed record IndexedPlan(GridSpec Spec, IReadOnlyList<string> Served, IReadOnlyDictionary<string, object?> Patterns)
+    {
+        public void Apply(Dictionary<string, object?> p)
+        {
+            foreach (var n in Served) p[n] = null;
+            foreach (var (k, v) in Patterns) p[k] = v;
+        }
+    }
+
+    /// The "text%" pattern of a starts-with search (LIKE's own wildcards matched literally).
+    public static string StartsWithPattern(string text) => Escape(text) + "%";
+
+    /// <summary>
+    /// #1189 PURE. The index-served form of a request's search and "contains" filters (<see cref="GridSpec.Indexed"/>), or
+    /// null: the spec has none, the request asked for the search anywhere, nothing it searches is served, or the source cannot
+    /// be narrowed (then the plain search runs, never a search that drops its condition). The search (q) is served when the
+    /// spec serves ANY of its searchable columns: the served columns' key sets are joined (UNION) and the rest of the
+    /// searchable columns are not searched -- the page says so (<see cref="SearchWords"/>).
+    /// </summary>
+    public static IndexedPlan? IndexedSearch(GridSpec s, GridState st)
+    {
+        if (s.Indexed is not { } ix || st.Anywhere) return null;
+        var ctes = new List<string>();
+        var served = new List<string>();
+        var patterns = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var source = s.Source;
+        string Fill(string sql, string any, string start) => sql.Replace("{any}", "@" + any, StringComparison.Ordinal).Replace("{start}", "@" + start, StringComparison.Ordinal);
+        bool Narrow(string name)
+        {
+            var n = ix.Narrow(source, name);
+            if (string.Equals(n, source, StringComparison.Ordinal)) return false;
+            source = n;
+            return true;
+        }
+        // a key set's patterns: only those its statement names (a statement passes no value it never uses)
+        void Patterns(string sql, string any, string start, string text)
+        {
+            if (sql.Contains("@" + any, StringComparison.Ordinal)) patterns[any] = ProDataFilters.Like(text);
+            if (sql.Contains("@" + start, StringComparison.Ordinal)) patterns[start] = StartsWithPattern(text);
+        }
+        var searched = s.Columns.Where(c => c.Search && ix.Columns.ContainsKey(c.Key)).ToList();
+        if (st.Search is { } q && searched.Count > 0)
+        {
+            var sql = string.Join("\n    UNION\n", searched.Select(c => Fill(ix.Columns[c.Key], "IxQAny", "IxQStart")));
+            ctes.Add("ixq AS (\n" + sql + "\n)");
+            if (!Narrow("ixq")) return null;
+            served.Add("Q");
+            Patterns(sql, "IxQAny", "IxQStart", q);
+        }
+        var i = 0;
+        foreach (var f in st.Filters.Where(f => f.Kind == GridFilter.Contains && f.Text is not null && ix.Columns.ContainsKey(f.Key)))
+        {
+            i++;
+            var name = "ixf" + i.ToString(CultureInfo.InvariantCulture);
+            var any = "IxF" + i.ToString(CultureInfo.InvariantCulture) + "Any";
+            var start = "IxF" + i.ToString(CultureInfo.InvariantCulture) + "Start";
+            var sql = Fill(ix.Columns[f.Key], any, start);
+            ctes.Add(name + " AS (\n" + sql + "\n)");
+            if (!Narrow(name)) return null;
+            served.Add(P(f.Key));
+            Patterns(sql, any, start, f.Text!);
+        }
+        if (ctes.Count == 0) return null;
+        var all = (s.Ctes.Trim().Length == 0 ? "" : s.Ctes.Trim() + ",\n") + string.Join(",\n", ctes);
+        return new IndexedPlan(s with { Ctes = all, Source = source, Indexed = null, Late = null }, served, patterns);
+    }
+
+    /// <summary>
+    /// #1189 PURE. What the fast search of this request matched, in the page's words (null = the request searches nothing the
+    /// spec serves, or it asked for the search anywhere): "the search 'pc2080': whose asset name contains it, whose CVE starts
+    /// with it ..." and which searchable columns it did NOT search -- so a page never shows a narrowed answer as the whole one.
+    /// </summary>
+    public static (IReadOnlyList<string> Matched, IReadOnlyList<string> NotSearched)? SearchWords(GridSpec s, GridState st)
+    {
+        if (s.Indexed is not { } ix || st.Anywhere) return null;
+        var matched = new List<string>();
+        var notSearched = new List<string>();
+        var searched = s.Columns.Where(c => c.Search && ix.Columns.ContainsKey(c.Key)).ToList();
+        if (st.Search is { } q && searched.Count > 0)
+        {
+            matched.Add($"the search “{q}”: findings " + string.Join(", or ", searched.Where(c => !c.Hidden || ix.Words.ContainsKey(c.Key)).Select(c => ix.Words.TryGetValue(c.Key, out var w) ? w : c.Label + " contains it").Distinct()));
+            notSearched.AddRange(s.Columns.Where(c => c.Search && !ix.Columns.ContainsKey(c.Key) && !c.Hidden).Select(c => c.Label));
+        }
+        foreach (var f in st.Filters.Where(f => f.Kind == GridFilter.Contains && f.Text is not null && ix.Columns.ContainsKey(f.Key)))
+        {
+            var label = s.Column(f.Key)?.Label ?? f.Key;
+            matched.Add($"the filter {label} “{f.Text}”: findings " + (ix.Words.TryGetValue(f.Key, out var w) ? w : label + " contains it"));
+        }
+        return matched.Count == 0 ? null : (matched, notSearched);
     }
 
     /// <summary>
@@ -398,6 +525,9 @@ OPTION (RECOMPILE);
         if (s.Keyset is { Counts: { } stored } ks && others.Filters.Count == 0 && st.Search is null && st.Selected.Count == 0 && ks.Applies(sourceParams)
             && stored(col.Key) is { } countsSql)
             return new SqlQuery(countsSql, s.SourceParameters.Where(n => n == "CollectionId").ToDictionary(n => n, n => sourceParams[n]));
+        // #1189: the search and the "contains" filters the spec serves off an index, as the page itself reads them
+        var ix = IndexedSearch(s, others);
+        if (ix is not null) s = ix.Spec;
         // a grid with a LATE projection counts over its narrow source: the costly late columns are read only when the counted
         // column, another active filter or the search needs them (the one-row-per-CVE grid: the close-loop is left out)
         if (s.Late is { } late && s.Ctes.Trim().Length == 0 && s.Columns.Any(c => c.LateSql is not null))
@@ -428,7 +558,9 @@ GROUP BY v.V
 ORDER BY COUNT_BIG(*) DESC, v.V
 OPTION (RECOMPILE);
 """;
-        return new SqlQuery(text, Params(s, others, sourceParams));
+        var p = Params(s, others, sourceParams);
+        ix?.Apply(p);
+        return new SqlQuery(text, p);
     }
 
     /// The most values one count read returns.

@@ -66,6 +66,10 @@ function Invoke-SIDataSummaryGroups {
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
         $done = 0; $groups = [long]0
+        # #1180: collections done of all, said and recorded as the step's progress (at most every minute; a collection is
+        # ONE statement, so this moves once per collection)
+        $sgTick = $null
+        if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $sgTick = New-SIStepProgressTicker -What 'groupings   : the grouped Summary rows' -Unit 'collections' -Total ([long]$pending.Count) -Invoke $Invoke -Log $Log -EverySeconds 60 }
         foreach ($p in $pending) {
             if ($done -gt 0 -and $clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { break }
             if ($paced) { $null = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log }
@@ -76,6 +80,7 @@ function Invoke-SIDataSummaryGroups {
             $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
             if ("$n" -match '^\d+$') { $groups += [long]"$n" }
             $done++
+            if ($sgTick -and $done -lt $pending.Count) { $null = Step-SIStepProgressTicker -Ticker $sgTick -Done $done }
         }
         $left = $pending.Count - $done
         & $Log 'OK' ("groupings   : {0} collection(s) got their grouped Summary rows ({1} group(s)) -- the grouped views read them" -f $done, $groups)

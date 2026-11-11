@@ -178,7 +178,7 @@ Describe 'WIRING and editions' {
     It 'container setup prints the guidance after it saves the hosting; no setup path installs the updater except the upgrade' {
         $b = Get-Content -Raw (Join-Path $script:SIRoot 'Bootstrap-ContainerAppJob.ps1')
         $b.IndexOf('Get-SIContainerUpdateGuidance') | Should -BeGreaterThan $b.IndexOf('Save-SIContainerHostingConfig -ConfigPath $siConfig')
-        $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter *.ps1 | Where-Object { $_.FullName -notmatch '\\tests\\' -and $_.Name -ne 'Install-SIUpdaterJob.ps1' } |
+        $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter *.ps1 | Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -ne 'Install-SIUpdaterJob.ps1' } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match "Install-SIUpdaterJob\.ps1'\)" } | ForEach-Object { $_.Name })
         $callers | Should -Be @('Upgrade-SIToPro.ps1')
     }

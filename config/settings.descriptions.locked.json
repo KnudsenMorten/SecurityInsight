@@ -3734,11 +3734,11 @@
       "group": "Risk Analysis reports"
     },
     "SI_Telemetry_Enabled": {
-      "label": "Status reports to Invardia",
-      "purpose": "Whether the install sends Invardia one status report a day and one short report per engine run: which engine ran, whether it ended ok, with warnings or failed, how long it took, the stage and the kind of error. Community reports are anonymous (a random install id; no tenant, host name or error text; counts only as ranges). Pro reports are identified by the install key and carry the error text with secrets removed.",
+      "label": "Invardia support link",
+      "purpose": "Sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll out: the install's health (every half hour on Pro, once a day on Community) and one short report per engine run -- which engine ran, whether it ended ok, with warnings or failed, how long it took, the stage and the kind of error. Community reports are anonymous (a random install id; no tenant, host name or error text; counts only as ranges). Pro reports are identified by the install key and carry the error text with secrets removed.",
       "defaultText": "On",
-      "effect": "Off sends nothing at all: no report is built, no file is written and Invardia is never contacted for this. For Pro, Invardia then cannot see failed or silent runs and warn you about them.",
-      "whenToChange": "Turn it off if your organisation does not allow status reports to leave the environment.",
+      "effect": "Off stops ALL reports to Invardia support -- the health reports, the run results and what update rollout relies on: no report is built, no file is written and Invardia is never contacted for this. Invardia support then cannot see failed or silent runs and warn you about them, and cannot see that a new release works at your install before it rolls out further.",
+      "whenToChange": "Turn it off only if your organisation does not allow these reports to leave the environment.",
       "advanced": false,
       "group": "Data & retention"
     },
@@ -3746,7 +3746,7 @@
       "label": "Setup report to Invardia",
       "purpose": "Pro installs with an install key send Invardia one setup report a day: a list of critical settings (updater, update ring, install key, licence, mail, permissions, last run, backup) with ok / missing / wrong / unknown, so Invardia can see what is not set up and help you. No secrets, no names of people and no error text are sent.",
       "defaultText": "all: every control, SecurityInsight's own too (sent again with only the minimum list when Invardia does not take it)",
-      "effect": "'all' (the default) sends the minimum list every product shares and SecurityInsight's own controls (SQL database reachable, job layout, run limits, last daily run, data sources, last CI build, Log Analytics ingestion, licence edition); when Invardia does not take that report, it is sent again once with only the minimum list, and the run log says so. 'minimum' sends only the minimum list. 'off' sends no setup report; the daily status report and the run reports are not affected. Status reports to Invardia off (SI_Telemetry_Enabled) turns this off too.",
+      "effect": "'all' (the default) sends the minimum list every product shares and SecurityInsight's own controls (SQL database reachable, job layout, run limits, last daily run, data sources, last CI build, Log Analytics ingestion, licence edition); when Invardia does not take that report, it is sent again once with only the minimum list, and the run log says so. 'minimum' sends only the minimum list. 'off' sends no setup report; the Invardia support link's health and run reports are not affected. The Invardia support link off (SI_Telemetry_Enabled) turns this off too.",
       "whenToChange": "Keep 'all'. Choose 'minimum' to send only the shared list, or 'off' if your organisation does not allow the setup state to leave the environment.",
       "advanced": true,
       "group": "Data & retention",
@@ -3756,9 +3756,9 @@
     },
     "SI_Telemetry_SendEndpoints": {
       "label": "Send this install's links to Invardia",
-      "purpose": "Pro installs with an install key can send Invardia this install's own links -- the web app's and the MCP server's addresses -- with the daily status report, so every mail Invardia sends about this environment carries an Open SecurityInsight button. Only the addresses are sent: no names, no secrets.",
+      "purpose": "Pro installs with an install key can send Invardia this install's own links -- the web app's and the MCP server's addresses -- with the Invardia support link's health report, so every mail Invardia sends about this environment carries an Open SecurityInsight button. Only the addresses are sent: no names, no secrets.",
       "defaultText": "On -- switch it off to send no links",
-      "effect": "On: the daily status report carries the web app's and the MCP server's addresses (read from the install's own hosting). Off: it carries no links. A failed run's report links to the run health page either way.",
+      "effect": "On: the Invardia support link's health report carries the web app's and the MCP server's addresses (read from the install's own hosting). Off: it carries no links. A failed run's report links to the run health page either way.",
       "whenToChange": "Switch it off only if Invardia should not see this install's web app and MCP addresses.",
       "advanced": true,
       "group": "Data & retention"
@@ -3766,7 +3766,7 @@
       "label": "Mail when a safety check stops a step",
       "purpose": "Mails a person when a safety check holds, refuses or stops a step to protect your data -- for example when far more vulnerabilities would close than usual.",
       "defaultText": "On",
-      "effect": "Off sends no such mail: the event is still recorded in run health, on the Guards page of the Pro web app and in the audit trail, and still reported to Invardia when status reports are on. While a check keeps tripping, at most one mail a day is sent, saying how many times it happened.",
+      "effect": "Off sends no such mail: the event is still recorded in run health, on the Guards page of the Pro web app and in the audit trail, and still reported to Invardia while the Invardia support link is on. While a check keeps tripping, at most one mail a day is sent, saying how many times it happened.",
       "whenToChange": "Leave it on. Turn it off only if another system already watches these events for you.",
       "advanced": false,
       "group": "Mail & notifications"
@@ -4860,8 +4860,8 @@
       "needs": "SI_Guard_JobRunThrottledStuck_Enabled"
     },
     "SI_Telemetry_Endpoint": {
-      "label": "Status report address",
-      "purpose": "The https address the status reports are sent to.",
+      "label": "Invardia support link address",
+      "purpose": "The https address the Invardia support link sends its reports to.",
       "defaultText": "Invardia's report address (https://invardia.com/api/uplink/v1/report)",
       "effect": "Reports go to this address instead. Only https addresses are used; anything else sends nothing.",
       "whenToChange": "Practically never; only if Invardia tells you to use another address.",

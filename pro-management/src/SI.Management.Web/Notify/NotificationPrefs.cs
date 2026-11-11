@@ -109,15 +109,19 @@ public static class NotifySettings
     public const string Prefs = "SIWeb_MailNotifications";
     public const string Reminder = "SIWeb_GetStartedReminder";
     public const string ReminderHour = "SIWeb_GetStartedReminderHourUtc";
+    /// #1172: the Waiting for you reminder's own list (a column of the list of people on Reports and alerts).
+    public const string ReminderTo = "SIWeb_GetStartedReminder_To";
+    /// #1172: who confirmed the list of people, and when ("&lt;time UTC&gt;|&lt;who&gt;"). Set = every report's own list is exact.
+    public const string Confirmed = "SIWeb_MailRecipientsConfirmed";
 
     private static JsonElement J(string json) { using var d = JsonDocument.Parse(json); return d.RootElement.Clone(); }
 
     private static CatalogSetting S(string name, string type, string label, string description, string def, string defaultText, string effect, string when,
-        double? min = null, double? max = null, string? unit = null, string card = "Notifications") => new()
+        double? min = null, double? max = null, string? unit = null, string card = "Notifications", string? itemFormat = null) => new()
     {
         Name = name, Label = label, Group = SI.Management.Web.Links.WebSettings.SettingsArea, Type = type, Engines = new[] { "management-web" }, Edition = "pro",
         Default = J(def), Description = description, DefaultText = defaultText, Effect = effect, WhenToChange = when, Min = min, Max = max, Unit = unit,
-        WebOnly = true, Card = card, Advanced = name == Prefs,
+        WebOnly = true, Card = card, Advanced = name is Prefs or Confirmed or ReminderTo, ItemFormat = itemFormat,
     };
 
     public static readonly IReadOnlyList<CatalogSetting> Catalog =
@@ -136,5 +140,15 @@ public static class NotifySettings
             "The hour of the day (UTC, 0 to 23) the daily Waiting for you reminder goes out.",
             "7", "07:00 UTC", "The reminder goes out at the first check after this hour, once a day.",
             "When 07:00 UTC is outside your IT team's working day.", 0, 23, "hour (UTC)", card: "Get Started reminder"),
+        S(ReminderTo, "list", "Waiting for you reminder recipients",
+            "Who receives the daily Waiting for you reminder. Set with the list of people on Reports and alerts (one row per person, one tick per report and alert).",
+            "null", "Not set: until the list of people is confirmed, the safety-check alert recipients, else the address given for the licence request",
+            "These addresses get the reminder. Once the list of people is confirmed, nobody else does -- an empty list means no one.",
+            "Change it on Reports and alerts, with the rest of the list of people.", card: "Get Started reminder", itemFormat: "email"),
+        S(Confirmed, "text", "List of people confirmed",
+            "Who confirmed the list of people on Reports and alerts, and when. Saving the list there records it; the Get Started step Who gets the reports is done once it is set.",
+            "\"\"", "Not set: the list of people has not been confirmed yet, and each report still falls back to the default recipients",
+            "Set: each report and alert goes exactly to the people ticked for it -- nobody ticked means nobody, never a default list.",
+            "Never by hand: saving the list of people on Reports and alerts sets it."),
     ];
 }

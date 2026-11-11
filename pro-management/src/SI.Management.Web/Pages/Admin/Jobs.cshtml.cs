@@ -163,6 +163,17 @@ SELECT N'Saved' AS Outcome;
         StepExecutions = found;
     }
 
+    /// SUPPORT-LINK-1: the Invardia support link's delivery state (the job always ends well, so its executions alone are
+    /// always green). Best effort: nothing recorded / not readable = the row shows as before.
+    public SupportLinkView? SupportLink { get; private set; }
+
+    private async Task LoadSupportLinkAsync(CancellationToken ct)
+    {
+        if (!List.Any(j => SupportLinkDelivery.IsSupportLink(j.Name))) return;
+        try { if (await SupportLinkDelivery.ReadAsync(_sql, ct) is { } s) SupportLink = SupportLinkDelivery.View(s); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "the support link's delivery state was not read"); }
+    }
+
     public async Task OnGetAsync(CancellationToken ct)
     {
         if (!Configured) return;
@@ -171,6 +182,7 @@ SELECT N'Saved' AS Outcome;
             List = await _jobs.ListAsync(ct);
             await LoadFlowAsync(ct);
             await LoadStepExecutionsAsync(ct);
+            await LoadSupportLinkAsync(ct);
             if (Job is not null && List.Any(j => j.Name == Job))
             {
                 Executions = await _jobs.ExecutionsAsync(Job, 15, ct);

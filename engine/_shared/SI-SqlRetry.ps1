@@ -160,7 +160,9 @@ function Open-SISqlConnectionRetry {
         Opens a database connection with an Entra token, and tries again -- a bounded number of times (Microsoft's errors),
         with a NEW token each time -- when the database answers
           * "Login failed" / 18456 / 40615: its administrator or firewall rule was changed a moment ago (Test-SISqlNotYetAnswer);
-          * a transient Azure SQL fault: a failover, a serverless resume, busy, a client timeout (Test-SISqlTransientError).
+          * a transient Azure SQL fault: a failover, a serverless resume, busy, a client timeout (Test-SISqlTransientError);
+          * #1181 a connection that failed at the network level: a name look-up that failed for a moment ("No such host is
+            known"), "network-related or instance-specific", a reset or refused connection (Test-SISqlConnectTransient's rules).
         Any other failure is thrown at once. Only the OPEN is retried -- nothing has been sent yet.
           -Token    { param([bool]$Fresh) } -> the access token for https://database.windows.net/ ($Fresh = ask for a new one)
           -Waits    seconds between tries (default 6 x 20 s)
@@ -207,6 +209,22 @@ function Open-SISqlConnectionRetry {
                     $ex = $ex.InnerException
                 }
                 if (-not $transient) { $transient = [bool]($msgText -match 'is not currently available|Please retry the connection later|too busy|try again') }
+                # #1181 (a large install 2026-11-11: "... (provider: TCP Provider, error: 0 - No such host is known.)" -- a name
+                # look-up that failed for a moment -- ended the prepared view columns): a connection that failed at the NETWORK
+                # level is opened again too -- the same rules as Test-SISqlConnectTransient, written out (this travels as a value).
+                # Nothing was sent. A refused sign-in is the branch above, never this one.
+                if (-not $transient) {
+                    $ex = $_.Exception
+                    while ($ex) {
+                        if ($ex -is [System.Data.SqlClient.SqlException]) {
+                            $netNums = @([int]$ex.Number); foreach ($er in @($ex.Errors)) { $netNums += [int]$er.Number }
+                            foreach ($n in $netNums) { if (@(40, 53, 10060, 10061, 10065, 11001, 1225, 121, 233, 64, 10053, 10054) -contains $n) { $transient = $true } }
+                            if ($transient) { break }
+                        }
+                        $ex = $ex.InnerException
+                    }
+                }
+                if (-not $transient) { $transient = [bool]($msgText -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed') }
             }
             if ((-not $notYet -and -not $transient) -or $try -ge @($Waits).Count) { throw }
             $w = [int]@($Waits)[$try]; $try++

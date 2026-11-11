@@ -693,12 +693,17 @@ function Invoke-SIDataKeyFiguresStepped {
         if ($rg) { $lo = $rg.Lo; $hi = $rg.Hi; if ($lo -is [System.DBNull]) { $lo = $null }; if ($hi -is [System.DBNull]) { $hi = $null } }
         if ($null -ne $lo -and $null -ne $hi) {
             $from = [long]$lo - 1; $top = [long]$hi; $span = [Math]::Max(1L, $FirstSpan); $said = [Diagnostics.Stopwatch]::StartNew()
+            # #1180: the step's progress record (the collection's findings read of all, by their ids) moves with the read,
+            # every few minutes -- the stall check sees a long read moving; the line below stays the log's word
+            $kfTick = $null
+            if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $kfTick = New-SIStepProgressTicker -What ('key figures of collection {0}' -f $cid) -Unit 'findings read' -Total ($top - [long]$lo + 1) -Invoke $Invoke }
             while ($from -lt $top) {
                 $to = [long][Math]::Min([double]$top, [double]$from + $span)
                 $sw.Restart()
                 $null = & $Run (& $batchOf $plan.Steps['findings'] $from $to) 'nonquery'
                 $sec = [Math]::Max(0.05, $sw.Elapsed.TotalSeconds)
                 $from = $to
+                if ($kfTick) { $null = Step-SIStepProgressTicker -Ticker $kfTick -Done ($from - [long]$lo + 1) }
                 # the next range from the measured pace (at most twice / half the last one, so one slow range never swings it)
                 $span = [long][Math]::Max(1, [Math]::Round($span * [Math]::Min(2.0, [Math]::Max(0.5, $TargetSeconds / $sec))))
                 if ($said.Elapsed.TotalSeconds -ge 60 -or $from -ge $top) {

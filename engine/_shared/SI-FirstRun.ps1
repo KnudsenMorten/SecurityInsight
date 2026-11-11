@@ -225,10 +225,10 @@ function Get-SITelemetryNoticeLines {
     $off = if ($Hosting -eq 'container') { 'set SI_Telemetry_Enabled = $false in config\SecurityInsight.custom.ps1 and run setup again, or set SI_TELEMETRY_ENABLED=false on the jobs' }
            else { 'set $global:SI_Telemetry_Enabled = $false in config\SecurityInsight.custom.ps1' }
     @(
-        'SecurityInsight sends short status reports to Invardia, the maker of SecurityInsight: one a day (version, edition, how it is hosted, licence state) and one per engine run (whether it succeeded, how long it took, the kind of error, and counts).',
+        'SecurityInsight''s Invardia support link sends its health and run results to Invardia support, so support can see problems and updates can roll out. Invardia is the maker of SecurityInsight. It sends one a day (version, edition, how it is hosted, licence state) and one per engine run (whether it succeeded, how long it took, the kind of error, and counts).',
         ' - A Community installation reports anonymously, with a random installation id: no tenant, no host name, no error text, and counts only as ranges.',
         ' - A Pro installation reports with its installation key; error messages are shortened and secrets are removed before they are sent.',
-        (' - To turn the reports off, {0}. This notice is shown once.' -f $off)
+        (' - To turn the Invardia support link off (it stops every report to Invardia support), {0}. This notice is shown once.' -f $off)
     )
 }
 

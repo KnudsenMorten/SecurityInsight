@@ -162,11 +162,12 @@ Describe 'the guided install''s e-mail page' {
         $r3.Values['mailboxCreate'] | Should -BeTrue
         $r3.Values.Contains('smtpServer') | Should -BeFalse
     }
-    It 'the shared mailbox defaults to SecurityInsight at the installer''s domain; recipients default to the installer' {
+    It 'the shared mailbox defaults to SecurityInsight at the installer''s domain; recipients are ONLY the addresses given -- never the installer' {
         . (Join-Path $script:Root 'setup\_shared\SI-GuidedInstall.ps1')
         $ctx = [pscustomobject]@{ Values = @{}; Facts = @{ userPrincipalName = 'admin@contoso.example' } }
         Get-SIInstallMailbox -Ctx $ctx | Should -Be 'SecurityInsight@contoso.example'
-        @(Get-SIInstallMailRecipients -Ctx $ctx) | Should -Be @('admin@contoso.example')
+        # owner 2026-11-10: the installer's own address ended up on a customer's report lists -- no answer = no one yet
+        @(Get-SIInstallMailRecipients -Ctx $ctx).Count | Should -Be 0
         $ctx.Values['mailFrom'] = 'alerts@contoso.example'; $ctx.Values['mailTo'] = @('soc@contoso.example')
         Get-SIInstallMailbox -Ctx $ctx | Should -Be 'alerts@contoso.example'
         @(Get-SIInstallMailRecipients -Ctx $ctx) | Should -Be @('soc@contoso.example')

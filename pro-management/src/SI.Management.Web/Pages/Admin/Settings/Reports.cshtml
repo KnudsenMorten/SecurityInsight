@@ -3,15 +3,92 @@
 @using SI.Management.Web.Notify
 @{
     ViewData["Title"] = "Reports and alerts";
+    var g = Model.Grid;
+    var exemption = Model.Lines.FirstOrDefault(l => !RecipientGrid.IsColumn(l.Entry));
+    var row = 0;
 }
 <h1>Reports and alerts</h1>
-<p class="lede">Every report and alert SecurityInsight mails, on one page: when it goes out, to whom, when it was last sent and goes next. Change the recipients or the schedule with the line's Configure link; each recipient's own choices (audience, on / off) are on <a href="/Admin/Settings/Notifications">Notifications</a>.</p>
+<p class="lede">Every report and alert SecurityInsight mails, on one page. <strong>Who gets which mail is one list of people:</strong> a row per person, a tick per report and alert -- ticked means they receive it, and nobody else does. Each person's own choices (where the button in their mails leads) are on <a href="/Admin/Settings/Notifications">Notifications</a>; the schedule of a report is changed with its Configure link below.</p>
 @if (Model.Error is not null) { <div class="notice error" role="alert" data-reports-error>@Model.Error</div> }
+@if (Model.Confirmed is { } c)
+{
+    <div class="notice info" role="status" data-recipients-confirmed>The list of people was confirmed@(string.IsNullOrWhiteSpace(c.By) ? "" : " by " + c.By)@(c.AtUtc > DateTime.MinValue ? " on " + Fmt.Time(c.AtUtc) : "").</div>
+}
+else
+{
+    <div class="notice warn" role="status" data-recipients-unconfirmed>Nobody at your organisation has confirmed this list yet. Check who receives each report and alert below and save it -- that confirms it, and closes the Get Started step <a href="/Admin/GetStarted?step=recipients">Who gets the reports</a>.</div>
+}
 <div class="tiles" data-report-tiles>
     <div class="tile"><div class="label">Reports and alerts</div><div class="value" data-count="entries">@Fmt.Int(Model.Lines.Count)</div></div>
     <div class="tile"><div class="label">Recipients</div><div class="value" data-count="recipients">@Fmt.Int(Model.Recipients)</div></div>
     <div class="tile"><div class="label">Without a recipient</div><div class="value" data-count="empty">@(Fmt.Int(Model.Lines.Count(l => l.Recipients.Count == 0 && l.Entry.RecipientsText is null)))</div></div>
 </div>
+
+<section class="card" id="people" aria-labelledby="people-h" data-recipient-grid="@g.People.Count">
+    <h2 id="people-h">Who gets which mail</h2>
+    @if (g.People.Count == 0)
+    {
+        <p class="hint" data-grid-empty>No one at your organisation receives a report or alert yet. Add the people who should, below.</p>
+    }
+    else
+    {
+        <form method="post" asp-page-handler="Save" data-grid-form>
+            <input type="hidden" name="Fingerprint" value="@Model.Version" />
+            <div class="table-wrap">
+                <table class="findings grid" data-sortable data-list="mail-people">
+                    <thead>
+                        <tr>
+                            <th scope="col">Person</th>
+                            @foreach (var col in g.Columns) { <th scope="col" class="wrap" data-col="@col.Id">@col.Title</th> }
+                            @if (Model.CanEdit) { <th scope="col"><span class="sr-only">Remove</span></th> }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in g.People)
+                        {
+                            row++;
+                            <tr id="@ReportsModel.Anchor(p)" data-person="@p" data-receives="@g.Of(p).Count" class="@(string.Equals(p, Model.Show, StringComparison.OrdinalIgnoreCase) ? "highlight" : null)">
+                                <th scope="row" class="wrap"><input type="hidden" name="Person" value="@p" />@p @if (g.Of(p).Count == 0) { <span class="badge warn" data-receives-nothing> receives nothing yet</span> }</th>
+                                @{ var colNo = 0; }
+                                @foreach (var col in g.Columns)
+                                {
+                                    colNo++;
+                                    <td><label class="sr-only" for="t-@row-@colNo">@p receives @col.Title</label><input id="t-@row-@colNo" type="checkbox" name="Tick" value="@(col.Id + "|" + p)" checked="@g.Ticked(col.Id, p)" disabled="@(!Model.CanEdit)" data-tick="@col.Id" /></td>
+                                }
+                                @if (Model.CanEdit) { <td><button type="submit" class="secondary" formaction="?handler=Remove" name="Address" value="@p" data-remove="@p">Remove</button></td> }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (Model.CanEdit) { <button type="submit" data-grid-save>@(Model.Confirmed is null ? "Save and confirm the list" : "Save")</button> }
+        </form>
+    }
+    @if (exemption is not null)
+    {
+        <p class="hint" data-entry-readonly="@exemption.Entry.Id"><strong>@exemption.Entry.Title</strong> go to @exemption.Entry.RecipientsText -- set on <a href="@exemption.Entry.ConfigurePath">Domain roles</a>, not here.</p>
+    }
+    @if (Model.CanEdit)
+    {
+        <h3 id="add-h">Add a person</h3>
+        <form method="post" asp-page-handler="Add" class="stack-form" data-grid-add>
+            <input type="hidden" name="Fingerprint" value="@Model.Version" />
+            <label for="add-address">Mail address</label>
+            <input id="add-address" name="Address" type="email" required maxlength="254" autocomplete="off" value="@Model.Suggested" />
+            @if (Model.Suggested is not null) { <p class="hint" data-suggested>Suggested: your own address. Nothing is set until you add it -- change it to the people at your organisation who should receive the reports.</p> }
+            <fieldset>
+                <legend>Receives</legend>
+                @foreach (var col in g.Columns)
+                {
+                    <label><input type="checkbox" name="AddTick" value="@col.Id" /> @col.Title</label>
+                }
+            </fieldset>
+            <button type="submit">Add</button>
+        </form>
+        <p class="hint">A person who is not a user of SecurityInsight yet is added as Reader, so the links in their mails open. Removing a person takes them off every report and alert; their role is never taken away here.</p>
+    }
+</section>
+
 <section class="card" aria-labelledby="all-h">
     <h2 id="all-h">All reports and alerts</h2>
     <div class="table-wrap">
@@ -20,11 +97,12 @@
             <tbody>
                 @foreach (var l in Model.Lines)
                 {
-                    <tr data-entry="@l.Entry.Id" data-recipients="@l.Recipients.Count">
+                    var receivers = g.Receivers.TryGetValue(l.Entry.Id, out var rl) ? rl : l.Recipients;
+                    <tr data-entry="@l.Entry.Id" data-recipients="@receivers.Count">
                         <td class="wrap"><strong>@l.Entry.Title</strong>@if (!l.Enabled) { <span class="badge info">paused</span> }</td>
                         <td>@(l.Entry.IsAlert ? "alert" : "report")</td>
                         <td class="wrap">@l.Entry.Cadence</td>
-                        <td class="wrap">@if (l.Entry.RecipientsText is { } t) { @t } else if (l.Recipients.Count == 0) { <span class="badge warn">nobody</span> } else { @string.Join(", ", l.Recipients) }</td>
+                        <td class="wrap">@if (l.Entry.RecipientsText is { } t) { @t } else if (receivers.Count == 0) { <span class="badge warn" data-nobody>@Model.NobodyText(l.Entry)</span> } else { @string.Join(", ", receivers) }</td>
                         <td>@Fmt.Time(l.LastSentUtc, empty: "–")</td>
                         <td>@Fmt.Time(l.NextUtc, empty: "–")</td>
                         <td class="wrap">link only</td>

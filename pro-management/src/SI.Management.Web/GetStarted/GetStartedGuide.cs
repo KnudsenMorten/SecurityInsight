@@ -190,6 +190,10 @@ public static class GetStartedGuide
         new("access", "Who can manage SecurityInsight", true,
             "Give at least two people -- or one group -- the Admin or SuperAdmin role, so more people than the one who installed SecurityInsight can manage it.",
             "/Admin/Access", "Open Access (roles + scopes)", Access, Need: "superadmin", Form: "access"),
+        // #1172 (owner 2026-11-10): who gets which mail is ONE list of people, confirmed once by someone at the install
+        new("recipients", "Who gets the reports", true,
+            "Choose the people at your organisation who receive each report and alert, and confirm the list. Until it is confirmed, a report may go to an old default list -- or to no one at all.",
+            "/Admin/Settings/Reports#people", "Open Reports and alerts", Recipients, Form: "recipients"),
         new("ring", "Update ring", true,
             "The update ring decides when this install receives new versions (ring 0 first, ring 3 last). It is set at installation and can be changed in Settings.",
             "/Admin/Settings?q=SI_UpdateRing", "Open Settings", Ring, Fields: ["SI_UpdateRing"]),
@@ -319,6 +323,20 @@ public static class GetStartedGuide
             ? "nobody added yet -- only the person who installed SecurityInsight can manage it"
             : Plural(people, "person", "people") + (groups > 0 ? " and " + Plural(groups, "group", "groups") : "") + " with Admin or SuperAdmin";
         return new(people >= MinAdmins || groups > 0, note);
+    }
+
+    /// #1172: done only once someone at the install confirmed the list of people (the setting saving it records -- who and
+    /// when). Until then it says how many people receive a report today (the jobs' own fallbacks), or that no one does.
+    public static StepCheck Recipients(GetStartedFacts f)
+    {
+        if (!f.Read("settings")) return new(false, NotRead);
+        if (SI.Management.Web.Notify.Confirmation.Of(f.Settings) is { } c)
+            return new(true, "confirmed" + (c.By.Length > 0 ? " by " + c.By : "") + (c.AtUtc > DateTime.MinValue ? " on " + Pages.LocalTime.Text(c.AtUtc) : ""));
+        var people = SI.Management.Web.Notify.NotifyCatalog.Fixed.Where(e => e.RecipientSettings.Count > 0)
+            .SelectMany(e => SI.Management.Web.Notify.NotifyCatalog.RecipientsOf(e, f.Settings)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        return new(false, people == 0
+            ? "no one at your organisation receives the reports yet -- choose who gets each report and alert, then confirm the list"
+            : Plural(people, "person receives", "people receive") + " reports or alerts today -- check the list and confirm it");
     }
 
     public static StepCheck Mail(GetStartedFacts f)

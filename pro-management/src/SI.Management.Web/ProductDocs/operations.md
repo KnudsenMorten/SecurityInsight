@@ -6,7 +6,7 @@ anything that needs a person says so in plain words.
 
 ## What runs
 
-![What runs and when: the pipeline runner every 5 minutes, the heartbeat every 15 minutes and the configuration backup at 18:00 UTC on their own timers; the updater at 18:30 and the daily pipeline at 19:00 in the local time of the install's region, with its stages Collect, Correlate and Deliver; the updater and the pipeline never run at the same time](images/daily-schedule.png)
+![What runs and when: the pipeline runner every 5 minutes, the Invardia support link every 15 minutes and the configuration backup at 18:00 UTC on their own timers; the updater at 18:30 and the daily pipeline at 19:00 in the local time of the install's region, with its stages Collect, Correlate and Deliver; the updater and the pipeline never run at the same time](images/daily-schedule.png)
 
 | Component | What it does | When |
 |---|---|---|
@@ -18,7 +18,7 @@ anything that needs a person says so in plain words.
 | Connectors | Hand findings and assets to your CMDB, ServiceNow and ticketing, with their safety checks. | Steps of the pipeline, after a complete run only |
 | Verification and data health | Read-only checks of SecurityInsight's own data against the sources. See [Data health](data-health). | Daily |
 | The pipeline runner | Starts the daily pipeline at its time and each step when it is due; follows a running step. | Every 5 minutes |
-| The heartbeat job | Tells Invardia every half hour that the install is alive. See [Status reports to Invardia](#status-reports-to-invardia). | Every 15 minutes |
+| The Invardia support link | Sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll out. See [The Invardia support link](#the-invardia-support-link). | Every 15 minutes (it sends at most once per half hour) |
 | Configuration backup | A daily backup of every configuration record you made, in the SecurityInsight database; kept 90 days by default. | Daily, 18:00 UTC |
 | The updater | Keeps the install on its update ring. See [Updates and upgrades](upgrade). | Daily, 18:30 in the local time of the install's Azure region (Danish time when the region is not known) |
 | The web app and MCP server | Views, settings, approvals; the MCP server answers read-only questions from MCP clients. | Always on (the web app scales to zero) |
@@ -76,14 +76,15 @@ identities may send from and nothing else, or through your own SMTP relay.
 | SQL audit | Your Log Analytics workspace (`SQLSecurityAuditEvents`) | 90 days |
 | Script runs | A transcript on the machine the script ran on | Until you delete it |
 
-## Status reports to Invardia
+## The Invardia support link
 
-On by default; `SI_Telemetry_Enabled = false` turns every report off. Counts and states only, never the content of
+It sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll
+out. On by default; `SI_Telemetry_Enabled = false` turns every report off. Counts and states only, never the content of
 your data:
 
 | Report | When | Carries |
 |---|---|---|
-| Heartbeat | A Pro install: every half hour, from its own heartbeat job (it runs every 15 minutes and sends at most once per half hour), whether or not the pipeline runs. A Community install: once a day, with its engine runs. | That the install is alive, and its edition, version, update ring, hosting, the kind of sign-in identity and licence state; how many users, guests and devices the tenant has; the guard mode, the pre-release wave and release mode when they apply |
+| Status | A Pro install: every half hour, from the Invardia support link job (it runs every 15 minutes and sends at most once per half hour), whether or not the pipeline runs. A Community install: once a day, with its engine runs. | That the install is alive, and its edition, version, update ring, hosting, the kind of sign-in identity and licence state; how many users, guests and devices the tenant has; the guard mode, the pre-release wave and release mode when they apply |
 | Run | Every engine run | Job, outcome, duration, failed stage, an error class, a count |
 | Guard | A safety check trips | Which check, the numbers against the limit, what was held |
 | Health | Each data health cycle and at once on a change | The state and per-source counts; never a record's name, id or value |
@@ -91,3 +92,8 @@ your data:
 A Pro install's reports are identified by its install key and include the tenant and a shortened, redacted error
 text. Invardia uses them to see a problem before you report it, and to decide whether a release may go to the next
 ring.
+
+**When a report cannot be delivered.** Nothing else is affected: the report is retried next cycle, and no mail is sent
+to you. *Operations > Jobs* shows it on the Invardia support link's line: green while it delivers; green with a line such
+as "1 report could not be delivered; it is retried next cycle" after one or two undelivered cycles; amber after three in
+a row. The next delivered cycle sets it back to green.

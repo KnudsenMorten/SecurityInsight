@@ -70,7 +70,7 @@ $Extra
     }
     function script:Count-Match([string[]]$Lines, [string]$Re) { @($Lines | Where-Object { $_ -match $Re }).Count }
     $script:UpgradeRe   = 'SecurityInsight was updated to 3\.0'
-    $script:TelemetryRe = 'sends short status reports to Invardia'
+    $script:TelemetryRe = 'Invardia support link sends its health and run results'
     $script:IgnoredRe   = 'WhatIfMode in your configuration is ignored for scheduled runs'
     $script:Roots = New-Object System.Collections.Generic.List[string]
 }
@@ -435,12 +435,12 @@ Describe 'the status reports: one notice, once; on by default for every install 
         $txt | Should -Match ([regex]::Escape('set $global:SI_Telemetry_Enabled = $false in config\SecurityInsight.custom.ps1'))
         $txt | Should -Not -Match '#\d+'
         $two = @(Invoke-SIFirstRunNotices -Hosting vm -Engine 'endpoint' -Store $store -TelemetryOn $true 6>&1)
-        (($two | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n") | Should -Not -Match 'status reports'
+        (($two | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n") | Should -Not -Match 'Invardia support link'
     }
     It 'NEGATIVE: reports turned off -> no notice' {
         $store = @{ Kind = 'memory'; Box = @{} }
         $o = @(Invoke-SIFirstRunNotices -Hosting vm -Engine 'endpoint' -Store $store -TelemetryOn $false 6>&1)
-        (($o | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n") | Should -Not -Match 'status reports'
+        (($o | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join "`n") | Should -Not -Match 'Invardia support link'
     }
     It 'the reports stay ON for an upgraded install when nothing is set (no separate default for upgraded installs)' {
         . (Join-Path $script:SIRoot 'engine\_shared\SI-TelemetrySend.ps1')

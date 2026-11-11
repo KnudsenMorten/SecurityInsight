@@ -847,6 +847,20 @@ function Get-SIJobFlowLatestSlot {
     $null
 }
 
+function Get-SIJobFlowNextSlot {
+    <#
+        PURE. The first time-of-day slot strictly AFTER -AfterUtc for a daily / weekdays / weekly flow, as UTC (the same
+        wall-clock time in the pipeline's time zone as Get-SIJobFlowLatestSlot, so a daylight-saving change moves it with the
+        clock); $null for interval (its next start depends on when the run ends) or when none falls within 8 days.
+    #>
+    param([Parameter(Mandatory)]$Definition, [Parameter(Mandatory)][datetime]$AfterUtc)
+    if ([string]$Definition.Cadence -eq 'interval') { return $null }
+    $after = $AfterUtc.ToUniversalTime()
+    $next = $null
+    for ($d = 8; $d -ge 0; $d--) { $c = Get-SIJobFlowLatestSlot -Definition $Definition -NowUtc $after.AddDays($d); if ($c -and $c -gt $after) { $next = $c } }
+    $next
+}
+
 function Get-SIJobFlowCoveredSlot {
     <#
         PURE. (2026-10-24, seen on internal: a manual run still going at the daily time, then a catch-up -- a second full run
@@ -920,8 +934,7 @@ function Get-SIJobFlowDue {
         return (& $mk 'Wait' $null '' '' $next ('next run {0:u}: the previous run finished {1:u} + {2} min' -f $next, $Previous.EndedUtc, $iv))
     }
     $slot = Get-SIJobFlowLatestSlot -Definition $Definition -NowUtc $now
-    $nextSlot = Get-SIJobFlowLatestSlot -Definition $Definition -NowUtc $now.AddDays(8)
-    for ($d = 7; $d -ge 0; $d--) { $c = Get-SIJobFlowLatestSlot -Definition $Definition -NowUtc $now.AddDays($d); if ($c -and $c -gt $now) { $nextSlot = $c } }
+    $nextSlot = Get-SIJobFlowNextSlot -Definition $Definition -AfterUtc $now
     # 2026-10-24: a whole run that was running at the slot and succeeded IS that slot's run (Get-SIJobFlowCoveredSlot)
     $last = Get-SIJobFlowSlotRun -Definition $Definition -Previous $Previous
     if ($last -and $slot -and ([datetime]$last).ToUniversalTime() -ge $slot) {

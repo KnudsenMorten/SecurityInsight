@@ -180,7 +180,65 @@ WHERE {ThisCollection}
         new("MitreTactics", "MITRE tactics", Filter: GridFilter.Tokens, Search: true),
         new("MitreTechniques", "MITRE techniques", Filter: GridFilter.Tokens, Search: true, Hidden: true),
         new("ComplianceTags", "Compliance", Filter: GridFilter.Tokens, Search: true),
-    ], "RiskScore", true, "FindingId", ["CollectionId", "AssetKey"], Immutable: true, Keyset: RowsKeyset(), KeySortSql: RowKeySort));
+    ], "RiskScore", true, "FindingId", ["CollectionId", "AssetKey"], Immutable: true, Keyset: RowsKeyset(), KeySortSql: RowKeySort, Indexed: FindingSearch()));
+
+    // ---- #1189: the findings' search off an index (a ring-1 customer, 2026-11-11, ~1 M findings per collection: a search for a
+    // device name -- q=pc2080, or the Asset filter -- was a LIKE '%pc2080%' over nine columns of every finding, 40-45 s, stopped).
+    // A device is found where it is SMALL: its CI (sidata.Asset, sidata.AssetRiskSummary: thousands of rows, one per CI) -- the
+    // name may be anywhere in it -- and that CI's findings are read by (CollectionId, AssetKey) (IX_Finding_Views), the same
+    // seek the one-CI page uses. A CVE / configuration id is a starts-with on (CollectionId, Cve) / (CollectionId,
+    // ConfigurationId) (IX_Finding_Cve, IX_Finding_Config). No new index: every key set is served by an index the schema has.
+    // The finding's text (title, report, MITRE, compliance) is searched only on "search anywhere" (GridState.Anywhere).
+
+    /// The findings of the collection's CIs whose NAME contains the text: the CI's current name (sidata.Asset) or the name its
+    /// findings carry in this collection (sidata.AssetRiskSummary, one row per CI) -- both small; the findings by their CI.
+    public const string FindingKeysByAssetName = """
+    SELECT fa.FindingId AS K FROM sidata.Finding AS fa
+    WHERE fa.CollectionId = TRY_CONVERT(int, @CollectionId)
+      AND fa.AssetKey IN (SELECT an.AssetKey FROM sidata.Asset AS an WHERE an.AssetName LIKE {any}
+                          UNION SELECT rn.AssetKey FROM sidata.AssetRiskSummary AS rn WHERE rn.CollectionId = TRY_CONVERT(int, @CollectionId) AND rn.AssetName LIKE {any})
+""";
+
+    /// The findings of the CIs whose KEY or one of whose IDENTIFIERS (device id, ARM id, object id ...) contains the text.
+    public const string FindingKeysByAssetId = """
+    SELECT fk.FindingId AS K FROM sidata.Finding AS fk
+    WHERE fk.CollectionId = TRY_CONVERT(int, @CollectionId)
+      AND fk.AssetKey IN (SELECT ak.AssetKey FROM sidata.Asset AS ak WHERE ak.AssetKey LIKE {any}
+                          UNION SELECT ai.AssetKey FROM sidata.AssetIdentifier AS ai WHERE ai.IdentifierValue LIKE {any})
+""";
+
+    /// The findings whose CVE starts with the text ("2024-3094" also finds CVE-2024-3094): a seek on IX_Finding_Cve.
+    public const string FindingKeysByCve = """
+    SELECT fc.FindingId AS K FROM sidata.Finding AS fc
+    WHERE fc.CollectionId = TRY_CONVERT(int, @CollectionId) AND (fc.Cve LIKE {start} OR fc.Cve LIKE N'CVE-' + {start})
+""";
+
+    /// The findings whose configuration id starts with the text: a seek on IX_Finding_Config.
+    public const string FindingKeysByConfiguration = """
+    SELECT fx.FindingId AS K FROM sidata.Finding AS fx
+    WHERE fx.CollectionId = TRY_CONVERT(int, @CollectionId) AND fx.ConfigurationId LIKE {start}
+""";
+
+    /// The finding grids' index-served search (the raw rows, one issue / fix, a department's findings): the source keeps the
+    /// findings of the key set through the clustered (CollectionId, FindingId) -- the #812 keyset's own narrowing.
+    public static GridIndexedSearch FindingSearch() => new(
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["AssetName"] = FindingKeysByAssetName,
+            ["AssetKey"] = FindingKeysByAssetId,
+            ["Cve"] = FindingKeysByCve,
+            ["ConfigurationId"] = FindingKeysByConfiguration,
+        },
+        (source, set) => source.Contains(ThisCollection, StringComparison.Ordinal)
+            ? source.Replace(ThisCollection, ThisCollection + " AND f.FindingId IN (SELECT " + set + ".K FROM " + set + ")", StringComparison.Ordinal)
+            : source,
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["AssetName"] = "on an asset whose name contains it",
+            ["AssetKey"] = "on an asset whose id or identifier contains it",
+            ["Cve"] = "whose CVE starts with it",
+            ["ConfigurationId"] = "whose configuration id starts with it",
+        });
 
     // ---- #812: the raw rows' opening view off an index, its total and its filter counts stored ------------------------
     // A large customer, 2026-10-19 (1,117,524 findings): the raw rows' first page counted every finding of the collection

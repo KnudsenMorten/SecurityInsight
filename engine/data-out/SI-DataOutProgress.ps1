@@ -5,6 +5,8 @@
     and the database idle -- nobody could tell building from sending, how far it had got or when it would end.
 
     WHAT IS KEPT (in memory, per output, counted per page -- never per row):
+      * #1188 the rows sent with u_action 'held' because their finding is not in this run are counted KEPT OPEN (RowsKeptOpen,
+        the column KeptOpenRows, "N kept open -- not seen this run" in the line) -- never in RowsHeld, which is the real holds;
       * the PHASE the writer is in -- read (a page of items from the database), build (the rows of a page: map, keys, the
         state compare, the CI check), send (a page to the destination), close (the end row), readback (the last batch's
         import result) -- and the seconds spent in each so far. The pages interleave (read, build, send, read ...), so each
@@ -45,7 +47,7 @@ function New-SIDataOutProgress {
     @{ Output = $Output; Label = $(if ($Label) { $Label } else { $Output }); Log = $Log; Clock = $Clock
        EverySec = $EverySec; StallSec = $StallSec; SlowWriteSec = $SlowWriteSec
        Started = $now; Phase = 'read'; PhaseAt = $now; PhaseSec = $sec; Parts = [ordered]@{}
-       RowsRead = 0L; ItemsBuilt = 0L; PagesSent = 0L; RowsSent = 0L; RowsHeld = 0L; Planned = $Planned; PlannedKind = $PlannedKind
+       RowsRead = 0L; ItemsBuilt = 0L; PagesSent = 0L; RowsSent = 0L; RowsHeld = 0L; RowsKeptOpen = 0L; Planned = $Planned; PlannedKind = $PlannedKind
        LastProgressUtc = $now; LastWriteUtc = $now; Stalls = 0; StallOpen = $false; Notes = (New-Object System.Collections.Generic.List[string])
        Store = $null; BatchId = ''; DbOff = $false; DbFails = 0; DbWrites = 0; DbSkipped = 0; Lines = 0; Done = $false }
 }
@@ -74,7 +76,7 @@ function Step-SIDataOutProgress {
         count advances the progress. A stall (no progress for StallSec) is said once per stall; at most every EverySec the
         progress is written (Write-SIDataOutProgress). In memory but for that write. Never throws.
     #>
-    param($Progress, [string]$Phase = '', [long]$RowsRead = 0, [long]$ItemsBuilt = 0, [long]$PagesSent = 0, [long]$RowsSent = 0, [long]$RowsHeld = 0)
+    param($Progress, [string]$Phase = '', [long]$RowsRead = 0, [long]$ItemsBuilt = 0, [long]$PagesSent = 0, [long]$RowsSent = 0, [long]$RowsHeld = 0, [long]$RowsKeptOpen = 0)
     $P = $Progress
     if ($null -eq $P -or $P.Done) { return }
     try {
@@ -84,11 +86,14 @@ function Step-SIDataOutProgress {
             $P.Phase = $Phase; $P.PhaseAt = $now
             if (-not $P.PhaseSec.Contains($Phase)) { $P.PhaseSec[$Phase] = 0.0 }
         }
-        $moved = ($RowsRead -gt 0 -or $ItemsBuilt -gt 0 -or $PagesSent -gt 0 -or $RowsSent -gt 0 -or $RowsHeld -gt 0)
+        $moved = ($RowsRead -gt 0 -or $ItemsBuilt -gt 0 -or $PagesSent -gt 0 -or $RowsSent -gt 0 -or $RowsHeld -gt 0 -or $RowsKeptOpen -gt 0)
         if ($moved) {
             $gap = ($now - $P.LastProgressUtc).TotalSeconds
             if ($gap -ge $P.StallSec) { Add-SIDataOutProgressStall -Progress $P -Now $now -Minutes ([int][Math]::Floor($gap / 60)) }
             $P.RowsRead += $RowsRead; $P.ItemsBuilt += $ItemsBuilt; $P.PagesSent += $PagesSent; $P.RowsSent += $RowsSent; $P.RowsHeld += $RowsHeld
+            # #1188 the rows sent 'held' because not seen this run: kept open, their own count (a progress object made before has none)
+            if (-not $P.ContainsKey('RowsKeptOpen')) { $P.RowsKeptOpen = 0L }
+            $P.RowsKeptOpen += $RowsKeptOpen
             $P.LastProgressUtc = $now
         } elseif (($now - $P.LastProgressUtc).TotalSeconds -ge $P.StallSec -and -not $P.StallOpen) {
             Add-SIDataOutProgressStall -Progress $P -Now $now -Minutes ([int][Math]::Floor(($now - $P.LastProgressUtc).TotalSeconds / 60))
@@ -152,6 +157,9 @@ function Format-SIDataOutProgressLine {
         else { $plan = & $fm ' of ~{0:N0} planned' $P.Planned }
     }
     $counts = & $fm '{0:N0} rows read{6}, {1:N0} items built, {2:N0} page(s) sent, {3:N0} rows sent{4}, {5:N0} held' $P.RowsRead $P.ItemsBuilt $P.PagesSent $P.RowsSent $plan $P.RowsHeld $toRead
+    # #1188 the rows sent 'held' because their finding is not in this run are KEPT OPEN, never "held": said apart, when there are any
+    $ko = $(if ($P.ContainsKey('RowsKeptOpen')) { [long]$P.RowsKeptOpen } else { 0L })
+    if ($ko -gt 0) { $counts += & $fm ', {0:N0} kept open -- not seen this run' $ko }
     if ($Final) { return (& $fm '{0}: progress -- done in {1:N1} s; {2}; {3:N1} rows/s; {4}' $P.Label $r.Elapsed $counts $r.RowsPerSec $(if ($times) { $times } else { 'no phase timed' })) }
     $left = $(if ($r.SecondsLeft -ge 0) { & $fm 'about {0:N0} min left' ([Math]::Ceiling($r.SecondsLeft / 60)) } else { 'time left not known yet' })
     & $fm '{0}: progress -- phase {1}; {2}; {3:N1} rows/s; {4} ({5})' $P.Label $P.Phase $counts $r.RowsPerSec $left $times
@@ -165,6 +173,9 @@ IF OBJECT_ID('cfg.DataOutBatch') IS NULL OR COL_LENGTH('cfg.DataOutBatch', 'Last
 UPDATE cfg.DataOutBatch SET Phase = @Phase, RowsPlanned = NULLIF(CONVERT(bigint, @RowsPlanned), -1), RowsSent = CONVERT(bigint, @RowsSent), RowsHeld = CONVERT(bigint, @RowsHeld),
        PagesSent = CONVERT(bigint, @PagesSent), LastProgressUtc = CONVERT(datetime2(3), @LastProgressUtc, 126)
 WHERE BatchId = @BatchId;
+-- #1188 the kept-open rows (sent as u_action held because not seen this run) apart from RowsHeld; skipped without the column
+IF COL_LENGTH('cfg.DataOutBatch', 'KeptOpenRows') IS NOT NULL
+    EXEC sys.sp_executesql N'UPDATE cfg.DataOutBatch SET KeptOpenRows = @k WHERE BatchId = @b;', N'@k bigint, @b nvarchar(160)', @k = @RowsKeptOpen, @b = @BatchId;
 '@
 }
 
@@ -173,7 +184,8 @@ function New-SIDataOutProgressParams {
     param([Parameter(Mandatory)]$Progress)
     $P = $Progress
     [ordered]@{ BatchId = [string]$P.BatchId; Phase = [string]$P.Phase; RowsPlanned = [long]$P.Planned; RowsSent = [long]$P.RowsSent; RowsHeld = [long]$P.RowsHeld
-                PagesSent = [long]$P.PagesSent; LastProgressUtc = ([datetime]$P.LastProgressUtc).ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture) }
+                PagesSent = [long]$P.PagesSent; LastProgressUtc = ([datetime]$P.LastProgressUtc).ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+                RowsKeptOpen = $(if ($P.ContainsKey('RowsKeptOpen')) { [long]$P.RowsKeptOpen } else { 0L }) }
 }
 
 function Write-SIDataOutProgress {

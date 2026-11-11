@@ -8,7 +8,7 @@
     var n = 0;
 }
 <h1>Notifications</h1>
-<p class="lede">Every mail recipient on one page: where the blue button in their mails leads (their audience), which reports and alerts they get, and whether they can open the links. A recipient who is not a user of SecurityInsight yet is added as <strong>Reader</strong> when you add them here, so the links in their mails open; a role is never raised or taken away here. Who is on each report's list is set on <a href="/Admin/Settings/Reports">Reports and alerts</a>.</p>
+<p class="lede">Every mail recipient on one page: where the blue button in their mails leads (their audience), which reports and alerts they get, and whether they can open the links. A recipient who is not a user of SecurityInsight yet is added as <strong>Reader</strong> when you add them here, so the links in their mails open; a role is never raised or taken away here. <strong>Who receives which report and alert is the one list of people on <a href="/Admin/Settings/Reports#people">Reports and alerts</a></strong> -- a person added here is added to that list, where you tick what they receive.</p>
 @if (Model.Error is not null) { <div class="notice error" role="alert" data-notify-error>@Model.Error</div> }
 <div class="notice info" role="status" data-notify-scope>The choices apply now to the mails the web app composes (the management summaries and the Get Started reminder). The Risk Analysis, daily vulnerability and safety-check mails are composed by the jobs and follow the choices once their mail step reads them -- each line on <a href="/Admin/Settings/Reports">Reports and alerts</a> says which.</div>
 
@@ -16,6 +16,7 @@
 {
     <section class="card" aria-labelledby="add-h" data-notify-add>
         <h2 id="add-h">Add a recipient</h2>
+        <p class="hint" data-add-goes-to-grid>The person is added to the list of people on Reports and alerts, which opens next: tick the reports and alerts they should receive there.</p>
         <form method="post" asp-page-handler="Add" class="inline-form" data-add-form>
             <input type="hidden" name="Version" value="@st.Version" />
             <label for="add-address">Mail address</label>
@@ -54,7 +55,7 @@
                 <summary><strong>@r</strong>@if (Model.ForwardOf.TryGetValue(r, out var fwdTo)) { <span data-forward-to="@fwdTo"> &rarr; @fwdTo</span> } -- @MailAudience.Label(p.Audience) · @(Fmt.Int(entries.Count(e => p.Wants(e.Id)))) of @Fmt.Int(entries.Count) on
                     @if (acc is not null) { <span class="badge @(acc.State is "reader+" or "added" ? "good" : acc.State == "none" ? "warn" : "info")" data-access="@acc.State">@acc.Words</span> }
                 </summary>
-                <p class="hint">On the list of: @(lists.Count == 0 ? "no report yet" : string.Join(", ", lists))</p>
+                <p class="hint" data-on-lists="@lists.Count">On the list of: @if (lists.Count == 0) { <span class="badge warn">nothing -- they receive no mail</span> <a href="/Admin/Settings/Reports?show=@Uri.EscapeDataString(r)#@NotificationsModel.Anchor(r)">tick what they receive</a> } else { @string.Join(", ", lists) }</p>
                 <form method="post" asp-page-handler="Save" class="stack-form" data-save-form>
                     <input type="hidden" name="Address" value="@r" />
                     <input type="hidden" name="Version" value="@st.Version" />

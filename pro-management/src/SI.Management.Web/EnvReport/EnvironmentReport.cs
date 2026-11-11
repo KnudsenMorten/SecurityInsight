@@ -113,7 +113,7 @@ public static class EnvironmentReportBuilder
             new("web app", "Pro database (Azure SQL)", "out", "TDS (encrypted)", "the web app's managed identity", "configuration, views, audit trail", sql ? "configured" : "not configured"),
             new("web app", "Azure Resource Manager", "out", "HTTPS (REST)", "the web app's managed identity (Reader, job operator)", "jobs: list, start, schedule; this report's Azure part", "on"),
             new("mail job", "Exchange Online / SMTP relay", "out", "HTTPS (Graph sendMail) or SMTP", "the mail identity, scoped to the shared mailbox", "reports, alerts, reminders", mail),
-            new("SecurityInsight", "Invardia (uplink)", "out", "HTTPS", "the install key", "status and run telemetry (no tenant data)", telemetry),
+            new("SecurityInsight", "Invardia support link", "out", "HTTPS", "the install key", "health and run results for Invardia support (no tenant data)", telemetry),
             new("Invardia", "updater job", "in", "HTTPS", "the install key; signed source", "new versions for the update ring", f?.Ring is { } r ? "ring " + r.Ring.ToString(System.Globalization.CultureInfo.InvariantCulture) : "ring not recorded"),
             new("Invardia", "updater job", "in", "HTTPS", "the install key", "the signed licence", f?.Licence is null ? "no licence recorded" : "licence " + f.Licence.Status),
             new("SecurityInsight", "connectors (ServiceNow / SQL CMDB / others)", "both", "HTTPS / TDS", "each connector's own secret reference (Key Vault)", "findings out, CMDB in", connectors.Count == 0 ? "none enabled" : string.Join(", ", connectors)),

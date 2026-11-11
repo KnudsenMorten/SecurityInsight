@@ -119,7 +119,11 @@ public sealed class NotificationsModel(NotificationService notify, AutoReader au
         var w = await notify.SaveAsync(State.Prefs.With(p with { Audience = MailAudience.Normalize(Audience) }), Version, User.ChangeName(), "recipient added on the Notifications page", ct);
         if (w.Status != WriteStatus.Saved) return Refused(w.Status == WriteStatus.Stale ? "someone changed the notifications since you opened the page -- reload it" : w.Message);
         var accessWords = acc.State == "added" ? " -- added as Reader, so the links in their mails open" : " -- " + acc.Words;
-        return Back($"{address} added ({MailAudience.Label(Audience)}){accessWords}. Put the address on the reports it should get (Reports and alerts).", acc.State != "refused", Anchor(address));
+        // #1172: a person added here is a row of the ONE list of people (Reports and alerts) -- the page sends you there to
+        // tick what they receive; never again someone counted as a recipient who is mailed nothing without it being shown
+        TempData["toast"] = $"{address} added ({MailAudience.Label(Audience)}){accessWords}. They receive nothing yet: tick the reports and alerts they should get, then Save.";
+        TempData["toastKind"] = acc.State != "refused" ? "ok" : "error";
+        return Redirect("/Admin/Settings/Reports?show=" + Uri.EscapeDataString(address) + "#" + Anchor(address));
     }
 
     /// Forgets a recipient's choices. Their address stays on the reports' lists and their role is NOT removed (said).

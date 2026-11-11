@@ -10,6 +10,12 @@
     service. No tenant, no network, no credentials.
 #>
 
+BeforeDiscovery {
+    # the parity tests compare with AzLogDcrIngestPS and exist only where it is installed (the gate counts a skip as a fail;
+    # a test that needs what the host does not have is defined only where it can run -- the Linux test runner has no module)
+    $script:HasDcrModule = [bool](Get-Module -ListAvailable -Name AzLogDcrIngestPS)
+}
+
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     . (Join-Path $script:SIRoot 'engine\_shared\SI-LogIngest.ps1')
@@ -181,9 +187,9 @@ Describe 'WIRING -- every former direct call goes through the wrapper' {
             foreach ($p in (Get-Command $w).Parameters.Keys) { if ($p -notin $common) { $rest | Should -Contain $p -Because "$w -$p" } }
         }
     }
+    if ($script:HasDcrModule) {
     It 'each wrapper declares the module''s parameter names and types (when AzLogDcrIngestPS is installed here)' {
         $m = Get-Module -ListAvailable -Name AzLogDcrIngestPS | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $m) { Set-ItResult -Skipped -Because 'AzLogDcrIngestPS is not installed on this host'; return }
         $loaded = Get-Module -Name AzLogDcrIngestPS
         $mod = Import-Module $m.Path -PassThru -Force -DisableNameChecking -WarningAction SilentlyContinue
         try {
@@ -198,6 +204,7 @@ Describe 'WIRING -- every former direct call goes through the wrapper' {
                 }
             }
         } finally { if (-not $loaded) { Remove-Module -ModuleInfo $mod -Force -ErrorAction SilentlyContinue } }
+    }
     }
     It 'the REST module ships in both editions: no Pro path is referenced' {
         # the CODE, not the comments (the file's history note names the correlation folder it moved out of)
@@ -341,9 +348,9 @@ Describe 'schema build -- the module''s type mapping' {
         $tbl[0] | Should -BeOfType [hashtable]
         @(Get-SILogSchemaRest -Data $rows -As Hash).Count | Should -Be 0 -Because 'like Get-ObjectSchemaAsHash, nothing without -ReturnType'
     }
+    if ($script:HasDcrModule) {
     It 'parity with AzLogDcrIngestPS on the same host (schema, column-name fix-up, alignment) when it is installed' {
         $m = Get-Module -ListAvailable -Name AzLogDcrIngestPS | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $m) { Set-ItResult -Skipped -Because 'AzLogDcrIngestPS is not installed on this host'; return }
         $loaded = Get-Module -Name AzLogDcrIngestPS
         $mod = Import-Module $m.Path -PassThru -Force -DisableNameChecking -WarningAction SilentlyContinue
         try {
@@ -364,6 +371,7 @@ Describe 'schema build -- the module''s type mapping' {
             $modCol  = & $mod { param($d) Add-ColumnDataToAllEntriesInArray -Data $d -Column1Name Computer -Column1Data 'h' -Column2Name UserLoggedOn -Column2Data 'u' } (& $mk) | ConvertTo-Json -Depth 5 -Compress
             $restCol | Should -Be $modCol
         } finally { if (-not $loaded) { Remove-Module -ModuleInfo $mod -Force -ErrorAction SilentlyContinue } }
+    }
     }
 }
 

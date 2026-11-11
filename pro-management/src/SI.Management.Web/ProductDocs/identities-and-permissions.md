@@ -49,7 +49,7 @@ the names an existing install shows.
 | DeviceManagementConfiguration.Read.All | Which compliance policies a device does not meet, and its update ring |
 | AccessReview.Read.All | The last access review of a privileged role, group or application |
 | SecurityAlert.Read.All | Open alerts per device: how many, the highest severity, the newest |
-| SecurityEvents.Read.All | The Microsoft Secure Score of the tenant, sent with the hourly status report |
+| SecurityEvents.Read.All | The Microsoft Secure Score of the tenant, sent with the Invardia support link |
 
 ### Microsoft Defender (application permissions, all read only)
 
@@ -59,7 +59,7 @@ the names an existing install shows.
 | Microsoft Defender for Endpoint | Machine.Read.All | The device list. Never Machine.ReadWrite.All: collection never writes. |
 | Microsoft Defender for Endpoint | Vulnerability.Read.All | Exploit details of a CVE for vulnerability findings |
 | Microsoft Defender for Endpoint | SecurityRecommendation.Read.All | The exposure impact and active alerts of a recommendation |
-| Microsoft Defender for Endpoint | Score.Read.All | The Defender exposure score of the tenant, sent with the hourly status report |
+| Microsoft Defender for Endpoint | Score.Read.All | The Defender exposure score of the tenant, sent with the Invardia support link |
 
 ### Azure roles
 

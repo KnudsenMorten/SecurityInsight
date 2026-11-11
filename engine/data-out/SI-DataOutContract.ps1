@@ -365,10 +365,50 @@ function New-SIDataOutActionCounts {
 }
 
 function Add-SIDataOutActionCount {
-    <# PURE (into -Counts). One more row of -Action. #>
+    <# PURE (into -Counts). One more row of -Action (a u_action, or the count 'kept_open' -- Get-SIDataOutCountKind). #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Counts, [Parameter(Mandatory)][string]$Action, [long]$By = 1)
     if (-not $Counts.Contains($Action)) { $Counts[$Action] = 0L }
     $Counts[$Action] = [long]$Counts[$Action] + $By
+}
+
+# #1188 (owner 2026-11-11 "a is fine" / "go") "KEPT OPEN -- NOT SEEN THIS RUN" IS NOT "HELD". A finding sent before that is
+# absent from this run's collection (still counting its complete runs without it, or no longer in SecurityInsight's data at
+# all) IS SENT -- with u_action 'held', the reason saying the target keeps the record. The word made a batch of them read as
+# rows held back. SecurityInsight therefore COUNTS such a row as 'kept_open' -- its own count everywhere SecurityInsight
+# itself shows it (the progress and end lines, cfg.DataOutBatch.KeptOpenRows) -- and keeps 'held' for the real holds only (no
+# CI key, CI not delivered yet, a disabled / not-completed source's record, a column too short, a whole batch held).
+# THE WIRE DOES NOT CHANGE: the row still says u_action 'held' with the same reason and hash, and the staging status end row's
+# u_si_held_rows still counts every 'held' row (Get-SIDataOutWireCounts) -- a wire change is a contract version step agreed
+# with the customer's ServiceNow owner.
+$script:SIDataOutKeptOpenCount = 'kept_open'
+$script:SIDataOutKeptOpenText = 'kept open -- not seen this run'
+
+function Get-SIDataOutKeptOpenText { <# PURE. The words SecurityInsight shows for the kept-open count (#1188). #> $script:SIDataOutKeptOpenText }
+
+function Get-SIDataOutCountKind {
+    <#
+        PURE. #1188 The count one row goes into: 'kept_open' for a row whose u_action is 'held' BECAUSE the record is not in this
+        run (-Now counting: an open finding whose absence is counted; -Now gone: no longer in SecurityInsight's data); else its
+        u_action. The row itself is unchanged.
+    #>
+    param([AllowEmptyString()][string]$Now, [AllowEmptyString()][string]$Action)
+    if ($Action -eq 'held' -and $Now -in 'counting', 'gone') { return $script:SIDataOutKeptOpenCount }
+    $Action
+}
+
+function Get-SIDataOutWireCounts {
+    <#
+        PURE. #1188 The counts as the WIRE says them (the staging status end row, u_si_*_rows): a kept-open row IS a u_action
+        'held' row on the wire, so 'kept_open' is added into 'held' and left out -- the end row is byte-identical to before.
+    #>
+    param($Counts)
+    if ($null -eq $Counts) { return $null }
+    $w = [ordered]@{}
+    foreach ($k in @($Counts.Keys)) { if ([string]$k -ne $script:SIDataOutKeptOpenCount) { $w[$k] = $Counts[$k] } }
+    if ($Counts.Contains($script:SIDataOutKeptOpenCount) -and [long]$Counts[$script:SIDataOutKeptOpenCount] -ne 0) {
+        $w['held'] = $(if ($w.Contains('held')) { [long]$w['held'] } else { 0L }) + [long]$Counts[$script:SIDataOutKeptOpenCount]
+    }
+    $w
 }
 
 # =====================================================================================================================
@@ -410,6 +450,10 @@ WHEN MATCHED THEN UPDATE SET State = @State, FinishedAt = CASE WHEN @State = N'w
      ReopenRows = @ReopenRows, HeldRows = @HeldRows, OutOfScopeRows = @OutOfScopeRows, ImportSetIds = NULLIF(@ImportSetIds, N''), Reason = LEFT(NULLIF(@Reason, N''), 1000)
 WHEN NOT MATCHED THEN INSERT (BatchId, OutputId, Connector, RunId, State, Mode, ContractVersion, TargetTable, StartedAt, RequestToken)
      VALUES (@BatchId, @OutputId, NULLIF(@Connector, N''), @RunId, @State, @Mode, @ContractVersion, NULLIF(@TargetTable, N''), SYSUTCDATETIME(), NULLIF(@RequestToken, N''));
+-- #1188 the kept-open rows (sent as u_action held because not seen this run) apart from HeldRows (the real holds); a
+-- database without the column (an older schema) skips it
+IF COL_LENGTH('cfg.DataOutBatch', 'KeptOpenRows') IS NOT NULL AND @State <> N'writing'
+    EXEC sys.sp_executesql N'UPDATE cfg.DataOutBatch SET KeptOpenRows = @k WHERE BatchId = @b;', N'@k bigint, @b nvarchar(160)', @k = @KeptOpenRows, @b = @BatchId;
 '@
 }
 
@@ -466,6 +510,8 @@ function New-SIDataOutBatchParams {
         Connector = $Connector; TargetTable = $TargetTable; RequestToken = $RequestToken
         PlannedRows = $Planned; SentRows = $Sent; FailedRows = $Failed
         NewRows = (& $g 'new'); UpdateRows = (& $g 'update'); CloseRows = (& $g 'close'); ReopenRows = (& $g 'reopen'); HeldRows = (& $g 'held'); OutOfScopeRows = (& $g 'out_of_scope')
+        # #1188 HeldRows = the real holds only; the kept-open rows (sent as u_action held, not seen this run) on their own
+        KeptOpenRows = (& $g $script:SIDataOutKeptOpenCount)
         ImportSetIds = ((@($ImportSets) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique) -join ','); Reason = $Reason
     }
 }

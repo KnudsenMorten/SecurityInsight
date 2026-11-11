@@ -1153,6 +1153,30 @@ function Write-RAStepProgressRow {
     } catch { }
 }
 
+function Get-RAWorkerSliceRows {
+    <# #1180: the query-slice progress records the run's report workers wrote since -SinceUtc ('report <name>', done / total --
+       Write-RAStepProgressRow), through the run's own database seam (Get-SIStepProgressRows). NEVER throws: @() when there
+       is no stream, no helper or nothing readable. #>
+    param($Stream, [Parameter(Mandatory)][datetime]$SinceUtc)
+    try {
+        if ($null -eq $Stream -or $null -eq $Stream.Invoke) { return @() }
+        if (-not (Get-Command -Name Get-SIStepProgressRows -ErrorAction SilentlyContinue)) { return @() }
+        @(Get-SIStepProgressRows -Invoke $Stream.Invoke -Job (Get-RAStepPhaseJob -Stream $Stream) -SinceUtc $SinceUtc -PhasePrefix 'report ')
+    } catch { @() }
+}
+
+function New-RAProgressTicker {
+    <# #1180: a progress ticker (New-SIStepProgressTicker, SI-StepPhase.ps1) for a long pass of this run -- its lines through
+       -Log, its progress record through the run's own database seam under the run's job name. $null when the helper is not
+       loaded (Step-SIStepProgressTicker then does nothing). NEVER throws. #>
+    param($Stream, [Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][string]$Unit, [long]$Total = -1, [scriptblock]$Log, [int]$EverySeconds = 180)
+    try {
+        if (-not (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue)) { return $null }
+        $inv = $null; if ($null -ne $Stream -and $Stream.Invoke -is [scriptblock]) { $inv = $Stream.Invoke }
+        New-SIStepProgressTicker -What $What -Unit $Unit -Total $Total -Invoke $inv -Job (Get-RAStepPhaseJob -Stream $Stream) -Log $Log -EverySeconds $EverySeconds
+    } catch { $null }
+}
+
 function Write-RAPhaseTimesToSql {
     <# #873 A: a report's (or a part's) time per phase as rows of cfg.StepPhaseTime -- '<What>: <phase>', one row per phase
        measured, in slice order; the insert row carries the rows written. NEVER throws. #>

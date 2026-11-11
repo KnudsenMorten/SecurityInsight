@@ -217,7 +217,7 @@
       "capabilities": [],
       "licences": []
     },
-    "customerText": "A run could not prepare its status report for the support service, so support did not hear how the run ended. The run itself is not affected; its result is in the run log.",
+    "customerText": "A run could not prepare its report for the Invardia support link, so support did not hear how the run ended. The run itself is not affected; its result is in the run log.",
     "internalNote": "customer B 2026-10-15 19:11Z: \"The status report to Invardia could not be prepared (OutOfMemoryException)\" -- no run record / heartbeat after 15:25Z, the failure never reached Invardia. Fixed: a failed run lets go of its caches before the end record; an out-of-memory while preparing tries once more with the run record alone; the warning and the result carry si-upl-0601 (#702).",
     "whoActs": "nobody",
     "priority": "P2",
@@ -643,6 +643,33 @@
     "since": null
   },
   {
+    "code": "si-cmdb-0702",
+    "title": "A safety check held back removing devices from the CMDB for one run",
+    "causeClass": "count-less",
+    "appliesTo": {
+      "capabilities": [
+        "cmdb"
+      ],
+      "licences": []
+    },
+    "customerText": "This run saw far fewer devices than your CMDB holds, so a safety check did not remove the missing ones from the CMDB on one run's word. Nothing is lost: new and changed devices were written as usual. If the next run sees the same, it confirms them and they are removed then; if they come back, they simply stay.",
+    "internalNote": "#1177 (SUP-2026-00480, SUP-2026-00391: si-cmdb-sql/collapse, class unknown). SI-CmdbSqlSync rule 5: a kind whose seen set falls below half of its active CIs retires nothing this run (plan.Collapsed, plan.RetireHeld). Sent as the run report's code (RunContext.FailureCode) ONLY when RetireHeld > 0; a collapse that held nothing is an INFO line and the run is a plain success. Read the run's COLLAPSE line (seen vs active per kind) and the next run's plan.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run confirms the missing devices or keeps them."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
     "code": "si-upd-0801",
     "title": "The updater may not store secrets in Key Vault (secure hand-over)",
     "causeClass": "permission",
@@ -877,7 +904,7 @@
       "capabilities": [],
       "licences": []
     },
-    "customerText": "SecurityInsight may not read your tenant's Microsoft Secure Score or Defender exposure score yet, so the status report carries no scores. Nothing SecurityInsight collects is affected. Grant the two read-only permissions with the setup script.",
+    "customerText": "SecurityInsight may not read your tenant's Microsoft Secure Score or Defender exposure score yet, so the Invardia support link carries no scores. Nothing SecurityInsight collects is affected. Grant the two read-only permissions with the setup script.",
     "internalNote": "The heartbeat reads Graph /security/secureScores?$top=1 (SecurityEvents.Read.All) and Defender /api/exposureScore (WindowsDefenderATP Score.Read.All), once per process per hour. One of them answered 401 / 403 -- Counts secureScore / secureScoreMax / exposureScore are then left out. Required permissions since 2026-10-16 (owner: \"Add, permission REQUIRED\"): granted on every new install; an existing install's update names them (the permission note). Raised by the hourly heartbeat's Warnings.",
     "whoActs": "customer",
     "priority": "P3",
@@ -892,7 +919,7 @@
       },
       {
         "who": "customer",
-        "text": "An admin who can give admin consent (Privileged Role Administrator or Global Administrator) runs them; the next hourly status report carries the scores."
+        "text": "An admin who can give admin consent (Privileged Role Administrator or Global Administrator) runs them; the next report of the Invardia support link carries the scores."
       }
     ],
     "lesson": null,
@@ -1225,6 +1252,31 @@
       }
     ],
     "lesson": "A part that fails on a full database is a failure of that part, sent to support -- never only a warning line in the log.",
+    "since": null
+  },
+  {
+    "code": "si-data-1405",
+    "title": "The clean-up of old data cannot keep up",
+    "causeClass": "too-large",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight removes the rows of older collections between its runs, paced by the database's load so the pages stay quick. At the pace the database allows, the rows left will not all be removed before the next run starts, so the database keeps growing. Nothing is lost and the pages show the current data. Support looks at the database's size and load.",
+    "internalNote": "2026-11-10 (owner: \"just make sure that it finishes before next runs so we dont get to far behind\"). Every wake-up of the pipeline runner with nothing going (no run, data sync or data out) removes the rows of marked collections up to almost its next wake-up (Get-SIDataHousekeepingWindow), in several key ranges at once (as many as the deadline asks, at most the database's cores, one fewer each time the load holds it back -- Invoke-SIDataRetireRangesWide). After each such wake-up: need = rows left (Get-SIDataHousekeepingLeftSql) / minutes to the next scheduled run (Get-SIJobFlowDue); reached = rows removed / the wake-up interval (Get-SIDataHousekeepingVerdict). Short and not yet at its widest: the next wake-up goes wider. Short at its widest, held back by the load, or on the last wake-up before the run: a WARN line in the runner's log ('housekeeping: the clean-up of old data cannot keep up ...') and cfg.InstallState 'Housekeeping' behind = since when; the hourly heartbeat raises this code while that record (at most 24 h old) says behind. It clears once a wake-up keeps up or nothing is left. Warning only: nothing is stopped, the data sync always goes first. engine/_shared/data-sql/SI-DataSql.ps1.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the pipeline runner's log: the 'housekeeping:' lines say the rows left, the pace needed and the pace reached, and how many key ranges ran at once. Look at the database's load on its Azure page while only the clean-up runs. A database at its limit then needs a larger tier, or more time between runs, until the rows left reach zero."
+      }
+    ],
+    "lesson": "A backlog that grows a little every day is only seen when its pace is measured against the time it has.",
     "since": null
   }
 ]

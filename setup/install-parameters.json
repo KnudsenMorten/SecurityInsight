@@ -75,7 +75,7 @@
       "help": "The mailbox SecurityInsight sends as, e.g. securityinsight@contoso.com. Empty = SecurityInsight@<your sign-in domain>." },
     { "key": "mailboxCreate", "page": "mail", "label": "Create the shared mailbox when it does not exist", "type": "bool", "default": true, "showIf": { "mailMode": "sharedMailbox" },
       "help": "Off = the mailbox must exist already. A shared mailbox needs no licence." },
-    { "key": "mailTo",     "page": "mail", "label": "Recipients of the reports (empty = you)", "type": "upnList" },
+    { "key": "mailTo",     "page": "mail", "label": "Recipients of the reports (empty = no one yet: chosen in Get Started)", "type": "upnList" },
     { "key": "smtpServer", "page": "mail", "label": "SMTP server", "type": "string", "showIf": { "mailMode": "smtp" } },
     { "key": "smtpPort",   "page": "mail", "label": "SMTP port", "type": "int", "min": 1, "max": 65535, "default": 587, "showIf": { "mailMode": "smtp" } },
     { "key": "smtpUser",   "page": "mail", "label": "SMTP user (empty = anonymous relay)", "type": "string", "showIf": { "mailMode": "smtp" },

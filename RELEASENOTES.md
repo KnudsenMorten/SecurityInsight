@@ -13,6 +13,79 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.2 — a fast device search, progress you can see, and steadier nights
+
+### What's new
+- **Searching a device in the detailed findings view is fast.** Searching for a device name, a CVE or an id in the
+  findings list used to read every finding of the collection and could take more than 40 seconds on a large
+  installation, sometimes ending in an error page. It now finds the device first and reads only its findings, so it
+  answers in seconds. The page says what was searched, and "search anywhere in the text" is still there when you need
+  it -- it can no longer end in an error page.
+- **Long steps show that they are moving.** A large report, the read of all findings after the reports, the long parts
+  of the data sync and the building of the configuration items now report how far they are ("batch 161 of 266").
+  You and support see that a long night is moving, not stuck.
+
+### Fixes
+- **A brief network failure no longer makes a night longer.** When a connection to the database failed for a moment,
+  one part of preparing the views was given up and the rest of the night ran slower. SecurityInsight now tries such a
+  connection again a few times before it gives up.
+- **"Kept open" is no longer counted as "held".** Findings that were sent to your ticketing system before and are not
+  in tonight's data are kept open there until enough complete runs confirm they are gone -- absence is not a fix. These
+  rows were counted as "held", which read as rows held back. They are now counted and named on their own: "kept open
+  -- not seen this run". What your ticketing system receives is unchanged.
+- **SecurityInsight never grants itself a permission it must not hold.** One permission (assigning directory roles) is
+  never given to SecurityInsight's updater, by any path -- including when its identity is moved.
+
+## v3.1.1 — the clean-up of older collections gives way to your database earlier
+
+### Fixes
+- **The clean-up of older collections no longer holds your database at its limit.** It used to pause only when the
+  database reached 85 % load, and each time it went on it pushed the load back up to near 100 %. Now it pauses at 70 %
+  and goes on only once the load is below 50 %. Each clean-up also starts with one part at a time, and it adds more
+  parts only while the database stays calm. Collections and your views keep their room, and the clean-up still
+  finishes before the next run.
+
+## v3.1.0 — SecurityInsight 3.1: a new platform, a support link you can see, and data you can trust
+
+SecurityInsight 3.1 brings together the work since 3.0. Nothing changes in how you use it, and you do not need to do
+anything: your installation updates itself.
+
+### What is new since 3.0
+
+- **A supported platform.** SecurityInsight now runs on .NET 10 and PowerShell 7.6, both long-term supported, on
+  Microsoft's own images that are kept up to date with security fixes.
+- **The Invardia support link.** The job that sends SecurityInsight's health and run results to Invardia support is
+  now called "Invardia support link" everywhere you see it. It sends SecurityInsight's health and run results to
+  Invardia support, so support can see problems and updates can roll out. One report that cannot be delivered never
+  sends you a mail; the Jobs page turns amber only after three in a row.
+- **Every error explained on invardia.com.** Each warning SecurityInsight shows has its own page there: what it means
+  and who acts.
+- **Data you can trust.** A run never waits in silence: the data sync says what it waits on, stops and repeats a part
+  that is held up, and goes on. The data sync always goes first; old data is removed when it does not get in the way,
+  and in time before the next run.
+- **One list of the people who get which mail.** Configuration > Reports and alerts now shows one row per person and a
+  tick per report and alert -- ticked means that person receives it, and nothing else decides. Get Started has a new
+  step, "Who gets the reports": your current recipients are already filled in, so you check them once and confirm.
+  Until you confirm, every mail goes where it goes today. Nobody is put on a list by default.
+- **Findings past their due date** are counted at every installation, from the accepted time to fix of each asset type.
+- Since 3.0 also: correlation decisions of your own, deleted users handled, reports that are never blank, a fresh start
+  of the data that is quick, private installations that check their network first, inherited Azure tags, ServiceNow
+  hand-off and management presentations -- each described in the 3.0.x notes below.
+
+### Fixes
+
+- A pipeline step that runs far past its usual time without progress opens a support case at once.
+- A safety check in the CMDB step that held nothing back no longer raises a warning.
+- A source is reported as behind only when its schedule says it should have been read.
+## v3.0.88 — The removal of old data keeps up without getting in the way
+
+### Fixes
+
+- Old data is now removed almost continuously while nothing else runs, instead of in short bursts, and in several parts
+  at once -- as many as the database can take, fewer the moment it is busy, so the web app stays responsive.
+- It works towards the next scheduled run: when it would not be done in time it widens, and when it still cannot keep up
+  it says so and support is told, so a backlog of old rows never grows unseen.
+- The data sync still always goes first: while it (or a data out) runs, nothing is removed.
 ## v3.0.87 — A data sync step never waits in silence
 
 ### Fixes

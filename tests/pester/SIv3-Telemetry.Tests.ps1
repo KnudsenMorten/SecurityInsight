@@ -344,7 +344,7 @@ Describe 'an endpoint that is down never fails or slows the run' {
         @($r.Sent).Count | Should -Be 0                      # stopped at the heartbeat -- the run report was not attempted
         $sw.Elapsed.TotalSeconds | Should -BeLessThan 12
         @($w).Count | Should -Be 1
-        "$($w[0])" | Should -Match '(?s)not sent.*run is not affected'
+        "$($w[0])" | Should -Match '(?s)Invardia support link could not deliver.*run is not affected'
         $global:SI_TelemetryHalted | Should -BeTrue
         $r2 = Send-SITelemetryRunEnd -RunContext (New-RunCtx) -ExitReason 'success' -Context $c -Transport $script:StubOk -WarningVariable w2 -WarningAction SilentlyContinue
         $r2.Status | Should -Be 'halted'; $script:Posts.Count | Should -Be 0; @($w2).Count | Should -Be 0

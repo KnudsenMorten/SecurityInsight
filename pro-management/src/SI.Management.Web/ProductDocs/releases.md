@@ -39,7 +39,7 @@ another ring:
 
 - The vendor names the installs of a wave. A wave can only serve a version already released to a lower ring.
 - A member's updater receives the wave's signed manifest instead of its ring's. Nothing else changes.
-- The header shows `Ring 2 - Pre-release (<wave name>)`, and the heartbeat to Invardia says the same.
+- The header shows `Ring 2 - Pre-release (<wave name>)`, and the Invardia support link says the same.
 - **Never moved back.** Leaving or stopping a wave never downgrades an install: it keeps its version until its ring
   catches up. The wave ends when the ring gets that version.
 - A member that turns Unhealthy, or stops reporting, after taking the wave's version stops the wave. There is no
@@ -52,7 +52,7 @@ After a release that changed engine code, every install that takes it reports mo
 | | |
 |---|---|
 | How often | Every 30 minutes, for 12 hours from the update |
-| What | Counts only, on the identified heartbeat: users, guests, devices, the guard mode, the wave and the release-mode period |
+| What | Counts only, on the Invardia support link: users, guests, devices, the guard mode, the wave and the release-mode period |
 | At the same time | Every numbered safety check is twice as strict for 24 hours. See [Guards and guard modes](guards). |
 
 ## Components: Testing and Stable

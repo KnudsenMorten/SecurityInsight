@@ -89,7 +89,7 @@ Floors (the share of records that must still be seen) are not halved: halving a 
 hold nothing are unchanged.
 
 **Where you see it.** *Operations > Guards* shows the period, its end, the release that started it, and each limit as
-"configured -> effective while strict". The header shows **Guard mode: Strict** to SuperAdmins. The heartbeat to Invardia
+"configured -> effective while strict". The header shows **Guard mode: Strict** to SuperAdmins. The Invardia support link
 carries the guard mode, so Invardia knows which installs are in their stricter period.
 
 **Ending it early.** A SuperAdmin may end the stricter period early on *Operations > Guards*, with a reason. It is

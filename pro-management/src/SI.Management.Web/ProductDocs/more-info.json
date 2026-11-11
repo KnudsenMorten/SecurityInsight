@@ -12,7 +12,7 @@
   "settings": {
     "SI_InvardiaUpdate_Enabled": "upgrade#staying-in-control",
     "SI_LicenseRequest_Auto": "upgrade#staying-in-control",
-    "SI_Telemetry_Enabled": "operations#status-reports-to-invardia",
+    "SI_Telemetry_Enabled": "operations#the-invardia-support-link",
     "SI_LogRetentionDays": "operations#logs-and-records"
   }
 }

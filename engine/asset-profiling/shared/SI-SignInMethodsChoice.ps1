@@ -116,7 +116,8 @@ function Test-SISignInMethodsPrivileged {
     #>
     param([string]$UserId, [hashtable]$Lookups)
     if (-not $UserId -or $null -eq $Lookups) { return $false }
-    foreach ($k in 'PermRoles', 'EligRoles', 'MemberToGroups', 'PimGroups', 'Azure') {
+    # PimGroupMembers (#1192): a plain member of a group that holds nothing but can activate into a privilege-holding group
+    foreach ($k in 'PermRoles', 'EligRoles', 'MemberToGroups', 'PimGroups', 'PimGroupMembers', 'Azure') {
         if ($Lookups.ContainsKey($k) -and (Test-SISignInMethodsLookupHas -Map $Lookups[$k] -Key $UserId)) { return $true }
     }
     if ($Lookups.ContainsKey('MemberToGroups') -and $Lookups.ContainsKey('Azure') -and $null -ne $Lookups['Azure'] -and (Test-SISignInMethodsLookupHas -Map $Lookups['MemberToGroups'] -Key $UserId)) {

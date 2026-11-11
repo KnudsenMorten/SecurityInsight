@@ -36,5 +36,5 @@ public static class SecurityHeaders
 public static class FrontVersion
 {
     /// <summary>Must equal FRAMEWORK/signin-front/VERSION (a test checks). Sent upstream as X-Signin-Front.</summary>
-    public const string Value = "2.1.0";
+    public const string Value = "2.1.1";
 }

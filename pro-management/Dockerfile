@@ -18,7 +18,7 @@
 # (New-SIReleaseCodeArchive -RequirePinnedBaseImages), and the digests go into the release's SBOM.
 # THE .NET RESTORE IS LOCKED: every project carries packages.lock.json (RestorePackagesWithLockFile) and the restore runs
 # --locked-mode -- a package (or a package it brings in) that differs from the lock file fails the build.
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
 WORKDIR /src
 # every shipped config file the projects link (settings catalog, audit actions, guard catalog, ...): the stage holds
 # exactly those, read from the csproj files by Deploy-SIManagement.ps1
@@ -37,7 +37,7 @@ RUN dotnet publish pro-management/src/SI.Management.Web/SI.Management.Web.csproj
 # IMAGE-PATCH-1 (2026-11-10): the runtime is Ubuntu 24.04 CHISELED -- no shell, no package manager, only the .NET runtime's
 # own files, so far fewer OS packages to carry a vulnerability. The -extra flavour keeps ICU + tzdata: the web app formats
 # numbers and times in the viewer's culture and time zone. Non-root by default (APP_UID 1654). Nothing below may need a shell.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:a9298ccc39c6258ae71228479e2f3f8d2ceb6639a9927262a4b0ff7d319a0e7e AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b AS runtime
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_HTTP_PORTS=8080 \

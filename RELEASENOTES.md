@@ -13,6 +13,27 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.4 — admins delegated through PIM groups count as privileged, and a faster device page
+
+### Fixes
+- **Admin accounts that get their rights through PIM groups are now classified by those rights.** When access is
+  delegated in steps -- a person is eligible in a group that holds no role itself, and that group is eligible in the
+  groups that hold the roles -- SecurityInsight followed only the last step, so such an admin could show the default
+  tier. It now follows every step: eligible and active, member and owner, nested to any depth. It covers Entra roles
+  (tenant-wide and administrative-unit scoped) and Azure roles at every scope, including roles a group is only eligible
+  for, and it applies to workload identities as well as people. The profile shows the way, for example
+  "Group <role group> (can activate via <persona group>) -> <role>". A read that fails is reported as unknown, never as
+  "no roles". No new permission is needed.
+- **Opening a device is fast.** The device page's history and its open items read only that device's rows, so on a
+  large installation the page opens in seconds instead of 20-30 seconds.
+- **The sign-in front is at the shared version 2.1.1** (.NET 10.0.15).
+## v3.1.3 — security update of the .NET runtime
+
+### Fixes
+- **Every SecurityInsight container now runs on .NET 10.0.15.** Microsoft's November update of .NET closes one
+  critical and several high-severity security issues in the runtime and in ASP.NET Core. The web app, the sign-in
+  front, the jobs, the MCP server and the updater are rebuilt on it. Nothing else changes.
+
 ## v3.1.2 — a fast device search, progress you can see, and steadier nights
 
 ### What's new

@@ -8,7 +8,7 @@
 # (installed as a .NET tool under /usr/share/powershell, /usr/bin/pwsh links to it) on the .NET 10 runtime. The old
 # powershell:lts-ubuntu-22.04 image carried PowerShell 7.4 on .NET 8, both out of support on 2026-11-10. Runs as root,
 # as the old base did (no USER is set). Pinned by digest (release\Update-SIBaseImageDigests.ps1).
-FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
 
 # IMAGE-PATCH-1 (2026-11-10): the base's OS packages are upgraded at build -- a digest-pinned base never moves, so its
 # fixed Ubuntu security updates reach the image only this way.

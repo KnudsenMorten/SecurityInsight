@@ -1034,18 +1034,21 @@ WHERE r.CollectionId = TRY_CONVERT(int, @CollectionId) AND r.AssetKey = @AssetKe
 ORDER BY r.Severity, r.Name;
 """;
 
-    /// The CI's findings per collection (newest 30): its history, from the (AssetKey, CollectionId) index -- never past
-    /// the published run.
+    /// The CI's findings per collection (newest 30): its history -- never past the published run.
+    /// DRIVEN BY THE COLLECTIONS, ONE SEEK OF (CollectionId, AssetKey) EACH (2026-11-11, live at a ring-1 install: 11.2 s for 2 rows
+    /// on a 1.5-million-finding collection). It grouped every finding of the asset in EVERY collection kept (complete or not,
+    /// published or not) from the (AssetKey, CollectionId) index, which has no ExemptionId: with exempted findings left out (the
+    /// page's default) each of those rows was looked up in the findings table (its documents) -- or the table was scanned. Now
+    /// the complete, published-or-older collections come first (a few hundred rows at most) and each is sought by (CollectionId,
+    /// AssetKey) in a covering index (the views' index carries RiskScore and ExemptionId); the LOOP join keeps that order
+    /// whatever the statistics say. Same rows: a collection without a finding of the asset has no row (inner join), as before.
     public const string AssetHistory = $"""
-SELECT TOP (30) CONVERT(nvarchar(64), col.CollectionId) AS CollectionId, col.CollectionTime, h.Findings, h.TotalRisk, h.MaxRisk
-FROM (
-    SELECT f.CollectionId, COUNT_BIG(*) AS Findings, SUM(f.RiskScore) AS TotalRisk, MAX(f.RiskScore) AS MaxRisk
-    FROM sidata.Finding AS f
-    WHERE f.AssetKey = @AssetKey
-    GROUP BY f.CollectionId
-) AS h
-JOIN sidata.Collection AS col ON col.CollectionId = h.CollectionId AND col.Status = N'Complete'
-WHERE col.CollectionTime <= ISNULL({PublishedRun.DetailedTime}, col.CollectionTime)
+SELECT TOP (30) CONVERT(nvarchar(64), col.CollectionId) AS CollectionId, col.CollectionTime,
+       COUNT_BIG(*) AS Findings, SUM(f.RiskScore) AS TotalRisk, MAX(f.RiskScore) AS MaxRisk
+FROM sidata.Collection AS col
+INNER LOOP JOIN sidata.Finding AS f ON f.CollectionId = col.CollectionId AND f.AssetKey = @AssetKey
+WHERE col.Status = N'Complete' AND col.CollectionTime <= ISNULL({PublishedRun.DetailedTime}, col.CollectionTime)
+GROUP BY col.CollectionId, col.CollectionTime
 ORDER BY col.CollectionTime DESC;
 """;
 
@@ -1057,14 +1060,25 @@ WITH k AS (
     UNION
     SELECT ai.IdentifierValue FROM sidata.AssetIdentifier AS ai WHERE ai.AssetKey = @AssetKey
 )
+-- EVERY BASE READ ONCE, THE PAGE CUT BEFORE THE TITLES (2026-11-11, live at a ring-1 install: 17.8 s for 500 rows on a
+-- 1.5-million-finding collection; 2.0 s for 333 rows on a smaller device -- it grew with the square of the device's items). The
+-- items were a CTE read twice (the rows, and again for the counts), the counts a one-row CTE cross-joined to every item, and the
+-- titles joined to EVERY item before the cut to 500 -- under the order the LOOP join hint fixes for the whole statement, the
+-- titles' seek (and the counts) could run once per item. Now: the asset's items are read ONCE, from the (CorrelationId, State)
+-- index that carries every shown column but the close reason, the counts a window over those same rows (every item, never
+-- the rows shown); the 500 shown rows are cut; only those 500 fetch the close reason by the item's key and their title from
+-- the titles read ONCE (a hash join: never one titles read per row).
 , a AS (
-    SELECT i.Cve, i.Severity, i.State, i.FirstSeen, i.LastSeen, i.ClosedAt, i.CloseReason
-    FROM k JOIN vuln.VulnerabilityItem AS i ON i.CorrelationId = k.K
+    SELECT i.SysId, i.Cve, i.Severity, i.State, i.FirstSeen, i.LastSeen, i.ClosedAt,
+           SUM(CASE WHEN i.State = N'Open' THEN 1 ELSE 0 END) OVER () AS OpenTotal,
+           SUM(CASE WHEN i.State = N'Open' THEN 0 ELSE 1 END) OVER () AS ClosedTotal
+    FROM k INNER LOOP JOIN vuln.VulnerabilityItem AS i ON i.CorrelationId = k.K
     WHERE i.Source = @Source
 )
--- the counts are over EVERY item of the asset, never over the rows shown (owner 2026-11-05: "500 open, 0 closed" was the cut)
-, c AS (
-    SELECT SUM(CASE WHEN a.State = N'Open' THEN 1 ELSE 0 END) AS OpenTotal, SUM(CASE WHEN a.State = N'Open' THEN 0 ELSE 1 END) AS ClosedTotal FROM a
+, p AS (
+    SELECT TOP (500) a.SysId, a.Cve, a.Severity, a.State, a.FirstSeen, a.LastSeen, a.ClosedAt, a.OpenTotal, a.ClosedTotal
+    FROM a
+    ORDER BY CASE WHEN a.State = N'Open' THEN 0 ELSE 1 END, a.Cve
 )
 -- the finding's readable name: this asset's findings in the PUBLISHED run, one title per key (a CVE, a recommendation id, a
 -- check) -- a keyed seek of the (CollectionId, AssetKey) index that carries the title; never a scan of every collection
@@ -1076,7 +1090,7 @@ WITH k AS (
 -- one seek per key of k (the asset and its few identifiers) -- whatever the statistics say. Same rows as before: the asset's
 -- titled findings in the published run, one title per key. The LOOP join keeps the asset's keys OUTSIDE: one seek per key, never
 -- a scan of an index joined by hash (the plan guard's ten-million-row plan did that without it); a join hint fixes the written
--- order for the whole statement, so every read starts from k (the items too: one seek of (Source, CorrelationId) per key), and
+-- order for the whole statement, so every read starts from k (the items too: one seek of (CorrelationId, State) per key), and
 -- the published collection is read BEFORE the findings (pub) -- written after them it could not be sought by.
 , pub AS (
     SELECT {PublishedRun.DetailedId} AS CollectionId
@@ -1091,10 +1105,11 @@ WITH k AS (
     ) AS x
     GROUP BY x.ConfigurationId
 )
-SELECT TOP (500) a.Cve, a.Severity, a.State, a.FirstSeen, a.LastSeen, a.ClosedAt, a.CloseReason, c.OpenTotal, c.ClosedTotal, t.Title
-FROM a CROSS JOIN c
-LEFT JOIN t ON t.ConfigurationId = a.Cve
-ORDER BY CASE WHEN a.State = N'Open' THEN 0 ELSE 1 END, a.Cve;
+SELECT p.Cve, p.Severity, p.State, p.FirstSeen, p.LastSeen, p.ClosedAt, r.CloseReason, p.OpenTotal, p.ClosedTotal, t.Title
+FROM p
+INNER LOOP JOIN vuln.VulnerabilityItem AS r ON r.SysId = p.SysId
+LEFT HASH JOIN t ON t.ConfigurationId = p.Cve
+ORDER BY CASE WHEN p.State = N'Open' THEN 0 ELSE 1 END, p.Cve;
 """;
 
     // ---- (15) services: the CMDB business services, ranked by weighted risk (#255) ------------------------------------

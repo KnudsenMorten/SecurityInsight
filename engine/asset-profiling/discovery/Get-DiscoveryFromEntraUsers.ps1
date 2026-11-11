@@ -87,25 +87,38 @@ function Get-DiscoveryFromEntraUsers {
         if ($got) { foreach ($k in @($got.Keys)) { $authMap[$k] = $got[$k] } }
     }
 
+    # Azure RBAC delegations (scope-aware Max). Caller must have
+    # called Connect-AzAccount; SI bootstrap already does this for the SPN.
+    # Read BEFORE the group expansion (#1192): a group that holds only Azure roles is a privilege-holding group too.
+    $ph = Start-SIIdentityPhase -Phase 'users: Azure RBAC'
+    $azureLookup = Get-SIAzureDelegationsByPrincipal -ExcludeSubscriptionPatterns @($global:SI_AzureSubscriptionExcludePatterns)
+    if ($null -eq $azureLookup) { $azureLookup = @{} }
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$azureLookup.Count) -Detail 'principals with an Azure role'
+
     # transitive group -> role expansion. Discover which GROUPS hold
     # roles, then walk each role-assigned group's transitiveMembers + invert.
     $ph = Start-SIIdentityPhase -Phase 'users: role-holding groups (members, PIM for Groups)'
     Write-SIInfo '[perms] discovering role-assigned groups...'
     $groupRoles = Get-SIRoleAssignedGroups -Token $token -PermanentRolesByPrincipal $permRolesMap -EligibleRolesByPrincipal $eligRolesMap
-    Write-SIInfo ('[perms] {0} groups hold Entra roles -- expanding transitive memberships...' -f $groupRoles.Count)
-    $memberToGroups = if ($groupRoles.Count -gt 0) {
-        Get-SIGroupTransitiveMembers -Token $token -RoleAssignedGroupMap $groupRoles
+    # #1192: the groups holding an Entra role AND the groups holding an Azure role are expanded (members, PIM for Groups)
+    $privGroups = Get-SIPrivilegeHoldingGroupMap -RoleAssignedGroupMap $groupRoles -AzureLookup $azureLookup
+    Write-SIInfo ('[perms] {0} groups hold Entra roles, {1} hold Entra or Azure roles -- expanding transitive memberships...' -f $groupRoles.Count, $privGroups.Count)
+    $memberToGroups = if ($privGroups.Count -gt 0) {
+        Get-SIGroupTransitiveMembers -Token $token -RoleAssignedGroupMap $privGroups
     } else { @{} }
-    # PIM-for-Groups: principals who can ELEVATE into a role-bearing group
-    # (not currently a member). Without this, EntraRoles_Eligible misses
-    # the entire PIM-for-Groups path (User -> PIM Group A -> Role).
-    $pimGroupsMap = if ($groupRoles.Count -gt 0) {
-        Get-SIPimForGroupsByPrincipal -Token $token -RoleAssignedGroupMap $groupRoles
+    # PIM-for-Groups: principals who can ELEVATE into a privilege-holding group (not currently a member), followed through
+    # groups that hold nothing themselves (User -> PIM group P -> PIM group R -> role), open depth.
+    $pimGroupsMap = if ($privGroups.Count -gt 0) {
+        Get-SIPimForGroupsByPrincipal -Token $token -RoleAssignedGroupMap $privGroups
     } else { @{} }
+    $grpLookups = Get-SIRoleGroupLookups
+    $pimGroupMembers = $grpLookups.PimGroupMembers
+    $activatedGroupMemberships = $grpLookups.ActivatedMembers
+    $groupNames = Get-SIRolePrincipalNames
     Write-SIInfo ('[perms] {0} principals inherit at least one role via group membership' -f $memberToGroups.Count)
-    $null = Stop-SIIdentityPhase $ph -Rows ([long]$groupRoles.Count) -Detail 'role-holding groups'
+    $null = Stop-SIIdentityPhase $ph -Rows ([long]$privGroups.Count) -Detail 'privilege-holding groups'
     # shadow-admin guard: no group holds a role = nothing to expand -- the group reads are complete by definition
-    if ($groupRoles.Count -eq 0 -and (Get-Command -Name Set-SIEntraRoleReadPart -ErrorAction SilentlyContinue)) {
+    if ($privGroups.Count -eq 0 -and (Get-Command -Name Set-SIEntraRoleReadPart -ErrorAction SilentlyContinue)) {
         Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $true
         Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $true
     }
@@ -119,15 +132,9 @@ function Get-DiscoveryFromEntraUsers {
     $rolePartial = ''; if (Get-Command -Name Get-SIEntraRoleReadPartialText -ErrorAction SilentlyContinue) { $rolePartial = [string](Get-SIEntraRoleReadPartialText) }
     $userDupWatch = New-SIIdDuplicateWatch -Label 'EntraUsers /users'
 
-    # Azure RBAC delegations (scope-aware Max). Caller must have
-    # called Connect-AzAccount; SI bootstrap already does this for the SPN.
-    $ph = Start-SIIdentityPhase -Phase 'users: Azure RBAC'
-    $azureLookup = Get-SIAzureDelegationsByPrincipal -ExcludeSubscriptionPatterns @($global:SI_AzureSubscriptionExcludePatterns)
-    $null = Stop-SIIdentityPhase $ph -Rows ([long]$(if ($null -ne $azureLookup) { $azureLookup.Count } else { 0 })) -Detail 'principals with an Azure role'
-
     # privileged for the sign-in methods' background read (read first; the only users read under 'privileged'): the role and
     # Azure look-ups above, and the registration report's isAdmin
-    $signInPrivLookups = @{ PermRoles = $permRolesMap; EligRoles = $eligRolesMap; MemberToGroups = $memberToGroups; PimGroups = $pimGroupsMap; Azure = $azureLookup; Registration = $mfaRegMap }
+    $signInPrivLookups = @{ PermRoles = $permRolesMap; EligRoles = $eligRolesMap; MemberToGroups = $memberToGroups; PimGroups = $pimGroupsMap; PimGroupMembers = $pimGroupMembers; Azure = $azureLookup; Registration = $mfaRegMap }
     $isSignInPrivileged = { param($u) Test-SISignInMethodsPrivileged -UserId ([string]$u.id) -Lookups $signInPrivLookups }
 
     # Defender XDR IdentityInfo (synced AD groups + MFA + risk signals).
@@ -230,14 +237,16 @@ function Get-DiscoveryFromEntraUsers {
         $permRoles = @(if ($permRolesMap.ContainsKey([string]$u.id)) { $permRolesMap[[string]$u.id] })
         $eligRoles = @(if ($eligRolesMap.ContainsKey([string]$u.id)) { $eligRolesMap[[string]$u.id] })
         # append roles inherited via group membership
-        $inh = Get-SIInheritedRolesForPrincipal -ObjectId ([string]$u.id) -MemberToGroupsMap $memberToGroups -RoleAssignedGroupMap $groupRoles -PimGroupsByPrincipal $pimGroupsMap
+        # #1192: every group the user reaches -- plain membership, PIM for Groups (eligible / active, member / owner),
+        # nesting, open depth -- and what those groups hold: Entra roles (tenant-wide or scoped) and Azure roles
+        $reach = @(Get-SIPrivilegeGroupReach -PrincipalId ([string]$u.id) -MemberToGroups $memberToGroups -PimGroups $pimGroupsMap -PimGroupMembers $pimGroupMembers -ActivatedGroupMemberships $activatedGroupMemberships)
+        $inh = Get-SIEntraRolesFromGroupReach -Reach $reach -GroupRoles $groupRoles
         $permRoles = @($permRoles + $inh.Permanent | Select-Object -Unique)
         $eligRoles = @($eligRoles + $inh.Eligible  | Select-Object -Unique)
-        # Azure delegations -- include direct + via inherited groups
-        $userGroupIds = if ($memberToGroups.ContainsKey([string]$u.id)) { @($memberToGroups[[string]$u.id]) } else { @() }
+        # Azure delegations -- direct + via every group reached (eligible through a PIM hop)
         $azDelegations = New-Object System.Collections.ArrayList
         if ($azureLookup.ContainsKey([string]$u.id)) { foreach ($e in $azureLookup[[string]$u.id]) { [void]$azDelegations.Add($e) } }
-        foreach ($gid in $userGroupIds) { if ($azureLookup.ContainsKey($gid)) { foreach ($e in $azureLookup[$gid]) { [void]$azDelegations.Add($e) } } }
+        foreach ($e in @(Get-SIAzureDelegationsFromGroupReach -Reach $reach -AzureLookup $azureLookup -Names $groupNames)) { [void]$azDelegations.Add($e) }
 
         # IdentityInfo enrichment (AD groups + MFA + risk + investigation priority)
         $ii = $identityInfoMap[[string]$u.id]

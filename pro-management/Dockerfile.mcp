@@ -8,7 +8,7 @@
 #   az acr build --registry <acr> --image si-management-mcp:<tag> --file pro-management/Dockerfile.mcp <stage>
 
 # Base images pinned by digest and the .NET restore locked (packages.lock.json, --locked-mode): see ./Dockerfile.
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
 WORKDIR /src
 COPY pro-management/src/SI.Management.Core/SI.Management.Core.csproj pro-management/src/SI.Management.Core/packages.lock.json pro-management/src/SI.Management.Core/
 COPY pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj pro-management/src/SI.Management.Mcp/packages.lock.json pro-management/src/SI.Management.Mcp/
@@ -19,7 +19,7 @@ RUN dotnet publish pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj
 
 # IMAGE-PATCH-1 (2026-11-10): the runtime is Ubuntu 24.04 CHISELED (no shell, no package manager; non-root by default). The
 # -extra flavour (ICU + tzdata) because the MCP server answers with the same culture-formatted values as the web app.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:a9298ccc39c6258ae71228479e2f3f8d2ceb6639a9927262a4b0ff7d319a0e7e AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b AS runtime
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_HTTP_PORTS=8080 \

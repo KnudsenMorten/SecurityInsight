@@ -15,7 +15,7 @@
          image carries ICU. 1.4.6: the runtime is aspnet:8.0-noble-chiseled-EXTRA (2.0.0: 10.0), the chiseled variant that
          carries ICU and tzdata; the plain chiseled image is invariant-only and would bring the 500 back. -->
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>2.1.0</Version>
+    <Version>2.1.1</Version>
     <!-- A package with a known vulnerability (direct or transitive) FAILS the build: sign-in code never ships on one. -->
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>

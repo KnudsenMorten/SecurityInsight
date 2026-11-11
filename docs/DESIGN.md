@@ -1203,7 +1203,23 @@ permission to grant. Existing installs get the permission the next time their pe
 (`setup\Grant-SIIdentity.ps1 -Apply`, `-AppId <client id>` for an app registration, or the guided install), which needs an
 administrator's consent; until then the field stays unknown.
 
-**PIM-for-Groups expansion** — `IdentityRoleFetcher.ps1` also pulls `identityGovernance/privilegedAccess/group/eligibilitySchedules` + `assignmentSchedules`. Recursive walker (`Get-SIRolesViaPimGroupChain`) handles nested chains: `User → PIM Group A (eligible) → PIM Group B (eligible) → Role`. Eligible roles inherited via PIM-for-Groups now flow into `EntraRoles_Eligible`.
+**PIM-for-Groups expansion (the delegation chain)** — a person often reaches privileges through groups only: person → a
+*persona* group that holds nothing itself → one or more *bundle* groups (nested to any depth) → what the bundles hold.
+`IdentityRoleFetcher.ps1` reads, for every group on the way, `identityGovernance/privilegedAccess/group/eligibilitySchedules`
+and `assignmentSchedules` (members AND owners, always per group — never filtered by principal). It starts from the
+**privilege-holding groups** (`Get-SIPrivilegeHoldingGroupMap`: groups holding an Entra role, tenant-wide or scoped to an
+administrative unit, AND groups holding an Azure role at any scope, tenant root and management groups included) plus the
+groups nested in them, and then follows every principal that is itself a group — persona groups that hold no role are
+followed too — round after round until no new group appears (cycle-safe, no depth cap). The plain members of those
+persona groups are read as well, so a plain member reaches what its persona can activate into.
+
+The rules are kept in one function each: `Get-SIPrivilegeGroupReach` (the hops: plain membership, PIM eligible or active,
+nesting — anything reached through a PIM hop is **eligible**), `Get-SIEntraRolesFromGroupReach` (Entra roles held by a
+group) and `Get-SIAzureDelegationsFromGroupReach` (Azure roles held by a group; Azure eligibility is read too, one list per
+subscription). Users and service principals use the same rules. The evidence names the way: the role path
+`Group <R> (can activate via <P>) -> <role>`, the Azure proof `(eligible via <P> -> <R>)`. A read that fails on the way
+makes the role read *not complete* (unknown), never "no roles". Group names are never a tier source — only what a group
+holds is. A workload identity's Graph application permissions are a separate path, tiered from the privilege tier catalog.
 
 **Per-source verdict split** — Catalog matching produces SEPARATE `EntraRolesPermanentVerdict_*` and `EntraRolesEligibleVerdict_*` flat columns. Was previously combined (and Eligible hardcoded to 0).
 

@@ -11,14 +11,16 @@
 # (SDK 10.0.403, runtime 10.0.14); runtime: aspnet:10.0-noble-chiseled-extra (ASP.NET Core 10.0.14). Both digests read
 # 2026-11-10. The .NET 10 image still sets ASPNETCORE_HTTP_PORTS=8080 and the non-root "app" user (APP_UID 1654) itself;
 # both are kept explicit below so the contract does not hang on a base-image default.
-FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
+# 2.1.1 (DOTNET-10015, Invardia 2026-11-11): both digests moved to .NET 10.0.15 (SDK 10.0.404, runtime + ASP.NET Core 10.0.15,
+# read 2026-11-11 from the MCR v2 API): 10.0.14's runtime packs carried CVE-2026-114146 (Critical), -114147 / -114149 / -109475.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
 WORKDIR /src
 COPY SigninFront.csproj packages.lock.json ./
 RUN dotnet restore SigninFront.csproj --locked-mode
 COPY . .
 RUN dotnet publish SigninFront.csproj -c Release -o /out --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:a9298ccc39c6258ae71228479e2f3f8d2ceb6639a9927262a4b0ff7d319a0e7e
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b
 WORKDIR /app
 COPY --from=build /out .
 ENV ASPNETCORE_HTTP_PORTS=8080

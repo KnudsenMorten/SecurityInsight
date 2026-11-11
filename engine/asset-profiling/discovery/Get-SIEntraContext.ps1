@@ -503,6 +503,17 @@ function Get-SIRolePaths {
             $gr = $Lookups.GroupRoles[[string]$g]
             foreach ($r in (@($gr.Permanent) + @($gr.Eligible))) { if ($r) { & $add ('Group {0} (can activate) -> {1}' -f (& $gname $g), [string]$r) } }
         }
+        # #1192: a role-holding group reached BY WAY OF ANOTHER GROUP (a group that holds no role, or a group the principal
+        # is a member of, that can activate into it): "Group <R> (can activate via <P> -> <Q>) -> <role>"
+        $pgm = $null; try { $pgm = $Lookups.PimGroupMembers } catch { $pgm = $null }
+        if ($null -eq $pgm) { $pgm = @{} }
+        $chain = @()
+        if (Get-Command -Name Get-SIPimGroupChainReach -ErrorAction SilentlyContinue) { $chain = @(Get-SIPimGroupChainReach -PrincipalId $pid2 -GroupRoles $Lookups.GroupRoles -MemberToGroups $Lookups.MemberToGroups -PimGroups $Lookups.PimGroups -PimGroupMembers $pgm) }
+        foreach ($reach in $chain) {
+            $gr = $Lookups.GroupRoles[[string]$reach.GroupId]
+            $viaText = (@($reach.Via) | ForEach-Object { & $gname $_ }) -join ' -> '
+            foreach ($r in (@($gr.Permanent) + @($gr.Eligible))) { if ($r) { & $add ('Group {0} (can activate via {1}) -> {2}' -f (& $gname $reach.GroupId), $viaText, [string]$r) } }
+        }
     }
     return $out.ToArray()
 }
@@ -932,6 +943,9 @@ function Invoke-SIEntraContextCapture {
         foreach ($cxP in @($cxScopes.Keys)) { [void]$cxPrincipals.Add([string]$cxP) }
         foreach ($cxP in @($cxLookups.MemberToGroups.Keys)) { [void]$cxPrincipals.Add([string]$cxP) }
         foreach ($cxP in @($cxLookups.PimGroups.Keys)) { [void]$cxPrincipals.Add([string]$cxP) }
+        $cxPgm = $null; try { $cxPgm = $cxLookups.PimGroupMembers } catch { $cxPgm = $null }
+        if ($null -eq $cxPgm) { $cxPgm = @{} }
+        foreach ($cxP in @($cxPgm.Keys)) { [void]$cxPrincipals.Add([string]$cxP) }
         # the tenant-wide role ids each principal holds (direct, and through the groups it is a member of) -- Conditional
         # Access names roles by id, and so do access reviews
         $cxRoleIds = @{}
@@ -952,6 +966,11 @@ function Invoke-SIEntraContextCapture {
             foreach ($cxG in @($cxLookups.PimGroups[$cxP])) {
                 if (-not $cxG -or -not $cxLookups.GroupRoles.ContainsKey([string]$cxG)) { continue }
                 foreach ($cxRn in (@($cxLookups.GroupRoles[[string]$cxG].Permanent) + @($cxLookups.GroupRoles[[string]$cxG].Eligible))) { if ($cxRn -and $cxRoleIdByName.ContainsKey([string]$cxRn)) { [void]$cxElig.Add($cxRoleIdByName[[string]$cxRn]) } }
+            }
+            # #1192: role-holding groups reached by way of another group -- eligible, as every PIM hop is
+            foreach ($cxReach in @(Get-SIPimGroupChainReach -PrincipalId $cxP -GroupRoles $cxLookups.GroupRoles -MemberToGroups $cxLookups.MemberToGroups -PimGroups $cxLookups.PimGroups -PimGroupMembers $cxPgm)) {
+                $cxGr = $cxLookups.GroupRoles[[string]$cxReach.GroupId]
+                foreach ($cxRn in (@($cxGr.Permanent) + @($cxGr.Eligible))) { if ($cxRn -and $cxRoleIdByName.ContainsKey([string]$cxRn)) { [void]$cxElig.Add($cxRoleIdByName[[string]$cxRn]) } }
             }
             $cxRoleIds[$cxP] = $cxHeld
             $cxActivation = New-Object System.Collections.Generic.List[object]
@@ -980,7 +999,9 @@ function Invoke-SIEntraContextCapture {
             if ($cxRoleTier) {
                 $cxHoldings = New-Object System.Collections.Generic.List[object]
                 foreach ($cxI in $cxItems) { $cxHoldings.Add($cxI) }
-                foreach ($cxG in (@($cxLookups.MemberToGroups[$cxP]) + @($cxLookups.PimGroups[$cxP]))) {
+                # (#1192: and the role-holding groups reached by way of another group -- a scoped role there keeps its scope)
+                $cxChainGroups = @(Get-SIPimGroupChainReach -PrincipalId $cxP -GroupRoles $cxLookups.GroupRoles -MemberToGroups $cxLookups.MemberToGroups -PimGroups $cxLookups.PimGroups -PimGroupMembers $cxPgm | ForEach-Object { [string]$_.GroupId })
+                foreach ($cxG in (@($cxLookups.MemberToGroups[$cxP]) + @($cxLookups.PimGroups[$cxP]) + $cxChainGroups)) {
                     if (-not $cxG -or -not $cxScopes.ContainsKey([string]$cxG)) { continue }
                     $cxGn = ''; if ($cxNames.ContainsKey([string]$cxG)) { $cxGn = [string]$cxNames[[string]$cxG] }; if (-not $cxGn) { $cxGn = [string]$cxG }
                     foreach ($cxGi in @(ConvertTo-SIRoleScopeItems -Entries @($cxScopes[[string]$cxG]) -PrincipalId ([string]$cxG) -ScopeNames $cxScopeNames -Activated $cxActivated)) {

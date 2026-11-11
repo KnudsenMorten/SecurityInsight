@@ -943,9 +943,11 @@ function Get-SIRolePrincipalNames {
 function Get-SIRoleGroupLookups {
     <# The run's role-through-group look-ups, as the discoveries built them (empty tables when they have not run):
        GroupRoles (group id -> { Permanent; Eligible }), MemberToGroups (member id -> group ids), PimGroups (principal id ->
-       the role-bearing groups it can activate into), ActivatedMembers ('<principal id>|<group id>' -> until when, for a
-       membership that exists only because it is activated right now). #>
-    $o = @{ GroupRoles = @{}; MemberToGroups = @{}; PimGroups = @{}; RoleDefinitions = @{}; ActivatedMembers = @{} }
+       the groups it can activate into -- role-holding ones, and groups that hold no role but lead into one), ActivatedMembers
+       ('<principal id>|<group id>' -> until when, for a membership that exists only because it is activated right now),
+       PimGroupMembers (member id -> the groups it is a member of that hold no role but lead into a role-holding group
+       through PIM for Groups). #>
+    $o = @{ GroupRoles = @{}; MemberToGroups = @{}; PimGroups = @{}; RoleDefinitions = @{}; ActivatedMembers = @{}; PimGroupMembers = @{} }
     if ($script:_SICache) {
         # a member of a role-holding group ONLY because an eligible membership is activated right now
         # (Get-SIPimGroupActivatedMemberships); empty when that read did not run or was refused
@@ -954,6 +956,7 @@ function Get-SIRoleGroupLookups {
         if ($script:_SICache.ContainsKey('GroupRoles')) { $o.GroupRoles = $script:_SICache['GroupRoles'] }
         if ($script:_SICache.ContainsKey('MemberToGroups')) { $o.MemberToGroups = $script:_SICache['MemberToGroups'] }
         if ($script:_SICache.ContainsKey('PimForGroupsMap')) { $o.PimGroups = $script:_SICache['PimForGroupsMap'] }
+        if ($script:_SICache.ContainsKey('PimGroupMembers')) { $o.PimGroupMembers = $script:_SICache['PimGroupMembers'] }
     }
     $o
 }
@@ -1089,29 +1092,14 @@ function Get-SIRoleAssignedGroups {
     foreach ($id in $EligibleRolesByPrincipal.Keys)  { [void]$allIds.Add($id) }
     if ($allIds.Count -eq 0) { Set-SIEntraRoleReadPart -Part 'GroupTypes' -Complete $true; return @{} }
 
-    # /directoryObjects/getByIds is capped at 1000 per call; chunk + batch.
-    $idArr = @($allIds)
-    $byType = @{}        # principalId -> @odata.type ('#microsoft.graph.group' | '...user' | '...servicePrincipal')
-    for ($i = 0; $i -lt $idArr.Count; $i += 1000) {
-        $chunk = $idArr[$i..([Math]::Min($i+999, $idArr.Count-1))]
-        $body  = @{ ids = $chunk; types = @('group','user','servicePrincipal') } | ConvertTo-Json -Compress
-        try {
-            $resp = Invoke-RestMethod -Method Post -Uri 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds' `
-                -Headers @{ Authorization = ('Bearer ' + $Token); 'Content-Type' = 'application/json' } `
-                -Body $body -ErrorAction Stop
-            foreach ($obj in $resp.value) {
-                if ($obj.id -and $obj.'@odata.type') { $byType[[string]$obj.id] = [string]$obj.'@odata.type' }
-                # the display name of every principal that holds a role (role paths name the group: "Group X -> role")
-                if ($obj.id -and $obj.PSObject.Properties['displayName'] -and $obj.displayName) {
-                    if (-not $script:_SICache.ContainsKey('RolePrincipalNames')) { $script:_SICache['RolePrincipalNames'] = @{} }
-                    $script:_SICache['RolePrincipalNames'][[string]$obj.id] = [string]$obj.displayName
-                }
-            }
-        } catch {
-            Write-Warning ('directoryObjects/getByIds failed -- {0}' -f $_.Exception.Message)
-            Set-SIEntraRoleReadPart -Part 'GroupTypes' -Complete $false -ErrorText $_.Exception.Message
-        }
+    # /directoryObjects/getByIds (1000 per call) -- the kinds and the display names of every principal that holds a role
+    # (role paths name the group: "Group X -> role"); kept for the run, so the PIM for Groups scan asks only for the new ones
+    $kinds = Get-SIDirectoryObjectTypes -Token $Token -Ids @($allIds)
+    if ($kinds.Failed) {
+        Write-Warning ('directoryObjects/getByIds failed -- {0}' -f $kinds.Error)
+        Set-SIEntraRoleReadPart -Part 'GroupTypes' -Complete $false -ErrorText $kinds.Error
     }
+    $byType = $kinds.Types   # principalId -> @odata.type ('#microsoft.graph.group' | '...user' | '...servicePrincipal')
 
     # Filter to GROUPS only and emit @{groupId = @{Permanent=...; Eligible=...}}
     $result = @{}
@@ -1136,6 +1124,7 @@ function Get-SIGroupTransitiveMembers {
     )
     if ($script:_SICache.ContainsKey('MemberToGroups')) { Write-SIInfo '[perms] group transitive members (cache hit)'; return $script:_SICache['MemberToGroups'] }
     $byMember = @{}     # userOrSpId -> HashSet[groupId]
+    $nestedGroups = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($gid in $RoleAssignedGroupMap.Keys) {
         try {
             # LIST KEPT: membership only -- the member ids of one group
@@ -1152,11 +1141,60 @@ function Get-SIGroupTransitiveMembers {
             if (-not $mid) { continue }
             if (-not $byMember.ContainsKey($mid)) { $byMember[$mid] = New-Object System.Collections.Generic.HashSet[string] }
             [void]$byMember[$mid].Add($gid)
+            # #1192: a GROUP nested in a privilege-holding group -- whoever can activate into it reaches the outer group, so
+            # the PIM for Groups scan reads its schedules too (the kind comes with the row; no extra read)
+            $tp = $m.PSObject.Properties['@odata.type']
+            if ($tp -and [string]$tp.Value -eq '#microsoft.graph.group') { [void]$nestedGroups.Add($mid) }
         }
     }
+    $script:_SICache['NestedMemberGroups'] = $nestedGroups
     Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $true      # AND-ed with a group that failed above
     $script:_SICache['MemberToGroups'] = $byMember
     return $byMember
+}
+
+function Get-SIDirectoryObjectTypes {
+    <#
+        The kind of each directory object id ('#microsoft.graph.group' | '...user' | '...servicePrincipal'): what this run
+        already knows (Get-SIRoleAssignedGroups keeps the kinds it read), then ONE /directoryObjects/getByIds call per 1000
+        ids not known yet. Kinds and display names read are kept for the run. An id the service does not return (deleted)
+        has no kind and is not asked again. Returns @{ Types = @{ <id> = <kind> }; Failed; Error } -- Failed when a call
+        failed: the ids it carried are then of unknown kind. Never throws.
+    #>
+    param([string]$Token, [AllowEmptyCollection()][string[]]$Ids = @())
+    if (-not $script:_SICache.ContainsKey('PrincipalTypes')) { $script:_SICache['PrincipalTypes'] = @{} }
+    $known = $script:_SICache['PrincipalTypes']
+    $res = @{ Types = @{}; Failed = $false; Error = '' }
+    $todo = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($id in @($Ids)) {
+        if (-not $id -or -not $seen.Add([string]$id)) { continue }
+        if ($known.ContainsKey([string]$id)) { $res.Types[[string]$id] = [string]$known[[string]$id] } else { $todo.Add([string]$id) }
+    }
+    for ($i = 0; $i -lt $todo.Count; $i += 1000) {
+        $chunk = @($todo.GetRange($i, [Math]::Min(1000, $todo.Count - $i)))
+        $body = @{ ids = $chunk; types = @('group', 'user', 'servicePrincipal') } | ConvertTo-Json -Compress
+        try {
+            $resp = Invoke-RestMethod -Method Post -Uri 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds' `
+                -Headers @{ Authorization = ('Bearer ' + $Token); 'Content-Type' = 'application/json' } -Body $body -ErrorAction Stop
+        } catch {
+            $res.Failed = $true
+            if (-not $res.Error) { $res.Error = [string]$_.Exception.Message }
+            continue
+        }
+        foreach ($obj in @($resp.value)) {
+            if ($null -eq $obj -or -not $obj.id) { continue }
+            $t = ''; if ($obj.PSObject.Properties['@odata.type']) { $t = [string]$obj.'@odata.type' }
+            $known[[string]$obj.id] = $t; $res.Types[[string]$obj.id] = $t
+            if ($obj.PSObject.Properties['displayName'] -and $obj.displayName) {
+                if (-not $script:_SICache.ContainsKey('RolePrincipalNames')) { $script:_SICache['RolePrincipalNames'] = @{} }
+                $script:_SICache['RolePrincipalNames'][[string]$obj.id] = [string]$obj.displayName
+            }
+        }
+        # asked and not answered: no such object (deleted) -- no kind, not asked again this run
+        foreach ($id in $chunk) { if (-not $known.ContainsKey($id)) { $known[$id] = '' } }
+    }
+    return $res
 }
 
 function Get-SIPimForGroupsByPrincipal {
@@ -1181,32 +1219,88 @@ function Get-SIPimForGroupsByPrincipal {
     Write-SIInfo ('[perms] PIM for Groups: scanning {0} role-bearing group(s)...' -f $RoleAssignedGroupMap.Count)
     $byPrincipal = @{}
     $totalRows = 0
-    $_pimTotal = $RoleAssignedGroupMap.Count; $_pimIdx = 0
+    # GROUPS THAT HOLD NO ROLE THEMSELVES ARE FOLLOWED TOO (#1192). A tenant may delegate through groups that hold no role:
+    # user --(eligible)--> group P (no role) --(eligible)--> group R (holds the role). Scanning only R records "P -> R" and
+    # never who can reach P, so the user's eligible roles came out empty. So every principal of a scanned group that is
+    # itself a GROUP is scanned as well, round after round, until no new group appears -- a visited set ends a cycle, and
+    # the closure ends by itself (no depth cap). Only groups that lead into a role-holding group are ever scanned.
+    $scanned = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $queue = @($RoleAssignedGroupMap.Keys | ForEach-Object { [string]$_ })
+    # groups nested (plain membership) in a privilege-holding group: who can activate into them reaches the outer group
+    $nested = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    if ($script:_SICache.ContainsKey('NestedMemberGroups') -and $script:_SICache['NestedMemberGroups']) { foreach ($n in $script:_SICache['NestedMemberGroups']) { [void]$nested.Add([string]$n) } }
+    $queue = @(@($queue) + @($nested | Where-Object { -not $RoleAssignedGroupMap.ContainsKey($_) }))
+    $_pimIdx = 0
     Reset-SIProgress -Label 'PimForGroups' -ErrorAction SilentlyContinue
-    foreach ($gid in $RoleAssignedGroupMap.Keys) {
-        $_pimIdx++
-        try { Write-SIProgress -Label 'PimForGroups' -Index $_pimIdx -Total $_pimTotal } catch { }
-        foreach ($endpoint in @('eligibilitySchedules','assignmentSchedules')) {
-            try {
-                # LIST KEPT: membership only -- who is eligible for or assigned to the group
-                $rows = Invoke-SIGraphPaged -RelativeUrl ("/identityGovernance/privilegedAccess/group/{0}?`$filter=groupId eq '{1}'&`$select=principalId,groupId" -f $endpoint, $gid) -Token $Token
-            } catch {
-                # Tenant may lack Entra ID P2; skip silently per group/endpoint -- but the read is then NOT complete: who
-                # can elevate into a role-bearing group is unknown (shadow-admin guard)
-                Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $_.Exception.Message
-                continue
-            }
-            foreach ($r in $rows) {
-                $principalId = [string]$r.principalId
-                if (-not $principalId) { continue }
-                if (-not $byPrincipal.ContainsKey($principalId)) {
-                    $byPrincipal[$principalId] = New-Object System.Collections.Generic.HashSet[string]
+    while ($queue.Count -gt 0) {
+        $_pimTotal = $scanned.Count + $queue.Count
+        $roundPrincipals = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($gid in $queue) {
+            if (-not $gid -or -not $scanned.Add($gid)) { continue }
+            $_pimIdx++
+            try { Write-SIProgress -Label 'PimForGroups' -Index $_pimIdx -Total $_pimTotal } catch { }
+            foreach ($endpoint in @('eligibilitySchedules','assignmentSchedules')) {
+                try {
+                    # LIST KEPT: membership only -- who is eligible for or assigned to the group
+                    $rows = Invoke-SIGraphPaged -RelativeUrl ("/identityGovernance/privilegedAccess/group/{0}?`$filter=groupId eq '{1}'&`$select=principalId,groupId" -f $endpoint, $gid) -Token $Token
+                } catch {
+                    # Tenant may lack Entra ID P2; skip silently per group/endpoint -- but the read is then NOT complete: who
+                    # can elevate into a role-bearing group is unknown (shadow-admin guard)
+                    Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $_.Exception.Message
+                    continue
                 }
-                if ($byPrincipal[$principalId].Add($gid)) { $totalRows++ }
+                foreach ($r in $rows) {
+                    $principalId = [string]$r.principalId
+                    if (-not $principalId) { continue }
+                    if (-not $byPrincipal.ContainsKey($principalId)) {
+                        $byPrincipal[$principalId] = New-Object System.Collections.Generic.HashSet[string]
+                    }
+                    if ($byPrincipal[$principalId].Add($gid)) { $totalRows++ }
+                    [void]$roundPrincipals.Add($principalId)
+                }
             }
         }
+        # which of this round's principals are groups not scanned yet (the run's known kinds first, then one look-up per
+        # 1000 unknown ids). A kind that could not be read leaves the chain unknown -- never "no roles".
+        $ask = @($roundPrincipals | Where-Object { -not $scanned.Contains($_) })
+        $next = New-Object System.Collections.Generic.List[string]
+        if ($ask.Count -gt 0) {
+            $kinds = Get-SIDirectoryObjectTypes -Token $Token -Ids $ask
+            if ($kinds.Failed) {
+                Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText ('the kind of a principal in a group''s PIM schedules could not be read: ' + [string]$kinds.Error)
+            }
+            foreach ($id in $ask) { if ([string]$kinds.Types[$id] -eq '#microsoft.graph.group') { $next.Add($id) } }
+        }
+        $queue = @($next.ToArray())
     }
+    # the members of the groups followed above (they hold no role themselves): a plain member of such a group can
+    # activate whatever the group is eligible for, so they reach the chain too. ONE paged read per such group; the
+    # role-holding groups' members are already read (Get-SIGroupTransitiveMembers).
+    $pimGroupMembers = @{}
+    # (a group nested in a privilege-holding group needs no read: its members are that group's transitive members already)
+    $followed = @($scanned | Where-Object { -not $RoleAssignedGroupMap.ContainsKey($_) -and -not $nested.Contains($_) })
+    foreach ($pg in $followed) {
+        try {
+            # LIST KEPT: membership only -- the member ids of one group
+            $rows = Invoke-SIGraphPaged -RelativeUrl ('/groups/{0}/transitiveMembers?$select=id' -f $pg) -Token $Token
+        } catch {
+            Write-Warning ('transitiveMembers failed for group {0}: {1}' -f $pg, $_.Exception.Message)
+            Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $_.Exception.Message
+            continue
+        }
+        $gw = New-SIIdDuplicateWatch -Label ('transitive members of group {0}' -f $pg); Add-SIIdDuplicateWatch -Watch $gw -Rows @($rows); $null = Write-SIIdDuplicateWarning $gw
+        foreach ($m in $rows) {
+            $mid = [string]$m.id
+            if (-not $mid) { continue }
+            if (-not $pimGroupMembers.ContainsKey($mid)) { $pimGroupMembers[$mid] = New-Object System.Collections.Generic.HashSet[string] }
+            [void]$pimGroupMembers[$mid].Add($pg)
+        }
+    }
+    $script:_SICache['PimGroupMembers'] = $pimGroupMembers
     Write-SIInfo ('[perms] PIM for Groups loaded: {0} principal->group entries across {1} principals' -f $totalRows, $byPrincipal.Count)
+    if ($followed.Count -gt 0) {
+        Write-SIInfo ('[perms] PIM for Groups: {0} group(s) that hold no role themselves lead into a role-holding group -- followed, {1} member(s)' -f $followed.Count, $pimGroupMembers.Count)
+    }
     Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $true      # AND-ed with a group / endpoint that failed above
     # who is a member of a role-holding group only while a membership is activated: one more read per group, kept for the
     # run (Get-SIInheritedRolesForPrincipal and the identity context read it from there). It never fails this scan.
@@ -1322,59 +1416,227 @@ function Get-SIRolesViaPimGroupChain {
     }
 }
 
+function Get-SIPrivilegeGroupReach {
+    <#
+        PURE. THE HOP RULES (#1192; framework contract PIM-DELEGATION-1): every group a principal reaches, and how. One place,
+        so a difference with the contract is a change here only. The hops:
+          member   plain (transitive) membership -- MemberToGroups (the privilege-holding groups' transitive members, which
+                   already flattens group-in-group nesting) and PimGroupMembers (the members of groups that hold nothing but
+                   lead into a privilege-holding group through PIM for Groups). Held as the group holds it -- except a
+                   membership that exists only while an eligible membership is activated right now: eligible.
+          pim      PIM for Groups, eligible or active (assignment schedules) -- PimGroups (principal -> groups). Everything
+                   reached through a PIM hop is ELIGIBLE: the principal must activate to use it.
+          nested   a group reached through a PIM hop is itself a plain member of other groups (MemberToGroups keyed by the
+                   group): the principal reaches those too, still eligible.
+        A group's own PIM eligibilities pass to its members (a member of P reaches what P can activate into). Open depth,
+        cycle-safe (a visited set), shortest way first; a group reached by plain membership is never downgraded.
+        Returns @( [pscustomobject]@{ GroupId; Via = string[] (the groups passed before it, in order); Hop; Eligible; } ).
+    #>
+    param([string]$PrincipalId, [hashtable]$MemberToGroups = @{}, [hashtable]$PimGroups = @{}, [hashtable]$PimGroupMembers = @{},
+          [hashtable]$ActivatedGroupMemberships = @{})
+    $out = New-Object System.Collections.Generic.List[object]
+    if (-not $PrincipalId) { return @() }
+    if ($null -eq $MemberToGroups) { $MemberToGroups = @{} }; if ($null -eq $PimGroups) { $PimGroups = @{} }
+    if ($null -eq $PimGroupMembers) { $PimGroupMembers = @{} }; if ($null -eq $ActivatedGroupMemberships) { $ActivatedGroupMemberships = @{} }
+    $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $queue = New-Object 'System.Collections.Generic.Queue[object]'
+    # hop 'member' first: what the principal holds through plain membership is never re-counted as eligible
+    $memberOf = New-Object System.Collections.Generic.List[string]
+    foreach ($src in @($MemberToGroups, $PimGroupMembers)) {
+        if ($src.ContainsKey($PrincipalId)) { foreach ($g in $src[$PrincipalId]) { if ($g -and $visited.Add([string]$g)) { $memberOf.Add([string]$g) } } }
+    }
+    foreach ($g in $memberOf) {
+        $act = ($ActivatedGroupMemberships.Count -gt 0 -and $ActivatedGroupMemberships.ContainsKey((Get-SIPimGroupActivationKey -PrincipalId $PrincipalId -GroupId $g)))
+        $out.Add([pscustomobject]@{ GroupId = $g; Via = [string[]]@(); Hop = 'member'; Eligible = [bool]$act })
+    }
+    # hop 'pim': what the principal itself can activate into, then what each group it is a member of can
+    if ($PimGroups.ContainsKey($PrincipalId)) { foreach ($g in $PimGroups[$PrincipalId]) { $queue.Enqueue(@([string]$g, [string[]]@(), 'pim')) } }
+    foreach ($mg in $memberOf) { if ($PimGroups.ContainsKey($mg)) { foreach ($g in $PimGroups[$mg]) { $queue.Enqueue(@([string]$g, [string[]]@($mg), 'pim')) } } }
+    while ($queue.Count -gt 0) {
+        $item = $queue.Dequeue()
+        $gid = [string]$item[0]; $via = [string[]]@($item[1]); $hop = [string]$item[2]
+        if (-not $gid -or -not $visited.Add($gid)) { continue }
+        $out.Add([pscustomobject]@{ GroupId = $gid; Via = $via; Hop = $hop; Eligible = $true })
+        $next = [string[]]@($via + $gid)
+        if ($PimGroups.ContainsKey($gid)) { foreach ($n in $PimGroups[$gid]) { if (-not $visited.Contains([string]$n)) { $queue.Enqueue(@([string]$n, $next, 'pim')) } } }
+        if ($MemberToGroups.ContainsKey($gid)) { foreach ($n in $MemberToGroups[$gid]) { if (-not $visited.Contains([string]$n)) { $queue.Enqueue(@([string]$n, $next, 'nested')) } } }
+        if ($PimGroupMembers.ContainsKey($gid)) { foreach ($n in $PimGroupMembers[$gid]) { if (-not $visited.Contains([string]$n)) { $queue.Enqueue(@([string]$n, $next, 'nested')) } } }
+    }
+    return $out.ToArray()
+}
+
+function Get-SIEntraRolesFromGroupReach {
+    <#
+        PURE. ATTACH POINT: an Entra role (tenant-wide or scoped to an administrative unit / one object -- a scoped role is
+        still the role, owner 2026-10-11) assigned to or eligible for a GROUP. A reach that is eligible makes every role of
+        the group eligible; a plain membership keeps the group's own split. Returns @{ Permanent = string[]; Eligible = string[] }.
+    #>
+    param([AllowEmptyCollection()][object[]]$Reach = @(), [hashtable]$GroupRoles = @{})
+    $perm = New-Object System.Collections.Generic.HashSet[string]
+    $elig = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($r in @($Reach)) {
+        if ($null -eq $r -or -not $GroupRoles.ContainsKey([string]$r.GroupId)) { continue }
+        $g = $GroupRoles[[string]$r.GroupId]
+        if ($r.Eligible) { foreach ($x in (@($g.Permanent) + @($g.Eligible))) { if ($x) { [void]$elig.Add([string]$x) } }; continue }
+        foreach ($x in @($g.Permanent)) { if ($x) { [void]$perm.Add([string]$x) } }
+        foreach ($x in @($g.Eligible))  { if ($x) { [void]$elig.Add([string]$x) } }
+    }
+    return @{ Permanent = @($perm); Eligible = @($elig) }
+}
+
+function Get-SIAzureDelegationsFromGroupReach {
+    <#
+        PURE. ATTACH POINT: an Azure RBAC role assignment held by a GROUP, at any scope (tenant root, management group,
+        subscription, resource group, resource) -- the tier is the one the Azure read worked out (Max(RoleTier, ScopeLevel)
+        = EffectiveTier). A plain membership adds the group's assignments exactly as before; a reach that is eligible (a PIM
+        hop, or a membership that exists only while activated) adds a COPY marked Assignment = 'eligible', InheritedFromGroup
+        and Via ("<P> -> <R>"), so the evidence says how. -Names: group id -> display name.
+    #>
+    param([AllowEmptyCollection()][object[]]$Reach = @(), [hashtable]$AzureLookup = @{}, [hashtable]$Names = @{})
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $AzureLookup) { return @() }
+    if ($null -eq $Names) { $Names = @{} }
+    $nm = { param($g) $n = ''; if ($Names.ContainsKey([string]$g)) { $n = [string]$Names[[string]$g] }; if (-not $n) { $n = [string]$g }; $n }
+    foreach ($r in @($Reach)) {
+        if ($null -eq $r -or -not $AzureLookup.ContainsKey([string]$r.GroupId)) { continue }
+        foreach ($e in @($AzureLookup[[string]$r.GroupId])) {
+            if ($null -eq $e) { continue }
+            if (-not $r.Eligible) { $out.Add($e); continue }
+            $c = [ordered]@{}
+            if ($e -is [System.Collections.IDictionary]) { foreach ($k in @($e.Keys)) { $c[[string]$k] = $e[$k] } } else { foreach ($p in $e.PSObject.Properties) { $c[$p.Name] = $p.Value } }
+            $c['Assignment'] = 'eligible'
+            $c['InheritedFromGroup'] = $true
+            $c['Via'] = ((@($r.Via) + @([string]$r.GroupId)) | ForEach-Object { & $nm $_ }) -join ' -> '
+            $out.Add($c)
+        }
+    }
+    return $out.ToArray()
+}
+
 function Get-SIInheritedRolesForPrincipal {
-    # Per-principal: walk the principal's role-via-group inheritance:
-    #   1. Active transitive membership in role-bearing groups
-    #   2. PIM-for-Groups eligibility/active (recursive nested chains)
-    # Returns @{Permanent=string[]; Eligible=string[]}.
+    # Per-principal: the Entra roles held through groups -- every hop (plain membership, PIM for Groups eligible or active,
+    # nesting; Get-SIPrivilegeGroupReach) and the Entra role attach point (Get-SIEntraRolesFromGroupReach). Anything
+    # reached through a PIM hop is Eligible. Returns @{Permanent=string[]; Eligible=string[]}.
     param(
         [Parameter(Mandatory)][string]$ObjectId,
         [Parameter(Mandatory)][hashtable]$MemberToGroupsMap,        # from Get-SIGroupTransitiveMembers
         [Parameter(Mandatory)][hashtable]$RoleAssignedGroupMap,     # from Get-SIRoleAssignedGroups
         [hashtable]$PimGroupsByPrincipal = @{},                     # from Get-SIPimForGroupsByPrincipal (optional for back-compat)
         # '<principal id>|<group id>' -> until when (Get-SIPimGroupActivatedMemberships); not given = what this run read
-        [hashtable]$ActivatedGroupMemberships = $null
+        [hashtable]$ActivatedGroupMemberships = $null,
+        # member id -> the groups it is a member of that hold nothing but lead into a privilege-holding group through PIM
+        # for Groups (Get-SIPimForGroupsByPrincipal); not given = what this run read
+        [hashtable]$PimGroupMembers = $null
     )
     if ($null -eq $ActivatedGroupMemberships) {
         $ActivatedGroupMemberships = @{}
         $actRead = Get-SIPimGroupActivatedMemberships -CacheOnly
         if ($actRead -and $actRead.ByKey) { $ActivatedGroupMemberships = $actRead.ByKey }
     }
-    $perm    = New-Object System.Collections.Generic.HashSet[string]
-    $elig    = New-Object System.Collections.Generic.HashSet[string]
-    $visited = New-Object System.Collections.Generic.HashSet[string]
+    if ($null -eq $PimGroupMembers) {
+        $PimGroupMembers = @{}
+        if ($script:_SICache -and $script:_SICache.ContainsKey('PimGroupMembers')) { $PimGroupMembers = $script:_SICache['PimGroupMembers'] }
+    }
+    $reach = @(Get-SIPrivilegeGroupReach -PrincipalId $ObjectId -MemberToGroups $MemberToGroupsMap -PimGroups $PimGroupsByPrincipal -PimGroupMembers $PimGroupMembers -ActivatedGroupMemberships $ActivatedGroupMemberships)
+    return (Get-SIEntraRolesFromGroupReach -Reach $reach -GroupRoles $RoleAssignedGroupMap)
+}
 
-    # 1. Active membership -- principal IS a member, so direct roles flow through unchanged.
-    if ($MemberToGroupsMap.ContainsKey($ObjectId)) {
-        foreach ($gid in $MemberToGroupsMap[$ObjectId]) {
-            [void]$visited.Add($gid)
-            if (-not $RoleAssignedGroupMap.ContainsKey($gid)) { continue }
-            $g = $RoleAssignedGroupMap[$gid]
-            # A MEMBERSHIP THAT IS ACTIVATED RIGHT NOW IS AN ELIGIBLE ONE: the principal is a member only until the
-            # activation ends, so every role it holds through this group is an eligible role, never a permanent one
-            if ($ActivatedGroupMemberships.Count -gt 0 -and $ActivatedGroupMemberships.ContainsKey((Get-SIPimGroupActivationKey -PrincipalId $ObjectId -GroupId ([string]$gid)))) {
-                foreach ($r in $g.Permanent) { [void]$elig.Add([string]$r) }
-                foreach ($r in $g.Eligible)  { [void]$elig.Add([string]$r) }
-                continue
+function Get-SIPimGroupChainReach {
+    <#
+        PURE. The role-holding groups a principal reaches BY WAY OF ANOTHER GROUP (#1192) -- what the role path shows:
+        "Group <R> (can activate via <P>) -> <role>". A role-holding group it is a member of, or can activate into
+        directly, is not listed (the existing paths say those). Built on Get-SIPrivilegeGroupReach.
+        Returns @( [pscustomobject]@{ GroupId; Via = string[] } ).
+    #>
+    param([string]$PrincipalId, [hashtable]$GroupRoles = @{}, [hashtable]$MemberToGroups = @{}, [hashtable]$PimGroups = @{}, [hashtable]$PimGroupMembers = @{})
+    if ($null -eq $GroupRoles) { $GroupRoles = @{} }
+    @(Get-SIPrivilegeGroupReach -PrincipalId $PrincipalId -MemberToGroups $MemberToGroups -PimGroups $PimGroups -PimGroupMembers $PimGroupMembers |
+        Where-Object { $_.Hop -ne 'member' -and @($_.Via).Count -gt 0 -and $GroupRoles.ContainsKey([string]$_.GroupId) } |
+        ForEach-Object { [pscustomobject]@{ GroupId = $_.GroupId; Via = $_.Via } })
+}
+
+function Get-SIPrivilegeHoldingGroupMap {
+    <#
+        PURE. THE GROUPS WHOSE MEMBERS AND PIM SCHEDULES ARE READ (#1192): every group that holds an Entra role (the map
+        Get-SIRoleAssignedGroups built) AND every group that holds an Azure RBAC role at any scope (-AzureLookup entries with
+        PrincipalType Group). Before #1192 only the Entra role groups were read, so a group holding only Azure roles (e.g.
+        Owner at the tenant root) never reached its members or the principals who can activate into it. Shape as
+        Get-SIRoleAssignedGroups: @{ <group id> = @{ Permanent; Eligible } } -- empty role lists for an Azure-only group.
+    #>
+    param([hashtable]$RoleAssignedGroupMap = @{}, [hashtable]$AzureLookup = @{})
+    $out = @{}
+    if ($RoleAssignedGroupMap) { foreach ($k in @($RoleAssignedGroupMap.Keys)) { $out[[string]$k] = $RoleAssignedGroupMap[$k] } }
+    if ($AzureLookup) {
+        foreach ($k in @($AzureLookup.Keys)) {
+            if ($out.ContainsKey([string]$k)) { continue }
+            $isGroup = $false
+            foreach ($e in @($AzureLookup[$k])) {
+                if ($null -eq $e) { continue }
+                $pt = ''; if ($e -is [System.Collections.IDictionary]) { $pt = [string]$e['PrincipalType'] } elseif ($e.PSObject.Properties['PrincipalType']) { $pt = [string]$e.PrincipalType }
+                if ($pt -eq 'Group') { $isGroup = $true; break }
             }
-            foreach ($r in $g.Permanent) { [void]$perm.Add([string]$r) }
-            foreach ($r in $g.Eligible)  { [void]$elig.Add([string]$r) }
+            if ($isGroup) { $out[[string]$k] = @{ Permanent = @(); Eligible = @() } }
         }
     }
+    return $out
+}
 
-    # 2. PIM-for-Groups -- principal can ELEVATE into the group; everything from this
-    #    chain is Eligible. Recursive helper handles nested PIM-into-PIM.
-    if ($PimGroupsByPrincipal.ContainsKey($ObjectId)) {
-        $eligibleGroupIds = @($PimGroupsByPrincipal[$ObjectId] | Where-Object { -not $visited.Contains($_) })
-        if ($eligibleGroupIds.Count -gt 0) {
-            Get-SIRolesViaPimGroupChain -GroupIds $eligibleGroupIds -Eligible $elig `
-                                         -Visited $visited `
-                                         -RoleAssignedGroupMap $RoleAssignedGroupMap `
-                                         -PimGroupsByPrincipal $PimGroupsByPrincipal
-        }
+function Get-SIAzureEligibleRoleEntries {
+    <#
+        ATTACH POINT (#1192, PIM-DELEGATION-1): Azure RBAC role ELIGIBILITY (Privileged Identity Management for Azure
+        resources) as one subscription sees it -- every eligibility at, above (management groups, the tenant root) and below
+        the subscription. ONE list read per subscription (roleEligibilityScheduleInstances, no principal filter: a filtered
+        read is known to drop schedules). The engine identity's Reader reads it (*/read covers Microsoft.Authorization reads)
+        -- no new right. Each entry has the shape of an Azure delegation (RoleName, Scope, ScopeLabel, ..., EffectiveTier =
+        Max(RoleTier, ScopeLevel)) plus Assignment = 'eligible'.
+        Returns @{ Entries = @( @{ ObjectId; Entry } ); Failed; Error }. Never throws: a failed read is Failed (= unknown).
+    #>
+    param([string]$SubscriptionId, [string]$SubscriptionName = '')
+    $res = @{ Entries = @(); Failed = $false; Error = '' }
+    $items = @()
+    try {
+        $items = @(Invoke-SIArm -Path ('/subscriptions/{0}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances' -f $SubscriptionId) -ApiVersion '2020-10-01' -List)
+    } catch {
+        $res.Failed = $true; $res.Error = [string]$_.Exception.Message
+        return $res
     }
-
-    return @{ Permanent = @($perm); Eligible = @($elig) }
+    $defs = $null
+    try { $defs = Get-SIAzRestRoleDefinitionNames -Scope ('/subscriptions/{0}' -f $SubscriptionId) } catch { $defs = $null }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($i in $items) {
+        if ($null -eq $i -or $null -eq $i.properties) { continue }
+        $p = $i.properties
+        $oid = [string]$p.principalId
+        if (-not $oid) { continue }
+        $rdKey = (([string]$p.roleDefinitionId -split '/')[-1]).ToLowerInvariant()
+        $roleName = ''
+        if ($defs) { if ($defs.BuiltIn -and $defs.BuiltIn.ContainsKey($rdKey)) { $roleName = [string]$defs.BuiltIn[$rdKey] } elseif ($defs.Custom -and $defs.Custom.ContainsKey($rdKey)) { $roleName = [string]$defs.Custom[$rdKey] } }
+        $xp = $null; if ($p.PSObject.Properties['expandedProperties']) { $xp = $p.expandedProperties }
+        if (-not $roleName -and $xp -and $xp.roleDefinition -and $xp.roleDefinition.displayName) { $roleName = [string]$xp.roleDefinition.displayName }
+        if (-not $roleName) { continue }
+        $scope = [string]$p.scope
+        $roleTier = Get-SITierFromAzureRoles -Roles @($roleName)
+        if ($null -eq $roleTier) { $roleTier = 2 }
+        $scopeLvl = Get-SIAzureScopeLevel -Scope $scope
+        $ptype = [string]$p.principalType
+        $pname = ''; if ($xp -and $xp.principal -and $xp.principal.displayName) { $pname = [string]$xp.principal.displayName }
+        $entry = [ordered]@{
+            RoleName         = $roleName
+            Scope            = $scope
+            ScopeLabel       = Get-SIAzureScopeLabel -Scope $scope
+            SubscriptionId   = [string]$SubscriptionId
+            SubscriptionName = [string]$SubscriptionName
+            PrincipalType    = $ptype
+            PrincipalName    = $pname
+            RoleTier         = $roleTier
+            ScopeLevel       = $scopeLvl
+            EffectiveTier    = [Math]::Max($roleTier, $scopeLvl)
+            Assignment       = 'eligible'
+        }
+        $out.Add(@{ ObjectId = $oid; Entry = $entry })
+    }
+    $res.Entries = $out.ToArray()
+    return $res
 }
 
 function Get-SIAzureDelegationsByPrincipal {
@@ -1423,6 +1685,7 @@ function Get-SIAzureDelegationsByPrincipal {
     $prevProgress = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
     $failedSubs = 0; $firstFail = ''
+    $failedEligSubs = 0; $firstEligFail = ''
     try {
         foreach ($sub in $subs) {
             $assignments = $null   # one subscription's answer at a time (#702: memory follows a subscription, not the tenant)
@@ -1465,10 +1728,32 @@ function Get-SIAzureDelegationsByPrincipal {
                 [void]$lookup[$oid].Add($entry)
                 $count++
             }
+            # #1192 (PIM-DELEGATION-1): Azure RBAC ELIGIBILITY -- an eligible role at any scope (tenant root, management
+            # group, subscription, resource group, resource) is an attach point too; the role-assignment list holds only
+            # what is active. A failed read = the eligible Azure roles there are UNKNOWN (said), never "none".
+            $eligRead = Get-SIAzureEligibleRoleEntries -SubscriptionId ([string]$sub.Id) -SubscriptionName ([string]$sub.Name)
+            if ($eligRead.Failed) {
+                $failedEligSubs++; if (-not $firstEligFail) { $firstEligFail = [string]$eligRead.Error }
+                continue
+            }
+            foreach ($pe in @($eligRead.Entries)) {
+                $oid = [string]$pe.ObjectId
+                if (-not $lookup.ContainsKey($oid)) { $lookup[$oid] = New-Object System.Collections.ArrayList }
+                # an eligibility seen from several subscriptions (inherited from a management group / the root) once only
+                $dup = $false
+                foreach ($x in @($lookup[$oid])) { if ($x['Assignment'] -eq 'eligible' -and $x['RoleName'] -eq $pe.Entry['RoleName'] -and $x['Scope'] -eq $pe.Entry['Scope']) { $dup = $true; break } }
+                if ($dup) { continue }
+                [void]$lookup[$oid].Add($pe.Entry)
+                $count++
+            }
         }
     } finally {
         $ProgressPreference = $prevProgress
     }
+    if ($failedEligSubs -gt 0) {
+        Write-Warning ('  Azure RBAC: the eligible role assignments of {0} of {1} subscription(s) could not be read (first: {2}) -- the eligible Azure roles held there are UNKNOWN this run, not absent.' -f $failedEligSubs, $subs.Count, $firstEligFail)
+    }
+    $script:_SICache['AzureEligibleReadComplete'] = ($failedEligSubs -eq 0)
     if ($failedSubs -gt 0) {
         # never fewer silently: the Azure roles held in those subscriptions are UNKNOWN this run, not absent
         Write-Warning ('  Azure RBAC: the role assignments of {0} of {1} subscription(s) could not be read (first: {2}) -- the Azure roles held there are UNKNOWN this run, not absent.' -f $failedSubs, $subs.Count, $firstFail)

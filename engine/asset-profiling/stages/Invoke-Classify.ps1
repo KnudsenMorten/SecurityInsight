@@ -539,6 +539,10 @@ function Invoke-SIClassify {
                 if ([string]::IsNullOrWhiteSpace([string]$e.RoleName)) { continue }
                 if ($null -eq $e.EffectiveTier -or [string]::IsNullOrWhiteSpace([string]$e.EffectiveTier)) { continue }
                 $inhNote = if ($e.PSObject.Properties['InheritedFromGroup'] -and $e.InheritedFromGroup) { ' (inherited via group)' } else { '' }
+                # #1192: reached through PIM for Groups / an eligible Azure role -- the way there is said
+                $eAsg = ''; if ($e.PSObject.Properties['Assignment']) { $eAsg = [string]$e.Assignment }
+                $eVia = ''; if ($e.PSObject.Properties['Via']) { $eVia = [string]$e.Via }
+                if ($eVia) { $inhNote = ' (eligible via {0})' -f $eVia } elseif ($eAsg -eq 'eligible') { $inhNote = ' (eligible)' }
                 [void]$proofs.Add(@{
                     Source      = 'Catalog:AzureRoles'
                     ProofLabel  = ('{0}@{1}' -f $e.RoleName, $e.ScopeLabel)

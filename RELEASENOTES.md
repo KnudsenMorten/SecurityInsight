@@ -13,6 +13,14 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.5 — the sign-in front of Pro installs on the .NET security update
+
+### Fixes
+- **The sign-in front of SecurityInsight Pro now runs on .NET 10.0.15 too.** Versions 3.1.3 and 3.1.4 moved every
+  other container to Microsoft's November .NET security update, but a Pro installation built its sign-in front -- the
+  part that answers on the internet -- from the previous version of that component, still on .NET 10.0.14. 3.1.5 builds
+  it from the updated component (2.1.1), so the critical and high-severity ASP.NET Core fixes now reach it as well.
+  The Community edition already had it. Nothing else changes.
 ## v3.1.4 — admins delegated through PIM groups count as privileged, and a faster device page
 
 ### Fixes

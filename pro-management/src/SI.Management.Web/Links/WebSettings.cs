@@ -26,7 +26,7 @@ public sealed class WebSettings
     private static CatalogSetting S(string name, string type, string label, string description, string? def, double? min = null, double? max = null,
         string? pattern = null, string? hint = null, bool secret = false, string? defaultText = null, string? effect = null, string? when = null, string? unit = null) => new()
     {
-        Name = name, Label = label, Group = SettingsArea, Type = type, Engines = new[] { "management-web" }, Edition = "pro", Secret = secret,
+        Name = name, Label = label, Group = SettingsArea, Type = type, Engines = new[] { "management-web" }, Edition = "community", Secret = secret,
         Default = def is null ? null : J(def), Description = description, Min = min, Max = max, Pattern = pattern, PatternHint = hint, WebOnly = true,
         DefaultText = defaultText, Effect = effect, WhenToChange = when, Unit = unit,
         // the Settings page card: the wall board has its own; the rest is about the links in mails

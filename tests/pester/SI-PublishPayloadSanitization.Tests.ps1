@@ -201,9 +201,11 @@ BeforeDiscovery {
                     # a .NET lock file's package hash (SHA-512, base64: 86 characters + '==') has the shape of a storage
                     # key; ONLY that key, ONLY in packages.lock.json, is a public package hash, not a secret (2026-11-01)
                     if ($d.name -eq 'storage account key' -and (Split-Path -Leaf $rel) -eq 'packages.lock.json' -and $line -match '^\s*"contentHash":\s*"[A-Za-z0-9+/]{86}=="\s*,?\s*$') { continue }
-                    # #1061 / framework PUB-FRONT: the vendored sign-in front's error text names the DOCUMENTED example host
-                    # (e.g. sql-x.database.windows.net) -- the one host PUB-FRONT's leak scan allows; ONLY that value, ONLY there
-                    if ($d.name -eq 'sql server host' -and $rel -like 'vendor\signin-front\*' -and $hit -ceq 'sql-x.database.windows.net') { continue }
+                    # #1061 / framework PUB-FRONT: the sign-in front's error text names the DOCUMENTED example host
+                    # (e.g. sql-x.database.windows.net) -- the one host PUB-FRONT's leak scan allows; ONLY that value, ONLY in
+                    # the pinned front the solution folder carries (pro-management\signin-front, one build path for Pro and
+                    # Community since SI #1207 -- the vendored copy is gone)
+                    if ($d.name -eq 'sql server host' -and $rel -like 'pro-management\signin-front\*' -and $hit -ceq 'sql-x.database.windows.net') { continue }
                     $script:Findings += [pscustomobject]@{ File = $rel; Line = $lineNo; Kind = $d.name; Match = $hit }
                 }
             }

@@ -34,6 +34,8 @@ if (-not (Get-Command -Name Format-SIMailBody -ErrorAction SilentlyContinue)) { 
 if (-not (Get-Command -Name New-SIMailPdf -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-MailPdf.ps1')) }
 # #710: the line under a mail's summary that links the install's page in the Invardia portal (Add-SIInvardiaPortalLink)
 if (-not (Get-Command -Name Add-SIInvardiaPortalLink -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaPortalLink.ps1')) }
+# #1211 MAIL-ENV: the environment's handle + kind (Invardia's, kept by the heartbeat) and the tenant line of every mail
+if (-not (Get-Command -Name Get-SIMailEnvIdentity -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-MailEnvironment.ps1')) }
 $script:SIMailGraphInlineMaxMb = 3
 $script:SIMailRestrictionCache = @{}
 $script:SIMailAllowedStates = @('verified', 'legacy-policy')
@@ -100,6 +102,9 @@ function Get-SIMailEnvironment {
           Version  SecurityInsight's version; WebUrl  SIWeb_PublicBaseUrl
           InvardiaEnvironmentId  #710: the install's environment in the Invardia portal (SI_InstallRingFacts
                    .InvardiaEnvironment, recorded from Invardia's answer), '' when not known
+          Handle / Kind / EnvDisplayName  #1211 MAIL-ENV: Invardia's handle, kind and display name as the heartbeat kept
+                   them (Get-SIMailInvardiaRecord; -Globals: only -Globals['SI_MailInvardiaEnvironment']), '' when none is
+                   kept; Invardia's tenant id / display name fill a tenant id / name the settings do not have
     #>
     param([System.Collections.IDictionary]$Globals)
     Initialize-SIMailTransportState
@@ -125,8 +130,20 @@ function Get-SIMailEnvironment {
     $web = (& $g 'SIWeb_PublicBaseUrl').TrimEnd('/')
     $envId = ''
     try { if (Get-Command -Name Get-SIInvardiaEnvironmentIdKnown -ErrorAction SilentlyContinue) { $envId = Get-SIInvardiaEnvironmentIdKnown -Facts (Get-SIMailSetting -Name 'SI_InstallRingFacts' -Globals $Globals) } } catch { $envId = '' }
+    # #1211 MAIL-ENV: Invardia's handle, kind and display name (the heartbeat keeps the last good answer; never called from
+    # here). None kept (a Community install without the install key, or not read yet) = the configured name above.
+    $inv = $null
+    try { if (Get-Command -Name Get-SIMailInvardiaRecord -ErrorAction SilentlyContinue) { $inv = Get-SIMailInvardiaRecord -Globals $Globals } } catch { $inv = $null }
+    $handle = ''; $kind = ''; $envDisplay = ''
+    if ($inv) {
+        $handle = [string]$inv.Handle; $kind = [string]$inv.Kind
+        $envDisplay = if ($inv.DisplayName) { [string]$inv.DisplayName } else { [string]$inv.Name }
+        if (-not $tid -and $inv.TenantId) { $tid = [string]$inv.TenantId }
+        if (-not $tname -and $envDisplay) { $tname = $envDisplay }
+    }
     [pscustomobject]@{ Name = $name; Display = $display; Ring = "$ring"; Edition = $edition; TenantName = $tname; TenantId = $tid
-                       Solution = 'SecurityInsight'; Version = $ver; WebUrl = $(if ($web -match '^https://') { $web } else { '' }); InvardiaEnvironmentId = $envId }
+                       Solution = 'SecurityInsight'; Version = $ver; WebUrl = $(if ($web -match '^https://') { $web } else { '' }); InvardiaEnvironmentId = $envId
+                       Handle = $handle; Kind = $kind; EnvDisplayName = $envDisplay }
 }
 
 # MAIL-3 (#653): one subject format for every mail SecurityInsight sends
@@ -181,8 +198,9 @@ function Get-SIMailSubjectEnvironment {
 function Get-SIMailSubject {
     <#
         PURE. THE ONE PLACE that builds a mail's whole subject (MAIL-3, #653):
-            [<Environment>] <severity word: if relevant><what happened> [<ticket if any>] [SecurityInsight]
-        - <Environment>   the web app header's name (Get-SIMailSubjectEnvironment) -- no ring, no edition
+            [<KIND>] <handle>[ (<display name>)] - <severity word: if relevant><what happened> [<ticket if any>] [SecurityInsight]
+        - #1211 MAIL-ENV  Invardia's kind tag + handle (+ the display name only when it says more), Get-SIMailEnvIdentity;
+                          without Invardia's handle: '<the web app header's name> - ' (no ring, no edition); none = no prefix
         - severity word   -Severity (Failed | Warning | ActionNeeded), else a leading 'Failed:' / 'Warning:' /
                           'Action needed:' the sender wrote itself; none for reports, digests and information mails
         - <what happened> the sender's text, with a leading product name taken out ('SecurityInsight <middle dot> ',
@@ -198,8 +216,10 @@ function Get-SIMailSubject {
     Initialize-SIMailTransportState
     if ($MaxLength -le 0) { $MaxLength = $script:SIMailSubjectMax }
     $product = ' [' + $script:SIMailProduct + ']'
+    # #1211 MAIL-ENV: '[<KIND>] <handle>[ (<display name>)] - ' (Get-SIMailEnvIdentity); without Invardia's handle the
+    # configured name stands in its place ('Contoso - ')
     $name = Get-SIMailSubjectEnvironment -Environment $Environment
-    $prefix = if ($name) { '[' + $name + '] ' } else { '' }
+    $prefix = (Get-SIMailEnvIdentity -Environment $Environment).Prefix
     $word = ConvertTo-SIMailSeverityWord $Severity
     $t = "$Ticket".Trim().Trim('[', ']').Trim()
     $s = ([string]$Subject -replace '[\r\n\t]+', ' ').Trim()
@@ -211,6 +231,7 @@ function Get-SIMailSubject {
     $old = if ($Environment) { "$($Environment.Display)".Trim() } else { '' }
     if ($prefix -and $s.StartsWith($prefix)) { $s = $s.Substring($prefix.Length).TrimStart() }
     elseif ($old -and $s.StartsWith('[' + $old + '] ')) { $s = $s.Substring($old.Length + 3).TrimStart() }
+    elseif ($name -and $s.StartsWith('[' + $name + '] ')) { $s = $s.Substring($name.Length + 3).TrimStart() }   # the MAIL-3 '[<Name>] ' a row queued earlier carries
     if ($t -and $s.EndsWith('[' + $t + ']')) { $s = $s.Substring(0, $s.Length - $t.Length - 2).TrimEnd() }
     # the product is named once, at the end (separators: middle dot, bar, colon, hyphen(s), en / em dash -- written as
     # [char] so this file stays plain ASCII)
@@ -753,6 +774,9 @@ function Send-SIMail {
     # One HTML body: Graph sendMail takes one body, and so does the SMTP transport; .Text is the CRLF text rendering.
     $formatted = Format-SIMailBody -BodyHtml $BodyHtml -Title $Subject
     $BodyHtml = [string]$formatted.Html
+    # #1211 MAIL-ENV: the FIRST line of every body is the subject ('[PROD] adatum-prod - ...'), then the tenant (name + id);
+    # a sign-in mail (-NoPdf) stays short: the first line only
+    $BodyHtml = Add-SIMailEnvironmentLines -BodyHtml $BodyHtml -Subject $Subject -Environment $envInfo -Short:$NoPdf
     # #710 (owner 2026-10-16): ONE line under the summary -- "See details and history: <the install's page in the Invardia
     # portal>" -- only when Invardia has named the environment, only in a mail that has a summary (or a place-holder at
     # its top: the daily close-loop mail and the management summary, owner 2026-10-16), never in a mail that

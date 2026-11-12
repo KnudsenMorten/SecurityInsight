@@ -282,7 +282,9 @@ Screenshots use synthetic demo data. More on [invardia.com/products/securityinsi
 
 Open [Azure Cloud Shell](https://shell.azure.com) in **PowerShell**, signed in to the tenant you want to assess. The
 install is two lines: line 1 downloads one small file from the latest public release, line 2 runs it with your tenant
-and subscription. It downloads the release, checks it and runs its installer.
+and subscription. It installs the release your update ring has (ring 3 unless you choose another), the same way
+for Community and Pro: it reads Invardia's signed list for that ring, downloads the release it names, checks the
+signature, the size and the SHA-256, and runs its installer.
 
 ```powershell
 Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
@@ -372,12 +374,23 @@ defaults and what each one does: `Get-Help ./Install-SecurityInsight.ps1 -Full` 
 <!-- /install samples -->
 ## Updates, status reports and 2.2
 
-**Updates.** A Community install updates itself from the SecurityInsight update channel. Before anything is
-installed, the release is checked against a signed entry: its version, its size and its SHA-256.
+**One way to install and run, both editions.** Community and Pro install, run and update exactly the same way: the
+same installer, the same jobs, identities, rights and settings, secrets in your Key Vault only. Only the licensed
+features differ, and each one checks the licence when it runs. Moving from Community to Pro adds a licence; nothing is
+reinstalled.
+
+**Updates.** Every install updates itself in your Azure, at its nightly run, to the version its update ring has
+(rings 0-3, in both editions). Before anything is installed, the release is checked against Invardia's signed entry:
+its version, its size and its SHA-256. Nothing updates faster on its own; an update sooner happens only when Invardia
+starts one for your install ("Update now").
 
 **Status reports.** The Community edition sends Invardia an anonymous daily status report: version, hosting type and
 run results, with no tenant id, host name or company. Set `$global:SI_Telemetry_Enabled = $false` in your
-configuration and nothing is sent.
+configuration and nothing is sent. **Connect this install to Invardia (Community, optional).** The installer asks "Connect this install to Invardia:
+health reports + updates on request" (`-ConnectToInvardia` in the two-line install; off by default). Only with
+yes does the install get its own install key and send its health reports, and only then can Invardia update it sooner
+on request. Without it, nothing that identifies the install is sent. Change it later with the setting
+`SI_Invardia_Connect`. A Pro install is always connected.
 
 **Coming from 2.2?** SecurityInsight 3 is installed beside 2.2, not over it. Branch
 [`main`](https://github.com/KnudsenMorten/SecurityInsight/tree/main) keeps 2.2 unchanged. Read
@@ -406,7 +419,8 @@ in its signed licence, Pro Enterprise has none.
 | One daily pipeline; an update waits for a running pipeline and never stops it | ✅ | ✅ | ✅ |
 | A database setup job: no person needs database admin rights | ✅ | ✅ | ✅ |
 | Asset tagging with a dry run first | ✅ | ✅ | ✅ |
-| Signed updates from the Community channel | ✅ | | |
+| Signed updates by update ring, at the nightly run (the same updater in every edition) | ✅ | ✅ | ✅ |
+| The mail job: the mail check, safety-check mails, the Get Started reminder | ✅ | ✅ | ✅ |
 | Departments, governed exemptions, follow-up tasks and governance mails | | ✅ | ✅ |
 | CMDB in SecurityInsight, business services ranked by weighted risk | | ✅ | ✅ |
 | ServiceNow CMDB and the vulnerability close-loop (ServiceNow, SQL, REST) | | ✅ | ✅ |
@@ -414,7 +428,7 @@ in its signed licence, Pro Enterprise has none.
 | Roles and scopes for people and groups, audit trail | | ✅ | ✅ |
 | Template releases by update ring, conformance and deviations | | ✅ | ✅ |
 | Ask SecurityInsight (AI chat), the MCP server and management presentations | | ✅ | ✅ |
-| Updates from Invardia by update ring and a signed licence | | ✅ | ✅ |
+| A signed licence from Invardia | | ✅ | ✅ |
 | Support from Invardia (support service, Support app, just-in-time database access - each optional) | Community help on GitHub; Support app optional | ✅ | ✅ |
 | Number of devices | No limit | The limit in your licence | No limit |
 

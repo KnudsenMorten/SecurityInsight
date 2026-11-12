@@ -61,7 +61,7 @@ public static class DisplayCulture
     public static readonly CatalogSetting Catalog = new()
     {
         Name = Setting, Label = "Number format (default for everyone)", Group = "Web app", Type = "enum",
-        Values = Choices.Select(c => c.Value).ToArray(), Engines = new[] { "management-web" }, Edition = "pro", WebOnly = true,
+        Values = Choices.Select(c => c.Value).ToArray(), Engines = new[] { "management-web" }, Edition = "community", WebOnly = true,
         Default = JsonDocument.Parse("\"auto\"").RootElement.Clone(),
         Description = "How numbers are written on screen for a person who has not chosen their own format in the user menu: auto (from the browser's language), da-DK (1.234,5), en-US (1,234.5), en-GB, de-DE, sv-SE or nb-NO.",
         Purpose = "Sets the thousands and decimal separators everyone sees by default, so a Danish organisation reads 1.234,5 even in an English browser.",

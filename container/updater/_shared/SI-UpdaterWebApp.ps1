@@ -52,7 +52,8 @@ function Get-SIUpdaterAppPrebuilds {
 function Invoke-SIUpdaterSigninFrontRoll {
     <#
         CR7 (framework 12.11g): the shared sign-in front of a web app that ALREADY runs behind it is kept on the front this
-        release pins (pro-management\signin-front.pin.json; its source packed in the release as pro-management\signin-front\).
+        release pins (pro-management\signin-front.pin.json; its source carried by the release at pro-management\signin-front\ --
+        the same tree, the same place and the same resolver in the Pro package and the Community release, SI #1207).
         This roll never adds or removes the front: an install from before the front is moved ONCE by
         Invoke-SIUpdaterSigninFrontAdopt (above it in the app roll), by setup\Set-SISigninFront.ps1 or by a new install's
         Deploy-SIManagement.ps1 -SigninFront; the updater never removes it. No front container: nothing at all.

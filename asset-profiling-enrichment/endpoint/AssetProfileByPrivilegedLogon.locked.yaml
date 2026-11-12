@@ -1,0 +1,51 @@
+id:        AssetProfileByPrivilegedLogon
+appliesTo: endpoint
+mode:      locked
+purpose:   'Endpoint tier from any privileged account that logged on to it (cross-engine)'
+category:  'Logon Graph'
+description: |
+  Any privileged logon counts: a device is as valuable to an attacker as the
+  most privileged account whose credentials were on it. Resolved in Enrich:
+  the Tier 0-2 accounts of this run's identity profile (their tier already
+  carries every identity rule -- roles, and the group-membership rules that
+  make HR or finance users Tier 2) are looked up in Defender device logons
+  (DeviceLogonEvents, filtered by those accounts, the last
+  SI_Endpoint_PrivilegedLogon_WindowDays days, default 30: signed in at the device,
+  Remote Desktop, cached credentials, unlock -- not network, service or batch
+  logons), stamped on each device as Metadata.PrivilegedLogonTier (the lowest
+  tier of any of them that logged on).
+
+  Mapping: a Tier 0 account logged on -> T0, Tier 1 -> T1, Tier 2 -> T2.
+  A Tier 3 logon claims nothing (the device keeps its other sources).
+
+detections:
+
+  - id: PrivilegedLogonByT0Account
+    detect:
+      any:
+        - kind: privilegedLogonTier
+          tierValues: [0]
+    set:
+      Tier:     0
+      Purpose:  'A Tier 0 account logged on to this device'
+      Category: 'Logon Graph'
+
+  - id: PrivilegedLogonByT1Account
+    detect:
+      any:
+        - kind: privilegedLogonTier
+          tierValues: [1]
+    set:
+      Tier:     1
+      Purpose:  'A Tier 1 account logged on to this device'
+      Category: 'Logon Graph'
+
+  - id: PrivilegedLogonByT2Account
+    detect:
+      any:
+        - kind: privilegedLogonTier
+          tierValues: [2]
+    set:
+      Tier:     2
+      Purpose:  'A Tier 2 account logged on to this device'
+      Category: 'Logon Graph'

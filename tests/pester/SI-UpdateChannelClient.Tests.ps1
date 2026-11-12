@@ -20,7 +20,8 @@ BeforeAll {
     $pub = $script:Rsa.ExportParameters($false)
     $script:Keys = @(@{ keyId = 'test-update-key'; n = (B64Url $pub.Modulus); e = (B64Url $pub.Exponent) })
     $script:Host1 = 'https://github.com/KnudsenMorten/SecurityInsight/releases/download/'
-    $script:ClientFiles = @('Update-SecurityInsight.ps1', 'engine/_shared/SI-CommunityUpdate.ps1', 'engine/_shared/InvardiaUpdate.verify.ps1')
+    # framework PRO-COMMUNITY-SAME (SI #1207): Update-SecurityInsight.ps1 is retired (a stub that points at the updater job)
+    $script:ClientFiles = @('engine/_shared/SI-CommunityUpdate.ps1', 'engine/_shared/InvardiaUpdate.verify.ps1')
 
     function script:Hash([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash }
     function script:Snapshot([string]$root) {
@@ -216,10 +217,15 @@ Describe 'ring gating' {
         $r.Action | Should -Be 'refused'; $r.Reason | Should -Match "signed for ring '2'"
         Same $before (Snapshot $root) | Should -BeTrue
     }
-    It 'ring 1 (internal) and nonsense are never read from the channel: they fall back to ring 3 and say so' {
-        $root = New-Install; [IO.File]::WriteAllText((Join-Path $root 'config\update.custom.json'), '{ "ring": 1 }')
+    It 'rings 0-3 are read as given (the same rings as Pro, PRO-COMMUNITY-SAME); anything else falls back to ring 3 and says so' {
+        foreach ($n in 0, 1, 2, 3) {
+            $root = New-Install; [IO.File]::WriteAllText((Join-Path $root 'config\update.custom.json'), ('{ "ring": ' + $n + ' }'))
+            (Get-SICommunityUpdateSettings -Root $root).Ring | Should -Be $n
+        }
+        (Get-SICommunityUpdateSettings -Root (New-Install) -Ring 0).Ring | Should -Be 0 -Because '-Ring 0 is a ring, not "none given"'
+        $root = New-Install; [IO.File]::WriteAllText((Join-Path $root 'config\update.custom.json'), '{ "ring": 7 }')
         $s = Get-SICommunityUpdateSettings -Root $root
-        $s.Ring | Should -Be 3; ($s.Problems -join ' ') | Should -Match 'not a Community ring'
+        $s.Ring | Should -Be 3; ($s.Problems -join ' ') | Should -Match 'not an update ring'
     }
 }
 
@@ -412,7 +418,8 @@ Describe 'scope and no git' {
         (Run $sol $w).Action | Should -Be 'not-community'
         # a Pro tree = a file only the Pro package carries (since 2026-10-27, #750: not LICENSE-* / engine\pro-*, which the
         # Community edition ships too)
-        foreach ($m in 'setup\_shared\SI-GuidedInstallPro.ps1', 'engine\_shared\SI-InvardiaUpdate.ps1', 'engine\asset-cmdb\Invoke-SICmdb.ps1') {
+        # (the update client engine\_shared\SI-InvardiaUpdate.ps1 ships in both editions since PRO-COMMUNITY-SAME: no marker)
+        foreach ($m in 'setup\_shared\SI-GuidedInstallPro.ps1', 'engine\asset-cmdb\Invoke-SICmdb.ps1') {
             $pro = New-Install; $p = Join-Path $pro $m; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null; [IO.File]::WriteAllText($p, '# pro')
             (Run $pro $w).Action | Should -Be 'not-community' -Because "$m marks the Pro package"
         }
@@ -421,6 +428,9 @@ Describe 'scope and no git' {
         $root = New-Install -Version '3.1.0'
         [IO.File]::WriteAllText((Join-Path $root 'LICENSE-PRO'), 'the paid web pages')
         New-Item -ItemType Directory -Force -Path (Join-Path $root 'engine\pro-settings'), (Join-Path $root 'engine\pro-data') | Out-Null
+        # PRO-COMMUNITY-SAME: the one update client ships in the Community edition too -- it never marks a Pro tree
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'engine\_shared') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $root 'engine\_shared\SI-InvardiaUpdate.ps1'), '# the update client')
         Get-SICommunityInstallKind -Root $root | Should -Be 'community'
     }
     It 'the client never runs git (no git command in its code)' {
@@ -430,23 +440,26 @@ Describe 'scope and no git' {
             $cmds.Count | Should -Be 0 -Because "$c must not need git"
         }
     }
-    It 'Update-SecurityInsight.ps1 runs in a fresh process with NO git on PATH (the manifest read from a local folder; nothing released -> exit 0)' {
+    It 'the retired Update-SecurityInsight.ps1 (framework PRO-COMMUNITY-SAME) only points at the updater job: exit 0, nothing changed, in a fresh process with NO git on PATH' {
         $root = New-Install
-        $ch = Join-Path $TestDrive 'manifests-empty'; New-Item -ItemType Directory -Force -Path $ch | Out-Null
+        Copy-Item -LiteralPath (Join-Path $script:SIRoot 'Update-SecurityInsight.ps1') -Destination (Join-Path $root 'Update-SecurityInsight.ps1') -Force
+        $before = Snapshot $root
         $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         $prev = $env:PATH
         try {
-            # no git on PATH: only the OS folders (Windows) and pwsh's own folder -- the same on the Linux runner
             $env:PATH = (@($(if ($env:SystemRoot) { (Join-Path $env:SystemRoot 'System32'), $env:SystemRoot }) + (Split-Path -Parent $exe)) -join [IO.Path]::PathSeparator)
             (Get-Command git -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
-            $out = & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'Update-SecurityInsight.ps1') -BaseUrl $ch 2>&1
+            # an older schedule's arguments are accepted and ignored
+            $out = & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'Update-SecurityInsight.ps1') -Apply -BaseUrl 'https://example.invalid' 2>&1
             $code = $LASTEXITCODE
         } finally { $env:PATH = $prev }
         $code | Should -Be 0
-        ($out -join "`n") | Should -Match 'nothing is released to ring 3'
+        ($out -join "`n") | Should -Match 'updated by its updater job in Azure'
+        ($out -join "`n") | Should -Match 'Install-SIUpdaterJob\.ps1'
+        Same $before (Snapshot $root) | Should -BeTrue -Because 'the retired script changes nothing'
+        $script:ClientFiles | Should -Not -Contain 'Update-SecurityInsight.ps1' -Because 'the update client no longer requires it'
     }
 }
-
 Describe 'NEGATIVE (2026-10-31): forward-only from the first manifest, and a manifest must name its ring' {
     It 'a FIRST manifest (nothing applied from the channel yet) that names a version OLDER than the install is held -- nothing downloaded, nothing changed' {
         $root = New-Install -Version '3.1.1'; $before = Snapshot $root; $zip = New-Release '3.0.9'

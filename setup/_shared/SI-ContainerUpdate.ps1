@@ -278,14 +278,14 @@ function Get-SIUpdaterManagedJob {
 }
 
 function Get-SIContainerUpdateGuidance {
-    <# PURE. What container setup tells the customer about updates: the Community command, or the updater job that owns it. #>
+    <# PURE. What container setup tells the customer about updates: the updater job that owns them (both editions), or how to
+       create it when the install has none. #>
     param([string]$UpdaterJob)
     if (-not [string]::IsNullOrWhiteSpace($UpdaterJob)) {
-        return @(("Updates: the updater job '{0}' (SecurityInsight Pro) rolls these containers to the version your update ring approves -- nothing to run." -f $UpdaterJob.Trim()))
+        return @(("Updates: the updater job '{0}' rolls these containers to the version your update ring approves -- nothing to run." -f $UpdaterJob.Trim()))
     }
     @(
-        'Updates: run .\Update-SecurityInsight.ps1 -Apply when you want the latest release -- it pulls it and rebuilds + rolls these containers (verify, roll back on failure).',
-        'With SecurityInsight Pro: .\setup\Upgrade-SIToPro.ps1 (from the Pro package) installs the updater job, which keeps the containers on your update ring by itself -- updates come from Invardia.'
+        'Updates: this install has no updater job yet -- run .\setup\Install-SIUpdaterJob.ps1 once; the job then keeps the containers on your update ring by itself (Pro and Community alike).'
     )
 }
 

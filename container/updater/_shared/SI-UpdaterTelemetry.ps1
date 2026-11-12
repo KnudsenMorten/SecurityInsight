@@ -143,7 +143,10 @@ function Send-SIUpdaterFailureReports {
             # loaded by Start-SIUpdater.ps1 from the code the image carries (/si/engine/_shared/SI-TelemetrySend.ps1)
             if (-not (Get-Command -Name Send-SITelemetryFailure -ErrorAction SilentlyContinue)) { & $Log 'failures are not reported to Invardia: this image carries no telemetry client'; return @() }
             $global:SI_Telemetry_Enabled = $true   # the switch was decided above (Settings page, then the job)
-            $edition = if ("$InstallKey".Trim()) { 'pro' } else { '' }
+            # framework PRO-COMMUNITY-SAME (opt-in): the run's connection decides (Start-SIUpdater / SI-UpdaterInvardia set it) -- a
+            # connected install reports as before (anonymously without a key); one that did not say yes reports nothing (the
+            # telemetry client's Connected gate, engine\_shared\SI-InvardiaConnect.ps1)
+            $edition = if ("$InstallKey".Trim()) { 'pro' } elseif ($global:SI_UpdaterConnected -eq $true) { 'pro' } elseif ($global:SI_UpdaterConnected -eq $false) { 'community' } else { '' }
             # the ring: what this updater run resolved (its own state), else the setting -- framework §8.4 / §8.7
             $ctxArgs = @{ License = $null; InstallKey = "$InstallKey"; TenantId = "$TenantId"; Edition = $edition; UpdaterRing = $global:SI_UpdaterResolvedRing }
             # Invardia S16: the lasting id rides on the identified reports (a telemetry client without the parameter: left out)

@@ -588,6 +588,36 @@ function Get-SIDerivedValue {
             }
             return @()
         }
+        # Any privileged logon counts (owner 2026-11-12): stamped on $meta by Stage Enrich (Get-SIBulkPrivilegedLogons,
+        # DeviceLogonEvents -> SI_Identity_Profile_CL). The tier (0-2, empty when none or unknown), the privileged accounts
+        # [{ Upn, Tier, LastLogonUtc, LogonType, Count }], and whether the source was read ('read' / 'unknown -- why').
+        'PrivilegedLogonTier' {
+            if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains('PrivilegedLogonTier')) { return $meta['PrivilegedLogonTier'] } }
+            elseif ($meta.PSObject.Properties['PrivilegedLogonTier']) { return $meta.PrivilegedLogonTier }
+            return $null
+        }
+        'PrivilegedLogons' {
+            if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains('PrivilegedLogons') -and $null -ne $meta['PrivilegedLogons']) { return @($meta['PrivilegedLogons']) } }
+            elseif ($meta.PSObject.Properties['PrivilegedLogons'] -and $null -ne $meta.PrivilegedLogons) { return @($meta.PrivilegedLogons) }
+            return @()
+        }
+        # #1209: what each device-user source COMPUTED (also in shadow mode, when it sets no tier) and the evidence sentence
+        { $_ -in 'PrivilegedLogonComputedTier', 'MostFrequentUserComputedTier' } {
+            $n = [string]$Field.name
+            if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains($n)) { return $meta[$n] } }
+            elseif ($meta.PSObject.Properties[$n]) { return $meta.$n }
+            return $null
+        }
+        'PrivilegedLogonEvidence' {
+            if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains('PrivilegedLogonEvidence')) { return [string]$meta['PrivilegedLogonEvidence'] } }
+            elseif ($meta.PSObject.Properties['PrivilegedLogonEvidence']) { return [string]$meta.PrivilegedLogonEvidence }
+            return ''
+        }
+        'PrivilegedLogonStatus' {
+            if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains('PrivilegedLogonStatus')) { return [string]$meta['PrivilegedLogonStatus'] } }
+            elseif ($meta.PSObject.Properties['PrivilegedLogonStatus']) { return [string]$meta.PrivilegedLogonStatus }
+            return ''
+        }
         # MostFrequentUsersCount dropped -- pure duplicate of
         # array_length(MostFrequentUsers). Queries derive count when needed.
 
@@ -1289,6 +1319,19 @@ function Build-SIEndpointProfileRow {
     # would fabricate a Tier 0 claim on every asset that has no most-frequent user.
     if ($null -ne $row['MostFrequentUserTier'] -and "$($row['MostFrequentUserTier'])" -ne '') {
         $tierSourcesForAttribution['MostFrequentUserTier'] = $row['MostFrequentUserTier']
+    }
+    # Any privileged logon counts: the lowest tier of an account that logged on (the rule AssetProfileByPrivilegedLogon
+    # set it; this claim carries the evidence "<account> (Tier 0) logged on <date> (RDP)"). Same guard: no value, no claim.
+    if ($null -ne $row['PrivilegedLogonTier'] -and "$($row['PrivilegedLogonTier'])" -ne '') {
+        $_plEv = ''
+        if ($meta -is [System.Collections.IDictionary]) { if ($meta.Contains('PrivilegedLogonEvidence')) { $_plEv = [string]$meta['PrivilegedLogonEvidence'] } }
+        elseif ($meta.PSObject.Properties['PrivilegedLogonEvidence']) { $_plEv = [string]$meta.PrivilegedLogonEvidence }
+        $tierSourcesForAttribution['PrivilegedLogonTier'] = [pscustomobject]@{
+            Tier       = [int]$row['PrivilegedLogonTier']
+            TopMatch   = $_plEv
+            MatchCount = @($row['PrivilegedLogons']).Count
+            Sentence   = $_plEv
+        }
     }
     # THE OPERATOR'S OWN TIER TAG -- the schema's ONLY `asserted` contributor, declared since 2.3.6 and
     # never produced by anything on the production path, so `tenant_si_manual_tag` emitted ZERO claims

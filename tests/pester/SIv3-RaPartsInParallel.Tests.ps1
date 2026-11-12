@@ -594,7 +594,7 @@ Describe 'the engine''s wiring' {
         $catch = $gh.IndexOf('if ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture) { throw }')
         $catch | Should -BeGreaterThan 0
         $catch | Should -BeLessThan $gh.IndexOf('Add-SIReportRetryAnswer -Message $msg')
-        $gh | Should -Match ([regex]::Escape('if (-not ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture)) { Flush-SupersededAttempts }'))
+        $gh | Should -Match ([regex]::Escape('if (-not ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture)) { Flush-SupersededAttempts -LastPath ''advanced-hunting'''))
         $lake = $gh.IndexOf('if (-not $script:_SentinelLakeUnavailable -and $null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture) { throw (Get-SIHuntingNotAheadText) }')
         $lake | Should -BeGreaterThan 0
         $lake | Should -BeLessThan $gh.IndexOf('Invoke-SISentinelLakeQuery -Query $Query')

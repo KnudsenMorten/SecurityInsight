@@ -39,21 +39,23 @@ $script:SICommunityTrustedKeys = @($script:InvardiaUpdateTrustedKeys)
 
 $script:SICommunityUpdateProduct        = 'securityinsight'
 $script:SICommunityUpdateKind           = 'community'
-# Invardia's Community route (rings 2 and 3); the signed manifest names the archive, which must be an https link
+# Invardia's Community route (rings 0-3, the same rings as Pro: framework PRO-COMMUNITY-SAME); the signed manifest names the
+# archive, which must be an https link
 $script:SICommunityUpdateBaseUrl        = 'https://invardia.com'
 $script:SICommunityUpdateDownloadPrefix = 'https://'
-$script:SICommunityUpdateRings          = @(2, 3)
+$script:SICommunityUpdateRings          = @(0, 1, 2, 3)
 $script:SICommunityUpdateDefaultRing    = 3
 $script:SICommunityUpdateStateFolder    = '.si-update'
 # The files that carry the update itself: a release without them would strand every install that takes it.
-$script:SICommunityUpdateClientFiles    = @('Update-SecurityInsight.ps1', 'engine/_shared/SI-CommunityUpdate.ps1', 'engine/_shared/InvardiaUpdate.verify.ps1')
+$script:SICommunityUpdateClientFiles    = @('engine/_shared/SI-CommunityUpdate.ps1', 'engine/_shared/InvardiaUpdate.verify.ps1')
 # The files earlier releases shipped that a release no longer has, with the SHA-256 of every shipped version -- carried BY
 # the release being applied. The FIRST update by this client (no installed-files list yet) removes such a file only when it
 # is byte for byte a shipped version: a changed copy is kept, a customer file is never on the list.
 $script:SICommunityRetiredManifest      = 'engine/_shared/SI-PreviousReleaseFiles.locked.json'
 # Files only the PRO package carries (Get-SICommunityInstallKind): a folder with any of them is never updated from the
-# community channel -- that would replace SecurityInsight Pro with the public edition.
-$script:SICommunityProOnlyMarkers       = @('setup/_shared/SI-GuidedInstallPro.ps1', 'engine/_shared/SI-InvardiaUpdate.ps1', 'engine/asset-cmdb/Invoke-SICmdb.ps1')
+# community channel -- that would replace SecurityInsight Pro with the public edition. The paid engines and the Pro install
+# steps only: the update client (engine/_shared/SI-InvardiaUpdate.ps1) ships in BOTH editions since PRO-COMMUNITY-SAME.
+$script:SICommunityProOnlyMarkers       = @('setup/_shared/SI-GuidedInstallPro.ps1', 'engine/asset-cmdb/Invoke-SICmdb.ps1')
 
 # =====================================================================================================================
 #  Pure helpers
@@ -152,11 +154,11 @@ function Test-SICommunityReleasePayload {
 function Get-SICommunityUpdateSettings {
     <#
         This install's ring and channel. -Ring (this run only) > config\update.custom.json { "ring": 2 } > 3 (broad).
-        Only Community rings (2, 3) are valid here -- ring 1 is internal and is never read from the public channel.
+        Rings 0-3 (the same rings as Pro, framework PRO-COMMUNITY-SAME).
         Returns @{ Ring; RingSource; BaseUrl; DownloadPrefix; Problems }. Never throws. config\update.custom.json may also name
         "baseUrl" (https, or a local folder for an offline rehearsal) instead of Invardia's.
     #>
-    param([Parameter(Mandatory)][string]$Root, [int]$Ring = 0, [string]$BaseUrl)
+    param([Parameter(Mandatory)][string]$Root, [int]$Ring = -1, [string]$BaseUrl)
     $problems = New-Object System.Collections.Generic.List[string]
     $cfg = $null
     $file = [IO.Path]::Combine($Root, 'config', 'update.custom.json')
@@ -166,14 +168,14 @@ function Get-SICommunityUpdateSettings {
     }
     $prop = { param($n) if ($cfg -and $cfg.PSObject.Properties[$n] -and "$($cfg.$n)".Trim()) { "$($cfg.$n)".Trim() } else { '' } }
     $r = $script:SICommunityUpdateDefaultRing; $src = 'default'
-    if ($Ring -gt 0) { $r = $Ring; $src = 'parameter' }
+    if ($Ring -ge 0) { $r = $Ring; $src = 'parameter' }
     elseif (& $prop 'ring') {
         $n = 0
         if ([int]::TryParse((& $prop 'ring'), [ref]$n)) { $r = $n; $src = 'config\update.custom.json' }
         else { $problems.Add(("config\update.custom.json names ring '{0}', which is not a number -- ring {1} is used" -f (& $prop 'ring'), $script:SICommunityUpdateDefaultRing)) }
     }
     if ($script:SICommunityUpdateRings -notcontains $r) {
-        $problems.Add(('ring {0} is not a Community ring (2 = early release, 3 = broad) -- ring {1} is used' -f $r, $script:SICommunityUpdateDefaultRing))
+        $problems.Add(('ring {0} is not an update ring (0-3) -- ring {1} is used' -f $r, $script:SICommunityUpdateDefaultRing))
         $r = $script:SICommunityUpdateDefaultRing; $src = 'default'
     }
     $url = @($BaseUrl, (& $prop 'baseUrl')) | Where-Object { "$_".Trim() } | Select-Object -First 1
@@ -577,7 +579,7 @@ function Invoke-SICommunityUpdate {
         Exit-code meaning for the caller: refused / rolledback / network / error are failures; the rest are not.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Root, [int]$Ring = 0, [string]$BaseUrl, [long]$AcceptManualStepSequence = -1,
+    param([Parameter(Mandatory)][string]$Root, [int]$Ring = -1, [string]$BaseUrl, [long]$AcceptManualStepSequence = -1,
           [switch]$SkipContainerUpdate, [System.Collections.IDictionary]$Seams = @{}, [AllowNull()][object[]]$TrustedKeys)
     $s = New-SICommunityUpdateSeams
     foreach ($k in @($Seams.Keys)) { $s[$k] = $Seams[$k] }

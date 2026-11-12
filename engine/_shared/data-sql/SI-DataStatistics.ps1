@@ -41,6 +41,40 @@ SELECT CONVERT(bit, 1) AS Ready, @t AS TableName, @r AS Refreshed, @f AS Failed,
 '@
 }
 
+function Get-SIDataStatisticsRecordSql {
+    <# #1210 (Invardia SQL-STATS-PROOF): the ONE statement that records a finished refresh pass in the settings database --
+       cfg.InstallState 'StatisticsRefresh' (UpdatedAt = when it ended; the heartbeat sends it as Database.statsRefreshedUtc),
+       @Value = a short JSON of the pass (<= 400). A database without the table yet: nothing. #>
+@'
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'StatisticsRefresh')
+        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsRefresh';
+    ELSE
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsRefresh', LEFT(@Value, 400), NULL, @By);
+END
+'@
+}
+
+function Test-SIDataStatisticsPassDone {
+    <# PURE. #1210 is -Result a refresh pass that went through every table (not only the setting, not stopped part-way)? Only
+       such a pass is recorded as the refresh after the writes; one statistic that failed does not undo the rest. #>
+    param($Result)
+    [bool]($Result -and $Result.Ready -and -not $Result.AsyncOnly -and -not $Result.Stopped)
+}
+
+function Save-SIDataStatisticsRefreshRecord {
+    <# #1210 records a finished pass (Test-SIDataStatisticsPassDone) through -Invoke (the SETTINGS database seam: sql, params,
+       mode 'nonquery'). NEVER throws: $true = recorded, $false = not a finished pass / no seam / the write failed. #>
+    param([scriptblock]$Invoke, $Result, [string]$By = 'caj-si-flow')
+    if (-not $Invoke -or -not (Test-SIDataStatisticsPassDone $Result)) { return $false }
+    try {
+        $v = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{{"tables":{0},"refreshed":{1},"failed":{2},"seconds":{3:0}}}', [int]$Result.Tables, [int]$Result.Refreshed, [int]$Result.Failed, [double]$Result.Seconds)
+        $null = & $Invoke (Get-SIDataStatisticsRecordSql) ([ordered]@{ Value = $v; By = $By }) 'nonquery'
+        $true
+    } catch { $false }
+}
+
 function Get-SIDataStatisticsRefreshText {
     <# PURE. The plain line(s) a refresh says. -Result: Invoke-SIDataStatisticsRefresh's answer; -When: the words for when it
        ran ('at the end of the run, after the pages moved to it'). Rows @{ Level; Text }; none when nothing was stale and nothing went wrong.
@@ -70,7 +104,10 @@ function Invoke-SIDataStatisticsRefresh {
         Lines }. AsyncOff = the database setting is (still) off after the call: kept for the caller, never said (only setup's
         admin may change the database; an install the updater keeps relies on the refresh after every run).
     #>
-    param([scriptblock]$Invoke, [switch]$AsyncOnly, [string]$When = '', [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat, [double]$ProgressSeconds = 60)
+    param([scriptblock]$Invoke, [switch]$AsyncOnly, [string]$When = '', [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat, [double]$ProgressSeconds = 60,
+          # #1210: the SETTINGS database seam (sql, params, 'nonquery') -- a pass through every table is recorded there
+          # (cfg.InstallState 'StatisticsRefresh', Save-SIDataStatisticsRefreshRecord); $null = not recorded
+          [scriptblock]$RecordInvoke)
     $res = [pscustomobject]@{ Ready = $false; AsyncOnly = [bool]$AsyncOnly; Tables = 0; Names = @(); Refreshed = 0; Failed = 0; FailedError = ''; Async = $null; AsyncOff = $false; AsyncError = ''; Error = ''; Stopped = $false; Seconds = 0.0; Lines = @() }
     if (-not $Invoke) { return $res }
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -123,5 +160,7 @@ function Invoke-SIDataStatisticsRefresh {
     # the wake-up's setting check says nothing of its own (every 5 minutes): the refresh at the end of a run says what is wrong
     if ($AsyncOnly) { $res.Lines = @() }
     foreach ($l in @($res.Lines | Where-Object { $null -ne $_ })) { try { & $Log $l.Level $l.Text } catch { } }
+    # #1210: a pass through every table is recorded (the heartbeat's Database.statsRefreshedUtc); never fails the run
+    if ($RecordInvoke) { $null = Save-SIDataStatisticsRefreshRecord -Invoke $RecordInvoke -Result $res }
     $res
 }

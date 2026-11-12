@@ -2543,6 +2543,24 @@
       "description": "Tier of the device's most frequent logon user (the endpoint profiler's logon correlation)."
     },
     {
+      "name": "si_privileged_logon_tier",
+      "classes": "device",
+      "type": "int",
+      "group": "tier",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "min",
+        "authority": [
+          "mde"
+        ],
+        "staleDays": 30
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Lowest tier (0-2) of any account that logged on to the device in the window: signed in, Remote Desktop, cached credentials or unlock (Defender device logons joined to the identity profile). Empty when no privileged account logged on or the logons could not be read."
+    },
+    {
       "name": "si_machine_groups",
       "classes": "device",
       "type": "dynamic",

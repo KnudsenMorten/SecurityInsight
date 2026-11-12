@@ -1,8 +1,7 @@
 #Requires -Version 5.1
 <#
-    caj-si-updater -- THE ROLL STEPS BOTH EDITIONS SHARE (SI #750 (b), 2026-10-27). Moved here unchanged from
-    _shared/SI-UpdaterInvardia.ps1 (SecurityInsight Pro, which dot-sources this file), so the Community edition's updater
-    (_shared/SI-UpdaterCommunity.ps1, the signed community channel) rolls a verified release EXACTLY as Pro does:
+    caj-si-updater -- THE ROLL STEPS of the one update client (SI #750 (b), 2026-10-27; framework PRO-COMMUNITY-SAME): dot-
+    sourced by _shared/SI-UpdaterInvardia.ps1, which runs them for every install, Pro and Community, the same way:
       Resolve-SIUpdaterRunningRelease    the release the jobs run (the recorded applied version when it is a build of it)
       Get-SIUpdaterNeedsQuiet            a release that must be installed while no SI job runs (UPDATE-NEEDS-QUIET.txt)
       Invoke-SIUpdaterInvardiaPreRoll    the manual-deploy mark + the quiet wait, before a roll (name kept: Pro tests call it)

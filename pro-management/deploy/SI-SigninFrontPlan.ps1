@@ -104,14 +104,19 @@ function Get-SISigninFrontAnonymousPathsValue {
 
 function Resolve-SISigninFrontSource {
     <#
-        PURE (reads the disk). Where the component's source is, for -SIRoot:
-          a release      <SIRoot>\pro-management\signin-front\   (Publish-SIRelease.ps1 packs the pinned tree there)
-          the repository <SIRoot>\..\..\FRAMEWORK\signin-front\  (SOLUTIONS\SecurityInsight -> the repo root)
-          the vendored   <SIRoot>\vendor\signin-front\           (#1061, framework PUB-FRONT: the Community release carries
-                         copy                                     FRAMEWORK/signin-front/{src,VERSION} at the pin) -- used ONLY
-                                                                  when FRAMEWORK/signin-front is not there
+        PURE (reads the disk). Where the component's source is, for -SIRoot -- ONE build path for Pro and Community
+        (framework PRO-COMMUNITY-SAME, SI #1207):
+          the release    <SIRoot>\pro-management\signin-front\   the pinned tree (FRAMEWORK/signin-front {src, VERSION} at the
+                                                                  pin), carried by the solution folder itself, so the Pro
+                                                                  package and the public Community release carry it at the
+                                                                  same place; Publish-SIRelease.ps1 (both editions) and
+                                                                  Publish-SICommunityRelease.ps1 refuse a release where it is
+                                                                  not exactly the pin (Add-SIReleaseSigninFront /
+                                                                  Test-SISigninFrontCarried)
+          the repository <SIRoot>\..\..\FRAMEWORK\signin-front\  (SOLUTIONS\SecurityInsight -> the repo root), at the pin
+        There is no other copy and no other source.
         It is usable only when its VERSION is the pinned version and it has its Dockerfile.
-        Returns @{ Ok; Path; BuildPath; Version; Why; Source ('release' / 'framework' / 'vendor' / '') }.
+        Returns @{ Ok; Path; BuildPath; Version; Why; Source ('release' / 'framework' / '') }.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Pin)
     $fw = [IO.Path]::GetFullPath([IO.Path]::Combine($SIRoot, '..', '..', ($Pin.component -replace '/', [IO.Path]::DirectorySeparatorChar)))
@@ -119,7 +124,6 @@ function Resolve-SISigninFrontSource {
         @{ P = [IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front'); S = 'release' },
         @{ P = $fw; S = 'framework' }
     )
-    if (-not (Test-Path -LiteralPath $fw -PathType Container)) { $cands += @{ P = [IO.Path]::Combine($SIRoot, 'vendor', 'signin-front'); S = 'vendor' } }
     $why = New-Object System.Collections.Generic.List[string]
     foreach ($cand in $cands) {
         $c = $cand.P
@@ -134,6 +138,23 @@ function Resolve-SISigninFrontSource {
     }
     if (-not $why.Count) { $why.Add(('the component {0} {1} is not in this release or tree (pin state: {2})' -f $Pin.component, $Pin.version, $Pin.state)) }
     [pscustomobject]@{ Ok = $false; Path = ''; BuildPath = ''; Version = ''; Why = ($why -join '; '); Source = '' }
+}
+
+function Test-SISigninFrontCarried {
+    <#
+        PURE (reads the disk). '' when the release folder -SIRoot (an extracted Pro package or public Community release)
+        carries the sign-in front the way every install builds it -- its pin, and the pinned tree at
+        pro-management\signin-front\ (Resolve-SISigninFrontSource, source 'release'); else why not. A pin in state
+        'contract' carries no front (''). The same check for both editions (framework PRO-COMMUNITY-SAME, SI #1207).
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot)
+    $pin = $null
+    try { $pin = Get-SISigninFrontPin -SIRoot $SIRoot } catch { return ('the sign-in front pin could not be read ({0})' -f $_.Exception.Message) }
+    if ([string]$pin.state -ne 'pinned') { return '' }
+    $src = Resolve-SISigninFrontSource -SIRoot $SIRoot -Pin $pin
+    if (-not $src.Ok) { return ('the sign-in front is not carried at the pin: {0}' -f $src.Why) }
+    if ($src.Source -ne 'release') { return ('the sign-in front is not carried in the release folder (pro-management/signin-front) -- found only in {0}' -f $src.Path) }
+    ''
 }
 
 function Get-SISigninFrontImageTag {

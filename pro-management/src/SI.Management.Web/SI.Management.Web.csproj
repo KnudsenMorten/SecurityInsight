@@ -29,8 +29,8 @@
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
     <!-- IMAGE-PATCH-1 (2026-11-10): pinned directly; they came in transitively at versions with fixed High findings.
          Moved to the .NET 10 servicing line with the move to net10.0. -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.14" />
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.15" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
   </ItemGroup>
 
   <ItemGroup>

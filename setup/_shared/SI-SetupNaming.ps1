@@ -107,23 +107,14 @@ function Get-SISetupDisplayNames {
        5.5, Invardia ruling 2026-11-07: groups follow grp-<code>-<purpose>; an older install's group is renamed back in place by
        the update's identity-names step).
        An existing install's objects get the same names from the update (setup\_shared\SI-DisplayNames.ps1).
-       SIDE BY SIDE IN ONE TENANT (SI #750, 2026-10-27; the same rule as v2.2 beside v3): these three are TENANT-WIDE objects,
-       found by name when an install is set up, so a NEW Community edition install (-New -Edition community) gets names of its
-       own -- "SecurityInsight Community Engine", "SecurityInsight Community", and its own SQL admin group (group
-       grp-si-community-sql-admins, mailNickname grpsicommunitysqladmins) -- and never finds, reuses or renames a Pro
-       install's application or admin group in the same tenant (nor a Pro install the Community one's). SqlAdminGroupName =
-       the name the admin group is looked up and created by (setup\Set-SISqlAdminGroup.ps1 -GroupName). Without -New (an
-       existing install, or SI_Setup_NewInstallNames off) both editions keep today's names, exactly as before. #>
+       ONE SET OF NAMES FOR BOTH EDITIONS (framework PRO-COMMUNITY-SAME, Invardia C1 2026-11-11): a NEW install gets the same
+       tenant-wide names in either edition -- the edition is not part of any name. (From 2026-10-27 to 2026-11-11 a new
+       Community install got names of its own -- "SecurityInsight Community Engine", "SecurityInsight Community",
+       grp-si-community-sql-admins; an EXISTING install keeps the names it has until it moves: its objects are found by the
+       names recorded for it and are never renamed by this function.) -Edition is kept for callers and changes nothing.
+       SqlAdminGroupName = the name the admin group is looked up and created by (setup\Set-SISqlAdminGroup.ps1 -GroupName).
+       Without -New (an existing install, or SI_Setup_NewInstallNames off) both editions keep today's names, exactly as before. #>
     param([switch]$New, [ValidateSet('community', 'pro')][string]$Edition = 'pro')
-    if ($New -and $Edition -eq 'community') {
-        return [ordered]@{
-            SpnDisplayName           = 'SecurityInsight Community Engine'
-            WebAppDisplayName        = 'SecurityInsight Community'
-            # framework 5.5 (Invardia ruling 2026-11-07): the group carries its STANDARD name from the start, no display name of its own
-            SqlAdminGroupDisplayName = 'grp-si-community-sql-admins'
-            SqlAdminGroupName        = 'grp-si-community-sql-admins'
-        }
-    }
     [ordered]@{
         SpnDisplayName           = $(if ($New) { 'SecurityInsight Engine' } else { 'SecurityInsight' })
         WebAppDisplayName        = $(if ($New) { 'SecurityInsight' } else { 'SecurityInsight Management' })

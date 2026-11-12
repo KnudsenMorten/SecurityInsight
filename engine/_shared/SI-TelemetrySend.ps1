@@ -65,6 +65,8 @@ if (-not (Get-Command -Name Get-SIInvardiaEnvironmentIdFromAnswer -ErrorAction S
 if (-not (Get-Command -Name Add-SIUplinkInstallId -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaInstallId.ps1')) }
 # framework 8.4: a run record that was not taken is kept in the Pro database (cfg.UplinkOutbox); the heartbeat job sends it again
 if (-not (Get-Command -Name Add-SIUplinkOutboxRecord -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-UplinkOutbox.ps1')) }
+# framework PRO-COMMUNITY-SAME (opt-in, owner 2026-11-11): nothing that identifies a Community install leaves it without its yes
+if (-not (Get-Command -Name Test-SIInvardiaConnect -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-InvardiaConnect.ps1')) }
 
 function Initialize-SIAitUplinkScope {
     <# The framework client (AitUplink.ps1, kept as it is) holds its closed lists and the community endpoint at script scope.
@@ -561,6 +563,10 @@ function Send-SITelemetryRecordWithFallback {
     #>
     param([Parameter(Mandatory)]$Record, [Parameter(Mandatory)][scriptblock]$Transport, [Parameter(Mandatory)]$Context, [int]$TimeoutSec = 5,
           [scriptblock]$Invoke, [datetime]$NowUtc = [datetime]::UtcNow)
+    # framework PRO-COMMUNITY-SAME (opt-in): never a record from an install that is not connected (every sender comes here)
+    if ($Context -and $Context.PSObject.Properties['Connected'] -and -not [bool]$Context.Connected) {
+        return [pscustomobject]@{ Result = [pscustomobject]@{ Status = 'skipped'; Reason = (Get-SIInvardiaConnectSkipText -What 'no record') }; Record = $Record; Held = $false }
+    }
     # Invardia S16: every IDENTIFIED record (heartbeat, run -- not the setup report) carries the install's LASTING id as
     # InstallId; an anonymous record keeps only its own random id, and no lasting id (none / unreadable) = no field
     if ($Record -and [string]$Context.Mode -eq 'identified' -and $Context.PSObject.Properties['LastingInstallId']) {
@@ -890,7 +896,13 @@ function Get-SITelemetryContext {
         if (Get-Command -Name Get-SILicense -ErrorAction SilentlyContinue) { try { $License = Get-SILicense 3>$null } catch { $License = $null } }
     }
     $li = Get-SITelemetryLicenceInfo -License $License
+    # the edition the opt-in rule reads: the caller's, else the LICENCE's -- never the database guess below (both editions have
+    # the database since 2026-10-18, so it no longer tells a Pro install from a Community one)
+    $connEdition = if ($Edition) { $Edition } else { [string]$li.Edition }
     if ($Edition) { $li = [pscustomobject]@{ Edition = $Edition; LicenceState = $li.LicenceState } }
+    # framework PRO-COMMUNITY-SAME: the edition the install RECORDED (SI_Edition, written by the installer) wins over the guess
+    # below -- both editions have the database, so the database alone no longer tells them apart
+    elseif ($li.Edition -eq 'community' -and "$global:SI_Edition".Trim().ToLowerInvariant() -eq 'community') { }
     elseif ($li.Edition -eq 'community' -and (Test-SITelemetryProInstall -GetEnv $GetEnv)) {
         # An install WITH a Pro database is Pro even when this run could not read its licence (it failed before, or its
         # identity cannot read the vault): reported as Pro with the licence state as found -- never as an anonymous
@@ -902,7 +914,9 @@ function Get-SITelemetryContext {
     $key = ''
     # why this install reports anonymously (plain words; never a secret value) -- '' when it is identified
     $anonWhy = ''
-    if ($li.Edition -ne 'community') {
+    # framework PRO-COMMUNITY-SAME: a Community install that said yes to "Connect this install to Invardia" has its own install
+    # key and reports with it, like Pro; without the yes its key is never read (and nothing is sent: Connected below)
+    if ($li.Edition -ne 'community' -or (Get-SIInvardiaConnectSetting) -eq $true) {
         if ($PSBoundParameters.ContainsKey('InstallKey')) { $key = "$InstallKey".Trim(); if (-not $key) { $anonWhy = 'no install key was given' } }
         else {
             $kr = Get-SITelemetryInstallKey -WithReason
@@ -964,6 +978,9 @@ function Get-SITelemetryContext {
                       elseif ($PSBoundParameters.ContainsKey('Endpoints')) { , @(ConvertTo-SITelemetryEndpointList -Items $Endpoints) }
                       else { , @(Get-SITelemetryInstallEndpoints) })
         # MAIL-3 (#653): the web app header's name -- identified only (a name says whose install it is)
+        # framework PRO-COMMUNITY-SAME (opt-in): may anything go out at all? A Community install without its yes sends nothing --
+        # not even the anonymous report (it carries the install's own id). Pro: connected, as before.
+        Connected = [bool](Test-SIInvardiaConnect -Edition $connEdition -HasInstallKey ([bool]$key))
         EnvironmentName = $(if ($sender.Mode -eq 'anonymous') { '' }
                             elseif ($PSBoundParameters.ContainsKey('EnvironmentName')) { ConvertTo-SITelemetryEnvironmentName $EnvironmentName }
                             else { Get-SITelemetryEnvironmentName })
@@ -1210,6 +1227,8 @@ function Send-SITelemetryRunEnd {
 
         $nowUtc = if ($Now) { ([datetime]$Now).ToUniversalTime() } else { [datetime]::UtcNow }
         if (-not $Context) { $Context = Get-SITelemetryContext }
+        # framework PRO-COMMUNITY-SAME (opt-in): a Community install that did not say yes sends nothing (Test-SIInvardiaConnect)
+        if ($Context.PSObject.Properties['Connected'] -and -not [bool]$Context.Connected) { return (& $out 'skipped' @() (Get-SIInvardiaConnectSkipText -What 'no run report')) }
         if (-not $Transport) {
             # #918: a build that is not a RELEASE (no BUILD.json release, a dev or rc label) never sends to the PUBLIC community
             # uplink -- test runs, gate suites, the test VM and dev runs were counted as Community installs. Identified installs

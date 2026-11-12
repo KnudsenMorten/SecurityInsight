@@ -814,7 +814,7 @@ function Invoke-SIUpdateCollectProducers {
 # (setup/_shared/SI-JobSizing.ps1, Invoke-SIWebAppSize): a smaller one is raised, one on the product's earlier 4 CPU / 8 GiB is
 # lowered, any other larger size is the customer's and kept. A size the customer set (SI_Bootstrap_WebAppCpu /
 # SI_Bootstrap_WebAppMemory: the Pro database's setting, then the config) wins, both ways. The sign-in front sidecar and the
-# MCP server are not touched. No web app (Community): nothing to do. Waits for the new revision and reads the size back, so
+# MCP server are not touched. No web app (an install without one, either edition): nothing to do. Waits for the new revision and reads the size back, so
 # the web app roll after it is not refused as an operation in flight. Never fails the update.
 function Invoke-SIUpdateWebAppSize {
     $lib = Join-Path $PSScriptRoot '_shared/SI-JobSizing.ps1'
@@ -1514,7 +1514,7 @@ function Invoke-SIUpdateSigninStore {
         $gv = { param($n) if ($globals.ContainsKey($n) -and "$($globals[$n])".Trim()) { "$($globals[$n])".Trim() } else { '' } }
         $proSrv = & $envOr 'SI_UPDATER_PRO_SQL_SERVER'; if (-not $proSrv) { $proSrv = & $gv 'SI_ProSqlServer' }
         $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
-        if (-not $proSrv -or -not $proDb) { return $null }   # Community / no Pro database: no web app, no front
+        if (-not $proSrv -or -not $proDb) { return $null }   # no database recorded (either edition): no web app, no front
         $proSrv = Get-SISigninStoreSqlFqdn -Server $proSrv
         $kvName = & $envOr 'SI_UPDATER_KEY_VAULT'; if (-not $kvName) { $kvName = & $gv 'SI_KeyVaultName' }
         $rg = $target.ResourceGroupName

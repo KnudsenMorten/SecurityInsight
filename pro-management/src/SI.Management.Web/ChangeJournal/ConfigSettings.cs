@@ -24,7 +24,7 @@ public sealed class ConfigSettings
     private static CatalogSetting S(string name, string type, string label, string purpose, string effect, string def, string defText, double? min = null, double? max = null,
         string? when = null, string? unit = null) => new()
     {
-        Name = name, Label = label, Group = Group, Type = type, Engines = new[] { "management-web" }, Edition = "pro",
+        Name = name, Label = label, Group = Group, Type = type, Engines = new[] { "management-web" }, Edition = "community",
         Default = J(def), DefaultText = defText, Description = purpose, Purpose = purpose, Effect = effect, WhenToChange = when, Unit = unit,
         Min = min, Max = max, WebOnly = true,
     };

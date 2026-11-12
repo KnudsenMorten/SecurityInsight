@@ -48,7 +48,7 @@ function Get-SICiKindMechanism {
         'hasSoftwareInstalled' { 'mde.installed_software' } 'egDetectedRoles' { 'eg.graph_field' } 'egKustoQuery' { 'mde.detection' }
         'nameMatches' { 'name.pattern' } 'osPlatform' { 'eg.graph_field' } 'hasMdeMachineGroupTag' { 'mde.machine_tag' }
         'hasEntraExtensionAttributeTag' { 'entra.extension_attribute' } 'groupMembership' { 'entra.directory' }
-        'hasAzureTagDirectOrParent' { 'azure.resource_tag' } 'mostFrequentUserTier' { 'mde.logon_user' } 'ipInRange' { 'network.ip_range' }
+        'hasAzureTagDirectOrParent' { 'azure.resource_tag' } 'mostFrequentUserTier' { 'mde.logon_user' } 'privilegedLogonTier' { 'mde.logon_user' } 'ipInRange' { 'network.ip_range' }
         'hasTag' { 'mde.machine_tag' } 'assetKind' { 'default' } default { 'name.pattern' }
     }
 }
@@ -135,6 +135,7 @@ function ConvertTo-SICiKindCondition {
             return (ConvertTo-SITagMatchCondition -Fields @('si_tags', 'si_azure_parent_tags', 'si_machine_groups') -Tag ([string](& $g 'tag')) -Value (& $g 'value') -Op $op)
         }
         'mostFrequentUserTier' { return [ordered]@{ field = 'si_frequent_user_tier'; op = 'in'; value = @(& $g 'tierValues') } }
+        'privilegedLogonTier' { return [ordered]@{ field = 'si_privileged_logon_tier'; op = 'in'; value = @(& $g 'tierValues') } }
         'ipInRange' {
             $cidrs = @(& $g 'cidrs'); if (-not $cidrs -or -not $cidrs[0]) { $cidrs = @(& $g 'ranges') }
             return [ordered]@{ any = @([ordered]@{ field = 'si_ip_addresses'; op = 'in_ranges'; value = @($cidrs) }, [ordered]@{ field = 'si_public_ip'; op = 'in_ranges'; value = @($cidrs) }, [ordered]@{ field = 'si_ip_address'; op = 'in_ranges'; value = @($cidrs) }) }
@@ -357,6 +358,7 @@ function ConvertTo-SICiEvidenceText {
         'si_device_roles' { return ('detected role {0}' -f ($s -replace '_', ' ')) }
         'si_group_memberships' { return "member of $s" }
         'si_frequent_user_tier' { return "its most frequent logon user is Tier $s" }
+        'si_privileged_logon_tier' { return "a Tier $s account logged on to it" }
         'si_is_break_glass' { return 'break-glass account' }
         'si_os_name' { return "operating system $s" }
         { @('si_ip_addresses', 'si_ip_address', 'si_public_ip') -contains $_ } { return "IP address $s" }

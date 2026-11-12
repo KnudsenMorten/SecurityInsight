@@ -701,6 +701,30 @@ function Write-PTCDownloadedTiers {
     Write-Log ("{0} built-in role(s), group(s) and permission(s) take their tier from the daily catalog version {1}." -f $n, $Catalog.Version) "INFO"
 }
 
+function Get-PTCDailyCatalogLabel {
+    <# PURE. How the log names the downloaded catalog: 'the daily catalog version V', or that it is not downloaded yet. #>
+    param([string]$Version)
+    if ($Version) { return ('the daily catalog version {0}' -f $Version) }
+    'the daily catalog (not downloaded yet)'
+}
+
+function Write-PTCSectionAHeader {
+    <#
+        The AD built-in groups section's opening lines. The log says what really happens (#1205): with the downloaded
+        catalog no AI request is sent, so no line may say AI tiers anything -- the AI wording only when AI really runs.
+    #>
+    param([bool]$NoAI, [string]$Version, [int]$GroupCount)
+    if ($NoAI) {
+        Write-Log ("=== AD built-in groups: tiers from {0} ===" -f (Get-PTCDailyCatalogLabel -Version $Version)) "INFO"
+        Write-Log "Catalog size: $GroupCount built-in group names (hardcoded list)." "INFO"
+    } else {
+        Write-Log "=== SECTION A: AD Built-in Groups (name-based AI tiering) ===" "INFO"
+        Write-Log "Catalog size: $GroupCount built-in group names (hardcoded list)." "INFO"
+        Write-Log "Classification method: Azure OpenAI tiers each group name into Tier 0/1/2/3." "INFO"
+    }
+    Write-Log "Membership analysis happens at query time in IdentityAssetsCollect via the Exposure Graph -- no on-prem AD enumeration, no RSAT required." "INFO"
+}
+
 function Get-PTCCatalogSourceNote {
     <# PURE. The one line a run records about the catalog it used (the log and the run-health row). #>
     param($Catalog)
@@ -989,7 +1013,11 @@ $itemsJson
 function Invoke-AIBatchTiering {
     param(
         [string]$CategoryName,
-        [array]$Items
+        [array]$Items,
+        # #1205: with the downloaded catalog (no AI request is sent) -- how many of this section's items it lists, and
+        # how the log names it. The section then says that in ONE line instead of the AI batch lines.
+        [int]$ListedCount = 0,
+        [string]$CatalogLabel = ''
     )
 
     $total      = $Items.Count
@@ -1005,7 +1033,11 @@ function Invoke-AIBatchTiering {
     }
 
     $totalChunks = $chunks.Count
-    Write-Log "AI batch: $CategoryName  $total items across $totalChunks chunk(s) of max $chunkSize" "INFO"
+    if ($script:PtcNoAI) {
+        Write-Log ("{0}: {1} item(s) take their tier from {2}; {3} not listed keep the tier they had." -f $CategoryName, $ListedCount, $CatalogLabel, $total) "INFO"
+    } else {
+        Write-Log "AI batch: $CategoryName  $total items across $totalChunks chunk(s) of max $chunkSize" "INFO"
+    }
 
     $chunkIndex = 0
     foreach ($chunk in $chunks) {
@@ -1022,7 +1054,7 @@ function Invoke-AIBatchTiering {
         if ($chunkIndex -lt $totalChunks) { Start-Sleep -Milliseconds 500 }
     }
 
-    Write-Log "AI batch complete: $CategoryName  $($allResults.Count) total results" "SUCCESS"
+    if (-not $script:PtcNoAI) { Write-Log "AI batch complete: $CategoryName  $($allResults.Count) total results" "SUCCESS" }
     return $allResults.ToArray()
 }
 
@@ -1229,7 +1261,13 @@ function Invoke-AllAITiering {
         [hashtable]$Known = $null
     )
 
-    Write-Log "=== AI TIERING: Preparing batch inputs ===" "INFO"
+    # #1205: the log says what really happens -- the AI wording only when AI really runs (built here with AI)
+    $catalogLabel = Get-PTCDailyCatalogLabel -Version ([string]$script:PtcCatalog.Version)
+    if ($script:PtcNoAI) {
+        Write-Log ("=== Roles, groups and permissions: tiers from {0} ===" -f $catalogLabel) "INFO"
+    } else {
+        Write-Log "=== AI TIERING: Preparing batch inputs ===" "INFO"
+    }
     $isKnown = {
         param([string]$Cat, [string]$Key, [bool]$BuiltIn)
         if ($null -eq $Known -or -not $BuiltIn -or [string]::IsNullOrWhiteSpace($Key) -or $null -eq $Known[$Cat]) { return $false }
@@ -1282,12 +1320,21 @@ function Invoke-AllAITiering {
     # ---- 5. Account Types ----
 
     # ---- Send batch calls ----
-    Write-Log "=== AI TIERING: Sending 4 batch requests ===" "INFO"
+    $listed = @{ ADGroups = 0; EntraRoles = 0; APIPerms = 0; AzureRoles = 0 }
+    if ($script:PtcNoAI) {
+        # how many of each section the downloaded catalog lists (the rest -- not listed, or a custom role -- keep their tier)
+        $listed.ADGroups   = @($BuiltInADGroups | Select-Object -Unique).Count - @($adGroupSummary).Count
+        $listed.EntraRoles = @($EntraRoles).Count - @($entraRoleInput).Count
+        $listed.APIPerms   = @($APIPermissions | Sort-Object Value -Unique).Count - @($apiPermInput).Count
+        $listed.AzureRoles = @($AzureRoles).Count - @($azureRoleInput).Count
+    } else {
+        Write-Log "=== AI TIERING: Sending 4 batch requests ===" "INFO"
+    }
 
-    $tieredADGroups   = Invoke-AIBatchTiering -CategoryName "Active Directory Built-in Groups"    -Items $adGroupSummary
-    $tieredEntraRoles = Invoke-AIBatchTiering -CategoryName "Entra ID Role Definitions"           -Items $entraRoleInput
-    $tieredAPIPerms   = Invoke-AIBatchTiering -CategoryName "Entra API Permissions"               -Items $apiPermInput
-    $tieredAzureRoles = Invoke-AIBatchTiering -CategoryName "Azure RBAC Role Definitions"         -Items $azureRoleInput
+    $tieredADGroups   = Invoke-AIBatchTiering -CategoryName "Active Directory Built-in Groups"    -Items $adGroupSummary -ListedCount $listed.ADGroups   -CatalogLabel $catalogLabel
+    $tieredEntraRoles = Invoke-AIBatchTiering -CategoryName "Entra ID Role Definitions"           -Items $entraRoleInput -ListedCount $listed.EntraRoles -CatalogLabel $catalogLabel
+    $tieredAPIPerms   = Invoke-AIBatchTiering -CategoryName "Entra API Permissions"               -Items $apiPermInput   -ListedCount $listed.APIPerms   -CatalogLabel $catalogLabel
+    $tieredAzureRoles = Invoke-AIBatchTiering -CategoryName "Azure RBAC Role Definitions"         -Items $azureRoleInput -ListedCount $listed.AzureRoles -CatalogLabel $catalogLabel
 
     # ---- Merge AI tier results back with full source data ----
     # All maps use case-insensitive string comparer and name trimming so AI name
@@ -1618,10 +1665,7 @@ function Main {
         Write-Log "ForcePrivilegedTierProfilerRebuild=`$true -- rebuilding regardless of catalog age." "INFO"
     }
 
-    Write-Log "=== SECTION A: AD Built-in Groups (name-based AI tiering) ===" "INFO"
-    Write-Log "Catalog size: $($BuiltInADGroups.Count) built-in group names (hardcoded list)." "INFO"
-    Write-Log "Classification method: Azure OpenAI tiers each group name into Tier 0/1/2/3." "INFO"
-    Write-Log "Membership analysis happens at query time in IdentityAssetsCollect via the Exposure Graph -- no on-prem AD enumeration, no RSAT required." "INFO"
+    Write-PTCSectionAHeader -NoAI ([bool]$script:PtcNoAI) -Version ([string]$script:PtcCatalog.Version) -GroupCount $BuiltInADGroups.Count
 
     # ---- Collect all data first ----
     $entraRoles     = Get-EntraRoleDefinitions

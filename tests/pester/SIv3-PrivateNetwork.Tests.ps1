@@ -400,19 +400,22 @@ Describe 'NEVER RE-OPENED: when we say it is private, it stays that way (owner 2
         Test-SIPublicAccessReopen -Kind registry -Before ([ordered]@{ publicNetworkAccess = 'Enabled' }) | Should -BeTrue
     }
     It 'static: only the cut-over''s rollback passes -AllowReopen, and only on the customer''s -ReopenPublicAccess' {
-        $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1 | Where-Object { $_.FullName -notmatch '\\tests\\' } |
-                  Select-String -Pattern '-AllowReopen\b' | ForEach-Object { '{0}: {1}' -f $_.Path.Substring($script:SIRoot.Length + 1), $_.Line.Trim() })
-        @($hits | Where-Object { $_ -notmatch '^setup\\Set-SIPrivateNetworking\.ps1: .*-AllowReopen:\$ReopenPublicAccess' -and $_ -notmatch '^setup\\_shared\\SI-PrivateNetwork\.ps1: ' }) | Should -BeNullOrEmpty
-        @($hits | Where-Object { $_ -match '^setup\\Set-SIPrivateNetworking\.ps1' }).Count | Should -Be 1
+        # paths are compared in one form ('/') so the allow-list holds on Linux (the runner) and Windows alike
+        $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1 |
+                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/' } |
+                  Select-String -Pattern '-AllowReopen\b' | ForEach-Object { '{0}: {1}' -f ($_.Path.Substring($script:SIRoot.Length + 1) -replace '\\', '/'), $_.Line.Trim() })
+        @($hits | Where-Object { $_ -notmatch '^setup/Set-SIPrivateNetworking\.ps1: .*-AllowReopen:\$ReopenPublicAccess' -and $_ -notmatch '^setup/_shared/SI-PrivateNetwork\.ps1: ' }) | Should -BeNullOrEmpty
+        @($hits | Where-Object { $_ -match '^setup/Set-SIPrivateNetworking\.ps1' }).Count | Should -Be 1
     }
     It 'static: no SecurityInsight code writes an open public endpoint except the create-only bodies it is known for' {
         # an install resource (database server, storage, Key Vault, registry) is never PUT/PATCHed open: the only literal
         # "Enabled" bodies are the database server's CREATE (sent only when Azure says it is not there, twice) and data
         # collection endpoints / a customer's own OpenAI resource (not part of the private set)
-        $allowed = @('setup\_shared\SI-SetupArm.ps1', 'setup\ConfigWizard\backend\Initialize-SIInfra.ps1', 'engine\_shared\SI-AzRest.ps1', 'setup\Validate-SIOpenAI.ps1')
-        $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1, *.psm1, *.bicep | Where-Object { $_.FullName -notmatch '\\tests\\' } |
+        $allowed = @('setup/_shared/SI-SetupArm.ps1', 'setup/ConfigWizard/backend/Initialize-SIInfra.ps1', 'engine/_shared/SI-AzRest.ps1', 'setup/Validate-SIOpenAI.ps1')
+        $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1, *.psm1, *.bicep |
+                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/' } |
                   Select-String -Pattern "(?i)publicNetworkAccess\s*=\s*['""]Enabled['""]|defaultAction\s*=\s*['""]Allow['""]|networkRuleBypassOptions\s*=\s*['""]None['""]" |
-                  ForEach-Object { $_.Path.Substring($script:SIRoot.Length + 1) } | Sort-Object -Unique)
+                  ForEach-Object { $_.Path.Substring($script:SIRoot.Length + 1) -replace '\\', '/' } | Sort-Object -Unique)
         @($hits | Where-Object { $allowed -notcontains $_ }) | Should -BeNullOrEmpty
         $arm = Get-Content -Raw (Join-Path $script:SIRoot 'setup\_shared\SI-SetupArm.ps1')
         $arm | Should -Match '(?s)\$absent = Test-SIArmResourceAbsent[^\r\n]*\r?\n\s*if \(\$absent\) \{\r?\n\s*\$null = Invoke-SIArm -Method PUT[^\r\n]*Get-SISqlServerEntraOnlyBody' -Because 'the open-at-create body is sent only to a server that is not there'

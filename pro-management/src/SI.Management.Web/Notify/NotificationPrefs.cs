@@ -119,7 +119,7 @@ public static class NotifySettings
     private static CatalogSetting S(string name, string type, string label, string description, string def, string defaultText, string effect, string when,
         double? min = null, double? max = null, string? unit = null, string card = "Notifications", string? itemFormat = null) => new()
     {
-        Name = name, Label = label, Group = SI.Management.Web.Links.WebSettings.SettingsArea, Type = type, Engines = new[] { "management-web" }, Edition = "pro",
+        Name = name, Label = label, Group = SI.Management.Web.Links.WebSettings.SettingsArea, Type = type, Engines = new[] { "management-web" }, Edition = "community",
         Default = J(def), Description = description, DefaultText = defaultText, Effect = effect, WhenToChange = when, Min = min, Max = max, Unit = unit,
         WebOnly = true, Card = card, Advanced = name is Prefs or Confirmed or ReminderTo, ItemFormat = itemFormat,
     };

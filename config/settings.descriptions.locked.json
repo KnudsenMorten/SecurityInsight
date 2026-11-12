@@ -1860,6 +1860,98 @@
       "advanced": true,
       "group": "Sign-in & Azure resources"
     },
+    "SI_Endpoint_MostFrequentUserTier_Mode": {
+      "label": "Device tier from its most frequent user",
+      "purpose": "Whether a device takes the tier of its most frequent user (the Exposure Graph's device users joined to the identity tiers).",
+      "defaultText": "on",
+      "effect": "On: a tier source of the device. Shadow: computed and recorded on the device (MostFrequentUserComputedTier) but never sets its tier. Off: not read.",
+      "whenToChange": "Only to compare the device-user tier sources (shadow) or to switch this one off.",
+      "type": "enum",
+      "values": ["on", "shadow", "off"],
+      "valueLabels": { "on": "On -- sets the device tier", "shadow": "Shadow -- recorded only", "off": "Off" },
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_Mode": {
+      "label": "Device tier from privileged logons",
+      "purpose": "Whether a device takes the tier of the most privileged account (Tier 0, 1 or 2) that logged on to it in the window -- an admin, or an HR / finance user made Tier 2 by a group rule.",
+      "defaultText": "on",
+      "effect": "On: a Tier 0-2 logon makes the device that tier (the lowest of its sources wins), with the account and the date as evidence; with none, the device keeps its other sources. Shadow: computed and recorded on the device (PrivilegedLogonComputedTier) but never sets its tier. Off: not read.",
+      "whenToChange": "Shadow to see what it would change before it does; off only if device logons must not count.",
+      "type": "enum",
+      "values": ["on", "shadow", "off"],
+      "valueLabels": { "on": "On -- sets the device tier", "shadow": "Shadow -- recorded only", "off": "Off" },
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_WindowDays": {
+      "label": "Privileged logon window",
+      "purpose": "How many days of device logons count for a device's tier.",
+      "defaultText": "30 days (what Defender advanced hunting keeps).",
+      "effect": "A shorter window lets a device fall back to its other tier sources sooner after a privileged account stops using it; more than 30 days reads no more, because Defender keeps 30 days of device logons.",
+      "whenToChange": "Only when an occasional privileged logon should count for a shorter time.",
+      "unit": "days",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_LogonTypes": {
+      "label": "Privileged logon types",
+      "purpose": "The kinds of logon that count: by default those that leave the account's credentials on the device.",
+      "defaultText": "Interactive, RemoteInteractive (Remote Desktop), CachedInteractive, CachedRemoteInteractive, Unlock, CachedUnlock.",
+      "effect": "Adding Network, Service or Batch also counts logons that leave no reusable credential on the device (more devices raised); a changed list reads the whole window again on the next run.",
+      "whenToChange": "Rarely; to also count service or batch logons of privileged accounts.",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_SupportFilter": {
+      "label": "Privileged logon support filter",
+      "purpose": "Whether Tier 1 and Tier 2 accounts with a support pattern -- many devices, one session each, measured against your own accounts every run -- are left out of the device tier.",
+      "defaultText": "off: every Tier 0-2 logon counts.",
+      "effect": "Dynamic: a support-pattern account's logons are recorded but never raise a device; a user-pattern account raises the devices it came back to on two or more days or whose frequent user it is. Tier 0 logons still count on one logon.",
+      "whenToChange": "When helpdesk sign-ins raise too many devices.",
+      "type": "enum",
+      "values": ["off", "dynamic"],
+      "valueLabels": { "off": "Off -- every privileged logon counts", "dynamic": "Dynamic -- leave out the support pattern" },
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_MinDays": {
+      "label": "Privileged logon minimum days",
+      "purpose": "A Tier 1 or Tier 2 logon counts only on a device the account used on at least this many distinct days in the window (or whose frequent user it is).",
+      "defaultText": "Not set: no minimum.",
+      "effect": "A higher number leaves out occasional sign-ins (fewer devices raised); empty counts every one.",
+      "whenToChange": "When one-off privileged sign-ins should not raise a device.",
+      "unit": "days",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_PrimaryUserCounts": {
+      "label": "Privileged logon: the device's own user counts",
+      "purpose": "With the support filter or a minimum of days, the device's own frequent user still counts on any logon.",
+      "defaultText": "On",
+      "effect": "On: a privileged user's own device is raised even by one logon. Off: their own device needs the minimum too.",
+      "whenToChange": "Rarely.",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_ExcludeGroups": {
+      "label": "Privileged logon excluded groups",
+      "purpose": "Groups (names or ids, comma-separated) whose members' logons never raise a device -- for example a helpdesk group.",
+      "defaultText": "No group: every Tier 0-2 account counts",
+      "effect": "Members' logons are recorded on the device but never set its tier.",
+      "whenToChange": "When a support group's sign-ins should not raise the devices they help.",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_Endpoint_PrivilegedLogon_Tier0Once": {
+      "label": "Privileged logon: Tier 0 counts on one logon",
+      "purpose": "With the support filter or a minimum of days, a Tier 0 account's logon still counts on a single logon: its credentials on a device are a direct path to the whole tenant.",
+      "defaultText": "On",
+      "effect": "Off: Tier 0 logons follow the same filter as Tier 1 and 2.",
+      "whenToChange": "Rarely.",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
     "SI_Endpoint_TableName": {
       "label": "Endpoint table name",
       "purpose": "The Log Analytics table the endpoint engine writes its asset rows to.",

@@ -42,7 +42,7 @@ public sealed class HeaderContext(ISettingsStoreReader settings, UpdateStateRead
 
     private static CatalogSetting Text(string name, string label, string description, string purpose, string defaultText, string effect, string when, string hint) => new()
     {
-        Name = name, Label = label, Group = SettingsCategory, Card = SettingsCard, Type = "text", Engines = new[] { "management-web" }, Edition = "pro", WebOnly = true,
+        Name = name, Label = label, Group = SettingsCategory, Card = SettingsCard, Type = "text", Engines = new[] { "management-web" }, Edition = "community", WebOnly = true,
         Default = JsonDocument.Parse("\"\"").RootElement.Clone(), Description = description, Purpose = purpose, DefaultText = defaultText, Effect = effect,
         WhenToChange = when, Hint = hint, Pattern = "^.{0,60}$", PatternHint = "at most 60 characters",
     };

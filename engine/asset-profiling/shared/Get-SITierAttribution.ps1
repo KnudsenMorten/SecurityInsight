@@ -58,6 +58,10 @@ $script:SITierClaimSources = @(
     @{ Key = 'InstalledApplications'; Label = 'software'; FeedsTier = $true;  Why = 'privileged software detected on the asset' }
     @{ Key = 'PostureRuleTargetTier'; Label = 'posture';  FeedsTier = $true;  Why = 'posture rule target tier' }
     @{ Key = 'MostFrequentUserTier';  Label = 'logon';    FeedsTier = $true;  Why = 'tier of the most frequent interactive user' }
+    # ANY PRIVILEGED LOGON COUNTS (owner 2026-11-12): the lowest tier of an account that logged on to the device in the
+    # window (Defender device logons -> the identity profile). It sets the tier through the rule AssetProfileByPrivilegedLogon
+    # (so SIRules claims the same tier); this claim carries the evidence sentence "<account> (Tier 0) logged on <date> (RDP)".
+    @{ Key = 'PrivilegedLogonTier';   Label = 'privileged-logon'; FeedsTier = $true; Why = 'a privileged account logged on to the device' }
     # tenant_si_manual_tag ADDED 2026-08-25. The operator's tier tag, and it is LAST here for the same
     # reason it is order 10 in the trust list.
     # 🔒 OPERATOR, 2026-08-25 -- READ THIS BEFORE GROWING ANYTHING AROUND IT: *"tags are part of the
@@ -251,12 +255,15 @@ function ConvertTo-SITierClaim {
     # and ranked last for that reason (operator, 2026-08-25).
     $claimedTiers = @()
     $conflicting  = $false
+    # a source that says its own reason in full (the privileged logon: "<account> (Tier 0) logged on <date> (RDP)")
+    $sentence     = ''
     if ($Verdict -isnot [int] -and $Verdict -isnot [long] -and $Verdict -isnot [string]) {
         if ($Verdict.PSObject.Properties['ClaimedTiers'] -and $Verdict.ClaimedTiers) { $claimedTiers = @($Verdict.ClaimedTiers) }
         if ($Verdict.PSObject.Properties['Conflicting']) { $conflicting = [bool]$Verdict.Conflicting }
+        if ($Verdict.PSObject.Properties['Sentence'] -and $Verdict.Sentence) { $sentence = [string]$Verdict.Sentence }
     }
 
-    [pscustomobject]@{
+    $claim = [pscustomobject]@{
         Source       = $label
         SourceKey    = $SourceKey
         Tier         = $tier
@@ -272,6 +279,9 @@ function ConvertTo-SITierClaim {
         # later never blinds the customer to the source.
         Trusted    = $true
     }
+    # only on a claim that has one, so every other claim's recorded shape stays as it was
+    if ($sentence) { Add-Member -InputObject $claim -NotePropertyName 'Sentence' -NotePropertyValue $sentence }
+    $claim
 }
 
 function Get-SITierAttribution {
@@ -354,12 +364,20 @@ function Get-SITierAttribution {
     $reason =
         if ($winners.Count -gt 0) {
             $w = $winners[0]
+            # A winning source that says its reason in full (the privileged logon) speaks for the rule that only CARRIES it:
+            # when the rules' winning match is the privileged-logon rule itself, "asset-profiling rule matched
+            # (AssetProfileByPrivilegedLogon/...)" says less than "<account> (Tier 0) logged on <date> (RDP)". A rule that
+            # set the same tier for its own reason (a domain controller) keeps the sentence.
+            $own = @($winners | Where-Object { $_.PSObject.Properties['Sentence'] -and $_.Sentence })
+            if ($own.Count -gt 0 -and ($w.SourceKey -ne 'SIRules' -or [string]$w.Evidence -like 'AssetProfileByPrivilegedLogon/*')) { $w = $own[0] }
             $ev = if ($w.Evidence) { (" ({0})" -f $w.Evidence) } else { '' }
+            $what = ('{0}{1}' -f $w.Why, $ev)
+            if ($w.PSObject.Properties['Sentence'] -and $w.Sentence) { $what = [string]$w.Sentence }
             if ($winners.Count -gt 1) {
-                'Tier {0} set by {1} -- {2}{3}; {4} independent source(s) agreed on this tier.' -f `
-                    $final, $setBy, $w.Why, $ev, $winners.Count
+                'Tier {0} set by {1} -- {2}; {3} independent source(s) agreed on this tier.' -f `
+                    $final, $setBy, $what, $winners.Count
             } else {
-                'Tier {0} set by {1} -- {2}{3}.' -f $final, $setBy, $w.Why, $ev
+                'Tier {0} set by {1} -- {2}.' -f $final, $setBy, $what
             }
         }
         elseif ($feeding.Count -eq 0) {

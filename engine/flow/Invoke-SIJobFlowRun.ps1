@@ -271,7 +271,10 @@ $upkeepCatchUp = { param($Beat) if ($publishSql) { $null = Invoke-SIDataPublishR
 # (b) 2026-11-05 STATISTICS KEPT FRESH (engine/_shared/data-sql/SI-DataStatistics.ps1): ONE refresh after a run, ONLY AFTER its
 #     publish and the copies (Invardia, framework owner: the pages move to a run only at the publish), table by table, beaten
 #     between tables. An update that waits goes first: the updater was started, and the upkeep is left to the next wake-up.
-$upkeepStats = { param($Beat) if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the run, once the pages moved to it' -Log $say -Beat $Beat } }
+#     #1210: a pass through every table is recorded in the settings database (cfg.InstallState 'StatisticsRefresh') -- the
+#     heartbeat sends its time as Database.statsRefreshedUtc (Invardia's check PERF-01).
+$statsRecord = if ($proStore) { $proStore.Invoke } else { $null }
+$upkeepStats = { param($Beat) if ($publishSql -and $statsOn) { $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the run, once the pages moved to it' -Log $say -Beat $Beat -RecordInvoke $statsRecord } }
 # (c) #816 (owner 2026-10-20): a run that failed or was cancelled leaves its Detailed collection 'Loading' with all its rows, and
 #     the collections' retention runs only at the end of a SUCCESSFUL data sync. So every wake-up removes stopped runs'
 #     collections (and the older ones retention would), inside a time budget -- the published run's collection and a result
@@ -343,7 +346,7 @@ if ($pipeDefinition.Mode -eq 'schedules' -and -not $pipeRequest -and -not $Cance
     $schedPub = $null
     if ($publishSql) { $schedPub = Invoke-SIDataPublishRun -Invoke $publishSql -Source schedules -SolutionVersion $siVersion -Log $say -Beat $wkBeat }
     # the copies, then (a newer collection is shown) its statistics, then the clean-up -- never fails the wake-up
-    $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -CatchUp $upkeepCatchUp -Statistics { param($Beat) $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the newest collection was shown' -Log $say -Beat $Beat } `
+    $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -CatchUp $upkeepCatchUp -Statistics { param($Beat) $null = Invoke-SIDataStatisticsRefresh -Invoke $publishSql -When 'after the newest collection was shown' -Log $say -Beat $Beat -RecordInvoke $statsRecord } `
         -Stats ([bool]($publishSql -and $statsOn -and $schedPub -and $schedPub.Published)) -Cleanup $upkeepCleanup -Log $say
     & $wkRelease
     exit 0

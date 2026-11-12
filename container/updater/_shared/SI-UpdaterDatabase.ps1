@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
-    caj-si-updater -- SecurityInsight Pro: THE DATABASE STEP OF AN UPDATE (#352, framework UPDATE-1.6 (j)). Loaded by
-    Start-SIUpdater.ps1 when present (the Community edition has no Pro database and does not carry this file).
+    caj-si-updater -- THE DATABASE STEP OF AN UPDATE (#352, framework UPDATE-1.6 (j)), in both editions: Pro and Community
+    installs both have the SecurityInsight database (framework PRO-COMMUNITY-SAME). Loaded by Start-SIUpdater.ps1.
 
     🔒 NEVER RUN NEW CODE ON AN OLD SCHEMA. Invoke-SIUpdaterRoll calls Invoke-SIUpdaterDatabase FIRST -- before the template
     gate, before any image is built or any job / app is rolled -- and a failure here STOPS the update (nothing is rolled;
@@ -713,17 +713,18 @@ function Invoke-SIUpdaterSupportStandingRecheck {
 
 function Invoke-SIUpdaterSupportAppRecord {
     <#
-        #1161 (agreed with Invardia 2026-11-10): on EVERY run of a Pro install, the Invardia Support app's client id is
+        #1161 (agreed with Invardia 2026-11-10): on EVERY run of an install (Pro and Community alike -- support is never
+        Pro-only, framework PRO-COMMUNITY-SAME), the Invardia Support app's client id is
         recorded (cfg.InstallState 'SupportApp') where that record is missing -- read from the install's own Support app
         database user (its SID), checked, written once (insert only), read back (setup\_shared\SI-SupportAppRecordUpdate.ps1).
         RECORDS ONLY: never a role, a grant, a user or a group membership (the just-in-time cut-over holds). Runs before the
-        standing re-check, which reads that record. A Community install (no Pro database) = nothing done, nothing said.
+        standing re-check, which reads that record. No database opened this run = nothing done, nothing said.
         -ExpectedClientId: an id Invardia names for the install -- Invardia sends none to the updater today, so Start-SIUpdater
         passes none. Never throws, never holds the update.
     #>
-    param([Parameter(Mandatory)][string]$SIRoot, $Store, [string]$Edition = [string]$global:SI_UpdaterEdition, [string]$ExpectedClientId = '')
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [string]$ExpectedClientId = '')
     try {
-        if ($Edition -ieq 'community' -or -not $Store -or -not $Store.Invoke) { return $null }
+        if (-not $Store -or -not $Store.Invoke) { return $null }
         $lib = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-SupportAppRecordUpdate.ps1')
         if (-not (Test-Path -LiteralPath $lib)) { return $null }
         . $lib

@@ -15,9 +15,10 @@
         defect), then syntax / semantic / type errors = query defect, then throttle, then timeout / 5xx.
 
     The order of the checks is the contract (first match wins):
-      settings-error > guard-refused > out-of-memory > database-full > licence-invalid > mi-unavailable > sql-login > config-missing > ingest-short-count >
+      settings-error > guard-refused > out-of-memory > Risk Analysis' "all data paths failed" (its last non-lake attempt,
+      Get-SIDataPathAttemptClass) > database-full > licence-invalid > mi-unavailable > sql-login > config-missing > ingest-short-count >
       table-missing > platform prefix (timeout / 5xx) > kql-query-defect > throttled > ingest-4xx >
-      401 / 403 by service > ai-error > platform-timeout > platform-5xx > unknown.
+      401 / 403 by service > ai-error > 413 (platform-5xx) > platform-timeout > platform-5xx > unknown.
     A 401 from Microsoft Graph is graph-401; a 401 from another service means the same thing as its 403 there (access
     refused) and gets that service's -403 class.
 
@@ -259,6 +260,43 @@ function Get-SIErrorRecordSummary {
     'an error without a message (' + ($parts -join ', ') + ')'
 }
 
+function Get-SIDataPathAttemptClass {
+    <#
+        PURE. SUP-2026-00496. Risk Analysis says ONE warning when every data path of a query failed (Flush-SupersededAttempts,
+        RA-RunProgress.ps1):
+            all data paths failed for this query; attempts: <path>: <words> || <path>: <words> ...
+        in the order the paths were tried (lake, then advanced hunting or Log Analytics direct). The Sentinel data lake is an
+        OPTIONAL path -- not onboarded, or not open to SecurityInsight's identity ("InvalidDatabaseInQuery ... is not
+        available for current user", 401 / 403, TenantNotFound) is a supported state, never a failure by itself. So the class
+        is the LAST attempt that is not the lake, classified with its service (advanced hunting = defender, Log Analytics
+        direct = loganalytics): a platform answer (429 / 5xx / 504 / timeout / 413) is the platform's class, a 400 syntax /
+        semantic answer kql-query-defect, a 401 / 403 on the path that should work that service's access class.
+        Only lake attempts (the shape before 3.1.9, which never listed the last path's answer -- on 3.1.7 that answer was
+        advanced hunting refusing the completeness count for its size, 413): a lake refusal gives platform-5xx (the class a
+        413 gets), any other lake answer its own class. '' when the text is not this warning.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    $m = [regex]::Match([string]$Text, '(?i)all data paths failed for this query; attempts: ([^\r\n]+)')
+    if (-not $m.Success) { return '' }
+    $atts = New-Object System.Collections.Generic.List[object]
+    foreach ($part in ($m.Groups[1].Value -split ' \|\| ')) {
+        $pm = [regex]::Match($part.Trim(), '^([A-Za-z][A-Za-z-]*): (.*)$')
+        if ($pm.Success) { $atts.Add([pscustomobject]@{ Path = $pm.Groups[1].Value; Words = $pm.Groups[2].Value }) }
+        elseif ($part.Trim()) { $atts.Add([pscustomobject]@{ Path = ''; Words = $part.Trim() }) }
+    }
+    if (-not $atts.Count) { return '' }
+    $real = @($atts | Where-Object { $_.Path -ne 'lake' })
+    if ($real.Count -gt 0) {
+        $last = $real[$real.Count - 1]
+        $hint = switch -Regex ([string]$last.Path) { '^(?i)advanced-hunting|hybrid$' { 'defender' } '^(?i)LA-direct$' { 'loganalytics' } default { '' } }
+        $c = Get-SIErrorClass -Message ([string]$last.Words) -Service $hint
+        return $c
+    }
+    $lake = $atts[$atts.Count - 1]
+    if ([string]$lake.Words -match '(?i)InvalidDatabaseInQuery|not available for current user|TenantNotFound|Tenant not registered|\b40[134]\b|Forbidden|Unauthorized|Not Found|NotFound') { return 'platform-5xx' }
+    Get-SIErrorClass -Message ([string]$lake.Words)
+}
+
 function Get-SIErrorClass {
     <#
         PURE. The error class of one failure -- exactly one value of Get-SIErrorClasses.
@@ -280,6 +318,9 @@ function Get-SIErrorClass {
     # "... parameter 'TimeoutSec'. Exception of type 'System.OutOfMemoryException' was thrown" read as platform-timeout)
     if ((Test-SIOutOfMemoryText $t) -or ($null -ne $ErrorRecord -and (Test-SIOutOfMemoryText $ErrorRecord))) { return 'out-of-memory' }
     if ([string]::IsNullOrWhiteSpace($t)) { return 'unknown' }
+    # SUP-2026-00496: Risk Analysis' ONE warning when every data path of a query failed -- the class is the LAST real attempt's
+    $__paths = Get-SIDataPathAttemptClass -Text $t
+    if ($__paths) { return $__paths }
     # #904: the database is full -- before every service / platform word (its text names SQL and often a timeout)
     if ((Test-SIDatabaseFullError $t) -or ($null -ne $ErrorRecord -and (Test-SIDatabaseFullError $ErrorRecord))) { return 'database-full' }
     # 2026-10-29: a temporary Azure SQL error that outlasted SecurityInsight's own retry is TAGGED by the code that retried
@@ -340,12 +381,19 @@ function Get-SIErrorClass {
             'storage'  { return 'storage-403' }
             'sql'      { return 'sql-login' }
             'ai'       { return 'ai-error' }
+            # SUP-2026-00496: Log Analytics access is Azure RBAC on the workspace -- a refusal there is the ARM class
+            'loganalytics' { if ($is401 -and -not $is403) { return 'graph-401' } else { return 'arm-403' } }
             default    { if ($is401 -and -not $is403) { return 'graph-401' } }
         }
     }
 
     # ---- AI ---------------------------------------------------------------------------------------------------------
     if ($svc -eq 'ai') { return 'ai-error' }
+
+    # SUP-2026-00496: a request the service refused for its SIZE (413, the advanced-hunting front end's 1 MB cap). The
+    # engine answers it itself (smaller slices, a count in parts) -- the platform family the too-large 502 is in, never a
+    # query defect and never the customer's. (Ingestion's own 4xx keeps its class above.)
+    if ($svc -ne 'ingest' -and $t -match '(?i)\b413\b|Request Entity Too Large|RequestEntityTooLarge') { return 'platform-5xx' }
 
     # ---- the platform -----------------------------------------------------------------------------------------------
     switch (Get-SITransientKind -Message $t) {

@@ -110,7 +110,7 @@ live in the internal test documentation — this doc only points at them.
 SecurityInsight/
   VERSION                         the release this tree is
   Setup-SecurityInsight-Unattended.ps1   setup from config/setup-unattended.json
-  Update-SecurityInsight.ps1      Community update: the signed, ring-gated release channel (no git) + container roll
+  Update-SecurityInsight.ps1      retired: says that every install is updated by its updater job (kept only for older updaters)
   Bootstrap-Auth.ps1              one-shot bootstrap (Key Vault / SPN / RBAC)
   Bootstrap-ContainerAppJob.ps1   one-shot registry + Container Apps environment + one job per engine
   Bootstrap-Storage.ps1           one-shot storage account + containers + queues
@@ -1240,6 +1240,8 @@ SI_Endpoint_Profile_CL
 | project Hostname, MostFrequentUserTier, MostFrequentUsers, OsPlatform, MachineGroup
 ```
 
+**Any privileged logon counts** — **a device takes the tier of the most privileged account (Tier 0-2) that logged on to it in the window; otherwise its user's tier** — so a device where an admin, or an HR / finance user made Tier 2 by a group rule, signs in is patched before the Tier 3 devices. The privileged accounts are the Tier 0-2 identities of the same run's identity profile; their tier already carries every identity rule, including the customer's group-membership rules. Stage Enrich asks Defender's device logons (`DeviceLogonEvents`, read only) for **those accounts only** — never per device — over the last `SI_Endpoint_PrivilegedLogon_WindowDays` days (default 30): successful logons at the device, over Remote Desktop, with cached credentials, or unlocking a session (also "run as" another account); network, service and batch logons do not count (`SI_Endpoint_PrivilegedLogon_LogonTypes`). The answer is summarised in the query to one row per device and account (count, newest logon, distinct days, logon types), so it follows the privileged accounts and the devices they touched, whatever the number of devices. The read is incremental: an account is read for the whole window the first time and afterwards only since its last read (with an overlap for late logons, never counted twice); the rolling window is kept in SI's own storage account, created on the first run, and shared by the parts of a run. Logons that age out of the window fall away by themselves, and an account whose tier changes counts with its new tier at once. A read the service refuses is split by time and then by account list; what still cannot be read — or a tenant without Defender device logons — is **unknown**, never "no privileged logon", and the device keeps its other sources. A device is evaluated account by account in tier order and stops at its first Tier 0 logon. The lowest tier of the counted logons becomes `PrivilegedLogonTier` and reaches the device's tier through the shipped rule `AssetProfileByPrivilegedLogon` (detection kind `privilegedLogonTier`), the same lowest-tier-wins rule path as every other source; with no Tier 0-2 logon this source sets nothing and the frequent-user source and the other sources decide as before. The tier reason names the account, why it is privileged, the date of its last logon and how it logged on, for example *"Tier 2 set by privileged-logon+rule -- finance.user@example.com (Tier 2: Finance team member (AssetProfileByGroupMembership/OrgFinanceMember)) logged on 2026-11-10 (at the device)"*. **Two sources, each with a mode**: `SI_Endpoint_PrivilegedLogon_Mode` and `SI_Endpoint_MostFrequentUserTier_Mode` — `on` (the default for both: a tier source), `shadow` (computed and recorded on the device in `PrivilegedLogonComputedTier` / `MostFrequentUserComputedTier` with the evidence, never its tier) or `off`. **An optional support filter** (off by default — every Tier 0-2 logon counts): `SI_Endpoint_PrivilegedLogon_SupportFilter = dynamic` leaves out Tier 1/2 accounts with a support pattern — logons on many devices, one session each — measured per tenant and run: an account's fan-out (devices it logged on to) above the median + 3 x max(1.4826 x MAD, 1) of the tenant's privileged accounts' fan-outs, with one session per device; a user-pattern account raises the devices it came back to on two or more days or whose frequent user it is. Overrides: `SI_Endpoint_PrivilegedLogon_MinDays`, `SI_Endpoint_PrivilegedLogon_PrimaryUserCounts`, `SI_Endpoint_PrivilegedLogon_ExcludeGroups` (support groups that never count) and `SI_Endpoint_PrivilegedLogon_Tier0Once` (a Tier 0 logon counts on one logon under any filter). `PrivilegedLogons` lists the privileged accounts on the device (`Upn`, `Tier`, `Reason`, `LastLogonUtc`, `LogonType`, `Count`, `Days`, `Counted`, `Why`) and `PrivilegedLogonStatus` says whether the logons were read. Each run records what each rule does — devices raised, raises by a Tier 0 logon, by a one-off logon and by a support-pattern account, logons not counted, the tenant's support cut-off — in the run log and with the stored window, and the per-device columns let a query compare the two sources device by device.
+
 ### Run-integrity guards — making absence loud
 
 A Risk Analysis run that produces *less* data than yesterday still exits 0, still writes a workbook and
@@ -1350,7 +1352,7 @@ must be at least 31 days** (the installer checks or sets it). The data sync no l
 what is left of it for the CI tables is the findings per CI (`SI_Finding_CL` → `sidata.CiFinding`) and the CIs' finding
 totals, set-based in SQL.
 
-### The one-time CI cut-off (3.0.41, Pro; a hidden support setting)
+### The one-time CI cut-off (3.0.41, both editions; a hidden support setting)
 
 The CI build groups every record collected within its look-back (`SI_ActiveStaleDays`, default 30 days). Records an old
 collection left behind -- for example accounts a setting now leaves out and that are no longer collected -- stay current
@@ -1370,7 +1372,7 @@ for that whole window, and a large install rebuilds them into CIs on every build
 - **When to set it:** just before a run's collection -- every source that run collects then drops its old records in that
   run's CI build. Each build logs `one-time CI cut-off <time> (<reason>): N record(s) before it ignored, M CI(s) retired`.
 
-### A fresh start of the data (Pro; a support script)
+### A fresh start of the data (both editions; a support script)
 
 When an install's data should start again from nothing -- a scope mistake collected objects that were never wanted, and
 nobody uses the data yet -- `setup\Reset-SIData.ps1` empties the DATA in place and keeps the install itself. No database is
@@ -3024,6 +3026,7 @@ Straight from `RuleEval.ps1` `$script:SIKindRegistry`. These are the **only** ki
 8. **`hasAzureTagDirectOrParent`** *(azure; also endpoint when EndpointAzureCorrelation has linked the row)* — `tag:` (KEY, exact CI), `value:` (string/list; omit = presence-only), `match:` (default `equal`). Walks parent chain: resource → RG → subscription → MG; matches if any level carries the tag. Requires the `parentChain` bulk index; looks up id from `AZ_ResourceId` (or `PrimaryEntityId` fallback).
 9. **`egKustoQuery`** *(endpoint, identity, azure — escape hatch)* — `kql:` (raw KQL run against the EG endpoint; must return a column of asset IDs: NodeId/DeviceId/AccountObjectId). The engine submits the KQL once at run start and caches the resulting node IDs into `$script:SIRuleIndexes.kustoSets[<RuleId>]`; per-asset evaluation does NOT submit KQL — it's a hashtable lookup against `PrimaryEntityId`/`EG_NodeId`/`MDE_DeviceId`/`AccountObjectId`. Cost paid once per rule per run.
 10. **`mostFrequentUserTier`** *(endpoint)* — `tierValues:` `[int,...]`. Endpoint inherits its tier verdict from the most-frequent interactive user (logon-graph inheritance). Reads `Metadata.MostFrequentUserTier` (stamped by `Get-SIBulkDeviceUserCorrelation` at Enrich, sourced from logon graph + `SI_Identity_Profile_CL`). Matches if device's most-frequent user tier is in the list.
+    **`privilegedLogonTier`** *(endpoint)* — `tierValues:` `[int,...]`. Reads `Metadata.PrivilegedLogonTier`: the lowest tier (0-2) of any account that logged on to the device in the privileged-logon window (see "Any privileged logon counts" above). Matches if that tier is in the list; no value (no privileged logon, or the logons could not be read) never matches.
 11. **`ipInRange`** *(endpoint, azure)* — `cidrs:` `[CIDR,...]` (IPv4/IPv6, aliased `cidr:`), `fields:` (optional; restrict which Metadata fields to scan, default = all known carriers). Default fields: `MDE_EffectiveIpAddresses`, `MDE_PublicIp`, `MDE_LastIpAddress`, `EG_PublicIp`, `EG_PrivateIp`, `EG_LastIpAddress`, `EG_InternalIpAddresses`, `ENTRA_PrivateIp`, `ENTRA_PublicIp`, `ENTRA_IpAddress`, `AZ_PrivateIp`, `AZ_PrivateIpAddresses`, `AZ_PublicIp`, `AD_IpAddress`, `AD_IpAddresses`, `CMDB_PrivateIp`, `CMDB_IpAddresses`, `CMDB_ip`, `CMDB_private_ip`. Also parses `AZ_PropertiesJson` for `ipAddress` / `ipConfigurations[*].properties.privateIPAddress`.
 12. **`hasTag`** *(endpoint, identity, azure — cross-source convenience)* — `tag:` (KEY, exact CI), `value:` (string/list), `match:` (default `equal`), `sources:` (restrict to `mde`/`eg`/`entra`/`arm`/`cmdb`/`ad`, default all). At least one of `tag:`/`value:` required. Three modes: **Mode 1 key presence** (`tag:` only — any source has that key with non-empty value); **Mode 2 value presence** (`value:` only, requires `match: in`/`regex`/`like`/`has` — plain `equal` value-only is REFUSED to prevent over-broad matches); **Mode 3 exact pair** (`tag:`+`value:` — also matches literal `key:value`/`key=value` strings inside value-only carriers like MDE machineTags).
 
@@ -3674,7 +3677,15 @@ enforced there:
   `[DIAG]` + in the `ra-laerr-*.txt` dumps); a successful path then emits at most one `[INFO]`
   (`auth/data via <path> (after N superseded fallback attempts)`), and only a **total** failure
   flushes a single consolidated `[WARN]`. This stops operators from reading a successful report
-  run as failed.
+  run as failed. That warning lists every attempt in the order tried, and the **last** one is the
+  path that really failed last (advanced hunting or Log Analytics direct) with its own words — the
+  Sentinel data lake is optional, so a lake that is not there for SecurityInsight's identity is
+  never the whole story. The run's error class comes from that last non-lake answer (throttled,
+  platform timeout / 5xx — a request refused for its size included — query defect, or that
+  service's access class). The completeness **count** of a report is a measurement: when every path
+  fails for it, the attempts go to `[DIAG]` only and the count is reported as not available
+  (`[INFO]`); it never raises a run warning, and the report's verdict is then made from its slices
+  as described under completeness.
 
 ### Allowed `SecurityDomain` values + their `byCategory` keys
 
@@ -5347,8 +5358,7 @@ the update, so as a step it would wait for itself.
   that must be installed while no SI job at all runs (a file `UPDATE-NEEDS-QUIET.txt` at its root, holding the reason) waits
   for the running jobs, up to `SI_UPDATER_WAIT_MINUTES`, then is deferred to the next updater run.
   The pipeline never starts while an update runs: each wake-up of the runner asks first (`-UpdateRunning` of
-  `Invoke-SIPipelineDrain`; container: a running execution of the updater job that still shows signs of life; VM: a
-  PowerShell process running `Update-SecurityInsight.ps1`) and, when one runs, starts nothing and takes no lock -- what was
+  `Invoke-SIPipelineDrain`; a running execution of the updater job that still shows signs of life) and, when one runs, starts nothing and takes no lock -- what was
   queued stays queued, a due slot stays due, the next 5-minute wake-up tries again. An updater execution that has stopped
   showing signs of life is stopped, said and reported, and the waiting work goes on.
 
@@ -6859,8 +6869,7 @@ the first image and every updated image behave the same.
 
 | Install | How it updates |
 |---|---|
-| **Community, VM** | `Update-SecurityInsight.ps1` takes the release its **update ring** approves from the signed release channel on GitHub, checks it, and applies it with a backup and an automatic restore (see "The Community update channel" below). No git needed. |
-| **Community, containers** | The same command; after the files it runs the NEW release's container update hook (below), and puts the files back too if the containers are rolled back. |
+| **Community and Pro, containers** | The SAME updater job in every install (`caj-si-updater`): at its nightly run it takes the release its **update ring** (0-3) has from Invardia's signed manifest, checks it and rolls it with the same build / roll / verify / roll-back steps. Only the manifest address differs: an install with a licence asks with its install key, a Community install without one reads its ring's signed manifest anonymously. Faster only when Invardia starts "Update now" for the install. |
 | **Pro / managed** | The managed sync delivers the release the customer's ring is on; after a sync that changed SecurityInsight it runs the same container hook (`solution.deploy.json`). Rings are a platform mechanism, not SecurityInsight's own. |
 | **Pro, containers** | An updater job in the customer's subscription takes the release its ring has from **Invardia** -- a signed manifest, checked before anything changes (see 12c and 12f) -- and rolls the jobs and apps. |
 
@@ -7962,7 +7971,11 @@ pages fixed one by one:
 - **A page never waits for a statistic.** The database is set to update a stale statistic in the background
   (`AUTO_UPDATE_STATISTICS_ASYNC`). Without it, the first page read after a run waited for SQL to rebuild a statistic at the
   storage limit, and a page that timed out cancelled that rebuild, so the next page waited again. Setup turns it on for a new
-  install; on an existing install the database setup job turns it on with the next update.
+  install; on an existing install the database setup job turns it on with the next update, and reads the setting back.
+- **Proof in the health report.** The install's half-hourly health report says, for the database, whether background
+  statistics are on, the share of statistics past the staleness rule (more changes than 20 % of the rows + 500), and when the
+  pipeline last finished a statistics refresh after its writes -- one read of the database's catalog per report; a read that
+  fails leaves the three values out and never the report.
 - **A view whose plan could change with the statistics** is written so it cannot: the device page's close-loop list starts
   from the device's few keys and seeks the findings index by collection and device, whatever the statistics say.
 - **Performance tests measure what an install has.** A measurement does not refresh statistics by itself before it measures,
@@ -8796,6 +8809,13 @@ SecurityInsight Pro sends its vulnerability findings to the systems you choose: 
 
 Once a day, by default at 10:45 UTC after the close-loop, SecurityInsight Pro mails a summary of the last 24 hours: what was opened, closed and reopened by severity and asset tier, what is open now, the most severe new and closed items, and the last 7 days when the data backend is set up. A close because the asset was retired or left the scope is not counted as a fix. A quiet day still sends a short "nothing changed" mail, so it is never mistaken for a missing report. It uses the Risk Analysis mail relay and reads only. Turn it on and choose recipients and the time on the web app's e-mail settings page; a new time takes effect when setup runs again.
 
+The job that sends it (`caj-si-close-loop-mail`, the mail job) is in **every** install, both editions: it also sends the
+mails every install sends -- the mail check, the safety-check mails and the outbox the web app fills (the Get Started
+reminder, sign-in, report and test mails). Only the paid kinds ask the licence when the job runs: this daily mail and the
+ServiceNow checks (the ServiceNow connector's licence), the exemption expiry warnings and monthly reviews, the department
+reports, the governance mails and the task digest (governance). Without the licence each paid kind is one line in the
+job's log; the job still ends well.
+
 ### 8a. Severity words in the mails, and no time to fix (#705)
 
 A finding's **severity** is printed with the SI words (Very High / High / Medium-High / Medium / Low); a stored or source
@@ -8912,8 +8932,8 @@ The full installer (`setup/Install-SecurityInsight.ps1`) is not one file: it loa
 the package and needs the whole SecurityInsight package next to it. The downloaded file is therefore a LAUNCHER
 (`setup/Install-SecurityInsight.Launcher.ps1`, PowerShell 7 or Windows PowerShell 5.1, no module, one file).
 
-**Pro installs from Invardia, Community from GitHub** (owner 2026-11-02 "github should be for community only" / "pro
-installs from invardia"; Invardia DESIGN ch 8 BINDING SPEC, framework section 0.1). The Pro copy (channel `pro`):
+**Both editions install the signed release of their ring** (framework PRO-COMMUNITY-SAME); the Pro package comes from
+Invardia, the Community release asset from the public release (framework section 0.1). The Pro copy (channel `pro`):
 
 1. Signs the admin in for `-TenantId` with SecurityInsight's OWN setup sign-in (`Connect-SISetupAzure`,
    `setup/_shared/SI-SetupAzure.ps1`): Cloud Shell's token endpoint with no prompt, else the browser (authorization code +
@@ -8946,24 +8966,16 @@ in the temp folder, checks each SHA-256 (a damaged copy stops before anything is
 only dot-source, `. $__siLauncherLoad`) and removes the folder when it ends. The repository copy embeds nothing and, as Pro,
 uses the files of the package it stands in. About 0.7 MB.
 
-The Community copy (channel `community`):
-
-1. It reads the public release on GitHub, anonymously: `api.github.com/repos/KnudsenMorten/SecurityInsight/releases/latest`,
-   or `releases/tags/v<version>` with `-Version`.
-2. It downloads the release asset `SecurityInsight-v<version>.zip` into a NEW, empty folder in the temp folder
-   (`securityinsight-release-<version>-<random>`) -- only when GitHub states the asset's SHA-256. A release that states
-   none is refused before anything is downloaded: exit 3, nothing installed.
-3. It checks the download before anything runs: not empty; the size the release states; the SHA-256 the release states;
-   the zip opens; it holds `setup/Install-SecurityInsight.ps1`; its `VERSION` is the release's version. A failed check
-   stops with the reason in plain words, exit 3, the folder removed, nothing installed.
-4. It unpacks the zip (an entry that would land outside the folder is refused) and runs the full installer FROM there with
-   exactly the parameters it was given (`$PSBoundParameters`, without its own `-Version`, `-KeepDownload`). The
-   installer's exit code is the launcher's.
-5. A successful install removes the folder (`-KeepDownload` keeps it); a stop keeps it, and `-Resume` finds it again from
-   a small note (`~/clouddrive/invardia/securityinsight-launcher.json` in Cloud Shell, else `.invardia/` in the user
-   profile) that holds the folder, its version and channel per install id -- never a parameter, never a secret. When the
-   folder is gone (a new Cloud Shell session), `-Resume` downloads the release again; the install keeps its own progress
-   in its state folder.
+The Community copy (channel `community`) takes THE SAME STEPS, in the same order, with the same embedded code
+(framework PRO-COMMUNITY-SAME): it signs the admin in first (step 1), then asks Invardia for the release of its ring --
+the Community route, anonymously, `GET https://invardia.com/api/updates/securityinsight/community/<ring>` (ring 3 without
+`-UpdateRing`; the ring only, no tenant, no key) -- and checks the answer with the same verifier (kind `community`, the
+ring asked for, the version format of every release, `<VERSION>.<build>` included). It downloads the release the signed
+manifest names (the public release asset), refuses a size or SHA-256 that is not the signed one, and runs the installer as
+step 5 does. It never installs a release newer than its ring has; only the package download source differs from Pro.
+A stop keeps the downloaded folder and `-Resume` finds it again from a small note (`~/clouddrive/invardia/securityinsight-launcher.json`
+in Cloud Shell, else `.invardia/` in the user profile) that holds the folder, its version and channel per install id --
+never a parameter, never a secret.
 
 **Its parameters are the full installer's**, the same names, types, validations and defaults, plus `-Version` and
 `-KeepDownload`; `SIv3-InstallLauncher` fails when the two sets differ. It prints `Install-SecurityInsight launcher
@@ -9083,8 +9095,8 @@ SecurityInsight Pro takes its new releases -- the code and the template packs --
 platform. The vendor publishes each release to Invardia; Invardia releases it ring by ring (0 dev, 1 test,
 2 design partners, 3 broad, always in that order) and signs, per ring, a small **manifest** that names the release
 and its SHA-256. Your updater job asks for the manifest of *its* ring every night, checks it, downloads the release
-and applies it with the same build / roll / verify / roll-back steps as before. Community installs keep updating
-from GitHub with `Update-SecurityInsight.ps1`.
+and applies it with the same build / roll / verify / roll-back steps as before. Community installs run the same updater job;
+only the manifest they read differs (their ring's signed release, read anonymously).
 
 **How your install proves who it is.** Two things together: your Pro **licence** (it says what you may fetch) and
 the install's **install key** (it says which environment, and so which ring, you are). The install key is created
@@ -9388,7 +9400,8 @@ a waited-for run, or for its own second pass.
    and roll of the engine jobs (`setup/Invoke-SIContainerUpdate.ps1 -Apply`: build, roll, verify, restore on failure; ring 1
    installs the release's templates directly), then, Pro, the web app and MCP server (image built from the release, app
    rolled, a healthy revision and `/healthz` 200 awaited, the previous image restored on failure), the record, and the
-   updater itself last. A second pass then runs that release's own update steps.
+   updater itself last. Only when all of that ended well, the install's registry is cleared of images older than the
+   release before (*Old images leave the install's registry*, below). A second pass then runs that release's own update steps.
 8. With no new code to roll: only the size steps. Then template packs from the template channel, then the web app's
    sign-in owner and name checks, and the run's state and any failure report.
 
@@ -9542,6 +9555,48 @@ setup, never a runtime one (the jobs, the web app and the MCP server stay ordina
 in [A2b](#a2b-rights-per-identity); they are given by the database setup job, or once with
 `setup/Grant-SIUpdaterDatabase.ps1 -Apply` (or `Install-SIUpdaterJob.ps1 -GrantSql`). Its user is found by SID, so an
 existing one is reused.
+
+#### Old images leave the install's registry -- only this release and the one before are kept
+
+Microsoft Defender for Cloud scans every image STORED in a container registry, not only the images that run. Old images
+that no longer run kept showing vulnerabilities that the running images no longer have. So after every successful update
+the updater keeps, in the install's own registry, only the images of the release it now runs and of the release before it
+-- the one a rollback of one version needs -- and deletes the others (`container/updater/_shared/SI-UpdaterImagePrune.ps1`,
+the same rule in every product of the platform).
+
+- **When.** Only after the update AND its read-back ended well: the engine jobs rolled and verified, the web app and MCP
+  server healthy, the record written. A failed, held or unread update deletes nothing.
+- **What is kept** comes only from what the install records, never from what a tag looks like:
+  - the images the install runs now, read back from Azure after the update: every container of every job and app of the
+    install's resource group (the engine jobs, the updater, the web app, the MCP server, the sign-in front), every active
+    revision of each app, and an updater image that is still waiting to be applied;
+  - the images it ran before this update, read the same way just before anything was rolled, and the release record of the
+    last update (Key Vault secret `SI-Release-Images`: the release then running and its images);
+  - the base images those images are built on (`si-base`, `si-updater-base`, `<image>-base`): a base is kept when all its
+    layers are the first layers of a kept image, read from the registry's own image descriptions;
+  - every tag of a kept image (images are deleted by their content address, never one a kept tag points at), and every
+    platform image of a kept multi-platform image.
+- **The same release again** (the updater's second pass after it moved onto the new release, or a re-run of a release
+  already recorded): what ran before this run is that release itself, so the release before it is taken from the release
+  record's previous release, and the record keeps that previous release when it is written again. Not recorded = nothing
+  is deleted, and the log says the previous release is not known.
+- **When it cannot be proven old, it stays.** If what ran before the update is not known (it could not be read, or nothing
+  was recorded), nothing is deleted and the log says so. An image or repository that cannot be read is kept; a repository
+  the install records nothing for is never touched; an image locked against deletion is kept.
+- **Only the install's own registry.** Only the registry the updater builds into, and only while it is in the install's own
+  resource group (a registry elsewhere may hold images of others: nothing is deleted there, said once). Only the registry's
+  own interface is used, with the updater's existing sign-in and the delete right of its registry role; nothing else in
+  Azure is changed.
+- **What it says.** After the deletes the registry is read again, and the run log has one line per repository, for example
+  *"si-orchestrator: 3 old images deleted, 2 left (this release and the one before)"*. The same counts are recorded for
+  the web app and the health report (`cfg.InstallState 'ImagePrune'`) and in the release record. A delete the registry
+  refuses is said and kept; the next update tries again. It never fails the update.
+- **A rollback.** A rollback to the release before finds its images kept. A rollback further back is an ordinary update to
+  an older release: the update builds every image that is missing from that signed release, as it does for any release.
+- **The switch.** `SI_Updater_ImagePrune` -- on by default; `off` keeps every image (set in the configuration, or as
+  `SI_CFG_SI_Updater_ImagePrune` / `SI_UPDATER_IMAGE_PRUNE` on the updater job).
+- **The first update after this version.** The release that brings this step is installed by the updater of the release
+  before it, which does not prune; the old images go with the next update after it.
 
 #### The security baseline quick wins -- registry password off, Key Vault purge protection, SQL auditing
 
@@ -11153,9 +11208,20 @@ every mail:
 
     [<Environment>] <severity word if relevant> <what happened> [<ticket number if any>] [SecurityInsight]
 
+**Every mail names its environment by handle and its tenant.** The environment part is `[<KIND>] <handle> - ` (for
+example `[PROD] contoso-prod - Warning: ...`): the kind (Production, Test, Development -> `PROD`, `TEST`, `DEV`) and the
+handle are the ones the Invardia portal holds for the install, read with the install key on the status-report tick and
+kept in the install's database (the last good value stays when Invardia cannot be reached). The display name follows the
+handle only when it differs and says more. The first line of the body repeats the subject, and the line under it names
+the tenant (name and tenant id); a sign-in mail keeps only the first line. An install without an install key (the
+Community edition without the opt-in) asks Invardia nothing and uses its own configured name: `<name> - ...`. No other
+customer's name is ever shown. Built in one place (`engine/_shared/SI-MailEnvironment.ps1`) that `Send-SIMail` applies to
+every mail; the web app queues its mails, which are sent the same way.
+
 - **`<Environment>`** is the name the web app's header shows (`SIWeb_EnvironmentName`, else `SI_EnvironmentName`, else the
   install id). The ring and the edition are NOT in the subject; the footer and the PDF keep them. A name that carries
-  them itself (`Internal (ring 1, PRO)`) is shown as `[Internal]`.
+  them itself (`Internal (ring 1, PRO)`) is shown as `Internal`. Where the Invardia portal names the install, its kind and
+  handle take this place (see above): `[PROD] <handle> - `.
 - **The severity word**, only when relevant: `Failed` (a failed run, step or update, a Risk Analysis report that is not
   complete, a failed licence request), `Warning` (a guard warning, a data-quality alert), `Action needed` (a guard that
   stopped, refused, held or skipped something; an exemption request, an expiry warning, the monthly exemption review, a
@@ -11503,7 +11569,7 @@ has no line of its own, one plain log line). The loops and their words:
 | loop | `progress` reads |
 |---|---|
 | the CI build's batches | `batch 161 of 266` |
-| the CI build's end-of-build marks (every record of the built CIs marked as built, then the marks of records that are gone cleared) -- run as one short statement per key range, each range its own transaction, so each range can say how far the pass is | `mark built 140,000 of 310,000`, then `clear built ...` |
+| the CI build's end-of-build marks (every record of the built CIs marked as built, then the marks of records that are gone cleared) -- run as one short statement per key range, each range its own transaction, so each range can say how far the pass is. Each range reads only its own keys (it is planned with its own bounds, never from the first record onward), and a record that its finished batch already marked in this build is counted, not written or read again: in the usual full build, whose batches are kept as they finish, the pass reads no record's document at all; otherwise it reads only the documents of the records it writes, once | `mark built 140,000 of 310,000`, then `clear built ...` |
 | the data sync's context field fill | `field fill rows 629,554 of 1,582,849` |
 | the data sync's other long parts (grouped Summary rows, key figures, findings per CI) | `collections 3 of 5`, `findings read ...`, `rows ...` |
 | the vulnerability connector's set-based compare (after every range of about 250,000 rows) | `compare rows 2,500,000 of 4,412,000` |
@@ -11525,7 +11591,9 @@ is sent again once with `idle`, so the rest of the record is never lost to it.
 **Error classes** (one per failed run, from the failure text — first match wins): `settings-error`, `licence-invalid`,
 `mi-unavailable`, `sql-login`, `config-missing`, `ingest-short-count`, `table-missing`, `platform-timeout`, `platform-5xx`,
 `kql-query-defect`, `throttled`, `ingest-4xx`, `graph-401`, `graph-403`, `defender-403`, `arm-403`, `kv-403`, `storage-403`,
-`ai-error`, `unknown`. A cancelled or service-side query failure is a platform class, never `kql-query-defect`.
+`ai-error`, `unknown`. A cancelled or service-side query failure is a platform class, never `kql-query-defect`. A
+request refused for its size (413) is `platform-5xx`; Risk Analysis' "all data paths failed" warning takes the class of
+its last attempt that is not the optional Sentinel data lake; a Log Analytics access refusal is `arm-403`.
 
 **Two modes.**
 - **Community — anonymous.** Sent with the public community code. The report carries a random install id (created once, kept in
@@ -12602,50 +12670,73 @@ their samples:
 - The bundled shared library (`FUNCTIONS/AutomateITPS*`) is inlined at publish time for community
   customers who don't have the monorepo.
 
-### Community and Pro — one codebase, two payloads
+### Community and Pro — built and run the same; only the licensed features differ
 
-The public mirror carries the **Community** edition. The paid **engines** of SecurityInsight Pro — the
-ServiceNow and SQL CMDB connectors, the close-loop and governance mails — live in the same source tree but
-in dedicated paths: their engine and launcher folders, their configuration files, their diagnostics and their
-tests. Every one of them is listed in `solution.publish.json` `excludePaths` and removed at publish;
-the private sync that paying customers use carries everything. The web app (with its MCP server) ships in
-both editions as one file set; its paid pages are switched off by the licence.
+A Community install and a Pro install are **built and run the same way** (framework rule, 2026-11-11): one installer,
+one updater and one update job, the same jobs, identities, rights and settings, secrets in the install's Key Vault only,
+the same sign-in layer in front of the web app. **Only the licensed features differ** -- each asks the licence when it
+runs -- and **where the package comes from** (the public release, or the Pro package from Invardia).
 
-- **Free code never loads a Pro file.** Anything both editions need lives in `engine/_shared/` — for
-  example the Log Analytics publisher that the Defender for Cloud recommendations stage and the
-  correlation engine both use. A test fails the build if a file outside the Pro paths names one in
-  code, or if a file that declares a Pro gate sits outside them.
-- **The licence check stays** inside the Pro payload as a second layer: with no licence, the Pro
-  engines print one line and publish nothing, and every free engine runs normally.
-- **Licence files.** `LICENSE` is the PolyForm Shield License 1.0.0, verbatim, with a header scoping
-  it to the Community edition. `LICENSE-PRO` ships in both copies: part 1 lists the paid web pages, actions
-  and services that ship in the Community copy switched off by the licence (proprietary: they may be
-  enabled and used only with a Pro licence), part 2 the Pro paths only the Pro package
-  contains.
-- **Side by side in one tenant.** A new Community edition install names its tenant-wide directory objects
-  apart from a Pro install's: the web app's sign-in application "SecurityInsight Community", the engine's
-  application "SecurityInsight Community Engine", the SQL admin group "SecurityInsight Community SQL admins"
-  (looked up and created as `grp-si-community-sql-admins`). Setup finds these objects by name, so a shared name
-  would have let a Community install reuse -- or rename -- a Pro install's application or admin group. The
-  databases keep their names in both editions (`sqldb-si-pro`, `sqldb-si-identity`); the resource group and the
-  database server carry the edition (`rg-si-prod-community-ca`, `sql-si-prod-community-ca-<suffix>`).
+- **The same jobs in both editions.** The guided install makes every job in both editions, the paid engines' jobs too
+  (the vulnerability connectors, the SQL CMDB connector, the template releases, the mail job, the status report job). A
+  paid engine asks the licence when it runs and ends with one line without it; a package that does not carry a paid
+  engine's code ends that job with one line too (a good exit). Adding a licence later needs no second install. Existing
+  installs get a job a newer version needs from the update (the missing-jobs repair ships in both editions).
+- **The mail job runs everywhere.** The mails every install sends -- the mail check, the safety-check mails, the outbox
+  the web app fills (the Get Started reminder, sign-in mails, report and test mails) -- go out in both editions. Its paid
+  kinds (the vulnerability close-loop's daily mail and the ServiceNow checks; the exemption expiry warnings and monthly
+  reviews, the department reports, the governance mails and the task digest) ask the licence when the job runs.
+- **Support is never Pro-only.** The Invardia Support app's database access is set at install in both editions when a
+  Support app is named; the support tools and jobs, the just-in-time support grant and the data-maintenance scripts ship
+  in both. Every one of them is opt-in exactly as in Pro.
+- **The settings are the same.** A setting is marked Pro only when it belongs to a licensed feature (ServiceNow, the SQL
+  CMDB, governance, the licence, the template channel); every setting that shapes how SecurityInsight runs is in both
+  editions.
+- **What only the Pro package carries.** The paid engines' code (the ServiceNow and SQL CMDB connectors and their
+  tooling, the governance mails), listed in `solution.publish.json` `excludePaths` and removed at publish. The vendor's
+  own release and support tooling is in neither package. A test fails the build if a file both editions carry loads a
+  Pro file, or if a file that declares a Pro gate sits outside the Pro paths.
+- **Licence files.** `LICENSE` is the PolyForm Shield License 1.0.0, verbatim, with a header scoping it to the Community
+  edition. `LICENSE-PRO` ships in both copies: part 1 lists the paid web pages, actions, services and mail kinds that ship
+  in the Community copy switched off by the licence (proprietary: they may be enabled and used only with a Pro licence),
+  part 2 the Pro paths only the Pro package contains.
+- **One set of names.** A new install gets the same tenant-wide names in both editions (the web app's sign-in
+  application "SecurityInsight", the engine's application "SecurityInsight Engine", the SQL admin group
+  `grp-si-sql-admins`). An existing Community install keeps the names it was made with until it moves; no object is
+  renamed. One resource group holds one install: a run into a group that holds SecurityInsight continues that install
+  (a re-run, or the same install changing edition, Community to Pro); the edition never stops it.
 
-### The Community edition updater -- in the cloud, on the signed Community channel
+### One updater for every install -- only the manifest address differs
 
-A Community container install keeps itself current exactly as Pro does -- the nightly updater job `caj-si-updater` --
-but from the **signed Community channel** instead of Invardia's licensed endpoint
-(`container/updater/_shared/SI-UpdaterCommunity.ps1`, the client `engine/_shared/SI-CommunityUpdate.ps1`). PIM's
-Community edition updates with a `git pull` and a re-run of its deploy; SecurityInsight's has a signed channel, so it
-follows the Pro model.
+Every install, Community and Pro, keeps itself current with the SAME nightly updater job `caj-si-updater` and the same
+client (`container/updater/_shared/SI-UpdaterInvardia.ps1`, `engine/_shared/SI-InvardiaUpdate.ps1`): the same ring
+(0-3), run gate, roll, state and reporting. **Only the manifest address differs**:
 
 | | |
 |---|---|
-| **Where releases come from** | Invardia's Community channel, the same route PIM's Community edition reads (owner + Invardia + PIM, 2026-10-28): `GET https://invardia.com/api/updates/securityinsight/community/<ring>`, ANONYMOUS (no install key, no code, no licence), rings 2 and 3 only. 200 = `{ manifest, manifestB64, signature, keyId, downloadUrl }`, an Invardia-signed manifest of the same RS256 family as Pro (kind `community`, `downloadUrl` = the manifest's archive URL); 204 = nothing released to the ring yet; 404 = no such ring. `SI_UPDATER_COMMUNITY_BASE_URL` (https only) points a rehearsal at a test endpoint. |
-| **How it checks them** | Before anything is downloaded (`engine/_shared/InvardiaUpdate.verify.ps1`, product-neutral, byte-identical with PIM's, keys embedded): RS256 over the decoded manifest against the update-signing keys embedded in the release (one trust list for both editions); product `securityinsight` and kind `community`; a ring the manifest names is this install's ring; the SAME MAJOR version as the installed one (a new major version is a new installation, never an update); the sequence is not lower than the one applied (no replay); a manual step or a minimum version holds; the link is on the release host. After the download: the signed size and SHA-256, a zip-slip-safe extract, the archive's VERSION is the signed version, and it carries the update client. A first manifest naming an older version than the jobs run is held (forward only). |
-| **Ring** | 2 or 3 only (rings 0 and 1 are internal): the ring on the updater job, else the ring recorded for the install (the guided install records 3 unless 2 is chosen), else 3. Anything else is 3, said in the log. |
-| **Steps** | The same as Pro, in the same order: the manual-deploy mark, the run gate (never while a pipeline run is going), the database step first (the release's schema and grants), the engine image built in your own registry from the verified archive and the jobs rolled, the web app, the installed record, and the updater's own job last. The size pass and a pending self-update also run when there is no new code. |
-| **State** | `cfg.InstallState` `CommunityUpdateState` (applied sequence, version, ring) and the compact `UpdateState` (source `community`) that the Settings page shows. Without the database, the running version is the guard. |
-| **Not in the Community edition** | No install key and no claim, no licence request, no template channel (the release's own templates go through the template gate), no update tracking or failure reports to Invardia. |
+| **An install with a licence** | Invardia's install route, with the install's key (unchanged). |
+| **A Community install without a licence** | Invardia's Community route for its ring, read ANONYMOUSLY -- the ring only, no install key, no tenant: `GET https://invardia.com/api/updates/securityinsight/community/<ring>` (rings 0-3). 200 = `{ manifest, manifestB64, signature, keyId, downloadUrl }`, the same RS256-signed manifest family as Pro (kind `community`); 204 = nothing released to the ring yet; 404 = no such ring. |
+| **A Pro install waiting for its licence** | Invardia's install route: it waits for the licence and never takes the Community package. |
+| **How it checks a release** | Before anything is downloaded: RS256 over the decoded manifest against the update-signing keys embedded in the release; the product, the kind and the ring; the SAME MAJOR version as the installed one; a sequence not lower than the one applied (no replay); a manual step or a minimum version holds; the link is on the release host. After the download: the signed size and SHA-256, a safe extract, the archive's VERSION is the signed version, and it carries the update client. |
+| **When** | At the install's NIGHTLY run, the version its ring has. Faster only when Invardia starts "Update now" for the install; the frequent status-report job never rolls by itself. |
+| **State** | One update state for every install (`SI-Update-State`, the channel it was read from). A Community install made before this change carries its earlier record (`cfg.InstallState` `CommunityUpdateState`) over once. |
+| **What the edition decides** | Only which address an unlicensed install asks: the resource group's `edition` tag (else the job's `SI_UPDATER_SOURCE`) -- never which files the image carries. |
+
+**Connect this install to Invardia (opt-in).** A Community install sends nothing that identifies its tenant or its
+install -- no status report, no licence request, no install key claim, no "Update now" poll, no failure report -- unless
+its user said yes to *"Connect this install to Invardia: health reports + updates on request"* (one setting,
+`SI_Invardia_Connect`; `engine/_shared/SI-InvardiaConnect.ps1` is the one rule every such call asks). A Pro install is
+connected. Reading the ring's signed manifest carries no identity and needs no yes. The installer asks the question
+(`connectToInvardia`, `-ConnectToInvardia` unattended, off by default for Community); on yes it claims the install's key
+with `POST /api/install-keys/claim { product, tenantId, edition: "community" }` -- no licence -- stores it in the install's
+Key Vault and turns the setting on. Invardia's answers never fail the install: `409 tenantKnown` (the tenant belongs to a
+licensed company: connect it with that licence instead), `409 keyExists` (already connected: the stored key is kept),
+`429` (tried again later; the updater claims on a later run). With its key, the install's `Update now` head call asks
+with kind `community` and is used exactly like Pro's. Without the yes no call is made.
+
+The earlier in-place local update for a folder copy (`Update-SecurityInsight.ps1`) is retired in v3: it only says that the
+updater job keeps the install current. The install launcher reads the same signed manifest of the ring for both editions
+(never a newer release than the ring has); only the package download source differs.
 
 #### Publishing a Community release (the same scripts as PIM's Community path; documented, NOT run before the owner says so)
 
@@ -12659,8 +12750,8 @@ follows the Pro model.
    `Invardia.Publisher.securityinsight`, certificate; Key Vault secrets `invardia-publisher-clientid-securityinsight` /
    `invardia-publisher-thumbprint-securityinsight`). Invardia builds the archive URL from the public release itself and hashes
    it -- SI sends no URL and no hash.
-3. **Release to the rings** (owner-approved): the ring route for ring 2, then ring 3
-   (`POST https://invardia.com/api/releases/securityinsight/community/rings/<2|3> { version, tag }`; `setup/Publish-SICommunityRelease.ps1`).
+3. **Release to the rings**: the ring route per ring, 0 to 3 in order, the same rings as Pro (rings 2 and 3 on the owner's
+   approval) (`POST https://invardia.com/api/releases/securityinsight/community/rings/<0-3> { version, tag }`; `setup/Publish-SICommunityRelease.ps1`).
    Installs on that ring take it with their next nightly update (`GET .../community/<ring>`, above).
 4. There is no test registration: the update leg is proven on the real release; the install leg is proven from the staged copy.
 
@@ -12674,9 +12765,8 @@ follows the Pro model.
 - the public copy carries no `BUILD.json` and no `SI.Management.sln`: the install's web deploy and the Community updater
   stamp `BUILD.json` themselves (`Initialize-SIBuildInfoFile`); the images build their projects directly.
 
-A copy is the Pro package when it carries a Pro-only file (`setup/_shared/SI-GuidedInstallPro.ps1`,
-`engine/_shared/SI-InvardiaUpdate.ps1` or `engine/asset-cmdb/Invoke-SICmdb.ps1`); `LICENSE-PRO` and the `engine/pro-*`
-folders ship in both, so they no longer tell the editions apart.
+A copy is the Pro package when it carries a Pro-only file (`setup/_shared/SI-GuidedInstallPro.ps1` or
+`engine/asset-cmdb/Invoke-SICmdb.ps1`); the update client, `LICENSE-PRO` and the `engine/pro-*` folders ship in both.
 
 ### Stripped at publish (never public)
 

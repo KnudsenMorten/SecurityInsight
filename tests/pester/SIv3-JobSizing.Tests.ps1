@@ -890,14 +890,14 @@ Describe 'THE WEB APP''S SIZE: every update SETS 2 CPU / 4 GiB (owner 2026-10-18
         $u | Should -Match "\`$webCpu = Get-SIUpdateSetting -Name 'SI_Bootstrap_WebAppCpu'; \`$webMem = Get-SIUpdateSetting -Name 'SI_Bootstrap_WebAppMemory'"
         $u | Should -Match "'SI_Bootstrap_WebAppCpu', 'SI_Bootstrap_WebAppMemory',"
     }
-    It 'the size settings are in the settings catalog (Pro; empty = the product''s size), so support can set them per install' {
+    It 'the size settings are in the settings catalog (both editions; empty = the product''s size), so support can set them per install' {
         $catPath = Join-Path $script:SIRoot 'config\settings.catalog.locked.json'   # a Pro file: not in the Community copy
         if (-not (Test-Path $catPath)) { Set-ItResult -Skipped -Because 'the settings catalog is Pro (not in the Community copy)'; return }
         $cat = Get-Content -Raw $catPath | ConvertFrom-Json
         foreach ($n in 'SI_Bootstrap_WebAppCpu', 'SI_Bootstrap_WebAppMemory') {
             $s = @($cat.settings | Where-Object { $_.name -eq $n })[0]
             $s | Should -Not -BeNullOrEmpty -Because "$n is a setting"
-            $s.edition | Should -Be 'pro'; $s.default | Should -BeNullOrEmpty
+            $s.edition | Should -Be 'community'; $s.default | Should -BeNullOrEmpty
         }
         $cpu = @($cat.settings | Where-Object { $_.name -eq 'SI_Bootstrap_WebAppCpu' })[0]
         foreach ($ok in '0.5', '1', '1.25', '2.0', '3.75', '4') { $ok | Should -Match $cpu.pattern }

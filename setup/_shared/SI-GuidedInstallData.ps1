@@ -24,8 +24,9 @@
                      and started once, waited for, its result read (Invoke-SIInstallDbJob).
     The step ids keep their names (pro-sql, pro-schema, ...): the status page and support tickets refer to them.
 
-    The paid steps (the licence, the v2.2 CMDB migration) and the Invardia Support app's database access stay in
-    SI-GuidedInstallPro.ps1, which only the paid package carries.
+    The engine jobs of every install (Get-SIInstallProEngines: the paid engines' jobs too -- each asks the licence when it
+    runs) and the Invardia Support app's database access are here, the same in both editions (framework
+    PRO-COMMUNITY-SAME). Only the licence steps (the licence, the v2.2 CMDB migration) stay in SI-GuidedInstallPro.ps1.
 
     The SQL scripts reach the database as the engine identity. In a guided install that is the person signed in to
     Cloud Shell: the install lends them a token through the same hook the container uses (Get-SIManagedIdentityToken),
@@ -45,6 +46,239 @@ $script:SIInstallLedgerDatabase = 'sqldb-si-identity'
 # framework SEC-08: the database setup job caj-si-dbinit (step db-job) and the one add-and-wait policy for a group member
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-DbInitJob.ps1'))
 if (-not (Get-Command -Name Invoke-SIGroupMemberAddRetry -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-GroupMemberAdd.ps1')) }
+
+# ---- PRO-COMMUNITY-SAME (owner 2026-11-11): the engine jobs of every install, and the Invardia Support app's database
+# access at install -- the SAME in both editions (moved here from SI-GuidedInstallPro.ps1, which keeps only the licence and
+# the v2.2 CMDB migration). A paid engine's job is made in both editions and asks the licence when it runs.
+# the Invardia Support app's database access: its own database user and its place in the admin group (framework 4.1b, kept after the install)
+if (-not (Get-Command -Name Invoke-SISupportAppDatabaseAccess -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-SupportAppDatabase.ps1')) }
+
+function Get-SIInstallProEngines {
+    <# PURE. The paid engines that get a container job in EVERY install, both editions (framework PRO-COMMUNITY-SAME, Invardia
+       C6 2026-11-11: the job set is the same; each paid engine asks the licence when it runs and ends with one line without
+       it; a package that does not carry a paid engine's code ends that job with one line too -- container\Start-SIInContainer.ps1).
+       (The ServiceNow connector only when an instance was given.) The CI
+       build (asset-correlation) and asset tagging (#236) are NOT here any more: they are in the Community edition and every
+       install gets them (SI-GuidedInstall.ps1 $SIInstallCommunityEngines; owner 2026-10-27, #750 (1) and (2)). The template
+       release job (#235/#250, caj-si-templates) always: the web app's Template releases page starts it. No asset-properties
+       job (#412): the profilers publish the full asset metadata themselves. The mail job (#714, caj-si-close-loop-mail)
+       always: it sends every mail SecurityInsight sends (the test mail, department sign-ins, governance, tasks,
+       exemptions, management summaries, the daily close-loop mail) and records the mail restriction check -- the web app
+       starts it for each of them. Until 2026-10-16 this list left it out, so no guided Pro install had it and no mail
+       was ever sent (the web app: "'caj-si-close-loop-mail' is not one of this installation's jobs").
+       #715: with a ServiceNow instance given, BOTH ServiceNow connectors' jobs -- the CMDB connector (caj-si-asset-cmdb)
+       and the vulnerability connector (caj-si-asset-vulns-servicenow, which the web app starts for a ServiceNow
+       vulnerability connector: Run once, the send log, the guard releases). The instance URL does not say which
+       direction the customer will set up in the web app afterwards, so both; without an instance neither (#269: the
+       ServiceNow jobs exist only where ServiceNow is used -- a connector set up later gets its job from the next update).
+       Bootstrap drops a ServiceNow job no setting asks for, so the install also passes -ServiceNowCmdb and
+       -ServiceNowVulnerabilities (Get-SIInstallServiceNowSwitches).
+       #718: the hourly status report to Invardia (caj-si-heartbeat) always -- its own timer, never a pipeline step, so the
+       install reports every hour whether or not a pipeline runs (Bootstrap also adds it whatever the engine list). #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Values)
+    # (the data sync, asset-datasync, is in every install: SI-GuidedInstall.ps1's engine list)
+    $e = @('asset-vulnerabilities', 'asset-cmdb-sql', 'close-loop-mail', 'templates-publish', 'heartbeat')
+    if ("$($Values['serviceNowUrl'])".Trim()) { $e += @('asset-cmdb', 'asset-vulnerabilities-servicenow') }
+    $e
+}
+
+function Get-SIInstallServiceNowSwitches {
+    <# PURE. #715: the Bootstrap switches that keep the ServiceNow jobs of -Engines -- Bootstrap's Select-SIBootstrapServiceNowEngines
+       drops asset-cmdb / asset-vulnerabilities-servicenow unless a setting or these switches say ServiceNow is used, and
+       the guided install writes no such setting (the connectors live in the Pro database, which setup does not read).
+       Returns an ordered hashtable of the switches to pass (empty when the list has no ServiceNow job). #>
+    param([string[]]$Engines = @())
+    $s = [ordered]@{}
+    if (@($Engines) -contains 'asset-cmdb') { $s['ServiceNowCmdb'] = $true }
+    if (@($Engines) -contains 'asset-vulnerabilities-servicenow') { $s['ServiceNowVulnerabilities'] = $true }
+    $s
+}
+
+function Get-SIInstallSupportAppAdminGroupId {
+    <# The database server's admin group for this install: the customer's own group (the sqlAdminGroupId answer), else
+       the group named grp-si-sql-admins. '' when the directory has none (or more than one) of that name. THROWS when
+       the directory cannot be read. #>
+    param([Parameter(Mandatory)]$Ctx)
+    $given = ([string]$Ctx.Values['sqlAdminGroupId']).Trim()
+    if ($given) { return $given }
+    # CR5 (#655 item 5): by ANY of its names -- grp-si-sql-admins, "SecurityInsight SQL admins", its mailNickname
+    if (-not (Get-Command -Name Find-SISqlAdminGroup -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-DisplayNames.ps1')) }
+    $fg = Find-SISqlAdminGroup -Graph { param($m, $u, $b) Invoke-SIInstallGraph -Ctx $Ctx -Uri $u } -GroupName 'grp-si-sql-admins'
+    if (-not $fg.Group) { return '' }
+    [string]$fg.Group.Id
+}
+
+function Set-SIInstallSupportAppDatabase {
+    <#
+        THE INVARDIA SUPPORT APP KEEPS ITS DATABASE ACCESS AFTER THE INSTALL -- BOTH PARTS, PERMANENTLY (framework section
+        4.1b; owner 2026-10-18: "make sure it never gets removed again") -- whoever runs the install: a person in Azure
+        Cloud Shell, or the Support app itself. Only when the answers name a Support app (supportAppId); without one NOTHING
+        is done and nothing is reported ($null).
+          1. ITS OWN DATABASE USER in the Pro database and the identity ledger, from its client id (WITH SID, TYPE = E, no
+             directory lookup), with db_owner. Made while the install is still the server's administrator, read back,
+             never removed by the end of the install.
+          2. membership of the server's admin group: added, read back, LEFT THERE -- no step of the install takes it away.
+             The end of the install makes that group the server's administrator, as a group (setup\Set-SISqlAdminGroup.ps1).
+          3. the client id is recorded in the Pro database, so the heartbeat knows which application to report on.
+        -CheckOnly reads only (the end-of-install check). Never throws. Returns @{ Ok; Member; Databases; Message; Unchecked }.
+    #>
+    param([Parameter(Mandatory)]$Ctx, [switch]$CheckOnly)
+    $app = ''; try { $app = ([string]$Ctx.Values['supportAppId']).Trim() } catch { }
+    if (-not $app) { return $null }
+    $out = [ordered]@{ Ok = $false; Member = $null; Databases = @(); Message = ''; Unchecked = '' }
+    try {
+        if (-not [string]$Ctx.Facts['sqlServerId']) {
+            $out.Unchecked = 'could not be checked: this install has no Pro database server yet'; $out.Message = 'The Invardia Support app''s database access ' + $out.Unchecked + '.'
+            return [pscustomobject]$out
+        }
+        $__siSupCtx = $Ctx; $__siSupFqdn = Get-SIInstallSqlFqdn -Ctx $Ctx
+        # NOT closures: a GetNewClosure() block cannot see the functions of a dot-sourced file; these run inside the calls
+        # below and find the two variables above in this function's scope
+        $graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIInstallGraph -Ctx $__siSupCtx -Method $Method -Uri $Uri -Body $Body }
+        $sql = { param([string]$Database, [string]$Query) Invoke-SIInstallSql -Ctx $__siSupCtx -Server $__siSupFqdn -Database $Database -Query $Query -Mode 'scalar' }
+        # ---- the application in this tenant (its name for the database user; its object id for the group) ----
+        $sp = $null; $spWhy = ''
+        try { $sp = Get-SISupportAppServicePrincipal -Graph $graph -ClientId $app } catch { $spWhy = 'could not be checked: the directory did not answer ({0})' -f $_.Exception.Message }
+        if (-not $sp -and -not $spWhy) { $spWhy = 'the tenant has no service principal for the application {0}' -f $app }
+        # ---- 1. its own database user with db_owner (needs no directory: the SID is the client id) ----
+        $dbs = @($script:SIInstallProDatabase, $script:SIInstallLedgerDatabase)
+        $name = $(if ($sp -and $sp.DisplayName) { $sp.DisplayName } else { 'invardia-support-app' })
+        $script:SIInstallSupportDbResult = @()
+        Use-SIInstallUserSqlToken -Ctx $Ctx -Action {
+            $script:SIInstallSupportDbResult = @(Invoke-SISupportAppDatabaseAccess -Sql $sql -Databases $dbs -ClientId $app -UserName $name -Apply:(-not $CheckOnly))
+            if (-not $CheckOnly) {
+                # 3. recorded for the heartbeat; a record that cannot be written is a line, never a failed step
+                try { $null = & $sql $script:SIInstallProDatabase (Get-SISupportAppRecordSql -ClientId $app -By 'guided install') }
+                catch { Write-SIInstallConsole -Ctx $Ctx -Text ('      the Support app''s client id could not be recorded in the Pro database ({0})' -f $_.Exception.Message) -Color 'Yellow' }
+                # #1021: the JUST-IN-TIME support grant, made NOW while the install is the databases' owner -- the tables, the
+                # standing read-only role, the customer's consent at the chosen level and the four signed procedures, in each
+                # product database (only ADDS; today's access above stays). A step that fails is a line, never a failed install:
+                # setup\Install-SISupportGrantProcedure.ps1 puts it in place later through a Support session.
+                try {
+                    if (-not (Get-Command -Name Get-SISupportGrantAdminSteps -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'pro-settings', 'SI-SupportGrantSql.ps1')) }
+                    $sgLevel = if ($Ctx.Values['supportAccess']) { [string]$Ctx.Values['supportAccess'] } else { 'troubleshoot' }
+                    foreach ($sgDb in $dbs) {
+                        foreach ($sgStep in @(Get-SISupportGrantAdminSteps -ClientId $app -UserName $name -Level $sgLevel -Source customer -By 'guided install')) {
+                            try { $null = & $sql $sgDb $sgStep.Sql }
+                            catch { Write-SIInstallConsole -Ctx $Ctx -Text ('      the support grant ({0}) could not be put in place in {1}: {2} -- setup\Install-SISupportGrantProcedure.ps1 does it later' -f $sgStep.Step, $sgDb, $_.Exception.Message) -Color 'Yellow'; break }
+                        }
+                    }
+                } catch { Write-SIInstallConsole -Ctx $Ctx -Text ('      the support grant was not put in place ({0})' -f $_.Exception.Message) -Color 'Yellow' }
+            }
+        }
+        $res = @($script:SIInstallSupportDbResult); $script:SIInstallSupportDbResult = $null
+        $out.Databases = $res
+        $dbOk = [bool]($res.Count -gt 0 -and @($res | Where-Object { $_.State -in 'present', 'granted' }).Count -eq $res.Count)
+        # ---- 2. a member of the admin group ----
+        $member = $null
+        if ($sp -and $sp.Id) {
+            $gid = ''; $gWhy = ''
+            try { $gid = Get-SIInstallSupportAppAdminGroupId -Ctx $Ctx } catch { $gWhy = 'could not be checked: the directory did not answer ({0})' -f $_.Exception.Message }
+            if ($gid) { $member = Set-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId $sp.Id -Apply:(-not $CheckOnly) -Sleep $Ctx.Seams.Sleep }
+            else { $member = [pscustomobject]@{ State = $(if ($gWhy) { 'unchecked' } else { 'failed' }); Detail = $(if ($gWhy) { $gWhy } else { 'the database admin group was not found in the directory' }) } }
+        } else { $member = [pscustomobject]@{ State = $(if ($spWhy -like 'could not be checked*') { 'unchecked' } else { 'failed' }); Detail = $spWhy } }
+        $out.Member = $member
+        $out.Ok = [bool]($dbOk -and $member.State -in 'present', 'added')
+        if ($out.Ok) { $Ctx.Facts['supportAppDatabase'] = 'ok' } elseif (-not $CheckOnly) { $Ctx.Facts['supportAppDatabase'] = 'not in place' }
+        $out.Unchecked = (@(@($res | Where-Object { $_.State -eq 'unchecked' } | ForEach-Object { '{0}: {1}' -f $_.Database, $_.Detail }) + @($(if ($member.State -eq 'unchecked') { 'the admin group: ' + $member.Detail })) | Where-Object { $_ }) -join '; ')
+        $out.Message = ('The Invardia Support app''s database access, kept after the install -- its own database user: {0}. Member of the database admin group: {1}.' -f
+            ((@($res | ForEach-Object { '{0}: {1}' -f $_.Database, $_.Detail })) -join '; '), $member.Detail)
+    } catch {
+        $out.Ok = $false; $out.Unchecked = 'could not be checked: {0}' -f $_.Exception.Message
+        $out.Message = 'The Invardia Support app''s database access ' + $out.Unchecked + '.'
+    }
+    [pscustomobject]$out
+}
+function Get-SIInstallSupportAppDatabaseCommand {
+    <# PURE apart from reading $Ctx. The command that puts both parts of the Support app's database access in place on an install that is there. #>
+    param([Parameter(Mandatory)]$Ctx)
+    './setup/Grant-SISupportAppDatabase.ps1 -AppId {0} -Apply' -f ([string]$Ctx.Values['supportAppId'])
+}
+
+function Confirm-SIInstallSupportAppSignIn {
+    <#
+        THE END OF THE INSTALL, once the admin group has the server back: does the Support app still get in?
+          * READ BACK from the server: its administrator is the admin group, and the server records it as kind Group.
+          * THE PROOF, WHERE IT CAN BE MADE: an install that ran AS the Support app signs in to each product database
+            with the Support app's own token and asks who it is there -- dbo (through the group) or its own database user,
+            either with the owner role (framework 4.1b holds both). One try per
+            database: a server whose administrator changed a moment ago may not answer yet, and that is said as "could
+            not be checked", never as "missing". A person's install cannot make this proof (it has no token of the
+            Support app); it says what it read back and that the sign-in was not made.
+        Reads only. Never throws. Returns $null (nothing to say here), or @{ Proven; Text }.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    try {
+        $facts = $null; try { $facts = $Ctx.Facts } catch { }
+        if (-not ($facts -is [System.Collections.IDictionary])) { return $null }
+        $app = ([string]$Ctx.Values['supportAppId']).Trim()
+        if (-not $app -or [string]$facts['supportAppDatabase'] -ne 'ok' -or [bool]$facts['supportAppSignInProven']) { return $null }
+        $asSupportApp = (Test-SIInstallSignedInAsApp -Ctx $Ctx) -and ([string]$facts['account'] -ieq $app)
+        if ($asSupportApp -and [bool]$facts['sqlAdminIsInstallApp']) {
+            return [pscustomobject]@{ Proven = $false; Text = 'A database sign-in as the Invardia Support app could not be checked: it is still the database server''s administrator.' }
+        }
+        # ---- the server's administrator, read back: the admin group, as a group ----
+        $adminOk = $false; $adminText = ''
+        $cur = Invoke-SIInstallArmTry -Ctx $Ctx -Command 'Get-SISqlServerEntraAdmin' -Arguments ([ordered]@{ ResourceGroupName = $Ctx.Names.ResourceGroup; Name = $Ctx.Names.SqlServer })
+        $sid = ''; $kind = ''; $login = ''
+        if ($cur.Ok -and $cur.Value) { $sid = [string](Get-SIInstallProp $cur.Value 'Sid'); $kind = [string](Get-SIInstallProp $cur.Value 'PrincipalType'); $login = [string](Get-SIInstallProp $cur.Value 'Login') }
+        $gid = ''; try { $gid = [string](Get-SIInstallSupportAppAdminGroupId -Ctx $Ctx) } catch { $gid = '' }
+        if ($sid -and $gid) {
+            if ($sid -ieq $gid -and $kind -ieq 'Group') { $adminOk = $true; $adminText = 'the database server''s administrator is the admin group, recorded as a group (read back)' }
+            elseif ($sid -ieq $gid) { $adminText = 'the database server names its admin group as "{0}", not as a group' -f $kind }
+            else { $adminText = 'the database server''s administrator is {0}, not the admin group' -f $login }
+        }
+        if (-not $asSupportApp) {
+            # a person's install: nothing is said unless the server's administrator could be read
+            if (-not $adminText) { return $null }
+            return [pscustomobject]@{ Proven = $adminOk; Text = ('The Invardia Support app''s database access: {0}; the Support app is a member of that group and has its own database user in each product database. A database sign-in as the Support app was not made (this install was not run as it).' -f $adminText) }
+        }
+        $fqdn = Get-SIInstallSqlFqdn -Ctx $Ctx; $said = New-Object System.Collections.Generic.List[string]; $all = $true
+        foreach ($db in $script:SIInstallProDatabase, $script:SIInstallLedgerDatabase) {
+            try {
+                $tok = [string](& $Ctx.Seams.Token 'https://database.windows.net/' $true)
+                $who = ([string](& $Ctx.Seams.Sql $fqdn $db (Get-SISupportAppWhoAmISql) 'scalar' $tok)).Trim()
+                $p = ConvertFrom-SISupportAppDatabaseAnswer $who
+                if ($p.User -and $p.Owner) { $said.Add(('{0}: signed in as {1}, with the owner role' -f $db, (Get-SISupportAppSignedInName $p.User))) }
+                else { $all = $false; $said.Add(('{0}: signed in as {1}, WITHOUT the owner role' -f $db, (Get-SISupportAppSignedInName $p.User))) }
+            } catch { $all = $false; $said.Add(('{0}: could not be checked: {1}' -f $db, $_.Exception.Message)) }
+        }
+        if ($all) { $facts['supportAppSignInProven'] = $true }
+        [pscustomobject]@{ Proven = $all; Text = ('A database sign-in as the Invardia Support app, after the admin group took the server back{0} -- {1}.' -f $(if ($adminText) { ' (' + $adminText + ')' } else { '' }), ($said.ToArray() -join '; ')) }
+    } catch { $null }
+}
+
+function Get-SIInstallSupportEndCheck {
+    <# THE END-OF-INSTALL CHECK's support part (Get-SIInstallEndCheck calls it where this file is loaded): the Invardia
+       Support app's database access, BOTH parts (framework 4.1b) -- its own database user with the owner role READ from
+       each product database, its membership of the database admin group READ from the directory. Missing = said
+       ('support-app-access|...': its step runs again). What could not be read is kept as a note for the health check
+       ("could not be checked: ..."), never reported as missing. No Support app in the answers = nothing checked, nothing
+       said. Never throws. #>
+    param([Parameter(Mandatory)]$Ctx)
+    $bad = New-Object System.Collections.Generic.List[string]
+    try {
+        $v = $Ctx.Values
+        $done = @($Ctx.State['completed']) + @($Ctx.State['pending'].Keys)
+        # The Invardia Support app's database access, BOTH parts (framework 4.1b; only when the answers name a Support app
+        # and its step ran): its own database user with the owner role is READ from each product database, and its
+        # membership of the database admin group from the directory. Missing = said, and its step runs again. What could
+        # not be read is kept as a note for the health check ("could not be checked: ..."), never reported as missing.
+        # No Support app in the answers = nothing checked, nothing said.
+        $from = 'support-app-access'
+        try { $Ctx.Facts.Remove('supportAppDatabaseNote') } catch { }
+        if ($done -contains 'support-app-access' -and $done -contains 'pro-schema' -and ([string]$v['supportAppId']).Trim()) {
+            $sd = Set-SIInstallSupportAppDatabase -Ctx $Ctx -CheckOnly
+            if ($sd) {
+                foreach ($d in @($sd.Databases | Where-Object { $_.State -eq 'missing' })) { $bad.Add($from + '|' + ('the Invardia Support app cannot run the setup scripts against the database {0}: {1}' -f $d.Database, $d.Detail)) }
+                if ($sd.Member -and $sd.Member.State -eq 'planned') { $bad.Add($from + '|the Invardia Support app is not a member of the database admin group') }
+                $Ctx.Facts['supportAppDatabaseNote'] = $(if ($sd.Unchecked) { 'The Invardia Support app''s database access -- ' + [string]$sd.Unchecked + '.' }
+                                                         elseif ($sd.Ok) { 'The Invardia Support app''s own database user, with the owner role, was read back from both databases, and its membership of the database admin group from the directory.' } else { '' })
+            }
+        }
+    } catch { }
+    $bad.ToArray()
+}
 
 function Set-SIInstallSqlAdminSetAt {
     <# #695: the moment the database server's Entra administrator was set by this install (UTC, round-trip text), so the
@@ -115,20 +349,97 @@ function Invoke-SIInstallSqlTierRestCall {
     }
 }
 
+function Test-SIInstallConnectToInvardia {
+    <# PURE. Did this install say yes to "Connect this install to Invardia: health reports + updates on request"? Pro: always
+       (its licence is the agreement); Community: the answer connectToInvardia (-ConnectToInvardia), off by default. #>
+    param([Parameter(Mandatory)]$Ctx)
+    if ([string]$Ctx.Edition -eq 'pro') { return $true }
+    [bool]($Ctx.Values -and $Ctx.Values.Contains('connectToInvardia') -and [bool]$Ctx.Values['connectToInvardia'])
+}
+
+function Invoke-SIInstallInvardiaKey {
+    <#
+        #240 -- the install's Invardia install key, at install time. NEVER fails the install; never echoes the key. The SAME
+        step for both editions (framework PRO-COMMUNITY-SAME): a Pro install claims with its licence; a Community install claims
+        ONLY when its user said yes to "Connect this install to Invardia: health reports + updates on request"
+        (connectToInvardia / -ConnectToInvardia) -- { product, tenantId, edition: 'community' }, no licence; without the yes
+        NOTHING is sent (no call at all) and the install stays anonymous.
+          * the bundle carried installKey -> the key-vault step stored it; no claim;
+          * otherwise CLAIM it with the licence: POST /api/install-keys/claim { product, tenantId, licence }, the tenant being
+            the 'tid' of the installing person's own Azure token (never config). Stored in the Key Vault (SI-Invardia-InstallKey);
+            the returned updates endpoint/header go into the update state (SI-Update-State) for the updater.
+        A refused claim is reported (a 409 = ask Invardia support for a reset); the updater also claims a key when none is stored.
+        Seams (tests): $ctx.Seams.InvardiaClaimHttp { param($Uri, $Body) } replaces the HTTP call.
+        Returns @{ Message; Warn }.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    # a Community install without the yes: no call at all (framework PRO-COMMUNITY-SAME, opt-in)
+    if ([string]$Ctx.Edition -ne 'pro' -and -not (Test-SIInstallConnectToInvardia -Ctx $Ctx)) {
+        return [pscustomobject]@{ Message = 'Not connected to Invardia (the default): nothing that identifies this install is sent; it still takes the release of its update ring every night. Connect it later with the setting SI_Invardia_Connect.'; Warn = $false; Skipped = $true }
+    }
+    if ($Ctx.InstallKey) {
+        if ($Ctx.Facts['installKeyStored']) { return [pscustomobject]@{ Message = 'The Invardia install key from your installation page is in the Key Vault; no key was claimed.'; Warn = $false } }
+        return [pscustomobject]@{ Message = 'The Invardia install key from your installation page was not stored (see the Key Vault step).'; Warn = $true }
+    }
+    try {
+        $client = [IO.Path]::Combine($Ctx.SIRoot, 'engine', '_shared', 'SI-InvardiaUpdate.ps1')
+        if (-not (Test-Path -LiteralPath $client)) { return [pscustomobject]@{ Message = 'This package has no Invardia update client; no install key was claimed.'; Warn = $false } }
+        . $client
+        $vault = $Ctx.Names.KeyVault
+        $c = $Ctx
+        $s = @{
+            ReadSecret  = {
+                param([string]$Name)
+                $sec = Invoke-SIInstallAz -Ctx $c -Command 'Get-SIAzKeyVaultSecret' -Arguments ([ordered]@{ VaultName = $vault; Name = $Name; ErrorAction = 'SilentlyContinue' })
+                $v = Get-SIInstallProp $sec 'SecretValue'
+                if ($v -is [System.Security.SecureString]) { return (New-Object System.Net.NetworkCredential('', $v)).Password }
+                $null
+            }
+            WriteSecret = {
+                param([string]$Name, [string]$Value)
+                $null = Invoke-SIInstallAz -Ctx $c -Command 'Set-SIAzKeyVaultSecret' -Arguments ([ordered]@{ VaultName = $vault; Name = $Name; SecretValue = (ConvertTo-SecureString -String $Value -AsPlainText -Force); ErrorAction = 'Stop' })
+            }
+            # the REAL tenant: the 'tid' of the installing person's own token, never config
+            TenantId    = {
+                $tok = [string](& $c.Seams.Token 'https://management.azure.com/')
+                try { $p = $tok.Split('.')[1].Replace('-', '+').Replace('_', '/'); while ($p.Length % 4) { $p += '=' }; [string](([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json).tid) } catch { $null }
+            }
+        }
+        if ($Ctx.Seams['InvardiaClaimHttp']) { $s.ClaimHttp = $Ctx.Seams['InvardiaClaimHttp'] }
+        $community = ([string]$Ctx.Edition -ne 'pro')
+        $lic = if ($community) { '' } else { [IO.File]::ReadAllText($Ctx.LicencePath).Trim() }
+        $state = ConvertFrom-SIInvardiaUpdateState -Json (& $s.ReadSecret 'SI-Update-State')
+        $r = Request-SIInvardiaInstallKey -State $state -Seams $s -Licence $lic -Community:$community -NowUtc (& $Ctx.Seams.Now)
+        $lic = $null
+        if ($r.Action -ne 'present') { try { & $s.WriteSecret 'SI-Update-State' (ConvertTo-SIInvardiaUpdateStateJson -State $state) } catch { } }
+        $Ctx.Facts['installKeyClaim'] = $r.Action
+        switch ($r.Action) {
+            'claimed' { return [pscustomobject]@{ Message = 'The Invardia install key was claimed and stored in the Key Vault; updates come from Invardia.'; Warn = $false } }
+            'present' { return [pscustomobject]@{ Message = 'The Invardia install key is in the Key Vault already.'; Warn = $false } }
+            'tenant-known' { return [pscustomobject]@{ Message = ('This install was not connected to Invardia: {0}.' -f $r.Reason); Warn = $true } }
+            'exists' { return [pscustomobject]@{ Message = ('{0}.' -f $r.Reason); Warn = (-not $r.HasKey) } }
+            'waiting' { return [pscustomobject]@{ Message = 'Invardia asked to try the connection again later -- the updater claims the install key on a later run.'; Warn = $false } }
+            { $_ -in 'conflict', 'forbidden', 'invalid' } { return [pscustomobject]@{ Message = ('The Invardia install key was NOT claimed: {0}' -f $r.Reason); Warn = $true } }
+            default { return [pscustomobject]@{ Message = ('The Invardia install key was not claimed now ({0}); the updater claims it on its first run.' -f $r.Reason); Warn = $false } }
+        }
+    } catch {
+        [pscustomobject]@{ Message = ('The Invardia install key was not claimed now ({0}); the updater claims it on its first run.' -f (Protect-SIInstallText $_.Exception.Message)); Warn = $false }
+    }
+}
+
 function Get-SIInstallUpdateSource {
-    <# Which update client this package carries for the updater job (Test-Path only -- never loaded here): 'invardia' (the
-       Invardia client, SecurityInsight Pro), 'community' (#750 (b): the signed Community channel -- the updater's Community
-       hook and the client it uses), or '' (neither). #>
-    param([Parameter(Mandatory)][string]$SIRoot)
-    if (Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'container', 'updater', '_shared', 'SI-UpdaterInvardia.ps1'))) { return 'invardia' }
-    if ((Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'container', 'updater', '_shared', 'SI-UpdaterCommunity.ps1'))) -and
-        (Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-CommunityUpdate.ps1')))) { return 'community' }
-    ''
+    <# The updater job's -Source: ONE update client for both editions (framework PRO-COMMUNITY-SAME) -- the package carries it
+       (container\updater\_shared\SI-UpdaterInvardia.ps1, Test-Path only, never loaded here) and -Edition only records which
+       manifest address an unlicensed install asks: 'community' for a Community install, 'invardia' otherwise; '' when the
+       package carries no update client. Never decided by which other files the package carries. #>
+    param([Parameter(Mandatory)][string]$SIRoot, [AllowEmptyString()][string]$Edition = '')
+    if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'container', 'updater', '_shared', 'SI-UpdaterInvardia.ps1')))) { return '' }
+    if ("$Edition".Trim().ToLowerInvariant() -eq 'community') { return 'community' }
+    'invardia'
 }
 
 function Test-SIInstallUpdateClientPresent {
-    <# Does this package carry an update client for the updater job -- Invardia's (Pro) or the signed Community channel's
-       (#750 (b))? Install-SIUpdaterJob refuses without either. Looked up with Test-Path only -- never loaded here. #>
+    <# Does this package carry the update client (one for both editions)? Install-SIUpdaterJob refuses without it. Looked up with Test-Path only -- never loaded here. #>
     param([Parameter(Mandatory)][string]$SIRoot)
     [bool](Get-SIInstallUpdateSource -SIRoot $SIRoot)
 }
@@ -152,6 +463,13 @@ function Get-SIInstallProConfigSettings {
     # #417: the update ring the install follows (the wizard's updateRing; none = 3), and the updater job once it exists
     $s['SI_UpdateRing'] = Get-SIInstallUpdateRing -Values $Ctx.Values
     if ($Ctx.Facts['updaterJob']) { $s['SI_Bootstrap_UpdaterJob'] = [string]$Ctx.Facts['updaterJob'] }
+    # framework PRO-COMMUNITY-SAME (opt-in, owner 2026-11-11): "Connect this install to Invardia: health reports + updates on
+    # request" -- ON for a Pro install (its licence is the agreement), for a Community install only when the answers say yes
+    # (connectToInvardia: the installer's question, -ConnectToInvardia unattended). Off = nothing that
+    # identifies the install leaves it (engine\_shared\SI-InvardiaConnect.ps1).
+    # the edition this install IS (the reports name it; the database alone no longer tells the editions apart)
+    $s['SI_Edition'] = $(if ([string]$Ctx.Edition -eq 'pro') { 'pro' } else { 'community' })
+    $s['SI_Invardia_Connect'] = $(if ([string]$Ctx.Edition -eq 'pro' -or ($Ctx.Values -and $Ctx.Values.Contains('connectToInvardia') -and [bool]$Ctx.Values['connectToInvardia'])) { 'on' } else { 'off' })
     $s
 }
 
@@ -321,10 +639,10 @@ function Get-SIInstallSqlAdminGroupArgs {
         $ga.GroupName = [string](Get-SIInstallProp $g 'displayName')
     }
     # framework §5.5 / §12.11c (Invardia ruling 2026-11-07): a NEW group is created under its STANDARD name from the start --
-    # grp-si-sql-admins, a Community install's grp-si-community-sql-admins -- never a display name of its own. A display name
+    # grp-si-sql-admins in both editions (framework PRO-COMMUNITY-SAME) -- never a display name of its own. A display name
     # is passed only when an install record carries one that differs (an install from before keeps what it has).
     elseif ($n -is [System.Collections.IDictionary]) {
-        # SI #750: a new Community edition install's own group (grp-si-community-sql-admins), never the Pro install's
+        # the names table's group (an existing Community install recorded grp-si-community-sql-admins and keeps it)
         $gn = Get-SIInstallSqlAdminGroupName -Names $n
         if ($gn -cne 'grp-si-sql-admins') { $ga.GroupName = $gn }
         if ($n.Contains('SqlAdminGroupDisplayName') -and [string]$n['SqlAdminGroupDisplayName'] -and [string]$n['SqlAdminGroupDisplayName'] -cne $gn) { $ga.DisplayName = [string]$n['SqlAdminGroupDisplayName'] }
@@ -334,8 +652,8 @@ function Get-SIInstallSqlAdminGroupArgs {
 
 function Get-SIInstallSqlAdminGroupName {
     <# PURE. The name this install's SQL admin group is looked up and created by: the names table's SqlAdminGroupName
-       (grp-si-community-sql-admins for a new Community edition install, so it never shares a Pro install's group in the same
-       tenant -- SI #750; setup\_shared\SI-SetupNaming.ps1), else grp-si-sql-admins (a table made before the key existed). #>
+       (grp-si-sql-admins for every new install, both editions -- framework PRO-COMMUNITY-SAME; an existing Community install's
+       record keeps grp-si-community-sql-admins), else grp-si-sql-admins (a table made before the key existed). #>
     param([AllowNull()]$Names)
     $g = ''
     if ($Names -is [System.Collections.IDictionary]) { if ($Names.Contains('SqlAdminGroupName')) { $g = [string]$Names['SqlAdminGroupName'] } }
@@ -435,7 +753,7 @@ function Get-SIInstallEndCheck {
                 }
             }
         }
-        # The Invardia Support app's database access (the Pro package only: Get-SIInstallSupportEndCheck)
+        # The Invardia Support app's database access (both editions: Get-SIInstallSupportEndCheck)
         if (Get-Command -Name Get-SIInstallSupportEndCheck -ErrorAction SilentlyContinue) { foreach ($x in @(Get-SIInstallSupportEndCheck -Ctx $Ctx)) { if ($x) { $bad.Add([string]$x) } } }
     } catch { }
     $bad.ToArray()
@@ -982,12 +1300,10 @@ function Get-SIInstallDataStepTable {
         $script:SIInstallRingResult = $null
         Use-SIInstallUserSqlToken -Ctx $ctx -Action {
             $a = Get-SIInstallSqlArgs -Ctx $ctx; $a.Ring = [string](Get-SIInstallUpdateRing -Values $ctx.Values)
-            # SI #750 (b): a Community edition install updates on the Community channel, rings 2 / 3 only (3 = broad, the
-            # default; rings 0 / 1 are internal) -- any other answer is recorded as 3
-            # -- by the package's UPDATE SOURCE, not the licence (owner 2026-11-02): the full package installed without a
-            # licence updates through Invardia once the licence is added, on the ring given at install (ring 1 included)
-            $viaInvardia = ((Get-SIInstallUpdateSource -SIRoot $ctx.SIRoot) -eq 'invardia')
-            if (-not $viaInvardia -and $a.Ring -notin '2', '3') { $a.Ring = '3' }
+            # rings 0-3 for both editions (framework PRO-COMMUNITY-SAME, SI #1207): the ring answered is recorded as given;
+            # the channel recorded is the install's edition (the one update client reads the Community route for a Community
+            # install without a licence, the install route otherwise)
+            $viaInvardia = ("$($ctx.Edition)".Trim() -ine 'community')
             $a.ResourceGroupName = [string]$ctx.Names.ResourceGroup; $a.Channel = $(if ($viaInvardia) { 'invardia' } else { 'community' }); $a.SetBy = 'guided install'; $a.PassThru = $true
             $r = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'setup/Set-SIInstallRing.ps1' -Arguments $a
             $script:SIInstallRingResult = @($r.Objects | Where-Object { $_ -and $_.PSObject.Properties['Ring'] }) | Select-Object -Last 1
@@ -1158,7 +1474,7 @@ function Get-SIInstallDataStepTable {
         # The updater takes its releases from Invardia through the update client (Pro), or -- the Community edition (#750 (b))
         # -- from the signed Community channel, in the cloud as Pro. A package without either installs no updater -- said,
         # never a failed step; the next run of the install command installs it once the package carries a client.
-        $src = Get-SIInstallUpdateSource -SIRoot $ctx.SIRoot
+        $src = Get-SIInstallUpdateSource -SIRoot $ctx.SIRoot -Edition ([string]$ctx.Edition)
         if (-not $src) {
             return (New-SIInstallResult -State 'skipped' -Message 'This package does not carry an update client, so no updater job was installed. Update with the install command of a newer release.')
         }
@@ -1175,9 +1491,12 @@ function Get-SIInstallDataStepTable {
             }
         }
         $ring = Get-SIInstallUpdateRing -Values $v
-        # the Community channel has rings 2 (early release) and 3 (broad): any other answer takes ring 3
+        # framework PRO-COMMUNITY-SAME: a Community install that said yes to "Connect this install to Invardia" gets its own install
+        # key now (the same claim as Pro, without a licence) -- BEFORE the updater, which then uses it; no yes = no call at all
+        $connectText = ''
+        if ([string]$ctx.Edition -ne 'pro' -and (Test-SIInstallConnectToInvardia -Ctx $ctx)) { try { $connectText = ' ' + [string](Invoke-SIInstallInvardiaKey -Ctx $ctx).Message } catch { $connectText = '' } }
+        # rings 0-3 for both editions (framework PRO-COMMUNITY-SAME): the ring answered is the ring used
         $ringNote = ''
-        if ($src -eq 'community' -and $ring -notin 2, 3) { $ringNote = (' Ring {0} is not a Community ring, so ring 3 (broad) is used.' -f $ring); $ring = 3 }
         $job = Get-SISetupComponentName -Names $n -Key UpdaterJob
         $a = [ordered]@{
             SubscriptionId = [string]$v['subscriptionId']; ResourceGroupName = $n.ResourceGroup; AcrName = $n.Acr; EnvName = $n.ContainerEnv
@@ -1205,10 +1524,11 @@ function Get-SIInstallDataStepTable {
                else { 'an install key it claims on its first run' }
         $nz = Get-SINightlyNewInstallSchedule -Region ([string]$v['location'])
         $done = if ($src -eq 'community') {
-            ('{0} keeps SecurityInsight up to date from the signed Community channel on update ring {1}, daily at {2}, as its own managed identity (no install key, no licence).' -f $job, $ring, (Get-SINightlyScheduleText -Zone $nz.Zone -Known $nz.Known)) + $ringNote + (Get-SIInstallUpdateRingNote -Ctx $ctx)
+            ('{0} keeps SecurityInsight up to date from Invardia''s signed release of update ring {1} (the same updater as every install), daily at {2}, as its own managed identity (no licence).' -f $job, $ring, (Get-SINightlyScheduleText -Zone $nz.Zone -Known $nz.Known)) + $ringNote + (Get-SIInstallUpdateRingNote -Ctx $ctx)
         } else {
             ('{0} keeps SecurityInsight up to date from Invardia on update ring {1}, daily at {3}, as its own managed identity, with {2}.' -f $job, $ring, $key, (Get-SINightlyScheduleText -Zone $nz.Zone -Known $nz.Known)) + (Get-SIInstallUpdateRingNote -Ctx $ctx)
-        }
+        }        $done += $connectText
+
         # The database server's administration goes back to the admin group at the END OF THE RUN (Complete-SIInstallSqlAdmin,
         # called by the install next to where it closes its database firewall rule) -- not here: a resume that runs
         # another database step and skips this one would leave the application as the administrator.

@@ -14,7 +14,7 @@
         "defender": "advanced hunting, one query per batch of devices (Get-SIDefenderDeviceContext): Hardening (DeviceTvmInfoGathering AdditionalFields), BiosVersion / Cpu / HardwareModel (DeviceTvmHardwareFirmware), Networks / OnPublicNetwork / DefaultGateways / AdapterAddresses (DeviceNetworkInfo, 7 days), Alerts30d / HighAlerts30d / LastAlert* (AlertEvidence + AlertInfo, 30 days), LastAdminLogon / AdminLogons30d / AdminLogonAccounts (DeviceLogonEvents, 30 days), NotLicensed",
         "openAlerts": "Microsoft Graph security alerts, ONE tenant-wide paged read per run of the alerts whose status is new or in progress (Get-SIDefenderOpenAlerts, SecurityAlert.Read.All), summarised per device by the Defender device id of the alert's device evidence: Open (how many; 0 when the read was whole and none names the device), HighestSeverity, and the newest one's Title / Id / Time. No part when the read was refused or did not complete (unknown, never 0)",
         "software": "DeviceTvmSoftwareInventory: vendor/product per device (the rule index)",
-        "logon": "the endpoint profiler's logon correlation: MostFrequentUserTier",
+        "logon": "the endpoint profiler's logon correlation: MostFrequentUserTier; PrivilegedLogonTier (the lowest tier, 0-2, of any account that logged on to the device in the window: DeviceLogonEvents joined to the identity profile; absent when none or when the read was unknown)",
         "egQueryRules": "ids of the detection rules whose Exposure Graph query matched",
         "vulnerabilities": "advanced hunting, one query per batch of devices (Get-SIDefenderFindingSummary), SUMMARISED per device: Total (distinct CVEs), Critical / High / Medium / Low, Exploitable, HighestCvss, Software (affected products), NewestPublished / OldestPublished, Top (id = the CVE, name = the software, severity, cvss, exploit, published, fix), TopText; Status when the tenant has no such data",
         "configurations": "the same query, SUMMARISED per device: Assessed, NonCompliant, HighestImpact, AssessedAt, Categories, Top (id = the configuration id, name, category, impact), TopText; Status when the tenant has no such data",
@@ -583,6 +583,18 @@
       ],
       "sources": [
         "logon.MostFrequentUserTier"
+      ],
+      "normalize": [
+        "int"
+      ]
+    },
+    {
+      "field": "si_privileged_logon_tier",
+      "recordTypes": [
+        "device"
+      ],
+      "sources": [
+        "logon.PrivilegedLogonTier"
       ],
       "normalize": [
         "int"

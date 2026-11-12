@@ -832,6 +832,21 @@ function Test-SIKind_mostFrequentUserTier {
     return $false
 }
 
+function Test-SIKind_privilegedLogonTier {
+    <# Reads PrivilegedLogonTier from asset Metadata (stamped by Enrich / Get-SIBulkPrivilegedLogons from Defender
+       DeviceLogonEvents + SI_Identity_Profile_CL): the lowest tier of any account that logged on to the device in the
+       window (Tier 0-2 only; no privileged logon or an unknown read = no value). Returns $true when the value is in the
+       rule's tierValues list. Used by AssetProfileByPrivilegedLogon ("any privileged logon counts"). #>
+    param([Parameter(Mandatory)]$Asset, [Parameter(Mandatory)]$Args)
+    $v = Get-SIAssetField -Asset $Asset -Name 'PrivilegedLogonTier'
+    if ($null -eq $v -or "$v" -eq '') { return $false }
+    try { $t = [int]$v } catch { return $false }
+    $vals = @($Args.tierValues)
+    if ($vals.Count -eq 0) { return $false }
+    foreach ($x in $vals) { if ([int]$x -eq $t) { return $true } }
+    return $false
+}
+
 function Test-SIKind_assetKind {
     <# kind: assetKind
          kinds: [endpoint, identity, azure, publicip]
@@ -900,6 +915,8 @@ $script:SIKindRegistry = @{
     'hasAzureTagDirectOrParent'     = 'Test-SIKind_hasAzureTagDirectOrParent'
     'egKustoQuery'                  = 'Test-SIKind_egKustoQuery'
     'mostFrequentUserTier'          = 'Test-SIKind_mostFrequentUserTier'
+    # any privileged logon in the window (DeviceLogonEvents -> the identity profile's tier)
+    'privilegedLogonTier'           = 'Test-SIKind_privilegedLogonTier'
 
     # IP-subnet match for CMDB / role mapping
     'ipInRange'                     = 'Test-SIKind_ipInRange'

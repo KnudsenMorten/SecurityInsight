@@ -785,7 +785,7 @@ Describe 'One CI never holds the build: the rules of one CI have a time limit' {
         # #881 the end-of-build marks run in key ranges (each its own transaction; PROGRESS-TICK-1: one call per range): a held
         # record is never marked in any range, and loses the hash it was built from after the marks
         $mk = Get-SICiMarkBuiltSql
-        $mk | Should -Match "(?s)INSERT @held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*AND NOT EXISTS \(SELECT 1 FROM @held hk WHERE hk\.RecordKey = r\.RecordKey\);"
+        $mk | Should -Match "(?s)INSERT @held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*AND NOT EXISTS \(SELECT 1 FROM @held hk WHERE hk\.RecordKey = r\.RecordKey\)\s+OPTION \(RECOMPILE\);"
         (Get-SICiMarkBuiltHeldSql) | Should -Match "(?s)INSERT @held \(RecordKey\) SELECT DISTINCT x\.RecordKey FROM OPENJSON\(@h\).*UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata\.CiRecord r JOIN @held x ON x\.RecordKey = r\.RecordKey;"
         (Get-Command Invoke-SICiMarkBuilt).Definition | Should -Match '(?s)Get-SICiMarkBuiltSql -Thresholds \$Thresholds.*Get-SICiMarkBuiltHeldSql.*Get-SICiMarkBuiltClearSql' -Because 'the held records lose their hash after the marks, before the clean-up'
         $dirty = Get-SICiDirtySql -LookbackDays 30

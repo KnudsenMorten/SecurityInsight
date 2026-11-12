@@ -675,8 +675,14 @@ function Add-SIRecordPartsFromProfileRows {
         }
         $mde = [string](Get-SIItemValue $row 'MdeDeviceId')
         $t = Get-SIItemValue $row 'MostFrequentUserTier'
-        if ($mde -and $null -ne $t -and "$t" -ne '' -and (& $has "mde|device|$($mde.ToLowerInvariant())")) {
-            Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key $mde -Part 'logon' -Object ([pscustomobject]@{ MostFrequentUserTier = $t })
+        # the lowest tier of an account that logged on to the device (any privileged logon counts) -- absent when none or
+        # when the logons could not be read (unknown), so the CI never reads "no privileged logon" from a failed read
+        $pt = Get-SIItemValue $row 'PrivilegedLogonTier'
+        $lp = [ordered]@{}
+        if ($null -ne $t -and "$t" -ne '') { $lp['MostFrequentUserTier'] = $t }
+        if ($null -ne $pt -and "$pt" -ne '') { $lp['PrivilegedLogonTier'] = $pt }
+        if ($mde -and $lp.Count -gt 0 -and (& $has "mde|device|$($mde.ToLowerInvariant())")) {
+            Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key $mde -Part 'logon' -Object ([pscustomobject]$lp)
         }
         $rt = Get-SIIdentityProfileRecordType $row
         $oid = ([string](Get-SIItemValue $row 'PrimaryEntityId')).ToLowerInvariant()

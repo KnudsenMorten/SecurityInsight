@@ -18,6 +18,9 @@
 #>
 
 BeforeAll {
+    # framework PRO-COMMUNITY-SAME (opt-in): these suites test what a CONNECTED install sends (anonymously without a key);
+    # a Community install that did not say yes sends nothing -- SIv3-ProCommunitySame proves that
+    $script:SavedInvardiaConnect = $global:SI_Invardia_Connect; $global:SI_Invardia_Connect = 'on'
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:SavedEndpointEnv = $env:SI_TELEMETRY_ENDPOINT
     $env:SI_TELEMETRY_ENDPOINT = 'https://127.0.0.1:9/api/uplink/v1/report'
@@ -60,6 +63,7 @@ BeforeAll {
 }
 
 AfterAll {
+    $global:SI_Invardia_Connect = $script:SavedInvardiaConnect
     $env:SI_TELEMETRY_ENDPOINT = $script:SavedEndpointEnv
     $global:SI_TelemetryHalted = $null; $global:SI_TelemetryWarned = $null; $global:SI_TelemetryContext = $null; $global:SI_Telemetry_Enabled = $null
     $global:SI_Telemetry_SetupControls = $null; $global:SI_InstallRingFacts = $null

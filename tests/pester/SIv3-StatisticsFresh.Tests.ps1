@@ -94,7 +94,10 @@ Describe 'STATIC: the schema, the grant and the runner' {
         $endOfRun = $endOfRun.Substring(0, $endOfRun.IndexOf('Get-SIJobFlowSummary -State $pipeResult'))
         @([regex]::Matches($endOfRun, 'Invoke-SIDataStatisticsRefresh ')).Count | Should -Be 0 -Because 'the refresh is in the upkeep now'
         # Invardia 2026-11-05: ONE refresh after a run, only after the publish -- the upkeep runs it after the copies, beaten
-        $f | Should -Match ([regex]::Escape("`$upkeepStats = { param(`$Beat) if (`$publishSql -and `$statsOn) { `$null = Invoke-SIDataStatisticsRefresh -Invoke `$publishSql -When 'after the run, once the pages moved to it' -Log `$say -Beat `$Beat } }"))
+        $f | Should -Match ([regex]::Escape("`$upkeepStats = { param(`$Beat) if (`$publishSql -and `$statsOn) { `$null = Invoke-SIDataStatisticsRefresh -Invoke `$publishSql -When 'after the run, once the pages moved to it' -Log `$say -Beat `$Beat -RecordInvoke `$statsRecord } }"))
+        # #1210: both refresh calls of the upkeep record a finished pass in the settings database (cfg.InstallState)
+        $f | Should -Match ([regex]::Escape('$statsRecord = if ($proStore) { $proStore.Invoke } else { $null }'))
+        $f | Should -Match ([regex]::Escape("-When 'after the newest collection was shown' -Log `$say -Beat `$Beat -RecordInvoke `$statsRecord }"))
         $f | Should -Match ([regex]::Escape('-Stats ([bool]($publishSql -and $statsOn -and $schedPub -and $schedPub.Published))'))
     }
 }

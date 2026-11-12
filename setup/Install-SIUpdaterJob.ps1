@@ -62,8 +62,8 @@ param(
     [string]$CertSecretName,                                   # KV secret holding the SPN PFX (not with -UseManagedIdentity)
     # RETIRED (2026-10-06): SI's own update feed. Kept only to refuse it clearly -- Pro updates come only from Invardia.
     [string]$SourceUrlSecretName,
-    # #240: where releases come from -- invardia (Pro) or community (#750 (b): the signed Community channel; the Community
-    # edition's default, chosen by itself when this copy has no Invardia client). 'feed' is refused: the feed is retired.
+    # #240: the install's edition for the one update client -- invardia (Pro) or community (the Community edition: without a
+    # licence the client reads Invardia's anonymous Community route). 'feed' is refused: the feed is retired.
     [ValidateSet('invardia', 'community', 'feed')][string]$Source = 'invardia',
     [string]$SpnClientId,                                      # the SPN's app id (not with -UseManagedIdentity)
     [Parameter(Mandatory)][string]$TenantId,
@@ -200,21 +200,12 @@ if ($Source -eq 'feed' -or "$SourceUrlSecretName".Trim()) {
     throw 'SecurityInsight''s own update feed is retired -- Pro updates come only from Invardia''s platform. Run this without -Source feed / -SourceUrlSecretName (the default is Invardia); a job that still has the feed link gets it removed.'
 }
 if (-not $UseManagedIdentity -and (-not "$CertSecretName".Trim() -or -not "$SpnClientId".Trim())) { throw 'Sign-in by certificate needs -CertSecretName and -SpnClientId (or pass -UseManagedIdentity).' }
-# #750 (b): WHICH UPDATE PATH this copy carries -- the Invardia client (SecurityInsight Pro), else the signed Community channel.
-# A Pro copy is never set up on the community channel (it would replace Pro with the Community edition).
-$hasInvardia = Test-Path -LiteralPath (Join-Path $solRoot 'container/updater/_shared/SI-UpdaterInvardia.ps1')
-$hasCommunity = (Test-Path -LiteralPath (Join-Path $solRoot 'container/updater/_shared/SI-UpdaterCommunity.ps1')) -and (Test-Path -LiteralPath (Join-Path $solRoot 'engine/_shared/SI-CommunityUpdate.ps1'))
-if ($hasInvardia -and $Source -eq 'community') { throw 'this copy is SecurityInsight Pro: its updater takes its releases from Invardia, never from the public Community channel. Run this without -Source community.' }
-if (-not $hasInvardia) {
-    if (-not $hasCommunity) { throw 'this copy carries no update client (neither the Invardia client of SecurityInsight Pro nor the signed Community client) -- use a newer release.' }
-    $Source = 'community'
-}
+# ONE UPDATE CLIENT FOR BOTH EDITIONS (framework PRO-COMMUNITY-SAME, 2026-11-11): every copy carries the same client
+# (container/updater/_shared/SI-UpdaterInvardia.ps1). -Source records the install's edition on the job (SI_UPDATER_SOURCE:
+# invardia = Pro, community = the Community edition); the client then asks Invardia's install route when the install has a
+# licence, else -- a Community install -- Invardia's anonymous Community route. Nothing else differs; rings 0-3 for both.
+if (-not (Test-Path -LiteralPath (Join-Path $solRoot 'container/updater/_shared/SI-UpdaterInvardia.ps1'))) { throw 'this copy carries no update client -- use a newer release.' }
 if ($UpdateRing -gt 3) { throw "-UpdateRing $UpdateRing is not an update ring (0-3)." }
-# the Community channel has rings 2 (early release) and 3 (broad); none given = 3
-if ($Source -eq 'community') {
-    if ($UpdateRing -lt 0) { $UpdateRing = 3 }
-    elseif ($UpdateRing -lt 2) { throw "-UpdateRing $UpdateRing is not a Community ring (2 = early release, 3 = broad)." }
-}
 # -Image is kept apart: PowerShell names are case-blind, and $image below is the image this setup builds
 $explicitImage = [string]$Image
 # the nightly schedule: 18:30 in the local time of the install's Azure region (SI-NightlySchedule.ps1, pure)
@@ -229,8 +220,7 @@ else { Info ("job {0} in {1} (environment {2}), daily at 23:00 in the local time
 Info ("image: {0} -- pulled with identity {1}" -f $(if ("$Image".Trim()) { "$Image (-Image)" } else { ('a NEW job gets {0}.azurecr.io/si-updater:v{1}; an EXISTING job keeps the image it runs (never moved back to this version)' -f $AcrName, $version) }), $IdentityName)
 if ($UseManagedIdentity) { Info ("sign-in: the job's managed identity {0} -- no certificate" -f $IdentityName) }
 else { Info ("secret by Key Vault reference: {0}/{1} (SPN certificate)" -f $KeyVaultName, $CertSecretName) }
-if ($Source -eq 'community') { Info 'update source: Invardia''s signed Community channel (GET https://invardia.com/api/updates/securityinsight/community/<ring>, anonymous; the release zip checked by size and SHA-256) -- no install key, no licence request' }
-else { Info ("update source: Invardia -- the install key (SI-Invardia-InstallKey, claimed automatically when missing) and the update state are read from {0} at run time" -f $KeyVaultName) }
+Info ("update source: Invardia -- the same update client for both editions; the install key (SI-Invardia-InstallKey, claimed automatically when missing) and the update state are read from {0} at run time{1}" -f $KeyVaultName, $(if ($Source -eq 'community') { '; without a licence it reads Invardia''s anonymous Community route for its ring (the release zip checked by the signed size and SHA-256)' } else { '' }))
 if ($Block) { Info "customer blocks: $Block" }
 if ($UpdateRing -ge 0) { Info ("update ring {0} (SI_UPDATER_RING): every run asks Invardia for what SecurityInsight released to ring {0}; the signed manifest must name ring {0} (UPDATE-1.7)" -f $UpdateRing) }
 else { Info 'no -UpdateRing: the updater uses the ring recorded for the install (cfg.InstallState ''Ring'', or Update ring on the Settings page); with none recorded it asks Invardia for NOTHING (UPDATE-1.7: SecurityInsight decides the ring)' }

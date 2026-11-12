@@ -3655,7 +3655,10 @@ function Get-RAReportExpectedRows {
         $q = $Query
         if ($hasBlock) { $q = Replace-BucketFilterBlock -Query $q -BucketFilterKql (New-BucketFilterKql -BucketCount $script:__cntN -BucketIndex $i -ReportName $ReportName) }
         if ($script:__cntN -gt 1) { $script:_CurrentBucketCount = $script:__cntN; $script:_CurrentBucketIndex = $i } else { $script:_CurrentBucketCount = 0; $script:_CurrentBucketIndex = 0 }
-        Get-RABucketRows -Resp (Invoke-GraphHuntingQuery -Query (Get-RAReportCountKql -Query $q -GroupKeys $script:__cntKeys) -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries 1)
+        # SUP-2026-00496: a count is a measurement -- every path failing is said by the verdict (INFO), never a run WARN
+        $script:_RAHuntingMeasurement = $true
+        try { Get-RABucketRows -Resp (Invoke-GraphHuntingQuery -Query (Get-RAReportCountKql -Query $q -GroupKeys $script:__cntKeys) -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries 1) }
+        finally { $script:_RAHuntingMeasurement = $false }
     }
     try {
         $script:__cntN = 1; $script:__cntKeys = @()

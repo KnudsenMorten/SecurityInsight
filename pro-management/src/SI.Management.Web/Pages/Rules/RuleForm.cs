@@ -67,6 +67,7 @@ public sealed partial class RuleFormModel
         ["hasAzureTagDirectOrParent"] = ["tag", "value"],
         ["egKustoQuery"] = ["query"],
         ["mostFrequentUserTier"] = ["tierValues"],
+        ["privilegedLogonTier"] = ["tierValues"],
         ["ipInRange"] = ["cidrs", "fields"],
         ["hasTag"] = ["tag", "value", "match", "sources"],
         ["assetKind"] = ["kinds"],

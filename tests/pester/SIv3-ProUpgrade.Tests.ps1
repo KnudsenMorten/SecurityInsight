@@ -3,7 +3,7 @@
     CONTAINER HOSTING IS FOR BOTH EDITIONS -- SI EXACTLY AS PIM (#164, operator 2026-10-02: "we must support community as
     well and we already have the same setup in pim ... only difference is the license and the features if paid or not").
 
-    Community: Update-SecurityInsight.ps1 -Apply pulls and rolls the containers. Pro: an updater job takes what SecurityInsight
+    (Before framework PRO-COMMUNITY-SAME, 2026-11-11, Community updated by a local script; it is retired.) Pro: an updater job takes what SecurityInsight
     released to the customer's ring from Invardia (SI's own feed is retired, 2026-10-06) and rolls them; setup\Upgrade-SIToPro.ps1 switches an install from the first to the
     second (PIM: Upgrade-PimToPro.ps1), and from then on the Community roll steps aside. The updater CODE ships in both
     editions (PIM ships its update job to Community too); the paid part is the Pro licence + Invardia's update platform.
@@ -168,8 +168,9 @@ Describe 'after the upgrade, the Community roll steps aside' {
     }
     It 'container setup tells the customer how THIS install is updated' {
         $c = Get-SIContainerUpdateGuidance -UpdaterJob ''
-        ($c -join ' ') | Should -Match 'Update-SecurityInsight\.ps1 -Apply'
-        ($c -join ' ') | Should -Match 'Upgrade-SIToPro\.ps1'
+        # framework PRO-COMMUNITY-SAME: one update path for both editions -- an install without the updater job is told to create it
+        ($c -join ' ') | Should -Match 'Install-SIUpdaterJob\.ps1'
+        ($c -join ' ') | Should -Not -Match 'Update-SecurityInsight' -Because 'the Community-only local update script is retired in v3'
         (Get-SIContainerUpdateGuidance -UpdaterJob 'caj-si-updater') -join ' ' | Should -Match "'caj-si-updater'.*nothing to run"
     }
 }

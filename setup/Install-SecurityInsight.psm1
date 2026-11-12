@@ -58,6 +58,7 @@ function Install-SecurityInsight {
         [ValidateSet('external', 'internal')][string]$WebAppAccess,
         [string[]]$WebAppAdmins,
         [switch]$AssetTaggingWrites,
+        [switch]$ConnectToInvardia,
         [ValidateSet(1, 2, 3)][int]$UpdateRing,
         [string]$ServiceNowUrl,
         [switch]$PrivateNetwork,

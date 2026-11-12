@@ -320,7 +320,7 @@ Describe 'every mail names its environment (subject prefix + footer, built once 
         $e = Get-SIMailEnvironment -Globals $script:EnvG
         $s = Get-SIMailSubject -Subject 'Report' -Environment $e
         # MAIL-3 (#653): the name only in the subject (no ring, no edition -- they stay in the footer), the product last
-        $s | Should -Be '[Internal] Report [SecurityInsight]'
+        $s | Should -Be 'Internal - Report [SecurityInsight]'
         Get-SIMailSubject -Subject $s -Environment $e | Should -Be $s
         $b = Add-SIMailFooter -BodyHtml '<html><body><p>x</p></body></html>' -Environment $e
         $b | Should -Match 'Environment: <b>Internal \(ring 1, PRO\)</b>'
@@ -337,7 +337,7 @@ Describe 'every mail names its environment (subject prefix + footer, built once 
         $r = Send-SIMail -Settings (Get-SIMailSettings -Globals $script:EnvG) -To 'a@contoso.example' -Subject 'Report' -BodyHtml '<p>x</p>' -Http $g.Http -TokenProvider { New-FakeJwt } 6>$null
         $r.Sent | Should -BeTrue
         $m = @($g.Calls | Where-Object { @($_.Body.message.toRecipients).Count })[0].Body.message
-        $m.subject | Should -Be '[Internal] Report [SecurityInsight]'
+        $m.subject | Should -Be 'Internal - Report [SecurityInsight]'
         $m.body.content | Should -Match 'data-si-mail-footer'
     }
     It 'the SMTP path sends it too' {
@@ -346,7 +346,7 @@ Describe 'every mail names its environment (subject prefix + footer, built once 
         $g2 = @{} + $script:EnvG; $g2.SI_Mail_Mode = 'smtp'; $g2.SmtpServer = 'relay.example.invalid'
         $r = Send-SIMail -Settings (Get-SIMailSettings -Globals $g2) -To 'a@x.example' -Subject 'Digest' -BodyHtml '<p>x</p>' 6>$null
         $r.Sent | Should -BeTrue
-        $script:Seen.S | Should -Be '[Internal] Digest [SecurityInsight]'
+        $script:Seen.S | Should -Be 'Internal - Digest [SecurityInsight]'
         $script:Seen.B | Should -Match 'data-si-mail-footer'
     }
     It 'it is built in the transport, not per sender' {

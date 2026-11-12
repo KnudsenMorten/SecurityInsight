@@ -44,19 +44,29 @@ Describe 'every Pro component is excluded from the public payload' {
 
     It '<_> is in excludePaths' -ForEach @(
         'launcher/asset-cmdb',
-        'engine/asset-cmdb/Invoke-SICmdb.ps1', 'engine/asset-cmdb/Invoke-SIVulnLoop.ps1', 'engine/asset-cmdb/Invoke-SICloseLoopMail.ps1',
+        'engine/asset-cmdb/Invoke-SICmdb.ps1', 'engine/asset-cmdb/Invoke-SIVulnLoop.ps1',
         'engine/asset-cmdb/Invoke-SICmdbSql.ps1', 'engine/asset-cmdb/Invoke-SICmdbImport.ps1', 'engine/asset-cmdb/_shared/SI-ServiceNowClient.ps1',
         'engine/pro-data/Invoke-SIDepartmentReport.ps1', 'engine/pro-data/Invoke-SIGovernanceMail.ps1', 'engine/pro-data/Invoke-SITaskDigest.ps1',
-        'setup/Set-SIServiceNowCredential.ps1', 'setup/_shared/SI-GuidedInstallPro.ps1',
-        'engine/_shared/SI-InvardiaUpdate.ps1', 'engine/_shared/SI-InvardiaUpdateKeys.json', 'container/updater/_shared/SI-UpdaterInvardia.ps1'
+        'setup/Set-SIServiceNowCredential.ps1', 'setup/_shared/SI-GuidedInstallPro.ps1'
     ) {
         $script:Exclude | Should -Contain $_
+    }
+
+    It 'the ONE update client ships in the Community edition (framework PRO-COMMUNITY-SAME, #1207): <_>' -ForEach @(
+        'engine/_shared/SI-InvardiaUpdate.ps1', 'engine/_shared/SI-InvardiaUpdateKeys.json', 'container/updater/_shared/SI-UpdaterInvardia.ps1',
+        'container/updater/_shared/SI-UpdaterCommunity.ps1', 'container/updater/Start-SIUpdater.ps1', 'engine/_shared/InvardiaUpdate.verify.ps1'
+    ) {
+        Test-Path -LiteralPath (Join-Path $script:SIRoot $_) | Should -BeTrue
+        Test-SIExcluded $_ | Should -BeFalse -Because "$_ is the update client both editions run"
     }
 
     It 'every file under engine/asset-cmdb is listed, except the four helpers the free data sync needs -- a NEW file there never ships by default' {
         # engine/asset-cmdb is listed file by file since 2026-10-18 (the data sync and the database setup need three of its
         # helpers in the free version: the completeness verdict, the release store, the vulnerability target's SQL seam and the close guards they load); a folder entry would have kept a new file out by itself, so this does it now.
-        $shared = @('engine/asset-cmdb/_shared/SI-VulnDesired.ps1', 'engine/asset-cmdb/_shared/SI-VulnRelease.ps1', 'engine/asset-cmdb/_shared/SI-VulnTarget.ps1', 'engine/asset-cmdb/_shared/SI-ReconcileGuards.ps1')
+        # framework PRO-COMMUNITY-SAME (2026-11-11): the mail job (Invoke-SICloseLoopMail.ps1 + the two mail helpers it loads) ships
+        # in both editions -- the free mails go everywhere, its paid kinds ask the licence when it runs
+        $shared = @('engine/asset-cmdb/_shared/SI-VulnDesired.ps1', 'engine/asset-cmdb/_shared/SI-VulnRelease.ps1', 'engine/asset-cmdb/_shared/SI-VulnTarget.ps1', 'engine/asset-cmdb/_shared/SI-ReconcileGuards.ps1',
+                    'engine/asset-cmdb/Invoke-SICloseLoopMail.ps1', 'engine/asset-cmdb/_shared/SI-CloseLoopMail.ps1', 'engine/asset-cmdb/_shared/SI-ExemptionMail.ps1')
         $root = Join-Path $script:SIRoot 'engine\asset-cmdb'
         $unlisted = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object { 'engine/asset-cmdb/' + $_.FullName.Substring($root.Length + 1).Replace('\', '/') } |
             Where-Object { $shared -notcontains $_ -and -not (Test-SIExcluded $_) })
@@ -77,7 +87,8 @@ Describe 'every Pro component is excluded from the public payload' {
         $gated | Should -Not -BeNullOrEmpty
         # SHIPPED on purpose, each with its reason: verification (Community since 2026-10-27, #750 (8)) asks the gate only to
         # SKIP its ServiceNow output check (after Test-Path finds the Pro helper) -- it gates nothing of its own
-        $shippedGateCallers = @('engine\verification\Invoke-SIVerification.ps1')
+        # ...and the mail job (PRO-COMMUNITY-SAME, 2026-11-11) gates only its paid mail kinds; its free mails run in both editions
+        $shippedGateCallers = @('engine\verification\Invoke-SIVerification.ps1', 'engine\asset-cmdb\Invoke-SICloseLoopMail.ps1')
         @($gated | Where-Object { -not (Test-SIExcluded $_) -and $shippedGateCallers -notcontains $_ }) | Should -BeNullOrEmpty
     }
 }
@@ -228,9 +239,9 @@ Describe 'no free file loads a Pro file' {
             'tests\pester\SIv3-SocAttackPaths.Tests.ps1|report-certification'   # the spec case runs only after Test-Path finds the folder (skipped without it)
             # the staged template pack's signed manifest is verified with the Pro update verifier, loaded only after Test-Path finds it
             'engine\pro-settings\SI-TemplatePacks.ps1|SI-InvardiaUpdate.ps1'
-            # the install launcher's PRO channel (the copy Invardia hands out, which carries the verifier embedded) checks the Pro
-            # package with the Pro update verifier; the Community copy never loads it (its channel is GitHub), and a repository
-            # copy loads it only after it finds the file next to it
+            # the install launcher checks the release of the ring with the update verifier in BOTH editions (framework
+            # PRO-COMMUNITY-SAME, SI #1207): the published copies carry it embedded, and a repository copy loads it only after it
+            # finds the file next to it (moot once the verifier ships in the Community edition)
             'setup\Install-SecurityInsight.Launcher.ps1|SI-InvardiaUpdate.ps1'
             # stop-the-run-then-update reads the version the ring serves with the Pro update client only after Test-Path finds it;
             # the Community copy says "this copy carries no Invardia update client" and goes on
@@ -426,6 +437,15 @@ Describe 'no free file loads a Pro file' {
         $guarded += 'tests\pester\SIv3-CommunityEdition.Tests.ps1|release\'
         foreach ($e in 'asset-cmdb', 'SI-Connector.ps1', 'Import-SICmdbCsv.ps1') { $guarded += "setup\Import-SIProSettings.ps1|$e" }
         foreach ($e in 'asset-cmdb', 'SI-CmdbSqlSync.ps1') { $guarded += "setup\Initialize-SIDataSql.ps1|$e" }
+        # ---- framework PRO-COMMUNITY-SAME (owner 2026-11-11, #1207): the update's missing-jobs repair ships in both editions; its
+        # catalog NAMES the paid engines' jobs and code files as Test-Path conditions (labels, never loaded). The mail job ships too:
+        # it runs the paid department / governance / task mails and the ServiceNow checks only after Test-Path finds them (and the
+        # licence allows them) -- a Community copy has neither file.
+        foreach ($e in 'asset-cmdb', 'Invoke-SIVulnLoop.ps1', 'Invoke-SICmdb.ps1') { $guarded += "setup\_shared\SI-MissingJobs.ps1|$e" }
+        # ...and the shared install file's engine job list (Get-SIInstallProEngines, both editions) NAMES the paid jobs (asset-cmdb,
+        # asset-cmdb-sql) -- job names, never a load; a package without a paid engine's code ends that job with one line
+        $guarded += 'setup\_shared\SI-GuidedInstallData.ps1|asset-cmdb'
+        foreach ($e in 'Invoke-SIDepartmentReport.ps1', 'Invoke-SIGovernanceMail.ps1', 'Invoke-SITaskDigest.ps1', 'SI-Connector.ps1', 'SI-SnowVerify.ps1') { $guarded += "engine\asset-cmdb\Invoke-SICloseLoopMail.ps1|$e" }
         $offenders = New-Object System.Collections.Generic.List[string]
         # -Include is silently ignored next to -LiteralPath on PS 5.1, so filter on the extension.
         Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File | Where-Object { $_.Extension -in '.ps1', '.psm1' } | ForEach-Object {

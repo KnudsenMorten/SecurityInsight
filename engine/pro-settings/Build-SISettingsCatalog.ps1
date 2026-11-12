@@ -38,15 +38,37 @@ if (-not $SIRoot) { $SIRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRo
 . (Join-Path $PSScriptRoot 'SI-Settings.ps1')
 $re = '^\s*(#\s*)?\$global:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$'
 $secretRe = '(Secret|Password|ApiKey|ClientSecret|Token|ConnectionString)$'
-# Pro components (the ServiceNow connector, the vulnerability close-loop, correlation, asset properties). Their own
-# engines are not in the public payload; a setting that only they read is Pro.
-# SI_Pro_* = settings of the Pro platform itself (the SQL data backend, ...).
-# SI_Exempted_* = how exempted findings are shown and counted (#264): exemptions exist only in Pro.
-# SI_InvardiaUpdate_* = Pro updates from Invardia (Community updates from GitHub and has no such switch).
-# SI_Bootstrap_WebAppCpu / _WebAppMemory / _SqlServiceObjective = the web app's and the Pro database's size (Pro only: Community has neither).
-# SI_UpdateRing = the install's update ring, recorded in the Pro database (#308; Community keeps its ring in config\update.custom.json).
-# SI_KeyFigures_* = the windows of the key figures (#859): the Executive overview / report / management mail are Pro (sidata).
-$proRe = '^(SI_(Pro_|KeyFigures_|EnableServiceNow|ServiceNow|SN_|Cmdb_|Vuln|Correlation|AssetProperties|License|Exempted_|InvardiaUpdate_|UpdateRing$|Update_RenameDisplayNames$|Bootstrap_WebAppCpu$|Bootstrap_WebAppMemory$|Bootstrap_SqlServiceObjective$)|Mail_CloseLoop_)'
+# THE EDITION MARK FOLLOWS THE LICENCE, NEVER THE NAME (framework PRO-COMMUNITY-SAME, owner 2026-11-11: Pro and Community
+# are built and run the same; only the licensed FEATURES differ). A setting is edition 'pro' ONLY when it belongs to a
+# licensed feature -- it is listed here BY NAME under that feature, and the catalog carries the feature as
+# 'licensedFeature'. Everything else -- how SI runs: job and database sizes, retention, guards, data quality, the
+# pipeline, the update ring, the key figures, correlation, asset properties, exemptions' counting -- is edition
+# 'community': shown, editable and honoured in both editions. Until 2026-11-11 a NAME pattern (SI_Pro_*, SI_KeyFigures_*,
+# ...) marked 91 settings Pro, most of which shape every install. A new setting is community unless it is added here on
+# purpose (the same rule as engine\SI-FeatureCatalog.ps1: unknown = free). The feature keys: the three paid features of
+# engine\SI-FeatureCatalog.ps1 (the close-loop mails are gated by 'servicenow-connector'), plus 'licence' (the licence
+# request itself) and 'template-channel' (the Invardia template channel). Held by SIv3-SettingsLicensedOnly.Tests.ps1.
+$licensedSettings = [ordered]@{
+    # the ServiceNow CMDB connector, the vulnerability close-loop it drives, its guards and the daily close-loop mail
+    'servicenow-connector' = @('SI_EnableServiceNowCmdb', 'SI_Cmdb_AllowCreate', 'SI_Cmdb_Mode', 'SI_Cmdb_RowLimit', 'SI_Cmdb_Run',
+                               'SI_VulnSync_Run', 'SI_VulnSync_CollapseFloor', 'SI_VulnSync_MaxCloseAbsolute', 'SI_VulnSync_MaxClosePercent',
+                               'Mail_CloseLoop_Daily_SendMail', 'Mail_CloseLoop_Daily_SendTimeUtc', 'Mail_CloseLoop_Daily_To')
+    # the CMDB in SQL and its connector
+    'cmdb-connectors'      = @('SI_Pro_CmdbSql_Enabled', 'SI_Pro_CmdbSql_Kinds', 'SI_Pro_CmdbSql_RetireAfterRuns', 'SI_Pro_CmdbSql_DryRun')
+    # governance: exemptions, departments (which department owns an asset -- set on the Departments page), the department
+    # and governance mails, the technical review, the task digest, remediation planning
+    'governance'           = @('SI_Pro_DepartmentReport_DayOfMonth', 'SI_Pro_DepartmentReport_SendMail', 'SI_Pro_GovernanceNotify_MinSeverity',
+                               'SI_Pro_GovernanceNotify_Mode', 'SI_Pro_GovernanceNotify_SendMail', 'SI_Pro_TaskDigest_DueSoonDays', 'SI_Pro_TaskDigest_SendMail',
+                               'SI_Pro_TechnicalReview_DayOfMonth', 'SI_Pro_TechnicalReview_SendMail', 'SI_Pro_Responsibility_OverdueDays',
+                               'SI_Pro_Responsibility_Sources', 'SI_Pro_Responsibility_TagNames', 'SI_Pro_Responsibility_DefaultDepartment',
+                               'SI_Pro_Remediation_AutoSchedule', 'SI_Exempted_InDepartmentReports', 'SI_Exempted_CountInManagement')
+    # the licence request
+    'licence'              = @('SI_LicenseRequest_Auto', 'SI_LicenseRequest_BaseUrl', 'SI_LicenseRequest_ContactEmail', 'SI_LicenseRequest_Edition')
+    # the Invardia template channel
+    'template-channel'     = @('SI_InvardiaUpdate_HoldMicrosoftContent')
+}
+$licensedFeatureOf = @{}
+foreach ($k in $licensedSettings.Keys) { foreach ($n in $licensedSettings[$k]) { $licensedFeatureOf[$n] = $k } }
 # Ranges the shipped files cannot say: written into the catalog, enforced by Test-SISettingValue (and the web app's port).
 $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays = @{ min = 1 }
             # #859: the key figures' windows (Get-SIKeyFigureWindowSettings takes 1..3650; anything else = the default)
@@ -73,6 +95,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             SI_AssetProperties_RetentionDays = @{ min = 1 }; SI_AssetProperties_ChangeGuardPercent = @{ min = 1; max = 100 }
             # #1200: the most minutes one Risk Analysis report spends on its retries (Get-RARecoveryBudgetMinutes: 0 = no limit)
             SI_RA_RecoveryBudgetMinutes = @{ min = 0 }
+            # #1209 the privileged-logon tier source (Get-SIPrivilegedLogonSettings takes a whole number >= 1; anything else = the default)
+            SI_Endpoint_PrivilegedLogon_WindowDays = @{ min = 1 }; SI_Endpoint_PrivilegedLogon_MinDays = @{ min = 1 }
             # #528: how long the privilege tier catalog is kept while its inputs are unchanged (0 = rebuild every run)
             SI_PrivilegeTierClassifier_RefreshDays = @{ min = 0; max = 365 }
             # the users' sign-in methods read in the background (Get-SISignInMethodsChoice takes these ranges; anything else = the default)
@@ -275,7 +299,7 @@ $settings = foreach ($g in @($all | Where-Object { $retired -notcontains $_.Name
         group        = $(if (Get-HelpValue $name 'group') { [string](Get-HelpValue $name 'group') } else { Get-GroupName $group $engines })
         type         = $type
         engines      = @($engines)
-        edition      = $(if ($name -match $proRe) { 'pro' } else { 'community' })
+        edition      = $(if ($licensedFeatureOf.ContainsKey($name)) { 'pro' } else { 'community' })
         secret       = [bool]$secret
         advanced     = [bool]$advanced
         default      = $(if ($secret) { $null } else { $default })
@@ -285,6 +309,7 @@ $settings = foreach ($g in @($all | Where-Object { $retired -notcontains $_.Name
         effect       = [string](Get-HelpValue $name 'effect')
         whenToChange = [string](Get-HelpValue $name 'whenToChange')
     }
+    if ($licensedFeatureOf.ContainsKey($name)) { $entry['licensedFeature'] = $licensedFeatureOf[$name] }
     $hUnit = Get-HelpValue $name 'unit'
     if ($hUnit) { $entry['unit'] = [string]$hUnit }
     # A fixed set of choices (#288): type 'enum' + the allowed values -- the Settings page shows a dropdown, and
@@ -310,6 +335,10 @@ $settings = foreach ($g in @($all | Where-Object { $retired -notcontains $_.Name
     if ($setupOnly -contains $name) { $entry['setupOnly'] = $true }
     $entry
 }
+
+# a licensed setting the shipped files no longer have protects nothing -- say so, so the list is kept true
+$staleLicensed = @($licensedFeatureOf.Keys | Where-Object { $n = $_; -not @($settings | Where-Object { $_.name -eq $n }).Count } | Sort-Object)
+if ($staleLicensed.Count) { Write-Warning ("licensed setting(s) not in the catalog (remove them from `$licensedSettings): {0}" -f ($staleLicensed -join ', ')) }
 
 # "More info" per setting (framework SETTING-INFO-1): composed from the help words + config\settings.info.locked.json.
 . (Join-Path $PSScriptRoot 'SI-SettingInfo.ps1')

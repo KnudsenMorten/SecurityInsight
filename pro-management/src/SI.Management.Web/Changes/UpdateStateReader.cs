@@ -39,7 +39,7 @@ public sealed record UpdateState(string Source, DateTime? LastCheckUtc, UpdateKi
     {
         "invardia" => "Invardia (signed manifests)",
         // SI #750 (b): a Community edition install's in-cloud updater (container/updater/_shared/SI-UpdaterCommunity.ps1)
-        "community" => "The signed Community channel (GitHub releases)",
+        "community" => "Invardia's signed release of this install's update ring (the same updater as every install)",
         "feed" => "SecurityInsight's own update feed (internal test path)",
         _ => "not recorded",
     };

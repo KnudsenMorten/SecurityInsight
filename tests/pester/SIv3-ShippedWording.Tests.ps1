@@ -19,8 +19,8 @@
     "Shipped" = every tracked file of SecurityInsight the public (Community) copy gets: solution.publish.json excludePaths
     and the shared publish stage's strips taken out (top-level logs, OUTPUT, staging, internal, demo,
     solution.publish.json, CLAUDE.md; the folders internal, logs, staging, demo, output at any depth; REQUIREMENTS.md,
-    TESTS.md, CLAUDE.md at any depth; *.internal-vm.* / *.internal-azure.*). The shared, byte-equal copies (vendor/ =
-    the framework's sign-in front, engine/_shared/InvardiaUpdate.verify.ps1 = Invardia's verifier) are not
+    TESTS.md, CLAUDE.md at any depth; *.internal-vm.* / *.internal-azure.*). The shared, byte-equal copies (pro-management/signin-front/ =
+    the framework's sign-in front at the pin, engine/_shared/InvardiaUpdate.verify.ps1 = Invardia's verifier) are not
     SecurityInsight's own text: they are changed at their source and are left out here. This file holds the rules
     themselves and is left out too.
     A new hit fails. There is no allow-list today; an entry would be file + exact text + the reason, one by one.
@@ -63,7 +63,7 @@ BeforeAll {
                    Where-Object { $_ -notmatch '(^|/)(bin|obj|node_modules|\.vs|TestResults|\.git)/' })
     }
     $topStrip = @('logs', 'output', 'staging', 'internal', 'demo', 'solution.publish.json', 'claude.md')
-    $shared = '^(vendor/|engine/_shared/InvardiaUpdate\.verify\.ps1$)'
+    $shared = '^(pro-management/signin-front/|engine/_shared/InvardiaUpdate\.verify\.ps1$)'
     $binary = '\.(png|jpg|jpeg|gif|ico|zip|dll|exe|pdb|woff2?|ttf|eot|pfx|cer|xlsx|docx|pptx|pdf|snk|nupkg|db|mdf|ldf|bak)$'
     $script:Shipped = @(foreach ($rel in $files) {
         $parts = $rel -split '/'

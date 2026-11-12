@@ -29,10 +29,14 @@
          thin layer on its cached base), the jobs swap by one ARM PATCH each, all at once, verified;
       5. a newer template pack: verified, gated (a pack that changes templates in force is held for an Admin).
 
-    THE COMMUNITY EDITION (SI #750 (b), owner 2026-10-18: "the IN-CLOUD UPDATER, as Pro, on the community channel"): an image
-    WITHOUT the Invardia client takes the signed Community channel instead (_shared/SI-UpdaterCommunity.ps1): ring 2 or 3,
-    the same signature / sequence / size + SHA-256 checks, then the SAME roll (run gate, database step, engine roll, web app,
-    the updater last). No licence request, no install key, no report to Invardia (Get-SIUpdaterEditionPath decides).
+    ONE CLIENT FOR BOTH EDITIONS (framework PRO-COMMUNITY-SAME, owner 2026-11-11: "it must be same pro community"): every
+    install -- Pro and Community -- runs the same steps: the licence request, the install key slot and claim, the ring (0-3),
+    the run gate, the database step, the engine roll, the web app, the updater last, the state, the failure reports to
+    Invardia (anonymous without an install key) and the "update now" start. ONLY the manifest address and its credential
+    differ (_shared/SI-UpdaterInvardia.ps1 Resolve-SIUpdaterUpdateRoute): an install with a licence asks Invardia's install
+    route with its install key; a Community install without one asks Invardia's anonymous Community route for its ring
+    (_shared/SI-UpdaterCommunity.ps1) and takes the public release zip. Every install takes a new version at its NIGHTLY
+    run; faster only by the owner's "Update now".
 
     SI's OWN UPDATE FEED IS RETIRED (2026-10-06): no storage container, no channel.json, no feed link. An updater still
     configured for it (SI_UPDATER_SOURCE = feed, or SI_UPDATER_SOURCE_URL without SI_UPDATER_SOURCE = invardia) changes
@@ -70,13 +74,16 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRunGate.ps1')
 # #750 (b): the roll steps both editions share (pre-roll, post-roll, self-retry, the state row, the running release)
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRollSteps.ps1')
-# Pro: the web app + MCP server roll (absent from the Community edition)
+# IMAGE-PRUNE (owner 2026-11-12): after a healthy update, the install's own registry keeps only this release + the one before
+. (Join-Path $PSScriptRoot '_shared/SI-UpdaterImagePrune.ps1')
+# the web app + MCP server roll (both editions have the web app)
 $siWebRoll = Join-Path $PSScriptRoot '_shared/SI-UpdaterWebApp.ps1'
 if (Test-Path -LiteralPath $siWebRoll) { . $siWebRoll }
-# Pro: the database step of an update -- the release's schema and grants BEFORE anything is rolled (#352, UPDATE-1.6 (j))
+# the database step of an update -- the release's schema and grants BEFORE anything is rolled (#352, UPDATE-1.6 (j)); both
+# editions have the database
 $siDbStep = Join-Path $PSScriptRoot '_shared/SI-UpdaterDatabase.ps1'
 if (Test-Path -LiteralPath $siDbStep) { . $siDbStep }
-# Pro: the secret hand-over -- the web app never writes a secret; this run stores what it handed over (SI-UpdaterSecretHandover.ps1)
+# the secret hand-over -- the web app never writes a secret; this run stores what it handed over (SI-UpdaterSecretHandover.ps1)
 $siHandover = Join-Path $PSScriptRoot '_shared/SI-UpdaterSecretHandover.ps1'
 if (Test-Path -LiteralPath $siHandover) { . $siHandover }
 # The two switches the customer has (automatic licence request, Pro updates from Invardia -- both ON by default) and the
@@ -143,8 +150,8 @@ function Invoke-SIUpdaterInstallNames {
         SI_UPDATER_JOB_NAME, else this execution's own job name CONTAINER_APP_JOB_NAME for the updater), else what is already
         recorded, else today's name; stored in cfg.InstallState 'InstallNames' only when it changes, and kept for this process
         in $global:SI_InstallNames (every later lookup of the run, and the release's own update scripts, read it). Existing
-        installs record TODAY's names: nothing is renamed, every lookup answers what it answered before. Without a Pro
-        database (Community) nothing is stored. Never throws, never fails the run. Returns the record (or $null).
+        installs record TODAY's names: nothing is renamed, every lookup answers what it answered before. Without a
+        database opened this run nothing is stored. Never throws, never fails the run. Returns the record (or $null).
     #>
     param([hashtable]$Env = @{}, $Store)
     try {
@@ -744,7 +751,7 @@ function ConvertTo-SIUpdaterPipelineScheduleValue {
 
 function Save-SIUpdaterInstallStateValue {
     <# One cfg.InstallState row (-Name, -Value) written by the updater. Never throws: $true written, $false not. #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState', 'SignInAppOwner', 'WebAppName')][string]$Name, [AllowEmptyString()][string]$Value)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState', 'ImagePrune', 'SignInAppOwner', 'WebAppName')][string]$Name, [AllowEmptyString()][string]$Value)
     if (-not "$Value".Trim()) { return $false }
     $sql = @'
 IF OBJECT_ID('cfg.InstallState') IS NOT NULL
@@ -889,9 +896,9 @@ function Invoke-SIUpdaterRoll {
           # other image is queued in parallel with the engine roll
           [string]$Version = '', [string]$Commit = '', [string]$WebApp = 'ca-si-management', [string]$McpApp = 'ca-si-mcp',
           [string]$UpdaterJob = 'caj-si-updater', [switch]$SelfOff)
-    # Pro: THE DATABASE FIRST (#352, framework UPDATE-1.6 (j)) -- the release's own schema (additive, gated, one transaction
-    # per file) and the grants its code needs, BEFORE the template gate, the build or any roll. Never new code on an old
-    # schema: a failure here stops the update with nothing rolled. No Pro database (Community / VM) = skipped.
+    # THE DATABASE FIRST (#352, framework UPDATE-1.6 (j)), both editions -- the release's own schema (additive, gated, one
+    # transaction per file) and the grants its code needs, BEFORE the template gate, the build or any roll. Never new code on
+    # an old schema: a failure here stops the update with nothing rolled. No database opened this run = skipped.
     # framework SEC-08: the database setup job caj-si-dbinit FIRST (the database work that needs the SQL admin group, as the
     # job's own identity): kept present on every update, run once its membership is proven -- a run that fails HOLDS the
     # update (nothing rolled, the installed version keeps running); anything else is a warning and today's path goes on.
@@ -919,7 +926,7 @@ function Invoke-SIUpdaterRoll {
     $global:SI_UpdaterStep = 'templates'
     # #1112: the lock says at once that the database step is over (the web app's notice ends with it)
     if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'templates' -Force }
-    # Pro: the template gate BEFORE anything changes (a Community install has no Pro database and no templates).
+    # The template gate BEFORE anything changes (both editions: the database holds the templates in force).
     # An install whose ring takes template packs from a template channel keeps the templates that channel released:
     # the code roll does not republish the release's own templates over them.
     $tplGate = $null; $tplPending = $null
@@ -1066,25 +1073,10 @@ function Get-SIUpdaterSourceKind {
     param([AllowEmptyString()][string]$Source, [AllowEmptyString()][string]$SourceUrl)
     $s = "$Source".Trim().ToLowerInvariant()
     if (-not $s) { if ("$SourceUrl".Trim()) { return 'feed' } else { return 'invardia' } }
-    # 'community' (#750 (b)): what setup writes on a Community edition's updater -- the edition decides the path (below)
-    if ($s -notin @('feed', 'invardia', 'community')) { throw "SI_UPDATER_SOURCE must be 'invardia' or 'feed' (or 'community' in the Community edition), not '$Source'." }
+    # 'community': what setup writes on a Community install's updater -- the SAME client runs; it is one of the facts the
+    # client reads to pick the manifest address (Resolve-SIUpdaterUpdateRoute), never a second path
+    if ($s -notin @('feed', 'invardia', 'community')) { throw "SI_UPDATER_SOURCE must be 'invardia' or 'feed' (or 'community'), not '$Source'." }
     $s
-}
-
-function Get-SIUpdaterEditionPath {
-    <#
-        PURE (Test-Path only). Which update path this image takes (SI #750 (b)):
-          'invardia'  -- the image carries the Invardia update client (-HookFolder/SI-UpdaterInvardia.ps1): SecurityInsight Pro.
-                         A Pro image ALWAYS takes it -- the public channel would replace Pro with the Community edition.
-          'community' -- no Invardia client, but the Community hook (-HookFolder/SI-UpdaterCommunity.ps1) and the signed
-                         Community client in the code the image carries (-SIRoot/engine/_shared/SI-CommunityUpdate.ps1).
-          ''          -- neither (an image built before either): the run says so and ends.
-    #>
-    param([Parameter(Mandatory)][string]$HookFolder, [AllowEmptyString()][string]$SIRoot)
-    if (Test-Path -LiteralPath (Join-Path $HookFolder 'SI-UpdaterInvardia.ps1')) { return 'invardia' }
-    if ((Test-Path -LiteralPath (Join-Path $HookFolder 'SI-UpdaterCommunity.ps1')) -and "$SIRoot".Trim() -and
-        (Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-CommunityUpdate.ps1')))) { return 'community' }
-    ''
 }
 
 function Get-SIUpdaterAutoSwitches {
@@ -1188,18 +1180,13 @@ function Invoke-SIUpdaterCore {
     $need = @('SI_UPDATER_TENANT_ID', 'SI_UPDATER_CLIENT_ID', 'SI_UPDATER_SUBSCRIPTION_ID', 'SI_UPDATER_RESOURCE_GROUP', 'SI_UPDATER_ACR', 'SI_UPDATER_KEY_VAULT')
     if ($auth -eq 'Certificate') { $need += 'SI_UPDATER_CERT_PFX_B64' }
     foreach ($req in $need) { if (-not (& $get $req)) { throw "$req is not set on the updater job." } }
-    # WHICH EDITION'S UPDATE PATH (SI #750 (b)): Pro updates come from Invardia (#240) -- the hook is Pro
-    # (SI-UpdaterInvardia.ps1), and a Pro image ALWAYS takes it. An image without it (the Community edition) updates from the
-    # signed Community channel (SI-UpdaterCommunity.ps1 + /si/engine/_shared/SI-CommunityUpdate.ps1), in the cloud, as Pro.
-    $edition = Get-SIUpdaterEditionPath -HookFolder (Join-Path $PSScriptRoot '_shared') -SIRoot $siAutoRoot
-    $global:SI_UpdaterEdition = $edition
-    if ($edition -eq 'invardia') {
-        . (Join-Path $PSScriptRoot '_shared/SI-UpdaterInvardia.ps1')
-        Write-UpdLog 'update source: Invardia (signed manifests)'
-    } elseif ($edition -eq 'community') {
-        . (Join-Path $PSScriptRoot '_shared/SI-UpdaterCommunity.ps1')
-        Write-UpdLog 'update source: the signed Community channel (SecurityInsight Community edition)'
-    } else { throw 'this updater image carries no update client (neither the Invardia client of SecurityInsight Pro nor the signed Community client) -- re-run setup/Install-SIUpdaterJob.ps1 to rebuild it.' }
+    # THE ONE UPDATE CLIENT (framework PRO-COMMUNITY-SAME): Pro and Community installs both run SI-UpdaterInvardia.ps1; the
+    # manifest address it asks (the install route with the install key, or the anonymous Community route) is decided inside
+    # it, by the licence and the install's recorded edition -- never by which files the image carries.
+    $hook = Join-Path $PSScriptRoot '_shared/SI-UpdaterInvardia.ps1'
+    if (-not (Test-Path -LiteralPath $hook)) { throw 'this updater image carries no update client -- re-run setup/Install-SIUpdaterJob.ps1 to rebuild it.' }
+    . $hook
+    Write-UpdLog 'update client: Invardia (signed manifests)'
 
     $global:SI_UpdaterStep = 'signin'
     Write-UpdLog ('signing in over REST ({0})' -f $(if ($auth -eq 'ManagedIdentity') { 'managed identity' } else { 'service principal, certificate' }))
@@ -1207,7 +1194,7 @@ function Invoke-SIUpdaterCore {
     Write-UpdLog ("signed in as {0}" -f $who)
     # the nightly tick: on its zone's ticks only the start that is 18:30 (23:00 on a job not moved yet) in the region's zone goes on (SI-NightlySchedule.ps1)
     if (-not (Test-SIUpdaterRunNow -Env $Env -SubscriptionId $sub -ResourceGroup $rg)) { return 0 }
-    # The Pro settings database (Pro only), opened once: the customer's switches, the licence state mirror, the gates -- and
+    # The SecurityInsight database (both editions), opened once: the customer's switches, the licence state mirror, the gates -- and
     # (NO FRESH BEAT = DEAD) the lock rows that tell whether an earlier update still works. Opened before the overlap check.
     $proSql = & $get 'SI_UPDATER_PRO_SQL_SERVER'; $proDb = & $get 'SI_UPDATER_PRO_SQL_DATABASE'
     $proStore = $null; $proStoreError = ''
@@ -1356,26 +1343,22 @@ function Invoke-SIUpdaterCore {
     # #1151 (6) SEC-03: the install's Key Vault to purge protection ON (both editions; read, PATCH only when off, read back with
     # retries; one-way, said). Never fails or holds the update.
     $null = Invoke-SIUpdaterKeyVaultPurgeStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg
-    if ($edition -eq 'community') {
-        # THE COMMUNITY EDITION (#750 (b)): no licence request to Invardia (a Community install holds no licence and must
-        # never ask for one), no install key, no Invardia switch -- the signed Community channel only.
-        Write-UpdLog 'licence request: not in the Community edition -- Invardia is not asked'
-        $global:SI_UpdaterStep = 'endpoints'
-        $null = Invoke-SIUpdaterRecordEndpoints -Store $proStore -SubscriptionId $sub -ResourceGroup $rg `
-                    -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env) -McpApp (Get-SIUpdaterInstallName -Role mcp -Env $Env)
-        $global:SI_UpdaterStep = 'updater'
-        if ($proSql -and $proDb -and -not $proStore) { throw "the SecurityInsight database could not be opened: $proStoreError" }
-        $rcCommunity = (Invoke-SIUpdaterFromCommunity -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
-                    -Deployed (Get-SIUpdaterDeployed -ResourceGroup $rg -AcrName $acrName -SubscriptionId $sub -Env $Env) -AcceptFingerprint (& $get 'SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT'))
-        Invoke-SIUpdaterWebAppStepsAfter -Rc $rcCommunity -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
-        return $rcCommunity
-    }
+    # the same steps for every install from here (PRO-COMMUNITY-SAME): the licence ask, the endpoints, the update
     $switches = Get-SIUpdaterAutoSwitches -Env $Env -Store $proStore -StoreFailed:([bool]$proStoreError) -StoreError $proStoreError
     # Licence requests (#239): ask Invardia for this install's licence, install the approved file. Never fails the run.
     # Off when the customer switched SI_LicenseRequest_Auto off (it is ON by default).
     $global:SI_UpdaterStep = 'licence'
+    # framework PRO-COMMUNITY-SAME (opt-in, owner 2026-11-11): the licence request carries the tenant -- a Community install that
+    # did not say yes to "Connect this install to Invardia" (SI_Invardia_Connect) never asks; a Pro install asks, as before
+    $connGet = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
+    $connRoute = (Resolve-SIUpdaterUpdateRoute -HasLicence $false -Edition (Get-SIUpdaterInstallEdition -SubscriptionId $sub -ResourceGroup $rg) -Source (& $connGet 'SI_UPDATER_SOURCE')).Route
+    $licenceAsk = Test-SIUpdaterInvardiaConnected -Route $connRoute -Get $connGet
+    $global:SI_UpdaterConnected = $licenceAsk
+    if (-not $licenceAsk) { Write-UpdLog ('licence request: ' + (Get-SIInvardiaConnectSkipText -What 'no licence request')); $lr = $null }
+    else {
     $lr = Invoke-SIUpdaterLicenceRequest -Env $Env -SubscriptionId $sub -Log { param($m) Write-UpdLog $m } -Store $proStore `
                 -Switch $(if ($switches) { $switches['SI_LicenseRequest_Auto'] } else { $null })
+    }
     # #427: a refused licence request is a failure Invardia hears about (the run itself goes on, as before)
     if (Get-Command -Name Get-SIUpdaterLicenceFailure -ErrorAction SilentlyContinue) { $lf = Get-SIUpdaterLicenceFailure -Result $lr; if ($lf) { Add-SIUpdaterFailureIf 'licence' $lf } }
     # framework §8.4: the web app's and MCP server's addresses, for the identified heartbeat's links (never fails the run)
@@ -1401,8 +1384,8 @@ function Invoke-SIUpdaterWebAppStepsAfter {
         The web app's two steps (_shared/SI-UpdaterWebApp.ps1, Invoke-SIUpdaterWebAppSteps): the sign-in app owned by this
         install's updater, then the web app under its standard name ca-si-management -- AFTER the update, and only when it
         did not fail (-Rc 0: a failed update never moves the web app; the next update checks again). SI_UPDATER_WEB_APP_MOVE=off
-        on the job switches off only the name move; the owner step runs on every update. An image without them (the
-        Community edition carries no web app roll file) = nothing.
+        on the job switches off only the name move; the owner step runs on every update. An image without them (an
+        older image without the web app roll file) = nothing.
         Never throws, never changes the exit code, writes nothing to the pipeline.
     #>
     param($Rc, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup)
@@ -1427,9 +1410,6 @@ function Invoke-SIUpdaterFailureReport {
     param([int]$ExitCode, $StartedAt, [hashtable]$Env = @{}, [scriptblock]$ReadKey, [scriptblock]$Send)
     try {
         if (-not (Get-Command -Name Send-SIUpdaterFailureReports -ErrorAction SilentlyContinue)) { return @() }
-        # the Community edition's updater (#750 (b)) reports nothing to Invardia: its failures are in the job's log and on the
-        # Settings page (cfg.InstallState 'UpdateState')
-        if ("$global:SI_UpdaterEdition" -eq 'community') { return @() }
         if (-not @(Get-SIUpdaterFailures).Count -and $ExitCode -eq 0) { return @() }
         $get = { param($k) $v = if ($Env.ContainsKey($k)) { $Env[$k] } else { [Environment]::GetEnvironmentVariable($k) }; if ([string]::IsNullOrWhiteSpace($v)) { '' } else { "$v".Trim() } }
         $settings = $null

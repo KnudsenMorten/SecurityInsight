@@ -244,6 +244,28 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Disable the EndpointAzureCorrelation cache (only after diagnosing a cache bug).
 # $global:SI_DisableEndpointAzureCorrelation = $true
 
+# The two device-user tier sources (a device takes the tier of the most privileged
+# account (Tier 0-2) that logged on to it in the window; otherwise its user's tier):
+#   on = a tier source; shadow = computed and recorded on the device, never its tier; off.
+# $global:SI_Endpoint_MostFrequentUserTier_Mode = 'on'      # the most frequent user (default on)
+# $global:SI_Endpoint_PrivilegedLogon_Mode      = 'on'      # any Tier 0-2 logon (default on)
+# How many days of device logons count (default 30 = what advanced hunting keeps).
+# $global:SI_Endpoint_PrivilegedLogon_WindowDays = 30
+# The logon types that count (default: Interactive, RemoteInteractive, CachedInteractive,
+# CachedRemoteInteractive, Unlock, CachedUnlock -- the ones that leave credentials on the device).
+# $global:SI_Endpoint_PrivilegedLogon_LogonTypes = 'Interactive,RemoteInteractive,CachedInteractive,CachedRemoteInteractive,Unlock,CachedUnlock'
+# The support filter (default off: every Tier 0-2 logon counts). dynamic = a Tier 1/2 account
+# that logs on to many devices once each (helpdesk pattern, measured per tenant) never raises.
+# $global:SI_Endpoint_PrivilegedLogon_SupportFilter = 'off'
+# A Tier 1/2 logon counts only on a device used on this many distinct days (default empty = no minimum).
+# $global:SI_Endpoint_PrivilegedLogon_MinDays = 2
+# With a filter on, the device's own frequent user always counts (default $true).
+# $global:SI_Endpoint_PrivilegedLogon_PrimaryUserCounts = $true
+# Members of these groups (names or ids, comma-separated) never count (default empty).
+# $global:SI_Endpoint_PrivilegedLogon_ExcludeGroups = 'Helpdesk Operators'
+# With a filter on, a Tier 0 logon still counts on one logon (default $true).
+# $global:SI_Endpoint_PrivilegedLogon_Tier0Once = $true
+
 
 # ============================================================================
 # 5.  ENGINE: IDENTITY  --  user + service-principal profiling (Entra + EG)
@@ -2352,6 +2374,33 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     of turning the check off.
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_DatasyncCollectionRefused_Mail/
 #
+# Data-quality mail  [SI_Pro_DataQuality_Mail_Enabled]
+#   What it is for:   One mail a day when a key number of the latest pipeline run is far off its usual range -- for
+#                     example far fewer assets, a report with no rows, or risk factors suddenly missing.
+#   Default:          On
+#   If you change it: Off sends no data-quality mail: the warnings are still shown on Operations > Data quality and in
+#                     Run health. Nothing is ever blocked by them either way.
+#   When to change:   Leave it on. Turn it off only if another system already watches these numbers for you.
+#   Risk:             Off: nobody is mailed when a key number of a run is far off its usual range; the warnings are
+#                     still on the Data quality panel and in Run health. Nothing is ever held or stopped by them.
+#                     Reversible at once.
+#   Recommended:      Keep the default. Change it when: Leave it on. Turn it off only if another system already
+#                     watches these numbers for you.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_Mail_Enabled/
+#
+# Data-quality mail recipients  [SI_Pro_DataQuality_Mail_To]
+#   What it is for:   The addresses that receive the daily data-quality mail.
+#   Default:          The safety-check mail recipients (SI_GuardMail_To); without those the report recipients
+#                     (MailTo), else the SecurityInsight Pro SuperAdmins
+#   If you change it: These addresses get the data-quality mail instead of the default recipients.
+#   When to change:   Set it to the people who change SecurityInsight's settings, so a setting that caused a drop is
+#                     corrected quickly.
+#   Risk:             A wrong address means the daily data-quality mail reaches the wrong people or nobody; nothing is
+#                     held or stopped. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Set it to the people who change SecurityInsight's settings, so
+#                     a setting that caused a drop is corrected quickly.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_Mail_To/
+#
 # Database change that could remove data  [SI_Guard_SchemaGateRefused_Enabled]
 #   What it is for:   The safety check that protects your SecurityInsight database: A database change was refused
 #                     because it is not approved for this install, or because it could remove data.
@@ -3139,6 +3188,174 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Raise it when vulnerabilities are left out on purpose
 #                     (excluded vulnerabilities, a minimum age) and the check counts them.
 #   More info:        https://invardia.com/docs/si/settings/SI_DataHealth_Margin_Vulnerabilities/
+#
+# Data quality: asset drop  [SI_Pro_DataQuality_AssetDropPercent]  (advanced, %)
+#   What it is for:   When the assets of a source (Defender for Endpoint, Entra ID, Azure, public IPs) or the active
+#                     CIs fall this many percent or more below the median of the last 3 runs, it is shown as a
+#                     data-quality warning.
+#   Default:          30 %
+#   If you change it: Lower warns about smaller drops; higher only about large ones. A warning never blocks anything.
+#   When to change:   Raise it when the number of assets moves a lot from day to day on purpose.
+#   Risk:             Only changes when a data-quality WARNING is shown and mailed; nothing is ever held or stopped by
+#                     it. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Raise it when the number of assets moves a lot from day to day
+#                     on purpose.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_AssetDropPercent/
+#
+# Data quality: column fill drop  [SI_Pro_DataQuality_FillDropPoints]  (advanced, points)
+#   What it is for:   When the share of rows that carry a key value -- the probability and consequence risk factors,
+#                     the tier, the SQL tag, and the CIs' asset type and owner -- falls this many percentage points or
+#                     more below the median of the last 3 runs, it is shown as a data-quality warning.
+#   Default:          30 points
+#   If you change it: Lower warns about smaller drops in fill; higher only about large ones. A warning never blocks
+#                     anything.
+#   When to change:   Lower it if you want to hear early about owners or factors going missing.
+#   Risk:             Only changes when a data-quality WARNING is shown and mailed; nothing is ever held or stopped by
+#                     it. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Lower it if you want to hear early about owners or factors
+#                     going missing.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_FillDropPoints/
+#
+# Data quality: report drop  [SI_Pro_DataQuality_ReportDropPercent]  (advanced, %)
+#   What it is for:   When a Risk Analysis report has 0 rows, or falls this many percent or more below the median of
+#                     the last 3 runs, it is shown as a data-quality warning -- the sign of a query that suddenly
+#                     returns nothing.
+#   Default:          50 %
+#   If you change it: Lower warns about smaller drops; higher only about large ones. A report at 0 rows always warns.
+#                     A warning never blocks anything.
+#   When to change:   Raise it when your reports shrink a lot on purpose (a large remediation round).
+#   Risk:             Only changes when a data-quality WARNING is shown and mailed; nothing is ever held or stopped by
+#                     it. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Raise it when your reports shrink a lot on purpose (a large
+#                     remediation round).
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_ReportDropPercent/
+#
+# Data quality: tier shift  [SI_Pro_DataQuality_TierShiftPercent]  (advanced, %)
+#   What it is for:   When the active CIs in a tier (0 to 3) change by this share of all active CIs or more compared
+#                     with the median of the last 3 runs -- or the CIs about to retire rise by it -- it is shown as a
+#                     data-quality warning. The typical cause: a customised rule that moved all servers to one tier.
+#   Default:          20 % of all active CIs
+#   If you change it: Lower warns about smaller moves between tiers; higher only about large ones. A warning never
+#                     blocks anything.
+#   When to change:   Raise it while you re-tier your estate on purpose.
+#   Risk:             Only changes when a data-quality WARNING is shown and mailed; nothing is ever held or stopped by
+#                     it. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Raise it while you re-tier your estate on purpose.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataQuality_TierShiftPercent/
+#
+# Failed step: show what was collected all the same  [SI_Pro_Pipeline_GoOnAfterFailedStep]  (advanced)
+#   What it is for:   When the correlation or Risk Analysis fails after the collections completed, the data sync and
+#                     the verification still run on what is stored, so the web app shows what was collected instead of
+#                     nothing. The run is marked as not complete and says what is missing.
+#   Default:          On
+#   If you change it: Off holds every step after a failed one until the next good run, as before: a new install then
+#                     shows nothing until its first run completes. On or off, nothing is closed, no ticket is changed
+#                     and no mail is sent from a run that is not complete.
+#   When to change:   Leave it on. Turn it off only if the web app must never show data of a run in which a step
+#                     failed.
+#   Risk:             Off: after one failed step the web app gets nothing from that run -- a new install stays empty
+#                     until its first run completes. On: the web app shows what the completed collections brought,
+#                     marked as not complete. Either way nothing is closed, no ticket is changed and no mail is sent
+#                     from a run that is not complete. Reversible at once; it applies from the next run.
+#   Recommended:      Keep the default. Change it when: Leave it on. Turn it off only if the web app must never show
+#                     data of a run in which a step failed.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_Pipeline_GoOnAfterFailedStep/
+#
+# Far fewer assets from a source: what to do  [SI_Pro_SourceDropout_AssetDropAction]  (advanced)
+#   What it is for:   What happens when a source's collection completes with far fewer assets than its last good
+#                     collection (down by the data-quality asset drop limit or more). That can be a real clean-up, for
+#                     example many Azure resources removed, or a source that answered only in part.
+#   Choices:          'confirm'; 'accept'
+#   Default:          confirm
+#   If you change it: confirm: the last good collection is kept (nothing is marked not seen), the run goes on, and the
+#                     drop is accepted by itself when the next complete collection of that source shows the same level
+#                     -- a real clean-up takes effect one run later. accept: the collection is taken as it comes and
+#                     the safety check only reports it.
+#   When to change:   Set accept when large clean-ups are normal for you and must show at once.
+#   Risk:             Accept: a source that answered only in part is taken as the truth at once -- the assets it no
+#                     longer lists are marked not seen, and their CIs retire after the usual days. Confirm (the
+#                     default) costs one run when a clean-up is real. Reversible at once; it applies from the next
+#                     collection.
+#   Recommended:      Keep the default. Change it when: Set accept when large clean-ups are normal for you and must
+#                     show at once.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_SourceDropout_AssetDropAction/
+#
+# First collection: restarts of a failed step  [SI_Pro_Pipeline_FirstRunRestarts]  (advanced, restarts)
+#   What it is for:   On a new install's first collection, a step that fails or is stopped is started again at once
+#                     and carries on from what it finished, this many times. After that the run ends with a warning
+#                     that names the step and who must act.
+#   Default:          2 restarts
+#   If you change it: Higher tries more often before the first collection ends with a warning; 0 means a failed step
+#                     is not started again. Only the steps that collect, correlate and load the web app are started
+#                     again -- never a step that writes to a CMDB, to ServiceNow or to a ticket. It has no effect
+#                     after the first complete collection.
+#   When to change:   Leave it at 2. Set 0 only when a failed step of the first collection must be looked at before
+#                     anything is started again.
+#   Risk:             0: a step that fails on a new install's first collection is not started again, so the first data
+#                     arrives a run later. Higher: a step that cannot succeed is tried that many times more before the
+#                     warning. Nothing is written to a CMDB, to ServiceNow or to a ticket by a restart, and nothing is
+#                     closed. Reversible at once; it applies from the next run and only until the first complete
+#                     collection.
+#   Recommended:      Keep the default. Change it when: Leave it at 2. Set 0 only when a failed step of the first
+#                     collection must be looked at before anything is started again.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_Pipeline_FirstRunRestarts/
+#
+# One-time repair of stale finding records  [SI_Pro_LifecycleStaleOpenRepair]  (advanced)
+#   What it is for:   A one-time clean-up of the finding history. Before a fix of October 2026, a finding that no CI
+#                     held could be closed as no longer monitored when it had only moved to a CI, and such a finding
+#                     could stay open under its old asset key. This repair puts those records right once.
+#   Choices:          'off'; 'count'; 'apply'
+#   Default:          off -- nothing is changed
+#   If you change it: off: nothing. count: nothing is changed; the data sync's log says how many finding records the
+#                     repair would change and what they would become. apply: once, after a complete collection -- a
+#                     record whose CI id is empty gets none (nothing visible changes), and a finding still open under
+#                     an old asset key that the newest collection reports open under its CI is closed as rekeyed (the
+#                     same finding, now under its CI; not a fix). Nothing is deleted; every other record goes through
+#                     the usual rule.
+#   When to change:   Only when support asks for it: first count, then apply. It is removed in a later release once it
+#                     has run everywhere.
+#   Risk:             count changes nothing. apply changes finding records once: an empty CI id is cleared, and a
+#                     finding still open under an old asset key that is open under its CI is closed as rekeyed -- its
+#                     CI's own record stays open, so no finding disappears from the open list; it only stops being
+#                     counted twice. Not reversible by the setting (turning it off later does not reopen them);
+#                     nothing is deleted.
+#   Recommended:      off; count first when support asks, then apply.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_LifecycleStaleOpenRepair/
+#
+# Show a run in which a report fell back to an earlier result  [SI_Pro_PublishPartialRun]  (advanced)
+#   What it is for:   Every page shows one run: the last run that completed in full. A run in which a report could not
+#                     be completed and fell back to its last complete result is not shown by default -- the pages keep
+#                     the last complete run, so nothing on a page is from two runs.
+#   Default:          Off
+#   If you change it: On: such a run is shown, marked "a part of this run is from an earlier result". Off: the pages
+#                     keep the last complete run until a run completes in full.
+#   When to change:   Leave it off. Turn it on only when a report keeps failing and the rest of the newest run must be
+#                     shown all the same.
+#   Risk:             On: a run in which a report fell back to its last complete result is shown, marked -- a page can
+#                     then show a part from an earlier run. Off (the default): the pages keep the last complete run
+#                     until a run completes in full, so a newer result can wait a day. Nothing is closed or sent by
+#                     it. Reversible at once; it applies from the next run.
+#   Recommended:      Keep the default. Change it when: Leave it off. Turn it on only when a report keeps failing and
+#                     the rest of the newest run must be shown all the same.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_PublishPartialRun/
+#
+# Source down: days until delivery waits  [SI_Pro_SourceDropout_HoldDeliveryDays]  (advanced, days)
+#   What it is for:   When the collection of one source (identities, Azure resources, endpoints, the public IP scan)
+#                     fails, the run goes on with that source's last good collection and says how old it is. When a
+#                     source has had no good collection for this many days or more, delivery waits: no mail is sent
+#                     and no ticket is changed until that source collects again.
+#   Default:          7 days
+#   If you change it: Lower makes delivery wait sooner; higher lets mails and ticket updates go out longer on older
+#                     data. 0 means delivery never waits for a source. The calculation always goes on, and nothing is
+#                     closed or retired because a source is down.
+#   When to change:   Raise it when a source is known to be down for longer and the mails should keep going out
+#                     meanwhile.
+#   Risk:             Higher, or 0: mails and ticket updates keep going out although one source's data is that many
+#                     days old. Lower: delivery waits sooner when a source stays down. The calculation is never held
+#                     by it, and nothing is closed or retired by it. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Raise it when a source is known to be down for longer and the
+#                     mails should keep going out meanwhile.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_SourceDropout_HoldDeliveryDays/
 #
 # Stuck on throttling after (hours)  [SI_Throttle_StuckHours]  (advanced, hours)
 #   What it is for:   How long a job may keep being throttled by Microsoft, without completing, before the one "stuck"
@@ -3980,6 +4197,38 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Off.
 #   More info:        https://invardia.com/docs/si/settings/SI_DisableEndpointAzureCorrelation/
 #
+# Device tier from its most frequent user  [SI_Endpoint_MostFrequentUserTier_Mode]  (advanced)
+#   What it is for:   Whether a device takes the tier of its most frequent user (the Exposure Graph's device users
+#                     joined to the identity tiers).
+#   Choices:          'on' (On -- sets the device tier); 'shadow' (Shadow -- recorded only); 'off' (Off)
+#   Default:          on
+#   If you change it: On: a tier source of the device. Shadow: computed and recorded on the device
+#                     (MostFrequentUserComputedTier) but never sets its tier. Off: not read.
+#   When to change:   Only to compare the device-user tier sources (shadow) or to switch this one off.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Only to compare the device-user tier sources (shadow) or to
+#                     switch this one off.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_MostFrequentUserTier_Mode/
+#
+# Device tier from privileged logons  [SI_Endpoint_PrivilegedLogon_Mode]  (advanced)
+#   What it is for:   Whether a device takes the tier of the most privileged account (Tier 0, 1 or 2) that logged on
+#                     to it in the window -- an admin, or an HR / finance user made Tier 2 by a group rule.
+#   Choices:          'on' (On -- sets the device tier); 'shadow' (Shadow -- recorded only); 'off' (Off)
+#   Default:          on
+#   If you change it: On: a Tier 0-2 logon makes the device that tier (the lowest of its sources wins), with the
+#                     account and the date as evidence; with none, the device keeps its other sources. Shadow:
+#                     computed and recorded on the device (PrivilegedLogonComputedTier) but never sets its tier. Off:
+#                     not read.
+#   When to change:   Shadow to see what it would change before it does; off only if device logons must not count.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Shadow to see what it would change before it does; off only if
+#                     device logons must not count.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_Mode/
+#
 # Endpoint asset limit  [SI_AssetLimit_Endpoint]  (engine: endpoint, advanced, assets)
 #   What it is for:   Caps how many discovered devices the endpoint engine processes in one run, for testing.
 #   Default:          No limit (every discovered device).
@@ -4135,6 +4384,101 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Once after changing rules or the schema; then switch it back
 #                     off.
 #   More info:        https://invardia.com/docs/si/settings/SI_ForceFullRun_Identity/
+#
+# Privileged logon excluded groups  [SI_Endpoint_PrivilegedLogon_ExcludeGroups]  (advanced)
+#   What it is for:   Groups (names or ids, comma-separated) whose members' logons never raise a device -- for example
+#                     a helpdesk group.
+#   Default:          No group: every Tier 0-2 account counts
+#   If you change it: Members' logons are recorded on the device but never set its tier.
+#   When to change:   When a support group's sign-ins should not raise the devices they help.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: When a support group's sign-ins should not raise the devices
+#                     they help.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_ExcludeGroups/
+#
+# Privileged logon minimum days  [SI_Endpoint_PrivilegedLogon_MinDays]  (advanced, days)
+#   What it is for:   A Tier 1 or Tier 2 logon counts only on a device the account used on at least this many distinct
+#                     days in the window (or whose frequent user it is).
+#   Default:          Not set: no minimum.
+#   If you change it: A higher number leaves out occasional sign-ins (fewer devices raised); empty counts every one.
+#   When to change:   When one-off privileged sign-ins should not raise a device.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: When one-off privileged sign-ins should not raise a device.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_MinDays/
+#
+# Privileged logon support filter  [SI_Endpoint_PrivilegedLogon_SupportFilter]  (advanced)
+#   What it is for:   Whether Tier 1 and Tier 2 accounts with a support pattern -- many devices, one session each,
+#                     measured against your own accounts every run -- are left out of the device tier.
+#   Choices:          'off' (Off -- every privileged logon counts); 'dynamic' (Dynamic -- leave out the support
+#                     pattern)
+#   Default:          off: every Tier 0-2 logon counts.
+#   If you change it: Dynamic: a support-pattern account's logons are recorded but never raise a device; a
+#                     user-pattern account raises the devices it came back to on two or more days or whose frequent
+#                     user it is. Tier 0 logons still count on one logon.
+#   When to change:   When helpdesk sign-ins raise too many devices.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: When helpdesk sign-ins raise too many devices.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_SupportFilter/
+#
+# Privileged logon types  [SI_Endpoint_PrivilegedLogon_LogonTypes]  (advanced)
+#   What it is for:   The kinds of logon that count: by default those that leave the account's credentials on the
+#                     device.
+#   Default:          Interactive, RemoteInteractive (Remote Desktop), CachedInteractive, CachedRemoteInteractive,
+#                     Unlock, CachedUnlock.
+#   If you change it: Adding Network, Service or Batch also counts logons that leave no reusable credential on the
+#                     device (more devices raised); a changed list reads the whole window again on the next run.
+#   When to change:   Rarely; to also count service or batch logons of privileged accounts.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Rarely; to also count service or batch logons of privileged
+#                     accounts.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_LogonTypes/
+#
+# Privileged logon window  [SI_Endpoint_PrivilegedLogon_WindowDays]  (advanced, days)
+#   What it is for:   How many days of device logons count for a device's tier.
+#   Default:          30 days (what Defender advanced hunting keeps).
+#   If you change it: A shorter window lets a device fall back to its other tier sources sooner after a privileged
+#                     account stops using it; more than 30 days reads no more, because Defender keeps 30 days of
+#                     device logons.
+#   When to change:   Only when an occasional privileged logon should count for a shorter time.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Only when an occasional privileged logon should count for a
+#                     shorter time.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_WindowDays/
+#
+# Privileged logon: the device's own user counts  [SI_Endpoint_PrivilegedLogon_PrimaryUserCounts]  (advanced)
+#   What it is for:   With the support filter or a minimum of days, the device's own frequent user still counts on any
+#                     logon.
+#   Default:          On
+#   If you change it: On: a privileged user's own device is raised even by one logon. Off: their own device needs the
+#                     minimum too.
+#   When to change:   Rarely.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Rarely.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_PrimaryUserCounts/
+#
+# Privileged logon: Tier 0 counts on one logon  [SI_Endpoint_PrivilegedLogon_Tier0Once]  (advanced)
+#   What it is for:   With the support filter or a minimum of days, a Tier 0 account's logon still counts on a single
+#                     logon: its credentials on a device are a direct path to the whole tenant.
+#   Default:          On
+#   If you change it: Off: Tier 0 logons follow the same filter as Tier 1 and 2.
+#   When to change:   Rarely.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Rarely.
+#   More info:        https://invardia.com/docs/si/settings/SI_Endpoint_PrivilegedLogon_Tier0Once/
 #
 # Public IP asset limit  [SI_AssetLimit_PublicIp]  (engine: publicip, advanced, assets)
 #   What it is for:   Caps how many public IP addresses the public IP engine processes in one run, for testing.
@@ -5298,6 +5642,75 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # matching executive view in the web app.
 # ----------------------------------------------------------------------------------------------------
 #
+# Hidden named views  [SI_Pro_HiddenViews]
+#   What it is for:   The named views SecurityInsight ships for Security recommendations, Summary and Detailed
+#                     (Critical and High, On Tier 0, Vulnerabilities (CVE), Known exploited, MITRE, Compliance, CVSS)
+#                     that are hidden from the view picker for everyone.
+#   Default:          None hidden: every shipped view is in the picker
+#   If you change it: A view on the list is no longer offered in the picker of either page (critical-high, tier0, cve,
+#                     exploited, mitre, compliance, cvss); summary:<view> or detailed:<view> hides it on one page
+#                     only. Its address still opens it. The findings are unchanged.
+#   When to change:   Hide a view your organisation does not use, so the picker shows only the ones people need.
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Hide a view your organisation does not use, so the picker
+#                     shows only the ones people need.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_HiddenViews/
+#
+# Key figures: age bands of open CVE findings (days)  [SI_KeyFigures_CveAgeBands]  (days)
+#   What it is for:   The bands of the key figures' table "Age of open CVE findings": one row "older than N days" per
+#                     number, separated by commas.
+#   Default:          30,60,90
+#   If you change it: The next data sync counts the open CVE findings first detected more than each number of days
+#                     before the collection. Whole numbers 1 to 3650; a list with none = the default.
+#   When to change:   Your patch policy has other milestones (for example 14,30,90).
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Your patch policy has other milestones (for example 14,30,90).
+#   More info:        https://invardia.com/docs/si/settings/SI_KeyFigures_CveAgeBands/
+#
+# Key figures: mean time to fix over the last (days)  [SI_KeyFigures_MeanTimeToFixDays]  (days)
+#   What it is for:   Which fixed vulnerabilities the key figure "Mean time to fix" averages: those remediated within
+#                     this many days before the collection.
+#   Default:          90 days
+#   If you change it: The next data sync averages the days from first detection to remediation of the CVE findings
+#                     remediated in this window; the label says the number in force.
+#   When to change:   A longer window gives a steadier number, a shorter one shows a recent change sooner.
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: A longer window gives a steadier number, a shorter one shows a
+#                     recent change sooner.
+#   More info:        https://invardia.com/docs/si/settings/SI_KeyFigures_MeanTimeToFixDays/
+#
+# Key figures: opened / fixed in the last (days)  [SI_KeyFigures_RecentDays]  (days)
+#   What it is for:   The window of the key figures "Vulnerabilities opened in the last N days" and "Vulnerabilities
+#                     fixed in the last N days" (the Executive overview, the Executive report and the management
+#                     mail).
+#   Default:          30 days
+#   If you change it: The next data sync counts the CVE findings first detected, and the CVE findings remediated,
+#                     within this many days before the collection; the labels say the number in force. Collections
+#                     already figured keep the window they were worked out with; an update works the newest ones out
+#                     again.
+#   When to change:   Your management reports per quarter or per sprint (for example 90 or 14).
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Your management reports per quarter or per sprint (for example
+#                     90 or 14).
+#   More info:        https://invardia.com/docs/si/settings/SI_KeyFigures_RecentDays/
+#
+# Key figures: privileged accounts without a sign-in for (days)  [SI_KeyFigures_StaleAdminDays]  (days)
+#   What it is for:   When the key figure "Privileged accounts without a sign-in for N days" counts an enabled, active
+#                     privileged account: its last sign-in is longer ago than this.
+#   Default:          90 days
+#   If you change it: The next data sync counts the privileged accounts whose last sign-in (Entra ID sign-in activity)
+#                     is older than this many days before the collection; the label says the number in force.
+#   When to change:   Your access review calls an admin account stale sooner (for example 30 or 45 days).
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Your access review calls an admin account stale sooner (for
+#                     example 30 or 45 days).
+#   More info:        https://invardia.com/docs/si/settings/SI_KeyFigures_StaleAdminDays/
+#
 # Leading report for AI summary  [SI_AISummary_Leader]
 #   What it is for:   In Consistent mode, chooses which report (Summary or Detailed) builds the AI summary, risk score
 #                     and top list that the other report reuses.
@@ -5843,6 +6256,34 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # What SecurityInsight reads from and writes to other systems: the CMDB, ServiceNow and asset tags.
 # ----------------------------------------------------------------------------------------------------
 #
+# Asset properties  [SI_AssetProperties]
+#   What it is for:   How much SecurityInsight keeps about each asset: security (what SecurityInsight needs for risk)
+#                     or full (all metadata from every source, kept a few days).
+#   Choices:          'security' (Security: what SecurityInsight needs for risk); 'full' (Full: all metadata from
+#                     every source, kept a few days)
+#   Default:          security: the security profile only -- what SecurityInsight needs for risk
+#   If you change it: 'security' (the default) keeps what SecurityInsight needs for risk -- name, kind, tier and the
+#                     security fields each profile carries -- and stores nothing extra. 'full' also keeps every
+#                     property each source knows about an asset -- Defender, Entra, Intune, Active Directory, Azure,
+#                     Exposure Graph and VM extensions, including serial numbers and MAC addresses. Each source is
+#                     still read only once: the profiler reads it with every property and builds the same security
+#                     profile from it, so the profile does not change. The whole objects go to SI_AssetProperties_CL
+#                     for the CMDB and vulnerability hand-off, and the data sync stores them in the Pro database,
+#                     where the asset page shows them under "Full metadata" per source (lists stay lists), with a
+#                     history of every snapshot kept and what changed between them. It is kept for the days set in
+#                     "Full asset metadata: days kept" (default 3). Full adds Log Analytics ingest on every run;
+#                     switching back to security stops the collection, and what was stored ages out after those days.
+#   When to change:   Choose full when you want to see every property of an asset in the web app, or when
+#                     SecurityInsight should hand asset metadata to a CMDB (for example ServiceNow); leave security
+#                     otherwise.
+#   Risk:             Affects what SecurityInsight writes to your CMDB or ticketing systems. Reversible for future
+#                     runs, but changes already written there stay; the connector's own guards hold large or unsafe
+#                     changes.
+#   Recommended:      Keep the default. Change it when: Choose full when you want to see every property of an asset in
+#                     the web app, or when SecurityInsight should hand asset metadata to a CMDB (for example
+#                     ServiceNow); leave security otherwise.
+#   More info:        https://invardia.com/docs/si/settings/SI_AssetProperties/
+#
 # Asset tagging  [SI_AssetTagging_Enabled]
 #   What it is for:   Turns asset tagging on: the asset-tagging rules (for example Auto-CanBeOnboarded--Excluded--SI
 #                     for the devices Defender can onboard) apply inside SecurityInsight, and the tagging job may run.
@@ -5876,6 +6317,20 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     changing the rules and running again (or by hand); the audit trail records every change.
 #   Recommended:      Off until the report-only output has been reviewed; then on.
 #   More info:        https://invardia.com/docs/si/settings/SI_AssetTagging_Apply/
+#
+# Asset tagging writes tags  [SI_Pro_AssetTagging_Apply]
+#   What it is for:   Lets the asset-tagging job actually write the tags its rules select in Defender, Azure and
+#                     Entra, instead of only reporting them.
+#   Default:          Off: report only, every planned tag is logged, nothing is changed
+#   If you change it: On, the job changes Defender machine tags, Azure resource tags and Entra custom security
+#                     attributes in your tenant. Only a real true turns it on; the job identity also needs the write
+#                     roles.
+#   When to change:   Turn it on after reviewing the report-only results and granting the tagging write roles.
+#   Risk:             Writes to your tenant: the job changes Defender machine tags, Azure resource tags and Entra
+#                     custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by
+#                     changing the rules and running again (or by hand); every change is on the audit trail.
+#   Recommended:      Off until the report-only plan has been reviewed on the Asset tagging page; then on.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetTagging_Apply/
 #
 # CMDB enrichment on  [SI_EnableCmdbProvider]
 #   What it is for:   Turns on enrichment of assets with data from your CMDB export (CMDB id, name, criticality, data
@@ -5937,6 +6392,28 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     changes.
 #   Recommended:      Keep the default. Change it when: When tags should only be written in part of your estate.
 #   More info:        https://invardia.com/docs/si/settings/SI_Bootstrap_TaggingScopes/
+#
+# Asset correlation: plan only  [SI_Correlation_DryRun]  (advanced)
+#   What it is for:   Makes the asset correlation compute and report its results without publishing them.
+#   Default:          Off: the correlation results are published
+#   If you change it: On, nothing is published, so the CI keys stay as they were on the last published run.
+#   When to change:   Only while checking a change to the correlation.
+#   Risk:             Affects what SecurityInsight writes to your CMDB or ticketing systems. Reversible for future
+#                     runs, but changes already written there stay; the connector's own guards hold large or unsafe
+#                     changes.
+#   Recommended:      Keep the default. Change it when: Only while checking a change to the correlation.
+#   More info:        https://invardia.com/docs/si/settings/SI_Correlation_DryRun/
+#
+# Asset correlation: row limit  [SI_Correlation_RowLimit]  (advanced)
+#   What it is for:   A limit on how many assets one correlation run reads, for troubleshooting.
+#   Default:          0: no limit, every asset
+#   If you change it: A number above 0 correlates only that many assets; the rest keep their previous result.
+#   When to change:   Only while troubleshooting.
+#   Risk:             Affects what SecurityInsight writes to your CMDB or ticketing systems. Reversible for future
+#                     runs, but changes already written there stay; the connector's own guards hold large or unsafe
+#                     changes.
+#   Recommended:      Keep the default. Change it when: Only while troubleshooting.
+#   More info:        https://invardia.com/docs/si/settings/SI_Correlation_RowLimit/
 #
 # Asset tagging identity name  [SI_Bootstrap_TaggingIdentityName]  (advanced)
 #   What it is for:   Name of the separate managed identity the asset tagging job runs as, so the collection identity
@@ -6081,6 +6558,24 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: When you switch the servicenow-vulnerable-item output on.
 #   More info:        https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowVulnTable/
 #
+# Full asset metadata: allowed change between runs  [SI_AssetProperties_ChangeGuardPercent]  (advanced, %)
+#   What it is for:   How much the full asset metadata collected from one source may change from one run to the next
+#                     before the hand-off of that source is held.
+#   Default:          10 %
+#   If you change it: When a source (for example Defender, Entra or Azure) returns more than this share more or fewer
+#                     objects than in the previous run, the previous collection of that source is kept for the CMDB
+#                     and vulnerability hand-off, and a guard event is raised (mail and Operations > Guards (safety
+#                     checks)). The hold ends by itself on the next run that is back within the limit, or once when an
+#                     Admin releases it.
+#   When to change:   Raise it if your estate legitimately changes a lot between runs; lower it to be warned of
+#                     smaller changes.
+#   Risk:             Affects what SecurityInsight writes to your CMDB or ticketing systems. Reversible for future
+#                     runs, but changes already written there stay; the connector's own guards hold large or unsafe
+#                     changes.
+#   Recommended:      Keep the default. Change it when: Raise it if your estate legitimately changes a lot between
+#                     runs; lower it to be warned of smaller changes.
+#   More info:        https://invardia.com/docs/si/settings/SI_AssetProperties_ChangeGuardPercent/
+#
 # Shipped asset tagging rules file  [LockedYamlFile]  (engine: asset-tagging, advanced)
 #   What it is for:   File name of the shipped asset tagging rules in the rules folder.
 #   Default:          AssetTagging.locked.yaml
@@ -6127,6 +6622,19 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     them.
 #   More info:        https://invardia.com/docs/si/settings/SI_Sinks_Azure/
 #
+# Configuration backups kept (days)  [SI_Pro_ConfigBackupRetentionDays]  (days)
+#   What it is for:   How many days the configuration backups are kept (the daily backup and Back up now).
+#   Default:          90 days
+#   If you change it: The backup job removes backups older than this, except pinned ones and a backup whose content a
+#                     newer one points at; each removal is recorded on the audit trail. A day without changes is
+#                     recorded as no change, not copied again.
+#   When to change:   When your policy needs backups for a longer or shorter time. The change journal is always kept
+#                     at least this long.
+#   Risk:             A shorter value deletes older configuration backups at the next backup run (pinned ones are
+#                     kept). Cannot be undone.
+#   Recommended:      90 days.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_ConfigBackupRetentionDays/
+#
 # Copy findings per CI to Log Analytics (SI_Finding_CL)  [SI_RA_Findings]
 #   What it is for:   Optional. After each Risk Analysis Detailed run, copies the de-duplicated findings (one row per
 #                     CI and finding) into your Log Analytics workspace, for your own workbooks, Sentinel or KQL.
@@ -6147,6 +6655,39 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     copies nothing.
 #   Recommended:      Off, unless your own workbooks, Sentinel rules or KQL read SI_Finding_CL.
 #   More info:        https://invardia.com/docs/si/settings/SI_RA_Findings/
+#
+# Days before an unseen asset is retired  [SI_Pro_AssetRetire_GraceDays]  (days)
+#   What it is for:   How many days an asset SecurityInsight no longer sees may stay unseen before it is retired: its
+#                     open vulnerabilities close as AssetRetired (never as fixed), its CI in the CI table is retired,
+#                     and ServiceNow gets the state (u_si_state = retired). Used for every category that has no value
+#                     of its own.
+#   Default:          30 days
+#   If you change it: Until then the asset is listed on Assets & services > CMDB > Not seen anymore with its open
+#                     findings, where an Admin may retire it early. Seen again = active again, and its findings
+#                     reopen. Shorter than the seen-window (8 days) is raised to the seen-window; non-numbers use 30.
+#   When to change:   Raise it if assets are away longer than this and come back (for example laptops during a long
+#                     holiday); lower it to close the findings of removed assets sooner.
+#   Risk:             A shorter grace period retires unseen assets sooner -- and closes their open vulnerabilities as
+#                     retired. A device that is only offline for a while can be retired by mistake. Reversible for the
+#                     future; closed findings reopen only when the asset is seen again.
+#   Recommended:      30 days (devices can be offline for weeks).
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays/
+#
+# Days unseen before a CI may be retired  [SI_Cmdb_RetireAfterDays]  (days)
+#   What it is for:   The least number of days an asset must go unseen before its CI is retired -- in the CI table and
+#                     in the state handed to ServiceNow. A brake under every other rule: whatever decided the
+#                     retirement (the grace period, the runs missing, an early retirement on the Not seen anymore
+#                     page), the CI waits until its asset has been unseen this long.
+#   Default:          7 days
+#   If you change it: Higher keeps CIs of assets that are away for a while; a CI retired too early is the one mistake
+#                     that does not heal by itself. No grace period can be shorter than this. Below 1 is raised to 1;
+#                     non-numbers use 7.
+#   When to change:   Raise it if CIs are retired for assets that come back after a week or more.
+#   Risk:             A lower value lets a CI retire sooner after its asset was last seen -- a device that is only
+#                     offline for a few days can lose its CI (in the CI table and in ServiceNow). A CI retired by
+#                     mistake does not heal by itself until the asset is seen again. Reversible for the future.
+#   Recommended:      7 days (the brake against CIs retired by mistake).
+#   More info:        https://invardia.com/docs/si/settings/SI_Cmdb_RetireAfterDays/
 #
 # Endpoint collection outputs  [SI_Sinks_Endpoint]  (engine: endpoint)
 #   What it is for:   Chooses where the endpoint collection writes its results: Log Analytics (LA), JSON files and/or
@@ -6198,6 +6739,19 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     reports to leave the environment.
 #   More info:        https://invardia.com/docs/si/settings/SI_Telemetry_Enabled/
 #
+# Pro data retention  [SI_Pro_DataRetentionDays]  (days)
+#   What it is for:   How many days of run data (findings, assets, daily aggregates) the Pro database keeps before
+#                     older collections are removed.
+#   Default:          90 days
+#   If you change it: Longer keeps more history for trends but grows the database and its cost; shorter purges history
+#                     permanently. Current vulnerability state and the identity ledger are never purged. An invalid
+#                     value stops the sync.
+#   When to change:   Change it when you need longer history for reporting or must limit database size.
+#   Risk:             A shorter value PERMANENTLY deletes older history (trends, past collections) at the next sync;
+#                     current state is kept. Cannot be undone. Longer grows the database and its cost.
+#   Recommended:      Keep 90 days or longer for trends across quarters.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataRetentionDays/
+#
 # Public IP collection outputs  [SI_Sinks_PublicIp]  (engine: publicip)
 #   What it is for:   Chooses where the public IP collection writes its results: Log Analytics (LA), JSON files and/or
 #                     Excel files.
@@ -6225,6 +6779,21 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      30 days.
 #   More info:        https://invardia.com/docs/si/settings/SI_LogRetentionDays/
 #
+# Runs before a vulnerability closes  [SI_VulnSync_CloseAfterRuns]  (runs)
+#   What it is for:   How many complete runs in a row a vulnerability must be missing from an asset that was seen
+#                     before the close-loop marks it fixed.
+#   Default:          2 runs
+#   If you change it: Higher avoids closing and reopening vulnerabilities that devices report on and off, but confirms
+#                     real fixes later. Runs where the asset was not seen do not count. Below 1 is raised to 1;
+#                     non-numbers use 2.
+#   When to change:   Raise it if vulnerabilities keep closing and reopening on the same devices.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Raise it if vulnerabilities keep closing and reopening on the
+#                     same devices.
+#   More info:        https://invardia.com/docs/si/settings/SI_VulnSync_CloseAfterRuns/
+#
 # Asset detail level  [SI_PayloadProfile]  (advanced)
 #   What it is for:   Chooses how much detail is kept per asset: everything collected (cmdb) or only the columns the
 #                     schema declares (security).
@@ -6239,6 +6808,88 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Consider security only if ingest volume matters more than a
 #                     full asset inventory.
 #   More info:        https://invardia.com/docs/si/settings/SI_PayloadProfile/
+#
+# Audit trail retention  [SI_Pro_AuditRetentionMonths]  (advanced, months)
+#   What it is for:   How many months the Pro audit trail (every action in the web app, the jobs and setup: who, when,
+#                     why, before and after) keeps its rows.
+#   Default:          not set: the audit trail is kept forever
+#   If you change it: When set, the data sync removes audit rows older than this many months and records that removal
+#                     on the trail itself. It cannot be shorter than 13 months; a smaller value or one that is not a
+#                     whole number is refused and the trail is kept in full.
+#   When to change:   Set it when your retention policy requires audit evidence to be removed after a period -- keep
+#                     it at least as long as the data the trail explains.
+#   Risk:             Setting it, or lowering it, PERMANENTLY deletes audit rows older than this at the next sync (at
+#                     least 13 months is enforced). Cannot be undone; check your audit obligations first.
+#   Recommended:      Not set (keep the audit trail), or your audit policy's period.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AuditRetentionMonths/
+#
+# Change journal kept (days)  [SI_Pro_ConfigJournalRetentionDays]  (advanced, days)
+#   What it is for:   How many days the change journal keeps its rows -- every configuration change, record by record,
+#                     that undo and restore are built on.
+#   Default:          not set: the change journal is kept forever
+#   If you change it: When set, the backup job removes journal rows older than this and records that on the audit
+#                     trail. It can never be shorter than the backup retention: a shorter value is refused and the
+#                     journal is kept, because an undo needs its evidence.
+#   When to change:   Only when your retention policy requires configuration history to be removed after a period.
+#   Risk:             Setting it, or lowering it, deletes older change-journal rows at the next backup run. Cannot be
+#                     undone.
+#   Recommended:      Not set (keep the journal).
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_ConfigJournalRetentionDays/
+#
+# CI change history kept  [SI_Pro_CiChangeRetentionDays]  (advanced, days)
+#   What it is for:   How many days the change history of each configuration item (CI) is kept in the Pro database.
+#   Default:          730 days
+#   If you change it: Older CI changes are removed after each data sync. Longer keeps more history on the CI page but
+#                     grows the database.
+#   When to change:   Shorten it to keep the database small; lengthen it when you need a longer audit of CI changes.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Shorten it to keep the database small; lengthen it when you
+#                     need a longer audit of CI changes.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_CiChangeRetentionDays/
+#
+# CI daily trend kept  [SI_Pro_CiDailyRetentionDays]  (advanced, days)
+#   What it is for:   How many days of each CI's daily trend (risk score, open findings by severity) the Pro database
+#                     keeps.
+#   Default:          400 days
+#   If you change it: Older daily rows are removed after each data sync, so trend charts go back this far.
+#   When to change:   Shorten it to keep the database small; lengthen it for longer trend charts.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Shorten it to keep the database small; lengthen it for longer
+#                     trend charts.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_CiDailyRetentionDays/
+#
+# CI seen-window  [SI_Pro_CmdbSql_SeenWithinDays]  (advanced, days)
+#   What it is for:   How recently an asset's profile must have been published for the SQL CMDB connector to count the
+#                     asset as present.
+#   Default:          8 days
+#   If you change it: Shorter notices removed assets sooner but can count low-tier assets as missing, because they are
+#                     re-profiled only weekly. A kind whose newest snapshot is older than this is not used at all and
+#                     the run changes nothing. Below 1 is raised to 1.
+#   When to change:   Only if you changed how often low-tier assets are re-profiled; keep it above the slowest
+#                     re-check interval.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Only if you changed how often low-tier assets are re-profiled;
+#                     keep it above the slowest re-check interval.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_CmdbSql_SeenWithinDays/
+#
+# Closed finding history kept  [SI_Pro_FindingStateRetentionDays]  (advanced, days)
+#   What it is for:   How many days a closed finding's lifecycle row (first detected, closed, close reason) is kept in
+#                     the Pro database.
+#   Default:          365 days
+#   If you change it: Closed lifecycle rows older than this are removed after each data sync; open findings are never
+#                     removed.
+#   When to change:   Lengthen it when you report on fixes over a longer period.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Lengthen it when you report on fixes over a longer period.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingStateRetentionDays/
 #
 # Copy records to Log Analytics  [SI_LaExport]  (advanced)
 #   What it is for:   Optionally copies the provider records (every object a collection reads, mapped to SI fields) to
@@ -6286,6 +6937,211 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     once.
 #   Recommended:      Keep 70.
 #   More info:        https://invardia.com/docs/si/settings/SI_SqlPacing_LowPercent/
+#
+# Days before an unseen asset is retired: Azure virtual machines  [SI_Pro_AssetRetire_GraceDays_AzureVm]  (advanced, days)
+#   What it is for:   The grace period for Azure virtual machines -- an Azure virtual machine or scale set, also when
+#                     Defender reports it as a device. Overrides the general value for this category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Raise it for VMs that are deallocated for long periods.
+#   Risk:             A shorter grace period retires unseen Azure VMs sooner (a stopped VM can be retired by mistake)
+#                     and closes their open vulnerabilities as retired. Reversible for the future.
+#   Recommended:      The general value.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_AzureVm/
+#
+# Days before an unseen asset is retired: client PCs  [SI_Pro_AssetRetire_GraceDays_ClientPc]  (advanced, days)
+#   What it is for:   The grace period for client PCs -- a device whose operating system is not a server (laptops,
+#                     desktops). Overrides the general value for this category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Raise it if people are away longer than this with their laptop switched off (holidays, leave).
+#   Risk:             A shorter grace period retires unseen client PCs sooner (laptops are often offline for weeks)
+#                     and closes their open vulnerabilities as retired. Reversible for the future.
+#   Recommended:      The general value (30 days) or longer.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_ClientPc/
+#
+# Days before an unseen asset is retired: other Azure resources  [SI_Pro_AssetRetire_GraceDays_AzureResource]  (advanced, days)
+#   What it is for:   The grace period for other Azure resources -- any Azure resource that is not a virtual machine.
+#                     Overrides the general value for this category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Lower it if Azure resources are deleted for good and you want their findings closed sooner.
+#   Risk:             A shorter grace period retires unseen Azure resources sooner and closes their open
+#                     vulnerabilities as retired. Reversible for the future.
+#   Recommended:      The general value.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_AzureResource/
+#
+# Days before an unseen asset is retired: servers  [SI_Pro_AssetRetire_GraceDays_Server]  (advanced, days)
+#   What it is for:   The grace period for servers -- a device with a server operating system, or an Arc-connected
+#                     machine. Overrides the general value for this category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Lower it if your servers are decommissioned through a process you trust and you want their
+#                     findings closed sooner.
+#   Risk:             A shorter grace period retires unseen servers sooner and closes their open vulnerabilities as
+#                     retired. Reversible for the future.
+#   Recommended:      The general value.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_Server/
+#
+# Days before an unseen asset is retired: service principals  [SI_Pro_AssetRetire_GraceDays_ServicePrincipal]  (advanced, days)
+#   What it is for:   The grace period for service principals -- an Entra service principal or managed identity.
+#                     Overrides the general value for this category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Raise it for service principals that are used only now and then.
+#   Risk:             A shorter grace period retires unseen service principals sooner and closes their open findings
+#                     as retired. Reversible for the future.
+#   Recommended:      The general value.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_ServicePrincipal/
+#
+# Days before an unseen asset is retired: users  [SI_Pro_AssetRetire_GraceDays_User]  (advanced, days)
+#   What it is for:   The grace period for users -- an Entra user account. Overrides the general value for this
+#                     category.
+#   Default:          The general value (30 days)
+#   If you change it: An asset of this category that SecurityInsight has not seen for longer than this is retired; its
+#                     open vulnerabilities close as AssetRetired and ServiceNow gets the state. Seen again = active
+#                     again. Shorter than the seen-window (8 days) is raised to it.
+#   When to change:   Raise it if accounts are disabled for long periods (leave) and come back.
+#   Risk:             A shorter grace period retires unseen users sooner and closes their open findings as retired.
+#                     Reversible for the future.
+#   Recommended:      The general value.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_User/
+#
+# Days to fix a critical finding  [SI_Pro_FindingSla_CriticalDays]  (advanced, days)
+#   What it is for:   How many days a critical finding has to be fixed, counted from when it was first found (or found
+#                     again after it was fixed).
+#   Default:          15 days
+#   If you change it: Sets the due date of every critical finding. A finding past its due date is shown as overdue on
+#                     the CI page, the service views and the trend. 0 = critical findings have no due date.
+#   When to change:   Set it to the deadline your security policy gives critical findings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives critical
+#                     findings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_CriticalDays/
+#
+# Days to fix a high finding  [SI_Pro_FindingSla_HighDays]  (advanced, days)
+#   What it is for:   How many days a high finding has to be fixed, counted from when it was first found (or found
+#                     again after it was fixed).
+#   Default:          30 days
+#   If you change it: Sets the due date of every high finding. A finding past its due date is shown as overdue. 0 =
+#                     high findings have no due date.
+#   When to change:   Set it to the deadline your security policy gives high findings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives high
+#                     findings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_HighDays/
+#
+# Days to fix a low finding  [SI_Pro_FindingSla_LowDays]  (advanced, days)
+#   What it is for:   How many days a low finding has to be fixed, counted from when it was first found (or found
+#                     again after it was fixed).
+#   Default:          180 days
+#   If you change it: Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low
+#                     findings have no due date.
+#   When to change:   Set it to the deadline your security policy gives low findings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives low
+#                     findings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_LowDays/
+#
+# Days to fix a medium finding  [SI_Pro_FindingSla_MediumDays]  (advanced, days)
+#   What it is for:   How many days a medium finding has to be fixed, counted from when it was first found (or found
+#                     again after it was fixed).
+#   Default:          90 days
+#   If you change it: Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 =
+#                     medium findings have no due date.
+#   When to change:   Set it to the deadline your security policy gives medium findings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives medium
+#                     findings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_MediumDays/
+#
+# Full asset metadata: days kept  [SI_AssetProperties_RetentionDays]  (advanced, days)
+#   What it is for:   How many days the full asset metadata is kept, in Log Analytics and in the Pro database.
+#   Default:          3 days
+#   If you change it: The run sets the retention of SI_AssetProperties_CL to this many days (Log Analytics keeps a
+#                     table at least 4 days, so a lower value is raised to 4 and the run says so), and the data sync
+#                     removes older full metadata from the Pro database. Every snapshot inside these days is kept, so
+#                     the asset page's history goes back this far. The data is only needed for the hand-off, the
+#                     history and the change guard, so a short retention keeps the cost low.
+#   When to change:   Raise it only if the full asset metadata must be looked up further back.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Raise it only if the full asset metadata must be looked up
+#                     further back.
+#   More info:        https://invardia.com/docs/si/settings/SI_AssetProperties_RetentionDays/
+#
+# Pro data sync database  [SI_Pro_DataSqlDatabase]  (advanced)
+#   What it is for:   The SQL database the Pro data sync writes run data to, when it should differ from the Pro
+#                     settings database.
+#   Default:          Same database as SI_ProSqlDatabase
+#   If you change it: Points the data sync, the close-loop mail and data setup at another database. Without any Pro
+#                     database configured the data sync job is skipped.
+#   When to change:   Only when you deliberately keep run data in a separate database from the Pro settings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Only when you deliberately keep run data in a separate
+#                     database from the Pro settings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataSqlDatabase/
+#
+# Pro data sync dry run  [SI_Pro_DataSync_DryRun]  (advanced)
+#   What it is for:   Makes the Pro data sync plan what it would copy and purge without writing anything to SQL.
+#   Default:          Off: the data sync writes to the database
+#   If you change it: On, no run data reaches the Pro database and nothing is purged, so Pro pages stop getting new
+#                     data. Useful to check a new setup safely.
+#   When to change:   Turn on briefly when testing a new database setup; turn off again afterwards.
+#   Risk:             No run data reaches the Pro database: the web app's pages stop getting new data while it is on.
+#                     Reversible: turn it off; the next sync catches up within its look-back.
+#   Recommended:      Off; on only to check a new setup safely.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataSync_DryRun/
+#
+# Pro data sync look-back  [SI_Pro_DataLookbackDays]  (advanced, days)
+#   What it is for:   How many days back in Log Analytics the Pro data sync looks for complete runs it has not copied
+#                     yet.
+#   Default:          3 days
+#   If you change it: A longer look-back catches up after longer outages but makes each sync query more data and take
+#                     longer. Too short can leave runs from a long outage uncopied. A value below 1 or not a whole
+#                     number stops the sync.
+#   When to change:   Raise it temporarily after the sync has been down for more than a few days.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Raise it temporarily after the sync has been down for more
+#                     than a few days.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataLookbackDays/
+#
+# Pro data sync SQL server  [SI_Pro_DataSqlServer]  (advanced)
+#   What it is for:   The SQL server the Pro data sync writes run data to, when it should differ from the Pro settings
+#                     database's server.
+#   Default:          Same server as SI_ProSqlServer
+#   If you change it: Points the data sync (and the close-loop mail's data source) at another server; the identity
+#                     must have access there. Without any Pro database configured the data sync job is skipped.
+#   When to change:   Only when run data lives on a different SQL server than the Pro settings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Only when run data lives on a different SQL server than the
+#                     Pro settings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataSqlServer/
 #
 # Retire at once: devices deleted in Intune  [SI_DeletionProof_Intune]  (advanced)
 #   What it is for:   Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete
@@ -6557,6 +7413,40 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Set at install; the workspace resource id is the main setting.
 #   More info:        https://invardia.com/docs/si/settings/SI_WorkspaceName/
 #
+# Pro updates from Invardia  [SI_InvardiaUpdate_Enabled]
+#   What it is for:   Whether SecurityInsight Pro takes its updates from Invardia by itself. Every night the updater
+#                     job asks Invardia for the release approved for this installation's ring, checks its signature
+#                     and contents, and applies it; if anything fails the previous version is restored. A release that
+#                     needs a manual step first, or a newer version than this installation can move to directly, is
+#                     held and shown on this page.
+#   Default:          On
+#   If you change it: Off: the updater job never asks Invardia for updates and applies nothing; the Settings page and
+#                     the job's log say that Pro updates from Invardia are off. The installation stays on its current
+#                     version until you turn it on again.
+#   When to change:   Turn it off only to hold an installation on its current version for a while, for example during
+#                     an audit or a change freeze; turn it on again afterwards.
+#   Risk:             No updates are applied any more -- including security fixes -- until it is turned on again.
+#                     Reversible at once.
+#   Recommended:      On.
+#   More info:        https://invardia.com/docs/si/settings/SI_InvardiaUpdate_Enabled/
+#
+# Rename to the agreed names  [SI_Update_RenameDisplayNames]
+#   What it is for:   Whether the update gives this installation's directory objects the names a new installation
+#                     gets: the engine's application "SecurityInsight Engine", the web app's sign-in application
+#                     "SecurityInsight" and the SQL admin group shown as "SecurityInsight SQL admins". Only
+#                     SecurityInsight's earlier names are renamed; a name you chose is kept. Each object is renamed
+#                     once, read back, and put back if the rename does not take. Azure resources keep their names.
+#   Default:          On
+#   If you change it: Off: the update renames nothing and only says, one line each, what it would rename. Where the
+#                     updater's identity may not rename an application or the SQL admin group, the update says so in
+#                     one line and an administrator renames with setup\Set-SIDisplayNames.ps1.
+#   When to change:   Turn it off only when your own processes still look for SecurityInsight's applications or the
+#                     SQL admin group by their earlier names; turn it on again once they use the new names.
+#   Risk:             SecurityInsight's applications and the SQL admin group keep their earlier names, unlike a new
+#                     installation. Nothing else changes. Reversible at once.
+#   Recommended:      On.
+#   More info:        https://invardia.com/docs/si/settings/SI_Update_RenameDisplayNames/
+#
 # Service principal app id  [SI_SPN_AppId]
 #   What it is for:   Application (client) id of the service principal the engines sign in as when not using managed
 #                     identity.
@@ -6654,6 +7544,23 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Only when your storage account lives in a different resource
 #                     group from the workspace; setup normally writes it.
 #   More info:        https://invardia.com/docs/si/settings/SI_StorageResourceGroup/
+#
+# Update ring  [SI_UpdateRing]
+#   What it is for:   The update ring this installation belongs to: 0 = development, 1 = internal test, 2 = early
+#                     release, 3 = broad. It is shown in the header (UPDATE RING) and recorded with the installation,
+#                     so the ring is known from the day it is installed -- also before the updater job has run.
+#   Default:          Not set: the ring the installation recorded at install time (from its resource-group name),
+#                     until the updater records the ring it updates by
+#   If you change it: The header shows this ring and setup records it as the installation's ring. Once the updater job
+#                     has run, the header shows the ring the updater actually updated by -- which ring an installation
+#                     receives releases on is decided by the update service, not by this setting.
+#   When to change:   Once, when the installation's ring is not shown, or was recorded wrongly at install time.
+#   Risk:             Affects how the jobs sign in or which Azure resources they use. A wrong value stops the affected
+#                     jobs at their next run (nothing is changed or deleted); a broader identity or right gives the
+#                     jobs more access than they need. Reversible: correct it and run again.
+#   Recommended:      Keep the default. Change it when: Once, when the installation's ring is not shown, or was
+#                     recorded wrongly at install time.
+#   More info:        https://invardia.com/docs/si/settings/SI_UpdateRing/
 #
 # User-assigned managed identity  [SI_ManagedIdentityClientId]
 #   What it is for:   Client id of a user-assigned managed identity to sign in with when the sign-in method is managed
@@ -6949,6 +7856,24 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: When the service principal secret is kept in Key Vault rather
 #                     than using a certificate or managed identity.
 #   More info:        https://invardia.com/docs/si/settings/SpnSecretName/
+#
+# Pro database size  [SI_Bootstrap_SqlServiceObjective]  (advanced)
+#   What it is for:   The size (Azure SQL service objective) of the Pro database. Allowed values: S1, S2, S3, S4, S6,
+#                     S7, S9, S12. Empty = the product's rule.
+#   Default:          Empty: the product's rule -- Standard S3 for every install, raised to it when smaller, never
+#                     lowered.
+#   If you change it: Every update sets the Pro database to this size, raising or LOWERING it, by one online change
+#                     (no data loss; open connections reconnect once). Never below S1. A database on Premium, vCore or
+#                     in an elastic pool is left as it is. The identity database is not affected: it stays S1. A
+#                     smaller size costs less but makes pages and the nightly writes slower.
+#   When to change:   Only when support advises it -- for example S2 for a small install whose database is mostly
+#                     idle.
+#   Risk:             Affects how the jobs sign in or which Azure resources they use. A wrong value stops the affected
+#                     jobs at their next run (nothing is changed or deleted); a broader identity or right gives the
+#                     jobs more access than they need. Reversible: correct it and run again.
+#   Recommended:      Keep the default. Change it when: Only when support advises it -- for example S2 for a small
+#                     install whose database is mostly idle.
+#   More info:        https://invardia.com/docs/si/settings/SI_Bootstrap_SqlServiceObjective/
 #
 # Profile table name pattern  [SI_TableNamePattern]  (advanced)
 #   What it is for:   The pattern used to name each collection engine's Log Analytics table, where {0} is replaced by
@@ -7249,6 +8174,32 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Only when the default rule name clashes with an existing one
 #                     in your workspace.
 #   More info:        https://invardia.com/docs/si/settings/SI_Trend_DcrName/
+#
+# Web app CPU  [SI_Bootstrap_WebAppCpu]  (advanced, CPU)
+#   What it is for:   The CPU of the web app's own container: 0.5 to 4, in steps of 0.25. Empty = the product's size.
+#   Default:          Empty: the product's size, 2 CPU / 4 GiB.
+#   If you change it: Every update sets the web app to this CPU, raising or lowering it, with memory twice the CPU
+#                     unless Web app memory says otherwise. The sign-in front next to it keeps its own 0.25 CPU / 0.5
+#                     GiB; together they stay within 4 CPU / 8 GiB.
+#   When to change:   Only when support advises it -- the web app normally uses a small part of 2 CPU.
+#   Risk:             Affects how the jobs sign in or which Azure resources they use. A wrong value stops the affected
+#                     jobs at their next run (nothing is changed or deleted); a broader identity or right gives the
+#                     jobs more access than they need. Reversible: correct it and run again.
+#   Recommended:      Keep the default. Change it when: Only when support advises it -- the web app normally uses a
+#                     small part of 2 CPU.
+#   More info:        https://invardia.com/docs/si/settings/SI_Bootstrap_WebAppCpu/
+#
+# Web app memory  [SI_Bootstrap_WebAppMemory]  (advanced, GiB)
+#   What it is for:   The memory of the web app's own container, for example 4Gi. Empty = twice the web app's CPU.
+#   Default:          Empty: twice the CPU (4 GiB with the product's 2 CPU).
+#   If you change it: Every update sets the web app to this memory. Azure takes memory as twice the CPU, so a memory
+#                     set alone also sets the CPU to half of it.
+#   When to change:   Rarely; set Web app CPU instead.
+#   Risk:             Affects how the jobs sign in or which Azure resources they use. A wrong value stops the affected
+#                     jobs at their next run (nothing is changed or deleted); a broader identity or right gives the
+#                     jobs more access than they need. Reversible: correct it and run again.
+#   Recommended:      Keep the default. Change it when: Rarely; set Web app CPU instead.
+#   More info:        https://invardia.com/docs/si/settings/SI_Bootstrap_WebAppMemory/
 #
 # ----------------------------------------------------------------------------------------------------
 # Advanced / diagnostics

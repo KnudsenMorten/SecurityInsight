@@ -615,11 +615,12 @@ function Get-SIInstallGroupEdition {
 
 function Assert-SIInstallGroupEdition {
     <#
-        Framework section 5.5 (both editions default to rg-si): two editions never share a resource group. When the install's
-        resource group (the default rg-si or one the customer named) already holds SecurityInsight of the OTHER edition, the
-        install STOPS here -- in preflight, before anything is created -- with one step: run again with -ResourceGroup <another
-        name>. The same edition = a re-run of that install, fine; an empty group, a group that is not SecurityInsight's, a group
-        that does not exist yet or cannot be read = fine (nothing to protect, or no proof to stop on). Reads only.
+        Framework section 5.5 + PRO-COMMUNITY-SAME (Invardia C2, 2026-11-11): ONE install per resource group, and the edition
+        never decides it. A group that already holds SecurityInsight holds THIS install: the run goes on with that install's
+        names (Resolve-SIInstallExistingNames, next in preflight-names) -- a re-run, or the same install changing edition
+        (Community -> Pro when a licence is given). A second install never gets made beside it: it would take the existing
+        install's names. What the group holds is said in one line when its edition differs; nothing ever stops on the edition.
+        Returns the edition the group holds ($null when empty / not SecurityInsight's / unreadable). Reads only.
     #>
     param([Parameter(Mandatory)]$Ctx)
     $n = $Ctx.Names; $sub = [string]$Ctx.Values['subscriptionId']
@@ -631,11 +632,11 @@ function Assert-SIInstallGroupEdition {
         $tagEd = Get-SIInstallGroupEdition -Group $g
         if (-not $tagEd) { $inRg = @(Invoke-SIInstallAz -Ctx $Ctx -Command 'Get-SIArmResource' -Arguments ([ordered]@{ ResourceGroupName = $rg; SubscriptionId = $sub; ErrorAction = 'SilentlyContinue' }) | Where-Object { $_ }) }
         $have = if ($tagEd) { $tagEd } else { Get-SIInstallGroupEdition -Group $null -InRg $inRg }
-    } catch { return }
-    if (-not $have -or $have -eq [string]$Ctx.Edition) { return }
+    } catch { return $null }
+    if (-not $have -or $have -eq [string]$Ctx.Edition) { return $have }
     $label = @{ community = 'Community'; pro = 'Pro' }
-    $msg = ('{0} already holds SecurityInsight {1}. Two editions never share a resource group -- run the install again with -ResourceGroup <another name>.' -f $rg, $label[$have])
-    throw (New-SIInstallFailure -Message $msg -ActionText ('Run the install again with -ResourceGroup <another name> (the {0} edition gets a resource group of its own; nothing was created).' -f $label[[string]$Ctx.Edition]))
+    try { Write-SIInstallConsole -Ctx $Ctx -Text ('      {0} holds this SecurityInsight install ({1}); this run continues it as {2}.' -f $rg, $label[$have], $label[[string]$Ctx.Edition]) -Color 'Yellow' } catch { }
+    $have
 }
 
 $script:SIInstallGlobalNameTypes = $script:SISetupGlobalNameTypes
@@ -1765,7 +1766,7 @@ function Send-SIInstallFailureTelemetry {
         $tid = ''; if ($Ctx.Values -and $Ctx.Values.Contains('tenantId')) { $tid = [string]$Ctx.Values['tenantId'] }
         # the ring the install follows (the wizard's answer, framework §8.4 / §8.7); no answer = the configuration's SI_UpdateRing
         $ringArg = @{}; if ($Ctx.Values -and $Ctx.Values.Contains('updateRing') -and "$($Ctx.Values['updateRing'])".Trim()) { $ringArg.UpdaterRing = $Ctx.Values['updateRing'] }
-        $context = Get-SITelemetryContext -License $null -InstallKey $key -TenantId $tid -Edition $(if ($Ctx.Pro) { 'pro' } else { 'community' }) @ringArg
+        $context = Get-SITelemetryContext -License $null -InstallKey $key -TenantId $tid -Edition $(if ([string]$Ctx.Edition -eq 'pro') { 'pro' } else { 'community' }) @ringArg
         Send-SITelemetryFailure -Job install -Step $StepId -ErrorMessage $Message -Context $context
     } catch { $null }
 }
@@ -2481,8 +2482,8 @@ function Get-SIInstallStepTable {
         # framework section 5.5: an existing install under the EARLIER default group is never missed by the new default rg-si
         $earlierRg = Resolve-SIInstallEarlierDefaultGroup -Ctx $ctx
         if ($earlierRg) { $v = $ctx.Values }
-        # framework section 5.5: two editions never share a resource group (both default to rg-si) -- stops before anything is made
-        Assert-SIInstallGroupEdition -Ctx $ctx
+        # framework section 5.5 + PRO-COMMUNITY-SAME: one install per resource group; the edition never stops it (said, one line)
+        $null = Assert-SIInstallGroupEdition -Ctx $ctx
         # An existing install keeps its storage / Key Vault / registry / SQL server names; a new one gets the suffixed names.
         $keptNames = @(Resolve-SIInstallExistingNames -Ctx $ctx)
         if ($earlierRg) { $keptNames = @($earlierRg) + $keptNames }
@@ -2951,13 +2952,14 @@ function Get-SIInstallStepTable {
         $level = if ($ctx.Values['supportAccess']) { [string]$ctx.Values['supportAccess'] } else { 'troubleshoot' }
         $r = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'setup/Grant-SISupportAccess.ps1' -Arguments ([ordered]@{ AppId = $app; Level = $level; ConfigPath = $ctx.ConfigPath })
         $self = './setup/Grant-SISupportAccess.ps1 -AppId {0} -Level {1}' -f $app, $level
-        # THE SUPPORT APP KEEPS ITS DATABASE ACCESS AFTER THE INSTALL (Pro; framework 4.1b, owner 2026-10-18) -- whoever runs the
+        # THE SUPPORT APP KEEPS ITS DATABASE ACCESS AFTER THE INSTALL (both editions -- support is never Pro-only, framework
+        # PRO-COMMUNITY-SAME; framework 4.1b, owner 2026-10-18) -- whoever runs the
         # install, and whatever the script above could do: its own database user with db_owner in the product databases and
         # its place in the server's admin group, made NOW (while the install is still the server's administrator) and read
         # back. Both stay; nothing removes them. Never fails the install:
         # what is not in place is a warning with the command that makes it.
         $sd = $null
-        if ($ctx.Pro -and (Get-Command -Name Set-SIInstallSupportAppDatabase -ErrorAction SilentlyContinue)) { $sd = Set-SIInstallSupportAppDatabase -Ctx $ctx }
+        if (Get-Command -Name Set-SIInstallSupportAppDatabase -ErrorAction SilentlyContinue) { $sd = Set-SIInstallSupportAppDatabase -Ctx $ctx }
         $dbText = if ($sd) { ' ' + [string]$sd.Message } else { '' }
         $dbCmd = if ($sd -and -not $sd.Ok) { @(Get-SIInstallSupportAppDatabaseCommand -Ctx $ctx) } else { @() }
         if ($r.Error) {
@@ -4058,6 +4060,8 @@ function Invoke-SIGuidedInstallRun {
     }
 
     # ---- the context ----
+    # framework PRO-COMMUNITY-SAME (#1207 (16)): $ctx.Pro decides ONLY the licence steps (the licence, the v2.2 CMDB migration --
+    # SI-GuidedInstallPro.ps1). Every other step, job, identity and right is the same in both editions and never asks it.
     $pro = [bool](Get-Command -Name Get-SIInstallProStepTable -ErrorAction SilentlyContinue)
     # the database and web app steps: every package carries them (SI-GuidedInstallData.ps1, both versions)
     $data = [bool](Get-Command -Name Get-SIInstallDataStepTable -ErrorAction SilentlyContinue)
@@ -4129,7 +4133,9 @@ function Invoke-SIGuidedInstallRun {
     # owner 2026-11-02 ("license will come automatically when env is deployed. then i login and add"): the FULL package
     # creates the Pro engine jobs also without a licence -- each one checks the licence when it runs and skips until
     # SI-License is in the vault, so adding the licence later needs no second install (a later update re-creates only some).
-    if ($pro) { $ctx.Engines += @(Get-SIInstallProEngines -Values $ctx.Values) }
+    # framework PRO-COMMUNITY-SAME (Invardia C6, 2026-11-11): the SAME job set in both editions -- the paid engines' jobs are
+    # made in every install and gate on the licence when they run (SI-GuidedInstallData.ps1, both editions)
+    if (Get-Command -Name Get-SIInstallProEngines -ErrorAction SilentlyContinue) { $ctx.Engines += @(Get-SIInstallProEngines -Values $ctx.Values) }
     $ctx.Engines = @($ctx.Engines | Select-Object -Unique)
     foreach ($k in $proSteps.Keys) { if (($script:SIInstallProStepIds + $script:SIInstallDataStepIds) -contains $k) { $steps[$k] = $proSteps[$k] } }
 

@@ -243,13 +243,13 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root 'engine'))) {
 # ---------------------------------------------------------------------------
 if (-not $Install -and -not $SkipPull) {
     # Stream-extract installs (no .git/ + no git binary on the host) skip git pull.
-    # Updates flow through Sync-AutomateIT.ps1 (internal) or Update-SecurityInsight.ps1
-    # (community) on those hosts; this engine wrapper just runs the engines.
+    # Updates flow through Sync-AutomateIT.ps1 (internal) or the updater job (both editions);
+    # this engine wrapper just runs the engines.
     $haveGit  = [bool](Get-Command git -ErrorAction SilentlyContinue)
     $isGitRepo = Test-Path -LiteralPath (Join-Path $Root '.git')
     if (-not $haveGit -or -not $isGitRepo) {
         $reason = if (-not $haveGit) { 'git command not on PATH' } else { 'no .git/ in install root' }
-        Write-Host ("`n==> skipping git pull -- {0}. Updates flow through Sync-AutomateIT.ps1 or Update-SecurityInsight.ps1 on this host." -f $reason) -ForegroundColor DarkGray
+        Write-Host ("`n==> skipping git pull -- {0}. Updates flow through Sync-AutomateIT.ps1 or the updater job." -f $reason) -ForegroundColor DarkGray
     } else {
         Write-Host "`n==> git pull" -ForegroundColor Cyan
         Push-Location $Root

@@ -169,7 +169,13 @@ $script:SICiBuildVersion = 15
 # the identity ledger) and a split CI is recorded. With no decision every statement and the fingerprint are as before: re-baselined.
 # 2026-11-11 (PROGRESS-TICK-1): the end-of-build marks run one key range per call from PowerShell (Invoke-SICiMarkBuilt) --
 # the same statement per range, the same marks and rows (proven against the one batch on SQL Server): re-baselined, version 15.
-$script:SICiBuildLogicHash = '4ae6814acbf9dc7131a4fa513cbbaa61d947b026e20d12260d63c7c0beef55d8'
+# 2026-11-11 (MARK-BUILT-COST): every range keyed on its own bounds (OPTION (RECOMPILE)), and a record its finished batch
+# already marked in this build is counted, not written or read again -- the same marks and rows (proven against the one batch
+# on SQL Server, after kept batches too): re-baselined, version 15.
+# 2026-11-12 (any privileged logon counts): the rule kind privilegedLogonTier reads si_privileged_logon_tier (database only).
+# A CI comes out different only when its device record carries the new logon value -- that record changed, so the
+# incremental build rebuilds exactly that CI; every other CI is the same: re-baselined, version 15.
+$script:SICiBuildLogicHash = '2a5857cbb7fcb3de5bc9bbf0b040c98e50ba07f932b2c5b3149fc97c5c941f8f'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -311,7 +317,10 @@ $script:SICiPostDatabaseOnly = @(
     'si_config_noncompliant_categories', 'si_config_top', 'si_config_summary_status', 'si_mdc_assessed_count', 'si_mdc_unhealthy_count',
     'si_mdc_high_count', 'si_mdc_medium_count', 'si_mdc_low_count', 'si_mdc_oldest_unhealthy', 'si_mdc_newest_change', 'si_mdc_top',
     # rc12 (#499): the software past (or near) end of support -- a list like si_installed_software (its count is posted)
-    'si_software_eos')
+    'si_software_eos',
+    # the lowest tier of an account that logged on to the device (a tier input: the tier it gives is posted in si_tier and
+    # explained in si_tier_reason); database only so adding it does not post every CI's full row again
+    'si_privileged_logon_tier')
 # the fields each linked object carries in SI_CI_CL si_linked_objects. `state` (active / frozen / not_seen / gone, the
 # link's own state from the CI build): Risk Analysis's link block (RA-CiKql.ps1) takes a key whose record is not seen or
 # gone OUT OF SCOPE when the CI has a current record of the same provider -- a rebuilt server's old Defender record never
@@ -1556,12 +1565,23 @@ SELECT @marked AS Marked, 0 AS Cleared;
     # are never marked in any range (so a build stopped between two ranges cannot leave one counted as built), and lose the hash
     # they were built from (and BuiltAt) after the last range (Get-SICiMarkBuiltHeldSql) -- the next build finds their group
     # changed and builds it again with every rule
+    # MARK-BUILT-COST (live 2026-11-11: a large install sat 9 h+ in this pass, one core, after all its batches were done):
+    #   * KEYED: every statement of a range is compiled with the range's own bounds (OPTION (RECOMPILE)). The bounds are
+    #     variables of the batch; compiled once without their values, '(@first = 1 OR key > @lo) AND key <= @hi' read the keys
+    #     from the FIRST key up to @hi in every range -- each range read more of the records (their documents in-row) than the
+    #     one before, the adaptive size shrank the ranges, and the pass grew with the square of the records.
+    #   * EACH DOCUMENT AT MOST ONCE PER BUILD: a record its finished batch already marked in this build (Get-SICiMarkBuiltSql
+    #     -Batch: BuiltAt = this build's moment, Built* = this build's Cur*) carries exactly what this range would write -- the
+    #     same moment, the same thresholds, its document unchanged by the build -- and is counted, not written again; only the
+    #     others are written, and only their documents are read for NextDueAt. A full build whose batches were kept (the
+    #     usual case) therefore reads no document here at all.
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 DECLARE @now DATETIME2(3) = CONVERT(DATETIME2(3), @nowAt, 126);
-DECLARE @lo NVARCHAR(450) = @after, @hi NVARCHAR(450) = NULL, @first BIT = CONVERT(BIT, @isFirst), @n BIGINT = CONVERT(BIGINT, @take), @walked BIGINT = 0, @t0 DATETIME2(3), @ms BIGINT, @marked INT = 0;
-SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) g.RecordKey FROM sidata.CiGroupMember g WHERE (@first = 1 OR g.RecordKey > @lo) ORDER BY g.RecordKey) k;
+DECLARE @lo NVARCHAR(450) = @after, @hi NVARCHAR(450) = NULL, @first BIT = CONVERT(BIT, @isFirst), @n BIGINT = CONVERT(BIGINT, @take), @walked BIGINT = 0, @t0 DATETIME2(3), @ms BIGINT, @marked INT = 0, @kept INT = 0;
+SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) g.RecordKey FROM sidata.CiGroupMember g WHERE (@first = 1 OR g.RecordKey > @lo) ORDER BY g.RecordKey) k
+OPTION (RECOMPILE);
 IF @hi IS NULL
 BEGIN
     SELECT CAST(NULL AS NVARCHAR(450)) AS Hi, 0 AS Marked, CAST(0 AS BIGINT) AS Ms, CAST(0 AS BIGINT) AS Walked;
@@ -1570,15 +1590,27 @@ END
 DECLARE @held TABLE (RecordKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
 IF @h IS NOT NULL AND @h <> N'' AND @h <> N'[]'
     INSERT @held (RecordKey) SELECT DISTINCT x.RecordKey FROM OPENJSON(@h) WITH (RecordKey NVARCHAR(450) '$') x WHERE x.RecordKey IS NOT NULL;
+-- the range's records to mark, from their columns only (no document is read); Done = 1: its batch marked it in this build
+DECLARE @mk TABLE (RecordKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Done BIT NOT NULL);
 SET @t0 = SYSUTCDATETIME();
 BEGIN TRANSACTION;
+INSERT @mk (RecordKey, Done)
+SELECT m.RecordKey,
+       CASE WHEN r.BuiltAt = @now AND r.BuiltHash = m.CurHash AND r.BuiltTimeSig = m.CurTimeSig
+                 AND r.BuiltGroupKey COLLATE Latin1_General_BIN2 = m.GroupKey COLLATE Latin1_General_BIN2
+                 AND r.BuiltState COLLATE Latin1_General_BIN2 = m.CurState COLLATE Latin1_General_BIN2 THEN 1 ELSE 0 END
+FROM sidata.CiGroupMember m JOIN sidata.CiRecord r ON r.RecordKey = m.RecordKey
+WHERE (m.Dirty = 1 OR @all = N'1') AND r.CiId IS NOT NULL AND (@first = 1 OR m.RecordKey > @lo) AND m.RecordKey <= @hi
+  AND NOT EXISTS (SELECT 1 FROM @held hk WHERE hk.RecordKey = r.RecordKey)
+OPTION (RECOMPILE);
+SET @kept = (SELECT COUNT(*) FROM @mk WHERE Done = 1);
 UPDATE r SET BuiltHash = m.CurHash, BuiltGroupKey = m.GroupKey, BuiltState = m.CurState, BuiltTimeSig = m.CurTimeSig, BuiltAt = @now, NextDueAt = d.Due
-FROM sidata.CiRecord r JOIN sidata.CiGroupMember m ON m.RecordKey = r.RecordKey
+FROM @mk k JOIN sidata.CiRecord r ON r.RecordKey = k.RecordKey JOIN sidata.CiGroupMember m ON m.RecordKey = r.RecordKey
 $($ts.Apply)
 $due
-WHERE (m.Dirty = 1 OR @all = N'1') AND r.CiId IS NOT NULL AND (@first = 1 OR m.RecordKey > @lo) AND m.RecordKey <= @hi
-  AND NOT EXISTS (SELECT 1 FROM @held hk WHERE hk.RecordKey = r.RecordKey);
-SET @marked = @@ROWCOUNT;
+WHERE k.Done = 0 /* one-statement-ok: only this key range's records (@mk), the ones not marked by their batch */
+OPTION (RECOMPILE);
+SET @marked = @kept + @@ROWCOUNT;
 COMMIT TRANSACTION;
 SET @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
 SELECT @hi AS Hi, @marked AS Marked, @ms AS Ms, @walked AS Walked;
@@ -1612,12 +1644,14 @@ UPDATE r SET BuiltHash = NULL, BuiltAt = NULL FROM sidata.CiRecord r JOIN @held 
 
 function Get-SICiMarkBuiltClearSql {
     <# PURE. ONE key range of the records (as Get-SICiMarkBuiltSql): the built marks of records gone from the lookback are
-       cleared. Answers Hi, Cleared, Ms, Walked. #>
+       cleared. Answers Hi, Cleared, Ms, Walked. Keyed like the marks (OPTION (RECOMPILE): the range's own bounds, never a
+       read of the records from the first key in every range -- MARK-BUILT-COST). #>
     @'
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 DECLARE @lo NVARCHAR(450) = @after, @hi NVARCHAR(450) = NULL, @first BIT = CONVERT(BIT, @isFirst), @n BIGINT = CONVERT(BIGINT, @take), @walked BIGINT = 0, @t0 DATETIME2(3), @ms BIGINT, @cleared INT = 0;
-SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) r.RecordKey FROM sidata.CiRecord r WHERE (@first = 1 OR r.RecordKey > @lo) ORDER BY r.RecordKey) k;
+SELECT @hi = MAX(k.RecordKey), @walked = COUNT_BIG(*) FROM (SELECT TOP (@n) r.RecordKey FROM sidata.CiRecord r WHERE (@first = 1 OR r.RecordKey > @lo) ORDER BY r.RecordKey) k
+OPTION (RECOMPILE);
 IF @hi IS NULL
 BEGIN
     SELECT CAST(NULL AS NVARCHAR(450)) AS Hi, 0 AS Cleared, CAST(0 AS BIGINT) AS Ms, CAST(0 AS BIGINT) AS Walked;
@@ -1627,7 +1661,8 @@ SET @t0 = SYSUTCDATETIME();
 UPDATE r SET BuiltHash = NULL, BuiltGroupKey = NULL, BuiltState = NULL, BuiltTimeSig = NULL, NextDueAt = NULL
 FROM sidata.CiRecord r
 WHERE (@first = 1 OR r.RecordKey > @lo) AND r.RecordKey <= @hi
-  AND r.BuiltGroupKey IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = r.RecordKey);
+  AND r.BuiltGroupKey IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.CiGroupMember m WHERE m.RecordKey = r.RecordKey)
+OPTION (RECOMPILE);
 SET @cleared = @@ROWCOUNT;
 SET @ms = DATEDIFF_BIG(MILLISECOND, @t0, SYSUTCDATETIME());
 SELECT @hi AS Hi, @cleared AS Cleared, @ms AS Ms, @walked AS Walked;

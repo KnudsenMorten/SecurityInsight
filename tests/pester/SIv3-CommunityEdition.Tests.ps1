@@ -10,7 +10,7 @@
       (11)    side by side in ONE tenant: a NEW Community edition install gets tenant-wide names of its own (the sign-in app,
               the engine app, the SQL admin group) and never finds a Pro install's objects -- nor a Pro install the Community
               one's;
-      (b)     a Community edition install records its update ring on the Community channel, ring 2 or 3 only.
+      (b)     a Community edition install records its update ring as given, rings 0-3 as Pro (PRO-COMMUNITY-SAME, #1207).
     The licence-record cases need the Pro package's install file (setup\_shared\SI-GuidedInstallPro.ps1) and are skipped in a
     Community copy, saying so.
 #>
@@ -80,16 +80,15 @@ Describe '(6) the database names are the same in both editions; the server and r
     }
 }
 
-Describe '(11) side by side in one tenant: a new Community edition install has tenant-wide names of its own' {
-    It 'its sign-in app, engine app and SQL admin group are named apart from a Pro install''s' {
+Describe '(11) tenant-wide names: a new install gets the SAME names in both editions (PRO-COMMUNITY-SAME, Invardia C1 2026-11-11); an existing Community install keeps its own' {
+    It 'its sign-in app, engine app and SQL admin group carry the same names in both editions -- the edition is in no name' {
         $c = Get-SISetupDisplayNames -New -Edition community
         $p = Get-SISetupDisplayNames -New -Edition pro
         foreach ($k in 'SpnDisplayName', 'WebAppDisplayName', 'SqlAdminGroupDisplayName', 'SqlAdminGroupName') {
-            [string]$c[$k] | Should -Not -BeExactly ([string]$p[$k]) -Because $k
-            [string]$c[$k] | Should -Match '(?i)community' -Because $k
+            [string]$c[$k] | Should -BeExactly ([string]$p[$k]) -Because $k
+            [string]$c[$k] | Should -Not -Match '(?i)community' -Because $k
         }
-        $c.SqlAdminGroupName | Should -BeExactly 'grp-si-community-sql-admins'
-        $p.SqlAdminGroupName | Should -BeExactly 'grp-si-sql-admins'
+        $c.SqlAdminGroupName | Should -BeExactly 'grp-si-sql-admins'
     }
     It 'an existing install (today''s names, no -New) keeps exactly today''s names in both editions' {
         foreach ($e in 'community', 'pro') {
@@ -109,7 +108,7 @@ Describe '(11) side by side in one tenant: a new Community edition install has t
         $pf = Get-SISqlAdminGroupFilter -GroupName 'grp-si-sql-admins'
         $pf | Should -Not -Match '(?i)community'
     }
-    It 'the install creates the Community group under its own standard name (both database steps)' {
+    It 'an existing Community install''s recorded group is kept; a new install of either edition gets grp-si-sql-admins (both database steps)' {
         $names = [ordered]@{ SqlServer = 'sql-si-prod-community-ca-abc123'; ResourceGroup = 'rg-si-prod-community-ca'
                              SqlAdminGroupDisplayName = 'SecurityInsight Community SQL admins'; SqlAdminGroupName = 'grp-si-community-sql-admins' }
         $ctx = [pscustomobject]@{ Values = [ordered]@{ subscriptionId = '00000000-0000-0000-0000-000000000001' }; Names = $names; Facts = [ordered]@{ userObjectId = '11111111-1111-1111-1111-111111111111' } }
@@ -119,7 +118,7 @@ Describe '(11) side by side in one tenant: a new Community edition install has t
         # framework 5.5 (Invardia 2026-11-07): a NEW install's names -- the group is created under its standard name, no display name of its own
         $ctx.Names = Get-SISetupDisplayNames -New -Edition community; $ctx.Names.SqlServer = 's'; $ctx.Names.ResourceGroup = 'r'
         $gc = Get-SIInstallSqlAdminGroupArgs -Ctx $ctx
-        $gc.GroupName | Should -BeExactly 'grp-si-community-sql-admins'
+        $gc.Contains('GroupName') | Should -BeFalse -Because 'a new Community install uses the same group as Pro (grp-si-sql-admins, the script default)'
         $gc.Contains('DisplayName') | Should -BeFalse
         $ctx.Names = Get-SISetupDisplayNames -New -Edition pro; $ctx.Names.SqlServer = 's'; $ctx.Names.ResourceGroup = 'r'
         $gp = Get-SIInstallSqlAdminGroupArgs -Ctx $ctx
@@ -166,20 +165,24 @@ Describe '2026-10-28: the public copy has no BUILD.json -- the web app image sti
         $e = Join-Path $TestDrive 'empty'; New-Item -ItemType Directory -Force -Path $e | Out-Null
         { Initialize-SIBuildInfoFile -SolutionRoot $e } | Should -Throw '*VERSION*'
     }
-    It 'the Community updater stamps it before anything is built; the guided install''s web deploy stamps its own stage' {
+    It 'the Community package is stamped before anything is built (the one client fetches the package, then rolls); the guided install''s web deploy stamps its own stage' {
         $u = Read-SI 'container\updater\_shared\SI-UpdaterCommunity.ps1'
-        $u.IndexOf('Initialize-SIBuildInfoFile') | Should -BeGreaterThan 0
-        $u.IndexOf('Initialize-SIBuildInfoFile') | Should -BeLessThan $u.IndexOf('Invoke-SIUpdaterRoll -SIRoot')
+        $fn = [regex]::Match($u, '(?s)function Save-SIUpdaterCommunityRelease \{.*?\r?\n\}\r?\n').Value
+        $fn.IndexOf('Initialize-SIBuildInfoFile') | Should -BeGreaterThan 0
+        $inv = Read-SI 'container\updater\_shared\SI-UpdaterInvardia.ps1'
+        $inv.IndexOf('$pkg = & $fetchCode $code $Work') | Should -BeGreaterThan 0
+        $inv.IndexOf('$pkg = & $fetchCode $code $Work') | Should -BeLessThan $inv.IndexOf('Invoke-SIUpdaterRoll -SIRoot $si')
         (Read-SI 'pro-management\deploy\Deploy-SIManagement.ps1') | Should -Match "Write-SIBuildInfo -Info \`$info -Path \(Join-Path \`$Stage 'BUILD.json'\)"
     }
 }
 
-Describe '(b) a Community edition install records its update ring on the Community channel, ring 2 or 3' {
-    It 'the settings step records channel community and clamps any other ring to 3' {
+Describe '(b) a Community edition install records its update ring as given, rings 0-3 as Pro (PRO-COMMUNITY-SAME)' {
+    It 'the settings step records channel community for a Community install and never clamps the ring' {
         $src = Read-SI 'setup\_shared\SI-GuidedInstallData.ps1'
-        # by the package's update source, not the licence: a full package installed without a licence keeps its ring
-        $src | Should -Match "\`$viaInvardia = \(\(Get-SIInstallUpdateSource -SIRoot \`$ctx\.SIRoot\) -eq 'invardia'\)"
-        $src | Should -Match "if \(-not \`$viaInvardia -and \`$a\.Ring -notin '2', '3'\) \{ \`$a\.Ring = '3' \}"
+        # by the install's edition, never by which files the package carries
+        $src | Should -Match "\`$viaInvardia = \(`"\`$\(\`$ctx\.Edition\)`"\.Trim\(\) -ine 'community'\)"
+        $src | Should -Not -Match "\`$a\.Ring -notin '2', '3'" -Because 'rings 0-3 for both editions'
+        $src | Should -Not -Match 'is not a Community ring' -Because 'rings 0-3 for both editions'
         $src | Should -Match "\`$a\.Channel = \`$\(if \(\`$viaInvardia\) \{ 'invardia' \} else \{ 'community' \}\)"
     }
 }

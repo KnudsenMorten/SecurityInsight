@@ -48,12 +48,14 @@ pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs.
   Services:
   pro-management/src/SI.Management.Mcp (the MCP server; it answers only with a Pro licence)
   the licence request to Invardia (Get Started's licence step)
+  the paid mail kinds of the mail job (engine/asset-cmdb/Invoke-SICloseLoopMail.ps1): the vulnerability close-loop's daily mail,
+  the ServiceNow checks, the exemption expiry warnings and monthly reviews -- each asks the licence when the job runs
 
 PART 2 -- PRO COMPONENTS THAT ARE NOT IN THE COMMUNITY EDITION
 
 These paths are delivered only to licensed customers through the private AutomateIT sync.
 
-  engine/asset-cmdb (every file except _shared/SI-VulnDesired.ps1, _shared/SI-VulnRelease.ps1, _shared/SI-VulnTarget.ps1 and _shared/SI-ReconcileGuards.ps1)
+  engine/asset-cmdb (every file except Invoke-SICloseLoopMail.ps1, _shared/SI-CloseLoopMail.ps1, _shared/SI-ExemptionMail.ps1, _shared/SI-VulnDesired.ps1, _shared/SI-VulnRelease.ps1, _shared/SI-VulnTarget.ps1 and _shared/SI-ReconcileGuards.ps1)
   engine/pro-data/Invoke-SIDepartmentReport.ps1
   engine/pro-data/Invoke-SIGovernanceMail.ps1
   engine/pro-data/Invoke-SITaskDigest.ps1
@@ -80,28 +82,9 @@ These paths are delivered only to licensed customers through the private Automat
   setup/Import-SIProductDocs.ps1
   setup/New-SITemplatePack.ps1
   setup/Get-SITemplateReleases.ps1
-  engine/heartbeat
-  engine/_shared/SI-HeartbeatJob.ps1
-  engine/_shared/SI-SupportSqlAccess.ps1
-  engine/_shared/SI-HeartbeatFields.ps1
-  engine/_shared/SI-PerfSample.ps1
-  engine/_shared/SI-UpdateNowSignal.ps1
-  engine/_shared/SI-InvardiaEnvironment.ps1
   setup/_shared/SI-GuidedInstallPro.ps1
   config/connector-risk-register.sample.json
   config/connector-jira-issues.sample.json
-  engine/_shared/SI-InvardiaUpdate.ps1
-  engine/_shared/SI-InvardiaUpdateKeys.json
-  container/updater/_shared/SI-UpdaterInvardia.ps1
-  setup/Grant-SISupportAppDatabase.ps1
-  setup/_shared/SI-SupportAppDatabase.ps1
-  setup/Invoke-SISupportSqlAccessJob.ps1
-  setup/Install-SISupportGrantProcedure.ps1
-  setup/Remove-SISupportStandingAccess.ps1
-  setup/_shared/SI-SupportSqlJob.ps1
-  setup/Invoke-SISupportReadJob.ps1
-  setup/_shared/SI-SupportReadJob.ps1
-  setup/_shared/SI-MissingJobs.ps1
   setup/Publish-SIRelease.ps1
   setup/Publish-SICommunityRelease.ps1
   setup/_shared/SI-ReleaseGateProof.ps1
@@ -116,9 +99,6 @@ These paths are delivered only to licensed customers through the private Automat
   setup/_shared/SI-InvardiaPublisher.ps1
   setup/Import-SICmdbCsv.ps1
   setup/New-SIServiceNowTestPack.ps1
-  setup/Clear-SIGuardEvents.ps1
-  setup/Set-SICiCutoff.ps1
-  setup/Reset-SIData.ps1
   setup/Invoke-SIGuardAcceptEverywhere.ps1
   setup/Compare-SISummaryGroupings.ps1
   setup/Get-SIFindingFoldPreview.ps1

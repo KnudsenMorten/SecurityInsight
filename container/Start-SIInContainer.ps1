@@ -591,6 +591,10 @@ if ($dispatchDirect) {
     $directExit = 0
     if ($d.Skip) {
         Write-Host ('[{0}] {1} -- nothing to do.' -f $engine, $d.Skip)
+    } elseif (-not (Test-Path -LiteralPath (Join-Path '/app' $d.Script))) {
+        # framework PRO-COMMUNITY-SAME (C6): every install has the same jobs; a licensed engine whose code this package does not
+        # carry ends here with one line and a good exit -- it runs once the install has the licence and the package that has it
+        Write-Host ('[{0}] this is a licensed SecurityInsight Pro feature and this package does not carry it -- nothing to do.' -f $engine)
     } else {
         $script = Join-Path '/app' $d.Script
         Write-Host ("[SI_ROLE=worker SI_ENGINE={0}] dispatching to {1} {2}" -f $engine, $script, (($d.Args.GetEnumerator() | ForEach-Object { "-$($_.Key) $($_.Value)" }) -join ' ')) -ForegroundColor Cyan

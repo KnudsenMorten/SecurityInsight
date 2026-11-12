@@ -14,14 +14,15 @@ Chapter numbering matches the internal backlog, so a feature
 keeps its chapter as it moves from planned → delivered.
 
 **Editions.** Everything in this catalog except the *SecurityInsight Pro* chapter at the end is part of the free **Community** edition, licensed under the
-PolyForm Shield License 1.0.0. Both editions run the same code in your own Azure as Azure Container Apps jobs, with the
-web app and a database, and the licence switches the Pro features on. Cross-engine correlation, the full asset
+PolyForm Shield License 1.0.0. Both editions install, run and update the same way in your own Azure as Azure Container
+Apps jobs, with the web app and a database: the same installer, the same jobs, identities, rights and settings, the
+same updater at the nightly run. Only the licensed features differ, and each one checks the licence when it runs. A Community install is connected to Invardia (health reports, updates on request) only if you choose so at install; otherwise it sends nothing that identifies it. Cross-engine correlation, the full asset
 properties, the web app's findings, views, tier board, management views, trends and wall board, and asset tagging are
 in both editions; some lines in the Pro chapter below describe these and are in Community too.
 **SecurityInsight Pro** adds governance (exemptions, departments, follow-up tasks, external advisors), the CMDB in
 SecurityInsight and its connectors, the ServiceNow CMDB connector and the vulnerability close-loop, mail alerts and
 management summary mails, roles and scopes, the audit trail, template releases by update ring, Ask SecurityInsight,
-the MCP server and management presentations, updates from Invardia and Invardia support. Pro comes as **Pro Business**
+the MCP server and management presentations, and Invardia support. Pro comes as **Pro Business**
 and **Pro Enterprise** with the same features: Pro Business carries a device limit in its signed licence, Pro
 Enterprise has none.
 
@@ -41,7 +42,8 @@ Enterprise has none.
 | One daily pipeline; an update waits for a running pipeline and never stops it | ✅ | ✅ | ✅ |
 | A database setup job: no person needs database admin rights | ✅ | ✅ | ✅ |
 | Asset tagging with a dry run first | ✅ | ✅ | ✅ |
-| Signed updates from the Community channel | ✅ | | |
+| Signed updates by update ring, at the nightly run (the same updater in every edition) | ✅ | ✅ | ✅ |
+| The mail job: the mail check, safety-check mails, the Get Started reminder | ✅ | ✅ | ✅ |
 | Departments, governed exemptions, follow-up tasks and governance mails | | ✅ | ✅ |
 | CMDB in SecurityInsight, business services ranked by weighted risk | | ✅ | ✅ |
 | ServiceNow CMDB and the vulnerability close-loop (ServiceNow, SQL, REST) | | ✅ | ✅ |
@@ -49,7 +51,7 @@ Enterprise has none.
 | Roles and scopes for people and groups, audit trail | | ✅ | ✅ |
 | Template releases by update ring, conformance and deviations | | ✅ | ✅ |
 | Ask SecurityInsight (AI chat), the MCP server and management presentations | | ✅ | ✅ |
-| Updates from Invardia by update ring and a signed licence | | ✅ | ✅ |
+| A signed licence from Invardia | | ✅ | ✅ |
 | Support from Invardia (support service, Support app, just-in-time database access - each optional) | Community help on GitHub; Support app optional | ✅ | ✅ |
 | Number of devices | No limit | The limit in your licence | No limit |
 

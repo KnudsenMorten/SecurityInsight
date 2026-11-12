@@ -1514,6 +1514,117 @@
       "addedIn": "2.3.0"
     },
     {
+      "name": "PrivilegedLogonTier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_privileged_logon_min_tier",
+        "lookbackDays": "SI_Endpoint_PrivilegedLogon_WindowDays (default 30)",
+        "logonTypes": "Interactive, RemoteInteractive, CachedInteractive, CachedRemoteInteractive, Unlock, CachedUnlock; successful logons only (no Network / Service / Batch / NetworkCleartext / NewCredentials)",
+        "join": "the Tier 0-2 identities of this run's SI_Identity_Profile_CL (on-prem SID, cloud SID of the object id, object id, UPN) are the FILTER of the DeviceLogonEvents query (never the devices); summarised per device and account; incremental from a stored rolling window; MIN tier over every account that logged on"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "rule",
+          "name": "AssetProfileByPrivilegedLogon"
+        }
+      ],
+      "addedIn": "3.1.8"
+    },
+    {
+      "name": "PrivilegedLogons",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_privileged_logon_min_tier",
+        "shape": "[ { Upn, Tier, Reason, LastLogonUtc, LogonType, Count, Days, Counted, Why }, ... ] the privileged accounts (Tier 0-2) that logged on in the window (Reason = why the account has its tier: its winning identity rule or tier reason; Days = distinct days on this device; Counted / Why = whether it set the tier and why -- e.g. a one-off or support-pattern logon under the support filter), sorted by Tier then newest logon, first 10 (the tier uses every one)"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "3.1.8"
+    },
+    {
+      "name": "PrivilegedLogonComputedTier",
+      "type": "int",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_privileged_logon_min_tier",
+        "values": "what the privileged-logon source decides (the lowest tier 0-2 of a counted logon), in every mode but off -- in shadow mode (SI_Endpoint_PrivilegedLogon_Mode = shadow) it is recorded here and PrivilegedLogonTier stays empty, so the device's Tier is not changed"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "3.1.8"
+    },
+    {
+      "name": "PrivilegedLogonEvidence",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_privileged_logon_min_tier",
+        "values": "<account> (Tier N: <why the account has its tier>) logged on <date> (<logon type>) for the logon that set the tier; for a privileged logon that was not counted, the same with why not"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "3.1.8"
+    },
+    {
+      "name": "MostFrequentUserComputedTier",
+      "type": "int",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_user_logon_min_tier",
+        "values": "what the most-frequent-user source decides, in every mode but off -- in shadow mode (SI_Endpoint_MostFrequentUserTier_Mode = shadow) MostFrequentUserTier stays empty, so the device's Tier is not changed"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "3.1.8"
+    },
+    {
+      "name": "PrivilegedLogonStatus",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_privileged_logon_min_tier",
+        "values": "read (the logons of the window were read; an empty PrivilegedLogonTier then means no privileged account logged on) / unknown -- <why> (the device logons or the identity tiers could not be read this run: the source is unknown, never 'no privileged logon') / empty (not asked: no Defender device)"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "3.1.8"
+    },
+    {
       "name": "CriticalityLevel",
       "type": "int",
       "purpose": "risk",

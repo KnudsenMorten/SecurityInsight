@@ -45,10 +45,27 @@ function Resolve-SupersededOnSuccess {
 function Flush-SupersededAttempts {
     # Call when EVERY path has failed for this query. Emits a SINGLE consolidated
     # WARN with all per-attempt detail, then clears the buffer.
-    if ($script:_SupersededAttempts.Count -gt 0) {
-        Write-Warn2 ("all data paths failed for this query; attempts: {0}" -f ($script:_SupersededAttempts -join ' || '))
-        Reset-SupersededAttempts
+    # SUP-2026-00496: -LastPath / -LastMessage = the LAST path's own failure (advanced hunting, Log Analytics direct). The
+    # WARN used to list only the EARLIER failures -- the last path's answer was never added -- so a lake that is simply not
+    # there for this identity (a supported state) read as the whole failure ("attempts: lake: ... InvalidDatabaseInQuery")
+    # and the run's warning got the class 'unknown'. Now the last path's failure is listed LAST with its real words, and the
+    # class comes from it (Get-SIErrorClass reads the last attempt). Nothing is said when no earlier path failed: a
+    # single-path failure says itself in its own handler, exactly as before.
+    # -Quiet: a MEASUREMENT (the completeness count) that says its own outcome -- its attempts go to the verbose log only,
+    # never a WARN (a count that cannot be had is said as INFO by its caller and never fails a report).
+    param([string]$LastPath = '', [AllowEmptyString()][AllowNull()][string]$LastMessage = '', [switch]$Quiet)
+    if ($null -eq $script:_SupersededAttempts -or $script:_SupersededAttempts.Count -eq 0) { return }
+    if ($LastPath) {
+        $first = @([string]$LastMessage -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+        $words = if ($first.Count) { ([string]$first[0]).Trim() } else { '(the service gave no message)' }
+        Add-SupersededAttempt -Path $LastPath -Message $words
     }
+    if ($Quiet) {
+        Write-Diag ("every data path failed for this count; attempts: {0}" -f ($script:_SupersededAttempts -join ' || '))
+    } else {
+        Write-Warn2 ("all data paths failed for this query; attempts: {0}" -f ($script:_SupersededAttempts -join ' || '))
+    }
+    Reset-SupersededAttempts
 }
 function Write-Phase  {
     param([Parameter(Mandatory)][string]$Title, [string]$Subtitle = '')

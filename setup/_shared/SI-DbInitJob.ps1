@@ -459,13 +459,16 @@ END
 
 function Get-SIDbInitStatsAsyncSql {
     <# PURE. The database's setting that a stale statistic is updated in the background; idempotent (on already = a read only).
-       A lock that does not come within 10 seconds is an error the job says as a warning; the next update tries again. #>
+       A lock that does not come within 10 seconds is an error the job says as a warning; the next update tries again.
+       #1210: READ BACK after the change -- still off = an error (a warning of this not-required batch), never a silent pass. #>
     @'
 IF (SELECT d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID()) = 0
 BEGIN
     SET LOCK_TIMEOUT 10000;
     ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC ON;
     SET LOCK_TIMEOUT -1;
+    IF (SELECT d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID()) = 0
+        THROW 51795, N'the background statistics setting did not change (read back: still off)', 1;
 END
 '@
 }

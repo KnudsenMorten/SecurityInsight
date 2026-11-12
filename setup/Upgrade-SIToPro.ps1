@@ -4,20 +4,22 @@
     SecurityInsight releases to your update ring -- from Invardia's update platform -- by themselves from now on.
 
 .DESCRIPTION
-    The same step as PIM4EntraPS's Upgrade-PimToPro.ps1. Both editions run the same containers; they differ in the
-    licence (which features run) and in HOW an install is updated:
+    The same step as PIM4EntraPS's Upgrade-PimToPro.ps1. Both editions run the same containers, the same database and web
+    app, and the same updater job with the same update client (framework PRO-COMMUNITY-SAME); they differ only in the
+    licence (which features run) and in the manifest address the client asks (with a licence: Invardia's install route;
+    a Community install without one: Invardia's anonymous Community route):
 
-      * Community: you update when you choose -- .\Update-SecurityInsight.ps1 -Apply takes the release from GitHub
-        and rebuilds + rolls the containers from it (verify, roll back on failure).
+      * An install made before 3.1 (framework PRO-COMMUNITY-SAME) may have no updater job: it was updated by a local
+        script, which is retired.
       * Pro: the nightly updater job in your own subscription takes what SecurityInsight released to your update ring
         from Invardia's update platform (signed manifests, checked against the keys this release carries) and rolls the
         containers to it. SecurityInsight's own update feed is retired (2026-10-06) -- there is no link to receive.
 
-    This is the switch from the first to the second. RUN IT FROM THE PRO PACKAGE (the guided install on invardia.com, or
-    the package your licence gives you): the updater job's Invardia client ships only with Pro. It reads the container
+    This is the switch from the first to the second: it installs (or refreshes) the updater job and records it as the
+    Pro edition's; with the licence installed, the job asks Invardia's install route. It reads the container
     hosting your setup SAVED in config\SecurityInsight.custom.ps1 and your engine identity, and runs
     setup\Install-SIUpdaterJob.ps1 with them. On success it records the updater job in the saved hosting block; from
-    then on setup\Invoke-SIContainerUpdate.ps1 (and so Update-SecurityInsight.ps1) leaves the containers to the job.
+    then on setup\Invoke-SIContainerUpdate.ps1 leaves the containers to the job.
 
     Without -Apply nothing changes: the plan is printed, including anything missing.
 
@@ -77,7 +79,7 @@ foreach ($n in 'SI_Bootstrap_SubscriptionId', 'SI_Bootstrap_ResourceGroupName', 
     if ($null -ne $v) { $globals[$n] = $v }
 }
 if (-not (Resolve-SIContainerUpdateTarget -Globals $globals)) {
-    throw 'This install has no container hosting saved -- the updater job updates CONTAINERS. A VM install keeps updating with .\Update-SecurityInsight.ps1 -Apply. (An install made before 3.0.0 records its containers once with: .\setup\Invoke-SIContainerUpdate.ps1 -ResourceGroupName <rg> -AcrName <acr> -Save)'
+    throw 'This install has no container hosting saved -- the updater job updates CONTAINERS. (An install made before 3.0.0 records its containers once with: .\setup\Invoke-SIContainerUpdate.ps1 -ResourceGroupName <rg> -AcrName <acr> -Save)'
 }
 $plan = Get-SIProUpgradePlan -Globals $globals -CertSecretName $CertSecretName -KeyVaultName $KeyVaultName -EnvName $EnvName -UseManagedIdentity:$UseManagedIdentity
 
@@ -90,7 +92,7 @@ if (@($plan.Missing).Count) {
 }
 if (-not $Apply) {
     Write-Host '    nothing changed -- re-run with -Apply to install the updater job.'
-    Write-Host '    From then on the job updates the containers; .\Update-SecurityInsight.ps1 still updates this folder but leaves the containers to the job.'
+    Write-Host '    From then on the job updates the containers.'
     return
 }
 

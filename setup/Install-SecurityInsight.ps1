@@ -99,6 +99,9 @@
     external (default: from the internet behind Entra sign-in) or internal (from your network only).
 .PARAMETER WebAppAdmins
     The web app's administrators (UPNs). Required when the install runs as an application.
+.PARAMETER ConnectToInvardia
+    Switch: Connect this install to Invardia: health reports + updates on request. Off by default for the Community edition
+    (nothing that identifies the install is sent); a Pro install is always connected. Changed later with SI_Invardia_Connect.
 .PARAMETER AssetTaggingWrites
     Switch: grant asset tagging the rights to write tags (writing is still switched on in the web app).
 .PARAMETER UpdateRing
@@ -243,6 +246,7 @@ param(
     [ValidateSet('external', 'internal')][string]$WebAppAccess,
     [string[]]$WebAppAdmins,
     [switch]$AssetTaggingWrites,
+    [switch]$ConnectToInvardia,
     [ValidateSet(1, 2, 3)][int]$UpdateRing,
     [string]$ServiceNowUrl,
     [switch]$PrivateNetwork,

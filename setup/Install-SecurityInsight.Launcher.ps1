@@ -7,36 +7,29 @@
     The ONE file a person downloads to install SecurityInsight (framework INSTALL-1). Runs in Azure Cloud Shell
     (PowerShell 7) and in PowerShell 7 or Windows PowerShell 5.1 on Windows. It needs no PowerShell module.
 
-    The edition comes with this file, never with a parameter. The copy in the public SecurityInsight repository installs
-    SecurityInsight Community from the public release on GitHub. The copy Invardia hands out at
-    https://invardia.com/support/si/ installs SecurityInsight Pro from Invardia -- never from GitHub.
+    The edition comes with this file, never with a parameter. The copy in the public SecurityInsight repository (and on its
+    GitHub releases) installs SecurityInsight Community; the copy Invardia hands out at https://invardia.com/support/si/
+    installs SecurityInsight Pro. Both copies take the SAME steps and install the release Invardia has signed for your
+    update ring -- never a newer one; only where the package is downloaded from differs:
 
-    SecurityInsight Pro (the copy from invardia.com):
       1. Signs you in to Azure for -TenantId: in Azure Cloud Shell with no prompt, on a workstation in your browser (the
          same sign-in the installer uses; no device code). The installer started in step 5 takes this sign-in over, so you
          sign in ONCE.
-      2. Asks Invardia for the SecurityInsight Pro package of your update ring (-UpdateRing; without it Invardia's default,
-         ring 3), with that sign-in. Invardia hands it out only to a signed-in admin of a tenant that has an Invardia
-         environment with SecurityInsight. No licence is needed: the install deploys with every job parked until the
-         licence is assigned. A refusal stops here with Invardia's reason (exit 3); there is no other source.
+      2. Asks Invardia for the release of your update ring (-UpdateRing; without it ring 3). Pro: the SecurityInsight Pro
+         package, with that sign-in (Invardia hands it out only to a signed-in admin of a tenant that has an Invardia
+         environment with SecurityInsight; no licence is needed: the install deploys with every job parked until the licence
+         is assigned). Community: the signed Community release of the ring (no account needed). A refusal stops here with
+         Invardia's reason (exit 3); there is no other source.
       3. Checks Invardia's answer exactly as SecurityInsight's updater checks an update: the manifest's signature against
          Invardia's update-signing keys that come with this file, then downloads the package into a NEW, empty folder in
          the temp folder (securityinsight-release-<version>-<random>) and checks its size and SHA-256 against the signed
-         manifest. -Version is not used: Pro installs the release Invardia serves to the ring.
+         manifest. Pro downloads the Pro package from Invardia; Community downloads the public release zip the signed
+         manifest names. -Version is not used: both install the release Invardia serves to the ring.
       4. Checks the zip (it opens, it holds setup/Install-SecurityInsight.ps1, its VERSION is the package's) and unpacks it.
-      5. Runs the full installer, setup/Install-SecurityInsight.ps1, FROM that folder as SecurityInsight Pro with exactly the
-         parameters you gave, and ends with its exit code.
+      5. Runs the full installer, setup/Install-SecurityInsight.ps1, FROM that folder with exactly the parameters you gave,
+         and ends with its exit code.
 
-    SecurityInsight Community (the copy from GitHub):
-      1. Reads the public SecurityInsight release on GitHub (the latest, or the one -Version names). No sign-in.
-      2. Downloads the release zip (SecurityInsight-v<version>.zip) into a NEW, empty folder in the temp folder.
-      3. Checks the download before anything runs: it is not empty (and has the size and SHA-256 the release states, when
-         the release states them), the zip opens, it holds setup/Install-SecurityInsight.ps1, and its VERSION file is the
-         release's version. A failed check stops here: nothing is installed and the folder is removed.
-      4. Unpacks it and runs the full installer FROM that folder with exactly the parameters you gave (the same parameters
-         as the installer; this help lists them), and ends with its exit code.
-
-    Both: after a successful install the downloaded folder is removed (-KeepDownload keeps it). After a stop it is kept, and
+    After a successful install the downloaded folder is removed (-KeepDownload keeps it). After a stop it is kept, and
     -Resume uses it again (a small note remembers where it is: ~/clouddrive/invardia/securityinsight-launcher.json in
     Azure Cloud Shell, else .invardia/securityinsight-launcher.json in your user profile). When the folder is gone (a new
     Cloud Shell session), -Resume downloads the package again -- the install keeps its own progress in its state folder,
@@ -114,11 +107,14 @@
     external (default: from the internet behind Entra sign-in) or internal (from your network only).
 .PARAMETER WebAppAdmins
     The web app's administrators (UPNs). Required when the install runs as an application.
+.PARAMETER ConnectToInvardia
+    Switch: Connect this install to Invardia: health reports + updates on request. Off by default for the Community edition
+    (nothing that identifies the install is sent); a Pro install is always connected. Changed later with SI_Invardia_Connect.
 .PARAMETER AssetTaggingWrites
     Switch: grant asset tagging the rights to write tags (writing is still switched on in the web app).
 .PARAMETER UpdateRing
     The release ring this install follows: 1, 2 or 3 (default 3, broad). Recorded at install, also without a licence.
-    SecurityInsight Pro installs the package Invardia serves to this ring.
+    The launcher installs the release Invardia serves to this ring (Pro and Community alike).
 .PARAMETER ServiceNowUrl
     https://<instance>.service-now.com (optional).
 .PARAMETER PrivateNetwork
@@ -185,15 +181,15 @@
 .PARAMETER StatePath
     The folder for the install's state file. Default: ~/clouddrive/invardia/<installId> (kept by Cloud Shell).
 .PARAMETER Version
-    SecurityInsight Community: the release to install, e.g. 3.0.21 (default: the latest public release). Not used by
-    SecurityInsight Pro, which installs the release Invardia serves to its update ring.
+    Not used: kept so that older install lines still run. Both editions install the release Invardia serves to the
+    install's update ring (-UpdateRing).
 .PARAMETER KeepDownload
     Keep the downloaded release folder after a successful install (it is always kept after a stop, for -Resume).
 
 .OUTPUTS
     Exit code: the installer's -- 0 installed (warnings included), 1 a step failed (fix it and run again with -Resume),
-    2 a check failed, 3 the settings are not valid. 3 also when the release cannot be read, Invardia refuses the Pro
-    package, or a check of the download fails (nothing was installed).
+    2 a check failed, 3 the settings are not valid. 3 also when Invardia cannot be read or refuses the release of the
+    ring, or a check of the download fails (nothing was installed).
 
 .EXAMPLE
     Invoke-WebRequest https://invardia.com/support/si/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
@@ -213,24 +209,20 @@
 .EXAMPLE
     ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Resume
     # continue an install that stopped, with the release and the answers of its first run (the same line 2 + -Resume)
-.EXAMPLE
-    ./Install-SecurityInsight.ps1 -TenantId '<tenant id>' -SubscriptionId '<subscription id>' -Version 3.0.21
-    # install one named release instead of the latest
-
 .NOTES
     Requirements:
       PowerShell 7 (Azure Cloud Shell) or Windows PowerShell 5.1. No PowerShell module.
       Role: Owner (or Contributor + User Access Administrator) -- on the subscription SecurityInsight is installed in
       Role: Privileged Role Administrator (or Global Administrator) -- optional -- on the tenant
-      Hosts: SecurityInsight Pro: invardia.com (the package), login.microsoftonline.com and management.azure.com (the
-        sign-in). SecurityInsight Community: github.com, api.github.com, objects.githubusercontent.com,
-        release-assets.githubusercontent.com (the release). Then the installer's: login.microsoftonline.com,
-        management.azure.com, graph.microsoft.com and the install's own Azure resources (the full list is on the
-        documentation page)
+      Hosts: both editions: invardia.com (the signed release of the ring), login.microsoftonline.com and
+        management.azure.com (the sign-in). SecurityInsight Community also: github.com, objects.githubusercontent.com,
+        release-assets.githubusercontent.com (the public release zip the signed manifest names). Then the installer's:
+        login.microsoftonline.com, management.azure.com, graph.microsoft.com and the install's own Azure resources (the
+        full list is on the documentation page)
 
-    Reads: Pro -- the Pro package at invardia.com (with your sign-in) and the zip it names; Community -- the public release
-    at api.github.com (anonymous) and the zip it names. Writes: a new folder in the temp folder (the zip and its unpacked
-    files; the Pro copy also writes the sign-in and package-check code it carries there, removed when it ends) and the
+    Reads: the release of the ring at invardia.com (Pro: the Pro package route, with your sign-in; Community: the Community
+    release of the ring, anonymous) and the zip it names. Writes: a new folder in the temp folder (the zip and its unpacked
+    files; the sign-in and package-check code the launcher carries is written there too and removed when it ends) and the
     small note with that folder's path; everything else is the installer's. Nothing is written to disk about the sign-in.
 
 .LINK
@@ -275,6 +267,7 @@ param(
     [ValidateSet('external', 'internal')][string]$WebAppAccess,
     [string[]]$WebAppAdmins,
     [switch]$AssetTaggingWrites,
+    [switch]$ConnectToInvardia,
     [ValidateSet(1, 2, 3)][int]$UpdateRing,
     [string]$ServiceNowUrl,
     [switch]$PrivateNetwork,
@@ -309,13 +302,12 @@ param(
     [Parameter(DontShow)][string]$SIConfigPath,
     # ---- this launcher's own ----
 
-    # the release to install (e.g. 3.0.21); default: the latest public release
+    # not used (older install lines still run): both editions install the release Invardia serves to the update ring
     [string]$Version,
     # keep the downloaded release folder after a successful install
     [switch]$KeepDownload,
-    # Tests only: GetRelease { param($Url) } -> the release object, Download { param($Url, $OutFile) },
-    # RunInstaller { param($Path, $Arguments) } -> exit code, TempRoot, NoteDir; the Pro channel also:
-    # SignIn { param($TenantId, $SubscriptionId) } -> @{ TenantId; Account; Token }, GetPackage { param($Url, $Token) } ->
+    # Tests only: Download { param($Url, $OutFile) }, RunInstaller { param($Path, $Arguments) } -> exit code, TempRoot,
+    # NoteDir, SignIn { param($TenantId, $SubscriptionId) } -> @{ TenantId; Account; Token }, GetPackage { param($Url, $Token) } ->
     # @{ Status; Body; Error }, TrustedKeys { } -> the update-signing keys, CodeRoot (the package root its code is loaded from),
     # RestHttp (replaces the REST layer's one HTTP call, Invoke-SIAzRestHttp, under the real sign-in)
     [Parameter(DontShow)][System.Collections.IDictionary]$LauncherSeams
@@ -326,15 +318,14 @@ param(
 $script:SIInstallChannel = 'community'
 # the release version this copy was built with (stamped by the build; empty in the repository)
 $__siLauncherVersion = ''
-# THE CODE THE PRO CHANNEL USES (Invardia DESIGN ch 8, Pro installs from Invardia): SecurityInsight's own setup sign-in
+# THE CODE THE LAUNCHER USES (both editions, framework PRO-COMMUNITY-SAME): SecurityInsight's own setup sign-in
 # (setup/_shared/SI-SetupAzure.ps1 and what it loads) and its updater's package check (engine/_shared/SI-InvardiaUpdate.ps1
 # with its update-signing keys). release\Build-SISupportScripts.ps1 EMBEDS them below this line in the copy handed to
-# Invardia -- readable, each file SHA-256 checked when it is written out -- so the published launcher stays ONE file.
+# Invardia, and release\Publish-SICommunityInstaller.ps1 in the copy on the public release -- readable, each file SHA-256 checked when it is written out -- so the published launcher stays ONE file.
 # Empty in the repository: there the launcher uses the files of the package it stands in.
 $__siLauncherFiles = [ordered]@{}
 $ErrorActionPreference = 'Stop'
 
-$siRepo = 'KnudsenMorten/SecurityInsight'
 $siOwn = @('Version', 'KeepDownload', 'LauncherSeams')
 $seam = @{}; if ($LauncherSeams) { foreach ($k in @($LauncherSeams.Keys)) { $seam[[string]$k] = $LauncherSeams[$k] } }
 
@@ -348,14 +339,7 @@ if (-not $selfVersion) { $selfVersion = 'unknown (not a released copy)' }
 Write-Host ('Install-SecurityInsight launcher {0}' -f $selfVersion)
 $isPro = ("$script:SIInstallChannel" -eq 'pro')
 $editionName = if ($isPro) { 'SecurityInsight Pro' } else { 'SecurityInsight Community' }
-Write-Host ('Installs {0} from {1}. Documentation: https://invardia.com/docs/si/scripts/Install-SecurityInsight/' -f $editionName, $(if ($isPro) { 'Invardia (the Pro package of your update ring)' } else { 'the public SecurityInsight release on GitHub' }))
-
-function Get-SILauncherReleaseUrl {
-    <# PURE. The GitHub API address of the release: the latest, or the tag v<version>. #>
-    param([string]$Repo = 'KnudsenMorten/SecurityInsight', [string]$Version)
-    $v = "$Version".Trim().TrimStart('v', 'V')
-    if ($v) { 'https://api.github.com/repos/{0}/releases/tags/v{1}' -f $Repo, $v } else { 'https://api.github.com/repos/{0}/releases/latest' -f $Repo }
-}
+Write-Host ('Installs {0}: the release Invardia has signed for your update ring. Documentation: https://invardia.com/docs/si/scripts/Install-SecurityInsight/' -f $editionName)
 
 function Get-SILauncherNotePath {
     <# Where the note that remembers the download folder lives: Cloud Shell's clouddrive, else the user profile. #>
@@ -407,8 +391,8 @@ function Test-SILauncherZip {
     <#
         The checks of a downloaded release zip, before anything is unpacked. Returns '' when it is good, else the reason in
         plain words: empty, not the size or SHA-256 the release states, no SHA-256 stated at all, not a zip, no
-        setup/Install-SecurityInsight.ps1, or a VERSION that is not the release's version. -AllowBuildNumber (the Pro
-        package): a release named <VERSION>.<build number> carries the code of VERSION -- the rule SecurityInsight's
+        setup/Install-SecurityInsight.ps1, or a VERSION that is not the release's version. -AllowBuildNumber (both editions:
+        one version format): a release named <VERSION>.<build number> carries the code of VERSION -- the rule SecurityInsight's
         updater applies. A download is used only when its SHA-256 matches the one the release states.
     #>
     param([string]$Path, [string]$Version, [long]$Size = 0, [string]$Sha256 = '', [switch]$AllowBuildNumber)
@@ -509,11 +493,18 @@ function Get-SILauncherPassThrough {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-#  THE PRO CHANNEL: the package from Invardia (Invardia DESIGN ch 8, framework section 0.1 -- never GitHub for Pro)
+#  THE RELEASE OF THE RING, from Invardia -- one path for Pro and Community (framework PRO-COMMUNITY-SAME)
 # ---------------------------------------------------------------------------------------------------------------------
 function Get-SILauncherPackageUrl {
-    <# PURE. Invardia's Pro package route: tenantId always, ring only when one is asked for (Invardia's default is ring 3). #>
-    param([string]$BaseUrl = 'https://invardia.com', [Parameter(Mandatory)][string]$TenantId, [int]$Ring = -1)
+    <#
+        PURE. Where the launcher asks Invardia for the release of the ring -- the address is the ONE difference between the
+        editions. Pro: the Pro package route (tenantId always, ring only when one is asked for: Invardia's default is ring 3).
+        Community: the Community release of the ring (<base>/api/updates/securityinsight/community/<ring>; ring 3 when none
+        is asked for).
+    #>
+    param([string]$BaseUrl = 'https://invardia.com', [string]$TenantId, [int]$Ring = -1, [ValidateSet('pro', 'community')][string]$Edition = 'pro')
+    if ($Edition -eq 'community') { return ('{0}/api/updates/securityinsight/community/{1}' -f "$BaseUrl".Trim().TrimEnd('/'), $(if ($Ring -ge 0) { $Ring } else { 3 })) }
+    if (-not "$TenantId".Trim()) { throw 'Get-SILauncherPackageUrl: the Pro package route needs -TenantId' }
     $u = '{0}/api/install/securityinsight/package?tenantId={1}' -f "$BaseUrl".Trim().TrimEnd('/'), [uri]::EscapeDataString("$TenantId".Trim())
     if ($Ring -ge 0) { $u += ('&ring={0}' -f $Ring) }
     $u
@@ -521,10 +512,11 @@ function Get-SILauncherPackageUrl {
 
 function Get-SILauncherRouteRefusal {
     <#
-        PURE. Why Invardia did not hand out the Pro package, in plain words: Invardia's own message ({ error, message }) with
+        PURE. Why Invardia did not hand out the release of the ring, in plain words: Invardia's own message ({ error, message }) with
         the status and its error code, else a sentence of our own for the status. Never the token.
     #>
-    param([int]$Status, [AllowEmptyString()][AllowNull()][string]$Body, [AllowEmptyString()][AllowNull()][string]$ErrorText)
+    param([int]$Status, [AllowEmptyString()][AllowNull()][string]$Body, [AllowEmptyString()][AllowNull()][string]$ErrorText,
+          [ValidateSet('pro', 'community')][string]$Edition = 'pro')
     if ($Status -eq 0) { return ('Invardia could not be reached ({0}) -- check the network (invardia.com) and run the same command again' -f $(if ("$ErrorText".Trim()) { "$ErrorText".Trim() } else { 'no answer' })) }
     $j = $null
     if ("$Body".Trim()) { try { $j = "$Body" | ConvertFrom-Json -ErrorAction Stop } catch { $j = $null } }
@@ -534,9 +526,10 @@ function Get-SILauncherRouteRefusal {
     if ($msg.Length -gt 300) { $msg = $msg.Substring(0, 297) + '...' }
     if (-not $msg) {
         $msg = switch ($Status) {
+            204 { 'nothing is released to this ring yet' }
             401 { 'Invardia did not accept the sign-in' }
             403 { 'the sign-in is for another tenant than -TenantId' }
-            404 { 'this tenant has no Invardia environment with SecurityInsight, or nothing is released on that ring' }
+            404 { if ($Edition -eq 'community') { 'Invardia has no SecurityInsight Community release for that ring' } else { 'this tenant has no Invardia environment with SecurityInsight, or nothing is released on that ring' } }
             422 { 'Invardia found the request not valid' }
             503 { 'Invardia cannot hand out packages right now' }
             default { 'Invardia answered {0}' -f $Status }
@@ -553,17 +546,18 @@ function Get-SILauncherRouteRefusal {
 }
 
 function Invoke-SILauncherPackageGet {
-    <# GET Invardia's Pro package route with the admin's ARM token. Returns @{ Status (0 = no answer); Body; Error }; never
+    <# GET the release route: Pro with the admin's ARM token, Community anonymous (-Token ''). Returns @{ Status (0 = no answer); Body; Error }; never
        throws, and the token is never in what it returns. #>
-    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Token, [int]$TimeoutSec = 60)
-    $h = @{ Authorization = ('Bearer ' + $Token); Accept = 'application/json'; 'User-Agent' = 'SecurityInsight-Installer' }
+    param([Parameter(Mandatory)][string]$Url, [AllowEmptyString()][string]$Token = '', [int]$TimeoutSec = 60)
+    $h = @{ Accept = 'application/json'; 'User-Agent' = 'SecurityInsight-Installer' }
+    if ("$Token".Trim()) { $h['Authorization'] = 'Bearer ' + $Token }
     try {
         $r = Invoke-WebRequest -Method Get -Uri $Url -Headers $h -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
         $c = $r.Content; if ($c -is [byte[]]) { $c = [System.Text.Encoding]::UTF8.GetString($c) }
         return [pscustomobject]@{ Status = [int]$r.StatusCode; Body = [string]$c; Error = '' }
     } catch {
         $resp = $null; try { $resp = $_.Exception.Response } catch { }
-        if (-not $resp) { return [pscustomobject]@{ Status = 0; Body = ''; Error = ("$($_.Exception.Message)").Replace($Token, '<withheld>') } }
+        if (-not $resp) { return [pscustomobject]@{ Status = 0; Body = ''; Error = $(if ("$Token".Trim()) { ("$($_.Exception.Message)").Replace($Token, '<withheld>') } else { "$($_.Exception.Message)" }) } }
         $code = 0; try { $code = [int]$resp.StatusCode } catch { }
         $text = ''
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $text = [string]$_.ErrorDetails.Message }
@@ -601,12 +595,12 @@ function Export-SILauncherCode {
 
 function Connect-SILauncherAzure {
     <#
-        The admin's sign-in for the Pro package, with SecurityInsight's OWN setup sign-in (setup/_shared/SI-SetupAzure.ps1,
+        The admin's sign-in (both editions: one sign-in that the installer takes over), with SecurityInsight's OWN setup sign-in (setup/_shared/SI-SetupAzure.ps1,
         loaded beside this): Azure Cloud Shell's token endpoint with no prompt, else the browser (authorization code + PKCE on
         localhost; never device code), or the Invardia Support session's tokens with -ViaSupportApp. The sign-in stays in
         THIS PowerShell process (memory only): the installer, started from here in the same process, finds it and uses it
         (it reuses a sign-in of the same tenant) -- the admin signs in once. Returns @{ TenantId; Account; Token } (Token =
-        an access token for Azure Resource Manager, the one Invardia's route accepts).
+        an access token for Azure Resource Manager, the one Invardia's Pro package route accepts).
     #>
     param([string]$TenantId, [string]$SubscriptionId)
     $ca = @{ ErrorAction = 'Stop' }
@@ -622,17 +616,18 @@ function Connect-SILauncherAzure {
     [pscustomobject]@{ TenantId = $tid; Account = $acct; Token = $tok }
 }
 
-function Test-SILauncherProPackage {
+function Test-SILauncherPackage {
     <#
-        Invardia's answer to the Pro package route, checked EXACTLY as SecurityInsight's updater checks an update (the
+        Invardia's answer for the release of the ring (-Kind code: the Pro package route; -Kind community: the Community
+        release of the ring), checked EXACTLY as SecurityInsight's updater checks an update (the
         functions of engine/_shared/SI-InvardiaUpdate.ps1, loaded beside this -- no second implementation): the signature
         over the manifest against the trusted update-signing keys (Test-SIInvardiaManifestSignature), then the signed
-        manifest itself -- product securityinsight, kind code, the ring asked for, a version, SHA-256 and size
+        manifest itself -- product securityinsight, the kind asked for, the ring asked for, a version, SHA-256 and size
         (Test-SIInvardiaManifestContent). The unsigned fields of the answer must say what the signed manifest says, and the
-        download link must be https. Returns @{ Ok; Reason; Manifest; Version; DownloadUrl; Sequence }.
+        download link must be https. Returns @{ Ok; Reason; Manifest; Version; DownloadUrl; Sequence; Kind }.
     #>
-    param([AllowEmptyString()][AllowNull()][string]$Body, [Parameter(Mandatory)][int]$Ring, [AllowNull()][object[]]$TrustedKeys)
-    $no = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why; Manifest = $null; Version = ''; DownloadUrl = ''; Sequence = -1 } }
+    param([AllowEmptyString()][AllowNull()][string]$Body, [Parameter(Mandatory)][int]$Ring, [AllowNull()][object[]]$TrustedKeys, [ValidateSet('code', 'community')][string]$Kind = 'code')
+    $no = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why; Manifest = $null; Version = ''; DownloadUrl = ''; Sequence = -1; Kind = $Kind } }
     $j = $null
     if ("$Body".Trim()) { try { $j = "$Body" | ConvertFrom-Json -ErrorAction Stop } catch { $j = $null } }
     if (-not $j) { return (& $no 'Invardia''s answer is not JSON') }
@@ -640,7 +635,7 @@ function Test-SILauncherProPackage {
     $sig = Test-SIInvardiaManifestSignature -ManifestB64 (& $p 'manifestB64') -Signature (& $p 'signature') -KeyId (& $p 'keyId') -TrustedKeys $TrustedKeys
     if (-not $sig.Ok) { return (& $no $sig.Reason) }
     $m = $sig.Manifest
-    $chk = Test-SIInvardiaManifestContent -Manifest $m -Kind 'code' -Ring $Ring
+    $chk = Test-SIInvardiaManifestContent -Manifest $m -Kind $Kind -Ring $Ring
     # 'hold' is a manual step an UPDATE of an existing install needs: a new install has nothing to step from
     if ($chk.Action -notin @('update', 'hold')) { return (& $no $chk.Reason) }
     foreach ($n in 'version', 'sha256', 'size', 'sequence') {
@@ -650,7 +645,7 @@ function Test-SILauncherProPackage {
     }
     $dl = & $p 'downloadUrl'
     if ($dl -notmatch '^https://[^/\s]+/') { return (& $no 'Invardia''s answer carries no https download link') }
-    [pscustomobject]@{ Ok = $true; Reason = ''; Manifest = $m; Version = "$($m.version)".Trim(); DownloadUrl = $dl; Sequence = $chk.Sequence }
+    [pscustomobject]@{ Ok = $true; Reason = ''; Manifest = $m; Version = "$($m.version)".Trim(); DownloadUrl = $dl; Sequence = $chk.Sequence; Kind = $Kind }
 }
 
 $code = 0
@@ -664,19 +659,15 @@ do {
         if ("$TenantId".Trim() -and "$($supState.TenantId)".Trim() -ne "$TenantId".Trim()) { Write-Host ('The support session is for tenant {0}, not for -TenantId {1}: connect the session to this tenant first. Nothing was downloaded or installed.' -f $supState.TenantId, $TenantId) -ForegroundColor Red; $code = 3; break }
     }
     if ($PSVersionTable.PSVersion.Major -lt 6) {
-        # Windows PowerShell 5.1: GitHub and Invardia need TLS 1.2
+        # Windows PowerShell 5.1: Invardia and the download need TLS 1.2
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     }
-    $getRelease = $seam['GetRelease']
-    if (-not $getRelease) { $getRelease = { param([string]$Url) Invoke-RestMethod -Method Get -Uri $Url -UseBasicParsing -Headers @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'SecurityInsight-Installer' } -TimeoutSec 60 } }
-    $download = $seam['Download']
-    if (-not $download) { $download = { param([string]$Url, [string]$OutFile) Invoke-WebRequest -Method Get -Uri $Url -OutFile $OutFile -UseBasicParsing -Headers @{ 'User-Agent' = 'SecurityInsight-Installer' } -TimeoutSec 900 | Out-Null } }
     $runInstaller = $seam['RunInstaller']
     if (-not $runInstaller) { $runInstaller = { param([string]$Path, [hashtable]$Arguments) $global:LASTEXITCODE = 0; & $Path @Arguments | Out-Host; [int]$LASTEXITCODE } }
     $tempRoot = if ("$($seam['TempRoot'])".Trim()) { "$($seam['TempRoot'])" } else { [IO.Path]::GetTempPath() }
     $notePath = Get-SILauncherNotePath -NoteDir "$($seam['NoteDir'])"
     $noteKey = if ("$InstallId".Trim()) { "$InstallId".Trim().ToLowerInvariant() } else { 'securityinsight' }
-    $steps = if ($isPro) { 5 } else { 4 }
+    $steps = 5   # the same steps for both editions
 
     # ---- 1. -Resume: the folder of the first run -- used again ONLY when it is the release this launcher installs now ----
     # framework INSTALL-1 / installer rule 12 ("-Resume never reuses a different package", owner 2026-11-04): the release
@@ -701,118 +692,98 @@ do {
 
     if (-not $tree) {
         $zipPath = ''; $assetName = ''; $relVersion = ''; $stated = ''; $statedSize = 0L
-        if ($isPro) {
-            # ======== SecurityInsight Pro: the package of the ring, from Invardia. No GitHub, no fallback. ========
-            if ("$Version".Trim()) { Write-Host ('-Version {0} is not used: SecurityInsight Pro installs the release Invardia serves to its update ring.' -f "$Version".Trim()) -ForegroundColor Yellow }
-            # the code this channel uses: embedded in this copy, else the package this file stands in
-            $codeRoot = ''
-            if ($__siLauncherFiles.Count) {
-                $codeDir = [IO.Path]::Combine($tempRoot, ('securityinsight-launcher-code-' + [guid]::NewGuid().ToString('N').Substring(0, 8)))
-                $ex = Export-SILauncherCode -Files $__siLauncherFiles -To $codeDir
-                if (-not $ex.Ok) { Write-Host ('This launcher cannot be used: {0}. Nothing was downloaded or installed.' -f $ex.Reason) -ForegroundColor Red; $code = 3; break }
-                $codeRoot = $ex.Root
-            } elseif ("$($seam['CodeRoot'])".Trim()) {
-                $codeRoot = "$($seam['CodeRoot'])".Trim()
-            } elseif ($PSScriptRoot) {
-                $pkg = Split-Path -Parent $PSScriptRoot
-                if ([IO.File]::Exists([IO.Path]::Combine($pkg, 'engine', '_shared', 'SI-InvardiaUpdate.ps1'))) { $codeRoot = $pkg }
-            }
-            if (-not $codeRoot) { Write-Host 'This copy of the launcher carries no SecurityInsight sign-in and package check, so it cannot install SecurityInsight Pro. Download it again from https://invardia.com/support/si/Install-SecurityInsight.ps1. Nothing was downloaded or installed.' -ForegroundColor Red; $code = 3; break }
-            $loads = @('engine/_shared/SI-InvardiaUpdate.ps1')
-            if (-not $seam['SignIn']) { $loads = @('setup/_shared/SI-SetupAzure.ps1') + $loads }
-            $loadFailed = ''
-            foreach ($__rel in $loads) {
-                $__siLauncherLoad = [IO.Path]::Combine($codeRoot, ($__rel -replace '/', [string][IO.Path]::DirectorySeparatorChar))
-                try { . $__siLauncherLoad } catch { $loadFailed = ('{0}: {1}' -f $__rel, $_.Exception.Message); break }
-            }
-            if ($loadFailed) { Write-Host ('This launcher cannot be used: its code did not load ({0}). Nothing was downloaded or installed.' -f $loadFailed) -ForegroundColor Red; $code = 3; break }
-            # tests only: the REST layer's ONE HTTP call (Invoke-SIAzRestHttp) answered by the test -- the sign-in is still SecurityInsight's own
-            if ($seam['RestHttp']) { Set-Item -Path 'function:script:Invoke-SIAzRestHttp' -Value $seam['RestHttp'] }
-
-            # ---- 2. sign in (once: the installer takes this sign-in over) ----
-            Write-Host ('Step 1 of {0}: signing in to Azure{1} -- the installer uses this sign-in, so you sign in once' -f $steps, $(if ("$TenantId".Trim()) { ' (tenant {0})' -f "$TenantId".Trim() } else { '' }))
-            $signIn = $seam['SignIn']
-            if (-not $signIn) { $signIn = { param([string]$T, [string]$S) Connect-SILauncherAzure -TenantId $T -SubscriptionId $S } }
-            $who = $null; $signInWhy = ''
-            try { $who = & $signIn "$TenantId".Trim() "$SubscriptionId".Trim() } catch { $signInWhy = "$($_.Exception.Message)" }
-            if (-not $who -or -not "$($who.Token)".Trim()) {
-                Write-Host ('The Azure sign-in did not complete{0}. Nothing was downloaded or installed. Run the same command again and complete the sign-in (in Azure Cloud Shell it is automatic; on a workstation a browser window opens).' -f $(if ($signInWhy) { ': ' + $signInWhy } else { '' })) -ForegroundColor Red
-                $code = 3; break
-            }
-            $tid = if ("$TenantId".Trim()) { "$TenantId".Trim() } else { "$($who.TenantId)".Trim() }
-            if ($tid -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { Write-Host 'The tenant is not known: give -TenantId (the tenant id, a GUID). Nothing was downloaded or installed.' -ForegroundColor Red; $code = 3; break }
-            if ("$($who.Account)".Trim()) { Write-Host ('  signed in as {0} (tenant {1})' -f "$($who.Account)".Trim(), $tid) }
-
-            # ---- 3. ask Invardia for the ring's Pro package ----
-            $ringAsked = if ($PSBoundParameters.ContainsKey('UpdateRing')) { [int]$UpdateRing } else { -1 }
-            $ringSigned = if ($ringAsked -ge 0) { $ringAsked } else { 3 }   # Invardia's default ring: a new install never starts ahead of its ring
-            $url = Get-SILauncherPackageUrl -TenantId $tid -Ring $ringAsked
-            Write-Host ('Step 2 of {0}: asking Invardia for the SecurityInsight Pro package of ring {1}{2}' -f $steps, $ringSigned, $(if ($ringAsked -lt 0) { ' (the default)' } else { '' }))
-            $getPackage = $seam['GetPackage']
-            if (-not $getPackage) { $getPackage = { param([string]$Url, [string]$Token) Invoke-SILauncherPackageGet -Url $Url -Token $Token } }
-            $ans = $null
-            try { $ans = & $getPackage $url "$($who.Token)" } catch { $ans = [pscustomobject]@{ Status = 0; Body = ''; Error = "$($_.Exception.Message)" } }
-            $who = $null   # the token is not kept by the launcher (the sign-in itself stays in the process for the installer)
-            if (-not $ans -or [int]$ans.Status -ne 200) {
-                $why = Get-SILauncherRouteRefusal -Status $(if ($ans) { [int]$ans.Status } else { 0 }) -Body $(if ($ans) { [string]$ans.Body } else { '' }) -ErrorText $(if ($ans -and $ans.PSObject.Properties['Error']) { [string]$ans.Error } else { '' })
-                Write-Host ('Invardia did not hand out the SecurityInsight Pro package: {0}' -f $why) -ForegroundColor Red
-                Write-Host 'Nothing was downloaded or installed. SecurityInsight Pro installs only from Invardia.' -ForegroundColor Red
-                $code = 3; break
-            }
-            $trusted = if ($seam['TrustedKeys']) { @(& $seam['TrustedKeys']) } else { @((Get-SIInvardiaTrustedKeys).Keys) }
-            $chk = Test-SILauncherProPackage -Body ([string]$ans.Body) -Ring $ringSigned -TrustedKeys $trusted
-            if (-not $chk.Ok) { Write-Host ('Invardia''s answer cannot be used: {0}. Nothing was downloaded or installed.' -f $chk.Reason) -ForegroundColor Red; $code = 3; break }
-            $relVersion = $chk.Version
-            Write-Host ('  SecurityInsight {0} (ring {1}, sequence {2}): the manifest''s signature verifies with Invardia''s update-signing key' -f $relVersion, $ringSigned, $chk.Sequence)
-            $reused = & $useEarlier $relVersion
-          if (-not $reused) {
-
-            # ---- 4. download into a NEW, empty folder: size and SHA-256 of the signed manifest ----
-            $dir = [IO.Path]::Combine($tempRoot, ('securityinsight-release-{0}-{1}' -f $relVersion, [guid]::NewGuid().ToString('N').Substring(0, 8)))
-            [void][IO.Directory]::CreateDirectory($dir)
-            $assetName = Get-SIInvardiaArchiveName -Kind 'code' -Version $relVersion -Archive $(if ($chk.Manifest.PSObject.Properties['archive']) { "$($chk.Manifest.archive)" } else { '' })
-            Write-Host ('Step 3 of {0}: downloading {1} from Invardia into {2}' -f $steps, $assetName, $dir)
-            $saveSeams = @{}
-            if ($seam['Download']) {
-                $dlSeam = $seam['Download']
-                $saveSeams['Download'] = { param($u, $f) try { & $dlSeam $u $f; [pscustomobject]@{ Status = 200; Error = '' } } catch { [pscustomobject]@{ Status = 0; Error = "$($_.Exception.Message)" } } }.GetNewClosure()
-            }
-            $saved = Save-SIInvardiaUpdateFile -Result ([pscustomobject]@{ Kind = 'code'; Action = 'update'; Manifest = $chk.Manifest; DownloadUrl = $chk.DownloadUrl }) -OutDir $dir -Seams $saveSeams
-            if (-not $saved.Ok) {
-                Write-Host ('The download cannot be used: {0}. Nothing was installed; the folder is removed. Run the command again.' -f $saved.Reason) -ForegroundColor Red
-                try { [IO.Directory]::Delete($dir, $true) } catch { }
-                $dir = ''; $code = 3; break
-            }
-            $zipPath = $saved.Path
-            $stated = "$($chk.Manifest.sha256)".Trim().ToLowerInvariant(); try { $statedSize = [long]$chk.Manifest.size } catch { $statedSize = 0L }
-            Write-Host ('  {0}: size and SHA-256 as the signed manifest states' -f $assetName)
-          }
-        } else {
-            # ======== SecurityInsight Community: the public release on GitHub ========
-            $relUrl = Get-SILauncherReleaseUrl -Repo $siRepo -Version $Version
-            Write-Host ('Step 1 of {0}: reading the release from GitHub ({1})' -f $steps, $relUrl)
-            $rel = $null
-            try { $rel = & $getRelease $relUrl } catch { Write-Verbose "$($_.Exception.Message)"; $rel = $null }
-            if (-not $rel -or -not "$($rel.tag_name)".Trim()) { Write-Host ('The SecurityInsight release could not be read from GitHub ({0}). Check the network (github.com, api.github.com) and -Version, then run the command again. Nothing was installed.' -f $relUrl) -ForegroundColor Red; $code = 3; break }
-            $relVersion = "$($rel.tag_name)".Trim().TrimStart('v', 'V')
-            $reused = & $useEarlier $relVersion
-          if (-not $reused) {
-            $assetName = 'SecurityInsight-v{0}.zip' -f $relVersion
-            $asset = @(@($rel.assets) | Where-Object { "$($_.name)" -eq $assetName }) | Select-Object -First 1
-            if (-not $asset -or -not "$($asset.browser_download_url)".Trim()) { Write-Host ('The release {0} has no {1} to download. Nothing was installed.' -f $relVersion, $assetName) -ForegroundColor Red; $code = 3; break }
-            $stated = if ("$($asset.digest)" -match '^(?i)sha256:([0-9a-f]{64})$') { $Matches[1].ToLowerInvariant() } else { '' }
-            # a download is used only when GitHub states its SHA-256: without one it cannot be checked, so it is not fetched
-            if (-not $stated) { Write-Host ('GitHub states no SHA-256 for {0} of release {1}, so the download cannot be checked. Nothing was downloaded or installed. Run the command again later, or give -Version for another release.' -f $assetName, $relVersion) -ForegroundColor Red; $code = 3; break }
-            $statedSize = 0L; try { $statedSize = [long]$asset.size } catch { $statedSize = 0L }
-
-            # ---- 3. download into a NEW, empty folder ----
-            $dir = [IO.Path]::Combine($tempRoot, ('securityinsight-release-{0}-{1}' -f $relVersion, [guid]::NewGuid().ToString('N').Substring(0, 8)))
-            [void][IO.Directory]::CreateDirectory($dir)
-            $zipPath = [IO.Path]::Combine($dir, $assetName)
-            Write-Host ('Step 2 of {0}: downloading {1} into {2}' -f $steps, $assetName, $dir)
-            try { & $download "$($asset.browser_download_url)" $zipPath } catch { Write-Verbose "$($_.Exception.Message)" }
-          }
+        # ======== ONE path for both editions (framework PRO-COMMUNITY-SAME): the signed release of the ring, from Invardia ========
+        # Pro and Community take the same steps: sign in, ask Invardia for the release its ring serves, check the signed
+        # manifest with the updater's own code, download, check size + SHA-256, run the installer. The address and the
+        # credential are the only difference: Pro asks the Pro package route with the admin's sign-in; Community reads the
+        # Community manifest of the ring (anonymous) and downloads the public release zip the signed manifest names.
+        $edition = "$script:SIInstallChannel"
+        if ("$Version".Trim()) { Write-Host ('-Version {0} is not used: {1} installs the release Invardia serves to its update ring.' -f "$Version".Trim(), $editionName) -ForegroundColor Yellow }
+        # the code this launcher uses: embedded in this copy, else the package this file stands in
+        $codeRoot = ''
+        if ($__siLauncherFiles.Count) {
+            $codeDir = [IO.Path]::Combine($tempRoot, ('securityinsight-launcher-code-' + [guid]::NewGuid().ToString('N').Substring(0, 8)))
+            $ex = Export-SILauncherCode -Files $__siLauncherFiles -To $codeDir
+            if (-not $ex.Ok) { Write-Host ('This launcher cannot be used: {0}. Nothing was downloaded or installed.' -f $ex.Reason) -ForegroundColor Red; $code = 3; break }
+            $codeRoot = $ex.Root
+        } elseif ("$($seam['CodeRoot'])".Trim()) {
+            $codeRoot = "$($seam['CodeRoot'])".Trim()
+        } elseif ($PSScriptRoot) {
+            $pkg = Split-Path -Parent $PSScriptRoot
+            if ([IO.File]::Exists([IO.Path]::Combine($pkg, 'engine', '_shared', 'SI-InvardiaUpdate.ps1'))) { $codeRoot = $pkg }
         }
+        if (-not $codeRoot) { Write-Host ('This copy of the launcher carries no SecurityInsight sign-in and package check, so it cannot install {0}. Download it again ({1}). Nothing was downloaded or installed.' -f $editionName, $(if ($isPro) { 'https://invardia.com/support/si/Install-SecurityInsight.ps1' } else { 'https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1' })) -ForegroundColor Red; $code = 3; break }
+        $loads = @('engine/_shared/SI-InvardiaUpdate.ps1')
+        if (-not $seam['SignIn']) { $loads = @('setup/_shared/SI-SetupAzure.ps1') + $loads }
+        $loadFailed = ''
+        foreach ($__rel in $loads) {
+            $__siLauncherLoad = [IO.Path]::Combine($codeRoot, ($__rel -replace '/', [string][IO.Path]::DirectorySeparatorChar))
+            try { . $__siLauncherLoad } catch { $loadFailed = ('{0}: {1}' -f $__rel, $_.Exception.Message); break }
+        }
+        if ($loadFailed) { Write-Host ('This launcher cannot be used: its code did not load ({0}). Nothing was downloaded or installed.' -f $loadFailed) -ForegroundColor Red; $code = 3; break }
+        # tests only: the REST layer's ONE HTTP call (Invoke-SIAzRestHttp) answered by the test -- the sign-in is still SecurityInsight's own
+        if ($seam['RestHttp']) { Set-Item -Path 'function:script:Invoke-SIAzRestHttp' -Value $seam['RestHttp'] }
+
+        # ---- 1. sign in (once: the installer takes this sign-in over) ----
+        Write-Host ('Step 1 of {0}: signing in to Azure{1} -- the installer uses this sign-in, so you sign in once' -f $steps, $(if ("$TenantId".Trim()) { ' (tenant {0})' -f "$TenantId".Trim() } else { '' }))
+        $signIn = $seam['SignIn']
+        if (-not $signIn) { $signIn = { param([string]$T, [string]$S) Connect-SILauncherAzure -TenantId $T -SubscriptionId $S } }
+        $who = $null; $signInWhy = ''
+        try { $who = & $signIn "$TenantId".Trim() "$SubscriptionId".Trim() } catch { $signInWhy = "$($_.Exception.Message)" }
+        if (-not $who -or -not "$($who.Token)".Trim()) {
+            Write-Host ('The Azure sign-in did not complete{0}. Nothing was downloaded or installed. Run the same command again and complete the sign-in (in Azure Cloud Shell it is automatic; on a workstation a browser window opens).' -f $(if ($signInWhy) { ': ' + $signInWhy } else { '' })) -ForegroundColor Red
+            $code = 3; break
+        }
+        $tid = if ("$TenantId".Trim()) { "$TenantId".Trim() } else { "$($who.TenantId)".Trim() }
+        if ($tid -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { Write-Host 'The tenant is not known: give -TenantId (the tenant id, a GUID). Nothing was downloaded or installed.' -ForegroundColor Red; $code = 3; break }
+        if ("$($who.Account)".Trim()) { Write-Host ('  signed in as {0} (tenant {1})' -f "$($who.Account)".Trim(), $tid) }
+
+        # ---- 2. ask Invardia for the release of the ring ----
+        $ringAsked = if ($PSBoundParameters.ContainsKey('UpdateRing')) { [int]$UpdateRing } else { -1 }
+        $ringSigned = if ($ringAsked -ge 0) { $ringAsked } else { 3 }   # the default ring: a new install never starts ahead of its ring
+        $url = Get-SILauncherPackageUrl -TenantId $tid -Ring $ringAsked -Edition $edition
+        Write-Host ('Step 2 of {0}: asking Invardia for the {1} release of ring {2}{3}' -f $steps, $editionName, $ringSigned, $(if ($ringAsked -lt 0) { ' (the default)' } else { '' }))
+        $getPackage = $seam['GetPackage']
+        if (-not $getPackage) { $getPackage = { param([string]$Url, [string]$Token) Invoke-SILauncherPackageGet -Url $Url -Token $Token } }
+        # Pro: the admin's ARM token (Invardia hands the Pro package only to a signed-in admin of the tenant); Community: anonymous
+        $bearer = if ($isPro) { "$($who.Token)" } else { '' }
+        $ans = $null
+        try { $ans = & $getPackage $url $bearer } catch { $ans = [pscustomobject]@{ Status = 0; Body = ''; Error = "$($_.Exception.Message)" } }
+        $who = $null; $bearer = ''   # the token is not kept by the launcher (the sign-in itself stays in the process for the installer)
+        if (-not $ans -or [int]$ans.Status -ne 200) {
+            $why = Get-SILauncherRouteRefusal -Status $(if ($ans) { [int]$ans.Status } else { 0 }) -Body $(if ($ans) { [string]$ans.Body } else { '' }) -ErrorText $(if ($ans -and $ans.PSObject.Properties['Error']) { [string]$ans.Error } else { '' }) -Edition $edition
+            Write-Host ('Invardia did not hand out the {0} release: {1}' -f $editionName, $why) -ForegroundColor Red
+            Write-Host ('Nothing was downloaded or installed. {0} installs only from Invardia''s signed release of its ring.' -f $editionName) -ForegroundColor Red
+            $code = 3; break
+        }
+        $trusted = if ($seam['TrustedKeys']) { @(& $seam['TrustedKeys']) } else { @((Get-SIInvardiaTrustedKeys).Keys) }
+        $chk = Test-SILauncherPackage -Body ([string]$ans.Body) -Ring $ringSigned -TrustedKeys $trusted -Kind $(if ($isPro) { 'code' } else { 'community' })
+        if (-not $chk.Ok) { Write-Host ('Invardia''s answer cannot be used: {0}. Nothing was downloaded or installed.' -f $chk.Reason) -ForegroundColor Red; $code = 3; break }
+        $relVersion = $chk.Version
+        Write-Host ('  SecurityInsight {0} (ring {1}, sequence {2}): the manifest''s signature verifies with Invardia''s update-signing key' -f $relVersion, $ringSigned, $chk.Sequence)
+        $reused = & $useEarlier $relVersion
+      if (-not $reused) {
+
+        # ---- 3. download into a NEW, empty folder: size and SHA-256 of the signed manifest ----
+        $dir = [IO.Path]::Combine($tempRoot, ('securityinsight-release-{0}-{1}' -f $relVersion, [guid]::NewGuid().ToString('N').Substring(0, 8)))
+        [void][IO.Directory]::CreateDirectory($dir)
+        $assetName = Get-SIInvardiaArchiveName -Kind $chk.Kind -Version $relVersion -Archive $(if ($chk.Manifest.PSObject.Properties['archive']) { "$($chk.Manifest.archive)" } else { '' })
+        Write-Host ('Step 3 of {0}: downloading {1} ({2}) into {3}' -f $steps, $assetName, $(if ($isPro) { 'the Pro package, from Invardia' } else { 'the public release the signed manifest names' }), $dir)
+        $saveSeams = @{}
+        if ($seam['Download']) {
+            $dlSeam = $seam['Download']
+            $saveSeams['Download'] = { param($u, $f) try { & $dlSeam $u $f; [pscustomobject]@{ Status = 200; Error = '' } } catch { [pscustomobject]@{ Status = 0; Error = "$($_.Exception.Message)" } } }.GetNewClosure()
+        }
+        $saved = Save-SIInvardiaUpdateFile -Result ([pscustomobject]@{ Kind = $chk.Kind; Action = 'update'; Manifest = $chk.Manifest; DownloadUrl = $chk.DownloadUrl }) -OutDir $dir -Seams $saveSeams
+        if (-not $saved.Ok) {
+            Write-Host ('The download cannot be used: {0}. Nothing was installed; the folder is removed. Run the command again.' -f $saved.Reason) -ForegroundColor Red
+            try { [IO.Directory]::Delete($dir, $true) } catch { }
+            $dir = ''; $code = 3; break
+        }
+        $zipPath = $saved.Path
+        $stated = "$($chk.Manifest.sha256)".Trim().ToLowerInvariant(); try { $statedSize = [long]$chk.Manifest.size } catch { $statedSize = 0L }
+        Write-Host ('  {0}: size and SHA-256 as the signed manifest states' -f $assetName)
+      }
 
         if ($reused) {
             # the release downloaded before IS the one this launcher installs now (same edition, same version): used again
@@ -820,13 +791,13 @@ do {
         } else {
         # ---- check it, unpack it ----
         Write-Host ('Step {0} of {1}: checking the download' -f ($steps - 1), $steps)
-        $why = Test-SILauncherZip -Path $zipPath -Version $relVersion -Size $statedSize -Sha256 $stated -AllowBuildNumber:$isPro
+        $why = Test-SILauncherZip -Path $zipPath -Version $relVersion -Size $statedSize -Sha256 $stated -AllowBuildNumber
         if ($why) {
             Write-Host ('The download cannot be used: {0}. Nothing was installed; the folder is removed. Run the command again.' -f $why) -ForegroundColor Red
             try { [IO.Directory]::Delete($dir, $true) } catch { }
             $dir = ''; $code = 3; break
         }
-        Write-Host ('  {0}: not empty, opens, holds the installer, VERSION {1}{2}' -f $assetName, $relVersion, $(if ($isPro) { ', SHA-256 as the signed manifest states' } else { ', SHA-256 as the release states' }))
+        Write-Host ('  {0}: not empty, opens, holds the installer, VERSION {1}, SHA-256 as the signed manifest states' -f $assetName, $relVersion)
         $unpack = [IO.Path]::Combine($dir, 'release')
         try { Expand-SILauncherZip -Path $zipPath -To $unpack } catch {
             Write-Host ('The release could not be unpacked: {0}. Nothing was installed; the folder is removed.' -f $_.Exception.Message) -ForegroundColor Red
@@ -836,11 +807,9 @@ do {
         $tree = Find-SILauncherTree -Dir $unpack
         if (-not $tree) { Write-Host 'The unpacked release holds no setup/Install-SecurityInsight.ps1. Nothing was installed; the folder is removed.' -ForegroundColor Red; try { [IO.Directory]::Delete($dir, $true) } catch { }; $dir = ''; $code = 3; break }
         $treeVersion = $relVersion
-        # the edition of this copy, into the unpacked installer's one edition line
-        if ($isPro) {
-            $why = Set-SILauncherEditionStamp -Path ([IO.Path]::Combine($tree, 'setup', 'Install-SecurityInsight.ps1')) -Edition 'pro'
-            if ($why) { Write-Host ('The release''s installer cannot be set to install SecurityInsight Pro: {0}. Nothing was installed; the folder is removed.' -f $why) -ForegroundColor Red; try { [IO.Directory]::Delete($dir, $true) } catch { }; $dir = ''; $code = 3; break }
-        }
+        # the edition of this copy, into the unpacked installer's one edition line (the same step for both editions)
+        $why = Set-SILauncherEditionStamp -Path ([IO.Path]::Combine($tree, 'setup', 'Install-SecurityInsight.ps1')) -Edition "$script:SIInstallChannel"
+        if ($why) { Write-Host ('The release''s installer cannot be set to install {0}: {1}. Nothing was installed; the folder is removed.' -f $editionName, $why) -ForegroundColor Red; try { [IO.Directory]::Delete($dir, $true) } catch { }; $dir = ''; $code = 3; break }
         # the note, so -Resume finds this folder again (a -WhatIf run writes nothing outside the temp folder)
         if (-not $WhatIfPreference) {
             try {

@@ -22,6 +22,7 @@ public static partial class DocumentValidator
     [
         "nameMatches", "osPlatform", "hasMdeMachineGroupTag", "egDetectedRoles", "hasEntraExtensionAttributeTag", "hasSoftwareInstalled",
         "groupMembership", "hasAzureTagDirectOrParent", "egKustoQuery", "mostFrequentUserTier", "ipInRange", "hasTag", "assetKind",
+        "privilegedLogonTier",
     ];
 
     [GeneratedRegex(@"^(endpoint|identity|azure|shared)/[A-Za-z][A-Za-z0-9_\-]{0,99}$", RegexOptions.CultureInvariant)] public static partial Regex RuleKey();

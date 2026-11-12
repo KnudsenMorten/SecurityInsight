@@ -147,6 +147,8 @@
     { "key": "logAnalyticsClusterId", "page": "data", "label": "Your Log Analytics cluster (resource id)", "type": "resourceId", "showIf": { "cmkLogAnalytics": "cluster-existing" },
       "pattern": "(?i)/providers/Microsoft\\.OperationalInsights/clusters/[^/]+$" },
 
+    { "key": "connectToInvardia", "page": "support", "label": "Connect this install to Invardia: health reports + updates on request", "type": "bool", "default": false,
+      "help": "Off (the default for the Community edition): the install sends nothing that identifies it -- no health reports, no install key, no 'Update now'; it still takes the release of its update ring every night. On: the install gets its own install key from Invardia, sends its health reports and can be updated sooner on request. A SecurityInsight Pro install is always connected. Change it later with the setting SI_Invardia_Connect." },
     { "key": "supportAppId",  "page": "support", "label": "Invardia Support app (client id, optional)", "type": "guid",
       "help": "The 'Invardia Support for SecurityInsight - PIM Manager (customer request-based only)' app in your tenant. Pre-filled from your support environment. Empty = no support access is granted." },
     { "key": "supportAccess", "page": "support", "label": "Support access level", "type": "enum", "default": "troubleshoot",

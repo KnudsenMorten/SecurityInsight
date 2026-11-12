@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
-    caj-si-updater -- SecurityInsight Pro: THE SECRET HAND-OVER (owner 2026-10-10: "this is a security concern, can we
+    caj-si-updater -- THE SECRET HAND-OVER (both editions) (owner 2026-10-10: "this is a security concern, can we
     commit this to the engine and then the engine commits it, so the gui keeps read only if possible"). Loaded by
-    Start-SIUpdater.ps1 when present (the Community edition has no Pro database and does not carry it).
+    Start-SIUpdater.ps1 when present.
 
     The web app NEVER writes a secret and holds no Key Vault right. It encrypts a pasted secret in memory -- a random
     AES-256-GCM data key encrypts the secret, RSA-OAEP-256 with the PUBLIC half of this updater's hand-over key wraps the

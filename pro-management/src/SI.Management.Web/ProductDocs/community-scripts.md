@@ -18,7 +18,7 @@ modules: Azure, Microsoft Graph and Defender are called over REST.
 | Analyse | Risk Analysis (Summary and Detailed) and the risk trend | Log Analytics finding and trend tables |
 | Deliver | Risk Analysis | Excel workbook, mail, JSON files, blob storage or a file share |
 | Operate | The daily pipeline, the health check, the deviation report | Run health table, console, CSV |
-| Update | The update script | A new signed release from GitHub |
+| Update | The updater job, in Azure (the same job as Pro) | The release Invardia signs for your update ring, at the nightly run |
 
 On a server, one scheduled task runs the daily pipeline: every step in order, each when the one before it has ended.
 In Container Apps, a pipeline job does the same with one job per engine.
@@ -43,7 +43,7 @@ In Container Apps, a pipeline job does the same with one job per engine.
 
 Open [Azure Cloud Shell](https://shell.azure.com) in **PowerShell**, signed in to the tenant you want to assess. The
 install is two lines: line 1 downloads one small file from the latest public release on GitHub, line 2 runs it. It
-downloads the release, checks it and runs its installer.
+installs the release Invardia has signed for your update ring (ring 3 unless you choose another), checks it and runs its installer.
 
 ```powershell
 Invoke-WebRequest https://github.com/KnudsenMorten/SecurityInsight/releases/latest/download/Install-SecurityInsight.ps1 -OutFile Install-SecurityInsight.ps1
@@ -180,10 +180,10 @@ Reports, exclusions, risk weights and the scoring matrix are files: `RiskAnalysi
 
 | File | Purpose | How to run it | Produces |
 |---|---|---|---|
-| `Update-SecurityInsight.ps1` | Takes the release your update ring approves from SecurityInsight's signed update channel on GitHub. It checks the signature, the product, the ring and that the version is not older, checks the download's size and SHA-256, pauses the scheduled tasks, keeps a backup and restores it on any failure. Ring 3 (broad) is the default; ring 2 is early release. | `.\Update-SecurityInsight.ps1` (schedule it, or run it when you choose; `-ShowReleaseNotes` prints what changed) | The new release in place; your custom files, logs and output untouched |
-| `setup\Invoke-SIContainerUpdate.ps1` | Container install: after an update, rebuilds the engine image in your own registry, rolls the jobs, verifies them and rolls back on failure. `Update-SecurityInsight.ps1` calls it for you. | `.\setup\Invoke-SIContainerUpdate.ps1 -Apply` | A new image and updated jobs |
+| `setup\Install-SIUpdaterJob.ps1` | Creates the updater job (setup does this for you; run it again to repair the job). The job takes the release your update ring approves from Invardia's signed release channel: it checks the signature, the product, the ring and that the version is not older, checks the download's size and SHA-256, and restores the previous version on any failure. Ring 3 (broad) is the default; ring 2 is early release. | `.\setup\Install-SIUpdaterJob.ps1` | The updater job |
+| `setup\Invoke-SIContainerUpdate.ps1` | Container install: after an update, rebuilds the engine image in your own registry, rolls the jobs, verifies them and rolls back on failure. The updater job runs it for you. | `.\setup\Invoke-SIContainerUpdate.ps1 -Apply` | A new image and updated jobs |
 
-Community has no automatic update job: you run or schedule the update script.
+Community updates exactly like Pro: the updater job takes the release of your update ring at its nightly run, checks its signature and SHA-256, and rolls the jobs and the web app.
 
 ## Container entry points
 

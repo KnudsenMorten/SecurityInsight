@@ -220,6 +220,10 @@ function Invoke-GraphHuntingQuery {
         # #673 plan B: set on the inner call, so the query plan B built is sent as it is
         [switch]$SIDefenderFilterDone
     )
+    # SUP-2026-00496: a MEASUREMENT (the completeness count, $script:_RAHuntingMeasurement set around it) -- when every path
+    # fails, the attempts go to the verbose log, never a WARN: its caller says the count is not available (INFO) and never
+    # fails a report on it. A script flag, not a parameter: it reaches the Defender filter's inner calls by itself.
+    $NoFailureWarning = [bool]$script:_RAHuntingMeasurement
 
     # #673 PLAN B (SI_RA_DefenderFilterInEngine / SI_RA_DefenderFilterCompare, in-engine ON by default since rc2, compare off -- REMOVE-ME): the
     # Azure recommendation reports' Defender de-duplication is taken out of the query and done against the run's Defender
@@ -712,6 +716,9 @@ function Invoke-GraphHuntingQuery {
             # XDR tables actually live alongside SI_*_CL in the same workspace), retry
             # against the SI workspace alone -- raw query, no let. Cleaner than failing
             # the whole report when LA can resolve the table itself.
+            # SUP-2026-00496: a Log Analytics failure after an earlier path failed is the LAST attempt of the consolidated
+            # WARN (Flush-SupersededAttempts -LastPath); with no earlier failure nothing changes (the caller says the error).
+            try {
             try {
                 # v2.2.280 -- visible heartbeat before the LA call. Same silent-gap
                 # problem as the AH path: large LA-direct queries can sit for
@@ -736,6 +743,10 @@ function Invoke-GraphHuntingQuery {
                     Write-Warn2 ("Cross-workspace XDR lookup failed ({0}). Retrying as direct LA query against `$global:SI_WorkspaceResourceId (single-workspace fallback)." -f $_.Exception.Message)
                     $rows = Invoke-LogAnalyticsKqlQueryParted -WorkspaceResourceId $wsResId -Query $Query -What 'the report''s query'
                 } else { throw }
+            }
+            } catch {
+                Flush-SupersededAttempts -LastPath 'LA-direct' -LastMessage $_.Exception.Message -Quiet:$NoFailureWarning
+                throw
             }
             if ($null -eq $rows) { $rows = @() }
             # Bypass the Microsoft Graph response shape entirely. v2.1.199 tried to mock
@@ -1118,7 +1129,8 @@ if ($looksAuth) {
         # All paths failed for this query -- emit the one consolidated WARN (BUG B)
         # then re-throw so the per-report handler behaves exactly as before.
         # (not for a part asked ahead: its own run says what happened)
-        if (-not ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture)) { Flush-SupersededAttempts }
+        # SUP-2026-00496: advanced hunting's own failure is the LAST attempt listed, so the WARN names what really failed
+        if (-not ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture)) { Flush-SupersededAttempts -LastPath 'advanced-hunting' -LastMessage $_.Exception.Message -Quiet:$NoFailureWarning }
         throw
     }
 }

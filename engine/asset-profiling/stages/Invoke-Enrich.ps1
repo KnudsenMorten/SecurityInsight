@@ -238,6 +238,8 @@ function Test-SIAssetMatchesRule {
 # all of Stage Enrich. This block dot-sources the shared file so existing
 # Stage Enrich callers keep working unchanged.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\HuntingQuery.ps1')
+# the privileged logons of the devices (DeviceLogonEvents -> the identity profile's tiers) -- a tier source of the endpoint
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\SI-PrivilegedLogon.ps1')
 
 # =====================================================================================================================
 #  #639 -- THE CROSS-ENGINE TIER LOOK-UPS READ ONLY THE KEYS THIS PART NEEDS, AND A FAILED ONE IS A RUN ISSUE.
@@ -1530,6 +1532,9 @@ function Invoke-SIEnrich {
     $azureEgEdges    = @{}
     $tvmByDeviceId   = @{}   # endpoint engine: bulk TVM software fan-out
     $userTierByDevice= @{}   # endpoint engine: cross-engine logon-user-tier fan-out
+    $privLogonByDevice = @{} # endpoint engine: the privileged logons of each device (MDE device id -> entry)
+    $privLogonAsked    = $false # the privileged logons were asked for this run (a device without an entry is then UNKNOWN)
+    $plSettings        = $null  # #1209 the two device-user tier sources' settings (read in the endpoint branch)
 
     # Signal-map per-run state. Reset per invocation so the
     # summary line reports this run's criticality density. Type-profile
@@ -1634,7 +1639,12 @@ function Invoke-SIEnrich {
                     $a = Get-SIRecordAadDeviceId -Metadata $r.Metadata
                     if ($a) { [void]$aadDeviceIds.Add([string]$a) }
                 }
-                if ($aadDeviceIds.Count -gt 0) {
+                # #1209: the two device-user tier sources each have a mode (Get-SIPrivilegedLogonSettings): the frequent
+                # user (SI_Endpoint_MostFrequentUserTier_Mode, default on) -- off = not read
+                $plSettings = Get-SIPrivilegedLogonSettings
+                if ($plSettings.MostFrequentMode -eq 'off') {
+                    Write-SIInfo '[perms] Device-user logon correlation (EG): switched off (SI_Endpoint_MostFrequentUserTier_Mode = off)'
+                } elseif ($aadDeviceIds.Count -gt 0) {
                     try {
                         $userTierByDevice = Get-SIBulkDeviceUserCorrelation -AadDeviceIds $aadDeviceIds.ToArray() -TopN 5
                     } catch {
@@ -1649,6 +1659,38 @@ function Invoke-SIEnrich {
                 } else {
                     Write-SIInfo '[perms] Device-user logon correlation (EG): 0 endpoints have AAD device id; skipping'
                 }
+
+                # Any privileged logon counts (owner 2026-11-12): the Tier 0-2 accounts of this run's identity profile that
+                # logged on to a device in the window (DeviceLogonEvents FILTERED BY THOSE ACCOUNTS, never by device;
+                # incremental from the stored state in SI's storage, shared by the parts of the run). Feeds the
+                # AssetProfileByPrivilegedLogon rule (kind privilegedLogonTier). Never throws; a failed read is a run issue
+                # and those devices' privileged-logon source is UNKNOWN (said on the row), never "none".
+                # SI_Endpoint_PrivilegedLogon_Mode: on (default) / shadow (computed + recorded, never the tier) / off
+                if ($plSettings.Mode -ne 'off') { $privLogonAsked = $true }
+                if ($privLogonAsked) { try {
+                    # the device's frequent user(s) (the Exposure Graph correlation above): the primary user of the filters
+                    $plPrimary = @{}
+                    foreach ($r in $records) {
+                        $md = [string]$r.Metadata.MDE_DeviceId; if (-not $md) { continue }
+                        $ad = Get-SIRecordAadDeviceId -Metadata $r.Metadata; if ($ad) { $ad = $ad.ToLowerInvariant() }
+                        if ($ad -and $userTierByDevice.ContainsKey($ad)) { $plPrimary[$md.ToLowerInvariant()] = @(@($userTierByDevice[$ad].MostFrequentUsers) | ForEach-Object { [string]$_.Upn } | Where-Object { $_ }) }
+                    }
+                    $plStore = New-SIPrivilegedLogonBlobStore -StorageContext $RunContext.StorageContext
+                    $pl = Get-SIBulkPrivilegedLogons -MdeDeviceIds $deviceIds.ToArray() -RunId ([string]$RunContext.RunId) -Store $plStore -PrimaryUsers $plPrimary -Settings $plSettings
+                    $privLogonByDevice = $pl.ByDevice
+                    $plSum = $pl.Summary
+                    if ($plSum) {
+                        # THE COMPARISON (owner 2026-11-12: "build all scenarios so we finetune this"): what each rule does in
+                        # this part, the tenant's support cut-off and how many raises come from one-off / support-pattern logons
+                        Write-SIInfo ('[perms] privileged logons ({0} days, mode {1}, support filter {2}): {3} Tier 0-2 account(s), {4} quer(y/ies), {5} row(s) returned, {6} account x device row(s) kept{7}; {8} of {9} device(s) raised ({10} by a Tier 0 logon, {11} by a one-off logon, {12} by a support-pattern account), not counted: {13} one-off / {14} support / {15} excluded; {16} unknown. Tenant pattern: fan-out median {17}, MAD {18}, support cut-off above {19} device(s): {20} support, {21} user account(s).' -f `
+                            $plSum.WindowDays, $plSum.Mode, $plSum.SupportFilter, $plSum.PrivilegedAccounts, $plSum.Queries, $plSum.RowsReturned, $plSum.StateRows, $(if ($pl.Reused) { ' (read by another part of this run)' } else { '' }),
+                            $plSum.RaisedDevices, $plSum.Devices, $plSum.RaisedByTier0, $plSum.RaisedByOneOff, $plSum.RaisedBySupportAccount, $plSum.NotCountedOneOff, $plSum.NotCountedSupport, $plSum.NotCountedExcluded, $plSum.Unknown,
+                            $plSum.FanOutMedian, $plSum.FanOutMad, $plSum.SupportCutOff, $plSum.SupportAccounts, $plSum.UserAccounts)
+                    }
+                } catch {
+                    Add-SIEnrichIssue ('The privileged logons of the devices were not read ({0}) -- the privileged-logon tier is unknown for this run, not absent.' -f $_.Exception.Message)
+                    $privLogonByDevice = @{}
+                } }
             }
         }
         elseif ($RunContext.Engine -eq 'identity') {
@@ -1793,6 +1835,13 @@ function Invoke-SIEnrich {
 
                 if ($aadDevKey -and $userTierByDevice.ContainsKey($aadDevKey)) {
                     $u = $userTierByDevice[$aadDevKey]
+                    # #1209 SI_Endpoint_MostFrequentUserTier_Mode: on = the tier source (as before); shadow = recorded in
+                    # MostFrequentUserComputedTier only (MostFrequentUserTier stays empty, so no rule, claim or CI reads it)
+                    $mfuMode = 'on'; if ($plSettings) { $mfuMode = [string]$plSettings.MostFrequentMode }
+                    $mfuComputed = $u.MostFrequentUserTier
+                    if ($mfuMode -ne 'on') { $u = @{ MostFrequentUserTier = $null; MostFrequentUsers = $u.MostFrequentUsers; MostFrequentUsersCount = $u.MostFrequentUsersCount } }
+                    if ($r.Metadata -is [System.Collections.IDictionary]) { $r.Metadata['MostFrequentUserComputedTier'] = $mfuComputed }
+                    else { $r.Metadata | Add-Member -NotePropertyName MostFrequentUserComputedTier -NotePropertyValue $mfuComputed -Force }
                     if ($r.Metadata -is [System.Collections.IDictionary]) {
                         $r.Metadata['MostFrequentUserTier']   = $u.MostFrequentUserTier
                         $r.Metadata['MostFrequentUsers']      = $u.MostFrequentUsers
@@ -1801,6 +1850,18 @@ function Invoke-SIEnrich {
                         $r.Metadata | Add-Member -NotePropertyName MostFrequentUserTier   -NotePropertyValue $u.MostFrequentUserTier   -Force
                         $r.Metadata | Add-Member -NotePropertyName MostFrequentUsers      -NotePropertyValue $u.MostFrequentUsers      -Force
                         $r.Metadata | Add-Member -NotePropertyName MostFrequentUsersCount -NotePropertyValue $u.MostFrequentUsersCount -Force
+                    }
+                }
+
+                # the privileged logons (Get-SIBulkPrivilegedLogons): the tier the rule AssetProfileByPrivilegedLogon reads,
+                # the list, the evidence sentence and whether the source was read -- a device the read did not cover is
+                # UNKNOWN, never "no privileged logon"
+                if ($privLogonAsked) {
+                    $pe = $privLogonByDevice[$devKey]
+                    if ($null -eq $pe) { $pe = @{ PrivilegedLogonComputedTier = $null; PrivilegedLogonTier = $null; PrivilegedLogons = @(); PrivilegedLogonStatus = 'unknown -- the device logons could not be read this run'; PrivilegedLogonEvidence = '' } }
+                    foreach ($pk in 'PrivilegedLogonTier', 'PrivilegedLogonComputedTier', 'PrivilegedLogons', 'PrivilegedLogonStatus', 'PrivilegedLogonEvidence') {
+                        if ($r.Metadata -is [System.Collections.IDictionary]) { $r.Metadata[$pk] = $pe[$pk] }
+                        else { $r.Metadata | Add-Member -NotePropertyName $pk -NotePropertyValue $pe[$pk] -Force }
                     }
                 }
             }

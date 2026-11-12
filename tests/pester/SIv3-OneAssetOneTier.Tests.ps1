@@ -224,7 +224,7 @@ Describe 'tier enrichment reads the Entra device id Defender actually provides (
         Get-SIRecordAadDeviceId -Metadata $null | Should -BeNullOrEmpty
     }
     It 'WIRING -- both the map build and the per-record lookup use it; the dead key is read nowhere else' {
-        @([regex]::Matches($script:EnrichSrc, 'Get-SIRecordAadDeviceId -Metadata \$r\.Metadata')).Count | Should -Be 2
+        @([regex]::Matches($script:EnrichSrc, 'Get-SIRecordAadDeviceId -Metadata \$r\.Metadata')).Count | Should -Be 3 -Because 'the map build, the per-record lookup, and the privileged-logon primary users (#1209) read the device''s Entra id the same way'
         @([regex]::Matches($script:EnrichSrc, "'MDE_AzureADDeviceId'")).Count | Should -Be 1 -Because 'only as the last, legacy fallback inside the function'
     }
 }

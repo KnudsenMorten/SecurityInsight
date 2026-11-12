@@ -743,9 +743,9 @@ Describe 'both steps together, the switch, the state rows and the wiring' {
             @($script:Calls | Where-Object { $_ -like 'PATCH *' }).Count | Should -Be 0
         } finally { [Environment]::SetEnvironmentVariable('SI_UPDATER_WEB_APP', $keepEnv); $global:SI_InstallNames = $script:KeepNames }
     }
-    It 'WIRING: both steps run after the update (Community and Invardia), only when it did not fail; the state rows are allowed names' {
+    It 'WIRING: both steps run after the update (the one client, every edition), only when it did not fail; the state rows are allowed names' {
         $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
-        $u | Should -Match '(?s)\$rcCommunity = \(Invoke-SIUpdaterFromCommunity .*?Invoke-SIUpdaterWebAppStepsAfter -Rc \$rcCommunity .*?return \$rcCommunity'
+        $u | Should -Not -Match 'Invoke-SIUpdaterFromCommunity' -Because 'one update client for both editions (PRO-COMMUNITY-SAME)'
         $u | Should -Match '(?s)\$rcInvardia = \(Invoke-SIUpdaterFromInvardia .*?Invoke-SIUpdaterWebAppStepsAfter -Rc \$rcInvardia .*?return \$rcInvardia'
         $u | Should -Match "ValidateSet\([^)]*'SignInAppOwner', 'WebAppName'\)"
         Mock Invoke-SIUpdaterWebAppSteps { $script:Calls.Add('STEPS') }

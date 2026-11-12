@@ -357,13 +357,13 @@ Describe 'a size the customer set lowers too (owner 2026-10-18); the rule alone 
         $iDb | Should -BeGreaterThan -1; $iCfg | Should -BeGreaterThan $iDb; $iEnv | Should -BeGreaterThan $iCfg
         $h | Should -Match "\`$script:SIUpdateProSettingNames = @\('SI_Bootstrap_SqlServiceObjective', 'SI_Bootstrap_WebAppCpu', 'SI_Bootstrap_WebAppMemory'\)"
     }
-    It 'the setting is in the settings catalog (support sets it per install), Pro, empty by default, S1 and up only' {
+    It 'the setting is in the settings catalog (support sets it per install), both editions, empty by default, S1 and up only' {
         $catPath = Join-Path $script:SIRoot 'config\settings.catalog.locked.json'   # a Pro file: not in the Community copy
         if (-not (Test-Path $catPath)) { Set-ItResult -Skipped -Because 'the settings catalog is Pro (not in the Community copy)'; return }
         $cat = Get-Content -Raw $catPath | ConvertFrom-Json
         $s = @($cat.settings | Where-Object { $_.name -eq 'SI_Bootstrap_SqlServiceObjective' })[0]
         $s | Should -Not -BeNullOrEmpty
-        $s.edition | Should -Be 'pro'; $s.default | Should -BeNullOrEmpty
+        $s.edition | Should -Be 'community'; $s.default | Should -BeNullOrEmpty
         foreach ($ok in 'S1', 'S2', 's2', 'S3', 'S12') { $ok | Should -Match $s.pattern }
         foreach ($no in 'S0', 'Basic', 'P1', 'S5', 'GP_Gen5_2') { $no | Should -Not -Match $s.pattern }
         $s.purpose | Should -Match 'Empty = the product''s rule'

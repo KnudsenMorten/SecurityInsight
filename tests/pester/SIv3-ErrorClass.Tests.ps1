@@ -249,7 +249,17 @@ Describe 'the builders send nothing' {
         $isPro = { param($full) $rel = & $relOf $full; [bool](@($proPaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '/') }).Count) }
         $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' | Where-Object { (& $relOf $_.FullName) -notmatch '(^|/)tests/' -and $_.Name -notin 'SI-Telemetry.ps1' -and -not (& $isPro $_.FullName) } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match 'New-SITelemetry(RunRecord|Heartbeat)' } | ForEach-Object { $_.Name })
-        # the support grant (Community AND Pro) reports each grant / close on the uplink through the sender's own send (framework SECAUDIT-1a)
-        @($callers | Sort-Object) | Should -Be @('Invoke-SISupportGrant.ps1', 'SI-TelemetrySend.ps1')
+        # the support grant (Community AND Pro) reports each grant / close on the uplink through the sender's own send (framework SECAUDIT-1a);
+        # the status report job ships in BOTH editions since framework PRO-COMMUNITY-SAME (2026-11-11) -- it builds its record and
+        # sends it ONLY through the sender (Send-SITelemetryRecordWithFallback), which sends nothing for a Community install without
+        # its "Connect this install to Invardia" yes (asserted below and in SIv3-ProCommunitySame)
+        @($callers | Sort-Object) | Should -Be @('Invoke-SISupportGrant.ps1', 'SI-HeartbeatJob.ps1', 'SI-TelemetrySend.ps1')
+        $hb = Get-Content -Raw -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'engine', '_shared', 'SI-HeartbeatJob.ps1'))
+        $hb | Should -Match 'Send-SITelemetryRecordWithFallback'
+        # NEGATIVE: the status report job never calls the network itself
+        $hbAst = [System.Management.Automation.Language.Parser]::ParseInput($hb, [ref]$null, [ref]$null)
+        @($hbAst.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } |
+            Where-Object { $_ -match '^(Invoke-RestMethod|Invoke-WebRequest|Send-AitUplink|Invoke-AzRestMethod)$' }) | Should -BeNullOrEmpty
+        $hb | Should -Match "PSObject\.Properties\['Connected'\] -and -not \[bool\]\`$Context\.Connected"
     }
 }

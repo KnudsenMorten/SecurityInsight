@@ -13,6 +13,51 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.11 — old images are cleaned up, the patched .NET packages, and a complete security pack
+
+### What's new
+- **The installation's own registry keeps only the current release and the one before.** After an update has been
+  checked healthy, the updater deletes the older images from the installation's own registry and says per repository
+  what was deleted and what is left. A rollback of one release uses the image that is kept; an older one is rebuilt.
+  Nothing is deleted when the update did not end healthy or when the previous release is not known.
+
+### Fixes
+- **The web app's .NET packages are on the patched 10.0.15 release**, the same release every image already runs on.
+- **The security pack names every published support script**, with the rights it needs and the changes it makes.
+## v3.1.10 — a device takes the tier of its most privileged logon, mails name their environment, one path for Community and Pro
+
+### What's new
+- **A device takes the tier of the most privileged account that signs in to it.** When a Tier 0, 1 or 2 account signs
+  in to a device, the device is classified at that tier; otherwise it keeps the tier of its most frequent user. Accounts
+  in the HR and finance groups make their devices Tier 2, so those devices are patched before Tier 3 devices. The check
+  is incremental: each run reads only the sign-ins since the last run, and a device's first privileged sign-in is
+  enough, so it scales to very large fleets. Each run's log says how many devices were raised and by which kind of
+  sign-in; an optional setting leaves out support accounts that sign in once each to many devices.
+- **Every mail names its environment.** The subject and first line start with the environment's kind and name, and the
+  body names the tenant, so a mail from one installation is never mistaken for another.
+- **Community and Pro install, run and update the same way.** Both editions use the same installer, updater, jobs,
+  support access and maintenance tools; only the licensed features differ. A setting is marked Pro only when it belongs
+  to a licensed feature.
+- **A Community installation can be connected to Invardia, on its own choice.** The installer asks "Connect this
+  install to Invardia: health reports + updates on request". Without a yes, a Community installation sends nothing that
+  identifies its tenant or its installation.
+
+### Fixes
+- **The health report shows that the database statistics are fresh**, with the time of the last refresh.
+- **A long step's progress time is kept when the clocks of two services differ by a few seconds**; before, the progress
+  could disappear and the step look stalled.
+- **The management presentation's file name is always one Windows can save.** A title with characters such as `:` or
+  `?` no longer reaches the attachment's name.
+## v3.1.9 — a faster end of the CI build, and clearer logs
+
+### Fixes
+- **The end of the CI build is much faster on large installations.** Marking every configuration item as built read
+  ever more records the further it got, and read each record's document again; on a large installation it took many
+  hours. Each part now reads only its own records, and each document at most once.
+- **The privilege tier classifier's log says "AI" only when AI is used.** With the daily downloaded catalog (the
+  default) the log now says which catalog version gave the tiers; nothing suggests an AI request that was not made.
+- **A Risk Analysis warning that every data path failed now names the path that really failed last**, with its
+  error, and a failed count used only to time a completeness check no longer raises a warning.
 ## v3.1.8 — long steps say how far they are, and a ready path for base image security updates
 
 ### What's new

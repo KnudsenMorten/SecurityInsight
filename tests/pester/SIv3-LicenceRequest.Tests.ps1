@@ -198,11 +198,11 @@ Describe 'when to knock: none, 30 days or less, more than 30 days' {
         $o.PSObject.Properties.Name | Should -Not -Contain 'edition'
         (Knocks)[0].Body | Should -Not -Match '(?i)trial'
     }
-    It 'framework INSTALL-1: the Community updater never knocks (it returns before the licence request)' {
+    It 'framework PRO-COMMUNITY-SAME (#1207): every install -- Community too -- asks Invardia for its licence, before the one update client runs' {
         $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
-        $c = $u.IndexOf('$rcCommunity = (Invoke-SIUpdaterFromCommunity'); $k = $u.IndexOf('$lr = Invoke-SIUpdaterLicenceRequest')
-        $u.IndexOf('return $rcCommunity') | Should -BeGreaterThan $c
-        $c | Should -BeGreaterThan 0; $k | Should -BeGreaterThan $c
+        $u | Should -Not -Match 'Invoke-SIUpdaterFromCommunity' -Because 'there is no Community path that returns before the licence request'
+        $k = $u.IndexOf('$lr = Invoke-SIUpdaterLicenceRequest'); $i = $u.IndexOf('$rcInvardia = (Invoke-SIUpdaterFromInvardia')
+        $k | Should -BeGreaterThan 0; $i | Should -BeGreaterThan $k
     }
     It 'a licence ending in exactly 30 days -> knock' {
         $script:Secrets['SI-License'] = New-LicText -ToDays 30

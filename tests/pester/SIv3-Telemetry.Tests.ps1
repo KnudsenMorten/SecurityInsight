@@ -16,6 +16,9 @@
 #>
 
 BeforeAll {
+    # framework PRO-COMMUNITY-SAME (opt-in): these suites test what a CONNECTED install sends (anonymously without a key);
+    # a Community install that did not say yes sends nothing -- SIv3-ProCommunitySame proves that
+    $script:SavedInvardiaConnect = $global:SI_Invardia_Connect; $global:SI_Invardia_Connect = 'on'
     $script:SIRoot   = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:RepoRoot = Split-Path -Parent (Split-Path -Parent $script:SIRoot)
     # Belt and braces: even a real send that slipped through would go to a closed local port, never to Invardia.
@@ -54,6 +57,7 @@ BeforeAll {
 }
 
 AfterAll {
+    $global:SI_Invardia_Connect = $script:SavedInvardiaConnect
     $env:SI_TELEMETRY_ENDPOINT = $script:SavedEndpointEnv
     $global:SI_TelemetryHalted = $null; $global:SI_TelemetryWarned = $null; $global:SI_TelemetryContext = $null; $global:SI_Telemetry_Enabled = $null
 }
@@ -134,9 +138,11 @@ Describe 'what this install reports as' {
         (Get-SITelemetryLicenceInfo ([pscustomobject]@{ Status = 'Expired'; Sku = 'Pro' })) | ForEach-Object { $_.Edition | Should -Be 'community'; $_.LicenceState | Should -Be 'expired' }
         (Get-SITelemetryLicenceInfo $null).LicenceState | Should -Be 'none'
     }
-    It 'Community: anonymous with the public community code -- and the install key is NEVER looked up' {
+    It 'Community (not connected to Invardia): anonymous with the public community code -- and the install key is NEVER looked up' {
         Mock Get-SITelemetryInstallKey { throw 'a Community install must not read a Key Vault for telemetry' }
-        $c = Get-SITelemetryContext -License $null -StateDirectory (Join-Path $TestDrive 'c1') -Vars @{ UseMi = $true } -GetEnv { param($n) $null } -Version '3.0.0'
+        $savedConn = $global:SI_Invardia_Connect; $global:SI_Invardia_Connect = $null
+        try { $c = Get-SITelemetryContext -License $null -StateDirectory (Join-Path $TestDrive 'c1') -Vars @{ UseMi = $true } -GetEnv { param($n) $null } -Version '3.0.0' } finally { $global:SI_Invardia_Connect = $savedConn }
+        $c.Connected | Should -BeFalse -Because 'nothing identifying leaves it without its yes'
         $c.Mode | Should -Be 'anonymous'; $c.AccessCode | Should -Be 'invardia-community-telemetry-v1'; $c.Edition | Should -Be 'community'
         $c.TenantId | Should -Be ''
         $c.InstallId | Should -Match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'

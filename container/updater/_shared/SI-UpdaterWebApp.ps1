@@ -435,7 +435,11 @@ function Invoke-SIUpdaterAppRoll {
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][string]$Tag,
-          [string]$WebApp = 'ca-si-management', [string]$McpApp = 'ca-si-mcp', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10)
+          [string]$WebApp = 'ca-si-management', [string]$McpApp = 'ca-si-mcp', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10,
+          # SEC-LANE-1 (the short image-only path, SI-UpdaterImageOnly.ps1): the IMAGES only -- the web app, the MCP server and
+          # the sign-in front a front-ed web app runs get their new revision; nothing of the sign-in (the front's adoption,
+          # the consent check, the enterprise application's assignment setting) is looked at or changed
+          [switch]$ImagesOnly)
     $plan = @(
         [pscustomobject]@{ App = $WebApp; Repo = 'si-management';     File = 'pro-management/Dockerfile';     Health = $true }
         [pscustomobject]@{ App = $McpApp; Repo = 'si-management-mcp'; File = 'pro-management/Dockerfile.mcp'; Health = $false }
@@ -519,6 +523,14 @@ function Invoke-SIUpdaterAppRoll {
         catch { Write-UpdLog ("{0}: could NOT be restored to {1}: {2} -- restore it by hand" -f $t.App, $t.Prev, $_.Exception.Message) }
     }
     if ($failed.Count) { return [pscustomobject]@{ Code = 1; Text = (($failed | ForEach-Object { '{0}: {1}' -f $_.App, $_.Error }) -join '; ') } }
+    # SEC-LANE-1 -ImagesOnly: the sign-in front's image (a web app that already runs behind it), then nothing else
+    if ($ImagesOnly) {
+        $sfo = Invoke-SIUpdaterSigninFrontRoll -SIRoot $SIRoot -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -LoginServer $LoginServer `
+                   -WebApp $WebApp -TimeoutMinutes $TimeoutMinutes -PollSeconds $PollSeconds
+        if ($sfo.Code -ne 0) { return [pscustomobject]@{ Code = 1; Text = $sfo.Text } }
+        if ($sfo.Text) { $done.Add($sfo.Text) }
+        return [pscustomobject]@{ Code = 0; Text = $(if ($done.Count) { $done -join '; ' } else { 'no web app in this environment' }) }
+    }
     # the 8-hour session with PKCE: a web app from before the front is moved behind it once everything it needs reads back
     # (what is missing in Microsoft Entra = one customer action; a chosen own sign-in is kept)
     $ad = Invoke-SIUpdaterSigninFrontAdopt -SIRoot $SIRoot -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -LoginServer $LoginServer `

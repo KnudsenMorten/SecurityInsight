@@ -73,6 +73,15 @@
     <EmbeddedResource Include="ProductDocs\**\*" LogicalName="ProductDocs/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- WHATS-NEW-1: every release's What's new (release\Update-SIWhatsNew.ps1 copies the solution's whats-new\ folder into
+       WhatsNew\; a test holds the copy to the folder), embedded so Help > What's new shows the releases up to the one this
+       app is, in both editions, without reading the disk or the network. Not content: nothing of it is copied next to the app. -->
+  <ItemGroup>
+    <Content Remove="WhatsNew\**" />
+    <None Remove="WhatsNew\**" />
+    <EmbeddedResource Include="WhatsNew\*.json" LogicalName="WhatsNew/%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- #757: the approximate monthly list prices of the sizes Operations > Performance offers (dated, embedded: never read from disk) -->
   <ItemGroup>
     <Content Remove="Performance\size-prices.json" />

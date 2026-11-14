@@ -17,8 +17,9 @@ public sealed class DepartmentScopePageFilter(IAccessScope access, SI.Management
     public static readonly IReadOnlySet<string> AllowedPages = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         // no estate data: the landing page, the refusal / error pages, the link pages, the person's own preferences, the
-        // product documentation, "part of Pro" (not /Help: it shows the estate's device count)
-        "/Index", "/NoAccess", "/Denied", "/Error", "/MagicLink", "/MagicLinkRequest", "/Preferences", "/Docs/Index", "/ProOnly",
+        // product documentation, What's new (the release files the app ships, its ?handler=Files too: the same page),
+        // "part of Pro" (not /Help: it shows the estate's device count)
+        "/Index", "/NoAccess", "/Denied", "/Error", "/MagicLink", "/MagicLinkRequest", "/Preferences", "/Docs/Index", "/WhatsNew", "/ProOnly",
         // every read limited to the person's departments (the visibility predicate / the department resolver)
         "/Findings/Index", "/Findings/Detail", "/Search", "/Chat", "/Records/Index", "/Summary/Index",
         "/Cis/Index", "/Cis/Detail", "/Cis/NotOnboarded", "/Cis/Findings", "/Cis/Summary",

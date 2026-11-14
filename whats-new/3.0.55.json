@@ -1,0 +1,13 @@
+{
+  "version": "3.0.55",
+  "date": "2026-11-06",
+  "type": "fix-only",
+  "summary": "Database setup now completes on its first try.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Database setup finishes in one run",
+      "text": "On an installation with the optional Support app, the database setup step used to need a second run. It now finishes and checks everything the first time."
+    }
+  ]
+}

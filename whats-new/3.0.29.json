@@ -1,0 +1,25 @@
+{
+  "version": "3.0.29",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "Installs succeed more reliably.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Your secure key store is set up correctly",
+      "text": "Your secure key store gets its network settings from the start, whether the install creates, restores or finds it."
+    },
+    {
+      "title": "Re-installing restores a deleted key store",
+      "text": "Installing again over a deleted SecurityInsight secure key store now takes it back, with its keys and secrets, instead of stopping."
+    },
+    {
+      "title": "Region check respects your Azure policies",
+      "text": "The region check now uses the same settings as the real resources, so a policy that requires those settings no longer refuses it."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "The support scripts now come as one complete set, each file checked, with documentation of the same version."
+    }
+  ]
+}

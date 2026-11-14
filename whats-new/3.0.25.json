@@ -1,0 +1,13 @@
+{
+  "version": "3.0.25",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "The person who installs SecurityInsight can now reach its data straight away.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "The installer gets access to the data",
+      "text": "The install now gives the person installing access to SecurityInsight's data."
+    }
+  ]
+}

@@ -62,6 +62,9 @@ function ConvertFrom-SIUpdaterManualStepAccept {
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-UpdaterRollSteps.ps1'))
 # the Community manifest address and package of the one client (PRO-COMMUNITY-SAME)
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-UpdaterCommunity.ps1'))
+# framework SEC-LANE-1: the short image-only update path (an image patch of the release the install runs)
+$__siIoLib = [IO.Path]::Combine($PSScriptRoot, 'SI-UpdaterImageOnly.ps1')
+if (Test-Path -LiteralPath $__siIoLib) { . $__siIoLib }
 # the ONE opt-in rule (framework PRO-COMMUNITY-SAME): the code the image carries (/si), else this checkout's
 foreach ($__siConn in @('/si/engine/_shared/SI-InvardiaConnect.ps1', [IO.Path]::Combine($PSScriptRoot, '..', '..', '..', 'engine', '_shared', 'SI-InvardiaConnect.ps1'))) { if (-not (Get-Command -Name Test-SIInvardiaConnect -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $__siConn)) { . $__siConn } }
 
@@ -484,7 +487,7 @@ function Invoke-SIUpdaterFromInvardia {
         }
 
         # ---- 3. code ----
-        $code = $null; $siNow = $null; $runs = $Deployed; $dec = $null; $roll = $null; $relCommit = ''
+        $code = $null; $siNow = $null; $runs = $Deployed; $dec = $null; $roll = $null; $relCommit = ''; $imageOnly = $false; $imageOnlyRan = $false
         if ($Blocked -contains 'engine-image') { Write-UpdLog 'code: the customer blocks engine-image updates -- not asked' }
         else { $code = & $ask 'code' }
         if ($code) {
@@ -498,17 +501,28 @@ function Invoke-SIUpdaterFromInvardia {
                 $pkg = & $fetchCode $code $Work
                 if (-not $pkg.Ok) {
                     $stepName = if ($pkg.PSObject.Properties['Step'] -and $pkg.Step) { [string]$pkg.Step } else { 'verify' }
+                    # SEC-LANE-1 (the drift reason): an image patch of what runs that was refused says so in its own record
+                    if ($Store -and (Get-Command -Name Test-SIImageOnlyVersion -ErrorAction SilentlyContinue) -and (Test-SIImageOnlyVersion -Version "$($code.Version)" -Running "$Deployed").Ok -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) {
+                        $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImageOnlyUpdate' -Value (ConvertTo-SIUpdaterImageOnlyValue -Result ([pscustomobject]@{ Result = 'refused'; Component = 'release'; Why = [string]$pkg.Reason }) -Version "$($code.Version)" -From "$Deployed")
+                    }
                     $state.code.lastAction = 'refused'; $state.code.lastReason = $pkg.Reason; $state.lastError = "code: $($pkg.Reason)"
                     Write-UpdLog ("code REFUSED: {0} -- nothing was rolled" -f $pkg.Reason); & $fail $stepName ("code REFUSED: {0}" -f $pkg.Reason); & $save; return 1
                 }
                 $global:SI_UpdaterStep = 'verify'
                 if ($route -eq 'community') { Write-UpdLog $pkg.Reason }
                 $si = [string]$pkg.Root; $relCommit = [string]$pkg.Commit
+                # framework SEC-LANE-1: is this release IMAGE-ONLY (an image patch of what runs, the same engine code)? Then the
+                # short path below: no run gate, no database or data step, the images swapped one part after the other
+                $io = $null
+                if ($s['ImageOnlyDecision']) { $io = & $s.ImageOnlyDecision $si "$($code.Version)" "$Deployed" }
+                elseif (Get-Command -Name Get-SIUpdaterImageOnlyDecision -ErrorAction SilentlyContinue) { $io = Get-SIUpdaterImageOnlyDecision -SIRoot $si -Version "$($code.Version)" -Deployed "$Deployed" -Store $Store }
+                $imageOnly = [bool]($io -and $io.ImageOnly)
+                if ($io) { Write-UpdLog ("image-only: {0} -- {1}" -f $(if ($imageOnly) { 'yes, the short image-only update path' } else { 'no, the full update' }), $io.Why) }
                 # never roll under a manual deploy; a running pipeline run holds the update (owner 2026-10-23, the run gate
                 # below -- replaces the 2026-10-12 rule); a release that says it must be installed while no SI job runs at
-                # all still waits for them here (SI_UPDATER_WAIT_MINUTES is that wait)
+                # all still waits for them here (SI_UPDATER_WAIT_MINUTES is that wait) -- never an image-only one
                 $waitMin = 60; [void][int]::TryParse((& $get 'SI_UPDATER_WAIT_MINUTES'), [ref]$waitMin); if ($waitMin -le 0) { $waitMin = 60 }
-                $pre = if ($s['PreRoll']) { & $s.PreRoll } else { Invoke-SIUpdaterInvardiaPreRoll -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -WaitMinutes $waitMin -SIRoot $si }
+                $pre = if ($s['PreRoll']) { & $s.PreRoll } else { Invoke-SIUpdaterInvardiaPreRoll -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -WaitMinutes $waitMin -SIRoot $si -NoQuietWait:$imageOnly }
                 if (-not $pre.Go) {
                     $state.code.lastAction = 'deferred'; $state.code.lastReason = $pre.Reason
                     Write-UpdLog ("code: deferred -- {0}" -f $pre.Reason); & $track 'waiting' $pre.Reason; & $save; return 0
@@ -523,6 +537,45 @@ function Invoke-SIUpdaterFromInvardia {
                     & $track 'current' ("{0} is installed already" -f $code.Version)
                     $dec = [pscustomobject]@{ Act = $false }
                 }
+            }
+            if ($dec.Act -and $imageOnly) {
+                # ---- framework SEC-LANE-1: THE SHORT IMAGE-ONLY PATH (SI-UpdaterImageOnly.ps1). NO run gate (a running
+                # pipeline is never waited for, held or stopped -- a running execution keeps its image), NO database, schema,
+                # template or data step, NO size step: the images are built in this install's registry and swapped one part
+                # after the other -- the engine jobs by digest, the web app / MCP server / sign-in front by a new revision,
+                # the updater LAST. The outcome and its reason are recorded (cfg.InstallState 'ImageOnlyUpdate') and a part
+                # that failed reaches Invardia; the next update run tries again.
+                $global:SI_UpdaterSelfMove = $null
+                $ioRes = if ($s['ImageOnlyRun']) { & $s.ImageOnlyRun $si "$($code.Version)" $relCommit $pre.Environment }
+                         else { Invoke-SIUpdaterImageOnly -SIRoot $si -Version "$($code.Version)" -Commit $relCommit -Environment $pre.Environment -ResourceGroup $ResourceGroup `
+                                    -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob (& $nameOf 'updater') -WebApp (& $nameOf 'web') -McpApp (& $nameOf 'mcp') `
+                                    -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$') }
+                Write-UpdLog ("image-only update {0}: {1}{2} -- {3}" -f $code.Version, $ioRes.Result, $(if ("$($ioRes.Component)".Trim()) { " at the $($ioRes.Component)" } else { '' }), $ioRes.Why)
+                if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) {
+                    $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImageOnlyUpdate' -Value (ConvertTo-SIUpdaterImageOnlyValue -Result $ioRes -Version "$($code.Version)" -From "$Deployed")
+                }
+                if ([int]$ioRes.Code -eq 0) {
+                    Set-SIInvardiaUpdateApplied -State $state -Result $code -NowUtc $now; $siNow = $si; $runs = $code.Version
+                    $global:SI_UpdaterEngineVersion = "$($code.Version)".Trim()
+                    & $track 'applied' $code.Version
+                    if ("$($ioRes.Result)" -ne 'done') { $state.lastError = ("code: image-only update {0}: {1}" -f $code.Version, $ioRes.Why) }
+                } else {
+                    $rc = 1; $state.code.lastReason = [string]$ioRes.Why
+                    $state.lastError = ("code: image-only update {0} {1} at the {2}: {3}" -f $code.Version, $ioRes.Result, $ioRes.Component, $ioRes.Why)
+                }
+                # owner 2026-11-14 ("when swap works we remove old") + the framework IMAGE-PRUNE amendment (Invardia 2026-11-14:
+                # the previous image goes only AFTER A JOB HAS SUCCEEDED ON THE NEW IMAGE): a swap that read back HEALTHY in every
+                # part deletes NOTHING now -- it is recorded as a pending clean-up, which a later updater run proves and does; a
+                # swap that is not healthy records nothing (the previous images are its way back)
+                $ioHealthy = [bool]([int]$ioRes.Code -eq 0 -and "$($ioRes.Result)" -eq 'done')
+                $imageOnlyRan = $true
+                if ($s['ImageOnlyPrune']) { $null = & $s.ImageOnlyPrune $ioHealthy }
+                elseif ($real -and (Get-Command -Name Invoke-SIUpdaterImageOnlyPruneStep -ErrorAction SilentlyContinue)) {
+                    $null = Invoke-SIUpdaterImageOnlyPruneStep -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Healthy $ioHealthy `
+                                -UpdaterJob (& $nameOf 'updater') -Get $get -Store $Store -Version "$($code.Version)" -Apps @((& $nameOf 'web'), (& $nameOf 'mcp'))
+                }
+                $roll = [pscustomobject]@{ Code = [int]$ioRes.Code; Held = $false; Reason = ''; ImageOnly = $true }
+                $dec = [pscustomobject]@{ Act = $false }
             }
             if ($dec.Act) {
                 # 2026-10-23: never under a running pipeline run -- the run gate, before the database step and the roll
@@ -685,6 +738,18 @@ function Invoke-SIUpdaterFromInvardia {
                         } catch { $state.lastError = "templates: $($_.Exception.Message)"; Write-UpdLog ("templates FAILED: {0}" -f $_.Exception.Message); & $fail 'template-pack' ("templates FAILED: {0}" -f $_.Exception.Message); $rc = 1 }
                     }
                 }
+            }
+        }
+
+        # ---- 5. framework IMAGE-PRUNE amendment (Invardia 2026-11-14): THE PENDING CLEAN-UP of an earlier image-only swap, on every
+        # run that did not swap itself -- proven first (each swapped job SUCCEEDED on its new image since the swap, the web app's
+        # new revision healthy), only then the old images go (only what runs stays); not proven = everything kept, one line.
+        # A run that swapped this time only recorded its swap (above). No pending record = nothing, nothing said.
+        if (-not $imageOnlyRan) {
+            if ($s['ImageOnlyPendingPrune']) { $null = & $s.ImageOnlyPendingPrune }
+            elseif ($real -and $Store -and (Get-Command -Name Invoke-SIUpdaterImageOnlyPendingPrune -ErrorAction SilentlyContinue)) {
+                $null = Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
+                            -UpdaterJob (& $nameOf 'updater') -Get $get
             }
         }
     } catch {

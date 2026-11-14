@@ -495,3 +495,40 @@ function Get-SIManagementJobExecutionLog {
     $r = Invoke-SILaQuery -WorkspaceId $WorkspaceId -Query (Get-SIManagementJobLogQuery -Execution $Execution -Hours $Hours)
     @(@($r.Results) | ForEach-Object { [string](Get-SIManagementProp $_ @('L')) })
 }
+
+function Remove-SIManagementProbeImage {
+    <#
+        The probe's OWN image (si-management-probe:<tag>, built by Test-SIManagementDeployment.ps1 -Apply for one run) taken out
+        of the install's registry again, after its job is deleted (Invardia's central image scan 2026-11-14: an old probe image
+        that nothing ran was left with critical findings). The registry's own data plane: the signed-in identity's ARM token
+        exchanged at https://<login server>/oauth2/exchange, a token for repository:<repo>:pull,delete, the tag's digest read
+        (HEAD), then DELETE of that manifest -- nothing else. -Http { param($Method, $Uri, $Headers, $Body, $ContentType) } ->
+        @{ StatusCode; Content; Headers } (default Invoke-SIAzRestHttp, the one HTTP seam); -ArmToken { }: test seams.
+        Returns @{ Ok; Why } -- never throws (the caller says a failure in one warning line).
+    #>
+    param([Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][string]$Image, [scriptblock]$Http, [scriptblock]$ArmToken)
+    try {
+        if ($Image -notmatch '^(?<repo>[a-z0-9][a-z0-9._/-]*):(?<tag>[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})$') { return [pscustomobject]@{ Ok = $false; Why = ('not an image name: {0}' -f $Image) } }
+        $repo = $Matches['repo']; $tag = $Matches['tag']
+        if (-not $Http) { $Http = { param($Method, $Uri, $Headers, $Body, $ContentType) Invoke-SIAzRestHttp -Method $Method -Uri $Uri -Headers $Headers -Body $Body -ContentType $ContentType -TimeoutSec 60 } }
+        if (-not $ArmToken) { $ArmToken = { Get-SIManagementToken -Resource 'https://management.azure.com/' } }
+        $aad = [string](& $ArmToken)
+        if (-not $aad) { return [pscustomobject]@{ Ok = $false; Why = 'no access token for the registry' } }
+        $form = 'application/x-www-form-urlencoded'
+        $ex = & $Http 'POST' ('https://{0}/oauth2/exchange' -f $LoginServer) @{} ('grant_type=access_token&service={0}&access_token={1}' -f [uri]::EscapeDataString($LoginServer), [uri]::EscapeDataString($aad)) $form
+        if ([int]$ex.StatusCode -lt 200 -or [int]$ex.StatusCode -ge 300) { return [pscustomobject]@{ Ok = $false; Why = ('the registry refused the token exchange (HTTP {0})' -f $ex.StatusCode) } }
+        $refresh = [string](("$($ex.Content)" | ConvertFrom-Json).refresh_token)
+        $tk = & $Http 'POST' ('https://{0}/oauth2/token' -f $LoginServer) @{} ('grant_type=refresh_token&service={0}&scope={1}&refresh_token={2}' -f [uri]::EscapeDataString($LoginServer), [uri]::EscapeDataString(('repository:{0}:pull,delete' -f $repo)), [uri]::EscapeDataString($refresh)) $form
+        if ([int]$tk.StatusCode -lt 200 -or [int]$tk.StatusCode -ge 300) { return [pscustomobject]@{ Ok = $false; Why = ('the registry refused a delete token for {0} (HTTP {1})' -f $repo, $tk.StatusCode) } }
+        $auth = @{ Authorization = ('Bearer ' + [string](("$($tk.Content)" | ConvertFrom-Json).access_token)); Accept = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' }
+        $h = & $Http 'HEAD' ('https://{0}/v2/{1}/manifests/{2}' -f $LoginServer, $repo, $tag) $auth $null ''
+        if ([int]$h.StatusCode -eq 404) { return [pscustomobject]@{ Ok = $true; Why = ('{0} is not in the registry (nothing to delete)' -f $Image) } }
+        $dg = ''
+        if ($h.Headers) { foreach ($k in @($h.Headers.Keys)) { if ("$k" -ieq 'Docker-Content-Digest') { $dg = ([string]@($h.Headers[$k])[0]).Trim().ToLowerInvariant() } } }
+        if ($dg -notmatch '^sha256:[0-9a-f]{64}$') { return [pscustomobject]@{ Ok = $false; Why = ('the registry gave no digest for {0} (HTTP {1})' -f $Image, $h.StatusCode) } }
+        $d = & $Http 'DELETE' ('https://{0}/v2/{1}/manifests/{2}' -f $LoginServer, $repo, $dg) @{ Authorization = $auth.Authorization } $null ''
+        if ([int]$d.StatusCode -ge 200 -and [int]$d.StatusCode -lt 300) { return [pscustomobject]@{ Ok = $true; Why = ('{0} deleted ({1})' -f $Image, $dg.Substring(0, 19)) } }
+        if ([int]$d.StatusCode -eq 404) { return [pscustomobject]@{ Ok = $true; Why = ('{0} was already gone' -f $Image) } }
+        [pscustomobject]@{ Ok = $false; Why = ('the registry refused to delete {0} (HTTP {1})' -f $Image, $d.StatusCode) }
+    } catch { [pscustomobject]@{ Ok = $false; Why = $_.Exception.Message } }
+}

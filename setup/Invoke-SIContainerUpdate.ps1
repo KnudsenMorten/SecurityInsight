@@ -165,6 +165,15 @@
                      applied, so nothing is built or rolled). No image is built, no job is rolled, no template, config file or
                      customisation file is written; each step is idempotent and never fails the update; exit 0.
 
+    -ImageOnly (framework SEC-LANE-1, owner 2026-11-14): THE SHORT IMAGE-ONLY PATH, run by the updater for an image-only
+                     release (an image patch: the same code as the release the jobs run). Steps 1-5 ONLY: the engine image
+                     is built in the install's own registry, and every engine job is pointed at it BY DIGEST
+                     (<registry>/si-orchestrator:<tag>@sha256:<digest>, one ARM PATCH per job, read back; on a failure
+                     every changed job is put back). Nothing else: no private-registry step (1b / 1c), no updater move
+                     (4b -- the updater moves itself LAST, after the web app), and none of the steps after the roll (6-12:
+                     no database, size, schedule, template or data step). A running execution keeps its image; the next one
+                     takes the new one. A job that already runs this tree's image by its digest is left as it is.
+
     -DetectOnly is the default (reports, changes nothing). -Apply performs the update.
     -Save records the resource group / registry / subscription you pass in config\SecurityInsight.custom.ps1,
     once, so every later sync finds the containers: the way an install made before 3.0.0 -- when setup never
@@ -196,7 +205,9 @@ param(
     [switch]$InstallTemplatesDirect,
     # #756: the code is current -- only the sizes the customer's settings set (steps 7, 8, 8d); nothing built or rolled.
     # The updater passes it on a run with no new code to install.
-    [switch]$SizingOnly
+    [switch]$SizingOnly,
+    # SEC-LANE-1: an image-only release -- build + swap the engine jobs by digest, nothing else (the description above)
+    [switch]$ImageOnly
 )
 
 #Requires -Version 5.1   # after the help and the param block: before the help, it hides the help from Get-Help
@@ -1708,7 +1719,9 @@ if (-not $acr) {
 # (Basic, public, admin user on) is converged HERE, before the build, so the build already runs on the agent pool in the
 # network. Public installs: nothing (read only). Never fails the update: what cannot be done yet is said, and kept open.
 $pnLib = Join-Path $PSScriptRoot '_shared/SI-PrivateNetwork.ps1'
-if ($Apply -and -not $DetectOnly -and (Test-Path -LiteralPath $pnLib)) {
+# SEC-LANE-1 -ImageOnly: images only -- the registry's network settings are not converged here (the next full update does)
+if ($ImageOnly) { Info 'image-only update: the images only -- the registry, the jobs'' settings and the database are not touched' }
+if ($Apply -and -not $DetectOnly -and -not $ImageOnly -and (Test-Path -LiteralPath $pnLib)) {
     try {
         if (-not (Get-Command -Name Invoke-SIUpdatePrivateRegistry -ErrorAction SilentlyContinue)) { . $pnLib }
         $pnArm = {
@@ -1743,7 +1756,7 @@ if ($Apply -and -not $DetectOnly -and (Test-Path -LiteralPath $pnLib)) {
 # A private install whose apps subnet has no route table (or one with neither a 0.0.0.0/0 nor a VirtualAppliance route): behind
 # a firewall in a hub, replies to the customer's people time out. The updater only SAYS it (a warning in its log) -- it never
 # makes a route: the next hop is the customer's firewall IP, a value it cannot know. Never fails the update.
-if (Test-Path -LiteralPath $pnLib) {
+if (-not $ImageOnly -and (Test-Path -LiteralPath $pnLib)) {
     try {
         if (-not (Get-Command -Name Get-SIUpdateReturnRouteReport -ErrorAction SilentlyContinue)) { . $pnLib }
         $rrArm = {
@@ -1775,7 +1788,9 @@ if ($plan.Count -eq 0) {
     exit 0
 }
 $toUpdate = @($plan | Where-Object { $_.Action -eq 'update' })
-foreach ($p in $plan) { Info ("{0,-40} {1}  ({2})" -f $p.Name, $p.Action, $p.PreviousImage) }
+# SEC-LANE-1 -ImageOnly: a job that already runs this tree's image pinned by its digest (<image>@sha256:...) is current
+if ($ImageOnly) { $toUpdate = @($toUpdate | Where-Object { -not ([string]$_.PreviousImage).ToLowerInvariant().StartsWith($newImage.ToLowerInvariant() + '@sha256:') }) }
+foreach ($p in $plan) { Info ("{0,-40} {1}  ({2})" -f $p.Name, $(if ($ImageOnly -and $p.Action -eq 'update' -and -not @($toUpdate | Where-Object { $_.Name -eq $p.Name }).Count) { 'current' } else { $p.Action }), $p.PreviousImage) }
 # 4b. THE UPDATER ITSELF -- RIGHT AFTER THE ENGINE JOBS READ BACK HEALTHY (live 2026-11-12: the updater moved its own job as
 # the LAST step of a run, so an update stopped in the steps after the roll left the updater on its old image). Only when the
 # updater runs this script and planned the move (Invoke-SIUpdaterSelfMoveAfterEngine, container\updater\_shared\
@@ -1783,14 +1798,17 @@ foreach ($p in $plan) { Info ("{0,-40} {1}  ({2})" -f $p.Name, $p.Action, $p.Pre
 # (exit 1) and never gets here. The running execution finishes on its image; the next one starts on the new. Never fails
 # the update (a failed move is retried by the next run, as before).
 function Invoke-SIUpdateSelfMove {
+    # (SEC-LANE-1 -ImageOnly never gets here: it exits before every call -- the updater moves itself LAST, after the web app)
     if (-not $Apply -or $DetectOnly -or -not $global:SI_UpdaterSelfMove) { return }
     if (-not (Get-Command -Name Invoke-SIUpdaterSelfMoveAfterEngine -ErrorAction SilentlyContinue)) { return }
     Step '4b. THE UPDATER ITSELF (right after the engine jobs read back healthy)'
     try { $null = Invoke-SIUpdaterSelfMoveAfterEngine }
     catch { Warn ("the updater itself: not moved now ({0}) -- the update goes on; its next run tries again." -f $_.Exception.Message) }
 }
+# SEC-LANE-1 -ImageOnly: nothing after the roll (and the updater moves itself last, in the updater's short path)
+if ($toUpdate.Count -eq 0 -and $ImageOnly) { Info 'image-only update: every engine job runs this image already -- nothing to roll'; exit 0 }
 if ($toUpdate.Count -eq 0) { Info 'Every job already runs this tree -- nothing to roll.'; Invoke-SIUpdateSelfMove; exit (Complete-SIUpdate) }
-if (-not $Apply -or $DetectOnly) { Info ("{0} job(s) would move to the new image. Re-run with -Apply to update." -f $toUpdate.Count); exit (Complete-SIUpdate) }
+if (-not $Apply -or $DetectOnly) { Info ("{0} job(s) would move to the new image. Re-run with -Apply to update." -f $toUpdate.Count); if ($ImageOnly) { exit 0 }; exit (Complete-SIUpdate) }
 
 # ---- 2. BUILD ---------------------------------------------------------------------------------
 # #416 (the fast roll, setup/_shared/SI-FastRoll.ps1): a Dockerfile with expensive lines before its first COPY is built in
@@ -1860,6 +1878,20 @@ if (Test-SIAcrTag @bArgs -Repo 'si-orchestrator' -Tag $tag -LoginServer $acr.Log
 Step '3. ROLL (all jobs at once)'
 $repoPrefix = ('{0}/si-orchestrator' -f $acr.LoginServer)
 $rollLog = { param($m) Info $m }
+# SEC-LANE-1 -ImageOnly: every job is pointed at the image BY DIGEST -- the digest the registry gives the tag just built (or
+# found). Not readable = nothing is changed (exit 1): a swap "by digest" never falls back to the tag.
+if ($ImageOnly) {
+    $dg = ''
+    try { $dg = [string](Get-SIAcrManifestDigest -Rest $rest -LoginServer $acr.LoginServer -Repo 'si-orchestrator' -Tag $tag) } catch { $dg = '' }
+    if ($dg -notmatch '^sha256:[0-9a-f]{64}$') {
+        Warn ("image-only update: the digest of si-orchestrator:{0} could not be read from the registry -- no job was changed" -f $tag)
+        if ($null -eq $global:SI_UpdateFailures) { $global:SI_UpdateFailures = New-Object System.Collections.Generic.List[object] }
+        $global:SI_UpdateFailures.Add([pscustomobject]@{ Step = 'roll'; Code = ''; Text = ("the digest of si-orchestrator:{0} could not be read from the registry -- no job was changed" -f $tag) })
+        exit 1
+    }
+    $newImage = '{0}@{1}' -f $newImage, $dg
+    Info ("image-only update: every engine job is pointed at {0}" -f ($newImage -split '/')[-1])
+}
 $targets = @($toUpdate | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Image = $newImage } })
 $results = @(Invoke-SIJobImageRoll -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Targets $targets -Jobs $jobsRaw -RepoPrefix $repoPrefix -Log $rollLog)
 Step '4. VERIFY'
@@ -1910,6 +1942,8 @@ if ($failed.Count) {
     exit 1
 }
 Info ("{0} job(s) now run {1}." -f $toUpdate.Count, $tag)
+# SEC-LANE-1 -ImageOnly: the images only -- none of the steps after the roll, and the updater moves itself last (the updater)
+if ($ImageOnly) { Info 'image-only update: the engine jobs are done -- no step after the roll runs in an image-only update'; exit 0 }
 # every engine job read back healthy: the updater moves itself NOW, before the steps that follow (4b above)
 Invoke-SIUpdateSelfMove
 # The update NEVER stops a running pipeline (owner 2026-10-16, reversing 2026-10-15: "i dont want it to stop it ... otherwise it

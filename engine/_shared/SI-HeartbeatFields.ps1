@@ -99,6 +99,8 @@ if (-not (Get-Command -Name Get-SIErrorCatalogue -ErrorAction SilentlyContinue))
 if (-not (Get-Command -Name Get-SIJobFlowDue -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-JobFlow.ps1')) }
 # framework 8.4: UplinkBacklog -- the run reports kept unsent in the outbox
 if (-not (Get-Command -Name ConvertTo-SIUplinkBacklog -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-UplinkOutbox.ps1')) }
+# framework SEC-LANE-1: Update.runningImages -- the images the install RUNS (the rule and the registry reader)
+if (-not (Get-Command -Name Get-SIRunningImages -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-ImageOnlyRelease.ps1')) }
 
 $script:SIHeartbeatFields = @{
     # the fields in the order they go on the record (Published: 2026-10-26, agreed with Invardia -- what customers see)
@@ -280,6 +282,14 @@ $script:SIHeartbeatFields = @{
     DatabaseStatsStalePct = 20
     DatabaseStatsStaleRows = 500
     DatabaseStatsState    = 'StatisticsRefresh'
+    # framework SEC-LANE-1 (Invardia's contract 2e20fb60, SOFT: a bad value drops this key alone): Update carries ONE more key
+    # after its agreed five, runningImages -- one entry per SI component (each job, the web app, the MCP server, the sign-in
+    # front, the updater) { component, repo, digest, dotnet, readUtc } (engine\_shared\SI-ImageOnlyRelease.ps1): the images
+    # read from ARM (ONE list of the jobs, ONE of the container apps), the digest from the pin or the registry's manifest of
+    # the tag, the .NET runtime as the image records it. A read that fails leaves the key out, never the rest of Update.
+    # >>> THE SWITCH: UpdateSendRunningImages. $false = the agreed five only.
+    UpdateRunningImagesField = 'runningImages'
+    UpdateSendRunningImages  = $true
     # 2026-10-23: an update that waits for a pipeline run longer than this is a warning (it never cancels and never blocks)
     UpdateWaitsWarnHours = 24
     # 2026-10-25: a scheduled collection held back by a pipeline run is said for this long after it (cfg.InstallState 'CollectionHeld')
@@ -524,7 +534,11 @@ function Test-SIHeartbeatField {
             return ''
         }
         'Update' {
-            $w = & $exact $Value $c.Fields.Update 'Update'; if ($w) { return $w }
+            # the agreed five, then -- SEC-LANE-1 -- runningImages when present (the last key)
+            $upNames = @($c.Fields.Update)
+            if ($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary]) -and $Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $upNames += $c.UpdateRunningImagesField }
+            $w = & $exact $Value $upNames 'Update'; if ($w) { return $w }
+            if ($Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $w = Test-SIRunningImagesValue -Value $Value.($c.UpdateRunningImagesField); if ($w) { return ('Update.{0}' -f $w) } }
             foreach ($n in 'installed', 'available') { if ($null -ne $Value.$n -and -not ($Value.$n -is [string] -and $Value.$n -cmatch '^[0-9][0-9A-Za-z.+-]{0,63}$')) { return "Update.$n is not a version" } }
             if (-not (& $inList $Value.lastUpdaterResult $c.UpdateResults $true)) { return ("Update.lastUpdaterResult '{0}' is not in the list" -f $Value.lastUpdaterResult) }
             foreach ($t in 'lastUpdaterRunUtc', 'nextUpdateUtc') { if (-not (& $isTime $Value.$t)) { return "Update.$t is not ISO-8601 UTC" } }
@@ -1620,6 +1634,43 @@ function Get-SIHeartbeatUpdate {
     New-SIHeartbeatOrdered -Names $script:SIHeartbeatFields.Fields.Update -Values $v
 }
 
+function Add-SIHeartbeatUpdateRunningImages {
+    <# PURE. framework SEC-LANE-1: Update with runningImages after its agreed five (-Images: Get-SIRunningImages). No image =
+       Update as it is (the key is left out, never sent empty). #>
+    param([Parameter(Mandatory)]$Update, [object[]]$Images = @())
+    $imgs = @(@($Images) | Where-Object { $null -ne $_ })
+    if (-not $imgs.Count) { return $Update }
+    $o = [ordered]@{}
+    foreach ($n in @($script:SIHeartbeatFields.Fields.Update)) { $o[$n] = $Update.$n }
+    $o[$script:SIHeartbeatFields.UpdateRunningImagesField] = [object[]]$imgs
+    [pscustomobject]$o
+}
+
+function Get-SIHeartbeatRunningImages {
+    <#
+        framework SEC-LANE-1: the images the install runs NOW (engine\_shared\SI-ImageOnlyRelease.ps1): ONE list of the jobs and
+        ONE of the container apps of -Scope through -Arm { param($Path) }; each image's digest (its pin, else the registry's
+        manifest of its tag) and .NET runtime through -ImageReader (default New-SIRegistryImageReader over this job's REST client --
+        a registry that refuses the read leaves digest / dotnet null). Returns the entries, @() when ARM could not be read.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)]$Scope, [Parameter(Mandatory)][datetime]$NowUtc, $ImageReader)
+    $c = $script:SIHeartbeatFields
+    $rgPath = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App' -f $Scope.Sub, $Scope.Rg
+    $jobs = @(Invoke-SIHeartbeatArmList -Arm $Arm -Path ('{0}/jobs?api-version={1}' -f $rgPath, $c.ArmJobsApi))
+    $apps = @(); try { $apps = @(Invoke-SIHeartbeatArmList -Arm $Arm -Path ('{0}/containerApps?api-version={1}' -f $rgPath, $c.ArmJobsApi)) } catch { $apps = @() }
+    $comp = @(Get-SIRunningImageComponents -Jobs $jobs -Apps $apps)
+    if (-not $comp.Count) { return @() }
+    if (-not $ImageReader -and (Get-Command -Name Invoke-SIAzRestHttp -ErrorAction SilentlyContinue) -and (Get-Command -Name Get-SIAzureToken -ErrorAction SilentlyContinue)) {
+        $ImageReader = New-SIRegistryImageReader -ArmToken { [string](Get-SIAzureToken -Audience Arm) } -Http {
+            param([string]$Method, [string]$Uri, [hashtable]$Headers, $Body)
+            $h = @{}; $ct = ''
+            if ($Headers) { foreach ($k in @($Headers.Keys)) { if ("$k" -ieq 'Content-Type') { $ct = [string]$Headers[$k] } else { $h[[string]$k] = $Headers[$k] } } }
+            $r = Invoke-SIAzRestHttp -Method $Method -Uri $Uri -Headers $h -Body $Body -ContentType $ct -TimeoutSec 20
+            [pscustomobject]@{ Status = [int]$r.StatusCode; Body = [string]$r.Content; Headers = $r.Headers } }
+    }
+    @(Get-SIRunningImages -Components $comp -ImageReader $ImageReader -NowUtc $NowUtc)
+}
+
 function ConvertTo-SIHeartbeatMailRestriction {
     <# PURE. cfg.InstallState 'MailRestriction' (state) / an attestation -> verified | not-verified | failed, or $null. #>
     param([AllowNull()][AllowEmptyString()][string]$Json, [AllowNull()][AllowEmptyString()][string]$Attestation)
@@ -2311,7 +2362,10 @@ function New-SIHeartbeatFields {
           [object[]]$UplinkBacklogRows,
           # #1210: the row of Get-SIHeartbeatDatabaseStatsSql (the test seam -- default: ONE read through -DataInvoke, the
           # database SI writes its data to and refreshes the statistics of; never in a test session)
-          [object[]]$DatabaseStatsRows)
+          [object[]]$DatabaseStatsRows,
+          # framework SEC-LANE-1: the Update.runningImages entries (the test seam -- default: Get-SIHeartbeatRunningImages,
+          # never in a test session)
+          [object[]]$RunningImages)
     $out = [ordered]@{}
     $problems = New-Object System.Collections.Generic.List[string]
     try {
@@ -2367,6 +2421,7 @@ function New-SIHeartbeatFields {
             try { $space = Get-SISqlSpaceCounts; if ($space -and -not $space.Count) { $space = $null } } catch { $space = $null }
         }
         $hasInstalled = $PSBoundParameters.ContainsKey('Installed')
+        $hasRunningImages = $PSBoundParameters.ContainsKey('RunningImages')
         # the security scores' permission state, as the Counts read left it (si-perm-1004)
         if (-not $PSBoundParameters.ContainsKey('ScoreState') -and (Get-Command -Name Get-SISecurityScoreState -ErrorAction SilentlyContinue)) {
             try { $ScoreState = Get-SISecurityScoreState } catch { $ScoreState = $null }
@@ -2467,7 +2522,22 @@ function New-SIHeartbeatFields {
             Update   = {
                 $inst = if ($hasInstalled) { $Installed } elseif (Get-Command -Name Get-SITelemetryReleaseVersion -ErrorAction SilentlyContinue) { Get-SITelemetryReleaseVersion } else { '' }
                 $cron = ''; if ($null -ne $armJobs) { $u = @($armJobs | Where-Object { $_.Key -eq 'updater' })[0]; if ($u) { $cron = $u.Cron } }
-                Get-SIHeartbeatUpdate -Rows @($CfgRows) -Installed $inst -UpdaterCron $cron -NowUtc $NowUtc }
+                $uv = Get-SIHeartbeatUpdate -Rows @($CfgRows) -Installed $inst -UpdaterCron $cron -NowUtc $NowUtc
+                # framework SEC-LANE-1: the images the install RUNS (runningImages, after the agreed five) -- in its own try:
+                # a read or a value that does not pass leaves the key out, never the rest of Update
+                if ($null -ne $uv -and $c.UpdateSendRunningImages) {
+                    try {
+                        $ri = if ($hasRunningImages) { $RunningImages }
+                              elseif (-not $testSession -and $Arm -and $scope.Sub -and $scope.Rg) { @(Get-SIHeartbeatRunningImages -Arm $Arm -Scope $scope -NowUtc $NowUtc) }
+                              else { $null }
+                        if ($null -ne $ri -and @($ri).Count) {
+                            $ux = Add-SIHeartbeatUpdateRunningImages -Update $uv -Images @($ri)
+                            $why = Test-SIHeartbeatField -Name 'Update' -Value $ux
+                            if (-not $why) { $uv = $ux } else { $problems.Add(('the running images were left out: {0}' -f $why)) }
+                        }
+                    } catch { $problems.Add(('the running images could not be read ({0}) -- Update goes without them' -f $_.Exception.Message)) }
+                }
+                $uv }
             Mail     = { if ($null -ne $CfgRows -or $null -ne $armJobs) { Get-SIHeartbeatMail -Rows @($CfgRows) -ArmJobs $armJobs } }
             Warnings = {
                 # the shown run's copies (the data database, one key read); a read that fails says nothing

@@ -434,13 +434,42 @@ function ConvertTo-SIIdentityMoveAzureRole {
     }
 }
 
+# SECURE-WEB-1 (framework 12.11f, Invardia 2026-11-14): the INTERNET-FACING identities (web: the web app with its sign-in front;
+# mcp: the MCP app) never receive a right that runs code as another identity or changes rights -- whatever an old identity held.
+# The Azure role definition GUIDs (built-in, the same in every tenant) the move NEVER copies to them:
+$script:SIInternetFacingRoles = @('web', 'mcp')
+$script:SIInternetFacingForbiddenRoleGuids = @{
+    '4e3d2b60-56ae-4dc6-a233-09c8e5a82e68' = 'Container Apps Jobs Contributor'
+    'b9a307c4-5aa3-4b52-ba60-2b17c136cd7b' = 'Container Apps Jobs Operator'
+    '358470bc-b998-42bd-ab17-a7e34c199c0f' = 'Container Apps Contributor'
+    '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' = 'Owner'
+    'b24988ac-6180-42a0-ab88-20f7382dd24c' = 'Contributor'
+    '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9' = 'User Access Administrator'
+    'f58310d9-a9f6-439a-9e8d-f62e7b41a168' = 'Role Based Access Control Administrator'
+    '8311e382-0749-4cb8-b61a-304f252e45ec' = 'AcrPush'
+    'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' = 'Key Vault Secrets Officer'
+    '00482a5a-887f-4fb3-b363-3b7fe8e74483' = 'Key Vault Administrator'
+    'f1a07417-d97a-45cb-824c-7a7467783830' = 'Managed Identity Operator'
+    'e40ec5ca-96e0-45a2-b4ff-59039f2c2b59' = 'Managed Identity Contributor'
+    '8b54135c-b56d-4d72-a534-26097cfdc8d8' = 'Key Vault Data Access Administrator'
+    '57cc5028-e6a7-4284-868d-0611c5923f8d' = 'Container Apps ManagedEnvironments Contributor'
+}
+
+function Test-SIIdentityMoveForbiddenForRole {
+    <# PURE. $true when -RoleGuid may NEVER be given to the identity of -Role (SECURE-WEB-1: an internet-facing identity). #>
+    param([string]$Role, [string]$RoleGuid)
+    ($script:SIInternetFacingRoles -contains "$Role".Trim().ToLowerInvariant()) -and $script:SIInternetFacingForbiddenRoleGuids.ContainsKey("$RoleGuid".Trim().ToLowerInvariant())
+}
+
 function Get-SIIdentityMoveAzureCopyPlan {
     <# PURE. The old principal's Azure role assignments (-Old) the new one (-New) does not hold yet: same role definition
-       (by GUID), same scope. Assignments of other principals in the lists are ignored (-OldPrincipalId / -NewPrincipalId). #>
-    param([object[]]$Old = @(), [object[]]$New = @(), [Parameter(Mandatory)][string]$OldPrincipalId, [Parameter(Mandatory)][string]$NewPrincipalId)
+       (by GUID), same scope. Assignments of other principals in the lists are ignored (-OldPrincipalId / -NewPrincipalId).
+       -Role (web / mcp = internet-facing): a forbidden role (SECURE-WEB-1) is never in the plan, whatever the old one held. #>
+    param([object[]]$Old = @(), [object[]]$New = @(), [Parameter(Mandatory)][string]$OldPrincipalId, [Parameter(Mandatory)][string]$NewPrincipalId, [string]$Role = '')
     $have = @($New | Where-Object { $_ -and $_.PrincipalId -ieq $NewPrincipalId })
     $seen = @{}
     foreach ($a in @($Old | Where-Object { $_ -and $_.PrincipalId -ieq $OldPrincipalId })) {
+        if (Test-SIIdentityMoveForbiddenForRole -Role $Role -RoleGuid ([string]$a.RoleGuid)) { continue }
         $key = ('{0}|{1}' -f $a.RoleGuid, "$($a.Scope)".TrimEnd('/').ToLowerInvariant())
         if ($seen.ContainsKey($key)) { continue }; $seen[$key] = $true
         if (@($have | Where-Object { $_.RoleGuid -eq $a.RoleGuid -and (Test-SIIdentityMoveSameScope $_.Scope $a.Scope) }).Count) { continue }
@@ -1276,7 +1305,7 @@ function Get-SIMoveCopyPlans {
     $sql = @{}
     foreach ($db in @($Inventory.Sql.Databases.Keys)) { $sql[$db] = Get-SIIdentityMoveSqlCopy -Rows $Inventory.Sql.Databases[$db] -NewName $sel.Standard -NewClientId $newId.ClientId }
     [pscustomobject]@{
-        Azure    = @(Get-SIIdentityMoveAzureCopyPlan -Old $o.Azure -New $nAz -OldPrincipalId $sel.Old.PrincipalId -NewPrincipalId $newPid)
+        Azure    = @(Get-SIIdentityMoveAzureCopyPlan -Old $o.Azure -New $nAz -OldPrincipalId $sel.Old.PrincipalId -NewPrincipalId $newPid -Role ([string]$sel.Role))
         AppRoles = @(Get-SIIdentityMoveAppRoleCopyPlan -Old $o.AppRoles -New $nAr)
         DirRoles = @(Get-SIIdentityMoveDirRoleCopyPlan -Old $o.DirRoles -New $nDr)
         Fic      = $ficNeeded

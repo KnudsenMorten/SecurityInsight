@@ -1,0 +1,38 @@
+{
+  "version": "3.1.7",
+  "date": "2026-11-11",
+  "type": "feature",
+  "summary": "Your admins' tiers stay current, and one slow report never holds up a run.",
+  "new": [
+    {
+      "title": "Tiers come from a current daily catalog",
+      "text": "Every installation now downloads the daily classified catalog of roles and permissions, checked before it is used. If a download fails, the last good one is kept."
+    },
+    {
+      "title": "Tier classification never holds up a night",
+      "text": "If the catalog cannot be read or built, the night goes on with the last known classification and says so."
+    },
+    {
+      "title": "Break-glass accounts are always Tier 0",
+      "text": "A break-glass account is always Tier 0, whatever roles it holds right now."
+    },
+    {
+      "title": "Built-in roles follow your classification",
+      "text": "With AI integration on, built-in roles follow your own classification instead of the shipped list."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "One slow report no longer holds a run",
+      "text": "When Microsoft keeps timing out on one heavy report, its retries now get a time limit of 90 minutes, a setting. Parts not read are reported as unknown, never as resolved, and the run goes on."
+    },
+    {
+      "title": "The data health check always reports",
+      "text": "When its last report is more than a day old and the installation is idle, the data health check now runs on its own."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "The size jump warning appears only on a real jump in a report's size. An old collection job from before the collection was split is removed after 14 days."
+    }
+  ]
+}

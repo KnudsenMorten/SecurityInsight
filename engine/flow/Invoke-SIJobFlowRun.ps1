@@ -336,8 +336,45 @@ $upkeepCleanup = {
         $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs -WakeCron $cleanCron -NextRunUtc $cleanNext -Beat $Beat -KeepCollections $cleanKeep
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
+# ---- framework SEC-LANE-1 (owner 2026-11-14: "updated within 2 hr to ring 2-3"): AN IMAGE-ONLY SECURITY RELEASE THAT WAITS
+# starts the updater from the wake-up -- ANY wake-up, the one during a run too: an image-only update never waits for a run and
+# never stops one (it swaps images; a running execution keeps its own). A cheap, read-only ask of the install's ring on the
+# updater's own update route (Request-SIInvardiaManifest, at most every 15 minutes), the updater started ONCE per release
+# while none runs (engine\_shared\SI-ImageOnlyWake.ps1); one line when it starts it. A code release is never started here.
+# Never stops the wake-up. -UpdaterJob: the updater job's name ('' = read from the install record here).
+$imageOnlyWake = {
+    param([string]$UpdaterJob)
+    if ($HostKind -ne 'Container' -or -not $proStore -or -not $armSeams) { return }
+    try {
+        if (-not "$UpdaterJob".Trim()) {
+            if (-not (Get-Command -Name Get-SIInstallName -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-InstallNames.ps1') }
+            $UpdaterJob = Get-SIInstallName -Role updater -Record (Read-SIInstallNamesRecord -Store $proStore)
+        }
+        if (-not "$UpdaterJob".Trim()) { return }
+        if (-not (Get-Command -Name Invoke-SIImageOnlyWakeCheck -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-ImageOnlyWake.ps1') }
+        if (-not (Get-Command -Name Request-SIInvardiaManifest -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-InvardiaUpdate.ps1') }
+        if (-not (Get-Command -Name Get-SITelemetryInstallKey -ErrorAction SilentlyContinue)) { $ts = Join-Path $siRoot 'engine/_shared/SI-TelemetrySend.ps1'; if (Test-Path -LiteralPath $ts) { . $ts } }
+        if (-not (Get-Command -Name Read-SIInstallRing -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-InstallRing.ps1') }
+        if (-not (Get-Command -Name New-SIUpdateNowStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
+        $iwRing = $null; try { $iwRow = Read-SIInstallRing -Store $proStore; if ($iwRow -and $null -ne $iwRow.Ring) { $iwRing = [int]$iwRow.Ring } } catch { $iwRing = $null }
+        $iwJob = "$UpdaterJob".Trim()
+        $iw = Invoke-SIImageOnlyWakeCheck -Installed $siVersion -Ring $iwRing `
+            -Ask { $rs = { param($n) if (Get-Command -Name Get-SITelemetryInstallKey -ErrorAction SilentlyContinue) { [string](Get-SITelemetryInstallKey -Name $n) } else { '' } }
+                   Request-SIInvardiaManifest -Kind code -Seams @{ ReadSecret = $rs } -RunningVersion $siVersion -Ring $iwRing -InstallId '' } `
+            -ReadMark { $row = @(& $proStore.Invoke (Get-SIImageOnlyWakeReadSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+                        if ($row -is [System.Collections.IDictionary]) { [string]$row['Value'] } elseif ($row) { [string]$row.Value } else { '' } } `
+            -SaveMark { param($Json) $null = & $proStore.Invoke (Get-SIImageOnlyWakeSaveSql) ([ordered]@{ Value = $Json; By = 'caj-si-flow' }) 'nonquery' } `
+            -Executions { $ex = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $iwJob) $null; @($ex.value) } `
+            -Start { $uj = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $iwJob) $null
+                     $ur = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $iwJob) (New-SIUpdateNowStartTemplate -Job $uj -Mode 'image-only')
+                     if ($ur -and $ur.PSObject.Properties['name']) { [string]$ur.name } else { '' } }
+        if ($iw.Line) { & $say $(if ($iw.Status -in @('start-failed', 'error')) { 'WARN' } else { 'INFO' }) $iw.Line }
+    } catch { & $say 'WARN' ('whether an image-only security update waits was not checked by this wake-up ({0}) -- the next one looks again' -f $_.Exception.Message) }
+}
 # #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) does its one job -- the clean-up; it starts nothing
 if ($housekeepingOnly) {
+    # SEC-LANE-1: the one exception -- an image-only security release starts the updater (it never touches the running run)
+    & $imageOnlyWake ''
     $null = Invoke-SIPipelineUpkeep -Beat $wkBeat -Cleanup $upkeepCleanup -Log $say
     & $wkRelease
     & $say 'INFO' 'a wake-up during a run: the housekeeping is done for this wake-up; it starts nothing -- the running run goes on'
@@ -870,6 +907,9 @@ if ($HostKind -eq 'Container' -and $armSeams -and $armSeams.PSObject.Methods['Ex
 
 # (owner 2026-11-05: "it must not auto cancel a running job due to missing upd") -- no update is started on a busy wake-up to
 # cancel the running run any more: a waiting update is installed between two runs (the wait mark, Invoke-SIPipelineDrain).
+
+# framework SEC-LANE-1: an image-only security release that waits starts the updater (defined above, also run by a busy wake-up)
+& $imageOnlyWake $updaterJobName
 
 $drain = $null
 try {

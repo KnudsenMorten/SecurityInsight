@@ -1,0 +1,13 @@
+{
+  "version": "3.0.24",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "Running the install a second time no longer stops at sign-in.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "A second install run signs you in",
+      "text": "Running the install again in the same window now signs you in again instead of stopping with \"You are not signed in\"."
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": "3.0.30",
+  "date": "2026-11-04",
+  "type": "feature",
+  "summary": "Your database stays lean, duplicate assets disappear, and you can open SecurityInsight straight from Invardia.",
+  "new": [
+    {
+      "title": "Open SecurityInsight from the Invardia portal",
+      "text": "The Invardia overview and every support mail about your install now carry an \"Open SecurityInsight\" link."
+    },
+    {
+      "title": "Documentation for your version in the portal",
+      "text": "The Invardia portal and invardia.com now show the install options, the reference and the release notes for the version you run."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Database no longer grows between busy runs",
+      "text": "Old finding data is now removed while a run is going, paced by the database's load, so installs with back-to-back runs clean up too."
+    },
+    {
+      "title": "Duplicate asset records are merged at once",
+      "text": "An asset stored twice is now merged at once, also in what goes to ServiceNow. A new install's first run no longer creates such copies."
+    },
+    {
+      "title": "Brief database interruptions no longer fail a run",
+      "text": "When the database is briefly unavailable, the work is sent again where that is safe, instead of failing the step."
+    },
+    {
+      "title": "Pro install waits for its licence",
+      "text": "A Pro install without its licence now waits for it instead of stopping with an error. The licence then arrives through the update."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "A full database is reported as its own cause, failed steps name their error, the web app's key check no longer reports a problem that is not there, and setup status reaches Invardia."
+    }
+  ]
+}

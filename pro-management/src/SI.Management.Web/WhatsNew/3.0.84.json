@@ -1,0 +1,13 @@
+{
+  "version": "3.0.84",
+  "date": "2026-11-10",
+  "type": "security",
+  "summary": "Security updates are applied to every part of SecurityInsight; your number and time formats work as before.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Security updates applied",
+      "text": "The web app and the AI assistant now run on a smaller, patched base. Every other part moves to its latest patched version."
+    }
+  ]
+}

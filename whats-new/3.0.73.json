@@ -1,0 +1,13 @@
+{
+  "version": "3.0.73",
+  "date": "2026-11-08",
+  "type": "feature",
+  "summary": "Tenants with very many unmanaged on-premises accounts can now leave them out.",
+  "new": [
+    {
+      "title": "Leave out never-synced on-premises accounts",
+      "text": "A new setting, off by default, leaves out on-premises Active Directory accounts that never sync to Entra ID unless they are privileged. Their findings close as retired, never as fixed."
+    }
+  ],
+  "fixes": []
+}

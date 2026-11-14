@@ -1,0 +1,13 @@
+{
+  "version": "3.0.34",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "New public installations no longer stop at the secure key store step.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "New public installs get past the key store",
+      "text": "A new public installation no longer stops partway. Private installations are unchanged."
+    }
+  ]
+}

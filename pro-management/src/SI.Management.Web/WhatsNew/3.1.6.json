@@ -1,0 +1,13 @@
+{
+  "version": "3.1.6",
+  "date": "2026-11-11",
+  "type": "fix-only",
+  "summary": "The data health check no longer reports missing data that is not missing.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "No more false data loss warnings",
+      "text": "The data health check sometimes reported missing vulnerability data although it was stored. It now still reports a real loss, and when it cannot read everything it says so instead of reporting a loss."
+    }
+  ]
+}

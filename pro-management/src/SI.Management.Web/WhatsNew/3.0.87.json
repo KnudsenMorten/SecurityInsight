@@ -1,0 +1,21 @@
+{
+  "version": "3.0.87",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "The data sync never waits for hours in silence, and stuck steps reach support the same day.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "The data sync never waits in silence",
+      "text": "The data sync now says about once a minute what each part waits on. A part stuck for 15 minutes is done again; if it is stuck twice, the step says so and the run goes on."
+    },
+    {
+      "title": "Stuck steps open a support case",
+      "text": "A step that runs far past its usual time without progress now opens a support case, so support acts on it the same day."
+    },
+    {
+      "title": "Removing old data waits for the sync",
+      "text": "While the data sync runs, removing old data waits. It goes on in small portions whenever the sync is not running, so even millions of old rows keep going down."
+    }
+  ]
+}

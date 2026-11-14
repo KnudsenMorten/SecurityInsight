@@ -1,0 +1,21 @@
+{
+  "version": "3.0.16",
+  "date": "2026-11-01",
+  "type": "fix-only",
+  "summary": "Vulnerable items reach ServiceNow again, and one oversized value no longer holds back the rest.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Vulnerable items reach your own ServiceNow tables",
+      "text": "Your own ServiceNow tables now receive vulnerable items, whatever their name."
+    },
+    {
+      "title": "One long value no longer blocks everything",
+      "text": "A value too long for its ServiceNow column now holds only its own row. The other rows are sent, and the held rows go once the column is wider."
+    },
+    {
+      "title": "Long identifiers fit ServiceNow",
+      "text": "A long vulnerable item identifier is shortened the way ServiceNow expects, so it fits the column."
+    }
+  ]
+}

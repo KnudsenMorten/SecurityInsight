@@ -1,0 +1,18 @@
+{
+  "version": "3.0.26",
+  "date": "2026-11-03",
+  "type": "feature",
+  "summary": "Pro installs now come straight from Invardia, signed and checked, and several install problems are fixed.",
+  "new": [
+    {
+      "title": "Pro installs come from Invardia",
+      "text": "The Pro install line from invardia.com now gets the signed and checked Pro package from Invardia, and you sign in once. The Community edition still installs from GitHub."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Install fixes from recent versions",
+      "text": "A Pro install without a licence starts, a new subscription's quota no longer stops it, a second run in one window signs in again, and the installer gets data access."
+    }
+  ]
+}

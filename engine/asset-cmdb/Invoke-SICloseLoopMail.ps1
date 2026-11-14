@@ -163,7 +163,8 @@ $send = {
     param([string[]]$to, [string]$subject, [string]$html)
     if ($smtp.Mode -eq 'sharedMailbox') { Write-MailInfo ("mail      : shared mailbox {0} (Microsoft Graph, this job's identity)" -f $smtp.SharedMailbox) }
     else { Write-MailInfo ("relay     : {0}:{1} (ssl {2}, {3}) from {4}" -f $smtp.Server, $smtp.Port, $smtp.UseSsl, $(if ($smtp.Anonymous) { 'anonymous' } else { 'authenticated as ' + $smtp.User }), $smtp.From) }
-    [void](Send-SICloseLoopMail -Smtp $smtp -To $to -Subject $subject -BodyHtml $html)
+    # $false = mail is off (SI_Mail_Mode = none): nothing went out, so the day's send record is not marked sent
+    [bool](Send-SICloseLoopMail -Smtp $smtp -To $to -Subject $subject -BodyHtml $html)
 }
 $log = {
     param([string]$level, [string]$msg)
@@ -181,7 +182,15 @@ if ($outboxOnly) {
     # the close-loop daily mail is a licensed kind: one line (above), the free mails below still go
 } else {
     try {
-        $res = Invoke-SICloseLoopMailCore -Globals $globalsNow -NewInvoke $newInvoke -Send $send -Top $Top -Version $version -DryRun:$DryRun -Log $log -Warnings $snowLines
+        # A MAIL GOES ONCE: the daily mail's send record lives in the data backend (sidata.MailSendRecord). No database
+        # configured = sent as before; one that cannot be opened = sent as before (fail open: a duplicate is possible, said once by the core).
+        . (Join-Path $siRoot 'engine\_shared\data-sql\SI-MailSendRecord.ps1')
+        $clRecord = @{ Invoke = $null; Problem = '' }
+        if (-not $DryRun) {
+            $rdb = Get-SIMailSendRecordDatabase -Globals $globalsNow
+            if ($rdb) { try { $clRecord.Invoke = & $newInvoke $rdb.Server $rdb.Database } catch { $clRecord.Problem = ('its database could not be opened: ' + $_.Exception.Message) } }
+        }
+        $res = Invoke-SICloseLoopMailCore -Globals $globalsNow -NewInvoke $newInvoke -Send $send -Top $Top -Version $version -DryRun:$DryRun -Log $log -Warnings $snowLines -SendRecord $clRecord
         if ($DryRun -and $res.Html) {
             $out = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('SI-CloseLoopMail-{0}.html' -f ([datetime]::UtcNow.ToString('yyyyMMdd-HHmmss'))))
             [IO.File]::WriteAllText($out, $res.Html, (New-Object System.Text.UTF8Encoding($false)))

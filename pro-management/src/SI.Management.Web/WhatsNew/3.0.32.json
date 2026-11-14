@@ -1,0 +1,13 @@
+{
+  "version": "3.0.32",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "A private installation no longer stops while Azure prepares its build machines.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Private installs wait for their update machines",
+      "text": "A private installation now waits up to 30 minutes while Azure creates the machines that prepare its updates, with progress every minute. A failed one is made again on the next run."
+    }
+  ]
+}

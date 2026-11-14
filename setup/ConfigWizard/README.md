@@ -55,7 +55,7 @@ This wizard is first-time setup only. Community: change settings in the custom f
 
 - **No build step.** Plain HTML, CSS, JS. Open in any browser.
 - **Offline.** Zero remote URLs. No CDN. No web fonts. No fetch beyond `localhost`.
-- **Persistent.** Every answer is saved to `localStorage` under the key `si.v22.wizard.state.v1`. Close the tab, reopen -- you're back where you were. The Welcome page has a Reset button that wipes it.
+- **Persistent.** Your answers are saved in this browser under the key `si.v22.wizard.state.v1`. Close the tab, reopen -- you're back where you were. **Sensitive answers -- passwords and API keys -- are NOT saved:** they are kept only while the page is open, and after a reload the wizard asks for them again. The Welcome page has a Reset button that wipes the saved answers.
 - **Pre-filled defaults.** Recommended values for the SPN display name, Key Vault secret name, workspace name + RG, and DCE name + RG are seeded into the input fields on first load — newcomers can click Next → Next → Apply without typing anything besides the GUIDs that have to come from their own tenant.
 - **Validated.** GUID, hex-thumbprint, Key Vault name format are all validated inline as you type.
 - **Snippet preview.** Each functional page renders a live PowerShell snippet on the right; click "Copy snippet" to put it on the clipboard. Lines whose value still matches the recommended default carry a `# default` tag.
@@ -90,7 +90,7 @@ setup/ConfigWizard/
 
 1. In `app.js`'s `PAGES` array, flip the matching page's `active: false` to `true` (or add a new entry).
 2. Add the matching `<section class="page" data-page="<id>">` to `Setup-SecurityInsight.html` -- copy an existing functional page's structure (header + form cards + preview card).
-3. Inputs should carry `data-key="<stateKey>"` so they auto-bind to `state.data` and persist via `localStorage`. Add `data-default="<recommended>"` on inputs that have a sensible default — they will be pre-filled into the input on first load and tagged `# default` in the snippet preview.
+3. Inputs should carry `data-key="<stateKey>"` so they auto-bind to `state.data` and persist via `localStorage`. An input with `type="password"` is treated as sensitive automatically: it is never written to storage and must be re-entered after a reload. Add `data-default="<recommended>"` on inputs that have a sensible default — they will be pre-filled into the input on first load and tagged `# default` in the snippet preview.
 4. Add validator(s) to the `validators` map in `app.js` if any input needs format validation; emit an inline error span via `<span class="err" data-err="<stateKey>">...</span>`.
 5. Implement a `buildXxxSnippet()` function and register it in `SNIPPET_BUILDERS` keyed by page id. Render target is `<pre class="preview" id="preview-<pageId>">`.
 6. If the new page produces optional state that the Apply backend should consume, extend `buildApplyState()` in `app.js` to include the new keys, and extend the relevant backend cmdlet (`New-SISpn` / `Initialize-SIInfra` / `Write-SICustomConfig`) to honour them.

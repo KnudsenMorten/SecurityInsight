@@ -1,0 +1,13 @@
+{
+  "version": "3.0.68",
+  "date": "2026-11-08",
+  "type": "fix-only",
+  "summary": "You no longer get a false warning about your daily runs.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "No false warning about pipeline runs",
+      "text": "The daily check no longer warns that your normal runs ran outside the pipeline. A job that really started outside the pipeline is still reported."
+    }
+  ]
+}

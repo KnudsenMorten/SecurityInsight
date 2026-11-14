@@ -1,0 +1,13 @@
+{
+  "version": "3.0.75",
+  "date": "2026-11-08",
+  "type": "fix-only",
+  "summary": "Support tools say what they do, and change nothing when they cannot go ahead.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Support tools say what they do",
+      "text": "Support tools say each step as they go. If a tool cannot go ahead, nothing is changed and the tool says why."
+    }
+  ]
+}

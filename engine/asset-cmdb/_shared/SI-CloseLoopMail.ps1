@@ -21,7 +21,8 @@
     Asset tier: the close-loop record carries no tier, so it is looked up in the Pro data backend (sidata.Asset, by
     the asset key or by the SI_AssetId identifier). Without the data backend every item is "Unknown" tier.
 
-    PS 5.1 safe. Read only: nothing here writes to the database.
+    PS 5.1 safe. Read only on the close-loop's record; the one write is the daily mail's send record (sidata.MailSendRecord,
+    engine\_shared\data-sql\SI-MailSendRecord.ps1), so a second run of the job on the same day never sends it again.
 #>
 
 # MAIL-1: the one mail transport (Send-SIMail, Get-SIMailSettings)
@@ -94,6 +95,24 @@ function Get-SICloseLoopMailSettings {
         $enabled = $false; $reason = 'The close-loop daily mail has no recipients (Mail_CloseLoop_Daily_To) -- nothing was sent.'
     }
     [pscustomobject]@{ Enabled = $enabled; Reason = $reason; To = @($to); Server = $server; Database = $db; WebBaseUrl = $web }
+}
+
+function Get-SICloseLoopMailSlotDay {
+    <#
+        PURE. The UTC day (yyyy-MM-dd) of the schedule slot a run of the daily mail belongs to -- the send record's key. The
+        slot is Mail_CloseLoop_Daily_SendTimeUtc (HH:mm, UTC; empty or not HH:mm = 10:45, the job's default schedule -- the
+        same rule as the container schedule, Get-SICloseLoopMailSchedule). A run belongs to the latest slot at or before its
+        start (with -GraceMinutes of early start allowed): a 23:50 slot run that starts at 00:05 keys to the slot's day, so
+        it never takes -- and suppresses -- the next day's mail.
+    #>
+    param([Parameter(Mandatory)][datetime]$Now, [AllowNull()][AllowEmptyString()][string]$SendTimeUtc, [int]$GraceMinutes = 30)
+    $t = "$SendTimeUtc".Trim()
+    if ($t -notmatch '^([01][0-9]|2[0-3]):([0-5][0-9])$') { $t = '10:45'; [void]($t -match '^([01][0-9]|2[0-3]):([0-5][0-9])$') }
+    $h = [int]$Matches[1]; $mi = [int]$Matches[2]
+    $at = $Now.ToUniversalTime().AddMinutes($GraceMinutes)
+    $slot = [datetime]::SpecifyKind($at.Date, 'Utc').AddHours($h).AddMinutes($mi)
+    if ($slot -gt $at) { $slot = $slot.AddDays(-1) }
+    $slot.ToString('yyyy-MM-dd', $script:SICloseLoopInvariant)
 }
 
 function Get-SICloseLoopMailSmtp {
@@ -594,7 +613,12 @@ function Invoke-SICloseLoopMailCore {
         [switch]$DryRun,
         [scriptblock]$Log = { param($level, $msg) Write-Host ("[{0}] {1}" -f $level, $msg) },
         # the mail's Warnings lines (the ServiceNow outputs whose newest check is not ok)
-        [AllowEmptyCollection()][string[]]$Warnings = @()
+        [AllowEmptyCollection()][string[]]$Warnings = @(),
+        # A MAIL GOES ONCE (engine\_shared\data-sql\SI-MailSendRecord.ps1): @{ Invoke = the data backend's SQL seam; Problem =
+        # why it could not be opened }. The daily mail is sent at most once per schedule slot day (Get-SICloseLoopMailSlotDay):
+        # a second run of the job for that slot never sends it again; a record that cannot be read or written = sent as
+        # before (fail open), with one line that a duplicate is possible. Not given = as before.
+        $SendRecord = $null
     )
     $s = Get-SICloseLoopMailSettings -Globals $Globals
     if (-not $s.Enabled) {
@@ -620,7 +644,26 @@ function Invoke-SICloseLoopMailCore {
         & $Log 'INFO' 'DRY RUN -- the mail was built and NOT sent.'
         return [pscustomobject]@{ Sent = $false; Reason = 'dry run'; Subject = $subject; Html = $html; Report = $report; To = $s.To }
     }
-    & $Send $s.To $subject $html
+    $rec = $null
+    if ($null -ne $SendRecord) {
+        if (-not (Get-Command -Name Enter-SIMailSendRecord -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'data-sql', 'SI-MailSendRecord.ps1')) }
+        # the key is the day of the mail's schedule SLOT, not the wall clock: a 23:50 slot that starts at 00:05 keeps its day
+        $day = Get-SICloseLoopMailSlotDay -Now $until -SendTimeUtc ([string]$Globals['Mail_CloseLoop_Daily_SendTimeUtc'])
+        $rec = [pscustomobject]@{ Key = (Get-SIMailSendRecordKey -Kind 'close-loop-daily' -Day $day); By = ('close-loop:' + [guid]::NewGuid().ToString('N')); Invoke = $SendRecord.Invoke }
+        $what = "close-loop: the daily mail of $day"
+        $gate = Enter-SIMailSendRecord -Invoke $SendRecord.Invoke -Problem ([string]$SendRecord.Problem) -Key $rec.Key -Kind 'close-loop-daily' -By $rec.By -What $what -Log $Log
+        if (-not $gate.Send) { return [pscustomobject]@{ Sent = $false; Reason = $gate.Line; Subject = $subject; Html = $html; Report = $report; To = $s.To } }
+        if (-not $gate.Claimed) { $rec = $null }
+    }
+    $sendOut = $null
+    try { $sendOut = @(& $Send $s.To $subject $html) | Select-Object -Last 1 }
+    catch {
+        # not sent (a failure, or a hold for an unreadable send right -- the try is given back): the next run of the day sends it
+        if ($rec) { $null = Exit-SIMailSendRecord -Invoke $rec.Invoke -Key $rec.Key -By $rec.By -As waiting -Reason $_.Exception.Message -Held:([bool](Test-SIMailHeldUnreadable -Failure $_)) -What $what -Log $Log }
+        throw
+    }
+    # a sender that answers $false sent nothing on purpose (mail is off, SI_Mail_Mode = none): the day's mail is not recorded as sent
+    if ($rec) { $null = Exit-SIMailSendRecord -Invoke $rec.Invoke -Key $rec.Key -By $rec.By -As $(if ($sendOut -is [bool] -and -not $sendOut) { 'waiting' } else { 'sent' }) -Reason 'mail is off' -What $what -Log $Log }
     & $Log 'OK' ("sent      : '{0}' to {1}" -f $subject, ($s.To -join ', '))
     [pscustomobject]@{ Sent = $true; Reason = ''; Subject = $subject; Html = $html; Report = $report; To = $s.To }
 }

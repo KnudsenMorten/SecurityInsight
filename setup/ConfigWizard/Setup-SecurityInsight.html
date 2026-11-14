@@ -534,6 +534,7 @@
           <div class="field required">
             <label for="f_smtpPassword">SMTP password / API key <span class="help" data-tip="Stored as $global:SMTPPassword in the custom config (or pulled from KV at engine start, depending on your auth setup). Treat as a secret.">?</span></label>
             <input type="password" id="f_smtpPassword" data-key="smtpPassword" autocomplete="off" />
+            <span class="hint">Not saved by the wizard -- enter it again after the page is reloaded.</span>
           </div>
         </div>
       </div>
@@ -640,6 +641,7 @@
           <div class="field required span-2">
             <label for="f_openAiApiKey">API key <span class="help" data-tip="Found under your Azure OpenAI resource > Keys and Endpoint > KEY 1. Treat as a secret -- ends up in $global:OpenAI_apiKey in the custom config (or KV-pulled at engine start).">?</span></label>
             <input type="password" id="f_openAiApiKey" data-key="openAiApiKey" autocomplete="off" />
+            <span class="hint">Not saved by the wizard -- enter it again after the page is reloaded.</span>
           </div>
           <div class="field">
             <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4.1-mini pricing. When the next call would push spend over this cap, the asset gets SI_Classify_Status='budget-capped' with a placeholder verdict and the run continues (engine does not throw). Default 3 USD covers ~200-500 assets comfortably; raise to 10 for very large tenants, lower to 0.50 for cost-paranoid lab use.">?</span></label>
@@ -766,6 +768,7 @@
           <div class="field required">
             <label for="f_shodanApiKey">API key <span class="help" data-tip="Found at account.shodan.io after sign-in. Treat as a secret -- ends up in $global:SI_Shodan_ApiKey in the custom config (or KV-pulled at engine start). Free-tier keys work; the engine surfaces 'rate-limit reached' clearly if you blow the quota.">?</span></label>
             <input type="password" id="f_shodanApiKey" data-key="shodanApiKey" autocomplete="off" />
+            <span class="hint">Not saved by the wizard -- enter it again after the page is reloaded.</span>
           </div>
         </div>
       </div>

@@ -384,6 +384,9 @@ reinstalled.
 its version, its size and its SHA-256. Nothing updates faster on its own; an update sooner happens only when Invardia
 starts one for your install ("Update now").
 
+**What's new.** [WHATSNEW.md](WHATSNEW.md) tells you what every release changed, newest first: its new features, its
+fixes and anything you need to do. The web app shows the same text under What's new in its Help menu.
+
 **Status reports.** The Community edition sends Invardia an anonymous daily status report: version, hosting type and
 run results, with no tenant id, host name or company. Set `$global:SI_Telemetry_Enabled = $false` in your
 configuration and nothing is sent. **Connect this install to Invardia (Community, optional).** The installer asks "Connect this install to Invardia:
@@ -436,7 +439,8 @@ Move from Community to Pro without reinstalling.
 
 ## Documentation
 
-Everything about SecurityInsight is at **[invardia.com/docs/securityinsight](https://invardia.com/docs/securityinsight/)**:
+What every release changed is in [WHATSNEW.md](WHATSNEW.md). Everything about SecurityInsight is at
+**[invardia.com/docs/securityinsight](https://invardia.com/docs/securityinsight/)**:
 
 - [Community edition: the scripts you run](https://invardia.com/docs/securityinsight/community-scripts/)
 - [The daily pipeline](https://invardia.com/docs/securityinsight/pipeline/) and [Weighted risk by CMDB service](https://invardia.com/docs/securityinsight/weighted-risk/)

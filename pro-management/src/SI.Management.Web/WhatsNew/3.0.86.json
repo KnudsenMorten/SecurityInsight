@@ -1,0 +1,13 @@
+{
+  "version": "3.0.86",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "You now see how many findings are past their due date at every installation.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Overdue findings are counted everywhere",
+      "text": "The executive overview's Findings past their due date now works at every installation. A finding is due at its first-seen date plus the accepted time to fix for its asset type, 30 days by default for a patch."
+    }
+  ]
+}

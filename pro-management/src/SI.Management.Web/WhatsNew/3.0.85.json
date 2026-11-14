@@ -1,0 +1,17 @@
+{
+  "version": "3.0.85",
+  "date": "2026-11-10",
+  "type": "security",
+  "summary": "SecurityInsight moves to Microsoft's supported platform, which keeps receiving security updates; it works as before.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Moved to a supported Microsoft platform",
+      "text": "SecurityInsight now runs on Microsoft's long-term supported releases, which keep receiving security updates."
+    },
+    {
+      "title": "Security updates applied",
+      "text": "Every part of SecurityInsight moves to a newer patched base."
+    }
+  ]
+}

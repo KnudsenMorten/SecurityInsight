@@ -1,0 +1,21 @@
+@page
+@model SI.Management.Web.Pages.WhatsNewModel
+@using SI.Management.Web.Docs
+@{
+    ViewData["Title"] = "What's new";
+}
+@* WHATS-NEW-1: Invardia's renderer and its look, unchanged; the app's colours reach it only through the --wn-* properties *@
+<link rel="stylesheet" href="~/lib/whatsnew/whats-new.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/whats-new-theme.css" asp-append-version="true" />
+
+<h1>What's new in @WhatsNewLibrary.ProductName</h1>
+<p class="lede">What every release changed, newest first: new features, then fixes, and anything you need to do first.</p>
+
+<div class="whats-new-page" data-whatsnew data-whatsnew-src="@WhatsNewLibrary.FilesHref" data-whatsnew-product="@WhatsNewLibrary.Product" data-whatsnew-name="@WhatsNewLibrary.ProductName" data-whatsnew-count="@Model.Library.Versions.Count">
+    <p class="muted" data-whatsnew-loading>Loading what's new in every release...</p>
+    <noscript><p>What's new needs JavaScript in this browser. The same text is in WHATSNEW.md of the SecurityInsight repository on GitHub.</p></noscript>
+</div>
+
+@section Scripts {
+    <script type="module" src="~/js/whats-new-page.js" asp-append-version="true"></script>
+}

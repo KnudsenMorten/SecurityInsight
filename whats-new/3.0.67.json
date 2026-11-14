@@ -1,0 +1,17 @@
+{
+  "version": "3.0.67",
+  "date": "2026-11-08",
+  "type": "fix-only",
+  "summary": "Moving the web app to its new address now needs only one sign-in.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Sign in once after the web app moves",
+      "text": "The old address now sends every page to the new one before anyone signs in, so you sign in once. Your bookmarks keep working."
+    },
+    {
+      "title": "The identity switch now completes",
+      "text": "Every part of the web app uses its new identity after the switch and on every later update."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "version": "3.1.9",
+  "date": "2026-11-12",
+  "type": "fix-only",
+  "summary": "Large installations finish their nightly work much sooner, and the logs say what really happened.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Configuration items finish much faster",
+      "text": "On large installations the last part of building the configuration items took many hours. Each part now reads only its own records, so it ends much sooner."
+    },
+    {
+      "title": "Logs mention AI only when AI is used",
+      "text": "The privilege tier log now says which catalog version gave the tiers and no longer suggests an AI request that was not made."
+    },
+    {
+      "title": "Risk Analysis warnings name the real failure",
+      "text": "A warning that every way of reading the data failed now names the one that really failed last, with its error. A count used only for timing no longer raises a warning."
+    }
+  ]
+}

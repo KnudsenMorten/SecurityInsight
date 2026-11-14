@@ -221,7 +221,13 @@ public static class NavModel
         new("Help", "/Help", "Help + glossary", "reader"),
         // #679: the documentation of THIS version, shipped inside the release -- every signed-in role may read it
         new("Help", "/Docs/Index", "Documentation", "home"),
+        // WHATS-NEW-1 (owner 2026-11-13): every release's What's new, shipped inside the release -- every signed-in role, both
+        // editions; the layout puts the "New" badge on it after an update until it is opened once
+        new("Help", WhatsNewPage, "What's new", "home"),
     };
+
+    /// Help &gt; What's new (WHATS-NEW-1): the page the layout's "New" badge sits on.
+    public const string WhatsNewPage = "/WhatsNew";
 
     /// The Configuration headings: the pipeline's stage titles (the Jobs page's words), then the install itself.
     /// (constants: the menu is built before any other static of this class; a test holds them to JobFlow.StageTitle)

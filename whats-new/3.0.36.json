@@ -1,0 +1,21 @@
+{
+  "version": "3.0.36",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "A private installation now finishes its install cleanly.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Private installs pass their final check",
+      "text": "The final health check now checks a private installation's database the private way."
+    },
+    {
+      "title": "New groups are ready before members join",
+      "text": "Adding a member to a group SecurityInsight just created now waits up to five minutes for Microsoft Entra, instead of stopping."
+    },
+    {
+      "title": "Support access step ends cleanly",
+      "text": "On a fresh installation, the support access step now ends without an error."
+    }
+  ]
+}

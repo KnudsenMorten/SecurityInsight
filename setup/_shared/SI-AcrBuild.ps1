@@ -416,3 +416,22 @@ function Test-SIAcrManifest {
     if ([int]$r.Status -eq 404) { return $false }
     throw ('the registry could not say whether {0}:{1} exists: {2}' -f $Repo, $Tag, (Format-SIRestFailure -Response $r))
 }
+
+function Get-SIAcrManifestDigest {
+    <# SEC-LANE-1: the digest the registry gives <login>/<repo>:<tag> (HEAD /v2/<repo>/manifests/<tag>, its Docker-Content-Digest),
+       lower case 'sha256:<64 hex>'. '' when the tag is not there; anything else that is not an answer THROWS. #>
+    param([Parameter(Mandatory)][scriptblock]$Rest, [Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][string]$Repo, [Parameter(Mandatory)][string]$Tag, [scriptblock]$Token)
+    $bearer = Get-SIAcrPullToken -Rest $Rest -LoginServer $LoginServer -Repo $Repo -Token $Token
+    $acc = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+    $r = & $Rest 'HEAD' ('https://{0}/v2/{1}/manifests/{2}' -f $LoginServer, $Repo, $Tag) $null '' @{ Authorization = ('Bearer ' + $bearer); Accept = $acc }
+    if ([int]$r.Status -eq 404) { return '' }
+    if ([int]$r.Status -lt 200 -or [int]$r.Status -ge 300) { throw ('the registry could not give the digest of {0}:{1}: {2}' -f $Repo, $Tag, (Format-SIRestFailure -Response $r)) }
+    $d = ''
+    $h = $r.Headers
+    if ($h) {
+        $keys = if ($h -is [System.Collections.IDictionary]) { @($h.Keys) } else { @($h.PSObject.Properties | ForEach-Object { $_.Name }) }
+        foreach ($k in $keys) { if ("$k" -ieq 'Docker-Content-Digest') { $v = if ($h -is [System.Collections.IDictionary]) { $h[$k] } else { $h.$k }; if ($v -is [array]) { $v = $v[0] }; $d = "$v".Trim().ToLowerInvariant() } }
+    }
+    if ($d -notmatch '^sha256:[0-9a-f]{64}$') { throw ('the registry gave no digest for {0}:{1}' -f $Repo, $Tag) }
+    $d
+}

@@ -1,0 +1,26 @@
+{
+  "version": "3.1.12",
+  "date": "2026-11-12",
+  "type": "feature",
+  "summary": "You can look back a week, and heavy reports and Risk Analysis finish more reliably.",
+  "new": [
+    {
+      "title": "A week of history",
+      "text": "Each installation keeps the findings of its newest 7 runs, so What changed and the history pages go back a week. When the database is 70% full, SecurityInsight keeps fewer runs and tells you."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Heavy attack-path reports complete",
+      "text": "A report part that Microsoft keeps timing out on is now split into smaller parts, so the report completes instead of leaving parts unread."
+    },
+    {
+      "title": "The Summary view is always ready",
+      "text": "The Summary view is built for every collection you can open, also when a preparation step failed the night before."
+    },
+    {
+      "title": "Risk Analysis ends much faster",
+      "text": "The end of a large Risk Analysis is much faster, where it took hours at the largest installations. The results are the same."
+    }
+  ]
+}

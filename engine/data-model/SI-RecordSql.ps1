@@ -188,8 +188,20 @@ function Get-SIRecordSqlWriteSql {
         SAFE TO RERUN: SET XACT_ABORT ON rolls the whole transaction back on any error (a deadlock victim too) and ends
         the batch; a rerun is a new batch that declares its table variables again from @r / @i and reads @changed again
         from what is committed -- the same input gives the same rows (proven on a real SQL Server: SIv3-RecordDeadlock).
+        A RECORD'S COLLECTION TIME NEVER MOVES BACK: two collections of the same source can write at once (an older run's
+        workers still going beside a newer run). A stored record is changed only by a write of the SAME or a NEWER
+        collection time; an older write leaves that record as it is -- its time, its values and its identifiers -- and is
+        counted (Older). The check is part of the UPDATE and the MERGE themselves (a plain comparison of the stored column,
+        no function on it), and the records it skips are also left out of the identifier rewrite. A new record is always
+        inserted. A record without a collection time (stored or written) is written as before.
+        NEVER OLDER CONTENT UNDER A NEWER TIME: which records are unchanged is read BEFORE the lock (the delta read,
+        Get-SIRecordSqlChangedKeys), so another collection can write new content in between. The time-only UPDATE therefore
+        also requires the stored content hash to still equal the incoming one; a record whose hash moved and that came
+        without its document is NOT stamped and is counted (Stale) -- the caller then writes those records again whole.
     #>
     param([int]$LockMs = 120000)
+    # the stored record t may be written from the incoming s: s is not older than t
+    $notOlder = '(t.CollectionTime IS NULL OR s.CollectionTime IS NULL OR s.CollectionTime >= t.CollectionTime)'
     $lock = ''
     if ($LockMs -gt 0) {
         $lock = ("DECLARE @lk INT;`n" +
@@ -207,17 +219,24 @@ FROM OPENJSON(@r) WITH (RecordKey NVARCHAR(450), Provider NVARCHAR(32), RecordTy
     SourceLastSeen DATETIME2(3), CollectionTime DATETIME2(3), Complete BIT, Hash VARCHAR(64), DocJson NVARCHAR(MAX))
 WHERE RecordKey IS NOT NULL GROUP BY RecordKey;
 DECLARE @changed TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
+DECLARE @older TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
+DECLARE @stale TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
 BEGIN TRANSACTION;
-{WRITELOCK}INSERT @changed SELECT s.RecordKey FROM @s s LEFT JOIN sidata.CiRecord t ON t.RecordKey = s.RecordKey
-WHERE (t.RecordKey IS NULL OR t.ContentHash IS NULL OR t.ContentHash <> s.Hash) AND s.DocJson IS NOT NULL;
+{WRITELOCK}INSERT @older SELECT s.RecordKey FROM @s s JOIN sidata.CiRecord t ON t.RecordKey = s.RecordKey
+WHERE s.CollectionTime < t.CollectionTime;
+INSERT @stale SELECT s.RecordKey FROM @s s JOIN sidata.CiRecord t ON t.RecordKey = s.RecordKey
+WHERE s.DocJson IS NULL AND t.ContentHash IS NOT NULL AND t.ContentHash <> s.Hash AND {NOTOLDER};
+INSERT @changed SELECT s.RecordKey FROM @s s LEFT JOIN sidata.CiRecord t ON t.RecordKey = s.RecordKey
+WHERE (t.RecordKey IS NULL OR t.ContentHash IS NULL OR t.ContentHash <> s.Hash) AND s.DocJson IS NOT NULL
+  AND (t.RecordKey IS NULL OR {NOTOLDER});
 UPDATE t SET CollectionTime = s.CollectionTime, Complete = s.Complete, SourceLastSeen = s.SourceLastSeen
 FROM sidata.CiRecord t JOIN @s s ON s.RecordKey = t.RecordKey
-WHERE s.RecordKey NOT IN (SELECT RecordKey FROM @changed)
+WHERE s.RecordKey NOT IN (SELECT RecordKey FROM @changed) AND {NOTOLDER} AND (t.ContentHash IS NULL OR t.ContentHash = s.Hash)
   AND (t.CollectionTime <> s.CollectionTime OR ISNULL(t.Complete, 1) <> ISNULL(s.Complete, 1) OR ISNULL(t.SourceLastSeen, '19000101') <> ISNULL(s.SourceLastSeen, '19000101'));
 MERGE sidata.CiRecord AS t
 USING (SELECT s.* FROM @s s JOIN @changed c ON c.RecordKey = s.RecordKey) AS s
 ON t.RecordKey = s.RecordKey
-WHEN MATCHED THEN UPDATE SET Provider = s.Provider, RecordType = s.RecordType, Class = s.Class, Name = s.Name, SourceLastSeen = s.SourceLastSeen,
+WHEN MATCHED AND {NOTOLDER} THEN UPDATE SET Provider = s.Provider, RecordType = s.RecordType, Class = s.Class, Name = s.Name, SourceLastSeen = s.SourceLastSeen,
     CollectionTime = s.CollectionTime, Complete = s.Complete, ContentHash = s.Hash, DocJson = s.DocJson
 WHEN NOT MATCHED THEN INSERT (RecordKey, Provider, RecordType, Class, Name, SourceLastSeen, CollectionTime, Complete, ContentHash, DocJson)
     VALUES (s.RecordKey, s.Provider, s.RecordType, s.Class, s.Name, s.SourceLastSeen, s.CollectionTime, s.Complete, s.Hash, s.DocJson);
@@ -227,8 +246,9 @@ SELECT DISTINCT x.RecordKey, x.IdType, x.IdValue, x.SeenAt FROM OPENJSON(@i) WIT
 WHERE x.RecordKey IN (SELECT RecordKey FROM @changed) AND x.IdValue IS NOT NULL;
 DECLARE @ids INT = @@ROWCOUNT;
 COMMIT TRANSACTION;
-SELECT (SELECT COUNT(*) FROM @s) AS Seen, (SELECT COUNT(*) FROM @changed) AS Changed, @ids AS Identifiers;
-'@).Replace('{WRITELOCK}', $lock)
+SELECT (SELECT COUNT(*) FROM @s) AS Seen, (SELECT COUNT(*) FROM @changed) AS Changed, @ids AS Identifiers, (SELECT COUNT(*) FROM @older) AS Older,
+       (SELECT COUNT(*) FROM @stale) AS Stale;
+'@).Replace('{WRITELOCK}', $lock).Replace('{NOTOLDER}', $notOlder)
 }
 
 # a batch write that lost a DEADLOCK (1205) or waited too long for a lock (1222; 51222 = the record write lock above) is
@@ -289,6 +309,7 @@ function Write-SIRecordsToSql {
                 $rec = $items.Records[$ri]
                 if ($null -eq $changedKeys -or $changedKeys.Contains([string]$rec.RecordKey)) { $rec.DocJson = ConvertTo-Json -InputObject $items.Sources[$ri] -Compress -Depth 12 }
             }
+            $allIds = @($items.Identifiers)
             if ($null -ne $changedKeys) { $items.Identifiers = @($items.Identifiers | Where-Object { $changedKeys.Contains([string]$_.RecordKey) }) }
         }
         finally { foreach ($pr in $pinned) { $pr.si_collection_complete = $true } }   # the rows themselves are handed on unchanged
@@ -302,21 +323,40 @@ function Write-SIRecordsToSql {
         # fails the batch exactly as before -- said and counted, never a silent loss.
         $writeSql = Get-SIRecordSqlWriteSql -LockMs $LockMs
         $max = [Math]::Max(1, [int]$script:SIRecordWriteAttempts)
-        $res = $null
         $label = $What; if (-not $label) { $label = 'a batch of {0} record(s)' -f @($items.Records).Count }
-        for ($attempt = 1; $attempt -le $max; $attempt++) {
-            try { $res = @(& $Invoke $writeSql $p 'rows'); break }
-            catch {
-                $why = Get-SIRecordWriteRetryReason -Exception $_.Exception
-                if (-not $why -or $attempt -ge $max) { throw }
-                $waitMs = [int]([double]$script:SIRecordWriteRetryMs * [Math]::Pow(2, $attempt - 1) * (1.0 + (Get-Random -Minimum 0.0 -Maximum 1.0)))
-                Write-Warning ('records: {0} on {1}, attempt {2} of {3} -- retried in {4:0.0} s' -f $why, $label, $attempt, $max, ($waitMs / 1000.0))
-                Start-Sleep -Milliseconds $waitMs
+        $num = { param($r, [string]$n) $v = Get-SIItemValue $r $n; if ($null -eq $v -or $v -is [System.DBNull]) { 0 } else { [int]$v } }
+        $row = $null; $stale = 0; $changed2 = 0; $ids2 = 0
+        # pass 1 = the batch as built (only what changed whole); pass 2 only when records moved under it (Stale, below)
+        foreach ($pass in 1, 2) {
+            $res = $null
+            for ($attempt = 1; $attempt -le $max; $attempt++) {
+                try { $res = @(& $Invoke $writeSql $p 'rows'); break }
+                catch {
+                    $why = Get-SIRecordWriteRetryReason -Exception $_.Exception
+                    if (-not $why -or $attempt -ge $max) { throw }
+                    $waitMs = [int]([double]$script:SIRecordWriteRetryMs * [Math]::Pow(2, $attempt - 1) * (1.0 + (Get-Random -Minimum 0.0 -Maximum 1.0)))
+                    Write-Warning ('records: {0} on {1}, attempt {2} of {3} -- retried in {4:0.0} s' -f $why, $label, $attempt, $max, ($waitMs / 1000.0))
+                    Start-Sleep -Milliseconds $waitMs
+                }
             }
+            if ($attempt -gt 1) { Write-Host ('[INFO] records: {0} written on attempt {1} of {2} (after a {3})' -f $label, $attempt, $max, $why) }
+            $r1 = $null; if ($res.Count -gt 0) { $r1 = $res[0] }
+            if ($pass -eq 1) { $row = $r1; $stale = & $num $r1 'Stale' } else { $changed2 = & $num $r1 'Changed'; $ids2 = & $num $r1 'Identifiers' }
+            # STALE (Get-SIRecordSqlWriteSql): records sent without their document whose stored content changed after the
+            # delta read (another collection wrote in between) -- they were NOT stamped. The batch is written again WHOLE
+            # (every document, every identifier): what is not older is written with this collection's content; what is
+            # older is left, as always. Only when the batch went as a delta; whole, nothing can be stale.
+            if ($pass -eq 2 -or $stale -le 0 -or $null -eq $changedKeys) { break }
+            for ($ri = 0; $ri -lt @($items.Records).Count; $ri++) { if ($null -eq $items.Records[$ri].DocJson) { $items.Records[$ri].DocJson = ConvertTo-Json -InputObject $items.Sources[$ri] -Compress -Depth 12 } }
+            $p = @{ r = (ConvertTo-SIJsonArray $items.Records); i = (ConvertTo-SIJsonArray $allIds) }
+            $attempt = 0; $why = $null
         }
-        if ($attempt -gt 1) { Write-Host ('[INFO] records: {0} written on attempt {1} of {2} (after a {3})' -f $label, $attempt, $max, $why) }
-        $row = $null; if ($res.Count -gt 0) { $row = $res[0] }
-        [pscustomobject]@{ Seen = [int](Get-SIItemValue $row 'Seen'); Changed = [int](Get-SIItemValue $row 'Changed'); Identifiers = [int](Get-SIItemValue $row 'Identifiers'); Failed = 0 }
+        # an older collection never moves a record back (Get-SIRecordSqlWriteSql): what it left alone is said, never an error
+        $older = & $num $row 'Older'
+        $of = ''; if ($What) { $of = ' of ' + $What }
+        if ($older -gt 0) { Write-Host ('[INFO] records: {0} record(s){1} were not changed: a newer collection already wrote them.' -f $older, $of) }
+        if ($stale -gt 0) { Write-Host ('[INFO] records: {0} record(s){1} were changed by another collection while this one was written -- not stamped with this collection''s time; written again with their whole content.' -f $stale, $of) }
+        [pscustomobject]@{ Seen = (& $num $row 'Seen'); Changed = ((& $num $row 'Changed') + $changed2); Identifiers = ((& $num $row 'Identifiers') + $ids2); Older = $older; Stale = $stale; Failed = 0 }
     } catch {
         $n = 0; if ($items) { $n = @($items.Records).Count }
         $tries = ''; if ($why -and $attempt -gt 1) { $tries = (' -- FAILED after {0} attempts, the last a {1}' -f $attempt, $why) }

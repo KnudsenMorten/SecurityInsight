@@ -1,0 +1,13 @@
+{
+  "version": "3.0.5",
+  "date": "2026-10-29",
+  "type": "fix-only",
+  "summary": "Run now and every other start from the web app keep working.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Job starts keep working",
+      "text": "After a change at Microsoft, every start from the web app, such as Run now, keeps working. A start that fails never runs later."
+    }
+  ]
+}

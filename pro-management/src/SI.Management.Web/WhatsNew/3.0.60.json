@@ -1,0 +1,13 @@
+{
+  "version": "3.0.60",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "A requested fresh start of your data no longer takes hours on large tables.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Data fresh start runs quickly again",
+      "text": "A fresh start of your data could fall back to deleting rows slowly, taking hours on a large table. It is now much faster, and a rerun continues where it stopped."
+    }
+  ]
+}

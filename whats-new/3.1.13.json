@@ -1,0 +1,29 @@
+{
+  "version": "3.1.13",
+  "date": "2026-11-12",
+  "type": "fix-only",
+  "summary": "Device tiers follow privileged sign-ins, and only complete data is sent to your other systems.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Privileged sign-ins count for devices",
+      "text": "A device that a Tier 0, 1 or 2 account signs in to takes that tier."
+    },
+    {
+      "title": "One tier problem no longer spoils a run",
+      "text": "When one tier source fails, only that value shows as unknown on the devices, with the reason. The rest of the run is complete and goes on as usual."
+    },
+    {
+      "title": "Incomplete data is never sent out",
+      "text": "Nothing built on incomplete source data is sent to ServiceNow or the workbooks. What they have stays, and the next complete run sends what changed."
+    },
+    {
+      "title": "Older program images are cleaned up safely",
+      "text": "The clean-up of older program images no longer stops during long work. It records what it keeps before it deletes anything and reports its progress as it goes."
+    },
+    {
+      "title": "History keeps the newest 3 complete runs",
+      "text": "Each installation now keeps the findings of its newest 3 complete runs instead of 7. Older runs keep their totals for the trends, and the log names each run removed."
+    }
+  ]
+}

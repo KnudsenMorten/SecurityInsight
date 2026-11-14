@@ -81,8 +81,10 @@ param(
     [string[]]$IdentityObjectId = @(),
     [string]$SubscriptionId,
     [string]$ResourceGroup,
-    # identities in -ResourceGroup that never send mail (asset tagging, the MCP server) are left out
-    [string]$ExcludeIdentityPattern = '(?i)tagging|mcp',
+    # identities in -ResourceGroup that never send mail are left out: asset tagging, and the INTERNET-FACING apps' identities --
+    # the web app (ca-si-management, id-si-web / uami-si-management) and the MCP server -- which never hold Mail.Send
+    # (SECURE-WEB-1, framework 12.11f: an internet-facing identity holds no right to send mail as a mailbox)
+    [string]$ExcludeIdentityPattern = '(?i)tagging|mcp|web|management',
     # A mailbox OUTSIDE the scope, to prove the restriction. Empty = the signed-in person (when it has a mailbox).
     [string]$ProbeMailbox,
     # smtp

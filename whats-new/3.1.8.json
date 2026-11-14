@@ -1,0 +1,17 @@
+{
+  "version": "3.1.8",
+  "date": "2026-11-11",
+  "type": "feature",
+  "summary": "You can see how far long steps are, and Microsoft's security fixes reach you the same day.",
+  "new": [
+    {
+      "title": "Long steps show their progress",
+      "text": "Long steps such as comparing vulnerability findings and finishing the configuration items now report how far they are every few minutes. A long night no longer looks stuck to you or to support."
+    },
+    {
+      "title": "Microsoft security fixes reach you the same day",
+      "text": "When Microsoft publishes security fixes for the system SecurityInsight runs on, a release with them is tested and rolled out the same day. If it fails, your installation goes back to what it ran before."
+    }
+  ],
+  "fixes": []
+}

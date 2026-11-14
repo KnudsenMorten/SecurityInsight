@@ -1,0 +1,17 @@
+{
+  "version": "3.0.70",
+  "date": "2026-11-08",
+  "type": "security",
+  "summary": "Support requests go through your installation's own queue, and private-network installs check their network first.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Support requests arrive on your own queue",
+      "text": "Support requests arrive on your installation's own queue."
+    },
+    {
+      "title": "Private-network installs check the network first",
+      "text": "Before it creates anything, a private-network install checks everything it needs and lists everything missing at once, with what to create. Nothing is created until it is there."
+    }
+  ]
+}

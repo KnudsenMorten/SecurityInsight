@@ -1,0 +1,17 @@
+{
+  "version": "3.1.18",
+  "date": "2026-11-14",
+  "type": "security",
+  "summary": "The parts of SecurityInsight that are reachable from the internet now hold only the rights they need, and a short network fault no longer stops a scheduled wake-up.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "The web app holds only needed rights",
+      "text": "The web app and MCP server identities keep only the rights for their own data, checked on every update. Until the next version, Run now, stopping a run, schedule changes and template releases show a message; scheduled runs continue."
+    },
+    {
+      "title": "Short database network faults are retried",
+      "text": "When the connection to the database fails for a moment while it is being set up, SecurityInsight tries again after a short wait instead of stopping the run."
+    }
+  ]
+}

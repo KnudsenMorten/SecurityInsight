@@ -863,3 +863,225 @@ Describe 'THE END OF AN UPDATE REACHES THE LOG: flush + a short, bounded pause o
         }
     }
 }
+Describe 'SEC-LANE-1: after a HEALTHY image-only swap only what runs stays (owner 2026-11-14: "when swap works we remove old")' {
+    It '-RunningOnly: the previous release is not kept -- every image no job, app, revision or running execution uses is deleted' {
+        $f = New-StandardRegistry
+        $collected = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' -Log { param($l) $collected.Add($l) }
+        $r.Done | Should -BeTrue
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
+        @($f.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2')
+        @($f.Repos['si-base'] | ForEach-Object { $_.Name }) | Should -Be @('base-h1') -Because 'the base layers a running image is built on stay'
+        # every kept and every deleted image in its own line, with its reason
+        $all = $collected -join "`n"
+        $all | Should -Match 'si-orchestrator@sha256:[0-9a-f]{12}: kept -- runs: '
+        $all | Should -Match 'si-orchestrator@sha256:[0-9a-f]{12} \(v3-bbb\): deleted -- no job, app, active revision or running execution uses it'
+        $all | Should -Match 'si-base@sha256:[0-9a-f]{12}: kept -- the base layers a running image is built on'
+        @($collected | Where-Object { $_ -match ': deleted -- ' }).Count | Should -Be 6
+        @($r.Lines) | Should -Contain 'si-orchestrator: 3 old images deleted, 1 left (what runs)'
+    }
+    It '-RunningOnly: an image a RUNNING execution started with is kept (its replica may restart)' {
+        $f = New-StandardRegistry
+        $cur = & $script:Cur
+        $run = @(ConvertTo-SIUpdaterImageRef -Image "$($script:Login)/si-orchestrator:v3-bbb" -LoginServer $script:Login)
+        $run[0] | Add-Member -NotePropertyName From -NotePropertyValue 'caj-si-flow (running execution e1)' -Force
+        $collected = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $f.Seam -After $cur -RunningRefs $run -RegistryResourceGroup 'rg-si' -Get { param($n) '' } 6>$null
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name } | Sort-Object) | Should -Be @('orch-v3', 'orch-v4')
+    }
+    It 'a swap that is NOT proven healthy deletes NOTHING (the previous images are its way back); the switch off deletes nothing' {
+        $f = New-StandardRegistry
+        Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $false -Registry $f.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' -Get { param($n) '' } 6>$null | Should -BeNullOrEmpty
+        $f.Deleted.Count | Should -Be 0
+        @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        $g = New-StandardRegistry
+        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $g.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' -Get { param($n) if ($n -eq 'SI_UPDATER_IMAGE_PRUNE') { 'off' } else { '' } } 6>$null
+        $g.Deleted.Count | Should -Be 0
+    }
+    It 'what runs that cannot be read back, or a registry outside the install''s resource group: nothing deleted' {
+        $f = New-StandardRegistry
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @() $false 'not read') -RunningOnly
+        $f.Deleted.Count | Should -Be 0
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly -RegistryResourceGroup 'rg-other' -InstallResourceGroup 'rg-si'
+        $f.Deleted.Count | Should -Be 0
+    }
+    It 'the running executions: only Running / Processing ones without an end, from the install''s registry' {
+        $jobs = @([pscustomobject]@{ name = 'caj-si-flow' })
+        $ex = { param($n) @(
+            [pscustomobject]@{ name = 'e1'; properties = [pscustomobject]@{ status = 'Running'; template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'acrsi.azurecr.io/si-orchestrator:v3-bbb' }) } } }
+            [pscustomobject]@{ name = 'e0'; properties = [pscustomobject]@{ status = 'Succeeded'; endTime = '2026-11-14T01:00:00Z'; template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'acrsi.azurecr.io/si-orchestrator:v2-ccc' }) } } }
+            [pscustomobject]@{ name = 'e2'; properties = [pscustomobject]@{ status = 'Running'; template = [pscustomobject]@{ containers = @([pscustomobject]@{ image = 'mcr.microsoft.com/x:y' }) } } }) }
+        $r = @(Get-SIUpdaterRunningExecutionRefs -Jobs $jobs -Executions $ex -LoginServer 'acrsi.azurecr.io')
+        $r.Count | Should -Be 1; $r[0].Tag | Should -Be 'v3-bbb'; $r[0].From | Should -Match 'running execution e1'
+    }
+    It 'WIRING: the short path asks for it only when every part read back healthy' {
+        $u = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1')
+        $u | Should -Match ([regex]::Escape('$ioHealthy = [bool]([int]$ioRes.Code -eq 0 -and "$($ioRes.Result)" -eq ''done'')'))
+        $u | Should -Match ([regex]::Escape('Invoke-SIUpdaterImageOnlyPruneStep -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Healthy $ioHealthy'))
+    }
+}
+
+Describe 'IMAGE-PRUNE amendment (Invardia 2026-11-14): the previous image goes only AFTER A JOB HAS SUCCEEDED ON THE NEW IMAGE' {
+    BeforeAll {
+        $script:NewD = 'sha256:' + ('1' * 64); $script:OldD = 'sha256:' + ('0' * 64)
+        $script:SwapAt = [datetime]::SpecifyKind([datetime]'2026-11-14T12:00:00', [DateTimeKind]::Utc)
+        $script:Pend = [pscustomobject]@{ Version = '3.1.17.1'; SwappedUtc = $script:SwapAt; Digest = $script:NewD; Apps = @('ca-si-management') }
+        function script:Job([string]$Name, [string]$Digest) {
+            [pscustomobject]@{ name = $Name; properties = [pscustomobject]@{ template = [pscustomobject]@{ containers = @([pscustomobject]@{ name = 'c'; image = "acrsi.azurecr.io/si-orchestrator:v3.1.17.1-abc@$Digest" }) } } }
+        }
+        function script:Exec([string]$Status, [datetime]$Start, [string]$Digest) {
+            [pscustomobject]@{ name = ('e-' + [guid]::NewGuid().ToString('N').Substring(0, 6)); properties = [pscustomobject]@{ status = $Status; startTime = $Start.ToString('o')
+                template = [pscustomobject]@{ containers = @([pscustomobject]@{ name = 'c'; image = "acrsi.azurecr.io/si-orchestrator:v3.1.17.1-abc@$Digest" }) } } }
+        }
+        $script:AppOk = { param($n) [pscustomobject]@{ name = $n; properties = [pscustomobject]@{ latestRevisionName = "$n--r2" } } }
+        $script:RevOk = { param($a, $r) [pscustomobject]@{ properties = [pscustomobject]@{ healthState = 'Healthy'; runningState = 'Running' } } }
+        # a fake Pro database: the pending row (the writes and the delete recorded)
+        function script:New-PendStore {
+            $s = @{ Cleared = $false; Saved = @{} }
+            $s.Store = [pscustomobject]@{ Invoke = { param($q, $p, $m) if ("$q" -match "DELETE FROM cfg.InstallState WHERE Name = N'ImageOnlyPrunePending'") { $s.Cleared = $true }
+                if ($p -is [System.Collections.IDictionary]) { $n = $null; $v = $null; foreach ($e in $p.GetEnumerator()) { if ("$($e.Key)" -eq 'Name') { $n = "$($e.Value)" } elseif ("$($e.Key)" -eq 'Value') { $v = "$($e.Value)" } }; if ($n) { $s.Saved[$n] = $v } }
+                , @() }.GetNewClosure() }
+            $s
+        }
+        function script:Invoke-Pend([object[]]$Execs, [switch]$ExecThrows, [scriptblock]$Rev = $script:RevOk, [object[]]$Jobs = @((Job 'caj-si-flow' $script:NewD)), [hashtable]$ExecsByJob) {
+            $w = @{ Cleanups = 0 }
+            $global:PendLines = New-Object System.Collections.Generic.List[string]
+            $st = New-PendStore
+            $map = if ($ExecsByJob) { $ExecsByJob } else { @{ 'caj-si-flow' = @($Execs) } }
+            $ex = if ($ExecThrows) { { param($n) throw 'HTTP 503' } } else { { param($n) @($map[$n]) }.GetNewClosure() }
+            Mock Write-UpdLog { $global:PendLines.Add([string]$m) }
+            $r = Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Store $st.Store -Pending $script:Pend -Jobs $Jobs `
+                     -Executions $ex -GetApp $script:AppOk -GetRevision $Rev -Cleanup { $w.Cleanups++; [pscustomobject]@{ Done = $true } }.GetNewClosure()
+            [pscustomobject]@{ R = $r; Cleanups = $w.Cleanups; Lines = ($global:PendLines -join "`n"); Cleared = [bool]$st.Cleared }
+        }
+    }
+    It 'a HEALTHY swap deletes NOTHING and records the pending clean-up (the release, the new digest, the apps, the time)' {
+        $st = New-PendStore
+        $after = [pscustomobject]@{ Ok = $true; Reason = 'read'; Refs = @(
+            [pscustomobject]@{ Repo = 'si-orchestrator'; Tag = 'v3.1.17.1-abc'; Digest = $script:NewD; From = 'caj-si-flow' }
+            [pscustomobject]@{ Repo = 'si-management'; Tag = 'src-2'; Digest = ''; From = 'ca-si-management' }) }
+        $f = New-StandardRegistry
+        Mock Get-SIUpdaterRegistry { throw 'the registry is not read at the swap' }
+        $v = Invoke-SIUpdaterImageOnlyPruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Store $st.Store -After $after -Version '3.1.17.1' `
+                 -Apps @('ca-si-management', 'ca-si-mcp') -NowUtc $script:SwapAt 6>$null
+        $f.Deleted.Count | Should -Be 0
+        $o = $st.Saved['ImageOnlyPrunePending'] | ConvertFrom-Json
+        $o.version | Should -Be '3.1.17.1'; $o.digest | Should -Be $script:NewD
+        (ConvertFrom-SIUpdaterImageOnlyPendingValue -Json $st.Saved['ImageOnlyPrunePending']).SwappedUtc | Should -Be $script:SwapAt
+        @($o.apps) | Should -Be @('ca-si-management') -Because 'only an app that is there'
+        (ConvertFrom-SIUpdaterImageOnlyPendingValue -Json $v).Digest | Should -Be $script:NewD
+        # not healthy: nothing recorded
+        $st2 = New-PendStore
+        Invoke-SIUpdaterImageOnlyPruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $false -Store $st2.Store -After $after 6>$null | Should -BeNullOrEmpty
+        $st2.Saved.Count | Should -Be 0
+    }
+    It 'a later run with NO successful execution yet: everything kept, said' {
+        $r = Invoke-Pend -Execs @((Exec 'Running' $script:SwapAt.AddMinutes(5) $script:NewD))
+        $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeFalse
+        $r.Lines | Should -Match 'kept until the image-only swap to 3\.1\.17\.1 is proven -- no successful run on the new image yet: no job has succeeded on the new engine image \(1 job\(s\) on it\)'
+    }
+    It 'a later run with a SUCCESS on the new digest after the swap: the clean-up runs and the record is cleared' {
+        $r = Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:NewD))
+        $r.R.Proven | Should -BeTrue
+        $r.Cleanups | Should -Be 1; $r.Cleared | Should -BeTrue
+        $r.Lines | Should -Match 'is proven -- 1 run\(s\) succeeded on the new engine image since 2026-11-14 12:00Z \(the newest: caj-si-flow\)'
+    }
+    It 'PER IMAGE: one pipeline job succeeded and the on-demand jobs never ran -> cleaned up' {
+        $jobs = @((Job 'caj-si-flow' $script:NewD), (Job 'caj-si-support-grant' $script:NewD), (Job 'caj-si-index-build' $script:NewD), (Job 'caj-si-dbinit' $script:NewD))
+        $r = Invoke-Pend -Jobs $jobs -ExecsByJob @{ 'caj-si-flow' = @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:NewD)) }
+        $r.R.Proven | Should -BeTrue
+        $r.Cleanups | Should -Be 1; $r.Cleared | Should -BeTrue
+    }
+    It 'PER IMAGE: the NEWEST finished run on the new digest Failed (an earlier one on another job Succeeded) -> kept, the job and the execution named' {
+        $jobs = @((Job 'caj-si-flow' $script:NewD), (Job 'caj-si-index-build' $script:NewD))
+        $bad = Exec 'Failed' $script:SwapAt.AddMinutes(40) $script:NewD
+        $r = Invoke-Pend -Jobs $jobs -ExecsByJob @{ 'caj-si-flow' = @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:NewD)); 'caj-si-index-build' = @($bad) }
+        $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeFalse
+        $r.Lines | Should -Match ('a run on the new image failed \(caj-si-index-build, execution {0}\); the previous image stays, it is the way back' -f [regex]::Escape($bad.name))
+    }
+    It 'PER IMAGE: only on-demand jobs ran and succeeded -> cleaned up (any job counts)' {
+        $jobs = @((Job 'caj-si-flow' $script:NewD), (Job 'caj-si-support-grant' $script:NewD))
+        $r = Invoke-Pend -Jobs $jobs -ExecsByJob @{ 'caj-si-support-grant' = @((Exec 'Succeeded' $script:SwapAt.AddMinutes(3) $script:NewD)) }
+        $r.Cleanups | Should -Be 1
+        $r.Lines | Should -Match '\(the newest: caj-si-support-grant\)'
+    }
+    It 'a success on the OLD digest, or one that started BEFORE the swap, does not count' {
+        (Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:OldD))).Cleanups | Should -Be 0
+        (Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(-10) $script:NewD))).Cleanups | Should -Be 0
+    }
+    It 'a FAILED run on the new image: kept -- the previous image is the way back -- and said' {
+        $r = Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(5) $script:NewD), (Exec 'Failed' $script:SwapAt.AddMinutes(30) $script:NewD))
+        $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeFalse
+        $r.Lines | Should -Match 'a run on the new image failed \(caj-si-flow, execution e-[0-9a-f]+\); the previous image stays, it is the way back'
+    }
+    It 'executions that cannot be read: not proven = kept' {
+        $r = Invoke-Pend -ExecThrows
+        $r.Cleanups | Should -Be 0
+        $r.Lines | Should -Match 'could not be read \(caj-si-flow\)'
+    }
+    It 'the web app''s new revision not healthy and running yet: kept' {
+        $r = Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:NewD)) -Rev { param($a, $r) [pscustomobject]@{ properties = [pscustomobject]@{ healthState = 'Unhealthy'; runningState = 'Running' } } }
+        $r.Cleanups | Should -Be 0
+        $r.Lines | Should -Match 'ca-si-management \(revision ca-si-management--r2'
+    }
+    It 'no job runs the recorded digest any more (a later release moved them): the record is cleared, nothing deleted by it' {
+        $r = Invoke-Pend -Execs @() -Jobs @((Job 'caj-si-flow' $script:OldD))
+        $r.R.Superseded | Should -BeTrue; $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeTrue
+    }
+    It 'no pending record: nothing at all' {
+        Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Store (New-PendStore).Store | Should -BeNullOrEmpty
+    }
+    It 'WIRING: the later run proves and cleans up on every run that did not swap itself' {
+        $u = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1')
+        $u | Should -Match ([regex]::Escape('if (-not $imageOnlyRan) {'))
+        $u | Should -Match ([regex]::Escape('Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store'))
+    }
+}
+
+Describe 'SI''s one-off repositories (Invardia''s central image scan 2026-11-14: si-management-probe)' {
+    BeforeAll {
+        function script:New-ProbeRegistry {
+            $f = New-StandardRegistry
+            $l = New-Object System.Collections.ArrayList
+            $null = $l.Add((M 'probe-1' @('20261003-175502') @('P0', 'P1')))
+            $null = $l.Add((M 'probe-2' @('20261110-090000') @('P0', 'P2')))
+            $f.Repos['si-management-probe'] = $l
+            $f
+        }
+    }
+    It 'the one list names it' { @($script:SIImagePruneOneOffRepos) | Should -Contain 'si-management-probe' }
+    It 'the full update: every probe image nothing runs is deleted, one line each with the reason; the rest as before' {
+        $f = New-ProbeRegistry
+        $col = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' `
+                 -RunningRefs @() -RunningKnown $true -Log { param($l) $col.Add($l) }
+        $r.Done | Should -BeTrue
+        $f.Repos['si-management-probe'].Count | Should -Be 0
+        @($col | Where-Object { $_ -match '^si-management-probe@sha256:[0-9a-f]{12} \(\d{8}-\d{6}\): deleted -- a one-off proof image, nothing runs it$' }).Count | Should -Be 2
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4', 'orch-v3') -Because 'the full release keeps current + previous, unchanged'
+    }
+    It 'a probe image a RUNNING execution uses is kept (the other goes)' {
+        $f = New-ProbeRegistry
+        $run = ConvertTo-SIUpdaterImageRef -Image "$($script:Login)/si-management-probe:20261110-090000" -LoginServer $script:Login
+        $run | Add-Member -NotePropertyName From -NotePropertyValue 'caj-si-mgmt-probe (running execution e1)' -Force
+        $col = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningRefs @($run) -RunningKnown $true -Log { param($l) $col.Add($l) }
+        @($f.Repos['si-management-probe'] | ForEach-Object { $_.Name }) | Should -Be @('probe-2')
+        ($col -join "`n") | Should -Match 'si-management-probe@sha256:[0-9a-f]{12}: kept -- runs: caj-si-mgmt-probe \(running execution e1\)'
+    }
+    It 'the running executions not read, or the probe repository not readable: every probe image kept, said' {
+        $f = New-ProbeRegistry
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningKnown $false
+        $f.Repos['si-management-probe'].Count | Should -Be 2
+        ($r.Lines -join "`n") | Should -Match 'si-management-probe: not cleaned up -- the running executions could not be read'
+        $g = New-ProbeRegistry; $g.ListFails = @('si-management-probe')
+        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $g.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningRefs @() -RunningKnown $true
+        $g.Repos['si-management-probe'].Count | Should -Be 2
+        ($r2.Lines -join "`n") | Should -Match 'si-management-probe: not cleaned up -- its images could not be listed'
+    }
+    It 'the image-only clean-up (what runs only) removes the probe images too' {
+        $f = New-ProbeRegistry
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly
+        $f.Repos['si-management-probe'].Count | Should -Be 0
+    }
+}

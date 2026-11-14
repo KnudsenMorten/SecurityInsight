@@ -1,0 +1,46 @@
+{
+  "version": "3.0.9",
+  "date": "2026-10-29",
+  "type": "feature",
+  "summary": "Large installations run steadily and updates always get through.",
+  "new": [
+    {
+      "title": "Risk Score parts as columns",
+      "text": "The parts of the Risk Score are now columns in the Detailed and Summary findings, shown by default. You can sort and filter by them."
+    },
+    {
+      "title": "Easier filtering and selection in findings",
+      "text": "The findings grids use the same filter panel as the CI list. Shift+click selects a range of rows; Ctrl+click adds one more."
+    },
+    {
+      "title": "See what a running step does",
+      "text": "Operations > Jobs shows job runs started outside the pipeline, and what a running step is doing now, with progress where the step counts it."
+    },
+    {
+      "title": "Install in one line",
+      "text": "The install takes the common answers as options, so the quickest install is one line. The install page and the README show five samples."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Updates always get through",
+      "text": "While an update waits, no new run starts, so it installs when the current run ends. After six hours it ends a run from an older version, installs, and the next run starts on the new one."
+    },
+    {
+      "title": "Large installs finish their data sync",
+      "text": "The data sync now works in bounded parts, and a sync that stops part-way is finished by the next. Brief database failures are retried for up to nine minutes."
+    },
+    {
+      "title": "Runs no longer hang on an ended step",
+      "text": "A step whose job ended on its own is now closed, so the run goes on. Cancelling a run now works while it is active."
+    },
+    {
+      "title": "Run reports reach Invardia again",
+      "text": "Collection run reports reach Invardia again, and each lists the steps that succeeded, so a solved problem closes by itself. Very slow steps are named."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Asset pages no longer warn of old data during a refresh, a sharp drop in assets from one source no longer sends a mail, and ServiceNow import problems show on the Guards page again."
+    }
+  ]
+}

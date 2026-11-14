@@ -1,0 +1,21 @@
+{
+  "version": "3.0.48",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "Updates never stop a running pipeline, and identity reads are faster at large tenants.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Updates never cancel a running pipeline",
+      "text": "An update now waits for a run to end and installs between two runs. An update never stops a running pipeline."
+    },
+    {
+      "title": "Private installs get more time to build",
+      "text": "An update now waits up to 90 minutes for its build, since a private installation builds inside its own network."
+    },
+    {
+      "title": "Faster identity reads at large tenants",
+      "text": "With the setting to skip inactive never-synced on-premises accounts on, those accounts are no longer read at all. The log says how many were skipped."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": "3.0.40",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Inherited Azure tags now appear in every collection mode, and installs run more smoothly.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Inherited Azure tags in every collection mode",
+      "text": "Azure records collected in parts, as larger installations do, now carry the tags they inherit from resource group, subscription and management groups. The log says how many were read."
+    },
+    {
+      "title": "New installs no longer wait for sign-in keys",
+      "text": "The install now creates the web app's sign-in key in your secure key store and grants its use itself. If you may not assign roles, the grant is listed as a task."
+    }
+  ]
+}

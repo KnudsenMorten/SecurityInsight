@@ -1,0 +1,30 @@
+{
+  "version": "3.0.1",
+  "date": "2026-10-28",
+  "type": "feature",
+  "summary": "The Community edition now includes more of SecurityInsight, and its updates are checked before they install.",
+  "new": [
+    {
+      "title": "More features in the Community edition",
+      "text": "Cross-engine correlation and full asset properties are now part of the Community edition. Asset tagging, verification and data health are in both editions."
+    },
+    {
+      "title": "Checked updates for the Community edition",
+      "text": "A Community install updates from the SecurityInsight update channel. Every release is verified before anything is installed."
+    },
+    {
+      "title": "Smaller improvements",
+      "text": "The Community edition shows its own logo in the web app, and version numbers are short."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Updates never overlap",
+      "text": "An update never overlaps another one that is still running, and a running update keeps reporting its stage, so it never looks hung."
+    },
+    {
+      "title": "Failed data sync parts are reported",
+      "text": "When part of the data sync fails, for example because the database is full, the run reports it as failed instead of finishing as if all was well."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "version": "3.0.81",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "Large installations finish their runs reliably and are ready for the next one.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Large runs finish instead of being stopped",
+      "text": "At the end of a run on a large installation, the pages now catch up in steps that report progress, so they always reach the new data."
+    },
+    {
+      "title": "Waiting updates install right after a run",
+      "text": "An update that waits for a run is now installed right after the run ends, before any other run starts."
+    },
+    {
+      "title": "The next run is no longer held back",
+      "text": "A run that ended while its runner was stopped is now closed at once."
+    }
+  ]
+}

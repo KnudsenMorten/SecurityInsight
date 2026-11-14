@@ -1,0 +1,17 @@
+{
+  "version": "3.0.56",
+  "date": "2026-11-06",
+  "type": "fix-only",
+  "summary": "One moved asset no longer holds back closing your vulnerabilities.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "One unclear finding no longer blocks every close",
+      "text": "When an asset moved to another CI, one unclear finding stopped every close in the run. Now only the CIs concerned are held, and the run's warning names them."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Database setup can now run during a pipeline run. Moving to new identity names now checks the moved rights completely."
+    }
+  ]
+}

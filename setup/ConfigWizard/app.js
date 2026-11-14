@@ -38,8 +38,28 @@ const PAGES = [
 
 const STORAGE_KEY = 'si.v22.wizard.state.v1';
 
+// SENSITIVE ANSWERS -- passwords and API keys are kept in memory for this page session only and are NEVER written
+// to browser storage. EVERY <input type="password" data-key> is sensitive automatically (a new password field
+// cannot be forgotten); SENSITIVE_KEYS names the known ones so storage written before the page is parsed is
+// cleaned too. saveState() strips them before it writes; loadState() removes any an earlier version stored.
+const SENSITIVE_KEYS = ['smtpPassword', 'openAiApiKey', 'shodanApiKey'];
+function sensitiveKeys() {
+  const keys = new Set(SENSITIVE_KEYS);
+  try {
+    document.querySelectorAll('input[type="password"][data-key]').forEach(i => { if (i.dataset.key) keys.add(i.dataset.key); });
+  } catch (e) { /* no DOM -- the known list still applies */ }
+  return keys;
+}
+// A copy of the state to persist: the same answers without one sensitive value.
+function stateForStorage(st) {
+  const copy = Object.assign({}, st);
+  copy.data = Object.assign({}, (st && st.data) || {});
+  sensitiveKeys().forEach(k => { delete copy.data[k]; });
+  return copy;
+}
+
 // ---------------------------------------------------------------------------
-// STATE -- single source of truth, mirrored to localStorage on every change.
+// STATE -- single source of truth, mirrored to localStorage on every change (sensitive answers excluded).
 // ---------------------------------------------------------------------------
 const state = {
   currentPage: 'welcome',
@@ -69,6 +89,16 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.data && typeof parsed.data === 'object') {
+      // A sensitive value an earlier version stored is removed from storage and is not restored: the field
+      // shows empty and the wizard asks for it again.
+      const keys = sensitiveKeys();
+      if (Object.keys(parsed.data).some(k => keys.has(k))) {
+        keys.forEach(k => { delete parsed.data[k]; });
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); }
+        catch (e) { try { localStorage.removeItem(STORAGE_KEY); } catch (e2) { /* nothing more to do */ } }
+      }
+    }
     if (parsed && typeof parsed === 'object') {
       Object.assign(state, parsed);
       // Ensure required nested objects exist after restore
@@ -105,7 +135,7 @@ function loadState() {
   }
 }
 function saveState() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForStorage(state))); }
   catch (e) { console.warn('Wizard: localStorage save failed --', e); }
 }
 
@@ -1229,6 +1259,12 @@ function validateApplyPayload(st) {
     if (st.spn && st.spn.credKind === 'Secret' && st.spn.credStorage === 'KeyVault' && !st.spn.keyVaultName) {
         problems.push('Step 1: Key Vault name is required when secret + KeyVault storage is selected.');
     }
+    // Sensitive answers are not kept after the page is reloaded: a feature that needs one is never applied without it.
+    var d = state.data || {};
+    var again = ' Passwords and API keys are not saved by the wizard -- enter it again after the page is reloaded.';
+    if (d.smtpMode === 'auth' && !d.smtpPassword) problems.push('Step 3: SMTP password / API key is required for an authenticated relay.' + again);
+    if (d.openAiMode === 'enabled' && d.openAiResMode !== 'createNew' && !d.openAiApiKey) problems.push('Step 5: Azure OpenAI API key is required.' + again);
+    if (d.shodanMode === 'enabled' && !d.shodanApiKey) problems.push('Step 6: Shodan API key is required.' + again);
     return problems;
 }
 

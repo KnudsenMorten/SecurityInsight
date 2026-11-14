@@ -366,6 +366,31 @@ function Invoke-SIUpdaterKeyVaultPurgeStep {
     } catch { Write-UpdLog ('WARNING: Key Vault purge protection: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
 }
 
+function Invoke-SIUpdaterWebJobRightsStep {
+    <#
+        SECURE-WEB-1 (framework 12.11f, Invardia 2026-11-14): the internet-facing identities (every identity of the install's
+        container apps: the web app with its sign-in front, the MCP app) hold NO job, owner / contributor, role-assignment,
+        registry-push or vault-admin right. On every update run (both editions, also in an apply-settings run: it is a security
+        rule, not a code change) any such assignment at the resource group or below is removed and READ BACK
+        (setup\_shared\SI-WebJobRights.ps1, Invoke-SIWebJobRightsConverge). One above the resource group is a support step.
+        NEVER throws, never fails or holds the update; a removal that did not read back is a failure Invardia hears
+        (step 'web-rights'). Seams (tests): -Arm { param($Method, $Path, $ApiVersion) }, -Lib, -Sleep. Returns the result or $null.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep)
+    try {
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-WebJobRights.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { Write-UpdLog 'WARNING: internet-facing identities: not checked (the rights library is missing from this release)'; return $null }
+        # dot-sourced and called HERE, in this scope (never from a .GetNewClosure() block: see Invoke-SIUpdaterSupportQueue)
+        . $file
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, [string]$ApiVersion) Invoke-SIUpdaterArm -Method $Method -Path $Path -ApiVersion $ApiVersion -AllowNotFound:($Method -eq 'GET') } }
+        $r = if ($Sleep) { Invoke-SIWebJobRightsConverge -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Sleep $Sleep } else { Invoke-SIWebJobRightsConverge -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup }
+        foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l -match 'NOT removed|NOT CHECKED|support step') { 'WARNING: ' + $l } else { $l }) }
+        foreach ($f in @($r.Failed)) { Add-SIUpdaterFailureIf 'web-rights' ('the internet-facing identity {0} still holds "{1}" on {2}' -f $f.Identity, $f.Role, $f.Scope) }
+        foreach ($f in @($(if ($r.PSObject.Properties['Shared']) { $r.Shared }))) { Add-SIUpdaterFailureIf 'web-rights' ('the identity {0} is shared by the internet-facing app {1} and the job(s) {2} and holds "{3}" on {4} -- detach it from the app' -f $f.Identity, $f.App, $f.Jobs, $f.Role, $f.Scope) }
+        $r
+    } catch { Write-UpdLog ('WARNING: internet-facing identities: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
 function Invoke-SIUpdaterIdentityNamesStep {
     <#
         #1145 THE IDENTITY NAMES (framework §5.5): the release's setup\_shared\SI-IdentityNamesStep.ps1 with this run's seams --
@@ -765,7 +790,7 @@ function ConvertTo-SIUpdaterPipelineScheduleValue {
 
 function Save-SIUpdaterInstallStateValue {
     <# One cfg.InstallState row (-Name, -Value) written by the updater. Never throws: $true written, $false not. #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState', 'ImagePrune', 'SignInAppOwner', 'WebAppName')][string]$Name, [AllowEmptyString()][string]$Value)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][ValidateSet('PipelineSchedule', 'SecretHandover', 'EngineFingerprint', 'CommunityUpdateState', 'UpdateState', 'ImagePrune', 'ImageOnlyUpdate', 'ImageOnlyPrunePending', 'SignInAppOwner', 'WebAppName')][string]$Name, [AllowEmptyString()][string]$Value)
     if (-not "$Value".Trim()) { return $false }
     $sql = @'
 IF OBJECT_ID('cfg.InstallState') IS NOT NULL
@@ -1349,6 +1374,9 @@ function Invoke-SIUpdaterCore {
         # (setup\_shared\SI-IdentityNamesStep.ps1). PLAN unless the install's IdentityMoveMode says apply; never fails the run
         $null = Invoke-SIUpdaterIdentityNamesStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg -TenantId $tenant -Auth $auth
     }
+    # SECURE-WEB-1: the internet-facing identities lose any job / owner / contributor / role-assignment right, read back --
+    # on EVERY run, before anything else may return (an apply-settings run included). Never fails or holds the update.
+    $null = Invoke-SIUpdaterWebJobRightsStep -SubscriptionId $sub -ResourceGroup $rg
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'
@@ -1357,6 +1385,13 @@ function Invoke-SIUpdaterCore {
     # #1151 (6) SEC-03: the install's Key Vault to purge protection ON (both editions; read, PATCH only when off, read back with
     # retries; one-way, said). Never fails or holds the update.
     $null = Invoke-SIUpdaterKeyVaultPurgeStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg
+    # framework SEC-LANE-1 (owner 2026-11-14 "things must work automatically"): the image clean-up switch set off by hand on
+    # this job is taken away by the updater itself once it runs 3.1.14+ (read back; one line) -- never by hand again
+    if (Get-Command -Name Invoke-SIUpdaterPruneSwitchClear -ErrorAction SilentlyContinue) {
+        $global:SI_UpdaterStep = 'settings'
+        $updVer = ''; if ($siAutoRoot) { try { $updVer = ([IO.File]::ReadAllText([IO.Path]::Combine($siAutoRoot, 'VERSION'))).Trim() } catch { $updVer = '' } }
+        $null = Invoke-SIUpdaterPruneSwitchClear -Env $Env -SubscriptionId $sub -ResourceGroup $rg -JobName (Get-SIUpdaterInstallName -Role updater -Env $Env) -Version $updVer
+    }
     # the same steps for every install from here (PRO-COMMUNITY-SAME): the licence ask, the endpoints, the update
     $switches = Get-SIUpdaterAutoSwitches -Env $Env -Store $proStore -StoreFailed:([bool]$proStoreError) -StoreError $proStoreError
     # Licence requests (#239): ask Invardia for this install's licence, install the approved file. Never fails the run.

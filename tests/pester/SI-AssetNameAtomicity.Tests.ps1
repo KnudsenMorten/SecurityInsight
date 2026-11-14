@@ -189,8 +189,11 @@ Describe 'mail attachment size guard -- an oversized workbook must not take the 
         # the Pro protection mail never skips the mail either: it is sent now unless it was KEPT in the outbox (the data sync
         # sends it, with the same body and the size-guarded attachments), and a mail that could not be kept is sent now
         $src | Should -Match '\$__sendNow = \$true'
-        @([regex]::Matches($src, '\$__sendNow = \$false')).Count | Should -Be 1 -Because 'only a mail that was kept is not sent now'
-        $src.IndexOf('$__mid = Add-SIRaMailOutbox') | Should -BeLessThan $src.IndexOf('$__sendNow = $false')
+        # only a mail that was kept is not sent now -- or one its send record says is not this run's to send (already sent or
+        # kept by an earlier run of the same step, or the record could not be read: never a second copy)
+        @([regex]::Matches($src, '\$__sendNow = \$false')).Count | Should -Be 2 -Because 'a kept mail, and a mail the send record holds back'
+        $src | Should -Match 'if \(-not \$__mailRec\.Send\) \{ \$__sendNow = \$false \}'
+        $src.IndexOf('$__mid = Add-SIRaMailOutbox') | Should -BeLessThan $src.LastIndexOf('$__sendNow = $false')
         $src | Should -Match '-AttachmentPath \$\(if \(@\(\$attachments\)\.Count\)'
         $src | Should -Match 'if \(\$__sendNow\) \{\s*\r?\n[^\r\n]*\r?\n\s*\$__mailRes = Send-SIMail [^\r\n]*-Attachments \$attachments'
     }

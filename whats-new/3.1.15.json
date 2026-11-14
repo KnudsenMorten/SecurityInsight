@@ -1,0 +1,21 @@
+{
+  "version": "3.1.15",
+  "date": "2026-11-13",
+  "type": "fix-only",
+  "summary": "Nothing is sent to your other systems from a run that did not finish every step.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Incomplete runs send nothing out",
+      "text": "When a step that a collection is built on fails, nothing is sent to ServiceNow or the workbooks. What they have stays, and the next complete run sends what changed."
+    },
+    {
+      "title": "Restarted runs are judged correctly",
+      "text": "When a run is started again from a later step, a failure earlier in that run still holds the collection back."
+    },
+    {
+      "title": "Switched-off steps never hold data back",
+      "text": "A step you switched off, or a step that Risk Analysis does not read, never holds a collection back."
+    }
+  ]
+}

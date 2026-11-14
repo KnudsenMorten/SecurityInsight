@@ -1,0 +1,13 @@
+{
+  "version": "3.0.42",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Every change of this version reaches you with 3.0.43.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Included in 3.0.43",
+      "text": "This version was not released to every installation. Every change in it is part of 3.0.43."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": "3.0.31",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "A private installation builds and keeps its updates inside your network.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Private installs build updates inside your network",
+      "text": "On a private installation, updates are built and kept inside your network. Your network team gets the details it needs."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Resuming an install downloads the right release, and the install shows the version it installs."
+    }
+  ]
+}

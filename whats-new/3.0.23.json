@@ -1,0 +1,17 @@
+{
+  "version": "3.0.23",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "The install now completes in a fresh subscription.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Install goes on in a new subscription",
+      "text": "In a subscription never used for SecurityInsight's kind of jobs, the install no longer stops at the capacity check. Capacity is checked when the environment is created."
+    },
+    {
+      "title": "A second install run signs you in",
+      "text": "Running the install again in the same window signs you in again instead of stopping at the subscription check."
+    }
+  ]
+}

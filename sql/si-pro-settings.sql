@@ -2194,6 +2194,34 @@ ALTER TABLE cfg.ReportMail ADD AttachmentName NVARCHAR(200) NULL;
 IF COL_LENGTH('cfg.ReportMail', 'AttachmentBytes') IS NULL
 ALTER TABLE cfg.ReportMail ADD AttachmentBytes VARBINARY(MAX) NULL;
 
+-- TWO SENDERS NEVER TAKE THE SAME QUEUED MAIL (added 2026-11-13): the mail job CLAIMS a queued row before it sends it (one
+-- UPDATE that sets ClaimedAt / ClaimedBy only while the row is not sent and nobody holds it) and releases it when the mail
+-- was not sent (engine\_shared\data-sql\SI-MailSendRecord.ps1). Additive: nullable, no default; without them the job sends
+-- as before.
+IF COL_LENGTH('cfg.ExemptionMail', 'ClaimedAt') IS NULL
+ALTER TABLE cfg.ExemptionMail ADD ClaimedAt DATETIME2(3) NULL;
+
+IF COL_LENGTH('cfg.ExemptionMail', 'ClaimedBy') IS NULL
+ALTER TABLE cfg.ExemptionMail ADD ClaimedBy NVARCHAR(200) NULL;
+
+IF COL_LENGTH('cfg.SignInMail', 'ClaimedAt') IS NULL
+ALTER TABLE cfg.SignInMail ADD ClaimedAt DATETIME2(3) NULL;
+
+IF COL_LENGTH('cfg.SignInMail', 'ClaimedBy') IS NULL
+ALTER TABLE cfg.SignInMail ADD ClaimedBy NVARCHAR(200) NULL;
+
+IF COL_LENGTH('cfg.ReportMail', 'ClaimedAt') IS NULL
+ALTER TABLE cfg.ReportMail ADD ClaimedAt DATETIME2(3) NULL;
+
+IF COL_LENGTH('cfg.ReportMail', 'ClaimedBy') IS NULL
+ALTER TABLE cfg.ReportMail ADD ClaimedBy NVARCHAR(200) NULL;
+
+IF COL_LENGTH('cfg.GovernanceMail', 'ClaimedAt') IS NULL
+ALTER TABLE cfg.GovernanceMail ADD ClaimedAt DATETIME2(3) NULL;
+
+IF COL_LENGTH('cfg.GovernanceMail', 'ClaimedBy') IS NULL
+ALTER TABLE cfg.GovernanceMail ADD ClaimedBy NVARCHAR(200) NULL;
+
 -- THE WEB APP'S SIGN-IN KEY RING (#345): the ASP.NET data-protection keys that encrypt the sign-in cookie and every form's
 -- antiforgery token, shared by every revision and replica of the web app (Auth\SqlKeyRing.cs). On the container's disk a
 -- new revision had new keys, so a deploy signed every open page out and refused its next save. One row per key, written

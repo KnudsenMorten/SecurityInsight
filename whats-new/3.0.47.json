@@ -1,0 +1,17 @@
+{
+  "version": "3.0.47",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "A new installation's first Risk Analysis no longer waits for hours.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "First collection starts Risk Analysis at once",
+      "text": "On a new installation's first collection, Risk Analysis used to wait hours for the asset build at a large tenant. It now starts at once."
+    },
+    {
+      "title": "Support status shows where access is set up",
+      "text": "The support status shows which databases have support access set up."
+    }
+  ]
+}

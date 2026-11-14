@@ -1,0 +1,21 @@
+{
+  "version": "3.0.21",
+  "date": "2026-11-03",
+  "type": "feature",
+  "summary": "You can install SecurityInsight unattended with one command, and resume it if it stops.",
+  "new": [
+    {
+      "title": "Install with one command",
+      "text": "Every setting of the guided install is now an option on one command, so the install runs unattended and reports each step. Only the tenant and subscription are required."
+    },
+    {
+      "title": "Install before you have a licence",
+      "text": "The install deploys the whole environment without a licence and runs nothing paid until one is assigned. It then takes its licence by itself."
+    },
+    {
+      "title": "Continue a stopped install",
+      "text": "If an install stops, you continue it with the same command and the Resume option."
+    }
+  ],
+  "fixes": []
+}

@@ -1,0 +1,21 @@
+{
+  "version": "3.0.39",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Collections no longer run a second time each day outside your pipeline.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "No extra daily collection outside the pipeline",
+      "text": "Endpoint, Identity and Azure collections no longer run a second time a day on their own timer. Installations that run jobs on their own schedules keep their timers."
+    },
+    {
+      "title": "Jobs page shows collections as pipeline steps",
+      "text": "The Jobs page shows these three collections as pipeline steps again, and saving the pipeline keeps them."
+    },
+    {
+      "title": "Collections outside the pipeline are reported",
+      "text": "A daily check now warns about any collection that did not run inside the pipeline and was not started by a person."
+    }
+  ]
+}

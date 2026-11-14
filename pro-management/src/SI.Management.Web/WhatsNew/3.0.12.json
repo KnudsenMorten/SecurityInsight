@@ -1,0 +1,22 @@
+{
+  "version": "3.0.12",
+  "date": "2026-11-01",
+  "type": "security",
+  "summary": "This version strengthens SecurityInsight's security.",
+  "new": [
+    {
+      "title": "AI summaries through your own gateway",
+      "text": "AI summaries use your Azure OpenAI service, directly or through an Azure API Management gateway in front of it."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Security strengthened",
+      "text": "Everyone signs in once more after the update."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Error messages on pages say what you can do."
+    }
+  ]
+}

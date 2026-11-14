@@ -215,7 +215,7 @@ function Get-SIUpgradeNoticeLines {
     } else {
         $l.Add(' - A dry run is now asked for per run (the -WhatIfMode switch); WhatIfMode in a configuration file no longer changes scheduled runs.')
     }
-    $l.Add(' - The full list is in RELEASENOTES.md, section "Upgrading from 2.2.x". This notice is shown once.')
+    $l.Add(' - SecurityInsight 3 is installed beside 2.2, not over it. The page "SecurityInsight 3 beside 2.2" in the SecurityInsight documentation explains how. This notice is shown once.')
     return @($l.ToArray())
 }
 

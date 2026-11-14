@@ -1,0 +1,18 @@
+{
+  "version": "3.0.41",
+  "date": "2026-11-04",
+  "type": "feature",
+  "summary": "Large installations can get a clean fresh start, and a private installation gets a private AI account.",
+  "new": [
+    {
+      "title": "One-time fresh start for large installations",
+      "text": "On your request, a one-time cut-off can be set so older records no longer build CIs. CIs built only from them retire with that reason, and nothing is deleted."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Private AI account on private installs",
+      "text": "On a private installation the optional AI account is private, or AI stays off and setup says why."
+    }
+  ]
+}

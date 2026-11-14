@@ -1,0 +1,26 @@
+{
+  "version": "3.0.59",
+  "date": "2026-11-07",
+  "type": "feature",
+  "summary": "Settings you never changed now always work with their defaults.",
+  "new": [
+    {
+      "title": "Fresh start of your data on request",
+      "text": "On your request, your data can start fresh, keeping settings, templates, audit trail, users and roles. A plan is shown first and the result is checked."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Unchanged settings now use their defaults",
+      "text": "A few settings you never stored had no value when a job started. They now always take their shipped default."
+    },
+    {
+      "title": "Unwanted accounts and groups are now left out",
+      "text": "Two identity settings on by default are now applied: on the first run, inactive never-synced Active Directory accounts and groups Entra ID no longer has are retired. To keep them, turn the setting off."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "An output's progress line now says rows to read when it estimates from the data, and privilege tiers are worked out again once. Updates name the script to run for web app sign-in assignment."
+    }
+  ]
+}

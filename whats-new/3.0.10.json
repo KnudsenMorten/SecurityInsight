@@ -1,0 +1,30 @@
+{
+  "version": "3.0.10",
+  "date": "2026-10-31",
+  "type": "feature",
+  "summary": "Your run figures are back, and the ServiceNow hand-off is prepared from every run.",
+  "new": [
+    {
+      "title": "Build a presentation from the Executive report",
+      "text": "A wizard builds a PowerPoint presentation from the Executive report. The monthly management pack is attached to the management summary mail."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Finding counts are back",
+      "text": "What was new, seen again, reopened and closed shows again in the log, the run record and the mail, so every close is counted."
+    },
+    {
+      "title": "ServiceNow hand-off prepared from every run",
+      "text": "The configuration items for ServiceNow are prepared from every run. The check before each send no longer needs ServiceNow's table list; without it only the column check is left out, with a warning."
+    },
+    {
+      "title": "Clearer ServiceNow messages and setup list",
+      "text": "A refusal says what ServiceNow said. The page for your ServiceNow team lists the user, every role, the table settings and every call SecurityInsight makes."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "A step whose job stops before it begins is started again once, and the column fill check no longer reports blank columns that are not blank."
+    }
+  ]
+}

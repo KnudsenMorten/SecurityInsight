@@ -110,13 +110,9 @@ if ($Rollback.Trim()) {
                     @{ Ok = $okAll; Line = ($lines -join '; ') }
                 }
                 'web-jobs-contributor-off' {
-                    $lines = New-Object System.Collections.Generic.List[string]; $okAll = $true
-                    foreach ($c in @($b.removed)) {
-                        $path = '{0}?api-version=2022-04-01' -f [string]$c.id
-                        $null = & $A 'PUT' $path (Get-SIRoleAssignmentPutBody -RoleDefinitionId ([string]$c.roleDefinitionId) -PrincipalId ([string]$c.principalId))
-                        $ok = [bool](& $A 'GET' $path $null); $lines.Add(('Container Apps Jobs Contributor on {0}: {1}' -f (([string]$c.scope) -split '/')[-1], $(if ($ok) { 'back (read back)' } else { 'NOT back' }))); if (-not $ok) { $okAll = $false }
-                    }
-                    @{ Ok = $okAll; Line = ($lines -join '; ') }
+                    # SECURE-WEB-1 (framework 12.11f, Invardia 2026-11-14): the web app is internet-facing; a rollback NEVER gives its
+                    # identity a job right again. The step is reported as kept off, nothing is written.
+                    @{ Ok = $true; Line = ('Container Apps Jobs Contributor stays OFF for the web app ({0} assignment(s) not put back): an internet-facing identity holds no job right (SECURE-WEB-1)' -f @($b.removed).Count) }
                 }
                 default { @{ Ok = $false; Line = 'not a step of this script' } }
             }

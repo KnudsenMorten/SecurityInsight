@@ -1,0 +1,17 @@
+{
+  "version": "3.0.19",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "Your database stays lean at busy installs, and jobs keep enough power for your tenant.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Old collections cleaned up during runs",
+      "text": "At installs with back-to-back runs, older data is now removed while a run is going. It waits when the database is busy and never slows a run or a ServiceNow send."
+    },
+    {
+      "title": "Every update checks job sizes",
+      "text": "Each update now checks the processing power and memory of the jobs and the web app, and raises any that is too small for your tenant."
+    }
+  ]
+}

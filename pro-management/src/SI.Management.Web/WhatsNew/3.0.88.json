@@ -1,0 +1,21 @@
+{
+  "version": "3.0.88",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "Old data is removed steadily without slowing the web app.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Old data is removed without slowing you",
+      "text": "Old data is now removed almost continuously while nothing else runs, as fast as the database allows and slower when it is busy. The web app stays responsive."
+    },
+    {
+      "title": "A growing backlog is never unseen",
+      "text": "When the removal would not finish before the next run, it speeds up. If it still cannot keep up, it says so and support is told."
+    },
+    {
+      "title": "The data sync always goes first",
+      "text": "While the data sync or sending data out runs, nothing is removed."
+    }
+  ]
+}

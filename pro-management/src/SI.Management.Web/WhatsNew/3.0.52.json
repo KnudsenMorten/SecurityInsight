@@ -1,0 +1,21 @@
+{
+  "version": "3.0.52",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "Pages stay fast after every run.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Pages stay fast after every run",
+      "text": "At the end of every run, SecurityInsight prepares the database for fast pages, so pages never wait while you look. If this cannot run, the run still completes."
+    },
+    {
+      "title": "Device close-loop list opens quickly",
+      "text": "A device's close-loop list now reads only that device's findings. It could take more than a minute before."
+    },
+    {
+      "title": "New installations keep pages from waiting",
+      "text": "New installations keep the database prepared in the background, so reading a page never waits."
+    }
+  ]
+}

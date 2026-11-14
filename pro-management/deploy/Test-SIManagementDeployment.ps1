@@ -9,7 +9,7 @@
 .DESCRIPTION
     -Apply: builds the probe image (deploy\probe) in the registry, creates a one-off MANUAL Container Apps job in the
     same environment on the WEB app's managed identity, starts it, prints its console result, and deletes the job
-    (-KeepJob keeps it). The probe checks:
+    and its probe image (-KeepJob keeps both). The probe checks:
       * /healthz of both apps returns "ok";
       * an unauthenticated page request redirects to Entra sign-in for this app and this host; a static asset too;
       * the MCP endpoint returns 401 without a token and with a malformed one;
@@ -174,6 +174,11 @@ if ($Apply) {
         else {
             Write-Call 'DELETE' $jobPath
             try { $null = Invoke-SIArm -Method DELETE -Path $jobPath -ApiVersion $appApi -AllowNotFound } catch { Write-Warning ('The probe job {0} could not be deleted: {1}' -f $JobName, $_.Exception.Message) }
+            # the probe's own image goes too, AFTER its job (Invardia's image scan 2026-11-14: a probe image left behind carried
+            # critical findings); a delete that fails is one warning, never a failure of the proof (-KeepJob keeps both)
+            Write-Call 'DELETE' ('https://{0}/v2/{1}  (the probe image)' -f $registry.loginServer, $image)
+            $rm = Remove-SIManagementProbeImage -LoginServer ([string]$registry.loginServer) -Image $image
+            if ($rm.Ok) { Write-Host ('  the probe image: {0}' -f $rm.Why) } else { Write-Warning ('The probe image {0} could not be deleted: {1}' -f $image, $rm.Why) }
         }
     }
 }

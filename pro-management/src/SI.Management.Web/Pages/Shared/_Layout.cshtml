@@ -63,6 +63,8 @@
     bool ItemShown(NavItem item) => Shown(item.Need) && (isPro || SI.Management.Web.Licensing.ProFeatures.FirstOpenPage(item, OpenTo) is not null);
     string ItemPage(NavItem item) => isPro ? item.Page : (SI.Management.Web.Licensing.ProFeatures.FirstOpenPage(item, OpenTo) ?? item.Page);
     bool MayOpen(string? page) => page is not null && Licensed(page) && NavModel.Find(page) is { } openItem && Shown(openItem.Need) && (NavModel.TabOf(page) is not { } openTab || Shown(openTab.Need));
+    // WHATS-NEW-1: the newest release this web app ships a What's new for -- the "New" badge compares it with the last one opened
+    var whatsNewNewest = SI.Management.Web.Docs.WhatsNewLibrary.Shipped.Newest;
     var toast = TempData["toast"] as string;
     var toastKind = TempData["toastKind"] as string ?? "ok";
     var numberChoice = DisplayCulture.ChosenBy(Context);
@@ -291,6 +293,8 @@
                         <span>@g.Key</span>
                         @if (groupBlocking > 0) { <span class="badge attn" data-blocking-count="@g.Key" title="@groupBlockingTitle">@Fmt.Int(groupBlocking)</span> }
                         @if (g.Key == "Admin" && pending > 0) { <span class="badge warn">@Fmt.Int(pending)</span> }
+                        @* WHATS-NEW-1: the "New" badge on the group too, so it is seen without opening the menu (whats-new-badge.js) *@
+                        @if (g.Any(l => l.Page == NavModel.WhatsNewPage)) { <span class="badge attn" data-whatsnew-badge data-whatsnew-newest="@whatsNewNewest" data-whatsnew-product="@SI.Management.Web.Docs.WhatsNewLibrary.Product" title="What's new since you last looked" hidden>New</span> }
                         <span class="nav-caret" aria-hidden="true">▾</span>
                     </summary>
                     @* owner 2026-10-19: a group whose items carry a stage (Configuration: the pipeline's stage titles, then Platform)
@@ -316,7 +320,7 @@
                             foreach (var l in stage)
                             {
                                 var itemBlocking = blocking.CountFor(l);
-                                <li><a class="nav-group-item" href="@SI.Management.Web.Columns.ViewState.MenuHref(Url.Page(ItemPage(l)), ItemPage(l))" aria-current="@Cur(l.Page)">@l.Label@if (itemBlocking > 0) { <span class="badge attn" data-blocking-count="@l.Label" title="@blocking.TitleFor(l)">@Fmt.Int(itemBlocking)</span> }@if (l.Page == "/Changes/Index" && pending > 0) { <span class="badge warn">@Fmt.Int(pending)</span> }</a></li>
+                                <li><a class="nav-group-item" href="@SI.Management.Web.Columns.ViewState.MenuHref(Url.Page(ItemPage(l)), ItemPage(l))" aria-current="@Cur(l.Page)">@l.Label@if (itemBlocking > 0) { <span class="badge attn" data-blocking-count="@l.Label" title="@blocking.TitleFor(l)">@Fmt.Int(itemBlocking)</span> }@if (l.Page == "/Changes/Index" && pending > 0) { <span class="badge warn">@Fmt.Int(pending)</span> }@if (l.Page == NavModel.WhatsNewPage) { <span class="badge attn" data-whatsnew-badge data-whatsnew-newest="@whatsNewNewest" data-whatsnew-product="@SI.Management.Web.Docs.WhatsNewLibrary.Product" title="What's new since you last looked" hidden>New</span> }</a></li>
                             }
                         }
                     </ul>
@@ -456,6 +460,10 @@
         <script src="~/js/getstarted-badge.js" asp-append-version="true"></script>
     }
     <script type="module" src="~/js/app/main.js" asp-append-version="true"></script>
+    @if (User.Identity?.IsAuthenticated == true && !magic)
+    {
+        <script type="module" src="~/js/whats-new-badge.js" asp-append-version="true"></script>
+    }
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

@@ -1,0 +1,13 @@
+{
+  "version": "3.0.66",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "Updates no longer fail by mistake on a change that was in fact made.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Updates no longer fail a correct sign-in check",
+      "text": "Microsoft Entra can briefly report an old value after a change, so the update's check failed although the change was made. The update now checks again for about half a minute."
+    }
+  ]
+}

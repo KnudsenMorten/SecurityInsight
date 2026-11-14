@@ -1,0 +1,12 @@
+/* WHATS-NEW-1: SecurityInsight's theme for Invardia's What's new (wwwroot/lib/whatsnew/whats-new.css, unchanged) -- ONLY its
+   --wn-* custom properties, set from the app's own tokens (site.css), which already follow light / dark. The selector outranks
+   the shared file's dark-mode defaults, so the app's colours win in both themes. */
+:root [data-whatsnew] .wn.wn {
+  --wn-accent: var(--accent);
+  --wn-fg: var(--text-primary);
+  --wn-muted: var(--text-secondary);
+  --wn-line: var(--border);
+  --wn-surface: var(--surface-1);
+  --wn-radius: var(--radius);
+  --wn-font: inherit;
+}

@@ -113,7 +113,10 @@ function Test-SISqlConnectTransient {
           transient: SqlException 40 / 53 / 10060 / 10061 / 10065 / 11001 / 1225 / 121 / 4060 / 40613 / 40197 / 40501 /
                      49918-49920 / -2 / 258 / 233 / 64 / 10053 / 10054, and the texts "network-related or instance-specific",
                      "Could not open a connection to SQL Server", "error: 40" / "error: 26" / "error: 0" of a provider, "semaphore
-                     timeout", "connection attempt failed", "actively refused", "No such host is known", "server was not found".
+                     timeout", "connection attempt failed", "actively refused", "No such host is known", "server was not found",
+                     and a failed pre-login / TLS handshake ("an error occurred during the pre-login handshake", "SSL Provider,
+                     error: 31" -- live 2026-11-14, a large install's 5-minute wake-up: the connection reached the server, the
+                     TLS handshake at the gateway failed once, the wake-up stopped as settings-error; the next one read fine).
           never:     a refused sign-in (18456 -- a grant, not the network), a permission, a missing database by name.
         -ErrorRecord: an ErrorRecord, an exception (SqlException numbers and inner exceptions are read) or a text.
     #>
@@ -132,7 +135,7 @@ function Test-SISqlConnectTransient {
     # a refused sign-in is a grant, not the network (4060 "Cannot open database ... The login failed." IS the failover class)
     if ($nums -contains 18456 -or $t -match '(?i)Login failed for user|\b18456\b') { return $false }
     foreach ($n in $nums) { if ($codes -contains $n) { return $true } }
-    [bool]($t -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed|\b(40613|40197|40501|10060|10061|4060)\b')
+    [bool]($t -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|\(provider: SSL Provider, error: 31\b|error occurred during the pre-login handshake|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed|\b(40613|40197|40501|10060|10061|4060)\b')
 }
 
 function Get-SISqlConnectRetryWaits {
@@ -224,7 +227,7 @@ function Open-SISqlConnectionRetry {
                         $ex = $ex.InnerException
                     }
                 }
-                if (-not $transient) { $transient = [bool]($msgText -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed') }
+                if (-not $transient) { $transient = [bool]($msgText -match '(?i)network-related or instance-specific error|Could not open a connection to SQL Server|\(provider: [^,]+, error: (0|26|35|40)\b|\(provider: SSL Provider, error: 31\b|error occurred during the pre-login handshake|semaphore timeout|connection attempt failed|actively refused|No such host is known|server was not found or was not accessible|transport-level error|forcibly closed by the remote host|connection was forcibly closed') }
             }
             if ((-not $notYet -and -not $transient) -or $try -ge @($Waits).Count) { throw }
             $w = [int]@($Waits)[$try]; $try++

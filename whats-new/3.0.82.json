@@ -1,0 +1,21 @@
+{
+  "version": "3.0.82",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "Older installations finish moving to the current setup, and support access shows correctly.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Old collection jobs are removed",
+      "text": "An update now removes the old single collection jobs left after the collection was split, once the new jobs have run."
+    },
+    {
+      "title": "Support access is shown correctly",
+      "text": "An older installation now records which Invardia support app it trusts, so its support access shows correctly. Nothing about the app's access changes."
+    },
+    {
+      "title": "The web app keeps its name and address",
+      "text": "The update no longer reports the web app's name as something to move."
+    }
+  ]
+}

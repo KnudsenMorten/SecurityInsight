@@ -1,0 +1,25 @@
+{
+  "version": "3.0.20",
+  "date": "2026-11-03",
+  "type": "feature",
+  "summary": "Your Azure resources and ServiceNow records now show owner and purpose tags inherited from higher levels.",
+  "new": [
+    {
+      "title": "Resources inherit tags from their parents",
+      "text": "An Azure resource now also shows the tags of its resource group and subscription, marked with their origin. Its own tag wins, and untagged resources now get owner, application and purpose."
+    },
+    {
+      "title": "Tags sent to ServiceNow",
+      "text": "The ServiceNow hand-off offers three new columns: all tags, own tags and inherited tags. ServiceNow ignores them until your ServiceNow team adds them."
+    },
+    {
+      "title": "Tags in rules, reports and connectors",
+      "text": "Every tag of an asset, its own first and then the inherited ones, is now available as one field for rules, reports and connectors."
+    },
+    {
+      "title": "An easier CI page",
+      "text": "Tags show their values, field names stay on one line, you can resize small table columns, and the field sources table shows each value."
+    }
+  ],
+  "fixes": []
+}

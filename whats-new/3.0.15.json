@@ -1,0 +1,21 @@
+{
+  "version": "3.0.15",
+  "date": "2026-11-01",
+  "type": "fix-only",
+  "summary": "Your data reaches ServiceNow sooner, and the monthly review mail is sent again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "ServiceNow receives data sooner",
+      "text": "Sending to ServiceNow and your other systems now starts as soon as the newest findings are stored, without waiting for the rest. A resend takes minutes."
+    },
+    {
+      "title": "Monthly review mail is sent again",
+      "text": "The technical owners' monthly review mail is sent again. It stopped in the two previous versions."
+    },
+    {
+      "title": "Old data removed in the background",
+      "text": "Old collections are removed a little at a time while nothing else runs, with progress in the status. The newest two complete collections are always kept."
+    }
+  ]
+}

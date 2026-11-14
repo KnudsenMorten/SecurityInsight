@@ -1,0 +1,38 @@
+{
+  "version": "3.1.10",
+  "date": "2026-11-12",
+  "type": "feature",
+  "summary": "Devices used by privileged accounts are prioritised correctly, and every mail says where it comes from.",
+  "new": [
+    {
+      "title": "Devices take their most privileged user's tier",
+      "text": "When a Tier 0, 1 or 2 account signs in to a device, the device gets that tier. Devices of HR and finance accounts become Tier 2, so they are patched before Tier 3 devices."
+    },
+    {
+      "title": "Every mail names its environment",
+      "text": "The subject and first line of every mail start with the environment's kind and name, and the body names the tenant. You never mistake one installation's mail for another's."
+    },
+    {
+      "title": "Community and Pro work the same way",
+      "text": "Both editions now install, run and update the same way; only the licensed features differ. A setting is marked Pro only when it belongs to a licensed feature."
+    },
+    {
+      "title": "Community can connect to Invardia by choice",
+      "text": "The installer asks whether to connect a Community installation to Invardia for health reports and updates on request. Without a yes, it sends nothing that identifies your tenant or installation."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Health report shows the database upkeep is current",
+      "text": "The health report now shows that the database upkeep that keeps pages fast is current, with the time it last ran."
+    },
+    {
+      "title": "Long steps no longer look stalled",
+      "text": "A long step's progress is no longer lost when the clocks of two services differ by a few seconds."
+    },
+    {
+      "title": "Presentation files always save on Windows",
+      "text": "The management presentation's file name is now always one Windows can save, also when its title has characters such as a colon or a question mark."
+    }
+  ]
+}

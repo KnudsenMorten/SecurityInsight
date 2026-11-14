@@ -1,0 +1,18 @@
+{
+  "version": "3.0.35",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Azure records show their inherited tags, and installs no longer stop over outside permissions.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Azure records show inherited tags",
+      "text": "Every Azure record now carries the tags it inherits from its resource group, subscription and management groups, with where each comes from. The nearest level wins."
+    },
+    {
+      "title": "Outside permissions no longer stop installs",
+      "text": "When the installer may not set a permission outside SecurityInsight's resource group, the grant is listed as a task and the install continues.",
+      "action": "Have someone with the rights complete the permission tasks the installer lists."
+    }
+  ]
+}

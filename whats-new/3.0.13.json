@@ -1,0 +1,13 @@
+{
+  "version": "3.0.13",
+  "date": "2026-11-01",
+  "type": "security",
+  "summary": "This version strengthens SecurityInsight's security.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Security strengthened",
+      "text": "The web app and the AI assistant carry the security improvements of this release."
+    }
+  ]
+}

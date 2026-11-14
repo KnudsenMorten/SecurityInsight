@@ -1,0 +1,13 @@
+{
+  "version": "3.0.69",
+  "date": "2026-11-08",
+  "type": "security",
+  "summary": "Invardia support reaches your data during a support case you agree to.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Support access follows your consent",
+      "text": "Invardia support reaches your data during a support case you agree to, at the level you chose; access ends when the case closes."
+    }
+  ]
+}

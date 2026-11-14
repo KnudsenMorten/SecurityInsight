@@ -1,0 +1,23 @@
+{
+  "version": "3.0.45",
+  "date": "2026-11-05",
+  "type": "feature",
+  "summary": "SecurityInsight now sets up its own database access, so nobody needs database admin rights for updates.",
+  "new": [
+    {
+      "title": "SecurityInsight sets up its own database access",
+      "text": "A built-in setup job now creates and checks the database access the product needs. Every update runs it first; if it fails, your installed version keeps running.",
+      "action": "For an existing installation, add the database setup job's identity to your SQL admin group once."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Support level applies in every database",
+      "text": "The support level you set in the Invardia portal applies to all your SecurityInsight data."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Asset tagging gets its database access from the update, and two manual database scripts are no longer needed for Pro."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "version": "3.0.17",
+  "date": "2026-11-01",
+  "type": "feature",
+  "summary": "Sending to ServiceNow is much faster, and you can follow its progress.",
+  "new": [
+    {
+      "title": "Follow ServiceNow send progress",
+      "text": "While it sends, you see the phase, rows sent of rows planned, rows held and time left. A send without progress for 10 minutes says so."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Vulnerable items built three times faster",
+      "text": "Vulnerable items for ServiceNow are now built about three times faster. On large installs, the pass over closed findings takes hours less, with the same rows sent."
+    },
+    {
+      "title": "Refused sends are reported at once",
+      "text": "When ServiceNow refuses or holds a send, SecurityInsight says so at once and stops. Nothing is counted as sent that was not."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "The install always identifies itself to Invardia the same way, and shows its hand-off progress in its status."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version": "3.1.1",
+  "date": "2026-11-11",
+  "type": "fix-only",
+  "summary": "Cleaning up older data no longer slows your database.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Clean-up gives way to your database earlier",
+      "text": "The clean-up of older collections now pauses when the database reaches 70% load and goes on only below 50%. It still finishes before the next run."
+    }
+  ]
+}

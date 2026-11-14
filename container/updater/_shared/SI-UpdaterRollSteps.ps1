@@ -54,13 +54,16 @@ function Invoke-SIUpdaterInvardiaPreRoll {
         without the channel helpers (an older image) = Go with no environment. Never throws.
     #>
     param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$SubscriptionId,
-          [string]$UpdaterJob = 'caj-si-updater', [int]$WaitMinutes = 60, [string]$SIRoot = '')
+          [string]$UpdaterJob = 'caj-si-updater', [int]$WaitMinutes = 60, [string]$SIRoot = '',
+          # SEC-LANE-1: an image-only release never waits for running jobs -- only the manual-deploy mark is honoured
+          [switch]$NoQuietWait)
     if (-not (Get-Command -Name Get-SIUpdaterEnvironment -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Go = $true; Reason = ''; Environment = $null } }
     try {
         $envNow = Get-SIUpdaterEnvironment -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob $UpdaterJob
         $lock = Test-SIUpdaterDeployLock -Value $envNow.DeployLock
         if ($lock.Reason) { Write-UpdLog $lock.Reason }
         if ($lock.Locked) { return [pscustomobject]@{ Go = $false; Reason = $lock.Reason; Environment = $envNow } }
+        if ($NoQuietWait) { return [pscustomobject]@{ Go = $true; Reason = ''; Environment = $envNow } }
         $quiet = Get-SIUpdaterNeedsQuiet -SIRoot $SIRoot
         if ($quiet) {
             Write-UpdLog ("this release is installed only while no SecurityInsight job runs: {0}" -f $quiet)

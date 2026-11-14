@@ -1,0 +1,13 @@
+{
+  "version": "3.0.22",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "A Pro install from invardia.com now starts even before you have a licence.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Pro install starts without a licence",
+      "text": "The Pro install no longer stops at the tenant and subscription check. It deploys the whole environment and waits for your licence, as intended."
+    }
+  ]
+}

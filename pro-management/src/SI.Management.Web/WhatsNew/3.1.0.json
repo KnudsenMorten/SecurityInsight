@@ -1,0 +1,38 @@
+{
+  "version": "3.1.0",
+  "date": "2026-11-10",
+  "type": "feature",
+  "summary": "SecurityInsight 3.1 runs on a supported platform with data you can trust.",
+  "new": [
+    {
+      "title": "A supported, up-to-date platform",
+      "text": "Since 3.0.85, SecurityInsight runs on Microsoft's long-term supported platform, on Microsoft images that are kept up to date with security fixes."
+    },
+    {
+      "title": "The Invardia support link",
+      "text": "The part that sends health and run results to Invardia support is now called Invardia support link everywhere. One failed report never mails you; the Jobs page turns amber only after three in a row."
+    },
+    {
+      "title": "Every warning explained on invardia.com",
+      "text": "Each warning SecurityInsight shows has its own page on invardia.com: what it means and who acts."
+    },
+    {
+      "title": "One list of who gets which mail",
+      "text": "Configuration > Reports and alerts shows one row per person with a tick per report and alert. Get Started has a new step, Who gets the reports, with your current recipients filled in."
+    },
+    {
+      "title": "Smaller improvements",
+      "text": "The data sync never waits in silence, and overdue findings are counted everywhere. Also included: correlation decisions, deleted users, ServiceNow hand-off and management presentations."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Stuck steps open a support case",
+      "text": "A step that runs far past its usual time without progress opens a support case at once."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "A safety check that held nothing back no longer raises a warning. A source is reported as behind only when its schedule says it should have been read."
+    }
+  ]
+}

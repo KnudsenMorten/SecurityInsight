@@ -1,0 +1,21 @@
+{
+  "version": "3.0.78",
+  "date": "2026-11-09",
+  "type": "fix-only",
+  "summary": "A template change no longer holds up a whole update.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Code updates go ahead despite template changes",
+      "text": "When a release changes templates you use, the code update now goes ahead. Only the template change waits for an administrator to accept it on the Template releases page."
+    },
+    {
+      "title": "A failed database step retries itself",
+      "text": "If the database setup fails during an update, the update is still held, but the failure is reported and the next update tries again. Nobody has to act."
+    },
+    {
+      "title": "Updates behave the same everywhere",
+      "text": "Updates behave the same whatever protection level your installation's guards have."
+    }
+  ]
+}

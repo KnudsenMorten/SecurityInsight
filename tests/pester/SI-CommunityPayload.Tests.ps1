@@ -393,6 +393,12 @@ Describe 'no free file loads a Pro file' {
         foreach ($e in 'SI-Connector.ps1', 'SI-SnowImportSet.ps1', 'SI-ServiceNowClient.ps1', 'SI-SnowVerify.ps1') { $guarded += "engine\data-out\SI-DataOut.ps1|$e" }
         foreach ($e in 'SI-CmdbSqlSync.ps1') { $guarded += "tests\pester\SIv3-CmdbRuleOverride.Tests.ps1|$e" }
         foreach ($e in 'SI-CloseLoopMail.ps1', 'SI-ExemptionMail.ps1', 'Invoke-SICloseLoopMail.ps1') { $guarded += "tests\pester\SIv3-InvardiaPortalLink.Tests.ps1|$e" }
+        # 2026-11-13: the mail-goes-once suite loads the Pro close-loop and exemption mails only where Test-Path finds them,
+        # and skips their parts otherwise (a Community copy has neither file)
+        # 2026-11-13: the What's new ships suite loads the vendor's release payload rules only where Test-Path finds them
+        $guarded += 'tests\pester\SIv3-WhatsNewShips.Tests.ps1|SI-ReleasePayload.ps1'
+        $guarded += 'tests\pester\SIv3-MailSendOnce.Tests.ps1|asset-cmdb'
+        foreach ($e in 'SI-CloseLoopMail.ps1', 'SI-ExemptionMail.ps1', 'Invoke-SICloseLoopMail.ps1', 'SI-GovernanceMail.ps1') { $guarded += "tests\pester\SIv3-MailSendOnce.Tests.ps1|$e" }
         $guarded += 'tests\pester\SIv3-KqlError.Tests.ps1|Invoke-SIVulnLoop.ps1'
         # The four close-loop helpers the free data sync and the database setup load SHIP (engine\asset-cmdb\_shared\
         # SI-VulnDesired / SI-VulnRelease / SI-VulnTarget / SI-ReconcileGuards); their folder's name is still a Pro term

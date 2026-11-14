@@ -1,0 +1,17 @@
+{
+  "version": "3.0.79",
+  "date": "2026-11-09",
+  "type": "fix-only",
+  "summary": "A rebuilt server no longer shows old vulnerabilities from its replaced device record.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Replaced device records no longer count",
+      "text": "When Defender keeps an older record of a rebuilt server beside the new one, the old record's vulnerabilities no longer count. An update missing only on the old record no longer shows."
+    },
+    {
+      "title": "These findings never read as fixed",
+      "text": "Such findings close as report changed, with a plain reason, so your ticketing system never records a fix that was not confirmed."
+    }
+  ]
+}

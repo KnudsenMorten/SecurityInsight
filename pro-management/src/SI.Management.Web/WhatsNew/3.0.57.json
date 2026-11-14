@@ -1,0 +1,21 @@
+{
+  "version": "3.0.57",
+  "date": "2026-11-06",
+  "type": "fix-only",
+  "summary": "A stuck job no longer holds back your daily collection.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Stuck jobs no longer block the daily run",
+      "text": "SecurityInsight now stops its own jobs that show no sign of life for 15 to 30 minutes, so the waiting run starts. A job that is still working is never stopped."
+    },
+    {
+      "title": "Building the CI list survives a hiccup",
+      "text": "A temporary database answer while building the CI list is now retried, so a long build no longer has to start again."
+    },
+    {
+      "title": "No more warning about support requests",
+      "text": "The update again makes sure support requests can be delivered. The warning shown on every run for the last few days is gone."
+    }
+  ]
+}

@@ -698,6 +698,9 @@ ol.meta-snapshots tr[data-change="removed"] td:nth-child(2) { color: var(--bad, 
   border-radius: 999px; background: var(--critical); color: #fff; font-size: 11px; font-weight: 800; line-height: 1;
 }
 .gs-nav-badge[hidden] { display: none; }
+/* WHATS-NEW-1: the "New" badge on Help and on What's new is rendered hidden and shown by whats-new-badge.js; site.css's
+   `.badge { display: inline-block }` would otherwise beat the [hidden] attribute and show it for ever */
+.badge[data-whatsnew-badge][hidden] { display: none; }
 @media (max-width: 560px) {
   .gs-actions .button { flex: 1 1 45%; text-align: center; }
   .gs-actions .gs-recheck { margin-left: 0; }

@@ -1,0 +1,21 @@
+{
+  "version": "3.0.76",
+  "date": "2026-11-09",
+  "type": "fix-only",
+  "summary": "Your web app keeps its familiar address, and old bookmarks work again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "The web app keeps its address",
+      "text": "Every installation keeps its web app name and address. If it recently got a new address, it gets its earlier one back with the same settings and sign-in, checked before use."
+    },
+    {
+      "title": "Bookmarks work again at once",
+      "text": "The recent address keeps working for a few days and sends visitors to the earlier address. Installations that never changed address are not touched."
+    },
+    {
+      "title": "Support tools report their changes correctly",
+      "text": "A support tool now reports its changes correctly once they are made."
+    }
+  ]
+}

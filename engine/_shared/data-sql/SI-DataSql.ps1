@@ -3096,6 +3096,138 @@ function Remove-SIDataCollectionRows {
     [pscustomobject]@{ Rows = $rows; Done = $done; Refused = $refused; Stopped = (-not $done -and -not $refused); Paused = [bool]$why; StopWhy = $why }
 }
 
+# ------------------------------------------------------------------------------------------------------------------
+#  #1228 A COLLECTION'S OWN TRUST VERDICT GOES WITH ITS COLLECTION. sidata.CollectionTrust (one row per CollectionTime +
+#  Grain, written by Risk Analysis) was never removed. The retention READS it (Get-SIDataRetentionStateSql /
+#  Get-SIDataRetireTrustSql) and the data sync reads a collection's verdict by its time, so a verdict is removed only once
+#  nothing can ask for it: its collection is marked AND every row of it is gone. Separate statements -- the retire range /
+#  batch / mark statements are left as they are.
+# ------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDataCollectionTrustRemoveSql {
+    <#
+        The verdict of ONE collection whose removal FINISHED (Invoke-SIDataCollectionRetention, at the point it says "its
+        findings are removed"; after its other rows, so a removal that stopped part way keeps the verdict that explains the
+        mark). The database itself refuses -- answers 0 -- unless the collection (@CollectionId for Detailed, @CollectionTime
+        for Summary) is MARKED, has NO rows left (Detailed: findings and recommendations; Summary: its rows and assets), is
+        not the published run's, and (Detailed) is not one a collection that is still kept carries rows from; and unless no
+        OTHER collection of the same grain and time is still present (not marked, or marked with rows left). Answers the
+        rows removed (0 or 1).
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Grain -eq 'Summary') {
+        return @'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL OR OBJECT_ID('sidata.SummaryLoad') IS NULL OR COL_LENGTH('sidata.SummaryLoad', 'RetiredAt') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+DECLARE @ok int = 0;
+EXEC sp_executesql N'SELECT @o = CASE WHEN EXISTS (SELECT 1 FROM sidata.SummaryLoad WHERE CollectionTime = @t AND RetiredAt IS NOT NULL)
+                                       AND NOT EXISTS (SELECT 1 FROM sidata.SummaryLoad WHERE CollectionTime = @t AND RetiredAt IS NULL) THEN 1 ELSE 0 END', N'@t datetime2(3), @o int OUTPUT', @t = @t, @o = @ok OUTPUT;
+IF @ok = 0 BEGIN SELECT 0; RETURN; END
+IF OBJECT_ID('sidata.SummaryRow') IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.SummaryRow WHERE CollectionTime = @t) BEGIN SELECT 0; RETURN; END
+IF OBJECT_ID('sidata.SummaryAsset') IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.SummaryAsset WHERE CollectionTime = @t) BEGIN SELECT 0; RETURN; END
+IF OBJECT_ID('sidata.PublishedRun') IS NOT NULL
+BEGIN
+    DECLARE @pub int = 0;
+    EXEC sp_executesql N'SELECT @p = COUNT(*) FROM sidata.PublishedRun WHERE Name = N''current'' AND SummaryCollectionTime = @t', N'@t datetime2(3), @p int OUTPUT', @t = @t, @p = @pub OUTPUT;
+    IF @pub > 0 BEGIN SELECT 0; RETURN; END
+END
+DELETE FROM sidata.CollectionTrust WHERE CollectionTime = @t AND Grain = N'Summary';
+SELECT @@ROWCOUNT;
+'@
+    }
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @c int = CONVERT(int, @CollectionId);
+DECLARE @t datetime2(3) = NULL;
+SELECT @t = CollectionTime FROM sidata.Collection WHERE CollectionId = @c AND Kind = N'Detailed' AND RetiredAt IS NOT NULL;
+IF @t IS NULL BEGIN SELECT 0; RETURN; END
+-- no row of it is left
+IF EXISTS (SELECT 1 FROM sidata.Finding WHERE CollectionId = @c) OR EXISTS (SELECT 1 FROM sidata.Recommendation WHERE CollectionId = @c) BEGIN SELECT 0; RETURN; END
+-- no other collection of the same time is still present (not marked, or marked with rows left)
+IF EXISTS (SELECT 1 FROM sidata.Collection AS o WHERE o.Kind = N'Detailed' AND o.CollectionTime = @t AND o.CollectionId <> @c
+                  AND (o.RetiredAt IS NULL OR EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = o.CollectionId))) BEGIN SELECT 0; RETURN; END
+DECLARE @no int = 0;
+-- never the published run's
+IF OBJECT_ID('sidata.PublishedRun') IS NOT NULL
+    EXEC sp_executesql N'SELECT @n = COUNT(*) FROM sidata.PublishedRun WHERE Name = N''current'' AND (DetailedCollectionId = @c OR DetailedCollectionTime = @t)', N'@c int, @t datetime2(3), @n int OUTPUT', @c = @c, @t = @t, @n = @no OUTPUT;
+IF @no > 0 BEGIN SELECT 0; RETURN; END
+-- never one a collection that is still kept carries rows from
+IF OBJECT_ID('sidata.CollectionReportCarry') IS NOT NULL
+    EXEC sp_executesql N'SELECT @n = COUNT(*) FROM sidata.CollectionReportCarry AS r JOIN sidata.Collection AS k ON k.CollectionId = r.CollectionId WHERE r.FromCollectionId = @c AND k.RetiredAt IS NULL', N'@c int, @n int OUTPUT', @c = @c, @n = @no OUTPUT;
+IF @no > 0 BEGIN SELECT 0; RETURN; END
+DELETE FROM sidata.CollectionTrust WHERE CollectionTime = @t AND Grain = N'Detailed';
+SELECT @@ROWCOUNT;
+'@
+}
+
+function Get-SIDataCollectionTrustOrphanSql {
+    <#
+        Verdicts whose collection is gone: of a grain, a verdict OLDER than the oldest collection of that grain that is still
+        kept (not marked), with no collection of its time still present (not marked, or marked with rows left) -- a verdict
+        left from before #1228, or of a collection a different clean-up removed. Never the published run's time, never a
+        time a kept collection carries rows from; a grain with no kept collection is left alone (no bound). At most @Batch
+        verdicts per grain per call, the oldest first. Answers the verdicts removed.
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL OR COL_LENGTH('sidata.Collection', 'RetiredAt') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @b int = TRY_CONVERT(int, @Batch);
+IF @b IS NULL OR @b < 1 SET @b = 1000;
+DECLARE @pubD int = NULL; DECLARE @pubDT datetime2(3) = NULL; DECLARE @pubS datetime2(3) = NULL;
+IF OBJECT_ID('sidata.PublishedRun') IS NOT NULL
+    EXEC sp_executesql N'SELECT @d = DetailedCollectionId, @dt = DetailedCollectionTime, @s = SummaryCollectionTime FROM sidata.PublishedRun WHERE Name = N''current''',
+         N'@d int OUTPUT, @dt datetime2(3) OUTPUT, @s datetime2(3) OUTPUT', @d = @pubD OUTPUT, @dt = @pubDT OUTPUT, @s = @pubS OUTPUT;
+IF @pubDT IS NULL AND @pubD IS NOT NULL SELECT @pubDT = CollectionTime FROM sidata.Collection WHERE CollectionId = @pubD;
+CREATE TABLE #gone (CollectionTime datetime2(3) NOT NULL, Grain nvarchar(16) NOT NULL, PRIMARY KEY (CollectionTime, Grain));
+-- Detailed: older than the oldest kept collection, and no collection of its time still present
+DECLARE @oldD datetime2(3) = (SELECT MIN(CollectionTime) FROM sidata.Collection WHERE Kind = N'Detailed' AND RetiredAt IS NULL);
+IF @oldD IS NOT NULL
+    INSERT #gone (CollectionTime, Grain)
+    SELECT TOP (@b) t.CollectionTime, t.Grain FROM sidata.CollectionTrust AS t
+    WHERE t.Grain = N'Detailed' AND t.CollectionTime < @oldD AND (@pubDT IS NULL OR t.CollectionTime <> @pubDT)
+      AND NOT EXISTS (SELECT 1 FROM sidata.Collection AS c WHERE c.Kind = N'Detailed' AND c.CollectionTime = t.CollectionTime
+                         AND (c.RetiredAt IS NULL OR c.CollectionId = @pubD
+                              OR EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId)
+                              OR EXISTS (SELECT 1 FROM sidata.Recommendation AS r WHERE r.CollectionId = c.CollectionId)))
+    ORDER BY t.CollectionTime;
+-- ... and never a time a kept collection carries rows from
+IF OBJECT_ID('sidata.CollectionReportCarry') IS NOT NULL
+    EXEC sp_executesql N'DELETE g FROM #gone AS g WHERE g.Grain = N''Detailed'' AND EXISTS (SELECT 1 FROM sidata.Collection AS c
+        JOIN sidata.CollectionReportCarry AS r ON r.FromCollectionId = c.CollectionId
+        JOIN sidata.Collection AS k ON k.CollectionId = r.CollectionId AND k.RetiredAt IS NULL
+        WHERE c.Kind = N''Detailed'' AND c.CollectionTime = g.CollectionTime)';
+-- Summary: the same rule over its loads -- a marked load still counts as present while it has rows OR assets left (as the
+-- per-collection removal checks); a database without sidata.SummaryAsset is not swept at all
+IF OBJECT_ID('sidata.SummaryLoad') IS NOT NULL AND COL_LENGTH('sidata.SummaryLoad', 'RetiredAt') IS NOT NULL AND OBJECT_ID('sidata.SummaryRow') IS NOT NULL AND OBJECT_ID('sidata.SummaryAsset') IS NOT NULL
+    EXEC sp_executesql N'DECLARE @oldS datetime2(3) = (SELECT MIN(CollectionTime) FROM sidata.SummaryLoad WHERE RetiredAt IS NULL);
+IF @oldS IS NOT NULL
+    INSERT #gone (CollectionTime, Grain)
+    SELECT TOP (@b) t.CollectionTime, t.Grain FROM sidata.CollectionTrust AS t
+    WHERE t.Grain = N''Summary'' AND t.CollectionTime < @oldS AND (@p IS NULL OR t.CollectionTime <> @p)
+      AND NOT EXISTS (SELECT 1 FROM sidata.SummaryLoad AS l WHERE l.CollectionTime = t.CollectionTime
+                         AND (l.RetiredAt IS NULL OR EXISTS (SELECT 1 FROM sidata.SummaryRow AS s WHERE s.CollectionTime = l.CollectionTime)
+                              OR EXISTS (SELECT 1 FROM sidata.SummaryAsset AS a WHERE a.CollectionTime = l.CollectionTime)))
+    ORDER BY t.CollectionTime;', N'@b int, @p datetime2(3)', @b = @b, @p = @pubS;
+DELETE t FROM sidata.CollectionTrust AS t JOIN #gone AS g ON g.CollectionTime = t.CollectionTime AND g.Grain = t.Grain;
+DECLARE @n int = @@ROWCOUNT;
+DROP TABLE #gone;
+SELECT @n;
+'@
+}
+
+function ConvertTo-SIDataCount {
+    <# PURE. A scalar answer as a count: the first number in it, else 0 (never throws). #>
+    param($Value)
+    foreach ($v in @($Value)) {
+        if ($null -eq $v -or $v -is [System.DBNull]) { continue }
+        $n = 0L
+        if (($v -is [ValueType] -or $v -is [string]) -and [long]::TryParse([string]$v, [ref]$n)) { return $n }
+    }
+    0L
+}
+
 function Format-SIDataRetentionText {
     <# PURE. The one plain line: what was kept, what was removed and how many rows per table. -Result: Invoke-SIDataCollectionRetention's (before its Text). #>
     param([Parameter(Mandatory)]$Result, [switch]$DryRun)
@@ -3182,7 +3314,7 @@ function Invoke-SIDataCollectionRetention {
     $staleText = if ($StaleDays -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddDays(-$StaleDays)) } else { '' }
     $idleText = if ($null -ne $IdleBeforeUtc) { Format-SIDataSqlTime -Time (([datetime]$IdleBeforeUtc).ToUniversalTime()) } elseif ($IdleStaleHours -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddHours(-$IdleStaleHours)) } else { '' }
     $deadline = if ($TimeBudgetSeconds -gt 0) { [datetime]::UtcNow.AddSeconds($TimeBudgetSeconds) } else { [datetime]::MaxValue }
-    $out = [ordered]@{ Status = 'ok'; Plan = @(); Removed = @(); Refused = @(); Stopped = $false; Paused = ''; Text = ''; Error = ''
+    $out = [ordered]@{ Status = 'ok'; Plan = @(); Removed = @(); Refused = @(); Stopped = $false; Paused = ''; Text = ''; Error = ''; TrustRemoved = 0L; TrustOrphansRemoved = 0L
                        Rows = [ordered]@{ findings = 0L; recommendations = 0L; issueRows = 0L; stagedRows = 0L; defenderKeys = 0L; summaryRows = 0L; summaryAssets = 0L } }
     $key = @{ Finding = 'findings'; Recommendation = 'recommendations'; IssueContext = 'issueRows'; RaStage = 'stagedRows'; RaDefenderKey = 'defenderKeys'; SummaryRow = 'summaryRows'; SummaryAsset = 'summaryAssets' }
     try {
@@ -3264,8 +3396,26 @@ function Invoke-SIDataCollectionRetention {
             # a removal its time budget cut short is marked (RetiredAt) and finished by the next call (Finish) -- never shown again
             if (-not $rm.Done -or [datetime]::UtcNow -ge $deadline) { $out.Stopped = $true; break }
             $out.Removed += $p
+            # #1228: its rows are all gone -- its own trust verdict goes too, in the same step and AFTER its rows (a removal that
+            # stopped part way never reaches here, so the verdict that explains the mark stays). The database refuses unless
+            # the collection is marked, holds no row, is not the published one and is not carried from. Never fails the step.
+            $trustGone = 0L
+            try {
+                $tp = @{ CollectionId = $prm.CollectionId; CollectionTime = $tText }
+                $trustGone = ConvertTo-SIDataCount (& $Invoke (Get-SIDataCollectionTrustRemoveSql -Grain $p.Grain) $tp 'scalar')
+            } catch { $trustGone = 0L }
+            $out.TrustRemoved += $trustGone
             # ... and its result as it goes (the trend totals stay)
-            try { & $Log 'INFO' ('collections : collection {0} ({1}, {2}): its findings are removed ({3} row(s)); its totals for the trends stay' -f $prm.CollectionId, $p.Grain, $tText, (@($rm.Rows.Values) | Measure-Object -Sum).Sum) } catch { }
+            try { & $Log 'INFO' ('collections : collection {0} ({1}, {2}): its findings are removed ({3} row(s)){4}; its totals for the trends stay' -f $prm.CollectionId, $p.Grain, $tText, (@($rm.Rows.Values) | Measure-Object -Sum).Sum, $(if ($trustGone -gt 0) { ', with its saved verdict on the source data' } else { '' })) } catch { }
+        }
+        # #1228: verdicts whose collection is gone (left from before this clean-up removed them, or of a collection another
+        # clean-up removed) -- older than the oldest kept collection of their grain, a bounded number per call. Only by the
+        # full step (not a mark-only, finish-only or dry run), and only when this step was not stopped. Said in one line.
+        if (-not $MarkOnly -and -not $FinishOnly -and -not $out.Stopped -and [datetime]::UtcNow -lt $deadline) {
+            $orphans = 0L
+            try { $orphans = ConvertTo-SIDataCount (& $Invoke (Get-SIDataCollectionTrustOrphanSql) @{ Batch = [string][Math]::Max(1L, $BatchSize) } 'scalar') } catch { $orphans = 0L }
+            $out.TrustOrphansRemoved = $orphans
+            if ($orphans -gt 0) { try { & $Log 'INFO' ('collections : removed {0} saved verdict(s) on the source data of collections that are no longer stored' -f $orphans) } catch { } }
         }
         $out['Marked'] = $marked.ToArray()
         if ($MarkOnly) {

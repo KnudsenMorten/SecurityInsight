@@ -1,0 +1,25 @@
+{
+  "version": "3.0.53",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "Database setup keeps working on its own, and a missing Defender licence no longer fails reports.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Database setup keeps its own access",
+      "text": "Database setup keeps working after every update without anyone granting rights again."
+    },
+    {
+      "title": "Admin group changes are proven or rolled back",
+      "text": "Moving the database admin to another group is proven by a real sign-in, and rolled back automatically when that fails."
+    },
+    {
+      "title": "Reports show not applicable without Defender licence",
+      "text": "A report whose Defender data is not in your tenant, for example without Defender vulnerability management, shows as not applicable again. A real report problem is still shown as failed."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Updates keep pages fast in the background, and setup lines reach your log workspace."
+    }
+  ]
+}

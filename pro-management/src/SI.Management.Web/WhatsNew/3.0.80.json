@@ -1,0 +1,29 @@
+{
+  "version": "3.0.80",
+  "date": "2026-11-09",
+  "type": "fix-only",
+  "summary": "Deleted users disappear, your correlation decisions apply everywhere, and reports are never quietly incomplete.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Deleted users are no longer shown active",
+      "text": "Users that Entra ID lists as deleted are retired at once, and their findings close as asset deleted, never as fixed. Expect a one-time retirement of such users after this update."
+    },
+    {
+      "title": "Your correlation decisions apply to assets",
+      "text": "Your merge and split decisions now apply to the assets themselves. Findings that move with a split asset never read as fixed."
+    },
+    {
+      "title": "Reports are never quietly incomplete",
+      "text": "A report that could not read all the data it needs now ends as not complete and keeps its last complete result, instead of finishing with empty columns."
+    },
+    {
+      "title": "Large reports keep going while progressing",
+      "text": "A large report that does not fit in one answer keeps going while it makes progress, and says plainly whether the service was briefly unavailable or the report is too large."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Users synchronised from Active Directory are no longer counted twice, so the users count can fall. A failed run during an identity move is no longer blamed on the new identity."
+    }
+  ]
+}

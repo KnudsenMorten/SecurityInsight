@@ -1,0 +1,13 @@
+{
+  "version": "3.0.50",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "A private installation can always build its updates.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Private installs can always build updates",
+      "text": "An update keeps the machines that prepare a private installation's updates in place, so every update can install. Between updates they scale down to none."
+    }
+  ]
+}

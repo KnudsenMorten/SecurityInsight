@@ -1,0 +1,17 @@
+{
+  "version": "3.0.28",
+  "date": "2026-11-03",
+  "type": "fix-only",
+  "summary": "The install tells you at once when your region cannot take new resources, before anything is created.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Install checks your region first",
+      "text": "Before anything is created, the install checks that your region takes new resources in this subscription. If not, it stops at once and names nearby regions that do."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "A private install reads its network settings reliably."
+    }
+  ]
+}

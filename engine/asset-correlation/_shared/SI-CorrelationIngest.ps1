@@ -133,7 +133,75 @@ function Resolve-SICorrelationWorkspaceId {
     $custId
 }
 
+function Get-SICorrelationSettlingColumn {
+    <#
+        PURE. The column a refused read names when that column is NOT this query's own: Log Analytics answered
+        "Failed to resolve scalar expression named '<column>'" (or '["<column>"]', how the service writes a name of
+        its own expansion of the table) for a column the query never names bare -- it names a profile column only
+        through column_ifexists, which cannot fail on a missing column. That is the table itself in the middle of
+        a change: a profile step added the column to the table moments earlier in the same run, and until Log
+        Analytics has finished adding it every read of the table is refused naming it (live 2026-11-13, ring 2:
+        endpoint's new PrivilegedLogonEvidence, on the first run of a release that carries it). '' = not that case
+        (a name the query writes itself is a fault of the query and is never waited for -- working rule 4).
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Message, [AllowNull()][AllowEmptyString()][string]$Query)
+    if (-not $Message) { return '' }
+    $m = [regex]::Match($Message, "(?i)Failed to resolve scalar expression named '(?:\[\s*[""'])?([A-Za-z_][A-Za-z0-9_]*)(?:[""']\s*\])?'")
+    if (-not $m.Success) { return '' }
+    $name = $m.Groups[1].Value
+    $own = [regex]::Replace([string]$Query, '(?i)column_ifexists\(\s*"[^"]*"', 'column_ifexists(')
+    if ([regex]::IsMatch($own, ('(?<![A-Za-z0-9_])' + [regex]::Escape($name) + '(?![A-Za-z0-9_])'))) { return '' }
+    $name
+}
+
+function Invoke-SICorrelationSettledRead {
+    <#
+        One read of a profile table (-Read { param($Query) } -> rows) that WAITS while Log Analytics is still adding a
+        column a profile step added to the table earlier in this run (Get-SICorrelationSettlingColumn): read again every
+        -PollSeconds, for at most the freshness wait (SI_CorrelationFreshnessWaitSec, default 600 s -- the same wait the
+        stage already gives Log Analytics for new rows), said once. Every other failure is thrown unchanged, at once.
+        Still refused at the end of the wait: thrown, saying what it is and that the next run reads the table again.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Read, [Parameter(Mandatory)][string]$Query, [int]$MaxWaitSeconds = -1, [int]$PollSeconds = 30, [scriptblock]$Sleep)
+    if ($MaxWaitSeconds -lt 0) { $MaxWaitSeconds = if ($global:SI_CorrelationFreshnessWaitSec) { [int]$global:SI_CorrelationFreshnessWaitSec } else { 600 } }
+    if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
+    $tm = [regex]::Match($Query, '\b([A-Za-z0-9_]+_CL)\b')
+    $table = if ($tm.Success) { $tm.Groups[1].Value } else { 'the profile table' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $said = $false
+    while ($true) {
+        try {
+            # collected first (a refusal throws before any row is handed on), then handed on as the read hands them: no
+            # rows = nothing, as before
+            $out = @(& $Read $Query)
+            $out
+            return
+        } catch {
+            $col = Get-SICorrelationSettlingColumn -Message $_.Exception.Message -Query $Query
+            if (-not $col) { throw }
+            if ($sw.Elapsed.TotalSeconds -ge $MaxWaitSeconds) {
+                throw ("correlation: Log Analytics has not finished adding the new column '{0}' to {1} after {2:N0} s: every read of the table is refused while it names that column. Correlation does not use the column; the next run reads the table again. The service said: {3}" -f $col, $table, $sw.Elapsed.TotalSeconds, $_.Exception.Message)
+            }
+            if (-not $said) {
+                Write-Warning ("correlation: Log Analytics is still adding the new column '{0}' to {1} (a profile step added it in this run) and refuses reads of the table until it has -- reading again every {2} s for up to {3} s." -f $col, $table, $PollSeconds, $MaxWaitSeconds)
+                $said = $true
+            }
+            & $Sleep $PollSeconds
+        }
+    }
+}
+
 function Invoke-SICorrelationKql {
+    <# A correlation read: Invoke-SICorrelationKqlOnce, waiting while the table is still taking a new column (Invoke-SICorrelationSettledRead). #>
+    param(
+        [Parameter(Mandatory)][string]$WorkspaceResourceId,
+        [Parameter(Mandatory)][string]$Query,
+        [int]$TimeoutSec = 600
+    )
+    Invoke-SICorrelationSettledRead -Query $Query -Read { param($q) Invoke-SICorrelationKqlOnce -WorkspaceResourceId $WorkspaceResourceId -Query $q -TimeoutSec $TimeoutSec }
+}
+
+function Invoke-SICorrelationKqlOnce {
     param(
         [Parameter(Mandatory)][string]$WorkspaceResourceId,
         [Parameter(Mandatory)][string]$Query,

@@ -30,6 +30,8 @@
 if (-not (Get-Command -Name ConvertTo-SIMailInlineHtml -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-MailLayout.ps1')) }
 # owner 2026-10-16: the management summary carries "See details and history: <portal link>" at its top (SI-InvardiaPortalLink.ps1)
 if (-not (Get-Command -Name Add-SIInvardiaPortalLinkAnchor -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-InvardiaPortalLink.ps1')) }
+# A MAIL GOES ONCE: every queued row is CLAIMED before it is sent and released when it was not (SI-MailSendRecord.ps1)
+if (-not (Get-Command -Name Request-SIMailQueueClaim -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'data-sql', 'SI-MailSendRecord.ps1')) }
 $script:SIExemptionInvariant = [System.Globalization.CultureInfo]::InvariantCulture
 $script:SIExemptionMaxAttempts = 5
 $script:SIExemptionReviewPath = '/Exemptions/Review'
@@ -489,7 +491,7 @@ function Invoke-SIExemptionMailCore {
         [switch]$DryRun,
         [scriptblock]$Log = { param($level, $msg) Write-Host ("[{0}] {1}" -f $level, $msg) }
     )
-    $res = [pscustomobject]@{ Skipped = ''; Queued = 0; Sent = 0; Failed = 0; Errors = @(); NoOwner = @(); Planned = @() }
+    $res = [pscustomobject]@{ Skipped = ''; Queued = 0; Sent = 0; Failed = 0; Errors = @(); NoOwner = @(); Planned = @(); Waiting = 0 }
     $db = Get-SIExemptionMailDatabase -Globals $Globals
     if (-not $db) { $res.Skipped = 'no Pro database is configured (SI_ProSqlServer / SI_ProSqlDatabase) -- no exemption mail.'; & $Log 'INFO' $res.Skipped; return $res }
     $invoke = & $NewInvoke $db.Server $db.Database
@@ -518,17 +520,42 @@ function Invoke-SIExemptionMailCore {
     }
     if ($DryRun) { & $Log 'INFO' 'DRY RUN -- nothing was queued or sent.'; return $res }
 
+    # A MAIL GOES ONCE: each queued row is claimed first (Request-SIMailQueueClaim) -- a row another sender holds is left to
+    # it; a claim that cannot be made means the row is not sent this time (never twice); a row not sent is released
+    $by = 'mail-job:' + [guid]::NewGuid().ToString('N')
+    # A row the server ACCEPTED but that could not be marked sent is noted 'sent, not marked' (Set-SIMailQueueSentNotMarked):
+    # no claim takes it again -- not after the lease either (a sign-in mail would carry its one-time secret twice); a later
+    # run marks it sent ($sentSql) and says so in one line.
+    $claim = {
+        param([string]$table, $mailId, [string]$label, [string]$sentSql)
+        $c = Request-SIMailQueueClaim -Invoke $invoke -Table $table -MailId $mailId -By $by
+        if ($c.Outcome -eq 'taken') { & $Log 'INFO' ("{0} {1} is being sent by another run -- left to it" -f $label, $mailId); return $false }
+        if ($c.Outcome -eq 'sent-unmarked') {
+            $fixed = $false
+            if ($sentSql) { try { & $invoke $sentSql @{ MailId = $mailId } 'nonquery' | Out-Null; $fixed = $true } catch { } }
+            & $Log 'WARN' ("{0} {1} was already sent (the server accepted it) but could not be marked sent then -- it is not sent again{2}" -f $label, $mailId, $(if ($fixed) { '; it is marked sent now' } else { '' }))
+            return $false
+        }
+        if ($c.Outcome -eq 'unreadable') { $res.Waiting++; & $Log 'WARN' ("{0} {1} could not be claimed ({2}) -- it is not sent this time, so it can never go twice; the next run sends it" -f $label, $mailId, $c.Error); return $false }
+        $true
+    }
+    $markedLate = { param([string]$table, [string]$label, $mailId, [string]$why) $null = Set-SIMailQueueSentNotMarked -Invoke $invoke -Table $table -MailId $mailId -Why $why -Label $label -Log $Log }
     foreach ($p in (Read-SIExemptionRows -Invoke $invoke -Sql (Get-SIExemptionMailPendingSql))) {
         $id = Get-SIExemptionValue $p 'MailId'
         $to = @(([string](Get-SIExemptionValue $p 'ToList')) -split '[;,]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if (-not (& $claim 'cfg.ExemptionMail' $id 'exemption mail' (Get-SIExemptionMailSentSql))) { continue }
+        $accepted = $false
         try {
             if ($to.Count -eq 0) { throw 'the mail has no recipient' }
             & $Send $to ([string](Get-SIExemptionValue $p 'Subject')) ([string](Get-SIExemptionValue $p 'BodyHtml'))
+            $accepted = $true
             & $invoke (Get-SIExemptionMailSentSql) @{ MailId = $id } 'nonquery' | Out-Null
             $res.Sent++
         } catch {
+            if ($accepted) { $res.Sent++; & $markedLate 'cfg.ExemptionMail' 'exemption mail' $id $_.Exception.Message; continue }
             $err = $_.Exception.Message
             & $invoke (Get-SIExemptionMailFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            $null = Undo-SIMailQueueClaim -Invoke $invoke -Table 'cfg.ExemptionMail' -MailId $id -By $by
             $res.Failed++; $res.Errors += ('mail {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("exemption mail {0} was not sent: {1}" -f $id, $err)
         }
@@ -537,16 +564,21 @@ function Invoke-SIExemptionMailCore {
     foreach ($p in (Read-SIExemptionRows -Invoke $invoke -Sql (Get-SIExemptionMailSignInPendingSql))) {
         $id = Get-SIExemptionValue $p 'MailId'
         $to = @(([string](Get-SIExemptionValue $p 'ToList')) -split '[;,]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if (-not (& $claim 'cfg.SignInMail' $id 'sign-in mail' (Get-SIExemptionMailSignInSentSql))) { continue }
+        $accepted = $false
         try {
             if ($to.Count -eq 0) { throw 'the mail has no recipient' }
             # #574: a sign-in link / one-time code never gets a PDF copy (4th argument: no PDF); the test mail does
             $noPdf = ([string](Get-SIExemptionValue $p 'Kind')) -ne 'mail-test'
             & $Send $to ([string](Get-SIExemptionValue $p 'Subject')) ([string](Get-SIExemptionValue $p 'BodyHtml')) $noPdf
+            $accepted = $true
             & $invoke (Get-SIExemptionMailSignInSentSql) @{ MailId = $id } 'nonquery' | Out-Null
             $res.Sent++
         } catch {
+            if ($accepted) { $res.Sent++; & $markedLate 'cfg.SignInMail' 'sign-in mail' $id $_.Exception.Message; continue }
             $err = $_.Exception.Message
             & $invoke (Get-SIExemptionMailSignInFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            $null = Undo-SIMailQueueClaim -Invoke $invoke -Table 'cfg.SignInMail' -MailId $id -By $by
             $res.Failed++; $res.Errors += ('sign-in mail {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("sign-in mail {0} was not sent: {1}" -f $id, $err)
         }
@@ -555,6 +587,8 @@ function Invoke-SIExemptionMailCore {
     foreach ($p in (Read-SIExemptionRows -Invoke $invoke -Sql (Get-SIReportMailPendingSql))) {
         $id = Get-SIExemptionValue $p 'MailId'
         $to = @(([string](Get-SIExemptionValue $p 'ToList')) -split '[;,]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if (-not (& $claim 'cfg.ReportMail' $id 'management summary mail' (Get-SIReportMailSentSql))) { continue }
+        $accepted = $false
         try {
             if ($to.Count -eq 0) { throw 'the mail has no recipient' }
             # owner 2026-10-16: the line to the install's page in the Invardia portal goes at the TOP of a management
@@ -575,11 +609,14 @@ function Invoke-SIExemptionMailCore {
             }
             try { & $Send $to ([string](Get-SIExemptionValue $p 'Subject')) $body $false $attPaths }
             finally { if ($attDir) { Remove-Item -LiteralPath $attDir -Recurse -Force -ErrorAction SilentlyContinue } }
+            $accepted = $true
             & $invoke (Get-SIReportMailSentSql) @{ MailId = $id } 'nonquery' | Out-Null
             $res.Sent++
         } catch {
+            if ($accepted) { $res.Sent++; & $markedLate 'cfg.ReportMail' 'management summary mail' $id $_.Exception.Message; continue }
             $err = $_.Exception.Message
             & $invoke (Get-SIReportMailFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            $null = Undo-SIMailQueueClaim -Invoke $invoke -Table 'cfg.ReportMail' -MailId $id -By $by
             $res.Failed++; $res.Errors += ('management summary {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("management summary mail {0} was not sent: {1}" -f $id, $err)
         }

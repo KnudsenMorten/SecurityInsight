@@ -1,0 +1,13 @@
+{
+  "version": "3.1.3",
+  "date": "2026-11-11",
+  "type": "security",
+  "summary": "The web app, the jobs and the updater carry Microsoft's November security updates.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Microsoft's November security updates applied",
+      "text": "The web app, the AI assistant, the jobs, the updater and the Community sign-in page carry Microsoft's November security updates."
+    }
+  ]
+}

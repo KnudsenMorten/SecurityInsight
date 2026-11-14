@@ -1,0 +1,22 @@
+{
+  "version": "3.0.46",
+  "date": "2026-11-05",
+  "type": "security",
+  "summary": "Support sessions are short, and the Community installer verifies every download.",
+  "new": [
+    {
+      "title": "Community installer verifies every download",
+      "text": "The Community installer verifies every download before it installs it."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Support sessions last at most 8 hours",
+      "text": "A support session lasts at most 8 hours."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Database setup finds each part's identity during a name move."
+    }
+  ]
+}

@@ -5810,7 +5810,7 @@ identity, so `-UseKEDA` with it is refused before anything is created.
 
 **PowerShell 5.1 and 7.** The layer avoids `?.` / `??` and `RSA.ImportFromPem`, so the same files run on a Windows VM under Windows PowerShell 5.1 and in the Linux container under PowerShell 7.
 
-**Upgrading from 2.2:** the modules 2.2 installed on a VM can stay or be removed -- v3 never loads them (see RELEASENOTES).
+**Upgrading from 2.2:** the modules 2.2 installed on a VM can stay or be removed -- v3 never loads them. SecurityInsight 3 is installed beside 2.2, not over it: see *SecurityInsight 3 beside 2.2* in the documentation.
 
 **Guarded:** `tests/pester/SIv3-NoPsModules.Tests.ps1` fails the build if a runtime script (engine, launcher, container, auth) loads, installs or calls a module, or a Dockerfile installs one. (Token requests with a client secret go through `Invoke-SILogIngestHttp`, the same `HttpWebRequest` shape.)
 
@@ -7325,7 +7325,8 @@ changed where it is kept; it never gets a second copy.
   BOM aside) is removed and the shipped index takes over; an edited one is kept as your own rows, checked before the
   shipped rows (a 2.2-form file is converted on load with exactly the scores it gave), and the run log says so once.
   Only a `git pull` install with an edited file has to step around it once: 2.2's `git pull --ff-only` stops on a
-  tracked file with local changes. Exact steps: RELEASENOTES v3.0.0 *Upgrading from 2.2.x*.
+  tracked file with local changes. SecurityInsight 3 is installed beside 2.2, not pulled over it: see
+  *SecurityInsight 3 beside 2.2* in the documentation.
 
 **Before moving a 2.2 installation to Pro, check these** -- the importer does not carry them over yet:
 

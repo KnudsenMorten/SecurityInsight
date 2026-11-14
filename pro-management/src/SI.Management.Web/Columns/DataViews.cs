@@ -97,6 +97,7 @@ public static class DataViews
         F("/Chat", "the assistant: questions and answers, no table"),
         F("/Help", "help and glossary text"),
         F("/Docs/Index", "the documentation pages of this version: text, no data table"),   // #679
+        F("/WhatsNew", "every release's What's new: cards drawn by Invardia's shared renderer, no data table"),   // WHATS-NEW-1
         F("/Management/Index", Dashboard),
         F("/Management/Overview", Dashboard),   // #636: the topics -- small tables over the stored key figures; every number opens a data view
         F("/Management/Report", "the executive report: the key figures blocks top to bottom, to read and print (#636)"),

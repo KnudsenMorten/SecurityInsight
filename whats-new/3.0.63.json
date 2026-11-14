@@ -1,0 +1,25 @@
+{
+  "version": "3.0.63",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "Your web app moves to its standard name without breaking bookmarks.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Web app moves to its standard name",
+      "text": "A new web app is created beside the old one and checked. The old address then forwards every page, and is removed only after someone signs in on the new one."
+    },
+    {
+      "title": "Custom addresses are never moved silently",
+      "text": "An installation with a custom domain or a custom public address stops before the move and tells you so."
+    },
+    {
+      "title": "Sign-in stays set up across updates",
+      "text": "SecurityInsight keeps its own sign-in set up across updates."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Database setup now records which Invardia Support app your installation trusts."
+    }
+  ]
+}

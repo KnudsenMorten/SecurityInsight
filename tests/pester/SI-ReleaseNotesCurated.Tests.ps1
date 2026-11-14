@@ -32,4 +32,12 @@ Describe 'the public release notes' {
         $sec = if ($j -gt $i) { $rn.Substring($i, $j - $i) } else { $rn.Substring($i) }
         $sec | Should -Not -Match '(?i)\baudit\s*#\s*\d+'
     }
+    It 'the notes carry SecurityInsight 3 only: no 2.2 entry, and the closing line says why (owner decision 2026-11-13)' {
+        $rn = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'RELEASENOTES.md'))
+        [regex]::Matches($rn, '(?m)^#{1,3}\s+.*\bv?2\.\d+\.\d+').Count | Should -Be 0 -Because 'the 2.2 release history is removed from the notes'
+        $rn | Should -Not -Match '(?m)^# Release notes . SecurityInsight v2'
+        $last = @([regex]::Matches($rn, '(?m)^## v(?<v>\d+\.\d+\.\d+(?:\.\d+)?) '))[-1].Groups['v'].Value
+        $last | Should -Be '3.0.0' -Because 'the oldest entry is the first SecurityInsight 3 release'
+        $rn.TrimEnd() | Should -Match ([regex]::Escape('SecurityInsight 3 replaces SecurityInsight 2.2; the 2.2 release history is not part of these notes.') + '$')
+    }
 }

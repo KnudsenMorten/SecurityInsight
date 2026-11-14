@@ -1,0 +1,30 @@
+{
+  "version": "3.1.17",
+  "date": "2026-11-13",
+  "type": "feature",
+  "summary": "See what is new in every version, get security updates within the hour, and each mail goes out once.",
+  "new": [
+    {
+      "title": "What's new in the web app",
+      "text": "Help > What's new shows what each version brought, newest first, in plain words. A New mark appears after an update until you open the page."
+    },
+    {
+      "title": "Security updates install within the hour",
+      "text": "When a security update of the images SecurityInsight runs on is released, your install takes it within the hour, without waiting for the nightly update. A running job is never stopped for it."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Each mail is sent only once",
+      "text": "The Risk Analysis mail and the daily summary mail are no longer sent twice when a step runs again. Other queued mails also go out only once."
+    },
+    {
+      "title": "Data correlation waits for new fields",
+      "text": "When a data table is still taking a new field, correlation now waits for it instead of stopping the run. The steps after it then run as usual."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "When two collections run at once, the newer device and identity details are kept. Old records about how complete each collection was are removed with the collection."
+    }
+  ]
+}

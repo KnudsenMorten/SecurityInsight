@@ -1,0 +1,17 @@
+{
+  "version": "3.1.14",
+  "date": "2026-11-12",
+  "type": "fix-only",
+  "summary": "Only data built on complete source data reaches ServiceNow and the workbooks.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Sending checks the data it sends",
+      "text": "Before sending, SecurityInsight now checks that the very collection it sends was built on complete source data. If not, nothing is sent, and the next complete run sends what changed."
+    },
+    {
+      "title": "Held sending shows as a warning",
+      "text": "When sending is held, the log now shows a warning with the collection's time and why it was held."
+    }
+  ]
+}

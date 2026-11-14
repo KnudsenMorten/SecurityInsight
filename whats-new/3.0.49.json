@@ -1,0 +1,42 @@
+{
+  "version": "3.0.49",
+  "date": "2026-11-05",
+  "type": "feature",
+  "summary": "Your CI list stays stable and complete, and you now see every user's sign-in methods.",
+  "new": [
+    {
+      "title": "See every user's sign-in methods",
+      "text": "SecurityInsight now reads each user's sign-in methods in full, including the device a key lives on. A setting chooses every user, privileged users only or none."
+    },
+    {
+      "title": "Assumptions page shows collection scope in force",
+      "text": "The Assumptions page shows every collection-scope setting with the value in force."
+    },
+    {
+      "title": "Close-loop table names every finding",
+      "text": "An asset's close-loop table names each finding with its title and kind, such as CVE, recommendation or certificate, and counts every item."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "One stable CI per machine",
+      "text": "A merged CI's id is never reused, and a CI that returned after a merge is retired into the right CI with its findings. Nothing is deleted."
+    },
+    {
+      "title": "ServiceNow learns every CI state and reason",
+      "text": "Every inactive CI is sent to ServiceNow with its state and a plain reason, such as merged or not seen since a date. No CI is ever dropped."
+    },
+    {
+      "title": "Gone machines retire after their grace period",
+      "text": "A device or Azure resource that only Microsoft's security data still lists now retires after its grace period. Dormant accounts stay, as a risk to report."
+    },
+    {
+      "title": "Private installs cost nothing between updates",
+      "text": "The machines that prepare a private installation's updates run only while they work and scale to none afterwards. Upkeep of large tables pauses whenever an update waits."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "An Azure VM's SQL Server is linked under the VM's CI, and nameless Defender devices get a generated name. Every CI is rebuilt once after this update."
+    }
+  ]
+}

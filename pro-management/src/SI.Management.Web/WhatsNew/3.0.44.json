@@ -1,0 +1,21 @@
+{
+  "version": "3.0.44",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Accounts and groups that no longer matter are left out of your assets by default.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Inactive identities are left out by default",
+      "text": "Never-synced Active Directory accounts that are disabled and not privileged, and groups Entra ID no longer has, are no longer assets by default. A value you chose is kept; turn a setting off to record them again."
+    },
+    {
+      "title": "Left-out items retire, never count as fixed",
+      "text": "Their existing assets retire with a reason naming the setting, and their findings close as asset retired, never as fixed. The Data health page counts what was left out."
+    },
+    {
+      "title": "Same install lines everywhere",
+      "text": "The two install lines are now the same in the README, release notes, release page, documentation and the installer's help."
+    }
+  ]
+}

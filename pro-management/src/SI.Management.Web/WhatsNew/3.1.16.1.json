@@ -1,0 +1,13 @@
+{
+  "version": "3.1.16.1",
+  "date": "2026-11-14",
+  "type": "security",
+  "summary": "The sign-in page now runs on Microsoft's newest security updates.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Sign-in page security update",
+      "text": "The sign-in page in front of the web app now uses Microsoft's newest security fixes for .NET."
+    }
+  ]
+}

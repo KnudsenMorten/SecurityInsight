@@ -1,0 +1,18 @@
+{
+  "version": "3.0.6",
+  "date": "2026-10-29",
+  "type": "feature",
+  "summary": "Filtering findings by category, subcategory and department is now quicker.",
+  "new": [
+    {
+      "title": "Dropdown filters for category and department",
+      "text": "Category, Subcategory and Department are now dropdown filters on the Summary and Detailed findings. You tick one or more values and see the number of findings for each."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Easier-to-read filter menus",
+      "text": "In every filter's value menu, each value now sits next to its tick box."
+    }
+  ]
+}

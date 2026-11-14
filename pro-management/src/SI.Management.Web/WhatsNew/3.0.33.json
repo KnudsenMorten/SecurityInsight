@@ -1,0 +1,22 @@
+{
+  "version": "3.0.33",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "Private installations can now build their updates inside your network.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Private installs can prepare their updates",
+      "text": "On a private installation, the network SecurityInsight creates now lets the machines that prepare updates start. Nothing becomes reachable from outside."
+    },
+    {
+      "title": "Clear step when your network needs a change",
+      "text": "On a network you provide that the update machines cannot start in, the install stops and names the one step your network team takes.",
+      "action": "Have your network team take the step the install names."
+    },
+    {
+      "title": "Updates repair stalled update machines",
+      "text": "An update repairs a private installation whose update machines do not run."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": "3.0.72",
+  "date": "2026-11-08",
+  "type": "fix-only",
+  "summary": "Reports that kept timing out now complete.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Timed-out reports complete in smaller parts",
+      "text": "A report part that kept timing out is now asked again in smaller parts in the same run, so nothing is lost. The next run starts with smaller parts."
+    },
+    {
+      "title": "Long-incomplete reports are named",
+      "text": "A report that has not been complete for several runs in a row now says so, with the date it started."
+    }
+  ]
+}

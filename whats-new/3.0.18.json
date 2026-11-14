@@ -1,0 +1,42 @@
+{
+  "version": "3.0.18",
+  "date": "2026-11-02",
+  "type": "feature",
+  "summary": "Your asset list is cleaner, with fewer duplicate machines, and you choose what goes to ServiceNow.",
+  "new": [
+    {
+      "title": "Choose which assets go to ServiceNow",
+      "text": "You can limit the items sent to ServiceNow by asset type and operating system, for example keeping mobile phones out while Windows, Linux and Azure resources go."
+    },
+    {
+      "title": "Decide on probable duplicate devices",
+      "text": "A data-quality check lists devices that are probably the same machine. You decide \"same machine\" or \"not the same\", and the next build uses your decision."
+    },
+    {
+      "title": "Retire proven-deleted assets at once",
+      "text": "An asset proven deleted can now be retired at once instead of after 30 days, with its open findings closed. One switch per source, all off by default."
+    },
+    {
+      "title": "Leave out stale accounts and groups",
+      "text": "You can choose to leave out disabled Active Directory accounts that never synced, and groups no longer in Entra ID. Both are off by default; privileged accounts are always kept."
+    },
+    {
+      "title": "Smaller improvements",
+      "text": "The CI list's lifecycle filter is in both filter panels."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "One CI per domain-joined computer",
+      "text": "A computer's Active Directory account is no longer a second device beside the machine itself. It is linked to the device it belongs to."
+    },
+    {
+      "title": "Placeholder device names no longer join devices",
+      "text": "A device with a placeholder name takes its name from another source or a clear generated name. A placeholder name never joins two devices."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "The ServiceNow check counts items without a database error, page texts name menu paths the same way, and the updater keeps its timers in step."
+    }
+  ]
+}

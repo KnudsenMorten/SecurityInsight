@@ -1,0 +1,17 @@
+{
+  "version": "3.0.77",
+  "date": "2026-11-09",
+  "type": "fix-only",
+  "summary": "Setup status is correct, and identity changes finish reliably.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Setup status shows the web app correctly",
+      "text": "Setup status no longer reports the web app as unfinished while its earlier address is back and the recent one only forwards visitors."
+    },
+    {
+      "title": "Identity moves finish reliably",
+      "text": "Moving SecurityInsight's identities to their standard names no longer stops while waiting for support access it opened itself."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version": "3.0.62",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "The web app keeps its database access during an identity change.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Web app keeps its database access",
+      "text": "The web app keeps its database access during an identity change, also when it has more than one identity."
+    }
+  ]
+}

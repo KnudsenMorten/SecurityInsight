@@ -1,0 +1,21 @@
+{
+  "version": "3.1.4",
+  "date": "2026-11-11",
+  "type": "fix-only",
+  "summary": "SecurityInsight follows rights given through PIM groups, and device pages open fast.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Rights through PIM groups are followed",
+      "text": "SecurityInsight follows rights given through PIM groups, at any depth. No new permission is needed."
+    },
+    {
+      "title": "Device pages open in seconds",
+      "text": "On a large installation a device page now opens in seconds instead of 20 to 30 seconds."
+    },
+    {
+      "title": "Community sign-in page is up to date",
+      "text": "The Community sign-in page is up to date."
+    }
+  ]
+}

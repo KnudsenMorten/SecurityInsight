@@ -1,0 +1,13 @@
+{
+  "version": "3.0.74",
+  "date": "2026-11-08",
+  "type": "fix-only",
+  "summary": "Your installation reports its support access as it is set.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Support access is reported as set",
+      "text": "Your installation reports its support access as it is set."
+    }
+  ]
+}

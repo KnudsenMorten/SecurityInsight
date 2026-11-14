@@ -1,0 +1,21 @@
+{
+  "version": "3.0.65",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "The identities SecurityInsight runs as move safely to standard, consistent names.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Identities move to their standard names",
+      "text": "Once switched on, older installations move to the standard identity names one role at a time. Each new identity gets every right and is proven before the old one is removed."
+    },
+    {
+      "title": "Updates report each identity's name",
+      "text": "Every update now tells you, per role, whether the identity carries its standard name."
+    },
+    {
+      "title": "Database administrators group gets its standard name",
+      "text": "The database administrators group is renamed in place, with the same members. New installations create it under that name."
+    }
+  ]
+}

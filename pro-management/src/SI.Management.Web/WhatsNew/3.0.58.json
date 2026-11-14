@@ -1,0 +1,13 @@
+{
+  "version": "3.0.58",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "The data sync at large installations finishes in normal time again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Large data syncs no longer take days",
+      "text": "At a large installation, one step of the data sync could take a day or more. It now reads only what it needs and is much faster."
+    }
+  ]
+}

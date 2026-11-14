@@ -1,0 +1,13 @@
+{
+  "version": "3.0.14",
+  "date": "2026-11-01",
+  "type": "fix-only",
+  "summary": "Your data reaches ServiceNow again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "ServiceNow receives its rows again",
+      "text": "Configuration items and vulnerable items reach ServiceNow again after the last three versions stopped before sending. The next send delivers everything that is due."
+    }
+  ]
+}

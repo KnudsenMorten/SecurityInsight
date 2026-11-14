@@ -288,7 +288,8 @@ Describe 'the two mails without a summary carry it at the TOP (owner 2026-10-16:
     }
     It 'the close-loop job sends the daily mail through Send-SICloseLoopMail -> Send-SIMail (wiring)' {
         $job = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-cmdb\Invoke-SICloseLoopMail.ps1'))
-        $job | Should -Match ([regex]::Escape('[void](Send-SICloseLoopMail -Smtp $smtp -To $to -Subject $subject -BodyHtml $html)'))
+        # [bool]: the answer tells the daily mail's send record whether anything went out (mail off = $false)
+        $job | Should -Match ([regex]::Escape('[bool](Send-SICloseLoopMail -Smtp $smtp -To $to -Subject $subject -BodyHtml $html)'))
         [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-cmdb\_shared\SI-CloseLoopMail.ps1')) | Should -Match '\$r = Send-SIMail -Settings \$Smtp'
     }
 

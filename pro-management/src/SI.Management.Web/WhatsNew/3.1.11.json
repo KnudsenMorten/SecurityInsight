@@ -1,0 +1,22 @@
+{
+  "version": "3.1.11",
+  "date": "2026-11-12",
+  "type": "feature",
+  "summary": "Your installation stays tidy, and the web app's components carry Microsoft's November security updates.",
+  "new": [
+    {
+      "title": "Older program images are cleaned up",
+      "text": "After a healthy update, SecurityInsight keeps only the current release's images and the one before. Nothing is deleted when the update did not end healthy."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Web app components on November security updates",
+      "text": "The web app's own components carry Microsoft's November security updates."
+    },
+    {
+      "title": "Security pack names the support scripts",
+      "text": "The security pack names the published support scripts, with their rights and changes."
+    }
+  ]
+}

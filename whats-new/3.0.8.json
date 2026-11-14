@@ -1,0 +1,13 @@
+{
+  "version": "3.0.8",
+  "date": "2026-10-29",
+  "type": "fix-only",
+  "summary": "Your install reports its status to Invardia again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Status reports reach Invardia again",
+      "text": "Since version 3.0.5 an install stopped sending its status report to Invardia. The status and run reports now go out as before."
+    }
+  ]
+}

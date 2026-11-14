@@ -1,0 +1,13 @@
+{
+  "version": "3.0.37",
+  "date": "2026-11-04",
+  "type": "fix-only",
+  "summary": "New installations get short, consistent resource names.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "New installs get short, standard names",
+      "text": "A new installation names its resources the short, standard way and keeps those names on every rerun. Names you choose still win, and existing installations are never renamed."
+    }
+  ]
+}

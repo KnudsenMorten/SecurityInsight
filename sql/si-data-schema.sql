@@ -4897,6 +4897,28 @@ CREATE TABLE sidata.RaMailOutbox (
     CONSTRAINT CK_RaMailOutbox_State CHECK (State IN ('waiting', 'sending', 'sent'))
 );
 
+-- =============================================================================================
+-- A MAIL GOES ONCE (added 2026-11-13): one row per mail that must go at most once -- the Risk Analysis mail of a pipeline run
+-- (or of a collection outside the pipeline) and the close-loop's daily mail of a day. Claimed in one transaction before the
+-- mail is sent, marked sent (or kept for the data sync) right after, put back when the send failed: a second run of a step,
+-- a retry, a restart or a hand start never sends it again (engine\_shared\data-sql\SI-MailSendRecord.ps1, which holds the
+-- SAME guarded statement; a database without it yet sends as before).
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.MailSendRecord') IS NULL
+CREATE TABLE sidata.MailSendRecord (
+    MailKey      NVARCHAR(200)  NOT NULL CONSTRAINT PK_MailSendRecord PRIMARY KEY,
+    Kind         NVARCHAR(32)   NOT NULL,
+    State        NVARCHAR(16)   NOT NULL,
+    ClaimedBy    NVARCHAR(200)  NULL,
+    ClaimedAt    DATETIME2(3)   NULL,
+    Attempts     INT            NOT NULL CONSTRAINT DF_MailSendRecord_Attempts DEFAULT 0,
+    SentAt       DATETIME2(3)   NULL,
+    OutboxMailId BIGINT         NULL,
+    LastError    NVARCHAR(2000) NULL,
+    CreatedAt    DATETIME2(3)   NOT NULL CONSTRAINT DF_MailSendRecord_CreatedAt DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_MailSendRecord_State CHECK (State IN ('sending', 'sent', 'queued', 'waiting'))
+);
+
 -- ---------------------------------------------------------------------------------------------
 -- THE NARROW FINDINGS (2026-10-25, owner: "i need the performance improvement, but no loosing of data"). The derived steps
 -- after the view context (the remediations, the findings per CI, ...) each scanned a collection's WIDE rows (DetailJson about

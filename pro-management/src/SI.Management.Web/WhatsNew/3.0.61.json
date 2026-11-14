@@ -1,0 +1,13 @@
+{
+  "version": "3.0.61",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "Your merge and split decisions on correlation suspects are saved again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Merge and split decisions save again",
+      "text": "Saving a merge or split decision on the correlation suspects page failed. The update now gives the web app the right it needs, so decisions save and can be undone."
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "version": "3.0.43",
+  "date": "2026-11-04",
+  "type": "feature",
+  "summary": "Reports complete on large tenants, and you set the support level in the Invardia portal.",
+  "new": [
+    {
+      "title": "Set the support level in Invardia portal",
+      "text": "The Invardia Support app's access level (none, troubleshoot or setup) now follows what you set in the Invardia customer portal."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Reports complete on large tenants",
+      "text": "Attack path and administrator sign-in reports could end incomplete on a large tenant. SecurityInsight now waits, asks again and works in parts, so the reports complete with the same rows."
+    },
+    {
+      "title": "Device reports work on Defender for Business",
+      "text": "The missing CVE, recommendation and end-of-support software reports now return rows when Defender has no device inventory, for example Defender for Business. Open findings keep their history."
+    },
+    {
+      "title": "Heavy jobs get more computing power",
+      "text": "Collections, correlation, Risk Analysis, the data sync and vulnerabilities now get more computing power and memory. No job is ever made smaller."
+    },
+    {
+      "title": "A stopped run is partial, not failed",
+      "text": "A collection stopped by an update, by support or by a person is now reported as partial, with that reason. Only a run that itself failed is reported as failed."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Stopping a run and updating is one checked step. The one-time cut-off now reads its own setting back correctly."
+    }
+  ]
+}

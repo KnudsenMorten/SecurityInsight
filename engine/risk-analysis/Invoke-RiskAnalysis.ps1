@@ -9633,7 +9633,20 @@ if ([bool]$global:Report_SendMail -eq $true) {
     # non-fatal for Risk Analysis).
     $__mailSettings = Get-SIMailSettings
     $__mailSettings.From = $from
+    # A MAIL GOES ONCE (engine\_shared\data-sql\SI-MailSendRecord.ps1): this run's send record, keyed by the pipeline run of this
+    # step (else by this run's collection) -- a second run of the step in the same pipeline run (a retry, a restart) never
+    # mails again; a record that cannot be read or written means the mail is SENT AS BEFORE (fail open: a lost mail is worse
+    # than a rare duplicate), with one line that a duplicate is possible.
+    $__recLog = { param($l, $m) if ($l -eq 'WARN') { Write-Warn2 $m } else { Write-Info $m } }
+    try {
+        if (-not (Get-Command -Name Open-SIRaMailSendRecord -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'data-sql', 'SI-MailSendRecord.ps1')) }
+        $__mailRec = Open-SIRaMailSendRecord -Stream $(if ($script:RAStreamOn) { $script:RAStream } else { $null }) -StreamWanted ([bool]$script:RAStreamWanted) -SettingsStore $global:SI_ProSettingsStore -Log $__recLog
+    } catch {
+        $__mailRec = [pscustomobject]@{ Send = $true; Claimed = $false; OutboxMailId = $null }
+        Write-Warn2 ("mail: the Risk Analysis mail of this run: its send record could not be checked ({0}) -- it is sent as before, so a duplicate is possible" -f $_.Exception.Message)
+    }
     $__sendNow = $true
+    if (-not $__mailRec.Send) { $__sendNow = $false }
     if ($script:RAProtectionFromStore) {
         # PRO: the mail WAITS for this collection's stored Protection Score (the data sync sends it right after its key figures
         # -- SI-RaMailOutbox.ps1). First, a mail of an EARLIER run that is still waiting (no data sync has run since) is sent
@@ -9645,7 +9658,8 @@ if ([bool]$global:Report_SendMail -eq $true) {
             try { $__syncRunning = [int](@(& $__oInv "SET NOCOUNT ON; IF OBJECT_ID('sidata.ViewState') IS NULL SELECT 0; ELSE SELECT COUNT(*) FROM sidata.ViewState WHERE Name = N'sync' AND UpdatedAt > DATEADD(hour, -12, SYSUTCDATETIME());" @{} 'scalar') | Select-Object -Last 1) -gt 0 } catch { $__syncRunning = $true }
             $__oSend = { param($m) $s = Get-SIMailSettings; if ($m.From) { $s.From = $m.From }; $r = Send-SIMail -Settings $s -To @($m.To) -Subject $m.Subject -BodyHtml $m.BodyHtml -Attachments @($m.Attachments) -Priority $m.Priority; @{ Sent = [bool]$r.Sent; Error = [string]$r.Error } }
             $null = Invoke-SIRaMailOutbox -Invoke $__oInv -Role producer -Send $__oSend -OwnCollectionId ([int]$script:RAStream.CollectionId) -SyncRunning $__syncRunning `
-                -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warn2 $m } elseif ($l -eq 'OK') { Write-Ok $m } else { Write-Info $m } }
+                -Log { param($l, $m) if ($l -eq 'WARN') { Write-Warn2 $m } elseif ($l -eq 'OK') { Write-Ok $m } else { Write-Info $m } } -HoldMailIds @($__mailRec.OutboxMailId)
+            if (-not $__sendNow) { throw [System.OperationCanceledException]::new('send-record') }   # already sent / kept / being sent by another run (said above)
             # review B1: kept only when the data sync recorded that it can send -- else this mail goes NOW, saying where the score is
             $__sender = Test-SIRaMailSender -Invoke $__oInv
             if (-not $__sender.Ready) {
@@ -9658,8 +9672,10 @@ if ([bool]$global:Report_SendMail -eq $true) {
                 -BodyHtml $__pending -To @($to) -From $from -Priority 'High' -AttachmentPath $(if (@($attachments).Count) { [string]@($attachments)[0] } else { '' })
             Write-Ok ("mail kept for the data sync (#{0}): it goes to {1} once this run's Protection Score is stored -- the numbers the web app shows" -f $__mid, ($to -join ', '))
             $__sendNow = $false
+            if ($__mailRec.Claimed) { $null = Exit-SIMailSendRecord -Invoke $__mailRec.Invoke -Key $__mailRec.Key -By $__mailRec.By -As queued -OutboxMailId $__mid -What 'mail: the Risk Analysis mail of this run' -Log $__recLog }
         } catch [System.OperationCanceledException] {
-            # (the data sync cannot send: the body with its line was built above -- sent below, now)
+            # (the data sync cannot send: the body with its line was built above -- sent below, now; or the send record said
+            # this mail is not this run's to send -- nothing is sent)
         } catch {
             Write-Warn2 ("mail: could not wait for this run's stored Protection Score ({0}) -- sent now, saying why the score is not in it" -f $_.Exception.Message)
             $bodyHtml = ConvertTo-RAReportMailHtml -Kpi $kpi @__mailArgs -GroupingsHtml $__sgHtml -ProtectionReason (Get-SIProtectionReason 'no-wait' $_.Exception.Message)
@@ -9672,7 +9688,13 @@ if ([bool]$global:Report_SendMail -eq $true) {
         if ($__mailSettings.Mode -eq 'sharedMailbox') { Write-Ok ("mail sent from the shared mailbox {0} (Microsoft Graph accepted it)" -f $__mailSettings.SharedMailbox) }
         else { Write-Ok "mail sent (NOTE: SMTP 250 OK only proves the relay accepted the message -- verify actual delivery in your SMTP provider's activity log + the recipient's junk folder)" }
     } else {
-        Write-Err2 ("mail FAILED: {0}. Engine continues (mail is non-fatal); fix the cause and re-run." -f $__mailRes.Error)
+        Write-Err2 ("mail FAILED: {0}. Engine continues (mail is non-fatal). This mail is not sent again by itself: a retry or restart of this step in the same pipeline run sends it; the next pipeline run sends its own, newer mail. Fix the cause." -f $__mailRes.Error)
+    }
+    # the send record: sent, or back to waiting (a retry / restart of this step in the SAME pipeline run sends it -- the key
+    # is per pipeline run, so the next pipeline run does not; a hold gives its try back)
+    if ($__mailRec.Claimed) {
+        $__held = [bool]($__mailRes.PSObject.Properties['Held'] -and "$($__mailRes.Held)".Trim())
+        $null = Exit-SIMailSendRecord -Invoke $__mailRec.Invoke -Key $__mailRec.Key -By $__mailRec.By -As $(if ($__mailRes.Sent) { 'sent' } else { 'waiting' }) -Reason ([string]$__mailRes.Error) -Held:$__held -What 'mail: the Risk Analysis mail of this run' -Log $__recLog
     }
     }
 }

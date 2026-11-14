@@ -1,0 +1,17 @@
+{
+  "version": "3.0.83",
+  "date": "2026-11-10",
+  "type": "fix-only",
+  "summary": "Old identities are cleaned up completely, without false warnings.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Old identities are removed",
+      "text": "When SecurityInsight moves to its standard identities, the old identity is removed."
+    },
+    {
+      "title": "No false warning about support access",
+      "text": "Support access checks show the access you agreed to, without false warnings."
+    }
+  ]
+}

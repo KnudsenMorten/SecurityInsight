@@ -289,7 +289,11 @@ function Invoke-SIRaMailOutbox {
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][ValidateSet('datasync', 'producer')][string]$Role,
           [Parameter(Mandatory)][scriptblock]$Send, $RunStartedUtc, $KeyFigures, [int]$OwnCollectionId = 0, [bool]$SyncRunning = $false,
-          [int]$LeaseMinutes = 60, [string]$By, $Settings, [switch]$DryRun, [scriptblock]$Log, [int]$MarkRetrySeconds = 2)
+          [int]$LeaseMinutes = 60, [string]$By, $Settings, [switch]$DryRun, [scriptblock]$Log, [int]$MarkRetrySeconds = 2,
+          # the mails this run must leave to the data sync (a second run of the same step: its first run's mail, kept for the
+          # stored score -- SI-MailSendRecord.ps1); they wait, whatever the decision says
+          [AllowEmptyCollection()][AllowNull()][object[]]$HoldMailIds = @())
+    $hold = @(@($HoldMailIds) | Where-Object { $null -ne $_ -and $_ -isnot [System.DBNull] -and "$_" -match '^\d+$' } | ForEach-Object { [long]"$_" })
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     if (-not $By) { $By = '{0}:{1}' -f $Role, [guid]::NewGuid().ToString('N') }
     $out = [ordered]@{ Sent = 0; Waiting = 0; Failed = 0; Lines = New-Object System.Collections.Generic.List[string] }
@@ -300,7 +304,7 @@ function Invoke-SIRaMailOutbox {
         $mid = [long](Get-SIRaMailOutboxValue $m 'MailId'); $cid = [int](Get-SIRaMailOutboxValue $m 'CollectionId')
         $ct = Get-SIRaMailOutboxValue $m 'CollectionTime'
         $d = Get-SIRaMailOutboxDecision -Mail $m -Role $Role -RunStartedUtc $RunStartedUtc -KeyFigures $KeyFigures -OwnCollectionId $OwnCollectionId -SyncRunning $SyncRunning
-        if ($d.Action -eq 'wait') { $out.Waiting++; continue }
+        if ($d.Action -eq 'wait' -or $hold -contains $mid) { $out.Waiting++; continue }
         if ($DryRun) { $out.Lines.Add(("the mail of the run of {0:yyyy-MM-dd HH:mm} UTC would be sent ({1})" -f $ct, $d.Action)); continue }
         $tmpDir = $null; $accepted = $false
         try {

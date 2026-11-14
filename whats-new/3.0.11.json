@@ -1,0 +1,17 @@
+{
+  "version": "3.0.11",
+  "date": "2026-11-01",
+  "type": "fix-only",
+  "summary": "The ServiceNow hand-off no longer stops with an error, and the detailed risk analysis finishes hours sooner on large installs.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "ServiceNow hand-off no longer stops with an error",
+      "text": "Configuration items and vulnerable items no longer stop with a database error. The next send closes the stopped batches and prepares their rows again."
+    },
+    {
+      "title": "Detailed risk analysis is much faster",
+      "text": "The Detailed risk analysis reads its results once instead of twice, with the same numbers. On the largest installs this saves hours."
+    }
+  ]
+}

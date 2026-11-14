@@ -1,0 +1,26 @@
+{
+  "version": "3.1.2",
+  "date": "2026-11-11",
+  "type": "feature",
+  "summary": "Device searches answer in seconds, you can see long steps moving, and nights run steadier.",
+  "new": [
+    {
+      "title": "Device search answers in seconds",
+      "text": "Searching for a device name, a CVE or an id in the detailed findings view now answers in seconds instead of 40 seconds or more. Searching anywhere in the text is still there."
+    },
+    {
+      "title": "Long steps show that they are moving",
+      "text": "Large reports, the data sync and the building of configuration items now report how far they are, for example batch 161 of 266. You and support see that a long night is moving."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Brief network failures no longer slow nights",
+      "text": "When a database connection failed for a moment, part of preparing the views was given up and the night ran slower. SecurityInsight now tries again a few times first."
+    },
+    {
+      "title": "Kept open is no longer counted as held",
+      "text": "Findings kept open in your ticketing system until enough complete runs confirm they are gone are now counted on their own. What your ticketing system receives is unchanged."
+    }
+  ]
+}

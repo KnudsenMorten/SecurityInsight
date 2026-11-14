@@ -1,0 +1,29 @@
+{
+  "version": "3.0.51",
+  "date": "2026-11-05",
+  "type": "fix-only",
+  "summary": "Pages answer much faster, and an update no longer makes the web app hang.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Views answer in a fraction of the time",
+      "text": "Navigation, the device page, a CI's findings and history, the Summary view and the audit trail now answer much faster, also during a run. Every view shows exactly the same rows."
+    },
+    {
+      "title": "The web app no longer hangs during updates",
+      "text": "While an update changes the database, the web app shows a short notice that SecurityInsight is being updated and comes back by itself."
+    },
+    {
+      "title": "Faster runs at large installations",
+      "text": "Unchanged findings are no longer rewritten on every run, and one step at large installations is many times faster. What SecurityInsight sends to your other systems is unchanged."
+    },
+    {
+      "title": "Updates no longer block pages at sign-in",
+      "text": "An update no longer re-creates unchanged parts of the database, so pages read at sign-in are not blocked while it runs."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Slow page reads are logged, and the device page names each finding from the published run. Run records Invardia could not receive are kept and sent later."
+    }
+  ]
+}

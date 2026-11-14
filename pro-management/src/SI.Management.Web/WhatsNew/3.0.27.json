@@ -1,0 +1,17 @@
+{
+  "version": "3.0.27",
+  "date": "2026-11-03",
+  "type": "feature",
+  "summary": "Installing the Community edition is now quick and simple.",
+  "new": [
+    {
+      "title": "Community edition installs in two lines",
+      "text": "You download the installer from the latest release and run it with your tenant and subscription. No code copy and no config file are needed."
+    },
+    {
+      "title": "Smaller improvements",
+      "text": "The README, the script help and the docs now show the same two lines, with only the settings an install uses."
+    }
+  ],
+  "fixes": []
+}

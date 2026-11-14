@@ -1,0 +1,50 @@
+{
+  "version": "3.0.0",
+  "date": "2026-10-01",
+  "type": "feature",
+  "summary": "SecurityInsight 3 brings two editions, safe automatic updates, and settings that finally take effect.",
+  "new": [
+    {
+      "title": "Two editions: Community and Pro",
+      "text": "SecurityInsight now comes as a free Community edition and a licensed Pro edition. Pro adds cross-engine correlation, the ServiceNow connector and sending vulnerabilities to ServiceNow or a database, with managed updates."
+    },
+    {
+      "title": "Safe, signed updates",
+      "text": "Updates come through a signed update channel in stages, are checked before use and restore the previous version on failure. Pro installs update and renew their licence from Invardia by themselves."
+    },
+    {
+      "title": "Findings never close when a source goes silent",
+      "text": "When a data source that had data suddenly returns none, the affected reports keep their last complete result. None of their findings is closed or marked as fixed."
+    },
+    {
+      "title": "One daily pipeline: Collect, Correlate, Deliver",
+      "text": "The daily jobs run as one pipeline at 22:00 in your time zone, and nothing is delivered from an incomplete collection. Run now works on the whole pipeline, a stage or a step."
+    },
+    {
+      "title": "Smaller improvements",
+      "text": "The Detailed report is now the default. Also new: Defender for Cloud recommendations and vulnerabilities, a daily trend in Community, managed identity sign-in by default, report-only asset tagging, and visible version numbers."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Your settings now override shipped defaults",
+      "text": "Settings in your own configuration now win over the shipped defaults, as documented. This affects about 60 settings."
+    },
+    {
+      "title": "Your asset rules win over the CMDB",
+      "text": "When your own asset rule sets a CMDB name, criticality or data sensitivity, that value now wins over the CMDB record, field by field."
+    },
+    {
+      "title": "Reports see every vulnerability and recommendation",
+      "text": "The vulnerability reports now also read Defender Vulnerability Management directly, and Azure recommendations no longer go missing. Expect these reports to grow."
+    },
+    {
+      "title": "One machine, one tier everywhere",
+      "text": "A machine seen by several sources is one asset with one tier and one name in every report. Large Summary reports also keep every asset."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Trend figures now count assets, devices sharing a name are profiled separately, hosted jobs receive all your non-secret settings, Shodan included, and Risk Analysis and asset profiling are more accurate."
+    }
+  ]
+}

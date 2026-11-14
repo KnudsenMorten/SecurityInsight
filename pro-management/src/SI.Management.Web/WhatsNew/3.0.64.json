@@ -1,0 +1,21 @@
+{
+  "version": "3.0.64",
+  "date": "2026-11-07",
+  "type": "fix-only",
+  "summary": "Updates, support work and daily runs no longer get in each other's way.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Updates are no longer held by support work",
+      "text": "A support step no longer starts the database setup during an update, and an update now waits only for its own setup. A busy database is retried."
+    },
+    {
+      "title": "Runs are not cut short by updates",
+      "text": "Right before an update starts, it checks again whether a run has begun and warns when the next run is minutes away. An update started by hand waits for a run that just started."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "A run retries a short network error while reading its settings. The data fresh start retries a temporary refusal and is much faster."
+    }
+  ]
+}

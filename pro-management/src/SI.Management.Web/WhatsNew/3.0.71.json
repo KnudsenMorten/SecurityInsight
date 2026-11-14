@@ -1,0 +1,25 @@
+{
+  "version": "3.0.71",
+  "date": "2026-11-08",
+  "type": "security",
+  "summary": "Deleted secrets and keys can be recovered, and urgent fixes reach you within minutes.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Deleted secrets can be recovered",
+      "text": "Deleted secrets and keys can be recovered during their retention period."
+    },
+    {
+      "title": "Security pack lists the updater's rights",
+      "text": "The security pack lists the updater's rights."
+    },
+    {
+      "title": "Urgent fixes arrive within minutes",
+      "text": "A fix marked urgent is now installed within minutes instead of at the next daily update. Other releases still wait for your installation's own update time."
+    },
+    {
+      "title": "Installation name is kept",
+      "text": "Your installation keeps its name on the vendor portal, and a failed read never clears it."
+    }
+  ]
+}

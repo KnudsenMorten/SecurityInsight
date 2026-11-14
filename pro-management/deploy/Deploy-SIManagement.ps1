@@ -536,19 +536,15 @@ if ("$SigninStoreKeyVaultName".Trim() -and $Apply -and $webApp -and $script:look
 } else { Write-Host '  (plan / not given) the web app''s grant on its key is made here with -SigninStoreKeyVaultName -Apply; the updater then makes the key and sets the web app''s setting.' }
 
 # ---------------------------------------------------------------------------------------------------------------
-Write-Step $(if ($jobsStartOnly) { '4b. The Jobs page: START-ONLY (Jobs Reader on the jobs'' resource group, Jobs Operator on each named job)' } else { '4b. The Jobs page (Container Apps Jobs Contributor on the jobs'' resource group)' })
+Write-Step '4b. The Jobs page: READ ONLY (Container Apps Jobs Reader on the jobs'' resource group)'
 if ($JobsResourceGroup) {
     $jobsScope = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $JobsResourceGroup
-    if ($jobsStartOnly) {
-        # CR8: list the jobs, start / stop the named ones -- never change one (a trigger change is a request the pipeline
-        # runner applies). A job an update adds later gets its Operator role from the security cut-over / the next setup run.
-        Grant-Role -PrincipalId $webId.PrincipalId -Role 'Container Apps Jobs Reader' -Scope $jobsScope
-        $named = @()
-        if ($script:lookups) { $named = @(Get-SIArmResource -ResourceType 'Microsoft.App/jobs' -ResourceGroupName $JobsResourceGroup -SubscriptionId $SubscriptionId | Where-Object { [string]$_.Name -like 'caj-si-*' }) }
-        if (-not $named.Count) { Write-Host '  (no caj-si-* job found yet -- run this again after the jobs exist, or the security cut-over adds them)' -ForegroundColor Yellow }
-        foreach ($j in $named) { Grant-Role -PrincipalId $webId.PrincipalId -Role 'Container Apps Jobs Operator' -Scope ([string]$j.Id) }
-    }
-    else { Grant-Role -PrincipalId $webId.PrincipalId -Role 'Container Apps Jobs Contributor' -Scope $jobsScope }
+    # SECURE-WEB-1 (framework 12.11f, Invardia 2026-11-14): the web app is internet-facing, so its identity holds NO right that
+    # starts or changes a job -- not Jobs Contributor, not Jobs Operator (a start alone accepts a container override, so it
+    # runs code as the job's identity). It only LISTS the jobs and their executions. -JobsStartOnly is kept for callers and
+    # changes nothing any more.
+    if ($jobsStartOnly) { Write-Host '  -JobsStartOnly: no longer grants Jobs Operator (SECURE-WEB-1) -- the web app reads the jobs only' }
+    Grant-Role -PrincipalId $webId.PrincipalId -Role 'Container Apps Jobs Reader' -Scope $jobsScope
 } else { Write-Host '  -JobsResourceGroup not given: the Jobs page says "not configured".' -ForegroundColor Yellow }
 
 Write-Step '4c. The magic-link key (Key Vault Secrets User)'

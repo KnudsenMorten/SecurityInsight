@@ -1,0 +1,72 @@
+/* WHATS-NEW-1: the ONE look of a product's What's new (whats-new.js markup) - SecurityInsight, PIM Manager, Entra Policy
+   Suite and invardia.com embed this file unchanged. Every colour is a custom property: the --wn-* values default to the
+   host's BRAND-2 tokens (--blue, --fg, --muted, --line, --surface, --radius, --font - invardia.com's site.css) and, when the
+   host has none, to the BRAND-2 values themselves. A product GUI may set --wn-* on .wn to match its own theme. */
+.wn {
+  --wn-accent: var(--blue, #1B4FE4);
+  --wn-fg: var(--fg, #0B1633);
+  --wn-muted: var(--muted, #4A5877);
+  --wn-line: var(--line, #E1E7F2);
+  --wn-surface: var(--surface, #FFFFFF);
+  --wn-radius: var(--radius, 12px);
+  --wn-font: var(--font, 'Mulish Variable', system-ui, -apple-system, 'Segoe UI', sans-serif);
+  font-family: var(--wn-font);
+  color: var(--wn-fg);
+  display: grid;
+  gap: 12px;
+  max-width: 900px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wn {
+    --wn-accent: var(--blue, #6E95FF); --wn-fg: var(--fg, #E8EDFA); --wn-muted: var(--muted, #A9B8DB);
+    --wn-line: var(--line, #243766); --wn-surface: var(--surface, #111F45);
+  }
+}
+[data-theme="dark"] .wn {
+  --wn-accent: var(--blue, #6E95FF); --wn-fg: var(--fg, #E8EDFA); --wn-muted: var(--muted, #A9B8DB);
+  --wn-line: var(--line, #243766); --wn-surface: var(--surface, #111F45);
+}
+.wn-heading { margin: 0 0 4px; font-size: 1.5rem; }
+.wn-empty { margin: 0; color: var(--wn-muted); }
+.wn-card {
+  background: var(--wn-surface);
+  border: 1px solid var(--wn-line);
+  border-radius: var(--wn-radius);
+  overflow: hidden;
+}
+.wn-head {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px 14px 40px;
+  cursor: pointer;
+  list-style: none;
+  position: relative;
+}
+.wn-head::-webkit-details-marker { display: none; }
+.wn-head::before {
+  content: '';
+  position: absolute; left: 18px; top: 21px;
+  width: 7px; height: 7px;
+  border-right: 2px solid var(--wn-muted); border-bottom: 2px solid var(--wn-muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.wn-card[open] > .wn-head::before { transform: rotate(45deg); }
+.wn-head:focus-visible { outline: 2px solid var(--wn-accent); outline-offset: -2px; }
+.wn-line { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
+.wn-version { color: var(--wn-accent); }
+.wn-date { color: var(--wn-muted); font-weight: 600; }
+.wn-type { font-weight: 600; }
+.wn-summary { color: var(--wn-fg); }
+.wn-body { padding: 0 18px 16px; display: grid; gap: 12px; }
+.wn-action {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 4px solid var(--wn-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wn-accent) 10%, var(--wn-surface));
+}
+.wn-section h3 { margin: 0 0 6px; font-size: 1rem; }
+.wn-section ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.wn-section li { overflow-wrap: anywhere; }
+.wn-none { margin: 0; color: var(--wn-muted); }

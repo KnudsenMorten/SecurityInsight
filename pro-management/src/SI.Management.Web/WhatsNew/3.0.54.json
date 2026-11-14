@@ -1,0 +1,21 @@
+{
+  "version": "3.0.54",
+  "date": "2026-11-06",
+  "type": "fix-only",
+  "summary": "Waiting updates start right after a run, and pages are fast as soon as new results show.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Waiting updates start right after a run",
+      "text": "An update that waits for a long run now always starts right after the run ends, never the next night."
+    },
+    {
+      "title": "Pages are fast when new results show",
+      "text": "The database upkeep that keeps pages fast runs once after the run's results are published, so pages are fast at once."
+    },
+    {
+      "title": "Short hiccups no longer stop setup or updates",
+      "text": "Database upkeep, database setup and updates now retry a short network or sign-in hiccup instead of stopping. The update also finds the Support app by itself."
+    }
+  ]
+}

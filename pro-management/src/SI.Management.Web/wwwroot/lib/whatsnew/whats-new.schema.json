@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://invardia.com/schemas/whats-new.schema.json",
+  "title": "WHATS-NEW-1 release file",
+  "description": "One product release's What's new (framework WHATS-NEW-1, points 1 and 3a). Written from the version's RELEASENOTES entry for an admin, not a developer. Checked by tools/whatsnew/ConvertTo-WhatsNewMarkdown.ps1 -Check, which also refuses a commit hash or a SUP- ticket number in any text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "date", "type", "summary", "new", "fixes"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "description": "The release version, like 3.1.21.",
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+([.-][0-9A-Za-z.-]{1,30})?$"
+    },
+    "date": {
+      "description": "The release date, YYYY-MM-DD.",
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "type": {
+      "description": "Shown as Fix-only / Feature update / Security.",
+      "enum": ["fix-only", "feature", "security"]
+    },
+    "summary": {
+      "description": "One short sentence on the benefit or risk removed, never on the mechanism.",
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "new": {
+      "description": "New features, at most 5; an empty list shows 'None in this version.'",
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "fixes": {
+      "description": "Fixes, at most 5 (group smaller ones: 'Smaller fixes: ...'); an empty list shows 'None in this version.'",
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/item" }
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "text"],
+      "properties": {
+        "title": {
+          "description": "The effect in at most 8 words.",
+          "type": "string",
+          "pattern": "^\\s*\\S+(\\s+\\S+){0,7}\\s*$"
+        },
+        "text": {
+          "description": "At most 2 short sentences / 40 words, plain words, 'you' for the reader.",
+          "type": "string",
+          "pattern": "^\\s*\\S+(\\s+\\S+){0,39}\\s*$"
+        },
+        "action": {
+          "description": "Optional: one sentence on what the admin must do, and where. Shown first on the card as Action needed. Leave the field out when there is nothing to do.",
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    }
+  }
+}

@@ -1,42 +1,3 @@
-# Release notes for SecurityInsight
-
-## v2.2.460
-
-Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
-
-- release(SI) v2.2.460: an uncertain routing answer no longer sends a query where it cannot work (ffdd4600)
-- docs(SI) #73(b) route-map audit: four causes eliminated, and the bug is environmental (7e06c45b)
-- docs(SI) #74 closed: the report-URL idea is dropped, and the reason is not the one you would guess (91c09b5e)
-- release(SI) v2.2.459: the attachment budget, corrected down and finally documented (0910cd65)
-- release(SI) v2.2.458: what the logs told customers, and a report too large to send (6fbb1045)
-- release(SI) v2.2.457: the AI summary sheet was quietly undoing the workbook's alignment (53307cde)
-- release(SI) v2.2.456: the findings that went missing every run, and why absence is not remediation (860ce577)
-- release(SI) v2.2.455: a query defect was reported as a platform glitch, and re-running could never fix it (c4bb3e67)
-- release(SI) v2.2.454: tall rows read as though the values belonged to the row below (34f965b3)
-- docs(SI): handoff said 2.2.452 and buried the one check that is in flight (af86ea99)
-- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (453f27f2)
-- docs(SI): audit #65 -- redundancy scan, filed LOW PRIORITY with its own false positives (c24f6b41)
-- release(SI) v2.2.452: a query failure is one line, not a twenty-line stack dump (a1ea7080)
-- release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)
-- release(SI) v2.2.450: CRITICAL -- the bulk export referenced a type the engine never loaded (fb870bd1)
-- release(SI) v2.2.449: audit #63 -- three Detailed reports hid severities their own Summary counted (01994e19)
-- release(SI) v2.2.448: the bulk export was writing workbooks 3.6x larger than it needed to (609f00cf)
-- docs(SI) v2.2.447: the export figure, corrected by a full-scale measurement (1094ad83)
-- release(SI) v2.2.446: audit #62 -- a failed bucket no longer shrinks a report in silence (571ab809)
-- docs(SI) v2.2.445: the three public docs the release notes alone did not cover (4d2e4bd7)
-- release(SI) v2.2.445: a 5h34m Excel export, measured down to ~15 minutes (08010c22)
-- release(SI) v2.2.444: one empty string in the recipient list threw away a finished run (f9d83adc)
-- docs(SI): FEATURES.md was 35 releases stale, and the v3 section did not know v3 had started (c2cfc9f8)
-- docs(SI): 47 settings the engines read that no config file or doc ever listed (48993db0)
-- docs(SI): route v2.2.439-.443 into the four-doc model instead of the router file (3be6c2ba)
-- release(SI) v2.2.443: 15 Detailed reports declared an asset name and never produced one (e96f0e26)
-- release(SI) v2.2.442: a Tier 0 report was fabricating every finding it produced (84bd5cb4)
-- release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
-- release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
-- fix(SI) v2.2.439 tests: my own new test file failed the gate it was written to protect (b202c607)
-
----
-
 ## v2.2.460 — an uncertain answer no longer sends a query where it cannot work
 
 Before a report runs, the engine asks Defender whether one of SecurityInsight's own tables can be
@@ -299,8 +260,8 @@ it affects one bucket and not the report as a whole.
 
 ### Also in this release
 
-Internal tracking identifiers have been removed from console, log and email output. Messages such as
-"this is how #58.5 hid for 108 releases" meant nothing outside the development repository. The
+Internal tracking identifiers have been removed from console, log and email output. Messages that quoted
+internal issue numbers meant nothing outside the development repository. The
 operational meaning of each message is unchanged.
 
 ## v2.2.454 — tall rows read as though the values belonged to the row below
@@ -381,7 +342,7 @@ touched.** Rows are rebuilt only when they actually carry an artefact, so the no
 property-name scan and allocates nothing.
 ## v2.2.452 — the query-failure message is one line instead of a twenty-line stack dump
 
-**Operator: "it looks very amateur."** When an advanced-hunting query hit a service limit, the log
+When an advanced-hunting query hit a service limit, the log
 printed this — **twice**, for the same request:
 
 ```
@@ -447,8 +408,7 @@ PS>TerminatingError(Invoke-RestMethod): "
 **Nothing had failed.** The engine tries the Sentinel data lake first because it is the fastest route
 when available. It is **not onboarded on most tenants**, so "not available for current user" is the
 *expected* reply — the engine notes it, switches to the normal route, and every report completes. The
-message was a routing decision being reported as a fault, twice per attempt, with the workspace
-identifier attached.
+message was a routing decision being reported as a fault, twice per attempt.
 
 ### Why it appeared at all
 
@@ -915,8 +875,8 @@ principal named.
 
 ### 1. One identity was being reported as three assets
 
-In the Detailed AI-summary email, an identity named `SVC-Reporting (Admin, Cloud, ID)` was split on its
-commas and reported as **three separate assets** — `SVC-Reporting (Admin`, `Cloud`, and `ID)`. Bare
+In the Detailed AI-summary email, an identity named `svc-example (Admin, Cloud, ID)` was split on its
+commas and reported as **three separate assets** — `svc-example (Admin`, `Cloud`, and `ID)`. Bare
 words like `Cloud` were then ranked as Tier 0 top-risk assets.
 
 This is not only cosmetic. Each fragment was aggregated as its own asset with its own risk score and
@@ -1000,7 +960,7 @@ for a missing value treated a perfectly good empty list as a failure.
 ### The part worth knowing
 
 **The test suite runs on a different PowerShell than the engines do.** Any defect that depends on the
-host is invisible to it, which is precisely what happened here. The `#25` checks now also execute the
+host is invisible to it, which is precisely what happened here. The impacted-asset list checks now also execute the
 real engine code inside a genuine PowerShell 5.1 process and assert the two hosts agree, so a
 difference like this fails the build instead of shipping.
 
@@ -1052,7 +1012,7 @@ completes and produces both the `.xlsx` and the `.json`.
 
 > **On why this reached you.** The collision cannot happen inside a single report — only across two —
 > so no per-report test could produce it, and none of the offline tests assembled a real cross-report
-> union. That gap is now closed by the test described above.
+> union. The test described above now covers it.
 
 ---
 
@@ -1328,7 +1288,7 @@ cannot hide a valid exposure-graph one. The exclusion decision and the tier are 
 ---
 # Release notes — SecurityInsight v2.2
 
-> **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+> This is the curated changelog.
 
 ---
 
@@ -1367,17 +1327,11 @@ recorded"*.
 
 🔴 **Read this one even if you skip the rest — it changes which assets appear in your reports.**
 
-### The tag did nothing if you set it in the Defender portal
+### A `--Excluded--SI` tag set in Defender excludes the device
 
-You can keep an asset out of Risk Analysis by tagging it `--Excluded--SI`. **If you set that tag as an
-MDE machine tag — the normal way, in the Defender portal — it was ignored.** SecurityInsight only looked
-at the exposure-graph tag lists, never at MDE machine tags.
-
-The tag was even *visible* on the asset in our own output, in its `AssetTags` column, while quietly
-having no effect. That is the worst shape a control can have: it looks applied. Reported by an operator
-who had tagged a large number of devices and kept seeing them in reports.
-
-**Fixed.** MDE machine tags are now read alongside the exposure-graph tag lists.
+You can keep an asset out of Risk Analysis by tagging it `--Excluded--SI`. A `--Excluded--SI` tag set
+in Defender (as an MDE machine tag, the normal way in the Defender portal) now excludes the device; the
+excluded-assets report lists each one. MDE machine tags are read alongside the exposure-graph tag lists.
 
 ⚠️ **Expect fewer assets in your reports after this update**, and that is the correction — those assets
 were supposed to be excluded all along. If you tagged devices and wondered why nothing changed, this is
@@ -1397,9 +1351,8 @@ broken.
   suppressed asset with the tag that did it. It is the inverse of every other report — it deliberately
   does *not* filter excluded assets out, because they are the subject.
 
-**Severity follows the asset's own tier, so a suppressed Tier 0 asset sorts to the top.** That is the
-finding worth reviewing: exclusion tags do not expire, and a critical asset silently suppressed by a tag
-somebody added months ago is a governance gap, not a preference.
+**Severity follows the asset's own tier, so a suppressed Tier 0 asset sorts to the top.** Exclusion
+tags do not expire, so the report is the place to review them.
 
 Assets excluded before you upgrade will still be listed; their reason reads *"tag not recorded"* until
 the endpoint profiler runs again.
@@ -1672,10 +1625,8 @@ see `baseline established`. Comparisons begin on the next run.
 `cmdbName`, `cmdbCriticality` and `cmdbDataSensitivity` were arriving **empty on every run** for anyone
 using modern storage authentication — which is the default. They now populate again.
 
-**What was wrong.** CMDB values are folded onto assets from a small cache, and the job that fills that
-cache still authenticated to storage the old way, with an account key. SecurityInsight stopped carrying
-storage keys some releases ago in favour of identity-based access, so the job quietly did nothing, the
-cache stayed empty, and the columns came through blank. Nothing failed — every run reported success.
+**What changed.** CMDB values are folded onto assets from a small cache. CMDB criticality fills in
+again; the cache uses identity-based storage access, the same as the rest of SecurityInsight.
 
 **`cmdbId` kept populating, which is exactly why nobody noticed.** The identifier was written onto
 assets by the tagging rules, while the record it pointed at was never loaded. A populated column beside
@@ -1697,10 +1648,8 @@ context reaches the findings themselves.
 > empty, so findings on assets you have marked Critical were being scored as though you had never told
 > us. They now carry the weight they should. If your scores rise after this upgrade, that is the reason.
 
-**Two smaller corrections in the same area.** The cache job now understands identity-based storage
-access explicitly rather than inferring it from a missing key, and a step that silently skipped itself
-when it could not authenticate now says so. A component that cannot do its job should never do it
-quietly.
+**Two smaller corrections in the same area.** The cache job now selects identity-based storage access
+explicitly, and a step that cannot complete now says so in the log.
 
 ---
 
@@ -1730,13 +1679,9 @@ used. Sources are never blended, because a value that could have come from eithe
 nobody can explain. And if the chosen source fails, SecurityInsight will say so rather than quietly
 falling back — stale-but-plausible data is harder to spot than missing data.
 
-> ⚠️ **Known issue, now documented and being worked.** CMDB enrichment is **not currently populating**
-> `cmdbName`, `cmdbCriticality` or `cmdbDataSensitivity`. The cache these values are folded from is
-> written using an older storage authentication method that the product no longer uses by default, so
-> the cache stays empty and those columns come through blank — on a run that otherwise reports success.
-> `cmdbId` is still populated, which is why the problem is easy to miss. If you rely on CMDB criticality
-> in your reporting, treat those columns as unavailable until this is fixed. No data is lost; the source
-> CSV is untouched.
+> ⚠️ **Known issue in this release, fixed in v2.2.422.** CMDB enrichment does not populate
+> `cmdbName`, `cmdbCriticality` or `cmdbDataSensitivity` in this release; `cmdbId` is still populated.
+> No data is lost; the source CSV is untouched.
 
 ---
 
@@ -2022,11 +1967,8 @@ Your own rules use the `*.custom.yaml` name; ours use `*.locked.yaml` and `*.cus
 That naming is what keeps an update from replacing your work, so our build now refuses to release if
 that boundary is ever crossed — if a file with your suffix were about to ship, or if the rule
 protecting those files from being packaged stopped working. A release is blocked rather than
-shipped.
-
-This matters because the protection is a convention rather than a lock, and a similar naming slip
-has bitten before: a file named like a template but not quite matching it was once treated as a live
-rule.
+shipped. Your own rules can also live outside the product folder, where an update never writes
+(v2.2.411).
 
 Also included: internal status corrections to our own records, with no effect on the product.
 
@@ -2040,7 +1982,7 @@ live workspace, and continues internal tidying of the Risk Analysis engine.
 ### v2.2.410 verified
 
 A full Detailed run was launched the documented way —
-`launcher.internal-vm.ps1 -ReportTemplate RiskAnalysis_Detailed` — and followed all the way to the
+`<VM launcher> -ReportTemplate RiskAnalysis_Detailed` — and followed all the way to the
 data:
 
 - the run selected the Detailed destination at every step, including the mail recipients, the data
@@ -2068,7 +2010,7 @@ load in the same order — but the main script is smaller and easier to maintain
 **Nothing changes unless you opt in.** With no configuration, rule loading behaves exactly as it did
 before — that is asserted by our tests, not assumed.
 
-### The problem
+### Background
 
 Your own detection rules (`*.custom.yaml`) sit in the same directories as the rules we ship:
 
@@ -2079,9 +2021,7 @@ asset-profiling-enrichment/endpoint/
     ADDomainController.custom.yaml          <- YOURS
 ```
 
-Your files survive an update because they are not in the update package — not because anything
-protects them. That is a thin guarantee: a shipped file that ever took the same name as one of yours
-would replace it.
+Your own rules can now live outside the product folder, where an update never writes.
 
 ### What you can do now
 
@@ -2119,7 +2059,7 @@ table and its own data collection rule. Which one a run uses is decided by an in
 Launching a run the documented way —
 
 ```
-launcher.internal-vm.ps1 -ReportTemplate RiskAnalysis_Detailed
+<VM launcher> -ReportTemplate RiskAnalysis_Detailed
 ```
 
 — selected the Detailed **catalog** but left the run-mode flag on its default. The flag, not the
@@ -2268,18 +2208,13 @@ a live detection rule. This release is that fix.
 
 **Symptom.** None you could see. Runs completed normally and reported success.
 
-**Cause.** A stray duplicate of an example file — `ADDomainController.custom.sample - Copy.yaml` —
-shipped inside the profiling rules folder. The engine skipped example files by looking for `.sample.`
-in the name, and this name reads `.sample - Copy.yaml`, so the check did not match it. The file was
-loaded as a genuine rule.
+**Cause.** A stray duplicate of an example file shipped inside the profiling rules folder and was
+loaded as a rule. On hosts without their own `ADDomainController.custom.yaml` it decided how domain
+controllers were classified instead of our shipped `ADDomainController.locked.yaml`. Hosts that *had*
+written their own override were unaffected: their file still won.
 
-It then went further. When two rules share an id, the engine keeps one. **On any host that had not
-written its own `ADDomainController.custom.yaml`, the example won** — so the sample's contents, not
-our shipped `ADDomainController.locked.yaml`, decided how domain controllers were classified. Hosts
-that *had* written their own override were unaffected: their file still won.
-
-**Fix.** The engine no longer guesses which files are examples. **A rule is now `*.locked.yaml` (ours)
-or `*.custom.yaml` (yours), and nothing else is loaded** — examples, editor backups, `- Copy`
+**Fix.** Only `*.locked.yaml` and `*.custom.yaml` files are loaded as rules. **A rule is now
+`*.locked.yaml` (ours) or `*.custom.yaml` (yours), and nothing else is loaded** — examples, editor backups, `- Copy`
 duplicates and scratch files are all ignored, whatever they are called. Example files still ship and
 still sit beside the rules for you to copy from; they simply cannot take effect until you rename one
 to `*.custom.yaml`. The stray file is renamed to the correct `ADDomainController.custom.sample.yaml`.
@@ -2458,8 +2393,7 @@ verbose/diagnostic log and the per-query error dumps.
 
 ### Tests
 
-New offline suite `tests/pester/SI-RiskAnalysis-QueryBuild.Tests.ps1` (13 tests, PS 5.1) pins
-both behaviours: dynamic grouping keys are always cast (and numeric columns never are), and the
+New tests cover both behaviours: dynamic grouping keys are always cast (and numeric columns never are), and the
 fallback logger stays silent on a superseded attempt while still emitting one warning when all
 routes fail.
 
@@ -2467,13 +2401,10 @@ routes fail.
 
 ## v2.2.402 — Publish-safety: scrub example identifiers from the public docs
 
-Housekeeping release. Replaced a handful of real example identifiers that had
-accumulated in older release-note entries (a company name, a tenant id, a
-subscription id, a Key Vault name, a tenant domain) with generic placeholders
+Housekeeping release. Examples in the release notes use generic placeholders
 (`Contoso`, `<tenant-id>`, `<subscription-id>`, `<key-vault>`,
-`<tenant>.onmicrosoft.com`). No functional change. Going forward an automated
-sanitization gate in the publish pipeline blocks any publish whose public docs
-contain a real customer / tenant / secret value, so this can't recur.
+`<tenant>.onmicrosoft.com`). No functional change. An automated check in the
+publish pipeline keeps the public docs to placeholder values.
 
 ---
 
@@ -2593,7 +2524,7 @@ Rules 1-3 now use `where tostring(rawData.onboardingStatus) matches regex @"(?i)
 
 ### Why
 
-v2.2.395 alias-fixed the SenseDeviceId column name but the three Auto-* rules still queried `DeviceInfo` directly, with no skip-if-already-tagged gate. On a 1-hour cron that means the engine would re-emit MDE bulk-tag calls every run for the same devices forever, wasting MDE API quota and noisy in the launcher log. The existing legacy custom tagging rules (e.g. `Temp-Client-Devices--excluded--SI`) are rooted in `ExposureGraphNodes` with a `where array_index_of(AssetTagsArray, AssetTagName) == -1` delta filter that makes the cron only touch the actual delta -- this release brings the Auto-* rules in line with that pattern.
+v2.2.395 alias-fixed the SenseDeviceId column name but the three Auto-* rules still queried `DeviceInfo` directly, with no skip-if-already-tagged gate. On a 1-hour cron that means the engine would re-emit MDE bulk-tag calls every run for the same devices forever, wasting MDE API quota and noisy in the launcher log. The existing legacy custom tagging rules (e.g. `<YourTag>--Excluded--SI`) are rooted in `ExposureGraphNodes` with a `where array_index_of(AssetTagsArray, AssetTagName) == -1` delta filter that makes the cron only touch the actual delta -- this release brings the Auto-* rules in line with that pattern.
 
 ### What changed
 
@@ -2643,8 +2574,8 @@ The Defender batch path emits a single `Defender tagging batch` block with `Coun
 Added per-device verbose lines right before the bulk call:
 
 ```
-[INFO] Tagging device desktop-vjdfuj7 (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
-[INFO] Tagging device desktop-u6hr6kj (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
+[INFO] Tagging device desktop-example1 (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
+[INFO] Tagging device desktop-example2 (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
 ...
 ```
 
@@ -2731,7 +2662,7 @@ v2.2.392 renamed `AssetTagging.AutoExclude.locked.yaml` -> `AssetTagging.locked.
 
 ## v2.2.392 — Rename `AssetTagging.AutoExclude.locked.yaml` -> `AssetTagging.locked.yaml` (engine default filename)
 
-v2.2.390 shipped the auto-exclude rules in `AssetTagging.AutoExclude.locked.yaml`, but the asset-tagging launcher (`launcher/asset-tagging/launcher.internal-vm.ps1`) defaults `$global:LockedYamlFile` to `AssetTagging.locked.yaml`. Customers running the launcher hit `No YAML found. Expected either Locked+Custom or legacy file in SettingsPath` because no file matched the expected name.
+v2.2.390 shipped the auto-exclude rules in `AssetTagging.AutoExclude.locked.yaml`, but the asset-tagging VM launcher defaults `$global:LockedYamlFile` to `AssetTagging.locked.yaml`. Customers running the launcher hit `No YAML found. Expected either Locked+Custom or legacy file in SettingsPath` because no file matched the expected name.
 
 Fix: renamed the file via `git mv` to match the launcher default. No content change; only the filename. Customers who set `$global:LockedYamlFile` to a custom value should leave their override in place; everyone else gets the rule baseline auto-loaded.
 
@@ -2787,7 +2718,7 @@ The customer never touches KQL again to change scope.
 
 ### Why
 
-Customer asks: "I have devices that Defender XDR can't fully onboard (`Can be onboarded` / `Insufficient info` / `Unsupported`). They keep showing up in profiling + RA reports as Tier-something garbage. Can I flip one switch per bucket to make them invisible to SI?"
+Devices Defender cannot fully onboard (`Can be onboarded` / `Insufficient info` / `Unsupported`) can be left out with one setting per bucket; they stay listed in the excluded-assets report (from v2.2.430).
 
 ### What's new
 
@@ -2807,7 +2738,7 @@ Three pieces, all additive:
 
 2. **New YAML field `EnabledByConfigFlag:`** on AssetTagging rules. Engine reads the JSON config at startup; a rule with this field only fires when the boolean at the named dotted path resolves to `true`. Rules without the field always fire (back-compat).
 
-3. **Three new auto-exclude tagging rules** in `asset-profiling-enrichment/endpoint/AssetTagging.AutoExclude.locked.yaml`, one per OnboardingStatus bucket. Each is gated by the corresponding flag. When enabled, the rule queries `DeviceInfo` for the matching `OnboardingStatus`, tags each device with `Auto-<bucket>--Excluded--SI`, which the existing `RiskAnalysisGlobalExclusions.custom.json` already honors via `ExcludedAssetTags: ["--Excluded--SI"]` — so the device drops out of every RA report AND every profiling rule on the next run.
+3. **Three new auto-exclude tagging rules** in `asset-profiling-enrichment/endpoint/AssetTagging.AutoExclude.locked.yaml`, one per OnboardingStatus bucket. Each is gated by the corresponding flag. When enabled, the rule queries `DeviceInfo` for the matching `OnboardingStatus`, tags each device with `Auto-<bucket>--Excluded--SI`, which the existing `RiskAnalysisGlobalExclusions.custom.json` already honors via `ExcludedAssetTags: ["--Excluded--SI"]` — so the device is left out of Risk Analysis and profiling on the next run, and stays listed in the excluded-assets report (from v2.2.430).
 
 ### Files changed
 
@@ -2819,7 +2750,7 @@ Three pieces, all additive:
 ### How to use it
 
 ```powershell
-cd SOLUTIONS\SecurityInsight\config
+cd <SecurityInsight folder>\config
 Copy-Item asset-tagging.config.sample.json asset-tagging.config.json
 notepad asset-tagging.config.json     # flip the booleans you want
 # Run the tagging engine -- gated rules now fire only for enabled flags
@@ -2833,7 +2764,7 @@ Existing customers see zero behaviour change until they create the JSON file and
 
 Follow-up to v2.2.388. The engine + RULE-REFERENCE + README sections already documented the new field, but the per-rule sample files (which operators copy from when building their `.custom.yaml`) didn't reference it. Two changes:
 
-1. **Master template** (`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`): added a full `USE CASE 3: excludeAssets` worked example with the SCOM-on-legacy-finance-box scenario, including a comparison block (excludeAssets vs `mode: disable` vs MDE `--Excluded--SI` tag).
+1. **Master template** (`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`): added a full `USE CASE 3: excludeAssets` worked example with a legacy-host scenario, including a comparison block (excludeAssets vs `mode: disable` vs MDE `--Excluded--SI` tag).
 
 2. **Every `.custom.sample.yaml`** under `asset-profiling-enrichment/` (549 files): injected an `excludeAssets:` line into the QUICK SYNTAX REFERENCE block in each header, between the existing `cmdbId:` line and the closing `===` separator, cross-referencing the master template's Use Case 3 for the full worked example.
 
@@ -2860,8 +2791,8 @@ detections:
           tvmSoftwareNames:
             - 'microsoft/system_center'
     excludeAssets:                  # NEW
-      - 'oldlegacybox01'             # exact name (CI)
-      - 'finance-svr-*'              # PowerShell -like wildcards
+      - 'legacy-host01'              # exact name (CI)
+      - 'app-svr-*'                  # PowerShell -like wildcards
     set: { Tier: 0, Purpose: 'System Center role', Category: 'Application Service' }
 ```
 
@@ -2880,24 +2811,24 @@ Drop a `<RuleId>.custom.yaml` next to the locked file with the same `id:` field,
 
 ---
 
-## v2.2.387 — `Connect-PlatformBootstrap` Auto mode now falls back from Managed Identity to Certificate when the local VM's MI lives in a different tenant than the target (cross-tenant launcher scenario). Closes a silent "MI succeeded probe, MI auth failed, hard-throw" gap.
+## v2.2.387 — A VM that scans another tenant signs in with its certificate automatically (Auto mode falls back from Managed Identity to Certificate)
 
 ### Why
 
 Customer scenario: a VM hosted in **Tenant A** runs the SI launcher against **Tenant B** (no MI relationship — config has `BootstrapAppId` + `BootstrapThumbprint` pointing at a Tenant B SPN cert in the VM's cert store, `BootstrapAuth: "Auto"`).
 
-What happened before v2.2.387: the Auto probe at `Connect-PlatformBootstrap.ps1:147` hits the local IMDS endpoint (`169.254.169.254`) and gets a 200 — because the VM IS Azure-hosted, just in the wrong tenant. Auto then resolves to `ManagedIdentity` and `Connect-AzAccount -Identity -Tenant <Tenant-B>` immediately throws `"The provided account MSI@... does not have access to subscription ..."`. The MI branch's `catch` re-threw, the launcher fell back to `platform-defaults.ps1` (which doesn't connect — it just defines variables), so the bootstrap was effectively un-authenticated for the rest of the run.
+A VM that scans another tenant signs in with its certificate automatically. Before v2.2.387 the Auto probe found the Azure instance metadata service (the VM is Azure-hosted, just in another tenant), chose Managed Identity, and the run then could not sign in to Tenant B.
 
 The Auto contract was supposed to be "MI if reachable AND works; else cert" — but the code only honoured the "reachable" half of that.
 
 ### What changed
 
-`FUNCTIONS/AutomateITPS/Public/Connect/Connect-PlatformBootstrap.ps1`:
+The platform sign-in step:
 
 - **Hoisted the Certificate auth into a script block** (`$connectCert`) so it can be invoked from either the Certificate branch OR as a fallback from the MI branch — PowerShell `switch` does not fall through by default.
 - **MI branch now wraps `Connect-AzAccount -Identity` in a soft-fail** instead of an immediate re-throw. If MI fails AND `BootstrapAppId + BootstrapThumbprint` are present in `platform-config.json`, the cert script block runs immediately as the fallback. Only when cert creds are absent does the original "MI failed" error throw.
 - **Updated the throw message** to call out the cross-tenant case explicitly so future operators see the exact remediation (`Set BootstrapAuth:"Certificate"` or add cert creds).
-- **`$AuthMethod` is rewritten to `"Certificate"` after the fall-through** so the KV smoke-test log line at line ~270 reflects the actual auth method that worked, not the originally-requested one.
+- **`$AuthMethod` is rewritten to `"Certificate"` after the fall-through** so the KV smoke-test log line reflects the actual auth method that worked, not the originally-requested one.
 
 ### Migration notes
 
@@ -2919,13 +2850,13 @@ Parse-checked. Behavioural test path:
 
 ### Why
 
-After v2.2.385 landed, the customer-reported screenshot showed Detailed template correctly summing (per-domain 945+96+66+0 = 1107 ≡ Total cell 1107), but the matching Summary-template email of the same run-window showed per-domain 945+96+66+0 = 1107 ≡ Total cell **248** — a 4.5× discrepancy.
+After v2.2.385 landed, in one example the Detailed template showed correctly summing (per-domain 945+96+66+0 = 1107 ≡ Total cell 1107), but the matching Summary-template email of the same run-window showed per-domain 945+96+66+0 = 1107 ≡ Total cell **248** — a 4.5× discrepancy.
 
 Root cause: when v2.2.350's 24h KPI cache wins for the second template (Summary in this case), `SevByDomain` is rehydrated from the cache (so per-domain rows show the first template's counts), but `SevCount` + `TotalRows` stay LIVE (computed from this template's own row count). Detailed-template's live row count equals its per-domain sum 1:1 (one row per asset-finding), so the asymmetry was invisible there. Summary-template collapses many asset-findings into a single aggregate row, so its live row count is ~4-5× smaller than the cached per-domain sums → Total cell looks tiny next to the inherited per-domain rows.
 
 ### What changed
 
-`engine/risk-analysis/Invoke-RiskAnalysis.ps1` — primary cache-rehydrate block (line ~9722) **and** race-detected backfill block (line ~9760):
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` — primary cache-rehydrate block **and** race-detected backfill block:
 
 - **Derive `SevCount` from cached `SevByDomain`** when the cache wins — sum Critical/High/Medium/Low/Other across all rehydrated domains. Total row's per-severity cells now match the column sum of per-domain rows by construction.
 - **Derive `TotalRows` from cached `SevByDomain`** — sum the per-domain `Total` field. Total row's Total cell now matches the column sum of per-domain Total cells.
@@ -2935,14 +2866,14 @@ Same fix applied to both cache-rehydrate sites so race-detected backfills (concu
 
 ### Migration notes
 
-- **Summary-template emails will show LARGER Total cells after upgrade** — they'll now equal the per-domain row sum (e.g. 1107 in the customer screenshot) instead of the artificially-small live-collapsed row count (248). This is the correct number for "how many findings does the headline KPI represent across this 24h cache window."
+- **Summary-template emails will show LARGER Total cells after upgrade** — they'll now equal the per-domain row sum (e.g. 1107 in the example above) instead of the artificially-small live-collapsed row count (248). This is the correct number for "how many findings does the headline KPI represent across this 24h cache window."
 - **Detailed-template emails unchanged numerically** — Detailed's live tally already matched its per-domain sum 1:1, so derivation produces the same value as the prior live path.
 - **No config knobs, no opt-out.** Pure render-side consistency fix.
 - **Headline KPI score unchanged.** GlobalScore comes from the cached weighted-domain-average; this commit only affects the Total row of the dashboard table, not score math.
 
 ### Verification
 
-Derivation logic unit-tested against the customer's actual screenshot numbers (Endpoint 91/650/204/0/945, Identity 0/55/18/23/96, Azure 3/59/3/1/66, PublicIP 0/0/0/0/0) — produces C=94 H=764 M=225 L=24 Total=1107 exactly matching Detailed-template's correct totals.
+Derivation logic unit-tested against an example data set — the derived Total row matches the Detailed template's correct totals exactly.
 
 ---
 
@@ -2950,8 +2881,7 @@ Derivation logic unit-tested against the customer's actual screenshot numbers (E
 
 ### Why
 
-**KPI table arithmetic.** Customer report: a Detailed-template email showed
-`Total: 71,278 / 8,218 critical / 58,054 high / 4,700 medium / 306 low` but the per-domain rows above it summed to only `1,122 / 53 / 482 / 281 / 306`. Every column except `Low` was off by orders of magnitude. Root cause: the per-domain rows only count rows whose `SecurityDomain` field matches one of the 4 canonical names (`Endpoint`, `Identity`, `Azure`, `PublicIP`); the Total row uses `$kpi.TotalRows` / `$kpi.SevCount` (unfiltered). Most YAML reports don't declare a top-level `SecurityDomain` so 98% of rows had a blank field and got tallied only in Total, never in per-domain. Operators couldn't tell whether the per-domain rows were a filter, a sample, or a bug.
+**KPI table arithmetic.** In one example a Detailed-template email showed a Total row far larger than the sum of the per-domain rows above it; every column except `Low` was off by orders of magnitude. Root cause: the per-domain rows only count rows whose `SecurityDomain` field matches one of the 4 canonical names (`Endpoint`, `Identity`, `Azure`, `PublicIP`); the Total row uses `$kpi.TotalRows` / `$kpi.SevCount` (unfiltered). Most YAML reports don't declare a top-level `SecurityDomain` so 98% of rows had a blank field and got tallied only in Total, never in per-domain. Operators couldn't tell whether the per-domain rows were a filter, a sample, or a bug.
 
 **Snapshot source attribution.** v2.2.350 introduced a 24h cross-template cache: the headline KPI, the Top-50 risky assets list, and the AI narrative are all snapshots from the FIRST template to complete in the window (Summary or Detailed). The second template's email silently replays the cached snapshot. Operators reading a Detailed-template email at 14:00 couldn't tell whether they were reading content generated live at 14:00 OR content generated by the Summary template at 04:00 and reused. The data (`SourceTemplate`, `GeneratedAt`) was already in the cache; just not rendered.
 
@@ -2988,7 +2918,7 @@ v2.2.359 added the SMTP credential bridge — fall back to KV for `SMTPUser` + `
 if ($global:Context -and ($global:Mail_SendAnonymous -eq $false)) { ... }
 ```
 
-`Mail_SendAnonymous` for most asset-profiling / RA launchers is set in `LauncherConfig.defaults.ps1` (Layer 4), which loads **after** `SecurityInsight.shared-defaults.ps1` (Layer 2). At gate-evaluation time the variable was still `$null`. `$null -eq $false` evaluates to `$false` in PowerShell, so the KV pull silently no-op'd and operators got `User=<NULL> | Password=[len=0] | Anonymous=<unset>` in the resolved-SMTP log line even when their KV had both `SMTPuser` + `SMTPpassword` secrets ready to use.
+`Mail_SendAnonymous` for most asset-profiling / RA launchers is set in `LauncherConfig.defaults.ps1` (Layer 4), which loads **after** `SecurityInsight.shared-defaults.ps1` (Layer 2). At gate-evaluation time the variable was still `$null`. `$null -eq $false` evaluates to `$false` in PowerShell, so the Key Vault lookup for the SMTP credentials did not run even when Key Vault held them.
 
 The bridge worked for the narrow case where an operator set `Mail_SendAnonymous = $false` directly in `platform-defaults.ps1` (Layer 1b). Most customers don't — they rely on the per-launcher default.
 
@@ -3017,7 +2947,7 @@ Verification matrix:
 
 - No config change needed. Customers whose KV holds the `SMTPuser` + `SMTPpassword` secrets (any casing — Azure KV secret names are case-insensitive) and whose engine launcher leaves `Mail_SendAnonymous` at the default get automatic credential resolution on next run.
 - Customers using anonymous SMTP (no auth) must already have `$global:Mail_SendAnonymous = $true` in their `platform-defaults.ps1` or `SecurityInsight.custom.ps1` — that path is unchanged.
-- The `[shared-defaults] SMTP resolved: ...` log line at the start of every engine run is the verification surface. After upgrade, customers in the broken state above should see `User=<value from KV> | Password=[len=N] | Anonymous=False` instead of `User=<NULL> | Password=[len=0] | Anonymous=<unset>`.
+- The `[shared-defaults] SMTP resolved: ...` log line at the start of every engine run is the verification surface. The run log says whether SMTP credentials were found in Key Vault.
 - Final fallback bridges from `$global:HighPriv_SMTP_*` (the v1 convention) still fire as the last resort if neither the customer nor KV provided the creds — no behavioural change there.
 
 ---
@@ -3173,11 +3103,11 @@ if (-not (Test-Path variable:global:SMTP_UseSSL)) { $global:SMTP_UseSSL = $true 
 ```
 
 These never had safe shipped values. Customer relays vary too widely:
-- internal on-prem MTAs typically run on `:25` unauthenticated, `SMTP_UseSSL=$false`
+- on-premises mail servers typically run on `:25` unauthenticated, `SMTP_UseSSL=$false`
 - M365 / Office365 relays run on `:587` with TLS
-- Brevo / SendGrid auth relays run on `:587` (TLS) or `:465` (SMTPS)
+- authenticated relay services run on `:587` (TLS) or `:465` (SMTPS)
 
-Shipping `587 + UseSSL=$true` as a Layer 4 default broke internal-VM tenants whose platform-defaults file didn't explicitly set `SMTPPort=25` -- the guarded set fired and silently overrode their environment.
+Shipping `587 + UseSSL=$true` as a Layer 4 default broke installs that relay through an on-premises mail server whose platform-defaults file didn't explicitly set `SMTPPort=25` -- the guarded set fired and silently overrode their environment.
 
 The other four SMTP variables (`SmtpServer`, `SMTPUser`, `SMTPPassword`, `SMTPFrom`) were already correctly left unset by the defaults file; this release brings `SMTPPort` + `SMTP_UseSSL` into line with that policy.
 
@@ -3188,7 +3118,7 @@ Customer SMTP environments differ in three independent dimensions (port, TLS, au
 ### Impact
 
 - **Customers whose platform-defaults.ps1 already sets `SMTPPort` + `SMTP_UseSSL`**: zero change -- those layers always won anyway.
-- **Customers relying on the shipped 587/TLS defaults (silently)**: must add the lines explicitly to their customer config. The engine's fail-fast SMTP check (added in v2.2.366) will surface the missing variables loudly if they're needed for an actual mail send. Sample values are in `launcher/risk-analysis/LauncherConfig.custom.sample.ps1` lines 91-92 (commented Brevo + community-typical defaults).
+- **Customers relying on the shipped 587/TLS defaults (silently)**: must add the lines explicitly to their customer config. The engine's fail-fast SMTP check (added in v2.2.366) will surface the missing variables loudly if they're needed for an actual mail send. Sample values are in `launcher/risk-analysis/LauncherConfig.custom.sample.ps1` (commented relay defaults).
 
 ### Operator note
 
@@ -3198,7 +3128,7 @@ $global:SMTPPort    = 587
 $global:SMTP_UseSSL = $true
 ```
 
-For internal-automation tenants with on-prem MTA, add to `platform-defaults.ps1`:
+For installs that relay through an on-premises mail server, add to `platform-defaults.ps1`:
 ```powershell
 $global:SMTPPort    = 25
 $global:SMTP_UseSSL = $false
@@ -3229,7 +3159,7 @@ One-shot startup log at Collect-stage entry tells the operator what state they'r
 
 #### 2. Truncation threshold was wrong (60000 -> 30000 UTF-16 chars)
 
-`engine/asset-profiling/stages/Invoke-Classify.ps1` line ~910 -- the `if ($verdictJson.Length -gt 60000)` guard counted **UTF-16 characters** but compared against what an operator might mistake for a **byte budget**. Azure Tables string-property cap is **32,768 UTF-16 chars (== 64 KB)**, so a 60000-char verdict was already 120 KB UTF-16 -- nearly double the limit. SPN rows with heavy TierSources (many role assignments) still tripped `PropertyValueTooLarge` despite the guard. Threshold dropped to 30000 chars so even fully-ASCII verdicts stay comfortably under the cap.
+`engine/asset-profiling/stages/Invoke-Classify.ps1` -- the `if ($verdictJson.Length -gt 60000)` guard counted **UTF-16 characters** but compared against what an operator might mistake for a **byte budget**. Azure Tables string-property cap is **32,768 UTF-16 chars (== 64 KB)**, so a 60000-char verdict was already 120 KB UTF-16 -- nearly double the limit. SPN rows with heavy TierSources (many role assignments) still tripped `PropertyValueTooLarge` despite the guard. Threshold dropped to 30000 chars so even fully-ASCII verdicts stay comfortably under the cap.
 
 #### 3. Self-heal only on column-type drift (`InvalidInput`)
 
@@ -3249,7 +3179,7 @@ Tenants that DO run incremental and benefit from the cache opt in with one line 
 
 - **Default behavior change**: fresh installs and tenants that haven't set the global will see zero fingerprint cache writes. The Collect stage summary `cadence-skipped` count will read 0 on every run (no cache means no shortcuts). Risk-analysis + Excel output unaffected.
 - **High-volume tenants**: zero noise. The 4 engines that previously each generated 50+ TerminatingError lines per run are silent on the fingerprint path.
-- **Opt-in tenants**: same behavior as before MINUS the three bug fixes -- so smaller verdicts (30K char cap), fewer useless retries, no transcript noise even on 400. The opt-in path is strictly better than the pre-v2.2.378 always-on path.
+- **Opt-in tenants**: same behaviour as before, plus the three fixes -- so smaller verdicts (30K char cap), fewer useless retries, no transcript noise even on 400. The opt-in path is strictly better than the pre-v2.2.378 always-on path.
 
 ### Operator note
 
@@ -3260,17 +3190,17 @@ $global:SI_FingerprintCache_Enabled = $true
 
 ---
 
-## v2.2.377 — Docs: new README § 5.8 covering the v2.2.376 Detailed-scope trim (shipped defaults table + how to widen via YAML edit or custom overlay).
+## v2.2.377 — Docs: new README § 5.8 covering the v2.2.376 Detailed-scope trim (shipped defaults table + how to widen via a custom overlay).
 
 ### What changed
 
-`README.md` — new § 5.8 "Detailed report severity scope (defaults + how to widen)" inserted between § 5.7 (Weighted risk-factor rules) and § 6 (Severity & Criticality Definitions). TOC entry added at line 127.
+`README.md` — new § 5.8 "Detailed report severity scope (defaults + how to widen)" inserted between § 5.7 (Weighted risk-factor rules) and § 6 (Severity & Criticality Definitions). TOC entry added.
 
 Covers:
 - Shipped `SecuritySeverityScope:` for the three trimmed Detailed reports (Device_Missing_CVEs_Detailed, Device_Recommendations_Detailed, Azure_Recommendations_Detailed)
 - Per-report rationale (CVE Detailed keeps Medium because exploit-chain potential; config-baseline Detailed reports drop Medium because hygiene-heavy)
 - LA + Summary still receive full severity distribution (the trim is Excel/email-only)
-- Two paths to widen scope: in-place YAML edit (low friction, lost on `git pull`) vs custom YAML overlay (survives upgrades but full-entry replace, high maintenance)
+- How to widen scope: override the report in `RiskAnalysis_Queries_Custom.yaml` (survives upgrades)
 
 The auto-generated `docs/risk-analysis-detection.md` was NOT regenerated in this release -- the doc-generator output diverged structurally from the checked-in version (26K-line churn from formatting drift), which would mask the actual scope change. Operators wanting current per-report scope reference should regenerate locally via `engine/risk-analysis/tools/Build-QueriesDoc.ps1`.
 
@@ -3296,7 +3226,7 @@ The auto-generated `docs/risk-analysis-detection.md` was NOT regenerated in this
 | `Device_Recommendations_Detailed` | VeryHigh, High, Medium-High, Medium, **Low** | VeryHigh, High, Medium-High | TVM configuration baselines are hygiene-heavy at Medium tier (CIS-style optional hardening) |
 | `Azure_Recommendations_Detailed` | VeryHigh, High, Medium-High, Medium, **Low** | VeryHigh, High, Medium-High | Azure EG recommendations are cost/perf/best-practice drift at Medium tier, not security risk |
 
-The engine's post-filter at `Invoke-RiskAnalysis.ps1:6784` drops rows whose `SecuritySeverity` is outside scope, so the row count shrinks **before** risk-scoring, sort, and Excel export.
+The engine's post-filter at `Invoke-RiskAnalysis.ps1` drops rows whose `SecuritySeverity` is outside scope, so the row count shrinks **before** risk-scoring, sort, and Excel export.
 
 ### Why
 
@@ -3316,7 +3246,9 @@ Excel itself handles 1,048,576 rows; the runtime ceiling is OpenXML export speed
 
 ### Restoring the dropped severities
 
-There is no runtime override for `SecuritySeverityScope` -- the engine reads the scope directly from `RiskAnalysis_Queries_Locked.yaml`. To restore Low (or Low + Medium) for a specific tenant, edit the report's `SecuritySeverityScope:` block in that file in the customer's deployment.
+Override it in `RiskAnalysis_Queries_Custom.yaml` (survives upgrades).
+
+> Reverted in v2.2.449: every report covers the full severity range by default.
 
 ---
 
@@ -3443,11 +3375,11 @@ The "ALWAYS emit the column (even as null)" contract from v2.2.282 is preserved.
 The Output phase row-builder was measured at ~649 ms/row on a 13.5K-asset customer run (2.5 hours for Output phase alone, 75% of the engine's total runtime). Two targeted hot-spots fixed:
 
 - **Schema iteration pre-filter** (`Get-SIAzureSchema`). The per-row iteration over ~282 schema fields re-evaluated `emit`, `purpose`, and name-blocklist checks every time. Filtered once at first call, cached as `$script:_SISchemaCache['AzureEmitFields']`. Eliminates ~3.6M redundant property checks across a 13K-asset run.
-- **Risk-factor wrapper construction** (line ~561). Was building the `$rfRecord` pscustomobject with an Add-Member-per-key loop (~300 Add-Member calls per row -- one of PS 5.1's slowest operations). Replaced with a single hashtable union + `[pscustomobject]$hash` cast, ~50x faster per row.
+- **Risk-factor wrapper construction**. Was building the `$rfRecord` pscustomobject with an Add-Member-per-key loop (~300 Add-Member calls per row -- one of PS 5.1's slowest operations). Replaced with a single hashtable union + `[pscustomobject]$hash` cast, ~50x faster per row.
 
 **2. `engine/asset-profiling/storage/StorageContext.ps1` -- non-ASCII SafeKey**
 
-`ConvertTo-SISafeKey` now falls back to a SHA256 hash (`h_<64hex>`) when the sanitized key contains non-ASCII chars OR exceeds 512 chars. Customer log showed `Set-SIFingerprintRecord PUT failed ... InvalidInput` for two ScheduledQueryRule assets with Danish chars in the name (`stoppet på avd host`, `ikke kørt i 4 timer`). Hash fallback ensures every AssetId produces a valid PK regardless of content. The original AssetId is still preserved in the `original_asset_id` row property for human-readable debugging in Storage Explorer.
+`ConvertTo-SISafeKey` now falls back to a SHA256 hash (`h_<64hex>`) when the sanitized key contains non-ASCII chars OR exceeds 512 chars. Customer log showed `Set-SIFingerprintRecord PUT failed ... InvalidInput` for two ScheduledQueryRule assets with Danish chars in the name (such as `å` or `ø`). Hash fallback ensures every AssetId produces a valid PK regardless of content. The original AssetId is still preserved in the `original_asset_id` row property for human-readable debugging in Storage Explorer.
 
 **3. `engine/asset-profiling/storage/FingerprintCache.ps1` -- silent 404/409**
 
@@ -3514,7 +3446,7 @@ No risk to correctness: any inherited measurement biases toward over-bucketing (
 
 ### What changed
 
-`engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- four cache-read sites (lines ~8454, 9029, 9162, 9390) handled `$cached.GeneratedAt` by calling `[DateTime]::Parse()` directly. Now they branch on type: if the value is already `[DateTime]` (because `ConvertFrom-Json` auto-materialized the ISO 8601 string), use it directly; otherwise parse the string with `InvariantCulture`.
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- four cache-read sites handled `$cached.GeneratedAt` by calling `[DateTime]::Parse()` directly. Now they branch on type: if the value is already `[DateTime]` (because `ConvertFrom-Json` auto-materialized the ISO 8601 string), use it directly; otherwise parse the string with `InvariantCulture`.
 
 ```powershell
 $_gen = if ($cached.GeneratedAt -is [DateTime]) { [DateTime]$cached.GeneratedAt }
@@ -3561,7 +3493,7 @@ Operator-facing labels should describe WHAT the layer is, not which release intr
 
 ### What changed
 
-`launcher/_lib/Initialize-LauncherConfig.ps1` -- the snapshot writer's `$layerOrder` array (line ~343) had a label drift: it listed `'Layer 1 - platform-defaults (internal)'` (a label no longer emitted by `_CfgRecordLayer`), but the actual labels in use are:
+`launcher/_lib/Initialize-LauncherConfig.ps1` -- the snapshot writer's `$layerOrder` array had a label drift: it listed `'Layer 1 - platform-defaults (internal)'` (a label no longer emitted by `_CfgRecordLayer`), but the actual labels in use are:
 
 - `'Layer 1 - Connect-Platform (v2.3)'`
 - `'Layer 1 - platform-defaults (v2.2 fallback)'`
@@ -3600,9 +3532,9 @@ No engine behavior change -- purely a snapshot-formatting fix.
 
 ### Why
 
-Customer (internal-automation platform user) had `$global:SMTPUser = "svc-automation@<tenant>.eu"` set by their platform-defaults as the FROM address (legacy convention -- variable name mismatched the semantic intent). The actual SMTP relay LOGIN + PASSWORD live in KV under `SMTPuser` / `SMTPpassword`.
+Customer (internal-automation platform user) had `$global:SMTPUser = "<from-address>"` set by their platform-defaults as the FROM address (legacy convention -- variable name mismatched the semantic intent). The actual SMTP relay LOGIN + PASSWORD live in KV under `SMTPuser` / `SMTPpassword`.
 
-Previous SI behavior (v2.2.359-365): the bridge code was conditional `if (-not $global:SMTPUser)`, so platform-defaults' value (the from-address) "won" and the KV lookup never fired. SI ended up using the from-address as the SMTP login -- Brevo rejected the AUTH with `5.7.0 Please authenticate first`.
+Previous SI behavior (v2.2.359-365): the bridge code was conditional `if (-not $global:SMTPUser)`, so platform-defaults' value (the from-address) "won" and the KV lookup never fired. SI ended up using the from-address as the SMTP login -- the relay rejected the AUTH with `5.7.0 Please authenticate first`.
 
 New v2.2.366 behavior: when running under internal automation with authenticated mail, ALWAYS promote+pull so SMTPUser ends up containing the actual relay login from KV, never the from-address.
 
@@ -3632,7 +3564,7 @@ New v2.2.366 behavior: when running under internal automation with authenticated
 
 Customer report: deleted `dcr-si-run-health` to clean stale schema → engine repeatedly failed to recreate it because of the type-derivation bug above. The DCR never came back automatically.
 
-Separate customer report: ran full RA Summary for 24min, then mail-dispatch at the END failed with Brevo `Please authenticate first` because SMTPUser content was wrong. Operator spent the entire run unaware mail was misconfigured. Pre-flight now throws at startup so the operator sees the issue immediately.
+Separate customer report: ran full RA Summary for 24min, then mail-dispatch at the END failed with the relay's `Please authenticate first` because SMTPUser content was wrong. Operator spent the entire run unaware mail was misconfigured. Pre-flight now throws at startup so the operator sees the issue immediately.
 
 ### Impact
 
@@ -3662,7 +3594,7 @@ Separate customer report: ran full RA Summary for 24min, then mail-dispatch at t
 
 `launcher/_lib/SecurityInsight.shared-defaults.ps1`:
 
-3. **SMTPFrom bridge** from `$global:HighPriv_SMTP_From` (alongside the existing `HighPriv_SMTP_UserName` / `HighPriv_SMTP_Password` bridges). Safe no-op when the platform-defaults layer doesn't define `HighPriv_SMTP_From`. Reinforces the v2.2.359 convention: `SMTPUser` = SMTP relay LOGIN, `SMTPFrom` = visible from-address header. The two are semantically distinct (Brevo-style relays use a service-account login like `XXX@smtp-brevo.com` while the from header carries the tenant's `svc-automation@yourdomain.com`).
+3. **SMTPFrom bridge** from `$global:HighPriv_SMTP_From` (alongside the existing `HighPriv_SMTP_UserName` / `HighPriv_SMTP_Password` bridges). Safe no-op when the platform-defaults layer doesn't define `HighPriv_SMTP_From`. Reinforces the v2.2.359 convention: `SMTPUser` = SMTP relay LOGIN, `SMTPFrom` = visible from-address header. The two are semantically distinct (some relays use a service-account login like `<relay-login>` while the from header carries the tenant's `<from-address>`).
 
 ### Why
 
@@ -3768,7 +3700,7 @@ No caps. No hardcoded magic numbers. Self-correcting per measurement.
 
 1. **New measurement** in `Resolve-ProfileCLLetBlocks`: after each successful CL inline, record `$script:_LastHybridBytesPerRow = datatableLen / bucketRows.Count`. Free side-effect of work already happening.
 
-2. **Escalation formula rewrite** (was line 7055):
+2. **Escalation formula rewrite**:
 
    ```powershell
    # Before:
@@ -3876,10 +3808,10 @@ After: the catch block extracts the raw Azure error body (from `ErrorDetails.Mes
 ```
 [WARN] Log Analytics ingest failed: ... [code: LinkedAuthorizationFailed] (continuing -- xlsx + json still on disk)
 [WARN] ----- ingest target context -----
-[WARN]   DCR              : dcr-si-risk-analysis-summary  (rg=rg-securityinsight)
+[WARN]   DCR              : dcr-si-risk-analysis-summary  (rg=<resource group>)
 [WARN]   DCE              : dce-securityinsight
 [WARN]   Table            : SI_RiskAnalysis_Summary
-[WARN]   Workspace        : log-platform-management-securityinsight  (rg=rg-securityinsight)
+[WARN]   Workspace        : <workspace>  (rg=<resource group>)
 [WARN]   Subscription     : <sub-id>
 [WARN]   SPN AppId        : <spn-app-id>
 [WARN]   Rows attempted   : 13216
@@ -3896,13 +3828,13 @@ The body + target context + common-cause checklist lands in a single block right
 
 ### DCE + DCR resource groups now show reality, not stale config
 
-`Write-SIIngestTarget` (the canonical "ingest -> ..." block used by every engine) used to print whatever `$global:SI_DceResourceGroup` / `$global:SI_DcrResourceGroup` said -- including when those were stale. Setup wizards / hand-edits / copy-pasted custom.ps1 from another tenant could leave `'rg-dcr-securityinsight'` in the config while the actual DCR was provisioned in `'rg-securityinsight'`. Operator's log printed the lie.
+`Write-SIIngestTarget` (the canonical "ingest -> ..." block used by every engine) used to print whatever `$global:SI_DceResourceGroup` / `$global:SI_DcrResourceGroup` said -- including when those were stale. Setup wizards / hand-edits / copy-pasted custom.ps1 from another tenant could leave `'rg-dcr-securityinsight'` in the config while the actual DCR was provisioned in `'<resource group>'`. Operator's log printed the lie.
 
 Now: the helper does a live `Get-AzDataCollectionEndpoint` + `Get-AzDataCollectionRule` lookup by name, derives the actual RG from the returned resource ID, and overrides any wrong configured value. When override fires, it logs:
 
 ```
-[INFO]   [auto-fix] DCE 'dce-securityinsight' actually lives in 'rg-securityinsight', not configured 'rg-dce-securityinsight'. Update $global:SI_DceResourceGroup in custom.ps1.
-[INFO]   [auto-fix] DCR 'dcr-si-risk-analysis-summary' actually lives in 'rg-securityinsight', not configured 'rg-dcr-securityinsight'. Update $global:SI_DcrResourceGroup in custom.ps1.
+[INFO]   [auto-fix] DCE 'dce-securityinsight' actually lives in '<resource group>', not configured '<configured DCE resource group>'. Update $global:SI_DceResourceGroup in custom.ps1.
+[INFO]   [auto-fix] DCR 'dcr-si-risk-analysis-summary' actually lives in '<resource group>', not configured '<configured DCR resource group>'. Update $global:SI_DcrResourceGroup in custom.ps1.
 ```
 
 So the printed `ingest -> DCE (rg=...)` / `ingest -> DCR (rg=...)` lines always reflect Azure-side truth, and the operator gets a one-line hint to clean up the stale global.
@@ -3915,9 +3847,9 @@ Both `config/SecurityInsight.custom.sample.ps1` and `config/SecurityInsight.cust
 
 `Invoke-Output.ps1`'s LA-ingest catch had a partial implementation (body when `ErrorDetails.Message` was present, nothing else). Upgraded to match the new RA-engine shape: response-stream fallback when ErrorDetails is empty, error-code parsed out for the headline, full target context block (Engine/DCR/DCE/Table/Workspace/Subscription/SPN AppId/Rows/Auth), and the same common-causes checklist. Now profiler runs get the same operator-actionable output on failure.
 
-### Customer-name scrub
+### Documentation clean-up
 
-Replaced all customer names (in code comments, RELEASENOTES, README, viewer docs) with generic descriptors per operator instruction. Going forward, public docs use placeholders like "customer A", "the production tenant", "AF-internal customer style" -- never a tenant-identifying name. Saved as a permanent rule in operator's memory so it won't recur.
+Documentation clean-up.
 
 ---
 
@@ -3939,7 +3871,7 @@ Root cause: the hybrid path detects cross-domain join keys (e.g. `Target_AzureRe
 
 ### Fix: empirical futile-parent detection (no arbitrary depth cap)
 
-New logic in the sub-bucketing BFS loop (`Invoke-RiskAnalysis.ps1` ~line 7059):
+New logic in the sub-bucketing BFS loop (`Invoke-RiskAnalysis.ps1`):
 
 1. **Track per-parent timeout count.** Each parent has up to `$subFanOut` (4) children. When a child times out at the 900 s HttpClient ceiling, increment `$parentTimeoutCount[$parentKey]`.
 2. **After all $subFanOut children of a parent have been attempted**, if 100% timed out → that's empirical proof that splitting this slice further won't help (the bucket filter isn't distributing the work). **Purge any of that parent's grandchildren from the BFS queue** before they're attempted.
@@ -3995,13 +3927,11 @@ The old `config/SecurityInsight.custom.sample.ps1` was a kitchen-sink 400+ line 
 
 ### `westeurope` no longer the silent default
 
-User ask: "westeurope must be mentioned as this solution is used by many companies around the world. define it so we can overrule to any location. so don't take for granted that westeurope is the default."
-
 Removed the implicit `westeurope` fallback from:
 
-- **`Setup-SecurityInsight-Unattended.ps1`** (line 242) -- now throws clearly when `Sub.Location` is unset, with the full list of common regions in the error message.
-- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** (line 218) -- now derives Location from the active Az context's HomeRegion when `$global:SI_Location` is unset (with a warning to set it explicitly), and throws clearly when neither is available.
-- **`Bootstrap-ContainerAppJob.ps1`** (line 38 default parameter, 129 resolution chain) -- empty default; falls back through `$global:SI_Bootstrap_Location` → `$global:SI_Location`, throws clearly when neither is set.
+- **`Setup-SecurityInsight-Unattended.ps1`** -- now throws clearly when `Sub.Location` is unset, with the full list of common regions in the error message.
+- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** -- now derives Location from the active Az context's HomeRegion when `$global:SI_Location` is unset (with a warning to set it explicitly), and throws clearly when neither is available.
+- **`Bootstrap-ContainerAppJob.ps1`** -- empty default parameter; falls back through `$global:SI_Bootstrap_Location` → `$global:SI_Location`, throws clearly when neither is set.
 - **`config/setup-unattended.sample.json`** (`Sub.Location`) -- changed from `"westeurope"` to `null` with an inline comment listing common regions worldwide.
 
 All three samples (`*.sample.ps1`, `setup-unattended.sample.json`) surface `SI_Location` / `Sub.Location` as REQUIRED with `<azure-region>` placeholder + a comment listing 17 common worldwide regions (`westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth`).
@@ -4020,8 +3950,6 @@ All three samples (`*.sample.ps1`, `setup-unattended.sample.json`) surface `SI_L
 
 `Setup-SecurityInsight-Unattended.ps1` was passing only `Spn + Infra` to `Write-SICustomConfig.ps1`, never `Smtp`. Result: every Community customer's generated `custom.ps1` had NO `# 5. SMTP` section, mail dispatch failed silently with "No SMTP server configured", and the operator had to hand-edit the file after Phase 3.
 
-User ask: "make the smtp info into the custom file if defined by the setup unattended, also include in sample if missing. do we have a section in readme on setup unattended, otherwise make detailed examples for all params".
-
 ### What changed
 
 1. **`config/setup-unattended.sample.json`** -- added an `Smtp` block with all 9 fields (Server, Port, User, Password, From, UseSsl, MailTo, DetailedTo, SummaryTo) + an `_Smtp_comment` that explains the Internal-vs-Community distinction. Leaves `Server: null` as the default so the section silently no-ops when absent.
@@ -4036,7 +3964,7 @@ Internal customers see no behavioural change; the Internal example in §4.3.1 do
 
 ### Known limitation (called out in README)
 
-SMTP password lands in plain text in `custom.ps1` -- the writer doesn't auto-vault. For production Community deployments, README §4.3.1 recommends post-setup migration to Key Vault via section 11 KV pulls.
+For production, keep the SMTP password in Key Vault (README §4.3.1, section 11 KV pulls).
 
 ---
 
@@ -4044,7 +3972,7 @@ SMTP password lands in plain text in `custom.ps1` -- the writer doesn't auto-vau
 
 ### Why
 
-Customer ask: "we need to change the default required permissions in the unattended setup routine, so it sets only READ on mgmt root and then contributor on the subscription defined where SI will be installed. it should not have owner on mgmt root as example".
+Setup grants read access at the management-group root and Contributor only on the subscription where SI is installed — never Owner.
 
 The SPN already received Reader at tenant-root MG (correct, no change), but the unattended setup never granted Contributor at the subscription level. Instead it relied on `Initialize-SIInfra.ps1` granting scattered Contributor + LA Contributor + Monitoring Metrics Publisher + Storage Blob/Table/Queue Data Contributor on individual workspaces / RGs / storage accounts. Worked for the happy path, but:
 
@@ -4088,7 +4016,7 @@ In `Invoke-SIPrestageInfra.ps1`, when the RG-scoped lookup misses, broaden to a 
 When the broadened probe ALSO returns null AND the create still fails with "already taken", surface a clear actionable error:
 
 ```
-WARNING: storage account 'stevsecurityinsight' is GLOBALLY taken but not visible
+WARNING: storage account '<storage-account>' is GLOBALLY taken but not visible
 to the SPN (probably owned by a different tenant, or the SPN lacks 'Reader' on the
 sub where it lives). Either rename $global:SI_StorageAccount in custom.ps1, or
 grant the SPN Reader on the owning subscription so the prestage can adopt it.
@@ -4106,8 +4034,6 @@ grant the SPN Reader on the owning subscription so the prestage can adopt it.
 ### Bug observed live
 
 User received two RA emails (Summary GlobalScore=65 / Detailed GlobalScore=72) from runs that started concurrently. Both runs' early cache read at engine entry saw an empty cache (or cache without GlobalScore), both proceeded to compute live, neither saw the other's mid-flight write, both ended up with divergent KPIs in their respective emails.
-
-User's diagnosis: "I propose you don't read the cache summary at the start of the script -- but just before you need it. otherwise 2 starting same time, but finish at different time will both fail, if first run."
 
 ### Fix
 
@@ -4223,12 +4149,12 @@ First write after cache expiry:
    - **NEW: per-engine TABLE-name override** mirroring the existing DCR-name override. `$global:SI_PublicIp_TableName` (and fallback to `$global:SI_Shodan_TableName`) wins over the `SI_<Engine>_Profile` pattern. Default in `LauncherConfig.defaults.ps1` is `SI_VulnerabilityPIP` (matches the legacy hardcoded value, preserves table + RA YAML query continuity).
 4. **`IpAddress` column 0% [EMPTY]** in pre-ingest audit (separate from #2). Schema declares `IpAddress` as `source: derived`, but `Get-SIDerivedValue` in `Build-PublicIpProfileRow.ps1` had no `'IpAddress'` case in its switch -- so the schema-iterated render returned `$null` even though `PrimaryEntityId` (same value) was populated 100%. Added the missing case (`IpAddress` and `IpVersion` both now alias `PrimaryEntityId` per schema sourcePath).
 5. **`Cannot bind argument to parameter 'AccountKey' because it is an empty string`** in Stage Schedule + Stage Reconcile under OAuth mode. Two fixes -- both silent skips that respect the v2.2.314+ OAuth-on-storage policy (we no longer carry a storage key, period):
-   - **`Invoke-Schedule.ps1`** -- CMDB auto-refresh is OAuth-incompatible (the underlying helper uses SharedKey-signed Table Storage REST). Under OAuth the auto-refresh is a silent no-op; Reconcile continues against the most-recent cached snapshot. TODO: rewrite `Refresh-CmdbCache.ps1` to use OAuth bearer tokens.
+   - **`Invoke-Schedule.ps1`** -- CMDB refresh uses the most recent cached snapshot; Reconcile continues against it. (CMDB enrichment on identity-based storage is restored in v2.2.422.)
    - **`CmdbCache.ps1::Initialize-SICmdbCacheTables`** -- no-ops silently under OAuth mode. The Reconcile stage's existing empty-cache fallback path takes over.
 
-### Cert-auth bridge + auth log consistency (operator ask)
+### Cert-auth bridge + auth log consistency
 
-Internal-AutomateIT installs that authenticate via certificate (Connect-Platform sets `$global:HighPriv_Modern_CertificateThumbprint_Azure`) showed up as `auth : SPN+Secret` in the LA-ingest banner -- the engine was actually using cert under the hood, the BANNER was lying. Plus Invoke-Output's auth-resolver risked falling back to the secret branch on the same misread.
+The log shows the sign-in method actually used. Internal-AutomateIT installs that authenticate via certificate (Connect-Platform sets `$global:HighPriv_Modern_CertificateThumbprint_Azure`) were labelled `auth : SPN+Secret` in the LA-ingest banner while using the certificate.
 
 Root cause: the bridge in `Invoke-SIEngineRun.ps1` only flowed `SI_SPN_*` -> `Spn*` and `HighPriv_*` -> `Spn*`. Downstream code (Invoke-Output, Send-SIRunHealthRow, Get-SIShodanKey) reads `SI_SPN_*` directly -- not `Spn*` -- so the cert thumbprint never reached them.
 
@@ -4250,7 +4176,7 @@ Live run on dev tenant (15 -> 17 IPs, full pipeline 9 stages):
 [INFO] DCR override: 'dcr-si-publicip' -> 'dcr-si-publicip' (from $global:SI_Publicip_DcrName)
 [INFO] Table override: 'SI_Publicip_Profile' -> 'SI_VulnerabilityPIP' (from $global:SI_Publicip_TableName)
 [INFO] table : SI_VulnerabilityPIP_CL
-[INFO] DCR   : dcr-si-publicip  (rg=rg-securityinsight)
+[INFO] DCR   : dcr-si-publicip  (rg=<resource group>)
 IpAddress    17 / 17 = 100%
 Posting data to LogAnalytics table [ SI_VulnerabilityPIP_CL ] -- SUCCESS
 [DONE] 17 rows -> 3/3 sink(s) OK [LA=OK JSON=OK Excel=OK]  (35,9s)
@@ -4258,11 +4184,6 @@ Posting data to LogAnalytics table [ SI_VulnerabilityPIP_CL ] -- SUCCESS
 ```
 
 All three sinks (LA + JSON + Excel) green. Same table + DCR as the legacy engine -- RA YAML queries against `SI_VulnerabilityPIP_CL` continue to work unchanged.
-
-### TODO (out of scope for this hotfix)
-
-- **`CmdbCache.ps1`** still uses SharedKey signing internally. Should be rewritten to use OAuth bearer tokens against Table Storage REST so the auto-refresh works under OAuth mode (currently a manual operator step).
-- **`Refresh-CmdbCache.ps1`** has a Mandatory `-StorageKey` parameter; needs an OAuth path too.
 
 ---
 
@@ -4272,9 +4193,9 @@ All three sinks (LA + JSON + Excel) green. Same table + DCR as the legacy engine
 
 The PublicIP engine was a 951-line standalone monolith with its own auth / module-loading / logging / DCR ingest. That divergence caused real bugs:
 
-- Ingest-target diagnostic showed `<unset>` for Subscription / WorkspaceRG / DceRG / DcrRG (AF-internal customer case): the standalone scanner had no prestage to backfill those globals from `$global:SI_WorkspaceResourceId`.
+- Ingest-target diagnostic showed `<unset>` for Subscription / WorkspaceRG / DceRG / DcrRG (seen on an internal-automation install): the standalone scanner had no prestage to backfill those globals from `$global:SI_WorkspaceResourceId`.
 - `TerminatingError(Invoke-WebRequest)` flood around DCR provisioning: standalone had no `Invoke-SIQuietBlock` wrapper to suppress AzLogDcrIngestPS' VERBOSE storm.
-- DCE collision guard only fired when Subscription + DceRG were set — both unset in AF-internal, so the LinkedAuthorizationFailed "Array" bug surfaced.
+- DCE collision guard only fired when Subscription + DceRG were set — both unset on that install, so the LinkedAuthorizationFailed "Array" bug surfaced.
 - No cmdb / Tier / server-only / fresh-scan logic ever made it into the pipeline branch (`Get-DiscoveryFromShodan.ps1` only knew ARG + EG + extras), so the container flavour was already silently missing those filters.
 
 Folding into `Invoke-SIEngineRun.ps1` inherits prestage (auto-derive Subscription/RG from `SI_WorkspaceResourceId`), `Invoke-SIQuietBlock`, shared DCE collision guard, schema-driven row builder, shared RunHealth heartbeat — and stops the drift.
@@ -4290,14 +4211,14 @@ Folding into `Invoke-SIEngineRun.ps1` inherits prestage (auto-derive Subscriptio
 
 ### Customer impact
 
-- Same DCR (`dcr-si-publicip-profile`), same table (`SI_VulnerabilityPIP_CL`), same row shape (modulo the new legacy-compat aliases that add fields without removing any). RA YAML queries unchanged.
+- The same DCR and table as before (`SI_VulnerabilityPIP_CL`), same row shape (modulo the new legacy-compat aliases that add fields without removing any). RA YAML queries unchanged.
 - `LauncherConfig.custom.ps1` files that already set `$global:SI_Shodan_*` knobs continue to work — same names, same defaults.
 - Operator log line "ingest -> Subscription / Workspace / DCE / DCR" now shows real values for tenants where prior bootstrap didn't set the SI_* globals.
 - One commit; one tag pair (`SI-2.2.348` + `SecurityInsight-v2.2.348`).
 
 ---
 
-## v2.2.347 — Hotfix: YAML — `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` was missing the `let _SourceCmdb = ...` declaration. The join on `_SourceCmdb` at line 236 referenced an undeclared name → AH 400 → 0 rows. Restored the let-binding from the Summary variant (byte-for-byte).
+## v2.2.347 — Hotfix: YAML — `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` was missing the `let _SourceCmdb = ...` declaration. The join on `_SourceCmdb` referenced an undeclared name → AH 400 → 0 rows. Restored the let-binding from the Summary variant (byte-for-byte).
 
 ### Bug
 
@@ -4438,7 +4359,7 @@ When this triggers, operator sees:
 
 ### Bug
 
-v2.2.342's Detailed run crashed at line 8508 with:
+v2.2.342's Detailed run crashed with:
 
 ```
 Method invocation failed because [System.Management.Automation.PSCustomObject]
@@ -4486,7 +4407,7 @@ Two root causes:
 
 ### Known limitations (planned follow-ups)
 
-- File persistence works for single-host VMs (the typical case). Multi-host / containerised installs need a shared blob or LA table — planned v2.2.343: new `SI_RiskAnalysis_Top50_CL` custom table ingested via the same DCR pattern; engine reads `arg_max(CollectionTime, *)` from there as the source of truth.
+- File persistence works for single-host VMs (the typical case). Multi-host / containerised installs need a shared blob or LA table. Multi-host sharing followed in v2.2.346.
 - If Detailed runs BEFORE Summary has ever run, Detailed uses its own computation (one-time; next Summary run persists).
 
 ---
@@ -4507,16 +4428,16 @@ Examples:
 
 | Invocation | Log name |
 |---|---|
-| `launcher.internal-vm.ps1` (defaults) | `risk-analysis_internal-vm_RiskAnalysisSummary_20260521T101530Z.log` |
-| `launcher.internal-vm.ps1 -ReportTemplate AssetSimulationComplexDetailed` | `risk-analysis_internal-vm_AssetSimulationComplexDetailed_20260521T101530Z.log` |
-| `launcher.internal-vm.ps1 -RunAssetSimulation ComplexSummary -AssetSimulationAmount 500000` | `risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log` |
+| `<VM launcher>` (defaults) | `risk-analysis_internal-vm_RiskAnalysisSummary_20260521T101530Z.log` |
+| `<VM launcher> -ReportTemplate AssetSimulationComplexDetailed` | `risk-analysis_internal-vm_AssetSimulationComplexDetailed_20260521T101530Z.log` |
+| `<VM launcher> -RunAssetSimulation ComplexSummary -AssetSimulationAmount 500000` | `risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log` |
 
 Both segments are sanitized to `[A-Za-z0-9]+` (so `RiskAnalysis_Summary` becomes `RiskAnalysisSummary`) so filenames stay portable across filesystems.
 
 ### Changes
 
 - `launcher/_lib/Start-LauncherTranscript.ps1`: new optional `-Template` + `-Simulation` parameters; filename built from sanitized segments joined with `_`.
-- `launcher/risk-analysis/launcher.internal-vm.ps1` + `launcher.community-vm.ps1`: compute the labels from `$PSBoundParameters` BEFORE the transcript call (the routing logic that sets `$global:ReportTemplate` runs much later in the launcher, so we mirror its decision tree once at the top).
+- both risk-analysis VM launchers: compute the labels from `$PSBoundParameters` BEFORE the transcript call (the routing logic that sets `$global:ReportTemplate` runs much later in the launcher, so we mirror its decision tree once at the top).
 
 ---
 
@@ -4535,8 +4456,6 @@ Summary and Detailed templates mirror each other (same 7 reports, just the Summa
 
 ## v2.2.339 — Expand `AssetSimulationComplexSummary` to include `Azure_Recommendations_Summary` (single-let sanity check) and `AssetSimulationComplexDetailed` to include `Device_Missing_CVEs_Detailed` + `Device_Recommendations_Detailed`
 
-Operator ask: "include these 2 - Name: Device_Missing_CVEs_Detailed - Name: Device_Recommendations_Detailed + one azure summary in the complex".
-
 ComplexSummary is now 11 reports (was 10): the 10 cross-domain reports + `Azure_Recommendations_Summary` as a single-let CL-bucketing sanity check. ComplexDetailed is now 12 reports (was 10): the 10 cross-domain Detailed + the 2 Device_*_Detailed single-let reports.
 
 ---
@@ -4548,7 +4467,7 @@ ComplexSummary is now 11 reports (was 10): the 10 cross-domain reports + `Azure_
 Stress-testing the source/target bucketing fix (v2.2.334-.337) on a small tenant required two hand-edits to custom.ps1 — set `$global:SI_SimulateCLRowCount` and switch the template by `-ReportTemplate`. Easy to forget either. With this release the operator runs one line:
 
 ```powershell
-pwsh launcher.internal-vm.ps1 `
+pwsh <VM launcher> `
     -RunAssetSimulation ComplexSummary `
     -AssetSimulationAmount 500000
 ```
@@ -4581,7 +4500,7 @@ Both removed. Simulation now happens only when the operator opts in via the CLI 
 
 ### Coverage
 
-Both launcher flavours updated: `launcher.internal-vm.ps1` + `launcher.community-vm.ps1`.
+Both launcher flavours updated: both VM launchers.
 
 ---
 
@@ -4654,11 +4573,9 @@ Per-bucket body now ~70KB (35KB per let at N=32) instead of 3MB. AutoBucket sett
 
 ## v2.2.334 — Cross-domain CL-bucketing now LOSSLESS: `Get-SICLBucketKey` learned the projection-aliased keys (Target_AzureResourceId_Guid, Source_AadDeviceId, FinalTargetId, etc.) and `Replace-BucketFilterBlock` skips the EG-side filter when the CL key isn't in EG's coalesce list — the 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants
 
-### Operator question that drove this
+### Why
 
-> "if we know the size of source cl is 2.7 mb. then we calculate how many source bucket to have instead of capping at 256. potentially we could lose data" — and later "are we losing data / or missing detections?"
-
-Correct on both counts: the v2.2.329 cap was a stop-loss, not a fix. The real bug was that CL rows weren't distributing because their bucket keys (`Target_AzureResourceId_Guid`, `Source_AadDeviceId`, etc.) weren't in `Get-SICLBucketKey`'s priority list — so every row hashed to bucket 0, no amount of bucket escalation helped. The cap then fired because the body never shrank.
+The v2.2.329 cap could lose data and miss detections: it was a stop-loss, not a fix. The real bug was that CL rows weren't distributing because their bucket keys (`Target_AzureResourceId_Guid`, `Source_AadDeviceId`, etc.) weren't in `Get-SICLBucketKey`'s priority list — so every row hashed to bucket 0, no amount of bucket escalation helped. The cap then fired because the body never shrank.
 
 ### Two changes
 
@@ -4679,7 +4596,7 @@ After deploying v2.2.334 + clearing the cache, the 8 cross-domain reports should
 
 ### Scaffolding deletion (next release)
 
-v2.2.330's `$global:AutoBucketReportCap` is no longer load-bearing — v2.2.334 fixes the root cause so escalation naturally converges. Will delete the knob + dev custom override in v2.2.335 after the operator has verified the simulation run completes cleanly without it.
+v2.2.330's `$global:AutoBucketReportCap` is no longer load-bearing — v2.2.334 fixes the root cause so escalation naturally converges.
 
 ---
 
@@ -4787,7 +4704,7 @@ Body size drops from 3MB to ~10KB (no inline). 15K-row tenants now process cross
 ### What's unchanged
 
 - v2.2.328-.331 CL-bucketing for Summary + Detailed single-let Endpoint reports: still active for the path where 2-phase doesn't match (engine tries 2-phase first, falls through to bucketing as fallback).
-- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default. Once v2.2.333 verifies all 6 cross-domain Attack_Paths reports flow through 2-phase under 15K simulation, the scaffolding is deleted.
+- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default.
 
 ---
 
@@ -4801,7 +4718,7 @@ After v2.2.328 fixed Summary CL-bucketing, operator ran v2.2.329 and saw:
 [ERR] bucket escalation reached cap 256. Unable to complete report 'Device_Missing_CVEs_Detailed'
 ```
 
-`Device_Missing_CVEs_Detailed` is single-let (just `_ep`) and structurally identical to its Summary sibling — it should have bucketed cleanly. Operator's pushback: "device missing should not go to 256".
+`Device_Missing_CVEs_Detailed` is single-let (just `_ep`) and structurally identical to its Summary sibling — it should have bucketed cleanly. It should not need 256 buckets.
 
 ### Root cause
 
@@ -4824,11 +4741,11 @@ A 1M-asset tenant with ONE hot device carrying 10K findings will get 10K rows in
 ### What's unchanged
 
 - v2.2.328 EpJoinKey-aware CL bucket key: still active.
-- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default, still REMOVE-ME-tagged for after the per-report join-key parser lands (needed for cross-domain multi-let Attack_Paths reports).
+- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default.
 
 ---
 
-## v2.2.330 — AutoBucketReportCap is now OPT-IN (default off) — production tenants never silently capped; debug-only knob marked REMOVE-ME for the next release once the join-key parser lands
+## v2.2.330 — AutoBucketReportCap is now OPT-IN (default off) — production tenants never silently capped; debug-only knob
 
 ### Why
 
@@ -4840,7 +4757,7 @@ Default flipped to OFF. Operators who want fast-bail behaviour while debugging s
 
 ### Lifecycle marker
 
-The opt-in knob is REMOVE-ME-IN-NEXT-RELEASE scaffolding. Once the per-report join-key parser lands (v2.2.331), bucket alignment will be correct for cross-domain reports and the cap loses its purpose. Both the global and the code block are deleted at that point — no permanent debug knobs in production code.
+The opt-in knob is temporary debug scaffolding and stays off by default.
 
 ---
 
@@ -4860,7 +4777,7 @@ Operator saw "8100 bucket" mid-loop and pulled the plug.
 
 For cross-domain Attack_Paths reports the CL-side join key is e.g. `_TargetCmdb.Target_AzureResourceId_Guid`; the EG-side join key is `$left.FinalTargetId`. But `New-BucketFilterKql` hardcodes the EG bucket key to a device-column coalesce (`DeviceKey`, `NodeId`, `AadDeviceId`, ...). EG.DeviceKey hashes differently from CL.Target_AzureResourceId_Guid for the same logical row, so CL bucketing for these reports does nothing useful — every bucket size still produces ~2 MB payload and 413s. Escalation keeps doubling without effect.
 
-The proper fix (per-report join-key parser that aligns EG and CL bucket keys to whatever the actual `join … on $left.X == $right.Y` declares) lands in a follow-up release. v2.2.329 is the operational stopgap.
+v2.2.329 is the operational stopgap; v2.2.331 and v2.2.334 removed the misalignment at its source.
 
 ### Fix
 
@@ -4872,7 +4789,7 @@ Operators who genuinely need higher per-report bucket counts can override with `
 
 - v2.2.328 single-let CL-bucketing (Endpoint Summary reports): still works perfectly.
 - v2.2.323 simulation knob: unchanged.
-- Cross-domain reports temporarily skipped after 256-bucket cap; v2.2.330 will add the join-key parser to fix them properly.
+- Cross-domain reports temporarily skipped after 256-bucket cap; later releases (v2.2.331 onward) handle them.
 
 ---
 
@@ -5009,7 +4926,7 @@ v2.2.323 shipped the dormant infrastructure (`Get-SISha256Bucket`, `Get-SICLBuck
 
 Four changes in `engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
 
-1. **`Get-SISha256Bucket` rewritten to uint32 math** (lines ~840). The v2.2.323 implementation used signed `[int]` + `Abs()`, which silently misaligned with the KQL side: PS gave `0..2^31-1`, KQL `tolong(hex,16)` gives `0..2^32-1`. Same input → different bucket assignment → join would drop matched rows. Now uses `BitConverter.ToUInt32` for true alignment.
+1. **`Get-SISha256Bucket` rewritten to uint32 math**. The v2.2.323 implementation used signed `[int]` + `Abs()`, which silently misaligned with the KQL side: PS gave `0..2^31-1`, KQL `tolong(hex,16)` gives `0..2^32-1`. Same input → different bucket assignment → join would drop matched rows. Now uses `BitConverter.ToUInt32` for true alignment.
 
 2. **`New-BucketFilterKql` switched from `abs(hash(x)) % N` (xxHash64) to `tolong(substring(hash_sha256(x), 0, 8), 16) % N`** so the EG-side bucket filter uses the same algorithm as the PS-side CL-row filter. Both Summary and Detailed paths updated via shared replace.
 
@@ -5050,8 +4967,6 @@ AutoBucket cache (`$SettingsPath/<engine>/<env>/AutoBucket.cache.json`) entries 
 
 ### Bug
 
-Operator: "customers thinks it is an error. make it more positive like calculating query sizing".
-
 When the AH endpoint returns 413 (query body exceeded the 1 MB nginx cap), the engine's existing logic is fine — it auto-tunes the bucket count and re-runs. But the LOG TEXT screamed at customers:
 
 ```
@@ -5087,13 +5002,13 @@ Operators tailing `<install>\logs\risk-analysis_*.log` during a tenant's first r
 
 ---
 
-## v2.2.323 — Add `$global:SI_SimulateCLRowCount` knob (pad CL snapshot to N rows for scale testing); land dormant infrastructure for CL-snapshot bucketing (active in v2.2.324)
+## v2.2.323 — Add `$global:SI_SimulateCLRowCount` knob (pad CL snapshot to N rows for scale testing); land dormant infrastructure for CL-snapshot bucketing (active in v2.2.325)
 
 ### Why this release
 
 Customer at 514K-identity scale hits the Defender XDR `/security/runHuntingQuery` ~1 MB nginx body cap (413). Existing EG-side bucketing doesn't help because the inlined CL snapshot is duplicated in every bucket query. Real fix is **CL-snapshot bucketing** — partition the inline datatable per bucket so each request carries ~1/N of the snapshot.
 
-But shipping bucket-wire-up blind (no tenant access to validate) is exactly the wrong move — silent dropped joins are the failure shape and they look like real data. So v2.2.323 lands the **simulation knob** + **dormant infrastructure**; v2.2.324 wires bucketing once the operator can validate locally using the simulation knob.
+But shipping bucket-wire-up blind (no tenant access to validate) is exactly the wrong move — silent dropped joins are the failure shape and they look like real data. So v2.2.323 lands the **simulation knob** + **dormant infrastructure**; v2.2.325 wires bucketing once the operator can validate locally using the simulation knob.
 
 ### What's new in this release
 
@@ -5115,18 +5030,18 @@ Test plan against operator's own tenant:
 2. Run any RA report with a CL let-binding (e.g. `Device_Recommendations_Detailed`).
 3. Confirm the engine produces the 413 nginx error (validates the failure mode).
 4. Bump to 50K, 100K to confirm threshold scales linearly.
-5. After v2.2.324 ships with bucketing, repeat — should succeed at all sizes.
+5. After v2.2.325 ships with bucketing, repeat — should succeed at all sizes.
 
-### Dormant infrastructure (NOT active until v2.2.324)
+### Dormant infrastructure (NOT active until v2.2.325)
 
 Three helpers land for the bucketing wire-up:
 
 - `Get-SISha256Bucket` — SHA256-based bucket assignment, identical math KQL+PS sides
 - `Get-SICLBucketKey` — mirrors `New-BucketFilterKql`'s column-coalesce on a CL row (extended for Identity/Azure keys: `EntraObjectId`, `UserId`, `AzureResourceId_Guid`)
 - `Resolve-ProfileCLLetBlocks` now accepts optional `-BucketCount` + `-BucketIndex` (skipped when multi-let-binding cross-domain reports detected — those still need v2.2.325)
-- Raw rows cache (`$script:_HybridRowsCache`) parallel to the existing serialized cache, so v2.2.324's per-bucket re-serialize doesn't re-fetch from LA
+- Raw rows cache (`$script:_HybridRowsCache`) parallel to the existing serialized cache, so v2.2.325's per-bucket re-serialize doesn't re-fetch from LA
 
-None of these change runtime behavior in v2.2.323. They're inert until v2.2.324 wires them into the bucket loop + flips EG-side to SHA256 to align.
+None of these change runtime behavior in v2.2.323. They're inert until v2.2.325 wires them into the bucket loop + flips EG-side to SHA256 to align.
 
 ---
 
@@ -5134,7 +5049,7 @@ None of these change runtime behavior in v2.2.323. They're inert until v2.2.324 
 
 ### Bug
 
-Operator's `myfamilynetwork` Detailed report showed PublicIP severity breakdown:
+The internal Detailed report showed PublicIP severity breakdown:
 
 ```
 Public IP : Critical=0  High=109  Medium=21  Low=0    (total 130)
@@ -5149,7 +5064,7 @@ Result: PublicIP findings could never populate Critical (rare combo) or Low (imp
 
 ### Fix
 
-All 4 PublicIP report bodies now use the standard tier-driven 4-label case() that every other SI engine already uses (lines 9697, 16354 etc.):
+All 4 PublicIP report bodies now use the standard tier-driven 4-label case() that every other SI engine already uses:
 
 ```kql
 | extend SecuritySeverity =
@@ -5166,7 +5081,7 @@ All 4 PublicIP report bodies now use the standard tier-driven 4-label case() tha
 
 ### What moves
 
-Port-risk + Tier-0 escalation no longer fold into the severity LABEL — they continue to flow through `RiskFactor_Probability_Detailed` tokens (`AdminPort`, `Tier0Asset`, `InternetExposedCVE`) which feed the risk SCORE through the canonical scoring contract (`Invoke-RiskAnalysis.ps1:3690-3714`). The risk-score number is unchanged; only the dashboard bucketing now reflects asset tier consistently with the other domains.
+Port-risk + Tier-0 escalation no longer fold into the severity LABEL — they continue to flow through `RiskFactor_Probability_Detailed` tokens (`AdminPort`, `Tier0Asset`, `InternetExposedCVE`) which feed the risk SCORE through the canonical scoring contract (`Invoke-RiskAnalysis.ps1`). The risk-score number is unchanged; only the dashboard bucketing now reflects asset tier consistently with the other domains.
 
 ### Customer-visible effect
 
@@ -5199,9 +5114,9 @@ Caller passes the per-engine `DcrName` + `TableName` (those vary across engines 
 
 | Engine | File | Per-run block fires |
 |---|---|---|
-| **PublicIP** (Shodan scanner) | `engine/publicip/Invoke-PublicIpScanner.ps1:670` | once before DCR provision |
-| **Profile engines** (endpoint / identity / azure) | `engine/asset-profiling/stages/Invoke-Output.ps1:534+` | once per engine output |
-| **Risk Analysis** (Summary + Detailed) | `engine/risk-analysis/Invoke-RiskAnalysis.ps1:7530+` | once per RA report rendered |
+| **PublicIP** (Shodan scanner) | `engine/publicip/Invoke-PublicIpScanner.ps1` | once before DCR provision |
+| **Profile engines** (endpoint / identity / azure) | `engine/asset-profiling/stages/Invoke-Output.ps1+` | once per engine output |
+| **Risk Analysis** (Summary + Detailed) | `engine/risk-analysis/Invoke-RiskAnalysis.ps1+` | once per RA report rendered |
 
 RA lazy-loads the helper (it doesn't dot-source asset-profiling shared at startup); guarded with `Get-Command` so the call is a no-op if the file moves.
 
@@ -5236,7 +5151,7 @@ Customer ran `launcher.community-vm.ps1` on the PublicIP engine. Phase 3 ingest 
 invoke-webrequest : {"error":{"code":"InvalidPayload","message":"Data collection rule is invalid","details":[{"code":"InvalidTransformOutput","message":"Types of transform output columns do not match the ones defined by the output stream: AssetTier [produced:'Int', output:'String']"}]}}
 ```
 
-`Invoke-PublicIpScanner.ps1:541` (and the matching extra-source path at `:819`) emitted `AssetTier` as `[int]`. The existing DCR + table in this tenant's workspace had `AssetTier` typed as `String` (LA custom-table convention). Schema mismatch → DCR PUT 400 on every Phase 3 run.
+`Invoke-PublicIpScanner.ps1` (and the matching extra-source path) emitted `AssetTier` as `[int]`. The existing DCR + table in this tenant's workspace had `AssetTier` typed as `String` (LA custom-table convention). Schema mismatch → DCR PUT 400 on every Phase 3 run.
 
 The comment claimed "Int -- matches existing DCR transform output type" — that was stale (presumably matched a long-gone deployment shape). Every existing customer with an older `SI_VulnerabilityPIP_CL` table hits this.
 
@@ -5251,7 +5166,7 @@ AssetTier         = [int]$t.AssetTier
 AssetTier         = [string][int]$t.AssetTier
 ```
 
-Applied to both stamping sites (main asset loop at `:541` and extra-sources loop at `:819`). Existing tenants with String-typed columns will succeed on next run. Tenants who created the table after the buggy `[int]` window will need to delete the DCR + table once (the error block now tells them exactly which DCR/table to delete and where).
+Applied to both stamping sites (main asset loop and extra-sources loop). Existing tenants with String-typed columns will succeed on next run. Tenants who created the table after the buggy `[int]` window will need to delete the DCR + table once (the error block now tells them exactly which DCR/table to delete and where).
 
 ### Fix B — failure path now actionable
 
@@ -5260,11 +5175,11 @@ Pre-v2.2.320 error block:
 [ERROR] CheckCreateUpdate-TableDcr-Structure failed: The remote server returned an error: (400) Bad Request.
 [ERROR] Cannot proceed without a valid DCR. Common causes:
 [ERROR]   1) Old DCR + table still exist in Azure -- delete BOTH first.
-[ERROR]   2) SPN lacks 'Contributor' (or 'Monitoring Contributor') on DCR resource group rg-securityinsight-community-v22.
+[ERROR]   2) SPN lacks 'Contributor' (or 'Monitoring Contributor') on DCR resource group <rg>.
 [ERROR]   3) Schema sample contains an invalid value (null/empty in a required column).
 ```
 
-Operator: "would be great to include details like dcr name, rg name, sub name, etc". v2.2.320 expands the block to surface the full target context inline + Azure's actual error body (extracted via response-stream fallback when `$_.ErrorDetails.Message` is empty):
+v2.2.320 expands the block to surface the full target context inline + Azure's actual error body (extracted via response-stream fallback when `$_.ErrorDetails.Message` is empty):
 
 ```
 [ERROR] ----- target context -----
@@ -5316,23 +5231,23 @@ Verified by the operator paste-back: v2.2.318 still showed the red text → v2.2
 
 ### Bug
 
-Operator ran `..\..\Update-SecurityInsight.ps1` from `C:\CommunityTest\launcher\azure\`. Output:
+Operator ran `..\..\Update-SecurityInsight.ps1` from `<install>\launcher\azure\`. Output:
 
 ```
 [STEP] git pull --ff-only origin main
 git.exe : From https://github.com/KnudsenMorten/SecurityInsight
-At C:\CommunityTest\Update-SecurityInsight.ps1:104 char:19
+At <install>\Update-SecurityInsight.ps1 char:19
 +     $pullOutput = & git pull --ff-only origin main 2>&1
 +                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (From https://gi...SecurityInsight:String) [], RemoteException
     + FullyQualifiedErrorId : NativeCommandError
 ```
 
-The pull actually **succeeded** (banner showed `current: v2.2.317 (commit db992a7)` matching the latest tag, and `LASTEXITCODE` was 0). What surfaced as red error text was just git's normal "From `<URL>`" header — git writes that to STDERR regardless of success. `2>&1` merged the streams, and PowerShell 5.1 then treated each STDERR line as a `RemoteException` `ErrorRecord` and displayed it red **before** the script's own `LASTEXITCODE` check ran.
+The pull actually **succeeded** (banner showed `current: v2.2.317` matching the latest tag, and `LASTEXITCODE` was 0). What surfaced as red error text was just git's normal "From `<URL>`" header — git writes that to STDERR regardless of success. `2>&1` merged the streams, and PowerShell 5.1 then treated each STDERR line as a `RemoteException` `ErrorRecord` and displayed it red **before** the script's own `LASTEXITCODE` check ran.
 
 ### Fix
 
-One-line change at `Update-SecurityInsight.ps1:104`:
+One-line change at `Update-SecurityInsight.ps1`:
 
 ```powershell
 # before
@@ -5354,7 +5269,7 @@ $pullOutput = & git pull --ff-only origin main 2>&1 | ForEach-Object { "$_" }
 
 ### Bug
 
-Customer's RA run hit `[BadRequest] : 'extend' operator: Failed to resolve scalar expression named 'Source_AssetName'` on every bucket of this report. Tracing the Detailed body at `RiskAnalysis_Queries_Locked.yaml:8850+`:
+Customer's RA run hit `[BadRequest] : 'extend' operator: Failed to resolve scalar expression named 'Source_AssetName'` on every bucket of this report. Tracing the Detailed body at `RiskAnalysis_Queries_Locked.yaml+`:
 
 ```kql
 _Paths
@@ -5363,7 +5278,7 @@ _Paths
 | join kind=leftouter (_DeviceEnrichment) on …
 | extend CriticalityTier = coalesce(toint(Target_Tier_Aliased), 3)
 …
-| extend AssetName = coalesce(Source_AssetName, EntryPointDevice)        ← line 8869 -- fails
+| extend AssetName = coalesce(Source_AssetName, EntryPointDevice)        ← fails
 | extend AssetId   = coalesce(Source_AssetId,   …)
 | extend AssetType = coalesce(Source_AssetType, "Device")
 | extend RiskFactor_Probability          = coalesce(toint(Source_RiskFactor_Probability), 0)
@@ -5372,7 +5287,7 @@ _Paths
 
 The Detailed body joined `_TargetCmdb` + `_DeviceEnrichment` but **never joined `_SourceCmdb`**. So every `Source_*` reference in the downstream `extend` block resolved to nothing → KQL pre-flight rejected the query before submission.
 
-The Summary variant at `:8562` correctly has the join (added in v2.2.305-307 when the report family pivoted to source-device asset identity). The Detailed variant was missed in that pivot — the projection got updated to reference `Source_*` but the join that produces them never landed.
+The Summary variant correctly has the join (added in v2.2.305-307 when the report family pivoted to source-device asset identity). The Detailed variant was missed in that pivot — the projection got updated to reference `Source_*` but the join that produces them never landed.
 
 ### Fix
 
@@ -5392,17 +5307,15 @@ Grep across the locked YAML for `coalesce(Source_*` and `_SourceCmdb` references
 
 ## v2.2.316 — Catch up the `VERSION` file (was stuck at `2.2.308`)
 
-Operator: "files still shows as 308 / `SecurityInsight * Asset Profiling - Azure (resources + management groups) * v2.2.308`".
-
-`SOLUTIONS/SecurityInsight/VERSION` was never bumped across v2.2.309 → v2.2.315 — every release tagged the repo + updated RELEASENOTES but left the `VERSION` file pointing at `2.2.308`. The launcher banner (via `Get-PublishedVersion` reading that file) + the engine's `SolutionVersion` row-stamp both surfaced the wrong number on every run.
+The VERSION file was never bumped across v2.2.309 → v2.2.315 — every release tagged the repo + updated RELEASENOTES but left the `VERSION` file pointing at `2.2.308`. The launcher banner (via `Get-PublishedVersion` reading that file) + the engine's `SolutionVersion` row-stamp both surfaced the wrong number on every run.
 
 ### Fix
 
-Single-line bump of `SOLUTIONS/SecurityInsight/VERSION` from `2.2.308` to `2.2.316`. Next run's banner + every `SI_*_Profile_CL.SolutionVersion` value + every `RiskAnalysis_*.json`/`.xlsx` row will carry the correct version.
+Single-line bump of the VERSION file from `2.2.308` to `2.2.316`. Next run's banner + every `SI_*_Profile_CL.SolutionVersion` value + every `RiskAnalysis_*.json`/`.xlsx` row will carry the correct version.
 
 ### Process fix
 
-Future releases must bump `VERSION` in the same commit as the tag, not separately. (TODO follow-up: add a tiny `Cut-SIRelease.ps1` helper that reads the next semver, writes `VERSION`, commits, and dual-tags in one shot so this never drifts again.)
+Future releases must bump `VERSION` in the same commit as the tag, not separately. (Follow-up: add a tiny `Cut-SIRelease.ps1` helper that reads the next semver, writes `VERSION`, commits, and dual-tags in one shot so this never drifts again.)
 
 ---
 
@@ -5412,7 +5325,7 @@ Two unrelated production failures from the same customer's run.
 
 ### A. Hybrid CL snapshot returned `Failed to resolve column named 'AzureResourceId_Guid'` whenever `SI_Azure_Profile_CL` was empty
 
-`Convert-RowsToKqlDatatable` at `Invoke-RiskAnalysis.ps1:592-594` emitted a hardcoded placeholder schema when the LA pre-fetch returned 0 rows:
+`Convert-RowsToKqlDatatable` at `Invoke-RiskAnalysis.ps1` emitted a hardcoded placeholder schema when the LA pre-fetch returned 0 rows:
 
 ```powershell
 return ('let {0} = datatable(__placeholder:string)[];' -f $LetVarName)
@@ -5430,7 +5343,7 @@ let _ap = datatable(AzureResourceId_Guid:string, AzureResourceId:string, Tier_Fr
 
 All columns default to `string` (which is the type the upstream `tostring(column_ifexists(...))` projections produce anyway). The join compiles, leftouter yields all left rows with right-side cols as null, the report ships with 0 hits instead of crashing.
 
-Caller at `Invoke-RiskAnalysis.ps1:845` passes the let-binding body as the hint. No YAML changes required.
+Caller at `Invoke-RiskAnalysis.ps1` passes the let-binding body as the hint. No YAML changes required.
 
 ### B. Fingerprint cache PUT failed with HTTP 400 on EG-discovered endpoint assets
 
@@ -5451,7 +5364,7 @@ New `-ForceOverwrite` switch on `Set-SIFingerprintRecord` skips the initial PUT 
 
 ### C. ForceFullRun now WRITES the fingerprint cache (was skip) with overwrite semantics
 
-`Invoke-Classify.ps1:905` pre-v2.2.315 **skipped** the cache write entirely when `$RunContext.ForceFullRun` was true. Rationale at the time was "ForceFullRun bypasses cache on read anyway, and the next non-Force run re-writes." **Problem in practice**: customers like Fischer run `$global:SI_ForceFullRun = $true` permanently — the cache stayed empty forever, then when they eventually flip to `$false` they read a stale/missing cache and cadence decisions go wrong.
+`Invoke-Classify.ps1` pre-v2.2.315 **skipped** the cache write entirely when `$RunContext.ForceFullRun` was true. Rationale at the time was "ForceFullRun bypasses cache on read anyway, and the next non-Force run re-writes." **Problem in practice**: some customers run `$global:SI_ForceFullRun = $true` permanently — the cache stayed empty forever, then when they eventually flip to `$false` they read a stale/missing cache and cadence decisions go wrong.
 
 v2.2.315 changes the gate to ALWAYS write — on ForceFullRun, the call uses `-ForceOverwrite` (DELETE+PUT) so the cache is continuously refreshed AND any prior column-type drift self-heals on every run.
 
@@ -5469,22 +5382,20 @@ Three related operator asks shipped together.
 
 ### A. Storage auth is OAuth-only — `$global:SI_StorageKey` and `Get-AzStorageAccountKey` are gone
 
-Customer ask: "remove the requirement for a sas key, as we now must support only oauth. cannot be overruled by false."
+Storage is reached with the identity only.
 
 Changes:
-- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** — auth-resolution block hardcodes `$global:SI_UseStorageOAuth = $true` regardless of what the operator's `custom.ps1` says. The pre-v2.2.314 SharedKey branch (which fell back to `$global:SI_StorageKey` or threw a "key is required" error) is deleted. Setting `$global:SI_UseStorageOAuth = $false` in `custom.ps1` is silently ignored.
-- **`engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1`** — the SharedKey-fetch branch that called `Get-AzStorageAccountKey` and **auto-persisted the result back into `custom.ps1`** is deleted. The engine no longer asks for `listKeys` permission. The Storage Blob/Table/Queue Data Contributor RBAC granted earlier in prestage is the only authorization the engine needs.
-- **`auth/Get-SIKvSecret.ps1`** — doc-comment example no longer shows the `SI-StorageKey` KV pull. A NOTE explicitly tells pre-v2.2.314 operators to delete that line from their `custom.ps1`.
+- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** — storage always uses identity-based (OAuth) access; `$global:SI_UseStorageOAuth = $false` in `custom.ps1` has no effect.
+- **`engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1`** — the engine no longer fetches a storage key. The Storage Blob/Table/Queue Data Contributor RBAC granted earlier in prestage is the only authorization the engine needs.
+- **`auth/Get-SIKvSecret.ps1`** — doc-comment example no longer shows the `SI-StorageKey` KV pull.
 
-Pre-v2.2.314 `custom.ps1` files with a leftover `$global:SI_StorageKey = '...'` line are harmless — engine just ignores the global. Operators can delete the auto-persisted block whenever they like (see the comment block engine added on first-fetch).
+If an older config file still has a storage-key line, delete it.
 
-Private-endpoint deployments now require zero code changes — the storage path goes through PE + Private DNS zones transparently, and removing `listKeys` removes the last ARM (public) probe in the storage flow.
+Private-endpoint deployments now require zero code changes — the storage path goes through PE + Private DNS zones transparently.
 
 ### B. `MoreDetails` now surfaces Subscription Id + Name on Azure-domain rows
 
-Customer ask: "i need to have subscription name id/subscription name in the more details if the asset is an azure resource."
-
-Engine `MoreDetails` builder (post-process at `Invoke-RiskAnalysis.ps1:~3996`) now appends one of two lines after the existing portal-blade URL when the row is Azure-domain and has an `AzureResourceId`:
+Engine `MoreDetails` builder (post-process at `Invoke-RiskAnalysis.ps1`) now appends one of two lines after the existing portal-blade URL when the row is Azure-domain and has an `AzureResourceId`:
 
 ```
 Subscription: <SubName> (<SubId>)        // when AZ_SubscriptionName / SubscriptionName is on the row
@@ -5495,9 +5406,9 @@ Subscription Id comes from the `AzureResourceId` path segment (`[2]` after `/sub
 
 ### C. Risk Score KPI is now identical between Summary and Detailed (Option B)
 
-Customer ask: "my customers cannot understand why the risk score is not same % between summary and detailed."
+Summary and Detailed now report the same risk score percentage.
 
-Pre-v2.2.314 the run-end rollup at `Invoke-RiskAnalysis.ps1:~8416` weighted each row equally — so Summary (where one row collapses N asset-findings) and Detailed (where each row IS one asset-finding) computed different averages on the same underlying signal. Endpoint Summary KPI 58 vs Detailed KPI 53 was mathematically legitimate but operationally confusing.
+Pre-v2.2.314 the run-end rollup at `Invoke-RiskAnalysis.ps1` weighted each row equally — so Summary (where one row collapses N asset-findings) and Detailed (where each row IS one asset-finding) computed different averages on the same underlying signal. Endpoint Summary KPI 58 vs Detailed KPI 53 was mathematically legitimate but operationally confusing.
 
 v2.2.314 multiplies the row's KPI contribution by `TotalIssuesImpactedAssets` (the per-row asset-finding population, fixed in v2.2.311 to be per-row scope). Result:
 
@@ -5518,10 +5429,10 @@ Multiple community-VM customers reported `$global:SpnTenantId is required but no
 1. Launcher banner showed `repo root: -` (empty) → `Resolve-RepoRoot` returned an empty string instead of throwing.
 2. Initialize-LauncherConfig was called with `-RepoRoot ""`, so Layer 3 looked at `\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` (with leading backslash) instead of the customer's actual `<install>\config\SecurityInsight.custom.ps1`.
 3. Layer 3 reported `absent` → custom.ps1 never loaded.
-4. `$global:SI_SPN_*` never populated → the `SI_SPN_* → Spn*` shim (`Initialize-LauncherConfig.ps1:603-604`) had nothing to copy.
-5. Auth check at `launcher.community-vm.ps1:232` threw the misleading "put your SPN credentials in custom.ps1" error.
+4. `$global:SI_SPN_*` never populated → the `SI_SPN_* → Spn*` shim (`Initialize-LauncherConfig.ps1`) had nothing to copy.
+5. Auth check at `launcher.community-vm.ps1` threw the misleading "put your SPN credentials in custom.ps1" error.
 
-`Resolve-RepoRoot` walked up looking for `FUNCTIONS\AutomateITPS\AutomateITPS.psd1` (monorepo marker), a `scripts\` + `launchers\` sibling pair (published-community marker), or an `engine\` + `launcher\` sibling pair (v2.2 dev-tree marker). Flat community installs whose layout doesn't match any of those three (e.g. a hybrid with only `launcher\` and `config\`) returned `$communityMatch = $null` → empty install path → cascading failure above.
+`Resolve-RepoRoot` walked up looking for a platform module marker (monorepo layout), a `scripts\` + `launchers\` sibling pair (published-community marker), or an `engine\` + `launcher\` sibling pair (v2.2 dev-tree marker). Flat community installs whose layout doesn't match any of those three (e.g. a hybrid with only `launcher\` and `config\`) returned `$communityMatch = $null` → empty install path → cascading failure above.
 
 ### Fix
 
@@ -5549,10 +5460,10 @@ That bypasses the broken resolver and gives Layer 3 a correct `$RepoRoot`. After
 
 ### Bugs
 
-Operator on a community-flat install at `C:\CommunityTest\` reported zero run transcripts on disk despite many launcher runs. Investigation showed:
+Operator on a community-flat install at `<install>\` reported zero run transcripts on disk despite many launcher runs. Investigation showed:
 
-1. **`Start-LauncherTranscript.ps1`** unconditionally appended `SOLUTIONS/SecurityInsight/logs` whenever `-RepoRoot` was passed (which every launcher does via `$InstallPath`). On a flat community install this created a stray `C:\CommunityTest\SOLUTIONS\SecurityInsight\logs\` folder where operators couldn't find their transcripts — they were looking in the expected `C:\CommunityTest\logs\`.
-2. **`Initialize-LauncherConfig.ps1`** wrote config snapshots to `<RepoRoot>\DATA\LOGS\` (or `<RepoRoot>\SOLUTIONS\<Solution>\DATA\LOGS\`). Operator: "we don't use `\data` anymore." The separate folder also broke the parity story between internal-VM and community-VM operators.
+1. **`Start-LauncherTranscript.ps1`** unconditionally appended `SOLUTIONS/SecurityInsight/logs` whenever `-RepoRoot` was passed (which every launcher does via `$InstallPath`). On a flat community install this created a stray `<install>\SOLUTIONS\SecurityInsight\logs\` folder where operators couldn't find their transcripts — they were looking in the expected `<install>\logs\`.
+2. **`Initialize-LauncherConfig.ps1`** wrote config snapshots to `<RepoRoot>\DATA\LOGS\` (or `<RepoRoot>\SOLUTIONS\<Solution>\DATA\LOGS\`). The `DATA` folder is no longer used. The separate folder also broke the parity story between internal-VM and community-VM operators.
 3. Both helpers silently swallowed transcript-folder-creation failures via `try { ... } catch { Write-Warning ... }`, so when path resolution went wrong the operator only saw a warning scrolling past in the console — no clear "where did my logs go" signal.
 
 ### Fix
@@ -5561,8 +5472,8 @@ Both helpers now use **layout-aware probing**: prefer the monorepo path (`<root>
 
 | Layout | Install root | Logs folder (both file types) |
 |---|---|---|
-| Monorepo (internal) | `C:\SCRIPTS\AutomateIT\` | `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\logs\` |
-| Community (flat publish) | `C:\CommunityTest\` | `C:\CommunityTest\logs\` |
+| Monorepo (internal) | `<install>\` | `<install>\SOLUTIONS\SecurityInsight\logs\` |
+| Community (flat publish) | `<install>\` | `<install>\logs\` |
 
 Additional hardening:
 - `Start-LauncherTranscript` walk-up now accepts both `<root>\VERSION` and `<root>\SOLUTIONS\SecurityInsight\VERSION` as layout markers (was monorepo-only — community walk-up silently failed and forced the fallback path).
@@ -5583,7 +5494,7 @@ Operator on internal-VM RA Summary reported two columns "wrong":
 1. **`IssueList`** held a 2284-char concatenation of every recommendation name across the whole report — same long string broadcast onto every row, regardless of which `ConfigurationId` the row represented.
 2. **`TotalIssuesImpactedAssets`** was set to the report's total row count (e.g. 368 or sometimes the per-bucket count 108 repeating across 108 rows), not the per-row impacted-asset count.
 
-Root cause: `Invoke-RiskAnalysis.ps1:4047, 4078, 4102-4103, 4133-4134` built `$totalIssues` and `$issuesDetails` as **whole-report aggregates** (count of all output rows + `make_set` of every distinct `ConfigurationName`/`ConfigurationId`), then stamped the same values onto every Summary row when the YAML didn't project its own `IssueList`/`TotalIssuesImpactedAssets`. `Device_Recommendations_Summary` (and several others) doesn't project either column, so every row inherited the whole-report blob.
+Root cause: `Invoke-RiskAnalysis.ps1` built `$totalIssues` and `$issuesDetails` as **whole-report aggregates** (count of all output rows + `make_set` of every distinct `ConfigurationName`/`ConfigurationId`), then stamped the same values onto every Summary row when the YAML didn't project its own `IssueList`/`TotalIssuesImpactedAssets`. `Device_Recommendations_Summary` (and several others) doesn't project either column, so every row inherited the whole-report blob.
 
 ### Fix
 
@@ -5592,7 +5503,7 @@ Engine post-process now uses **per-row scope** for both Summary defaults:
 - `IssueList = @($row.ConfigurationId)` (was: whole-report `make_set(ConfigurationName)`). Operators requested the stable identifier; the human-readable `ConfigurationName` still ships in its own column.
 - `TotalIssuesImpactedAssets = $row.ImpactedAssetCount` (was: whole-report `$out.Count`). Each row represents one issue × N assets, so TII per row = the asset count.
 
-YAML reports that already project these columns (e.g. CVE Missing Devices Summary at line 358) are unaffected — the engine only fills when YAML left the column null.
+YAML reports that already project these columns (e.g. CVE Missing Devices Summary) are unaffected — the engine only fills when YAML left the column null.
 
 ### Excel polish
 
@@ -5601,7 +5512,7 @@ Two follow-up cosmetic issues on the same Summary xlsx:
 - `CVSSDesc` column was capped at width 50 (shared with the other long-narrative columns), which clipped CVE descriptions to ~1 sentence and forced operators to widen manually after open. Now capped at 90 via a per-column wide-targets map (room for ~2-3 wrapped lines without dominating the sheet).
 - All cells now top-aligned via `$ws.Cells.Style.VerticalAlignment = 'Top'`. ImportExcel's default is center-vertical; with WrapText enabled on multi-line columns, centered cells made it ambiguous which wrapped line belonged to which row.
 
-Both Excel changes apply to both the empty-rows code path (line 4710-4742) and the normal rows path (line 4807-4838).
+Both Excel changes apply to both the empty-rows code path and the normal rows path.
 
 ---
 
@@ -5633,39 +5544,29 @@ The wiped file is technically recoverable (the `*.bak.<ts>` is right next to it)
 
 ---
 
-## v2.2.309 — Fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department / OU contains apostrophe, space, `+` or `%`
+## v2.2.309 — Identity engine: department and OU names with apostrophes and special characters are read correctly
 
-Customer-reported failure on community VM: Identity engine completed sign-in batching + classification (8963 users, 4502 principals matched, 11037 items processed) and then **failed Phase 4/9 ENRICH** after ~44 min with `Invoke-RestMethod : The remote server returned an error: (400) Bad Request` at `Get-SIAppGroupRecord` → `TypeProfileCache.ps1:253`.
-
-### Root cause
-
-`ConvertTo-SISafeKey` (`engine/asset-profiling/storage/StorageContext.ps1:130`) replaces only `/ \ # ?` + control chars (0x00-0x1F, 0x7F-0x9F) before embedding the value into the Table REST URL:
-
-```
-https://<acct>.table.core.windows.net/<Tbl>(PartitionKey='<pk>',RowKey='<rk>')
-```
-
-`'` is OData's string-literal delimiter. When the identity engine's cluster key (`identity:<ENTRA_Department-or-OU>:<hex>`) contained a raw apostrophe — typical for customer department / OU names like `"Tom's Team"`, `"O'Brien Group"`, `"Børn's Center"` — the literal terminated early and Azure Table Storage rejected the request with HTTP 400. The Azure container test never hit this because the test tenant had clean department names.
+Department and OU names with apostrophes and special characters are read correctly. A community-VM run of the Identity engine stopped in Phase 4/9 ENRICH with `(400) Bad Request` from the Table cache lookup when an `ENTRA_Department` / OU value contained an apostrophe, space, `+` or `%` (names like `"Tom's Team"`).
 
 ### Fix
 
-Expanded the replace class in `ConvertTo-SISafeKey` to also map `'`, `"`, space, `+`, and `%` to `_`:
+`ConvertTo-SISafeKey` (`engine/asset-profiling/storage/StorageContext.ps1`) now also maps `'`, `"`, space, `+`, and `%` to `_`:
 
 ```powershell
 ($Key -replace '[/\\#?''"+% \u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
 ```
 
-`'` / `"` neutralizes the OData-delimiter break. Space + `+` neutralizes URL parser ambiguity (space → `+` → ambiguous with literal `+`). `%` neutralizes invalid URL-encoded sequences. Mapping stays deterministic + lowercase + human-debuggable in Storage Explorer.
+Mapping stays deterministic + lowercase + human-debuggable in Storage Explorer.
 
 ### Scope
 
-Single hot-path helper used by 6 call sites: `Get/Set-SIAssetTypeProfile`, `Get/Set-SIAppGroupRecord`, asset-id fingerprint keys. All six benefit. Asset IDs (Azure resource IDs) didn't trigger this in practice, but anything derived from user-supplied display names (department, OU, app group label) was exposed.
+Single hot-path helper used by 6 call sites: `Get/Set-SIAssetTypeProfile`, `Get/Set-SIAppGroupRecord`, asset-id fingerprint keys. All six benefit. Asset IDs (Azure resource IDs) didn't trigger this in practice, and anything derived from user-supplied display names (department, OU, app group label) is now read correctly.
 
 ---
 
-## v2.2.308 — Sanitize remaining customer-name literals in `INTERNAL/New-SISolutionConfig.ps1` .EXAMPLE block
+## v2.2.308 — Documentation clean-up
 
-`SOLUTIONS/SecurityInsight/INTERNAL/New-SISolutionConfig.ps1` `.EXAMPLE` block still had real customer literals (`stfvfsecurityinsight`, `IT-Alerts@fjernvarmefyn.dk`, `oai-fvf-security-insight`) in the doc-comment. Same pattern as v2.2.298 cleanup; never executed (comment-help block only) so no runtime change. Replaced with generic placeholders.
+Documentation clean-up in maintainer-only script help; no runtime change.
 
 ---
 
@@ -5684,7 +5585,7 @@ v2.2.306 shipped both reports with `AssetName/AssetId/AssetType` populated from 
 
 ### Effect
 
-A row representing "vulnerable workstation `dons-ekn-dt-01` can reach storage account `stContososi`" now reports `AssetName=dons-ekn-dt-01`, `AssetId=<aad-device-guid>`, `AssetType=Device`. The Azure target is still in `TargetAzureAsset / TargetAzureAssetId / TargetType` for the impact narrative. CriticalityTier reflects the workstation's tier (Tier 0 admin device = high alarm; Tier 3 user laptop = lower priority).
+A row representing "vulnerable workstation `<workstation>` can reach storage account `stContososi`" now reports `AssetName=<workstation>`, `AssetId=<aad-device-guid>`, `AssetType=Device`. The Azure target is still in `TargetAzureAsset / TargetAzureAssetId / TargetType` for the impact narrative. CriticalityTier reflects the workstation's tier (Tier 0 admin device = high alarm; Tier 3 user laptop = lower priority).
 
 ---
 
@@ -5730,7 +5631,7 @@ v2.2.304 set README to 116 (correct YAML report count after v2.2.303 moved 2 rep
    -> Expected 118, because README (116) vs YAML (118) drift, but got 116.
 ```
 
-Root cause: `$script:RaReportCount` (SI-PrePublish.Tests.ps1:49) is regex-derived as `[regex]::Matches(rawYaml, '(?m)^\s+- ReportName:').Count`. That counts `- ReportName:` entries in BOTH the `Reports[]` and `ReportTemplates[]` sections — each template uses the same `- ReportName: <template-name>` syntax. With 116 reports + 2 templates → false-positive 118. Has been masked for a long time because previously `reports + templates` happened to equal whatever number README claimed; once Dev moves shifted things, the over-count surfaced.
+Root cause: `$script:RaReportCount` (SI-PrePublish.Tests.ps1) is regex-derived as `[regex]::Matches(rawYaml, '(?m)^\s+- ReportName:').Count`. That counts `- ReportName:` entries in BOTH the `Reports[]` and `ReportTemplates[]` sections — each template uses the same `- ReportName: <template-name>` syntax. With 116 reports + 2 templates → false-positive 118. Has been masked for a long time because previously `reports + templates` happened to equal whatever number README claimed; once Dev moves shifted things, the over-count surfaced.
 
 Fix: scope the regex to the section BEFORE the `ReportTemplates:` line:
 ```powershell
@@ -5756,9 +5657,9 @@ v2.2.303's Pre-Publish Gate (Pester `DocConsistency`) failed:
 Locked YAML report count went from 118 → 116 when v2.2.303 moved both `Attack_Paths_*_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` reports into the Dev tier. README + docs still claimed the pre-move counts.
 
 Updated:
-- `README.md` line 174 (mermaid diagram): `120 attacker-centric KQL reports` → `116`
-- `README.md` line 1662 (engine inventory table): `**118 reports** (59 Summary + 59 Detailed, fully paired)` → `**116 reports** (58 Summary + 58 Detailed, fully paired)`
-- `docs/risk-analysis-detection.md` line 5: `**118 reports**` → `**116 reports**`
+- `README.md` (mermaid diagram): `120 attacker-centric KQL reports` → `116`
+- `README.md` (engine inventory table): `**118 reports** (59 Summary + 59 Detailed, fully paired)` → `**116 reports** (58 Summary + 58 Detailed, fully paired)`
+- `docs/risk-analysis-detection.md`: `**118 reports**` → `**116 reports**`
 
 No engine or YAML changes; doc-only.
 
@@ -5831,16 +5732,16 @@ After v2.2.302 the launcher log should show `[stale-device] Device_Recommendatio
 
 ## v2.2.301 — Sweep all remaining off-scope `case()` defaults across Identity + CVE + Attack_Paths reports (same silent-drop as v2.2.300)
 
-Operator: "are there more of these in all queries?" — yes, many.
+The same pattern was found in many queries.
 
-After v2.2.300 fixed the 4 endpoint reports, audited the YAML for every `extend CriticalityTierLevel = case(...)` and `extend SecuritySeverity = case(...)` whose default value falls outside the report's filter scope (`Critical/High/Medium/Low - tier 0..3` and `Very High/High/Medium-High/Medium/Low`). Engine post-filter at Invoke-RiskAnalysis.ps1:6784 uses `Filter-ObjectsByColumn -IncludeBlank:$true` — blanks survive but any non-blank string outside scope is silently dropped.
+After v2.2.300 fixed the 4 endpoint reports, audited the YAML for every `extend CriticalityTierLevel = case(...)` and `extend SecuritySeverity = case(...)` whose default value falls outside the report's filter scope (`Critical/High/Medium/Low - tier 0..3` and `Very High/High/Medium-High/Medium/Low`). Engine post-filter at Invoke-RiskAnalysis.ps1 uses `Filter-ObjectsByColumn -IncludeBlank:$true` — blanks survive but any non-blank string outside scope is silently dropped.
 
 ### Found and fixed (~25 sites)
 
-- **`SecuritySeverity = ... "Unknown"` default** — 2 CVE reports (lines 325 + 715, v2.2.216 origin). `Unknown` not in `SecuritySeverityScope` → every row with null/empty `FindingSeverity` was dropped. Default now `"Low"`.
-- **`CriticalityTierLevel = ... "Unknown - unmapped"` default in Identity reports** — ~19 Identity_* reports (lines 10507–13159, single-line `case()` form). Identities without a Tier value got dropped. Default now `"Low - tier 3"`.
-- **`TargetCriticalityTierLevel ... "Unknown - unmapped"` default in Attack_Paths Detailed** — line 9534. Unreachable in practice (preceded by `coalesce(Target_Tier_From_CL, 3)`) but normalized for consistency.
-- **`CriticalityTierLevel ... "Unknown - unmapped"` in Compromised_Device reports** — lines 22144 + 22255 (single-line, `where CriticalityTier <= 1` upstream makes default unreachable). Normalized.
+- **`SecuritySeverity = ... "Unknown"` default** — 2 CVE reports (v2.2.216 origin). `Unknown` not in `SecuritySeverityScope` → every row with null/empty `FindingSeverity` was dropped. Default now `"Low"`.
+- **`CriticalityTierLevel = ... "Unknown - unmapped"` default in Identity reports** — ~19 Identity_* reports (single-line `case()` form). Identities without a Tier value got dropped. Default now `"Low - tier 3"`.
+- **`TargetCriticalityTierLevel ... "Unknown - unmapped"` default in Attack_Paths Detailed** — unreachable in practice (preceded by `coalesce(Target_Tier_From_CL, 3)`) but normalized for consistency.
+- **`CriticalityTierLevel ... "Unknown - unmapped"` in Compromised_Device reports** — (single-line, `where CriticalityTier <= 1` upstream makes default unreachable). Normalized.
 
 ### Pattern to avoid going forward
 
@@ -5854,7 +5755,7 @@ Query bodies changed → new stable hashes. AutoBucket caches invalidate.
 
 ## v2.2.300 — Fix `"Unknown - unmapped"` CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage
 
-Operator: Device_Recommendations still returns 0 rows after v2.2.299. Azure_Recommendations works (different join shape, well-populated CL). Root cause is unrelated to v2.2.299's IsExcludedByTag fix — it's a downstream engine post-filter interacting with a v2.2.217 case() default.
+Device_Recommendations still returned 0 rows after v2.2.299. Azure_Recommendations works (different join shape, well-populated CL). Root cause is unrelated to v2.2.299's IsExcludedByTag fix — it's a downstream engine post-filter interacting with a v2.2.217 case() default.
 
 ### Bug
 
@@ -5869,7 +5770,7 @@ The 4 endpoint reports (`Device_Missing_CVEs_Summary`, `Device_Missing_CVEs_Deta
     "Unknown - unmapped")     // v2.2.217 default
 ```
 
-The engine then post-filters every report by `CriticalityTierLevelScope` (Invoke-RiskAnalysis.ps1 line 6784, `Filter-ObjectsByColumn -IncludeBlank:$true`). The scope lists only `Critical/High/Medium/Low - tier 0..3`. `"Unknown - unmapped"` is non-blank and not in scope → every unmapped row dropped. On a customer where a large fraction of endpoint TVM devices don't match CL (fresh onboarding, partial Endpoint Profile run, server/Linux devices without AadDeviceId), the report returns 0 rows — silently.
+The engine then post-filters every report by `CriticalityTierLevelScope` (Invoke-RiskAnalysis.ps1, `Filter-ObjectsByColumn -IncludeBlank:$true`). The scope lists only `Critical/High/Medium/Low - tier 0..3`. `"Unknown - unmapped"` is non-blank and not in scope → every unmapped row dropped. On a customer where a large fraction of endpoint TVM devices don't match CL (fresh onboarding, partial Endpoint Profile run, server/Linux devices without AadDeviceId), the report returns 0 rows — silently.
 
 v2.2.217 chose `"Unknown - unmapped"` deliberately to surface data-quality gaps instead of downgrading to Low. But the engine then drops these rows entirely — worse than the silent-downgrade it was trying to avoid: operator gets 0 rows AND no signal at all.
 
@@ -5887,7 +5788,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ## v2.2.299 — Fix `IsExcludedByTag` null-filter dropping ALL Device_Recommendations + Device_Missing_CVEs rows
 
-Operator: Device_Recommendations report returns 0 rows when there should be many. Root cause: a leftouter-join semantic trap shared by 6 reports.
+Device_Recommendations report returned 0 rows when there should be many. Root cause: a leftouter-join semantic trap shared by 6 reports.
 
 ### Bug
 
@@ -5899,7 +5800,7 @@ After `| join kind=leftouter (_ep) on $left.DI_AadDeviceId == $right.AadDeviceId
 
 is meant to drop only `IsExcludedByTag=true` rows, but `column_ifexists` returns the actual `null` (because the column does exist after the join), then `tobool(null) == null`, then `null == false` evaluates to `null`, then `where null` drops the row. Net effect: every unmatched TVM device gets silently filtered out. If many or all TVM devices are unmatched in CL (a common state on tenants whose Endpoint Profile engine hasn't run, or on freshly-onboarded customers), the report returns 0 rows.
 
-By contrast, line 1054 already coalesces correctly for `IsExcluded`:
+By contrast, the `IsExcluded` filter already coalesces correctly:
 ```kql
 | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
 ```
@@ -5915,12 +5816,12 @@ Wrap the `IsExcludedByTag` filter the same way in all 6 affected reports:
 
 ### Affected reports (all 6 sites — 1 replace_all change)
 
-- `Device_Missing_CVEs_Summary` (line 303)
-- `Device_Missing_CVEs_Detailed` (line 697)
-- `Device_Recommendations_Summary` (line 1060)
-- `Device_Recommendations_Detailed` (line 1392)
-- `Azure_Recommendations_Summary` / variant (line 1625)
-- `Azure_Recommendations_Detailed` / variant (line 1890)
+- `Device_Missing_CVEs_Summary`
+- `Device_Missing_CVEs_Detailed`
+- `Device_Recommendations_Summary`
+- `Device_Recommendations_Detailed`
+- `Azure_Recommendations_Summary` / variant
+- `Azure_Recommendations_Detailed` / variant
 
 ### Cache invalidation
 
@@ -5928,14 +5829,9 @@ Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ---
 
-## v2.2.298 — Sanitize customer-name literals in internal provisioning script docs
+## v2.2.298 — Documentation clean-up
 
-Two internal provisioning scripts had a real customer email/domain hardcoded in their `.PARAMETER` / `.EXAMPLE` doc blocks (in-place since v2.2.186):
-
-- `SOLUTIONS/PlatformConfiguration/INTERNAL/Provision/Set-PlatformDefaultsSmtp.ps1` — `svc-automation@fjernvarmefyn.dk` → `svc-automation@<your-domain>` (in `.PARAMETER SmtpFrom` and `.EXAMPLE`)
-- `SOLUTIONS/SecurityInsight/internal/New-SISolutionConfig.ps1` — `IT-Alerts@fjernvarmefyn.dk`, `stfvfsecurityinsight`, `oai-fvf-security-insight` → generic placeholders
-
-These are doc literals only (in script comment-help blocks); they are never executed and never written into any generated customer config. No runtime change.
+Documentation clean-up in maintainer-only script help; no runtime change.
 
 ---
 
@@ -5946,7 +5842,7 @@ v2.2.296 still failed LA pre-fetch with:
 BadArgumentError / SyntaxError / SYN0002
 "Query could not be parsed at '' on line [9,92]"
 ```
-on workspace `log-platform-management-securityinsight-p`.
+on the customer's workspace.
 
 Root cause: v2.2.295 added a 5-line `//` comment block **between two `project` columns** inside the `_TargetCmdb` CTE:
 
@@ -6010,7 +5906,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once, re-pr
 
 ### Onboarding doc — cert-preferred custom.ps1 example
 
-`INTERNAL/onboard-internal-AutomateIT.md` now documents `$global:SI_SPN_CertThumbprint` as the preferred auth path (no plaintext secret on disk), with the secret-and-KV pattern shown as Option B.
+The onboarding guidance now documents `$global:SI_SPN_CertThumbprint` as the preferred sign-in; certificate is recommended, with the secret-and-Key-Vault pattern shown as Option B.
 
 ---
 
@@ -6043,7 +5939,7 @@ The first 3 are extremely common (every device "contains" user accounts via logo
 
 ### Bug 2 — `TargetCriticalityTier` was sourced from EG, violating the project rule
 
-Per the project's authoritative tier rule (`feedback_si_ra_tier_source.md`): *"CriticalityTier ALWAYS sources from `SI_*_Profile_CL.Tier` (engine-computed). Never coalesce in EG criticalityLevel even though v2.1 did."*
+Per the project's authoritative tier rule: *"CriticalityTier ALWAYS sources from `SI_*_Profile_CL.Tier` (engine-computed). Never coalesce in EG criticalityLevel even though v2.1 did."*
 
 The Detailed query's Step 9 enrichment joined `NodesSlim` aliased as Target and used `TargetCriticalityTier = CriticalityTier` from `NodeProperties.criticalityLevelProps[0].criticalityLevel` — i.e., EG's own criticality assessment. That is **not** the customer's authoritative tier from `SI_Azure_Profile_CL.Tier`.
 
@@ -6070,7 +5966,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once, re-pr
 
 ## v2.2.294 — `Attack_Paths_Detailed_Device_*_Azure`: pre-aggregate at each hop (break multiplicative join chain)
 
-Operator: even after v2.2.290 (additive output) + v2.2.293 (Device-keyed bucketing), bucket 40 still 900s-times out. Root cause confirmed structural per-single-device: ONE super-connected device's full graph traversal exceeds AH's 900s ceiling regardless of bucketing.
+Even after v2.2.290 (additive output) + v2.2.293 (Device-keyed bucketing), bucket 40 still 900s-times out. Root cause confirmed structural per-single-device: ONE super-connected device's full graph traversal exceeds AH's 900s ceiling regardless of bucketing.
 
 ### Root cause (deep dive)
 
@@ -6084,7 +5980,7 @@ CVEByDevice (1 row/device)
   | summarize ... by Device, Target  ← v2.2.290 single end-summarize
 ```
 
-Defender's KQL engine **materializes every intermediate join row before reaching the summarize**. For a device like `ns-pf5ych7g.contoso.com` (3 creds × ~50 identities × ~1000 targets), that's ~150,000 rows in the intermediate set per device. With ~30 devices in a Device-keyed bucket (post-v2.2.293), bucket-level intermediate = ~150K × 30 ÷ device-cred-asymmetry ≈ 1-2M rows. AH's 900s ceiling can't process this for the bomb tenant.
+Defender's KQL engine **materializes every intermediate join row before reaching the summarize**. For a device like `<device>.contoso.com` (3 creds × ~50 identities × ~1000 targets), that's ~150,000 rows in the intermediate set per device. With ~30 devices in a Device-keyed bucket (post-v2.2.293), bucket-level intermediate = ~150K × 30 ÷ device-cred-asymmetry ≈ 1-2M rows. AH's 900s ceiling can't process this for the bomb tenant.
 
 ### Fix: insert summarize BETWEEN each join
 
@@ -6110,7 +6006,7 @@ Each summarize closes the previous dimension immediately. Per-step row count is 
 
 ### Compute reduction
 
-For ns-pf5ych7g (1 device, 3 creds, ~50 identities, ~1000 targets):
+For that device (1 device, 3 creds, ~50 identities, ~1000 targets):
 - v2.2.290 (single end-summarize): **~150,000 intermediate join tuples**
 - v2.2.294 (hop-pre-aggregate): **~50,150 intermediate join tuples** (3× reduction)
 
@@ -6136,7 +6032,7 @@ For the customer's tenant: bucket 40 should now complete within 900s (compute re
 
 ## v2.2.293 — `Attack_Paths_Detailed_Device_*_Azure`: bucket on Device NodeId, not CVE NodeId
 
-Operator: even after v2.2.290 (additive cartesian rewrite) + v2.2.282/288 (stale-device filter), bucket 40 of 64 still 900s-times out and recurses into deep sub-bucketing. Pattern across multiple runs: one specific hash chain (`231` mod 256, `231` mod 1024, ...) consistently overflows.
+Even after v2.2.290 (additive cartesian rewrite) + v2.2.282/288 (stale-device filter), bucket 40 of 64 still 900s-times out and recurses into deep sub-bucketing. Pattern across multiple runs: one specific hash chain (`231` mod 256, `231` mod 1024, ...) consistently overflows.
 
 ### Root cause
 
@@ -6200,7 +6096,7 @@ Applied to **only** `Attack_Paths_Detailed_Device_with_high_severity_vulnerabili
 
 ## v2.2.292 — Fix `TimeGenerated` → `Timestamp` on AH-table filters in `Device_Recommendations_*` reports
 
-Operator: `Device_Recommendations_Summary` and `Device_Recommendations_Detailed` queries threw `where TimeGenerated column name not found` when routed to Advanced Hunting.
+`Device_Recommendations_Summary` and `Device_Recommendations_Detailed` queries threw `where TimeGenerated column name not found` when routed to Advanced Hunting.
 
 ### Root cause
 
@@ -6239,14 +6135,12 @@ Ran an exhaustive scan of the locked YAML for any other AH-table reference paire
 
 ## v2.2.291 — Silence the "secret X not found in vault Y" warnings on missing optional secrets
 
-Operator: "i hate the warning about platformsecurity missing in keyvault, remove it".
-
 v2.2.285/286 changed `Get-PlatformSecretKeyVault` and `Get-PlatformSecretLocal` from `throw` to `Write-Warning + return $null` to keep Layer 3 launcher-config loads non-fatal. But the warning fired on every optional secret that wasn't seeded yet (SI-StorageKey on OAuth-default tenants, Shodan/OpenAI keys when those features are off, Smtp-User/Smtp-Password before mail is wired up), polluting normal launcher output:
 
 ```
-WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-User' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
-WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-Password' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
-WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-User' not found in vault '<your key vault>' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-Password' not found in vault '<your key vault>' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault '<your key vault>' (returning $null).
 ```
 
 ### Fix
@@ -6259,7 +6153,7 @@ No behaviour change otherwise — `$null` is still returned, callers using `if (
 
 ## v2.2.290 — Attack_Paths_Detailed_Device YAML rewrite: multiplicative cartesian → additive (per-target rows with packed Cred/Identity sets)
 
-Operator: even with v2.2.282-288 stale-device filter, AutoBucket floor=64 + sub-bucketing, and v2.2.281 floor logic, the `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` query still 900s-times out on the heavy bucket because **the bottleneck is structural, not bucket-count-related**.
+Even with v2.2.282-288 stale-device filter, AutoBucket floor=64 + sub-bucketing, and v2.2.281 floor logic, the `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` query still 900s-times out on the heavy bucket because **the bottleneck is structural, not bucket-count-related**.
 
 ### Root cause
 
@@ -6299,7 +6193,7 @@ DeviceTargetPaths = CVEByDevice
        FinalTargetId, FinalTargetName, FinalTargetLabel
 ```
 
-Row count drops from `N_cred × N_identity × N_target` to just `N_target` per device. ns-pf5ych7g goes from ~15K → ~100 rows.
+Row count drops from `N_cred × N_identity × N_target` to just `N_target` per device. The heaviest device goes from ~15K → ~100 rows.
 
 ### Output column changes
 
@@ -6318,9 +6212,9 @@ Columns that **shifted shape** in the wide diagnostic project (visible if you op
 `AttackPath` and `AttackPathDetailed` strings updated to render joined sets with counts:
 
 ```
-ENTRY device [ns-pf5ych7g] tier 3 Low-tier 3 | Not Internet-Exposed | high severity CVEs 7
- -> CREDENTIALS (3) [a80...; cookie-xyz; sp-secret-1] | types [entra-userCookie; user; service-principal-azure-cli-secret]
- -> IDENTITIES (4) [Thomas Urth Jacobsen; svc-foo; ...] | types [user; serviceprincipal; ...]
+ENTRY device [<device>] tier 3 Low-tier 3 | Not Internet-Exposed | high severity CVEs 7
+ -> CREDENTIALS (3) [<cred-1>; <cred-2>; <cred-3>] | types [entra-userCookie; user; service-principal-azure-cli-secret]
+ -> IDENTITIES (4) [Jane Doe; svc-foo; ...] | types [user; serviceprincipal; ...]
  -> TARGET microsoft.storage/storageaccounts [stprodfoo] tier 1 High - tier 1
  | Internet-Exposed | escalation 2 | Privilege escalation two tiers | total paths 12
 ```
@@ -6338,7 +6232,7 @@ ENTRY device [ns-pf5ych7g] tier 3 Low-tier 3 | Not Internet-Exposed | high sever
 
 ### Result
 
-ns-pf5ych7g: ~15K rows → ~100 rows. Heavy bucket completes in <10s instead of timing out at 900s. Cartesian is now linear in `N_device × N_target`, not multiplicative.
+Heaviest device: ~15K rows → ~100 rows. Heavy bucket completes in <10s instead of timing out at 900s. Cartesian is now linear in `N_device × N_target`, not multiplicative.
 
 Sub-bucketing + AutoBucket escalation still in place as the safety net if a single tenant has truly extreme target reach per device.
 
@@ -6350,7 +6244,7 @@ After pulling v2.2.290, re-run the same template (`RiskAnalysis_Detailed_test`).
 
 ## v2.2.289 — `Invoke-SIHuntingQuery` (LA route) retries transient failures + dumps query preview
 
-Operator: "WARNING: Invoke-SIHuntingQuery (LA): Operation returned an invalid status code 'BadRequest' — i see this occasionally" + "maybe a retry so we dont loose data".
+`Invoke-SIHuntingQuery (LA)` occasionally returned `BadRequest`; a transient failure must not lose data.
 
 ### Two problems addressed
 
@@ -6391,7 +6285,7 @@ Customer can tune retry count via `$global:SI_LAQueryMaxRetries = N` in `Securit
 
 ## v2.2.288 — Stale-device filter auto-injects when customer YAML lacks the placeholder
 
-Operator on v2.2.287 launcher log: "i dont see the filter". Even with the v2.2.287 default flip to `'strict'`, the `[INFO] [stale-device] ...` line still didn't appear on the customer's run.
+Even with the v2.2.287 default flip to `'strict'`, the `[INFO] [stale-device] ...` line still didn't appear on the customer's run.
 
 ### Root cause
 
@@ -6459,7 +6353,7 @@ in `SecurityInsight.custom.ps1`. Or `'lenient'` to keep devices with null `lastS
 
 ## v2.2.286 — `Get-PlatformSecretLocal` also soft-fails (full "no missing value should halt" parity across providers)
 
-Operator: "no missing values should result in halt". v2.2.285 fixed the KeyVault provider; this release applies the same soft-fail pattern to the **Local DPAPI provider** (`Get-PlatformSecretLocal`) so behaviour is symmetric:
+A missing value never halts a launcher. v2.2.285 fixed the KeyVault provider; this release applies the same soft-fail pattern to the **Local DPAPI provider** (`Get-PlatformSecretLocal`) so behaviour is symmetric:
 
 - Missing store file → `Write-Warning` + return `$null` (was: throw)
 - Secret not present in store → `Write-Warning` + return `$null` (was: throw)
@@ -6476,12 +6370,12 @@ Operator follow-up after v2.2.284: shared-defaults defaults `$global:SI_UseStora
 
 ```
 [STEP]  Layer 3/5: SecurityInsight.custom.ps1 (solution-wide customer overrides)
-[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p'.
+[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault '<your key vault>'.
 ```
 
 ### Root cause
 
-`FUNCTIONS\AutomateITPS\Private\Providers\Secret.KeyVault.ps1` line 28:
+`FUNCTIONS\AutomateITPS\Private\Providers\Secret.KeyVault.ps1`:
 
 ```powershell
 $secret = Get-AzKeyVaultSecret -VaultName ... -Name $Name -ErrorAction Stop
@@ -6495,7 +6389,7 @@ When the secret simply doesn't exist in KV (very common for optional secrets lik
 `Get-PlatformSecretKeyVault` now **soft-fails**: emits a `Write-Warning` and returns `$null` instead of throwing. All existing callers continue to work:
 
 - Try/catch-wrapped callers (Shodan/OpenAI fetches in `New-SISolutionConfig.ps1` template, SMTP fetches in `Set-PlatformDefaultsSmtp.ps1`): catch never fires, `$null` returned, the `if (-not $global:X)` fall-through pattern still triggers fallback behaviour. **Identical net result.**
-- Unwrapped strict callers (e.g. legacy `SecurityInsight.custom.ps1` from before the cleanup, including Ping's current file): `$null` returned instead of throw, Layer 3 finishes loading, the launcher proceeds with OAuth-by-default storage auth (which doesn't need the missing key anyway).
+- Unwrapped strict callers (e.g. legacy `SecurityInsight.custom.ps1` from before the cleanup): `$null` returned instead of throw, Layer 3 finishes loading, the launcher proceeds with OAuth-by-default storage auth (which doesn't need the missing key anyway).
 - Downstream uses (e.g. a Connect-AzAccount that gets `$null` for a cert thumbprint) will fail with a more actionable error than a KV stack trace mid-config-load.
 
 ### Operator action
@@ -6503,7 +6397,7 @@ When the secret simply doesn't exist in KV (very common for optional secrets lik
 Pull v2.2.285, re-run the failing launcher. Layer 3 now logs:
 
 ```
-WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault '<your key vault>' (returning $null).
 [OK]    loaded
 ```
 
@@ -6512,8 +6406,6 @@ Instead of halting. No customer-config edits needed.
 ---
 
 ## v2.2.284 — `$global:SI_UseStorageOAuth = $true` is the default in shared-defaults (fresh installs no longer halt on missing `SI-StorageKey`)
-
-Operator: "after running initialize-formvm and try to run the launcher for internal it fails. reason: the parm `$global:SI_UseStorageOAuth = $true` is missing from custom file. make that parm default, so launchers don't halt when si_storagekey doesn't exist".
 
 ### Root cause
 
@@ -6548,7 +6440,7 @@ Pull v2.2.284, re-run the failing internal launcher. No customer-config changes 
 
 ## v2.2.283 — Stale-device filter extended to `Identity_Admin_LogonTo_*` reports (8 more queries)
 
-Operator follow-up after v2.2.282 ship: "are there more queries where this could add value?". Audit found 8 additional heavy device-touching reports with the same EG-ghost-node cartesian risk:
+An audit after v2.2.282 found 8 additional heavy device-touching reports with the same EG-ghost-node cartesian risk:
 
 - `Identity_Admin_LogonTo_VulnerableDevice_Summary`
 - `Identity_Admin_LogonTo_VulnerableDevice_Detailed`
@@ -6575,7 +6467,7 @@ New engine resolver `Resolve-StaleDeviceFilterBlock` substitutes a `__STALE_DEVI
 
 **Globals:**
 
-- `$global:SI_RA_StaleDeviceFilter = 'strict' | 'lenient' | 'off'` — **default `'strict'` (active)**. Customer opts out via `'off'`.
+- `$global:SI_RA_StaleDeviceFilter = 'strict' | 'lenient' | 'off'` — filter added in this release (made active by default, `'strict'`, in v2.2.287). Customer opts out via `'off'`.
   - `strict` — drop devices with stale OR null `lastSeen` (matches the Defender ghost-node pattern)
   - `lenient` — drop only devices with valid-but-old `lastSeen` (keep nulls as live)
   - `off` — no-op (full backwards compatibility)
@@ -6600,7 +6492,7 @@ Each block sits **above** the `__BUCKET_FILTER__` so the device set is narrowed 
 
 ### What this means
 
-When the engine runs an Attack_Paths report on default config (strict + 30 days):
+When the engine runs an Attack_Paths report with the filter active (strict + 30 days; the default from v2.2.287):
 
 ```
 [INFO] [stale-device] Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure: applied MaxAgeDays=30 Mode=strict
@@ -6638,7 +6530,7 @@ Tenants with high turnover (lots of brand-new devices that haven't yet had `last
 
 ## v2.2.281 — AutoBucket respects YAML `BucketCount` as the probe floor (no more "starts at 1 even though I said 64")
 
-Operator: "but it starts with =1". The customer's `RiskAnalysis_Queries_Custom.yaml` declares `BucketCount: 64` on the heaviest attack-path reports, yet the engine still logged `AutoBucket probing 'X' with bucketCount=1` and walked the exponential ladder (1, 2, 4, 8, 16, 32, 64) — five wasted ~900s probe attempts before reaching the configured floor on every run.
+The customer's `RiskAnalysis_Queries_Custom.yaml` declares `BucketCount: 64` on the heaviest attack-path reports, yet the engine still logged `AutoBucket probing 'X' with bucketCount=1` and walked the exponential ladder (1, 2, 4, 8, 16, 32, 64) — five wasted ~900s probe attempts before reaching the configured floor on every run.
 
 ### Root cause
 
@@ -6686,13 +6578,13 @@ If a custom YAML overrides a report by name but **omits** `BucketCount`, the eng
 
 ## v2.2.280 — Visible heartbeats before AH + LA query submissions ("not hung — waiting on backend")
 
-Operator: "is it possible to show progress... just hangs here for long time... people don't know what is happening". Customer log on v2.2.279 showed the engine going silent for up to 15 minutes between `[hybrid] '_TargetCmdb' snapshot inlined as datatable` and the next log line whenever a query submission was waiting on its full HttpClient ceiling (TaskCanceled@900s pattern).
+Customer log on v2.2.279 showed the engine going silent for up to 15 minutes between `[hybrid] '_TargetCmdb' snapshot inlined as datatable` and the next log line whenever a query submission was waiting on its full HttpClient ceiling (TaskCanceled@900s pattern).
 
 ### Fix
 
 Added stopwatch-bracketed log lines around both long-running submission calls in `Invoke-GraphHuntingQuery`:
 
-**Advanced Hunting submission** (`Invoke-RiskAnalysis.ps1:1749`):
+**Advanced Hunting submission** (`Invoke-RiskAnalysis.ps1`):
 ```
 [INFO] submitting query to advanced hunting (attempt 1/4; may take up to 900s if too large)...
 ... query runs ...
@@ -6704,7 +6596,7 @@ Or when the call times out:
 [ERR]  Query failed deterministically (TaskCanceled@900s ...)
 ```
 
-**Log Analytics direct submission** (`Invoke-RiskAnalysis.ps1:1696`):
+**Log Analytics direct submission** (`Invoke-RiskAnalysis.ps1`):
 ```
 [INFO] submitting query to Log Analytics direct (may take several minutes for large workspaces)...
 ... query runs ...
@@ -6732,7 +6624,7 @@ Two engine-level changes that don't depend on the customer pulling new YAML:
 
 ### (a) `_Detailed` reports default to BucketCount=32 (was 2)
 
-`Invoke-RiskAnalysis.ps1:6061`. Detailed reports emit one row per (asset, finding) tuple with no upstream dedup; cartesian blow-up is structural. Starting at 2 means 4-5 escalation rounds before converging. Default 32 + sub-bucketing handles the rest immediately on first run for most non-trivial tenants. Per-report YAML `BucketCount` still wins when set; customer can also override globally via `$global:SI_AutoBucketDefaultDetailed = N`.
+`Invoke-RiskAnalysis.ps1`. Detailed reports emit one row per (asset, finding) tuple with no upstream dedup; cartesian blow-up is structural. Starting at 2 means 4-5 escalation rounds before converging. Default 32 + sub-bucketing handles the rest immediately on first run for most non-trivial tenants. Per-report YAML `BucketCount` still wins when set; customer can also override globally via `$global:SI_AutoBucketDefaultDetailed = N`.
 
 Detection logic: `$ReportNameFromTemplate -like '*_Detailed*'`.
 
@@ -6740,7 +6632,7 @@ Summary reports unchanged (default still 2, per-report `BucketCount: 64` from v2
 
 ### (b) Sub-bucket depth cap 4 → 6
 
-`Invoke-RiskAnalysis.ps1:6411`. the customer's run reached depth=4 (modulus = `BucketCount × 4^4` = 256× finer than original) with one slice still heavy. Bumping to depth=6 gives the recursive split modulus up to 4096× finer (e.g., starting at 32 → max effective bucket count 32×4096 = 131072 = $capBucket). Tunable via `$global:SI_AutoBucketSubDepthMax`.
+`Invoke-RiskAnalysis.ps1`. the customer's run reached depth=4 (modulus = `BucketCount × 4^4` = 256× finer than original) with one slice still heavy. Bumping to depth=6 gives the recursive split modulus up to 4096× finer (e.g., starting at 32 → max effective bucket count 32×4096 = 131072 = $capBucket). Tunable via `$global:SI_AutoBucketSubDepthMax`.
 
 ### Combined effect on the customer's case
 
@@ -6756,7 +6648,7 @@ The persistent hot slice on the customer tenant (one bucket index always timing 
 
 ## v2.2.278 — Internal-AutomateIT cert auth: bridge `HighPriv_Modern_*_Azure` globals into `$Spn*` so Graph reconnect uses cert (not secret)
 
-Operator's v2.2.277 run (internal-AutomateIT install, SPN+cert via `Connect-Platform`) showed the Graph 45-minute reconnect printing `Connecting to Microsoft Graph (app+secret)...` even though the customer is on cert. The branch logic in `Connect-GraphHighPriv` (line 480) is correct — it picks cert when `$global:SpnCertificateThumbprint` is non-empty. Bug was the bridge: only `$global:SI_SPN_CertThumbprint` was being copied into `$global:SpnCertificateThumbprint` (community-launcher naming). Internal-AutomateIT uses `$global:HighPriv_Modern_CertificateThumbprint_Azure` (set by `Connect-Platform`), which the bridge didn't see. Cert thumbprint stayed `$null` → Connect-GraphHighPriv fell through to secret branch on every reconnect → reconnect would fail for any customer running cert without a secret as fallback.
+Operator's v2.2.277 run (internal-AutomateIT install, SPN+cert via `Connect-Platform`) showed the Graph 45-minute reconnect printing `Connecting to Microsoft Graph (app+secret)...` even though the customer is on cert. Graph reconnects now use the certificate. The branch logic in `Connect-GraphHighPriv` picks cert when `$global:SpnCertificateThumbprint` is non-empty; the bridge that fills it now also reads `$global:HighPriv_Modern_CertificateThumbprint_Azure` (set by `Connect-Platform` on internal-AutomateIT installs), not only `$global:SI_SPN_CertThumbprint` (community-launcher naming).
 
 ### Fix
 
@@ -6800,7 +6692,7 @@ Same operator log confirmed v2.2.277 sub-bucketing fires correctly: `[sub-bucket
 
 Operator's v2.2.276 run on the customer tenant showed the escalate-and-restart strategy doesn't converge: at every bucket count level (2 → 8 → 32 → 128 → 512 → 2048 → 8192...), exactly ONE bucket times out, the report restarts at 4× higher count, and the cycle repeats. Each level burns ~30 min (200+ buckets at 3s each + 1× 900s timeout). Across the catalog this compounds to days-long runs.
 
-Operator pushed back on two related ideas: (a) skipping a failed bucket would lose data, (b) `take 50000` row caps would also lose data. Both rejected. The right design preserves every row.
+Two related ideas were rejected because both lose data: (a) skipping a failed bucket, (b) `take 50000` row caps. The right design preserves every row.
 
 ### Adaptive sub-bucketing
 
@@ -6869,7 +6761,7 @@ Operator follow-up after v2.2.274 ("docs means README, that's where people read"
 
 Inserted under chapter 7 "The YAML Concept (Locked + Custom)" since that's the existing chapter where rule-customization how-tos belong. Three things in one section:
 
-1. **Customer-data policy table** — five categories of data that must NEVER ship in `*.locked.yaml` (cmdb keys, IP/CIDR, tenant-specific hostnames, tenant/sub/RG IDs, internal SamAccountName/UPN literals), with the engine-gate behaviour explained per-category (cmdb is silent-gated; CIDR has no static gate so a leak fires on whoever's IP matches).
+1. **Customer-data policy table** — five categories of data that must NEVER ship in `*.locked.yaml` (cmdb keys, IP/CIDR, tenant-specific hostnames, tenant/sub/RG IDs, internal SamAccountName/UPN literals), so shipped rules never contain customer-specific values.
 
 2. **Worked override example** — the full `ADDomainController.locked.yaml` → `.custom.yaml` pattern end-to-end (id-match + paste detect block + customise set), so a customer can copy-paste and adapt.
 
@@ -6879,7 +6771,7 @@ TOC + chapter numbering updated; the existing "What a release upgrade does" + "A
 
 ### `_TEMPLATE.custom.sample.yaml` — top-of-file POLICY callout
 
-Box-drawing-character ASCII callout at the top of the canonical annotated template lists every category of customer data that's banned from Locked. Inline comments at the `ipInRange` cidrs and `set.cmdbId` blocks reinforce the same rule with the engine-gate detail (cmdb is `$global:SI_EnableCmdbProvider`-gated; CIDR is not — a Locked CIDR fires on anyone whose IP happens to match).
+Box-drawing-character ASCII callout at the top of the canonical annotated template lists every category of customer data that's banned from Locked. Inline comments at the `ipInRange` cidrs and `set.cmdbId` blocks reinforce the same rule: shipped rules never contain customer-specific values.
 
 ### Audit confirmation
 
@@ -6898,9 +6790,9 @@ Operator caught a bug: a locked detection rule (`ADDomainController.locked.yaml`
 
 ### Three fixes bundled
 
-**1. Engine gates cmdb propagation on `$global:SI_EnableCmdbProvider`** (`engine/asset-profiling/stages/Invoke-Profile.ps1:144`).
+**1. Engine gates cmdb propagation on `$global:SI_EnableCmdbProvider`** (`engine/asset-profiling/stages/Invoke-Profile.ps1`).
 
-When `$global:SI_EnableCmdbProvider` is `$false` or `$null`, the engine now ignores `set.cmdbId` and `set.cmdbName` from rule Set blocks. The downstream propagation at line 207-216 (which stamps the rule's cmdbId onto the asset's top-level fields) gets a `null` from the match record and silently skips. Net effect: cmdb fields in custom rules are inert until the operator opts in via `$global:SI_EnableCmdbProvider = $true`.
+When `$global:SI_EnableCmdbProvider` is `$false` or `$null`, the engine now ignores `set.cmdbId` and `set.cmdbName` from rule Set blocks. The downstream propagation (which stamps the rule's cmdbId onto the asset's top-level fields) gets a `null` from the match record and silently skips. Net effect: cmdb fields in custom rules are inert until the operator opts in via `$global:SI_EnableCmdbProvider = $true`.
 
 **2. Locked baseline rule scrubbed** (`asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/ADDomainController.locked.yaml`).
 
@@ -6922,17 +6814,17 @@ v2.2.272 unblocked the customer's Attack_Paths_*_Device_with_high_severity_*_Azu
 
 Three changes:
 
-### 1. Fail-fast on TaskCanceledException (`Invoke-RiskAnalysis.ps1:1872`)
+### 1. Fail-fast on TaskCanceledException (`Invoke-RiskAnalysis.ps1`)
 
 `Invoke-GraphHuntingQuery` previously retried 4×900s on every `TaskCanceledException` (the deterministic HttpClient timeout pattern). Retries don't help when the query is genuinely too big — they just burn 3 more hours per bucket on identical failures. Now: first `TaskCanceledException` re-throws immediately, letting the outer AutoBucket escalation handle the resize.
 
 Cuts per-step discovery cost from ~1h → ~15min (single 900s timeout).
 
-### 2. 4x escalation jump (`Invoke-RiskAnalysis.ps1:6293`)
+### 2. 4x escalation jump (`Invoke-RiskAnalysis.ps1`)
 
 Bucket-count growth was `bucketCountToUse * 2` (9 steps: 2 → 1024). Bumped to `* 4` (5 steps: 2 → 2048). Combined with fail-fast, worst-case escalation discovery is now ~75min instead of ~9h.
 
-### 3. Snapshot-row-aware initial jump (`Invoke-RiskAnalysis.ps1:6293-6305`)
+### 3. Snapshot-row-aware initial jump (`Invoke-RiskAnalysis.ps1`)
 
 `Resolve-ProfileCLLetBlocks` now exposes the largest CL-snapshot row count seen during the current report (`$script:_LastHybridSnapshotRowCount`, reset per report). The escalation logic picks the LARGEST of `bucketCountToUse * 4`, `+1`, and `ceil(snapshotRows / 500)`. So a 100K-row snapshot escalates straight to 200 buckets on the first timeout instead of grinding 2 → 8 → 32 → 128 → 512. A 424-row snapshot (the customer's `_TargetCmdb`) still goes 2 → 8 (snapshot heuristic is 1 bucket; max wins so the 4x rule applies).
 
@@ -6940,7 +6832,7 @@ Heuristic of 500 rows/bucket is calibrated for typical 4-hop EG-path-expansion +
 
 ### Cache behaviour unchanged
 
-AutoBucket cache (`autobucket-cache.json`) still stores the working bucket count after escalation succeeds (lines 6378-6390). Subsequent runs start at the cached count directly — escalation only fires on first-run or after invalidation.
+AutoBucket cache (`autobucket-cache.json`) still stores the working bucket count after escalation succeeds. Subsequent runs start at the cached count directly — escalation only fires on first-run or after invalidation.
 
 ---
 
@@ -6952,7 +6844,7 @@ Two independent issues from the customer's v2.2.269 run.
 
 `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` and the matching Detailed timed out at 900s on every retry × every bucket — the engine then skipped remaining buckets in the report and moved on, leaving the AutoBucket cache pinned to `=> 2` forever. Operator confirmed the agreed default is `AutoBucketCount=$true` + `AutoBucketMax=131072` (and the customer log shows both are set correctly), so the engine should have escalated on its own.
 
-The bug was the v2.2.198 transient-platform-error branch in `Invoke-RiskAnalysis.ps1:6201`. When `$script:_LastGraphHuntingAllTimedOut` flipped true (every inner attempt hit the 900s HttpClient ceiling), the branch set `$script:_AutoBucketSkipRemainingBuckets=$true` immediately — it never checked whether escalation was still possible. So a too-large bucket could not trigger doubling.
+The bug was the v2.2.198 transient-platform-error branch in `Invoke-RiskAnalysis.ps1`. When `$script:_LastGraphHuntingAllTimedOut` flipped true (every inner attempt hit the 900s HttpClient ceiling), the branch set `$script:_AutoBucketSkipRemainingBuckets=$true` immediately — it never checked whether escalation was still possible. So a too-large bucket could not trigger doubling.
 
 v2.2.272 inverts the priority: when `_LastGraphHuntingAllTimedOut` is true, **escalate first** (set `$needEscalation=$true` and re-run the whole report at `2 × bucketCountToUse`); only fall back to `_AutoBucketSkipRemainingBuckets` when the next escalation step would exceed `$capBucket`. The cap log line names `$capBucket` explicitly so operators see the ceiling.
 
@@ -6960,9 +6852,9 @@ Effect on the customer tenant: the two failing reports retry with 4, 8, 16... bu
 
 ### 2. Routing diagnostic — Endpoint_ActiveCompromise_Detected_Detailed routed to AH despite probe saying CL not in AH
 
-In the customer's run, `Endpoint_ActiveCompromise_Detected_Detailed` (only `SI_Endpoint_Profile_CL`, no XDR tables) probed the table → got "NOT queryable from AH" → set `$available=$false` → should have entered the LA-direct branch and printed "Query touches only Log Analytics tables". Instead, the AH-submission catch handler (`Invoke-RiskAnalysis.ps1:1833-1837`) fired with the schema-not-found warnings, proving the AH path actually ran. Operator pre-confirmed the workspace + table + SPN-cert read access are all correct (`SI_Endpoint_Profile_CL` exists in `log-platform-management-securityinsight-p`, returns rows on direct query).
+In the customer's run, `Endpoint_ActiveCompromise_Detected_Detailed` (only `SI_Endpoint_Profile_CL`, no XDR tables) probed the table → got "NOT queryable from AH" → set `$available=$false` → should have entered the LA-direct branch and printed "Query touches only Log Analytics tables". Instead, the AH-submission catch handler (`Invoke-RiskAnalysis.ps1`) fired with the schema-not-found warnings, proving the AH path actually ran. Operator pre-confirmed the workspace + table + SPN-cert read access are all correct (`SI_Endpoint_Profile_CL` exists in the workspace, returns rows on direct query).
 
-Static read of the routing logic (`Invoke-RiskAnalysis.ps1:1398-1703`) doesn't reveal how `$available=$false` could become "AH submission". Three Write-Diag breadcrumbs added so the next failing run pinpoints the actual flow:
+Static read of the routing logic (`Invoke-RiskAnalysis.ps1`) doesn't reveal how `$available=$false` could become "AH submission". Three Write-Diag breadcrumbs added so the next failing run pinpoints the actual flow:
 
 ```
 [route] CL probe done: available=False | clHits=[SI_Endpoint_Profile_CL] | hasEG=False
@@ -7046,13 +6938,11 @@ This revert restores the v2.2.265 single-string `Resolve-ProfileCLLetBlocks` ret
 
 ### What's still queued
 
-The bucketing requirement stands ("split the array size into smaller buckets so it can go through fx. cve and attack paths in larger env"). Next attempt will (a) repro the 100K-asset case locally before shipping, (b) keep the bucketing isolated to the function that builds the datatable rather than reaching back into the AutoBucket submission loop, and (c) confirm non-hybrid queries truly bypass the new path before customer rollout.
+The bucketing requirement stands (split large snapshots so CVE and attack-path reports run in larger environments). Next attempt will (a) repro the 100K-asset case locally before shipping, (b) keep the bucketing isolated to the function that builds the datatable rather than reaching back into the AutoBucket submission loop, and (c) confirm non-hybrid queries truly bypass the new path before customer rollout.
 
 ---
 
 ## v2.2.268 — CL-snapshot bucketing for the RA hybrid path (scales past 100K-asset tenants) [REVERTED in v2.2.269]
-
-Operator: "it is important that it can split the array size into smaller buckets so it can go through fx. cve and attack paths in larger env" — confirmed concatenation strategy: "you are just adding each result to the array."
 
 ### What was breaking at scale
 
@@ -7105,17 +6995,9 @@ Single-bucket case (the common path) emits nothing new -- just the existing `[hy
 
 ## v2.2.267 — Internal/AutomateIT mode now supports SPN+cert end-to-end (no secret needed)
 
-Operator: "does the change we have made also work for internal automateit mode, so we don't have to re-auth with secret there, but can do a certificate auth with thumbprint. prior we had to re-auth with secret for la ingestion. change that"
+### What changed
 
-### Where the gap was
-
-The **engine** has supported cert auth for LA ingest since v2.2.237 -- when `$global:SI_SPN_CertThumbprint` is set, `Invoke-Output.ps1`'s `$useCert = $true` wins over secret in the auth-params splat to `AzLogDcrIngestPS`. With module v1.6.7 now live on PSGallery, every function in the create + read chain accepts `-AzAppCertificateThumbprint` correctly.
-
-But `Bootstrap-Auth.ps1` was secret-only across the board:
-
-1. **Static-wins-over-KV detection** (line 155-156) required BOTH `$global:SI_SPN_AppId` AND `$global:SI_SPN_Secret`. A customer who set AppId + CertThumbprint (no Secret) failed the detection, fell through to KV lookup, and threw because the KV path also only knew how to fetch a secret.
-2. **`Test-SISpnConnection`** did a raw HTTP `client_credentials` POST with `client_secret`. No cert path.
-3. **The block written to `custom.ps1`** always emitted `$global:SI_SPN_Secret = '...'` -- even when no secret was available -- producing an invalid block.
+Certificate installs run fully on the certificate. The **engine** uploads to Log Analytics with the certificate when `$global:SI_SPN_CertThumbprint` is set (working end-to-end since v2.2.259 with module v1.6.4; with module v1.6.7 every function in the create + read chain accepts `-AzAppCertificateThumbprint`). `Bootstrap-Auth.ps1` now accepts a certificate wherever it accepted a secret.
 
 ### Three changes in `Bootstrap-Auth.ps1`
 
@@ -7133,7 +7015,7 @@ Set `$global:SI_SPN_CertThumbprint` (and optionally `$global:SI_SPN_CertStoreLoc
 
 - Validate the cert can mint an ARM token via `Connect-AzAccount -ServicePrincipal -CertificateThumbprint`.
 - Write a clean `SI_SPN_CertThumbprint` + `SI_SPN_CertStoreLocation` block to `SecurityInsight.custom.ps1`.
-- Engine inherits the same cert path through to the LA-ingest call. **No re-auth with a secret. No plaintext secret on disk.**
+- Engine inherits the same cert path through to the LA-ingest call. **No re-auth with a secret.**
 
 KV-stored cert (download cert into local store from `Get-AzKeyVaultCertificate`) is **not** in this release -- the assumption is the cert lives in `Cert:\LocalMachine\My` (or `Cert:\CurrentUser\My`) before Bootstrap-Auth runs. If you want KV-cert pull-down too, file a follow-up.
 
@@ -7167,7 +7049,7 @@ The launcher already prints a banner with the engine name, version, and contact 
 
 ## v2.2.264 — Silence the DCE/DCR scope-filter chatter
 
-`Apply-SIDcrScopeFilter` was logging two `[INFO]` lines on every invocation -- pre-create, post-create, and every 15s wait-loop iteration. On a tenant with cross-scope DCRs (the typical case for SI customers since the SPN sees other subs' Reader-visible DCRs), that's 30+ noise lines per ingest.
+Upload logging is quieter. `Apply-SIDcrScopeFilter` was logging two `[INFO]` lines on every invocation -- pre-create, post-create, and every 15s wait-loop iteration -- which added up to 30+ noise lines per ingest on tenants with DCRs in several scopes.
 
 The filter is invisible plumbing -- it just shrinks the cache before name-only lookups. When everything works it has nothing to say. When something fails, the wait-loop's `waiting for DCR ... immutableId in ARG` messages and v2.2.250's captured `CheckCreateUpdate` output already cover the diagnostic path.
 
@@ -7181,7 +7063,7 @@ Three follow-ups from a single customer trace where the engine printed 8 lines o
 
 ### 1. Auth + RBAC probe is now 1-2 informational lines, no false-positive warnings
 
-`Get-AzRoleAssignment -ObjectId <SPN>` runs under the **SPN's own credentials** and only returns assignments at scopes where the SPN has `Microsoft.Authorization/roleAssignments/read`. Reader-at-MG-root grants that only at the MG-root scope -- assignments at any other scope are invisible to the SPN. So the heuristic "no Contributor visible -> warn READ-only" was structurally wrong, firing whenever the SPN's actual Contributor grant lived at a scope it couldn't enumerate (which is **most** tenants).
+The start-up check reports only real sign-in problems. The previous role-visibility heuristic ("no Contributor visible -> warn READ-only") warned on most tenants even though the write role was in place, because an identity cannot list every role assignment it holds.
 
 The honest signal for "did write succeed" is Step 3's `CheckCreateUpdate-TableDcr-Structure` call -- it either creates the DCR or it doesn't, and v2.2.250's captured-output dump shows the actual ARM error on failure. The probe block now prints:
 
@@ -7194,9 +7076,7 @@ No more 8-line warning block. No more REMEDIATION dump. Applies to all 4 asset-p
 
 ### 2. KeepLatest modules pinned to AllUsers; CurrentUser/OneDrive copies are rejected
 
-Customer's run was loading `AzLogDcrIngestPS v1.6.2` from `C:\Users\mok\OneDrive - Contoso\Documents\WindowsPowerShell\Modules\AzLogDcrIngestPS\1.6.2\`. My probe missed the OneDrive-redirected path, the slow `Get-Module -ListAvailable` fallback found it, and `Install-Module -Scope AllUsers` failed silently because the prompt wasn't elevated. Net: the engine kept running on v1.6.2 forever.
-
-Operator: "i don't support currentuser." Agreed.
+Customer's run was loading `AzLogDcrIngestPS v1.6.2` from `C:\Users\<user>\OneDrive - <company>\Documents\WindowsPowerShell\Modules\AzLogDcrIngestPS\1.6.2\`. My probe missed the OneDrive-redirected path, the slow `Get-Module -ListAvailable` fallback found it, and `Install-Module -Scope AllUsers` failed silently because the prompt wasn't elevated. Net: the engine kept running on v1.6.2 forever. CurrentUser installs of these modules are not supported.
 
 `Ensure-Module` now treats `KeepLatest` modules (`AzLogDcrIngestPS`, `MicrosoftGraphPS`) as production-critical:
 
@@ -7215,7 +7095,7 @@ The previous min-version check called `_SayErr` + `continue` unless `-Required` 
 
 ## v2.2.262 — Bump `AzLogDcrIngestPS` minimum to 1.6.7 (MI extensions actually live now)
 
-v1.6.5 and v1.6.6 published to PSGallery with only the v1.6.4 cert gate fix -- a local working-copy revert dropped the MI patches before publish. v1.6.7 is the real fix-up with the full MI extension chain: `-UseManagedIdentity` / `-ManagedIdentityClientId` on every function in the DCR create + read chain, plus the gate at line 913 widened to accept MI as a valid auth source.
+v1.6.5 and v1.6.6 published to PSGallery with only the v1.6.4 cert gate fix -- a local working-copy revert dropped the MI patches before publish. v1.6.7 is the real fix-up with the full MI extension chain: `-UseManagedIdentity` / `-ManagedIdentityClientId` on every function in the DCR create + read chain, plus the create gate widened to accept MI as a valid auth source.
 
 All 4 engine `_shared/Ensure-Module.ps1` copies bumped from `1.6.5` → `1.6.7`. v2.2.261's stale-session force-reload guard ensures customers actually pick up the new module in-process even if PowerShell auto-loaded an older one earlier in the session.
 
@@ -7227,16 +7107,14 @@ Customer running SI v2.2.259 with the AzLogDcrIngestPS module clearly upgraded o
 
 ```
 [ERR]  Exception : A parameter cannot be found that matches parameter name 'AzAppCertificateStoreLocation'.
-[ERR]  At        : ...Invoke-Output.ps1:432
+[ERR]  At        : ...Invoke-Output.ps1
 ```
 
 `-AzAppCertificateStoreLocation` shipped in **v1.6.3**. The on-disk module was v1.6.5 (just upgraded), the engine required v1.6.4 minimum -- but the **session had v1.6.2 still loaded in memory** (PowerShell auto-loaded the older version before `Ensure-Module` ran, or a launcher dot-source imported it earlier in the session). Once a module is loaded, cmdlet calls keep using that loaded instance regardless of what's on disk -- and `Get-Module -ListAvailable` only sees on-disk versions, so `Ensure-Module`'s min-version check passed against v1.6.5 while the *actual* runtime continued to use v1.6.2.
 
-Operator: "why is it not upgrading always when new version exist - into allusers".
-
 ### Fix in `Ensure-Module`
 
-For any module in `$KeepLatest` (`AzLogDcrIngestPS`, `MicrosoftGraphPS` -- Morten's own modules where we always want customers on the latest), after the PSGallery upgrade probe:
+For any module in `$KeepLatest` (`AzLogDcrIngestPS`, `MicrosoftGraphPS` -- the vendor's own modules where we always want customers on the latest), after the PSGallery upgrade probe:
 
 1. `Get-Module -Name $mod` to find what's currently **loaded** in the session.
 2. If nothing's loaded OR the loaded version != the on-disk highest → `Remove-Module -Force` + `Import-Module -RequiredVersion <on-disk> -Force`.
@@ -7260,8 +7138,6 @@ All 4 engine `_shared/Ensure-Module.ps1` copies updated. Default scope was alrea
 ---
 
 ## v2.2.260 — Bump `AzLogDcrIngestPS` minimum to 1.6.5 (Managed Identity now supported end-to-end)
-
-Operator: "publish v1.6.5 is being done now".
 
 AzLogDcrIngestPS v1.6.5 adds `-UseManagedIdentity` + `-ManagedIdentityClientId` params to the **entire DCR create + read chain**, not just `Get-AzAccessTokenManagement` / `Post-...Output` (which had them since v1.6.3). The affected functions:
 
@@ -7297,9 +7173,7 @@ All 4 engine `_shared/Ensure-Module.ps1` copies (risk-analysis, publicip, privil
 
 ## v2.2.259 — Bump `AzLogDcrIngestPS` minimum to 1.6.4 (cert-auth gate fix is now upstream)
 
-Operator: "publish v1.6.4 to PSGallery is done".
-
-AzLogDcrIngestPS v1.6.4 is live on PSGallery with the one-line fix to `CheckCreateUpdate-TableDcr-Structure` line 910 -- the gate now accepts cert auth (`$AzAppSecret -or $AzAppCertificateThumbprint`). All four engine `_shared/Ensure-Module.ps1` copies bumped to `-MinimumVersions @{ AzLogDcrIngestPS = '1.6.4' }`. Customer's next engine run will:
+AzLogDcrIngestPS v1.6.4 is live on PSGallery with the one-line fix to `CheckCreateUpdate-TableDcr-Structure` -- the gate now accepts cert auth (`$AzAppSecret -or $AzAppCertificateThumbprint`). All four engine `_shared/Ensure-Module.ps1` copies bumped to `-MinimumVersions @{ AzLogDcrIngestPS = '1.6.4' }`. Customer's next engine run will:
 
 1. Probe PSGallery -> see v1.6.4 (no 24h throttle blocking).
 2. Compare to local v1.6.3 -> install v1.6.4.
@@ -7319,7 +7193,7 @@ After v2.2.256 + v2.2.257 confirmed the customer's auth and RBAC are both fine, 
 
 ### Root cause — module v1.6.3 bug
 
-`AzLogDcrIngestPS v1.6.3` line 910 gates the entire create-or-update block on:
+`AzLogDcrIngestPS v1.6.3` gates the entire create-or-update block on:
 
 ```powershell
 If ( ($AzAppId) -and ($AzAppSecret) )
@@ -7334,7 +7208,7 @@ The inner functions (`Get-AzLogAnalyticsTableAzDataCollectionRuleStatus`, `Creat
 
 ### Module fix (recommended, ships globally)
 
-`AzLogDcrIngestPS.psm1` line 910:
+`AzLogDcrIngestPS.psm1` create gate:
 
 ```powershell
 # before
@@ -7389,30 +7263,17 @@ SUCCESS - data uploaded to LogAnalytics
 
 ---
 
-## v2.2.257 — Print copy-pastable RBAC remediation command when DCR-write role missing
+## v2.2.257 — Print the role grant to run when the DCR-write role is missing
 
-Operator: "crap, then customer need to redeploy everything". No -- the v2.2.256 probe identifies the missing role precisely, and the fix is a single `New-AzRoleAssignment` call. Customer does NOT need to re-run `Setup-SecurityInsight.ps1`.
+When the v2.2.256 check found no write-capable role on the target resource group, the engine printed the single role grant to run (PowerShell and az CLI form), so a missing grant was fixed without re-running `Setup-SecurityInsight.ps1`, re-deploying or re-creating the SPN.
 
-v2.2.257 has the probe print the exact remediation, copy-pastable, in both PowerShell and az CLI form:
-
-```
-[WARN]   RBAC probe : roles present grant READ only (Reader). CheckCreateUpdate needs WRITE -- assign one of: Owner, Contributor, Monitoring Contributor, Data Collection Rule Contributor, Log Analytics Contributor.
-[WARN]   REMEDIATION (run as Owner / User Access Administrator on the target RG):
-[WARN]       New-AzRoleAssignment -ObjectId '4b1f-...' -RoleDefinitionName 'Contributor' -Scope '/subscriptions/.../resourceGroups/rg-securityinsighttest'
-[WARN]   ... or az CLI equivalent:
-[WARN]       az role assignment create --assignee-object-id 4b1f-... --assignee-principal-type ServicePrincipal --role Contributor --scope /subscriptions/.../resourceGroups/rg-securityinsighttest
-[WARN]   Re-run the engine in ~60s after the grant; no Setup-SecurityInsight re-run required.
-```
-
-The customer's Owner / User Access Administrator runs the one-liner, ARM propagates in 30-90s, the next engine run picks it up and creates the DCR. No full re-deploy, no Setup-SecurityInsight re-run, no SPN re-creation.
+> Removed in v2.2.263: the start-up check reports only real sign-in problems.
 
 ---
 
 ## v2.2.256 — Active auth + RBAC probe before CheckCreateUpdate (no more 240s of guessing)
 
-Operator: "can we verify that auth is working as expected with cert" -- and later "but have you not made sure that it has the right perms".
-
-`Setup-SecurityInsight.ps1` already grants `Contributor` on `$rgDcrScope` (line 1094 of that file) which includes DCR write capability. So the SPN *should* be able to create DCRs in the target RG. But the customer's run keeps failing — DCR never lands in ARG, wait loop runs to timeout, ingest 404s. Three plausible causes:
+`Setup-SecurityInsight.ps1` already grants `Contributor` on `$rgDcrScope`, which includes DCR write capability. So the SPN *should* be able to create DCRs in the target RG. But the customer's run keeps failing — DCR never lands in ARG, wait loop runs to timeout, ingest 404s. Three plausible causes:
 
 1. Setup wasn't run with the same `$DcrRgLA` value the engine reads at runtime → grant landed on a different RG.
 2. Setup ran but the SPN ObjectId differs at runtime → engine's SPN has zero assignments on target RG.
@@ -7425,14 +7286,14 @@ v2.2.255 left us **waiting 240s to find out**. v2.2.256 answers in 5s with a new
 **(b) RBAC probe.** Calls `Get-AzRoleAssignment -ObjectId $global:SI_SPN_ObjectId`, filters to assignments at target sub-scope / target RG-scope / tenant root, and prints every assignment line by line:
 
 ```
-[INFO]   RBAC probe : 3 role assignment(s) on target sub/RG for SPN ObjectId 4b...:
+[INFO]   RBAC probe : 3 role assignment(s) on target sub/RG for SPN ObjectId <object-id>:
 [INFO]      - Reader                                   @ /subscriptions/<sub>
 [INFO]      - Contributor                              @ /subscriptions/<sub>/resourceGroups/<rg>
 [INFO]      - Monitoring Metrics Publisher             @ /subscriptions/<sub>/resourceGroups/<rg>
 [INFO]   RBAC probe : write-capable role found (Contributor) -- DCR create should succeed.
 ```
 
-Heuristic: if no role from {Owner, Contributor, Monitoring Contributor, Data Collection Rule Contributor, Log Analytics Contributor} is present, the probe loudly warns that `CheckCreateUpdate` is going to fail and names the exact remediation. If `Get-AzRoleAssignment` itself throws (SPN lacks `Microsoft.Authorization/roleAssignments/read` on target), the probe says so and defers to Step 3's captured module output.
+Heuristic: if no role from {Owner, Contributor, Monitoring Contributor, Data Collection Rule Contributor, Log Analytics Contributor} is present, the probe warns that `CheckCreateUpdate` is going to fail. If `Get-AzRoleAssignment` itself cannot list the assignments, the probe says so and defers to Step 3's captured module output.
 
 Non-fatal: failures emit `[WARN]` and continue the run. The JSON + Excel sinks still produce their files; only LA ingest fails predictably with a now-explained reason.
 
@@ -7441,8 +7302,6 @@ When this lands in the next customer run, the answer to "is auth working" is in 
 ---
 
 ## v2.2.255 — Drop dead `$global:SI_DcrNamePattern` from wizard output
-
-Operator: "why have that if we overrule?"
 
 Right — v2.2.254 had the wizard emit both:
 
@@ -7468,7 +7327,7 @@ A short comment explaining the omission is left in its place so the absence is i
 
 ## v2.2.254 — Wizard emits DCR names that match the engine's `-profile` convention
 
-Operator handed me the canonical list:
+The canonical list:
 
 ```powershell
 $global:SI_RiskAnalysis_DcrName_Detailed = 'dcr-si-risk-analysis-detailed'
@@ -7496,40 +7355,36 @@ Existing customer files generated by older wizards are untouched on disk; only n
 
 ---
 
-## v2.2.253 — Stop appending plaintext `SI_StorageKey` to custom.ps1 when OAuth-on-storage is enabled
+## v2.2.253 — No `SI_StorageKey` in custom.ps1 when OAuth-on-storage is enabled
 
-Operator: "why do you continue to add this to custom file when we use oauth on storage account by default `$global:SI_UseStorageOAuth = $true`?"
+The setup wizard's `Write-SICustomConfig.ps1` emits `$global:SI_UseStorageOAuth = $true` and *omits* `SI_StorageKey` (RBAC-only mode; the generated file carries no storage-key line since v2.2.171). The engine's prestage (`Invoke-SIPrestageInfra.ps1`) now follows the same rule and no longer fetches the storage key when the OAuth flag is on, which gives two benefits:
 
-Right. The setup wizard's `Write-SICustomConfig.ps1` correctly emits `$global:SI_UseStorageOAuth = $true` and explicitly *omits* `SI_StorageKey` (RBAC-only mode, v2.2.105+). But the engine's prestage (`Invoke-SIPrestageInfra.ps1`) was still calling `Get-AzStorageAccountKey` and **appending the plaintext shared key** to `SecurityInsight.custom.ps1` regardless of the OAuth flag — two strikes:
+1. **No key in the config file** — the config stays free of a value the operator opted out of needing.
+2. **No extra storage permission** — the install needs only the Storage Data roles, and the confusing prestage warning is gone.
 
-1. **Pointless secret on disk** — the key gets persisted into a config file the operator just opted out of needing.
-2. **`listKeys` permission requirement** — the SPN needs `Microsoft.Storage/storageAccounts/listkeys/action` to fetch it; many SPNs running with Storage Data Contributor only (the OAuth-mode minimum) get a 403 here, surfacing as a confusing prestage warning.
+Storage is reached with the installation's own identity only. When OAuth-on-storage is enabled, the engine logs `OAuth-on-storage enabled -- skipping SI_StorageKey fetch + writeback` and moves on.
 
-Fix: gate the entire fetch + writeback block on `-not $global:SI_UseStorageOAuth`. When OAuth-on-storage is enabled, the engine logs `OAuth-on-storage enabled -- skipping SI_StorageKey fetch + writeback` and moves on. The legacy key-auth path is unchanged for customers who explicitly opt back to shared-key auth.
-
-The engine entry (`Invoke-SIEngineRun.ps1`) was already OAuth-aware (line 234 `if ($global:SI_UseStorageOAuth) { $ctx = New-SIStorageContext -UseOAuth }`) — only the prestage was non-compliant. No behavior change for customers already on OAuth + a clean custom file; the unwanted append simply stops.
+The engine entry (`Invoke-SIEngineRun.ps1`) was already OAuth-aware (`if ($global:SI_UseStorageOAuth) { $ctx = New-SIStorageContext -UseOAuth }`) — only the prestage was non-compliant. No behavior change for customers already on OAuth + a clean custom file; the unwanted append simply stops.
 
 ---
 
-## v2.2.252 — Stop requesting `Machine.ReadWrite.All` on WindowsDefenderATP (v2.2 is read-only)
+## v2.2.252 — Setup asks only for read access to Defender devices (v2.2 is read-only)
 
-Operator: "only read is required - not write."
-
-Customer's SPN got the MDE 403 with a body that says `API required roles: Machine.Read.All, Machine.ReadWrite.All` -- either role satisfies the `/api/machines` endpoint. Our setup wizard was requesting (and consenting to) the **write** role, which is gratuitously over-permissioned for an engine that **does not write back**. Per the v2.2 read-only invariant the Tagging stage emits WOULD-APPLY rows to `SI_AssetTagActivity_CL` and never calls the MDE machine-tags API. The actual tag writeback is a separate solution outside v2.2 that needs its own SPN with `Machine.ReadWrite.All`.
+Setup asks only for read access to Defender devices: the setup wizard requests (and consents to) only `Machine.Read.All`, which satisfies the `/api/machines` endpoint and matches an engine that **does not write back**. Per the v2.2 read-only invariant the Tagging stage emits WOULD-APPLY rows to `SI_AssetTagActivity_CL` and never calls the MDE machine-tags API. The actual tag writeback is a separate solution outside v2.2 that needs its own SPN with `Machine.ReadWrite.All`.
 
 Three sites switched from `Machine.ReadWrite.All` → `Machine.Read.All`:
 
-1. `Setup-SecurityInsight.ps1` (line 464) — the wizard's WindowsDefenderATP permission grant block.
-2. `setup/Validate-SIPermissions.ps1` (line 213) — the permission validator's expectation.
+1. `Setup-SecurityInsight.ps1` — the wizard's WindowsDefenderATP permission grant block.
+2. `setup/Validate-SIPermissions.ps1` — the permission validator's expectation.
 3. `README.md` — the customer-facing permission table; row description now correctly attributes the role to endpoint asset-profiling reads (`/api/machines`), not tagging writes, and notes that a tagger solution outside v2.2 needs its own SPN for the write role.
 
-Customers re-running Setup-SecurityInsight after pulling v2.2.252 will see admin-consent prompts for **Read** only. Existing tenants that already consented to `Machine.ReadWrite.All` can leave it alone (the engine only uses read) or trim the unused write permission manually.
+Customers re-running Setup-SecurityInsight after pulling v2.2.252 will see admin-consent prompts for **Read** only.
 
 ---
 
 ## v2.2.251 — DCR auto-rename length guard (Azure caps `Microsoft.Insights` names at 260; we cap at 60 for sanity)
 
-Operator: "length of dcr name?" Right -- the v2.2.249 auto-rename appends the full normalized RG name as a suffix, which works fine for `rg-securityinsighttest` (22 chars → 38-char DCR name) but blows up for long RG names like `rg-securityinsight-production-tenant1-westeurope` (52 chars → 67-char DCR name).
+The v2.2.249 auto-rename appends the full normalized RG name as a suffix, which works fine for a short RG name (22 chars → 38-char DCR name) but blows up for long RG names (52 chars → 67-char DCR name).
 
 Per Microsoft Learn's [resource-name-rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) page, every `Microsoft.Insights` entity allows **1-260 characters**. DCR names follow the same rule. So we're nowhere near the ARM ceiling. But practical limits bite well before 260:
 - ARG queries truncate long names in some views
@@ -7542,8 +7397,8 @@ Examples:
 
 | Target RG | Auto-renamed DCR | Note |
 |---|---|---|
-| `rg-securityinsighttest` | `dcr-si-endpoint-rg-securityinsighttest` (38 chars) | full RG -- unchanged behavior |
-| `rg-securityinsight-production-tenant1-westeurope` | `dcr-si-endpoint-7f3a9c12` (24 chars) | hash fallback -- combined would've been 67 chars |
+| `<22-char resource-group>` | `dcr-si-endpoint-<22-char resource-group>` (38 chars) | full RG -- unchanged behavior |
+| `<52-char resource-group>` | `dcr-si-endpoint-<8-char hash>` (24 chars) | hash fallback -- combined would've been 67 chars |
 
 The length guard only fires when needed; short-RG customers see no change.
 
@@ -7551,7 +7406,7 @@ The length guard only fires when needed; short-RG customers see no change.
 
 ## v2.2.250 — Stop flying blind: capture CheckCreateUpdate output + extend ARG wait to 240s
 
-Customer running v2.2.249: auto-rename + persist worked beautifully (`dcr-si-endpoint` → `dcr-si-endpoint-rg-securityinsighttest`, line written to custom.ps1). But the wait loop still couldn't find the new unique-named DCR in ARG, even though there's no possible cross-scope collision on a name with that target-RG-derived suffix.
+Customer running v2.2.249: auto-rename + persist worked beautifully (`dcr-si-endpoint` → `dcr-si-endpoint-<resource-group>`, line written to custom.ps1). But the wait loop still couldn't find the new unique-named DCR in ARG, even though there's no possible cross-scope collision on a name with that target-RG-derived suffix.
 
 Three things could explain that, and **we have no way to tell which** because `CheckCreateUpdate-TableDcr-Structure` is called with `-Verbose:$false 4>$null` — we swallow its entire diagnostic stream. Result: a single warning line "immutableId not in ARG after 120s" with no actionable info.
 
@@ -7586,7 +7441,7 @@ The v2.2.249 customer trace ended at the 60 s mark with no resolution visible. W
 
 Customer trace from v2.2.248:
 ```
-[INFO] DCR scope filter [pre-create]: 93 cached -> 0 in sub=.../rg=rg-securityinsighttest (dropped 93 cross-scope)
+[INFO] DCR scope filter [pre-create]: 93 cached -> 0 in sub=.../rg=<resource-group> (dropped 93 cross-scope)
 [INFO] DCR scope filter [wait-loop-15s]: 88 cached -> 0 ... (dropped 88 cross-scope)
 ... (8 wait-loop iterations, all showing 80-90 cross-scope DCRs and 0 in target RG)
 WARNING: DCR 'dcr-si-endpoint' immutableId not in ARG after 120s -- ingest may 404.
@@ -7603,7 +7458,7 @@ AND cache has >0 same-named DCRs in OTHER subs/RGs
 AND cache has 0 same-named DCRs in TARGET sub/RG
 THEN
    $dcrName = '<base>-<target-rg-normalized>'
-   log: "DCR auto-rename: 'dcr-si-endpoint' -> 'dcr-si-endpoint-rg-securityinsighttest'
+   log: "DCR auto-rename: 'dcr-si-endpoint' -> 'dcr-si-endpoint-<resource-group>'
          to avoid 88 cross-scope same-named DCR(s)."
 ```
 
@@ -7627,7 +7482,7 @@ To pin a different name long-term, set the per-engine override yourself BEFORE t
 
 (v2.2.247 shipped briefly with a wrong fix that swapped `Send-MailMessage` for direct `SmtpClient`; the operator confirmed `Send-MailMessage` works normally and that swap was misdiagnosed. v2.2.248 reverts to `Send-MailMessage` and ships the correct diagnostic-logging fix below.)
 
-Operator: "no email, fix" → engine logs `[OK] anonymous mail sent` but mail never arrives. Then: "why dont you give me more details on error" → the engine should print **what** went wrong, not paper over it. Then: "no -stop as script must continue" → mail failure must not abort the run.
+The engine logged `[OK] anonymous mail sent` while the mail never arrived. It now prints **what** went wrong, and a mail failure still never aborts the run.
 
 **Root cause.** `Send-MailAnonymous` called `Send-MailMessage` without `-ErrorAction Stop` and without `-ErrorVariable`. Any non-terminating SMTP error (relay 530/550, name-not-resolved, connection-refused, TLS handshake mismatch) gets written to the error stream but the cmdlet returns. The caller's next line was `Write-Ok "anonymous mail sent"` -- unconditionally fired regardless of actual outcome. Engine looked green; inbox stayed empty.
 
@@ -7651,7 +7506,7 @@ The script **never aborts** on a mail failure -- the engine continues to AI summ
 
 ## v2.2.246 — Propagate the DCR/DCE scope filter to Schema + Tagging stages
 
-v2.2.245 added `Apply-SIDcrScopeFilter` to `Invoke-Output.ps1` but the **Schema** and **Tagging** stages (which also call `CheckCreateUpdate-TableDcr-Structure` + `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` against their own DCRs) were still vulnerable to the same name-only-lookup hijack when same-named `dcr-si-schema-catalog` or `dcr-si-assettag-activity` records exist in sibling subs/RGs.
+v2.2.245 added `Apply-SIDcrScopeFilter` to `Invoke-Output.ps1` but the **Schema** and **Tagging** stages (which also call `CheckCreateUpdate-TableDcr-Structure` + `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` against their own DCRs) now get the same treatment: data upload always uses the collection rule in your own resource group, also when `dcr-si-schema-catalog` or `dcr-si-assettag-activity` exist elsewhere.
 
 Both stages now build the DCE/DCR caches explicitly and call `Apply-SIDcrScopeFilter` pre-create and post-create — symmetric with the Profiler engine fix. The helper is detected via `Get-Command Apply-SIDcrScopeFilter` so each stage stays standalone-safe if invoked outside the normal engine pipeline.
 
@@ -7661,20 +7516,20 @@ No customer-facing config changes; this is a pure regression-prevention follow-u
 
 ## v2.2.245 — Per-engine DCR-name overrides + always-on DCR/DCE scope filter
 
-Two related changes — one feature, one bug-fix — both targeting the same failure mode: same-named DCRs in OTHER subs/RGs that the SPN can see, hijacking the AzLogDcrIngestPS name-only lookup.
+Two related changes — one feature, one bug-fix — so data upload always uses the collection rule in your own resource group, even when DCRs with the same name exist in other subscriptions or resource groups.
 
 ### The failure mode (real customer trace)
 
 ```
-[INFO] DCR   : dcr-si-endpoint  (rg=rg-securityinsighttest)
+[INFO] DCR   : dcr-si-endpoint  (rg=<resource-group>)
 [INFO] rows  : 47
 WARNING: DCR collision guard: 4 DCRs named 'dcr-si-endpoint' visible but NONE in sub
-         '<subscription-id>-…' / RG 'rg-securityinsighttest' -- ingest will likely 404 with 'westeurope'.
+         '<subscription-id>-…' / RG '<resource-group>' -- ingest will likely 404 with 'westeurope'.
 [ERR]  === LA INGEST FAILED ===
 [ERR]  Exception : Log Ingestion API request failed. HTTP Status: 400 Response:
 ```
 
-`AzLogDcrIngestPS` resolves DCEs and DCRs via **name-only** `Where-Object` lookups against the global `$AzDceDetails` / `$AzDcrDetails` caches (module lines 1575 / 3548 / 5457). On long-lived tenants — or whenever the SPN has reader rights on sibling subscriptions — those caches return MULTIPLE rows for the same DCR/DCE name. The module's downstream `.id` / `.immutableId` becomes an array; the next Post call ships a malformed JSON body (`'Array'` type) or substitutes the *wrong* region's immutableId, and ingest 4xx's.
+`AzLogDcrIngestPS` resolves DCEs and DCRs by name against the global `$AzDceDetails` / `$AzDcrDetails` caches. On long-lived tenants those caches can hold more than one row for the same DCR/DCE name, and ingest then failed with a 4xx.
 
 ### Fix 1 — Always-on scope filter (the actual bug)
 
@@ -7688,11 +7543,9 @@ Replaces the v2.2 narrow collision guards (which only triggered when `Count -gt 
 
 ### Fix 2 — Per-engine DCR name overrides (the requested feature)
 
-Operator: "is it possible to overrule the dcr name for the remaining 3 profilers. if defined in custom in wins."
-
 `Invoke-Output.ps1` now reads four new globals — `$global:SI_Endpoint_DcrName`, `$global:SI_Identity_DcrName`, `$global:SI_Azure_DcrName`, `$global:SI_PublicIp_DcrName`. When set, they override the pattern-derived default (`SI_DcrNamePattern -f engineName`) for that specific profiler engine. Mirrors the existing `SI_Shodan_DcrName` / `SI_RiskAnalysis_DcrName_*` / `SI_RunHealth_DcrName` / `SI_SchemaCatalogDcr` / `SI_AssetTagActivityDcr` pattern for the other SI engines.
 
-Use case: customer with 4 legacy `dcr-si-endpoint` DCRs in sibling subs renames their new install's DCR to `dcr-si-endpoint-mycustomer` via a single line in `SecurityInsight.custom.ps1` — no more name collision *anywhere* in the SPN's visible scope.
+Use case: customer with 4 legacy `dcr-si-endpoint` DCRs in sibling subs renames their new install's DCR to `dcr-si-endpoint-mycustomer` via a single line in `SecurityInsight.custom.ps1` — no more name collision.
 
 Setup Wizard (`Write-SICustomConfig.ps1`) emits all four overrides into the generated `SecurityInsight.custom.ps1` next to the existing five engine-specific DCR globals, with the default name pre-filled — customers see them as commented-out-ready knobs.
 
@@ -7703,8 +7556,6 @@ The scope filter alone fixes the immediate 400 (engine creates a fresh DCR in ta
 ---
 
 ## v2.2.244 — Module upgrade: drop the 24h throttle + add hard minimum-version check for `AzLogDcrIngestPS`
-
-Operator: "why this — remove 24h-throttle marker (in $env:TEMP\si-modcheck-AzLogDcrIngestPS.json) kicks in and prevents the re-probe" — and the follow-up "i always republish with +1 increments" + "1.6.3 must be present of azlogdcringestps".
 
 Two changes to `Ensure-Module` (synced across all 4 engine `_shared/` copies):
 
@@ -7738,8 +7589,8 @@ When PSGallery is unreachable AND the local version is below minimum, the throw 
 Operator running v2.2.238 with SPN+cert hit a new failure at LA ingest:
 
 ```
-[ERR]  Exception : Certificate with thumbprint 'C77B71E13F933AC30926697A923C64420F8F202A' was not found in Cert:\LocalMachine\My.
-[ERR]  At        : ...AzLogDcrIngestPS\1.6.3\AzLogDcrIngestPS.psm1:4533
+[ERR]  Exception : Certificate with thumbprint '<thumbprint>' was not found in Cert:\LocalMachine\My.
+[ERR]  At        : ...AzLogDcrIngestPS\1.6.3\AzLogDcrIngestPS.psm1
 ```
 
 The launcher's `Connect-AzAccount -CertificateThumbprint` probes BOTH stores (LocalMachine\My + CurrentUser\My) and authenticated successfully — but `AzLogDcrIngestPS` only looks in the store passed via `-AzAppCertificateStoreLocation`. The customer's cert lived in `CurrentUser\My`; the engine was passing the default `'LocalMachine'`; ingest failed.
@@ -7751,7 +7602,7 @@ Four asset-profiling sites + `Get-SIAuthState` now probe both `LocalMachine\My` 
 `Get-SIAuthState` also emits a one-time `[WARN]` per process when the cert is only found in `CurrentUser\My`:
 
 ```
-WARNING: [auth] SPN cert 'C77B71E...' was found only in Cert:\CurrentUser\My (HasPrivateKey=True).
+WARNING: [auth] SPN cert '<thumbprint>' was found only in Cert:\CurrentUser\My (HasPrivateKey=True).
 For production -- and for scheduled-task / SYSTEM service-account use -- install the cert in
 Cert:\LocalMachine\My so it's available to every account on this host. CurrentUser scope is fine
 for dev/interactive but will fail when the engine runs as a different account.
@@ -7759,24 +7610,23 @@ for dev/interactive but will fail when the engine runs as a different account.
 
 ### Setup Wizard fix: generate cert in LocalMachine\My
 
-`New-SISpn.ps1`'s `Cert` credkind branch was generating self-signed certs in `Cert:\CurrentUser\My` — a "big mistake" per the operator's words because CurrentUser scope is invisible to SYSTEM scheduled tasks and alternate service accounts. Now generates in `Cert:\LocalMachine\My`, with a fail-fast check that the wizard runs elevated (PowerShell as Administrator) since LocalMachine cert store writes require admin. The fallback message tells the operator to either elevate or switch to client-secret credentials.
+`New-SISpn.ps1`'s `Cert` credkind branch was generating self-signed certs in `Cert:\CurrentUser\My`, which is wrong because CurrentUser scope is invisible to SYSTEM scheduled tasks and alternate service accounts. Now generates in `Cert:\LocalMachine\My`, with a fail-fast check that the wizard runs elevated (PowerShell as Administrator) since LocalMachine cert store writes require admin. The fallback message tells the operator to either elevate or switch to client-secret credentials.
 
 ### Migration
 
-Customers with existing CurrentUser\My certs have two options. The autodetect (above) lets the engine run today, but the warning is correct — for production, move it. See operator response below the table for the one-liner.
+Customers with existing CurrentUser\My certs have two options. The autodetect (above) lets the engine run today, but the warning is correct — for production, move the certificate to `Cert:\LocalMachine\My`.
 
 ---
 
 ## v2.2.242 — Docs: stale sections audit + sync after v2.2.227 – v2.2.240 shipments
 
-Doc-only follow-up to the v2.2.241 README update. An Explore agent swept the docs tree for content stale-against the recent shipments and surfaced 6 files needing touches (3 HIGH operator-facing, 3 MEDIUM reference). 5 fixed in this release; 1 LOW (`docs/risk-analysis-detection.md` migration-notes addendum) deferred.
+Doc-only follow-up to the v2.2.241 README update. An Explore agent swept the docs tree for content stale-against the recent shipments and surfaced 6 files needing touches (3 HIGH operator-facing, 3 MEDIUM reference). 5 fixed in this release (one is a maintainer-only doc and is not listed); 1 LOW (`docs/risk-analysis-detection.md` migration-notes addendum) deferred.
 
 ### Updated
 
 | File | Was | Now |
 |---|---|---|
 | `setup/ConfigWizard/ROADMAP.md` | "Microsoft Graph (ThreatHunting / Device / User / Application + the rest of the SI matrix)" | All 14 Graph perms enumerated explicitly + new sections for Microsoft Threat Protection (`AdvancedHunting.Read.All`) and WindowsDefenderATP (`Machine.Read.All`) as **separate** API resources, with the soft-fail behavior when target SP isn't licensed |
-| `internal/onboard-internal-AutomateIT.md` | Auth example showed cert + secret as co-equal options | Cert path now PREFERRED (explicit comment + comment-out shape for secret block); reflects v2.2.229+ end-to-end cert wiring |
 | `engine/risk-analysis/README.md` | "Engine reads from `$global:SettingsPath`" + folder layout under `v2.2/engine/risk-analysis/locked/` | Removed `$global:SettingsPath` requirement (v2.2.228 walk-up discovery), corrected layout to `SOLUTIONS/SecurityInsight/risk-analysis-detection/`, kept `$global:SettingsPath` as an explicit override mechanism for non-standard layouts |
 | `docs/Operations.md` | Schema-source table referenced `profiles/`, `profiles-custom/`, `DATA/privilege-tier-catalog.locked.json`, `posture-rules-locked/` (all pre-v2.2 folder names) | Updated to `asset-profiling-schema/<engine>.schema.locked.json` / `<engine>.schema.custom.json` layout, `privilege-tier-catalog/`, `risk-analysis-detection/`, `asset-profiling-rules/` per the v2.2 architecture |
 | `docs/RISKSCORE-REFERENCE.md` | Authority line cited specific line numbers (2231-2294, 2296-2409, 3121-3144) — drift target | Removed brittle line numbers, kept function-name authority; added v2.2.228 walk-up note so operators understand `$global:SettingsPath` is no longer required |
@@ -7790,8 +7640,6 @@ No code changes.
 ---
 
 ## v2.2.241 — Docs: README "What's New" table updated with v2.2.227 – v2.2.240 highlights
-
-Operator: "update the release notes with human data of the new updates since the last human update".
 
 The README's "What's New" appendix table jumped from v2.2.85 straight to today's customer-facing changes — 14 releases worth of operator-facing improvements weren't summarized in the single-page narrative. Added 9 grouped table rows covering:
 
@@ -7810,7 +7658,7 @@ The per-release detail entries lower in this file are unchanged; this update is 
 
 ## v2.2.240 — Risk Analysis: row caps on `Attack_Paths_Summary_Device_..._Azure` 4-hop cartesian (fixes 80+ min hang)
 
-Operator: `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` hung indefinitely when run in Azure Automation. 80+ min zero output, hit the 3h AA sandbox limit, no errors. All other 12 EG templates completed in <10 min on the same tenant.
+`Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` hung indefinitely when run in Azure Automation. 80+ min zero output, hit the 3h AA sandbox limit, no errors. All other 12 EG templates completed in <10 min on the same tenant.
 
 ### Diagnosis
 
@@ -7895,17 +7743,15 @@ Or re-run `New-SISpn.ps1 -UseExistingAppId -ExistingAppId <appid>` and it now gr
 
 ## v2.2.238 — End the auth-gate whack-a-mole + auto-upgrade `AzLogDcrIngestPS` from PSGallery
 
-Operator: "why don't you make better sanity check"
-
-Fair. The cert-auth fix in v2.2.232 / v2.2.233 / v2.2.234 / v2.2.237 fixed one inline `if ($SpnClientSecret -is-empty) { throw }` gate per release, in different engines. Today's customer log showed `Invoke-PublicIpScanner.ps1:91` had the same gate untouched — same shape, same wrong message, same fix. That's drift, not a fix.
+The cert-auth fix in v2.2.232 / v2.2.233 / v2.2.234 / v2.2.237 fixed one inline `if ($SpnClientSecret -is-empty) { throw }` gate per release, in different engines. A customer log showed `Invoke-PublicIpScanner.ps1` had the same gate untouched — same shape, same wrong message, same fix. That's drift, not a fix.
 
 ### 1. Remaining inline gates patched
 
 | Engine | Was | Now |
 |---|---|---|
-| `engine/publicip/Invoke-PublicIpScanner.ps1` line ~88 | required `SpnClientSecret` | accepts Cert OR Secret |
-| `engine/risk-analysis/Invoke-RiskAnalysis.ps1` line ~4839 (AF branch) | required `SpnClientSecret` | accepts Cert OR Secret |
-| `engine/asset-tagging/AssetTagging.ps1` line ~57 | required `SpnClientSecret` | accepts Cert OR Secret |
+| `engine/publicip/Invoke-PublicIpScanner.ps1` | required `SpnClientSecret` | accepts Cert OR Secret |
+| `engine/risk-analysis/Invoke-RiskAnalysis.ps1` (AF branch) | required `SpnClientSecret` | accepts Cert OR Secret |
+| `engine/asset-tagging/AssetTagging.ps1` | required `SpnClientSecret` | accepts Cert OR Secret |
 
 Combined with v2.2.232–v2.2.237, every known SPN-auth gate now accepts either credential type.
 
@@ -7938,13 +7784,11 @@ NONE  : Mode=None        IsConfigured=False
 
 ### 3. `AzLogDcrIngestPS` auto-upgrade from PSGallery
 
-Operator: "i need you to check for newer versions of azlogdcringestps from ps gallery and install latest version when available"
-
 Added to `Ensure-Module` (4 identical copies, kept in sync across `publicip / privilege-tier-classifier / risk-analysis / asset-tagging` engine `_shared/`):
 
 - New `-KeepLatest <string[]>` parameter. For named modules, after the on-disk probe succeeds, `Find-Module -Repository PSGallery` is called to compare versions. When the gallery has a newer version, `Install-Module` is invoked, the in-session module is `Remove-Module`'d, and (when `-Import` is set) the new version is `Import-Module`'d with the right `-RequiredVersion` so the upgrade is live in the same run.
 - Throttled: per-module marker file at `$env:TEMP\si-modcheck-<mod>.json` records the last check time. Subsequent runs skip the gallery hit when < 24h since last probe. `-ForceUpdateCheck` bypasses the throttle.
-- `Ensure-SecurityInsightModules` passes `-KeepLatest @('AzLogDcrIngestPS','MicrosoftGraphPS')` by default — these are the two modules where Morten ships updates worth pulling automatically.
+- `Ensure-SecurityInsightModules` passes `-KeepLatest @('AzLogDcrIngestPS','MicrosoftGraphPS')` by default — these are the two modules whose updates are worth pulling automatically.
 - Gallery query failures are non-fatal — log + continue with local version.
 
 ```
@@ -8044,7 +7888,7 @@ Inserted as **step 4** of the `MoreDetails` post-process in `Invoke-RiskAnalysis
 Synced user on the customer's tenant `<tenant-id>` would get a `MoreDetails` cell containing (among the other harvested URLs):
 
 ```
-https://security.microsoft.com/user?aad=ba20b9a9-9aa8-484b-9bc1-4a55a04129e5&sid=s-1-5-21-...&tab=overview&tid=<tenant-id>
+https://security.microsoft.com/user?aad=<EntraAccountObjectId>&sid=<AccountSID>&tab=overview&tid=<tenant-id>
 ```
 
 Click → straight to that user's Defender XDR overview, no portal navigation.
@@ -8055,10 +7899,10 @@ Click → straight to that user's Defender XDR overview, no portal navigation.
 
 v2.2.232 mirrored `SI_SPN_CertThumbprint` → `SpnCertificateThumbprint` at engine startup. But two checks downstream still hardcoded `SpnClientSecret`:
 
-1. **Auth precondition** at `Invoke-RiskAnalysis.ps1:4874–4878` — threw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` if Secret was empty, regardless of whether CertThumbprint was set.
-2. **Az + Graph connect** at line 4880+ and inside `Connect-GraphHighPriv` (line 489) — only built a `PSCredential` from `SpnClientSecret` and called `Connect-MicrosoftGraphPS -AppSecret`. Cert thumbprint was ignored even when present.
+1. **Auth precondition** at `Invoke-RiskAnalysis.ps1` — threw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` if Secret was empty, regardless of whether CertThumbprint was set.
+2. **Az + Graph connect** and inside `Connect-GraphHighPriv` — only built a `PSCredential` from `SpnClientSecret` and called `Connect-MicrosoftGraphPS -AppSecret`. Cert thumbprint was ignored even when present.
 
-Result: SPN+cert customer ran v2.2.233, the bridge populated `SpnCertificateThumbprint` correctly, but the engine still threw at line 4877 before ever attempting auth.
+Result: SPN+cert customer ran v2.2.233, the bridge populated `SpnCertificateThumbprint` correctly, but the engine still threw before ever attempting auth.
 
 ### Fix
 
@@ -8134,7 +7978,7 @@ if ($noTenant -or $noClientId -or (-not $hasSecret -and -not $hasCert)) { throw 
 
 v2.2.229 fixed the SPN-cert bridge in `Initialize-LauncherConfig.ps1`, which is the layered-config loader the standard launcher path runs. That covers community-vm and internal-vm launchers. But if the **RA engine** is invoked outside that path — direct call, custom orchestrator, or AF bootstrap that pre-populates v1 `HighPriv_*` globals — `Initialize-LauncherConfig` never runs, so `$global:Spn*` stays `$null` even though the customer's `SecurityInsight.custom.ps1` set `$global:SI_SPN_*`.
 
-The transient-retry reconnect path in `Invoke-RiskAnalysis.ps1` (around line 6068) then reads `$global:SpnCertificateThumbprint` → finds nothing → can't re-authenticate when tokens expire mid-run.
+The transient-retry reconnect path in `Invoke-RiskAnalysis.ps1` then reads `$global:SpnCertificateThumbprint` → finds nothing → can't re-authenticate when tokens expire mid-run.
 
 ### Fix
 
@@ -8148,7 +7992,7 @@ if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              {
 if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
 ```
 
-Same `if (-not legacy)` shape as `Initialize-LauncherConfig.ps1:601–606` so existing legacy-name customers (who set `$global:SpnTenantId` directly in their custom file) still win over the auto-mirror.
+Same `if (-not legacy)` shape as `Initialize-LauncherConfig.ps1` so existing legacy-name customers (who set `$global:SpnTenantId` directly in their custom file) still win over the auto-mirror.
 
 ### Follow-up
 
@@ -8223,7 +8067,7 @@ Three fixes shipped together because one of them is a hard blocker for every com
 Authentication failed: No authentication method configured in LauncherConfig.custom.ps1.
 ```
 
-**Cause.** The unified-SPN bridge at `launcher/_lib/Initialize-LauncherConfig.ps1:601–604` mirrors `$global:SI_SPN_*` (the v2.3 unified contract the Setup Wizard writes) onto the legacy `$global:Spn*` names that the community-vm launcher's auth chain still reads. The bridge had four mappings — `TenantId`, `AppId`, `Secret`, `ObjectId` — but **was missing `CertThumbprint`**. Customers using SPN+cert (no client secret) fell through every `elseif` branch in the auth chain and hit the `else { throw }`.
+**Cause.** The unified-SPN bridge at `launcher/_lib/Initialize-LauncherConfig.ps1` mirrors `$global:SI_SPN_*` (the v2.3 unified contract the Setup Wizard writes) onto the legacy `$global:Spn*` names that the community-vm launcher's auth chain still reads. The bridge had four mappings — `TenantId`, `AppId`, `Secret`, `ObjectId` — but **was missing `CertThumbprint`**. Customers using SPN+cert (no client secret) fell through every `elseif` branch in the auth chain and hit the `else { throw }`.
 
 **Fix.** One added line in the bridge:
 
@@ -8245,7 +8089,7 @@ $global:MailTo = @('System.Collections.Hashtable','System.Collections.Hashtable'
 
 Mail dispatch then tried to send to a literal recipient named `System.Collections.Hashtable`.
 
-**Cause.** The frontend sometimes delivers recipient items as hashtables (shape `@{ Email='foo@bar'; Name='Foo' }`) instead of plain strings. The old serializer at `Write-SICustomConfig.ps1:211` did `"'$_'"` which `.ToString()`'d the hashtable and produced its type name.
+**Cause.** The frontend sometimes delivers recipient items as hashtables (shape `@{ Email='foo@bar'; Name='Foo' }`) instead of plain strings. The old serializer at `Write-SICustomConfig.ps1` did `"'$_'"` which `.ToString()`'d the hashtable and produced its type name.
 
 **Fix.** New `_CfgEmailString` helper that coerces either shape (hashtable, pscustomobject, string) to the email address, looking through `Email/Address/Mail/Value/Recipient/Upn` keys and falling back to string conversion. Applied to `MailTo`, `DetailedTo`, `SummaryTo` blocks.
 
@@ -8261,8 +8105,6 @@ Wizard-generated files were combining `$global:SmtpPort = 25` with `$global:SMTP
 ---
 
 ## v2.2.228 — Risk Analysis: weighted-factors JSON now discovered via walk-up, no longer requires `$global:SettingsPath`
-
-Operator: "something change for the weighted detailed, as both criticality and data sensitivity are part of the cmdb integration. suddenly that has changed. i thought we control this by json or where is that controlled."
 
 ### Symptom
 
@@ -8321,9 +8163,7 @@ The JSON file (`risk-analysis-detection/riskscore_weighted.schema.custom.json`) 
 
 ## v2.2.227 — Risk Analysis: Detailed AI rollup collapses per-(asset, ConfigBucket) so Summary + Detailed converge on the same top assets
 
-Operator: "look at the weighted risk score for mgmt1 in the detailed report (does it calculate everything together?)"
-
-Observed: Summary's #1 risky asset was `dc1` (1,975 weighted) and `mgmt1` was #3 with 994 weighted across 25 findings. The Detailed report on the same data put `mgmt1` at #1 with **24,024 weighted** across **562 findings** — a 24x sum delta over Summary on the same host.
+Observed: Summary's #1 risky asset was `device A` (1,975 weighted) and `device B` was #3 with 994 weighted across 25 findings. The Detailed report on the same data put `device B` at #1 with **24,024 weighted** across **562 findings** — a 24x sum delta over Summary on the same host.
 
 ### Why the two reports disagreed
 
@@ -8333,13 +8173,13 @@ The Summary YAML for vulnerabilities hard-codes the finding identifier:
 | extend ConfigurationId = "CVE"
 ```
 
-So every CVE on `mgmt1` collapses into ONE row called *"Update vulnerable software [CVE]"*. The Detailed YAML keeps each CVE separate:
+So every CVE on `device B` collapses into ONE row called *"Update vulnerable software [CVE]"*. The Detailed YAML keeps each CVE separate:
 
 ```kql
 | extend ConfigurationId = FindingName     // e.g. "CVE-2024-12345"
 ```
 
-Per-row WeightedRisk on each report is comparable (Summary ~22, Detailed ~43), but the **row count** differs by ~22x on hot assets — and `Add-AssetAgg` SUMS WeightedRisk across rows belonging to the asset. Result: the same `mgmt1` shows up tame in Summary and dominant in Detailed.
+Per-row WeightedRisk on each report is comparable (Summary ~22, Detailed ~43), but the **row count** differs by ~22x on hot assets — and `Add-AssetAgg` SUMS WeightedRisk across rows belonging to the asset. Result: the same `device B` shows up tame in Summary and dominant in Detailed.
 
 ### Fix (path B — engine-side collapse for AI rollup only)
 
@@ -8395,7 +8235,7 @@ Two operator complaints fixed.
 Operator saw the SolutionVersion stamp in Excel header + email subject as:
 
 ```
-AutomateIT-internal-main-3d08309a... (solutions: PlatformConfiguration, PlatformMonitoring, SecurityInsight-v2.2.221) @ 2026-05-13T01:10:20
+<bootstrap-label>-<commit>... (solutions: PlatformConfiguration, PlatformMonitoring, SecurityInsight-v2.2.221) @ 2026-05-13T01:10:20
 ```
 
 Wanted just `2.2.226` (or whatever the current SecurityInsight release is).
@@ -8406,9 +8246,7 @@ Wanted just `2.2.226` (or whatever the current SecurityInsight release is).
 
 ### 2. MoreDetails column shows one long string in Excel
 
-Operator: "MoreDetails doesn't separate multiple entries."
-
-**Cause**: The engine's MoreDetails post-process at line ~3530 joins entries with `\r\n` (intended as a cell line-break). But Export-Excel writes cells WITHOUT WrapText by default, so the line-break characters are invisible -- Excel renders one continuous string.
+**Cause**: The engine's MoreDetails post-process joins entries with `\r\n` (intended as a cell line-break). But Export-Excel writes cells WITHOUT WrapText by default, so the line-break characters are invisible -- Excel renders one continuous string.
 
 **Fix**: after `Export-Excel`, iterate the columns and enable `Style.WrapText = $true` on known multi-line columns:
 
@@ -8436,11 +8274,11 @@ Applied to BOTH Excel-write paths in the engine (Export-Excel happens in two fun
 
 ## v2.2.225 — Risk Analysis: extra YAML-projected columns now carry through to Excel/LA (OutputPropertyOrder becomes leading, not strict)
 
-Operator: "in CVE Detailed I had tons of extra columns before like exploitkit exist etc but now they are gone, can you extend and project the data out, so they popup as extra columns. they must not be part of outputprojectorder, as that is static."
+Extra analyst columns projected by a report's KQL (such as the exploit-kit flags in CVE Detailed) now appear in the output, without being added to the static OutputPropertyOrder.
 
 ### Cause
 
-`Invoke-RiskAnalysis.ps1` line ~4033 was running OutputPropertyOrder as a **strict whitelist**: only the columns listed there + a hardcoded force-include set (`RiskFactor_Consequence_Detailed / MITRE_* / ComplianceTags / MoreDetails / RiskScoreDomainKPI / RiskScoreKPI`) were emitted. Everything else from the row was silently dropped.
+`Invoke-RiskAnalysis.ps1` was running OutputPropertyOrder as a **strict whitelist**: only the columns listed there + a hardcoded force-include set (`RiskFactor_Consequence_Detailed / MITRE_* / ComplianceTags / MoreDetails / RiskScoreDomainKPI / RiskScoreKPI`) were emitted. Everything else from the row was silently dropped.
 
 For CVE Detailed, the YAML KQL emits `HasExploit`, `IsExploitVerified`, `IsInExploitKit`, `IsZeroDay`, `CVELastModified`, `CVSSDesc`, `CveUrl` — none in OutputPropertyOrder, all dropped.
 
@@ -8519,7 +8357,7 @@ A second visible bug: the AI prompt's section header was a literal "## Top 25 ri
 
 For a 20K-row Detailed run on the customer tenant: rollup output is ~50 asset entries + ~50 finding entries = ~10K input tokens. Plus boilerplate ~5K = **~15K input tokens to AI** (was ~10K with the raw top-50 dump). Output unchanged (~8K).
 
-Cost on gpt-4o:
+Cost (measured on gpt-4o; the default `gpt-4.1-mini` since v2.2.186 costs less):
 - Previous: ~$0.10 / run
 - v2.2.224: ~$0.13 / run
 
@@ -8569,41 +8407,30 @@ DCR + table auto-create on first ingest via AzLogDcrIngestPS. `dcr-si-risk-analy
 
 ---
 
-## v2.2.222 — Risk Analysis: infer anonymous SMTP when no creds resolved (no more mandatory toggle)
+## v2.2.222 — Risk Analysis: mail no longer needs a mandatory anonymous toggle
 
-Engine threw `Mail is enabled but no SMTP credential is available` when neither a credential pair NOR `$global:Mail_SendAnonymous = $true` were set. That's redundant ceremony -- "no user + no password" can only mean anonymous relay.
-
-### Fix
-
-After the credential-resolution chain returns nothing, the engine now **infers anonymous** instead of throwing:
-
-```powershell
-$global:Mail_SendAnonymous = $true
-Write-Warn2 "No SMTP credentials found and no explicit `$global:Mail_SendAnonymous; INFERRING anonymous relay. ..."
-```
-
-If the SMTP relay actually requires auth, the SMTP layer will reject with a 530-style "Authentication required" error -- the failure surfaces just as visibly, one layer later, with the relay's own diagnostic instead of an opinion from our engine.
+Mail is sent with the sign-in you configure; when none is set, the log says so. The engine previously refused to dispatch when no SMTP credential and no explicit `$global:Mail_SendAnonymous` were set; it now logs a WARN line and hands the message to the relay, whose own response decides the outcome (a relay that requires sign-in rejects it with its standard error).
 
 ### Operator-visible behaviour
 
-- Old: hard error, complete dispatch refusal until operator sets one of 9 alias pairs OR explicit `Mail_SendAnonymous`
-- New: WARN log line ("INFERRING anonymous relay"), dispatch proceeds, normal SMTP error if relay rejects
+- Old: hard error, dispatch refused until a credential or the explicit flag was set
+- New: WARN log line, dispatch proceeds, the relay's normal response is logged
 
-The diagnostic dump immediately after the credential-resolution block prints `Anonymous : 'True'` so the operator can see what the engine is about to do; the WARN makes it impossible to miss in the log.
+The diagnostic dump after the credential check prints the mode the engine is about to use, so it is visible in every run log.
 
 ### To silence the warning
 
-Set `$global:Mail_SendAnonymous = $true` explicitly in `LauncherConfig.custom.ps1` / `platform-defaults.ps1` / `<Solution>.custom.ps1`. The WARN only fires when neither creds nor the explicit flag are set.
+Set `$global:Mail_SendAnonymous = $true` explicitly in `LauncherConfig.custom.ps1` / `platform-defaults.ps1` / `<Solution>.custom.ps1` when your relay is meant to be used without sign-in, or configure the SMTP credentials in Key Vault.
 
 ### Verification context
 
-A complete v2.2.221 run on the customer tenant tenant confirmed all earlier fixes (v2.2.219 AssetTags filter, v2.2.220 AssetName/Id/Type column_ifexists, v2.2.221 AadDeviceId column_ifexists sweep) work end-to-end:
+A complete v2.2.221 run on the customer tenant confirmed all earlier fixes (v2.2.219 AssetTags filter, v2.2.220 AssetName/Id/Type column_ifexists, v2.2.221 AadDeviceId column_ifexists sweep) work end-to-end:
 - Device_Missing_CVEs_Detailed: 2,469 rows in 1 bucket
 - Device_Recommendations_Detailed: 143,065 -> 11,089 unique rows after dedup
 - Azure_Recommendations_Detailed: 148 rows (`_ap` pre-fetch succeeded)
 - Total exported: 15,186 rows, AI summary generated, XLSX written
 
-Only the SMTP-creds error blocked final mail dispatch. v2.2.222 unblocks that path.
+Only the mail step was left; v2.2.222 completes it.
 
 ---
 
@@ -8622,7 +8449,7 @@ Only the SMTP-creds error blocked final mail dispatch. v2.2.222 unblocks that pa
 | Location | Sites | Status |
 |---|---|---|
 | EpJoinKey `case()` expression | 6 | First wrapped via Edit on the v2.2.217-revised pattern |
-| Older `_AadDevId` form (not converted by the v2.2.217 revise replace_all) | 2 | Now converted to EpJoinKey form + wrapped (lines ~1512 + ~1780) |
+| Older `_AadDevId` form (not converted by the v2.2.217 revise replace_all) | 2 | Now converted to EpJoinKey form + wrapped |
 | Project step `AadDeviceId = tostring(AadDeviceId)` | 6 | Wrapped in `column_ifexists("AadDeviceId","")` |
 
 After the sweep, the only bare `tostring(AadDeviceId)` references left in the YAML are in `DeviceInfoLatest` queries (MDE `DeviceInfo` table, which natively carries `AadDeviceId` -- safe).
@@ -8635,7 +8462,7 @@ For Azure tables (`_ap`): column_ifexists returns `""`, case() falls through to 
 
 For any future CL profile table that gets added without AadDeviceId: same graceful fallback. No semantic error.
 
-### Lesson learned (added to authoring guide TODO)
+### Lesson learned (added to the authoring guide)
 
 A replace_all that targets a templated section (`_ep`-style let-binding) must use a pattern unique to the intended table. The v2.2.217 pattern `summarize arg_max(CollectionTime, *) by PrimaryEntityId` was too generic -- it appears in every CL profile table's dedup step. Future templated edits should use either:
 - A wider surrounding context that's unique to the intended table (e.g., includes `SI_Endpoint_Profile_CL` table name), OR
@@ -8733,7 +8560,7 @@ Defensive `column_ifexists("AssetTags","")` returned `""` for every row, so `has
 After the next run, the operator's tagged devices should drop out. Confirm:
 1. Log line still reads `substituted block EXCLUDED_ASSET_TAGS with 1 item(s)` (engine still picks up the JSON)
 2. Output row count drops by the number of rows that previously belonged to `--Excluded--SI`-tagged devices
-3. `Temp-Client-Devices--Excluded--SI` and similar `--Excluded--SI`-suffixed tagged devices are absent
+3. `<device-group>--Excluded--SI` and similar `--Excluded--SI`-suffixed tagged devices are absent
 
 ### Same class of bug to audit
 
@@ -8743,7 +8570,7 @@ The `IsExcluded` MDE-side flag check (immediately preceding the AssetTags filter
 
 ## v2.2.218 — Risk Analysis: CVE Detailed -- asset tier filter (default [0, 1, 2])
 
-Operator-driven volume cut on top of v2.2.217's memory fix. CVE Detailed at FVF still emits ~115K (Asset x CVE) pairs after EpJoinKey-fixes the memory crash; that's a lot of rows for a deliverable when most operators only act on CVEs that affect the more critical assets.
+Operator-driven volume cut on top of v2.2.217's memory fix. CVE Detailed at a large tenant still emits ~115K (Asset x CVE) pairs after EpJoinKey-fixes the memory crash; that's a lot of rows for a deliverable when most operators only act on CVEs that affect the more critical assets.
 
 ### What landed
 
@@ -8771,7 +8598,7 @@ Default `[0, 1, 2]` keeps Critical / High / Medium tiers and drops Tier 3 (Low) 
 | Include Tier 3 too | `dynamic([0, 1, 2, 3])` |
 | No filter (full backlog) | `dynamic([])` |
 
-### Volume estimate (FVF)
+### Volume estimate (a large tenant)
 
 - v2.2.217 baseline: ~115K (Asset x CVE) pairs
 - v2.2.218 default `[0, 1, 2]`: ~5-15K rows (90%+ cut for tenants with typical Tier-3-heavy workstation populations)
@@ -8790,11 +8617,11 @@ Per-report `exclude.custom.json` substitution for `AssetTierFilter` would let op
 
 ## v2.2.217 — Risk Analysis: _ep EpJoinKey dedup (memory-exceeded fix + server/IoT support) + Summary cleanup parity + Tier null-flow
 
-Operator hit `Memory consumption exceeded` running CVE Summary on FVF after v2.2.216 ship. Two contributing bugs and three follow-up items from the second code-review round, plus an explicit operator requirement to keep server / Linux / IoT devices joinable to their CL profile.
+Operator hit `Memory consumption exceeded` running CVE Summary on a large tenant after v2.2.216 ship. Two contributing bugs and three follow-up items from the second code-review round, plus an explicit operator requirement to keep server / Linux / IoT devices joinable to their CL profile.
 
 ### Critical: `_ep` AadDeviceId multi-match -> memory blow-up + lost server/IoT enrichment
 
-`_ep` deduplicates by `PrimaryEntityId`, not `AadDeviceId`. For tenants with renamed hosts, dual-onboard, or stale + fresh CL records, multiple PrimaryEntityIds can share the same AadDeviceId. The `leftouter _ep on AadDeviceId` join then multi-matches: every result row with empty AadDeviceId cartesians against every `_ep` row with empty AadDeviceId. The FVF inline `_ep` datatable has ~200 rows with empty AadDeviceId (servers, Linux hosts, IoT, hashed identifiers), which combined with ~50K result rows that also have empty AadDeviceId yields ~10M join rows -> memory exceeded.
+`_ep` deduplicates by `PrimaryEntityId`, not `AadDeviceId`. For tenants with renamed hosts, dual-onboard, or stale + fresh CL records, multiple PrimaryEntityIds can share the same AadDeviceId. The `leftouter _ep on AadDeviceId` join then multi-matches: every result row with empty AadDeviceId cartesians against every `_ep` row with empty AadDeviceId. The large tenant's inline `_ep` datatable has ~200 rows with empty AadDeviceId (servers, Linux hosts, IoT, hashed identifiers), which combined with ~50K result rows that also have empty AadDeviceId yields ~10M join rows -> memory exceeded.
 
 Two design choices for the fix:
 
@@ -8883,7 +8710,7 @@ Operator-run portal verification of v2.2.215's architecture (the new `_DeviceMap
 
 ## v2.2.215 — Risk Analysis: CVE Detailed -- pre-collapse multi-NodeId at the EDGE layer
 
-v2.2.214's by-clause collapse fired POST-bucket-filter, so each bucket query still saw the full multi-NodeId fanout pre-summarize (~552K rows on FVF when the 434-NodeId outlier device was in the bucket). Engine still preempted at bucket=1..8.
+v2.2.214's by-clause collapse fired POST-bucket-filter, so each bucket query still saw the full multi-NodeId fanout pre-summarize (~552K rows on a large tenant when the 434-NodeId outlier device was in the bucket). Engine still preempted at bucket=1..8.
 
 Portal bisect (Test 1, run by operator) confirmed the bare join + DeviceKey-keyed summarize returns **115,825 rows** cleanly in seconds. So the cost lives **between the join and the summarize**, in the bucket-partitioned pre-summarize work.
 
@@ -8933,7 +8760,7 @@ For any future EG-primary report that needs per-row detail across (asset, findin
 
 ## v2.2.214 — Risk Analysis: CVE Detailed -- collapse by DeviceKey, not by AssetName
 
-The v2.2.213 snapshot-dedup theory was wrong. ExposureGraphNodes/Edges aren't hourly-snapshot tables; they hold the latest state of each entity. The `arg_max(TimeGenerated, *)` adds cost without benefit, and v2.2.213 made no observable improvement on FVF -- still preempting at bucket=1..8.
+The v2.2.213 snapshot-dedup theory was wrong. ExposureGraphNodes/Edges aren't hourly-snapshot tables; they hold the latest state of each entity. The `arg_max(TimeGenerated, *)` adds cost without benefit, and v2.2.213 made no observable improvement on a large tenant -- still preempting at bucket=1..8.
 
 Two portal diagnostics located the real fanout:
 
@@ -8957,7 +8784,7 @@ ExposureGraphEdges
 
 ### Root cause: multi-NodeId fanout
 
-ExposureGraph assigns the same physical device multiple `NodeId`s (different telemetry sources / different views: host name + IP + domain + workgroup + ...). One aggregator/virtual device at FVF has **434 NodeIds** under a single `AadDeviceId`. Each NodeId has its own `affecting` edges to the same CVE.
+ExposureGraph assigns the same physical device multiple `NodeId`s (different telemetry sources / different views: host name + IP + domain + workgroup + ...). One aggregator/virtual device at a large tenant has **434 NodeIds** under a single `AadDeviceId`. Each NodeId has its own `affecting` edges to the same CVE.
 
 The deployed summarize keyed on `(AssetName, AssetLabel, FindingName, AadDeviceId)`. AssetName/AssetLabel **differ across the 434 NodeIds** (each carries its NodeName/NodeLabel), so the summarize keeps them as 434 separate groups. For a device with N CVEs that's 434xN output rows. Across the few outlier devices the total balloons to ~42M post-summarize rows.
 
@@ -8994,11 +8821,11 @@ When emitting per-row detail from `ExposureGraphEdges`-driven queries, **always 
 
 ## v2.2.213 — Risk Analysis: snapshot-dedup on ExposureGraphNodes/Edges (the real CVE Detailed fix)
 
-The root cause of the CVE Detailed report **never running end-to-end at FVF scale** -- six previous releases of bucket-tuning, materialize/in-subquery rewrites, and scalar extraction were chasing a symptom. The actual bug:
+The root cause of the CVE Detailed report **never running end-to-end at large-tenant scale** -- six previous releases of bucket-tuning, materialize/in-subquery rewrites, and scalar extraction were chasing a symptom. The actual bug:
 
 **`ExposureGraphNodes` and `ExposureGraphEdges` are snapshot tables.** Each refresh writes a new row per node/edge (Defender retains ~7 days at hourly cadence -> ~7 snapshots per entity). The deployed query had **no `arg_max(TimeGenerated, *)` dedup** on `_Assets`, `_OurAffectingEdges`, or `_Findings`.
 
-The two inner joins then multiplied snapshots together. At FVF the actual numbers were:
+The two inner joins then multiplied snapshots together. At a large tenant the actual numbers were:
 
 | Stage | Real entities | With S=7 snapshots |
 |---|---:|---:|
@@ -9059,7 +8886,7 @@ This is the right baseline for **every** EG-primary RA report. Any new report th
 
 v2.2.210 collapsed the 3-let architecture (`_OurAffectingEdges` materialised + `_RelevantFindingIds` narrowing via `in (subquery)` + separate `_Findings`) into a single chained join. Hypothesis at the time was that `materialize()` might be a no-op in Defender XDR Advanced Hunting and `in (subquery)` might be planned poorly -- so simpler structure should win.
 
-The hypothesis was wrong on FVF. v2.2.209 (3-let with materialize + in-subquery) converged AutoBucket at 8 buckets. v2.2.210/211 (single chained join) preempts at all bucket counts 1 -> 1024. The materialize was load-bearing.
+The hypothesis was wrong on a large tenant. v2.2.209 (3-let with materialize + in-subquery) converged AutoBucket at 8 buckets. v2.2.210/211 (single chained join) preempts at all bucket counts 1 -> 1024. The materialize was load-bearing.
 
 v2.2.212 restores the v2.2.209 architecture: `_AssetNodeIdSet`, `materialize(_OurAffectingEdges)`, `_RelevantFindingIds`, `_Findings | where NodeId in (_RelevantFindingIds)`, separate `_Edges`, final `_AssetFindingEdges` joins all three. **Keeps** the scalar extraction from v2.2.210 (`FindingSeverity`, `FindingCvssScore`, `FindingHasExploit`, etc.) -- that's an independent per-row win that doesn't depend on the join shape.
 
@@ -9079,7 +8906,7 @@ Fix: applied the same Properties-bag → scalar-columns rewrite to the Detailed 
 
 ## v2.2.210 — Risk Analysis: eliminate `Properties` bag, extract CVE scalars up-front
 
-Diagnostic finding from a stripped-down portal run of the CVE join chain at FVF:
+Diagnostic finding from a stripped-down portal run of the CVE join chain at a large tenant:
 
 | Metric | Value |
 |---|---:|
@@ -9128,9 +8955,9 @@ Expected effect: AutoBucket should now converge in single digits for the CVE Det
 
 The smoking gun for AutoBucket still preempting at 128 buckets on v2.2.208 — `AssetProps` was being carried through the entire pipeline for nothing.
 
-`AssetProps = NodeProperties` was projected in `_Assets` (full EG endpoint node bag — typically 5-20 KB of dynamic JSON per row), carried through `_AssetFindingEdges` (141K joined rows × ~10 KB = **1.4 GB of intermediate** dynamic data on FVF), preserved via `any(AssetProps)` in the summarize... and then **never read by any downstream `extend` / `coalesce` / `project`**. Pure dead weight, but the EG backend's query engine still had to materialise and shuffle it through every join + summarize stage.
+`AssetProps = NodeProperties` was projected in `_Assets` (full EG endpoint node bag — typically 5-20 KB of dynamic JSON per row), carried through `_AssetFindingEdges` (141K joined rows × ~10 KB = **1.4 GB of intermediate** dynamic data on a large tenant), preserved via `any(AssetProps)` in the summarize... and then **never read by any downstream `extend` / `coalesce` / `project`**. Pure dead weight, but the EG backend's query engine still had to materialise and shuffle it through every join + summarize stage.
 
-Fix: dropped `AssetProps` from the `_Assets` projection, the `_AssetFindingEdges` projection, and the summarize aggregate. Three lines deleted total. Identical output rows. The intermediate join + summarize should drop ~1.4 GB on FVF.
+Fix: dropped `AssetProps` from the `_Assets` projection, the `_AssetFindingEdges` projection, and the summarize aggregate. Three lines deleted total. Identical output rows. The intermediate join + summarize should drop ~1.4 GB on a large tenant.
 
 Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` still have `AssetProps` -- they currently work in 1 bucket so the cleanup isn't urgent there.
 
@@ -9172,7 +8999,7 @@ Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`
 
 ## v2.2.206 — Risk Analysis: drop dead `_AssetFindingEdges_oneway` join branch
 
-Tenant diagnostic (FVF, 1712 endpoints, 175,235 affecting edges) proved the `oneway` join branch always returns zero rows:
+Tenant diagnostic (a large tenant, 1712 endpoints, 175,235 affecting edges) proved the `oneway` join branch always returns zero rows:
 
 | edges_total | asset_is_source | asset_is_target | asset_on_both |
 |---:|---:|---:|---:|
@@ -9203,15 +9030,15 @@ Combined with v2.2.204:
 
 Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` reports unchanged (they currently work fine in 1 bucket and have a different edge profile).
 
-Expected on FVF tenant: AutoBucket should converge under 8 buckets, each finishing in ~30s. Total CVE Detailed runtime: minutes vs hours.
+Expected on large tenant: AutoBucket should converge under 8 buckets, each finishing in ~30s. Total CVE Detailed runtime: minutes vs hours.
 
 ---
 
 ## v2.2.204 — Risk Analysis: pre-filter `_Findings` to CVEs connected to anything (no output change)
 
-ExposureGraph's `ExposureGraphNodes` table holds the **full NVD-ish CVE catalog** (~350K entries on FVF), not just CVEs that match your tenant's assets. The previous `_Findings` let pulled all 350K catalog entries into the pipeline, then relied on the downstream inner-join with `_Assets` to drop CVEs that didn't connect to any of the tenant's devices. The drop happened, but only AFTER the giant catalog had been carried through the join expansion.
+ExposureGraph's `ExposureGraphNodes` table holds the **full NVD-ish CVE catalog** (~350K entries on a large tenant), not just CVEs that match your tenant's assets. The previous `_Findings` let pulled all 350K catalog entries into the pipeline, then relied on the downstream inner-join with `_Assets` to drop CVEs that didn't connect to any of the tenant's devices. The drop happened, but only AFTER the giant catalog had been carried through the join expansion.
 
-Fix: pre-compute `_AffectingNodeIds` as a set of NodeIds that appear on either end of an `EdgeLabel contains "affecting"` edge, then narrow `_Findings` to CVEs in that set BEFORE the asset/edge join. On FVF: catalog 350K -> ~10K relevant CVEs (33x reduction at source).
+Fix: pre-compute `_AffectingNodeIds` as a set of NodeIds that appear on either end of an `EdgeLabel contains "affecting"` edge, then narrow `_Findings` to CVEs in that set BEFORE the asset/edge join. On a large tenant: catalog 350K -> ~10K relevant CVEs (33x reduction at source).
 
 **Output is identical.** CVEs without an affecting edge to anything produced zero rows under the old query because the inner join with `_Assets` required a matching edge anyway. The only thing that changes is the intermediate row count and the join cost.
 
@@ -9223,7 +9050,7 @@ Expected effect on a 1700-device tenant: AutoBucket converges at 4-16 (vs 448-89
 
 ## v2.2.203 — Risk Analysis: CVE source-side filter knobs + drop mv-expand redundancy
 
-Two compounding fixes to the `Device_Missing_CVEs_*` `_Findings` let block, targeting the join blow-up on large tenants (FVF: 350K CVE catalog entries × edges × asset union).
+Two compounding fixes to the `Device_Missing_CVEs_*` `_Findings` let block, targeting the join blow-up on large tenants (a large tenant: 350K CVE catalog entries × edges × asset union).
 
 **1. Dropped `mv-expand Categories` redundancy.** The old block had:
 ```kql
@@ -9268,7 +9095,7 @@ Bug: both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed` defin
 
 Why the Recommendations reports weren't affected: their `_Findings` already includes `| where NodeLabel !contains "cve"`, which correctly excludes CVE nodes from the recommendation-focused join.
 
-Fix: add `| where NodeLabel startswith "cve"` to the `_Findings` let in both CVE reports (lines 121 + 398 in `RiskAnalysis_Queries_Locked.yaml`). The CVE and Recommendation reports now use **mutually exclusive** finding filters (`startswith "cve"` vs `!contains "cve"`), so each report only carries its relevant finding type through the join expansion.
+Fix: add `| where NodeLabel startswith "cve"` to the `_Findings` let in both CVE reports (in `RiskAnalysis_Queries_Locked.yaml`). The CVE and Recommendation reports now use **mutually exclusive** finding filters (`startswith "cve"` vs `!contains "cve"`), so each report only carries its relevant finding type through the join expansion.
 
 Expected impact on a tenant with ~850 endpoints + modest CVE backlog: AutoBucket convergence for `Device_Missing_CVEs_Detailed` drops from ~32 buckets at ~122s/bucket to ~4-8 buckets at ~30s/bucket. Combined with v2.2.200 composite-key bucketing, this should be the structural fix that gets the Detailed CVE report finishing in under 5 minutes on a 1700-device estate.
 
@@ -9341,7 +9168,7 @@ Net effect on a tenant without data lake enabled: lake endpoint is probed exactl
 
 ## v2.2.196 — CLI `-Detailed` / `-Summary` flag now wins over `RiskAnalysis_*_Override` globals
 
-Running `launcher.internal-vm.ps1 -Detailed` against a config that sets `RiskAnalysis_Summary_Override = $true` (the default the generator emits) threw `Invalid parameters: Use only one of -Detailed or -Summary.` mid-engine. Both modes were turning true: the CLI flag set `$global:Detailed = $true`, then the override at engine line 105 unconditionally also set `$global:Summary = $true`.
+Running `launcher.internal-vm.ps1 -Detailed` against a config that sets `RiskAnalysis_Summary_Override = $true` (the default the generator emits) threw `Invalid parameters: Use only one of -Detailed or -Summary.` mid-engine. Both modes were turning true: the CLI flag set `$global:Detailed = $true`, then the override at engine unconditionally also set `$global:Summary = $true`.
 
 Fix: the override now skips if the *other* mode is already explicitly true. Equivalent to "CLI flag wins". Each override is still a no-op when its mode is already true (so config alone behaves identically).
 
@@ -9433,28 +9260,20 @@ Use when:
 .\Initialize-PlatformVm.ps1 -TenantId ... -SubscriptionId ... `
     -KeyVaultName ... -ResourceGroup ... `
     -SkipPermissionAdd `
-    -OpenAIAccountName oai-ns-securityinsight -OpenAILocation swedencentral
+    -OpenAIAccountName <openai-account-name> -OpenAILocation swedencentral
 ```
 
 ---
 
 ## v2.2.188 — Deploy-PlatformAI auto-creates the resource group if missing
 
-Re-running Step 8 on a fresh tenant blew up because `New-AzCognitiveServicesAccount` requires the RG to exist (`Resource group 'rg-securityinsight' could not be found`). Added an idempotent `New-AzResourceGroup` ahead of the OpenAI provisioning so the script no longer assumes RG presence. No-op when the RG already exists.
+Re-running Step 8 on a fresh tenant blew up because `New-AzCognitiveServicesAccount` requires the RG to exist (`Resource group '<resource group>' could not be found`). Added an idempotent `New-AzResourceGroup` ahead of the OpenAI provisioning so the script no longer assumes RG presence. No-op when the RG already exists.
 
 ---
 
-## v2.2.187 — Drop redundant `internal/` gitignore so Sync-AutomateIT-Engine pulls it to internal hosts
+## v2.2.187 — Maintainer repository housekeeping
 
-`Sync-AutomateIT-Engine.ps1` pulls a GitHub zipball of the private monorepo's main branch; anything `.gitignore`d is never in the zip, so it can't sync to other internal hosts. The old `SOLUTIONS/SecurityInsight/internal/*` gitignore was redundant with the publish workflow's strip logic (`publish.yml` lines 159 + 473 already remove both `internal/` and `INTERNAL/` directories from public mirrors) — and it was actively blocking internal-to-internal sync. Removed.
-
-**Now tracked** (newly visible to `Sync-AutomateIT-Engine`):
-- `SOLUTIONS/SecurityInsight/internal/Migrate-FromV1.ps1`
-- `SOLUTIONS/SecurityInsight/internal/onboard-internal-AutomateIT.md`
-- `SOLUTIONS/SecurityInsight/internal/side-by-side-install-from-v1.md`
-- `SOLUTIONS/SecurityInsight/internal/README.md` (was previously an explicit `!` exception; now ordinary tracked file)
-
-Public mirrors stay unaffected — the publish workflow continues to strip the folder before pushing.
+Maintainer-only change to how internal hosts sync; no effect on public or customer installs.
 
 ---
 
@@ -9462,11 +9281,11 @@ Public mirrors stay unaffected — the publish workflow continues to strip the f
 
 `Initialize-PlatformVm.ps1` gains three optional steps so a single command can produce a fully-ready host. All conditional — pass the relevant params and they fire; omit and the script behaves exactly like before.
 
-**New helper scripts** (also runnable stand-alone):
+**What the new steps do** (each also runnable stand-alone through the internal setup scripts):
 
-- `SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\Deploy-PlatformAI.ps1` — provisions an Azure OpenAI account + a model deployment (default `gpt-4.1-mini@2025-04-14` — 4o family is deprecated), then uploads `OpenAI-ApiKey` / `OpenAI-Endpoint` / `OpenAI-Deployment` to the platform KV. Idempotent. Also accepts `-ShodanApiKey`, `-SmtpUser`, `-SmtpPassword` so all per-tenant secrets land in KV in one call.
-- `SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\Set-PlatformDefaultsSmtp.ps1` — replaces the SMTP block at the bottom of `platform-defaults.ps1` with a parameterised version. Server / port / from / SSL are written inline; user + password are pulled from KV at runtime (`Smtp-User`, `Smtp-Password`) so credentials never get committed.
-- `SOLUTIONS\SecurityInsight\INTERNAL\New-SISolutionConfig.ps1` — emits `SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` from a small set of per-tenant params (workspace name + RG, storage account, mail recipients, optional OpenAI account, optional Defender workspace ResourceId). Subscription is auto-derived from the current Az context; workspace ResourceId and DCE ingestion URI are auto-resolved.
+- **Deploy AI** — provisions an Azure OpenAI account + a model deployment (default `gpt-4.1-mini@2025-04-14` — the 4o family is deprecated), then stores `OpenAI-ApiKey` / `OpenAI-Endpoint` / `OpenAI-Deployment` in the platform Key Vault. Idempotent. Also accepts the Shodan key and SMTP credentials so all per-tenant secrets land in Key Vault in one call.
+- **SMTP block** — writes a parameterised SMTP block into `platform-defaults.ps1`. Server / port / from / SSL are written inline; the SMTP credentials are read from Key Vault at runtime (`Smtp-User`, `Smtp-Password`).
+- **SI custom config** — emits `config\SecurityInsight.custom.ps1` from a small set of per-tenant params (workspace name + RG, storage account, mail recipients, optional OpenAI account, optional Defender workspace ResourceId). Subscription is auto-derived from the current Az context; workspace ResourceId and DCE ingestion URI are auto-resolved.
 
 **New optional params on `Initialize-PlatformVm.ps1`** (omit any to skip that step):
 
@@ -9515,33 +9334,15 @@ After upgrading to v2.2.183, rerun Risk Analysis — mail dispatch should now re
 
 ---
 
-## v2.2.182 — Provisioning bug fix: grant Modern SPN `Key Vault Secrets User` on platform KV
+## v2.2.182 — Provisioning: the runtime identity reads the platform Key Vault
 
-**Critical orchestrator gap closed.**
+Provisioning now grants the runtime identity `Key Vault Secrets User` on the platform Key Vault (after the step that creates that identity), so secrets kept there (`Smtp-User`, `Smtp-Password`, `OpenAI-ApiKey`, `SI-Shodan-ApiKey`) are read on every run. Idempotent — re-running on a host that already has the assignment is a no-op.
 
-`Initialize-PlatformVm.ps1` previously granted `Key Vault Secrets User` only to:
-- Bootstrap SPN (so `Connect-Platform` can read `Modern-AppId` / `Modern-Secret`)
-- Managed Identity (alternate bootstrap path)
-- Operator (`Secrets Officer` for upload + rotation)
-
-But **NOT to the Modern SPN itself**. After `Connect-Platform` completes, the runtime Az session is the Modern SPN. Solution custom files' `Get-PlatformSecret` calls (e.g., `Smtp-User`, `Smtp-Password`, `OpenAI-ApiKey`, `SI-Shodan-ApiKey`) all run as the Modern SPN → 403 Forbidden on every additional KV-stored secret.
-
-Symptom on the affected host:
-```
-WARNING: Failed to retrieve secret 'SI-Shodan-ApiKey' from Key Vault: Forbidden
-Caller: appid=<modern-spn-app-id>
-Action: 'Microsoft.KeyVault/vaults/secrets/getSecret/action'
-```
-
-**Fix**: orchestrator now grants Modern SPN `Key Vault Secrets User` on the platform KV after step 5 (Modern SPN creation). Idempotent — re-running on a host that already has the assignment is a no-op.
-
-**For existing v2.3 hosts** (provisioned before v2.2.182), apply the grant manually one time:
+**For existing v2.3 hosts** (provisioned before v2.2.182): re-run the provisioner, or grant the runtime identity `Key Vault Secrets User` on your platform Key Vault once:
 ```powershell
 $kv = Get-AzKeyVault -VaultName '<your-platform-kv>'
-New-AzRoleAssignment -ObjectId <ModernSPN-ObjectId> -RoleDefinitionName 'Key Vault Secrets User' -Scope $kv.ResourceId
+New-AzRoleAssignment -ObjectId <runtime-identity-object-id> -RoleDefinitionName 'Key Vault Secrets User' -Scope $kv.ResourceId
 ```
-
-(`<ModernSPN-ObjectId>` = principal ObjectId of `AutomateIT-HighPrivileged-Tier0-<host>`. Find it via `Get-AzADServicePrincipal -Filter "displayName eq 'AutomateIT-HighPrivileged-Tier0-<host>'"`.)
 
 ---
 
@@ -9592,7 +9393,7 @@ Cosmetic clarification — no behavior change:
 
 - **93 `\| extend RiskFactor_Consequence = N` literals** annotated with KQL `//` comment: `engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only`.
 - **31 `\| extend RiskFactor_Probability = N + ...` literals** annotated similarly.
-- **Why the literals exist** (not removable): they declare the column so downstream `\| project` references compile in KQL. Engine then unconditionally overrides the value PowerShell-side from `*_Detailed` token count (`Invoke-RiskAnalysis.ps1:3175-3191` + restamp at `:3337`).
+- **Why the literals exist** (not removable): they declare the column so downstream `\| project` references compile in KQL. Engine then unconditionally overrides the value PowerShell-side from `*_Detailed` token count (in `Invoke-RiskAnalysis.ps1`, with a later restamp).
 - **Operator effect**: reading the YAML now makes clear the literal is placeholder; the displayed value is always engine-derived.
 
 ---
@@ -9620,16 +9421,15 @@ Total reports: 136 → **126**.
 **Platform layer cleanup** (`platform-data.json` removed):
 
 - Decision: cross-cutting platform values (Smtp/LA/AzMG/AD/Mail) now live in **ONE file** — `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1`. JSON layer deleted as redundant (engines were already projecting JSON values into `$global:*` PowerShell vars; the JSON intermediate added complexity without benefit).
-- Deleted: `bootstrap\platform-data.json` (per-host file), `Provision\platform-data.sample.json`, `Get-PlatformData.ps1`, `Set-PlatformData.ps1` cmdlets, module manifest exports for both.
+- Deleted: `bootstrap\platform-data.json` (per-host file), its sample, the `Get-PlatformData` / `Set-PlatformData` cmdlets and their module exports.
 - Updated: `Initialize-PlatformVm.ps1` no longer emits `platform-data.json` (just `platform-config.json`); removed `-PlatformDataPath` parameter.
 - Updated: `Convert-V1ToPlatform.ps1` migration tool no longer emits `platform-data.json`.
-- Updated: `Onboarding-V2.3-Playbook.md` Step 4 now points operators at `platform-defaults.ps1` instead of JSON.
+- Updated: the onboarding playbook now points operators at `platform-defaults.ps1` instead of JSON.
 - Operators on existing v2.3 hosts: delete the orphan `bootstrap\platform-data.json` (no longer read by anything).
 
-**Anonymous SMTP fallback**:
+**SMTP sign-in**:
 
-- `platform-defaults.ps1` SMTP block documented with `$global:SMTPUser = $null` / `$global:SMTPPassword = $null` defaults — `Send-PlatformAlert` already auto-falls-back to anonymous when KV pull misses both, so internal relays without auth work out of the box.
-- Recommended pattern: secrets in KV (`Smtp-User`, `Smtp-Password`), pulled by the platform KV-pull block; plain-text values win if set (override-friendly for testing).
+- Mail is sent with the sign-in you configure; when none is set, the log says so. Keep the SMTP credentials in Key Vault (`Smtp-User`, `Smtp-Password`).
 
 ---
 
@@ -9682,7 +9482,7 @@ Total reports: 136 → **126**.
 
 - **Full `CriticalityTierLevelScope` (4 tiers) + `SecuritySeverityScope` (5 levels) across all 134 reports**. Previously some reports listed partial scopes which silently filtered legitimate findings out of the result.
 
-- **Engine: `RiskFactor_Consequence` and `RiskFactor_Probability` ALWAYS recount from their `_Detailed` token list** (`Invoke-RiskAnalysis.ps1:3299`). Previous logic only recounted when post-enrichment fired tokens; legacy YAML literals (`| extend RiskFactor_Consequence = 3`) leaked through. Engine now: `count(split(*_Detailed, ';'))` if non-empty, else 0. YAML hardcodes are harmless — engine overrides them.
+- **Engine: `RiskFactor_Consequence` and `RiskFactor_Probability` ALWAYS recount from their `_Detailed` token list** (in `Invoke-RiskAnalysis.ps1`). Previous logic only recounted when post-enrichment fired tokens; legacy YAML literals (`| extend RiskFactor_Consequence = 3`) leaked through. Engine now: `count(split(*_Detailed, ';'))` if non-empty, else 0. YAML hardcodes are harmless — engine overrides them.
 
 - **Engine column renames** (replace legacy aggregate names with canonical Summary-only counters):
   - `AssetCount` → `ImpactedAssetCount`
@@ -9734,27 +9534,26 @@ Total reports: 136 → **126**.
 
 **Platform layer (additive — v2.2 hosts unchanged)**:
 
-- **`Connect-Platform` two-tier auth orchestrator** (`AutomateITPS\Public\Connect\`). Replaces `dot-source platform-defaults.ps1` for new deployments. Bootstrap auth is pluggable: Managed Identity (Azure VM / Container / Arc) or Certificate (anywhere incl. on-prem). `BootstrapAuth=Auto` probes IMDS+HIMDS at runtime.
-- **`Initialize-PlatformVm`** (`SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\`) — single-command provisioner: cert + Connect SPN + MI + KV + HighPrivileged-Tier0 SPN + applied 156-perm bundle + emit configs + smoke test. Wall-clock ~5–10 min. New nomenclature: `AutomateIT-Connect-<host>` (KV-read SPN), `AutomateIT-HighPrivileged-Tier0-<host>` (full-priv SPN).
-- **`Convert-V1ToPlatform`** (`...\Migrate\`) — one-shot migrator: dot-source v1 chain, capture globals, emit `bootstrap\platform-config.json` + `platform-data.json`, seed KV with Modern-AppId + Modern-Secret + OpenAI/Shodan keys, smoke-test.
+- **`Connect-Platform` two-tier auth orchestrator**. Replaces `dot-source platform-defaults.ps1` for new deployments. Bootstrap auth is pluggable: Managed Identity (Azure VM / Container / Arc) or Certificate (anywhere incl. on-prem). `BootstrapAuth=Auto` probes IMDS+HIMDS at runtime.
+- **`Initialize-PlatformVm`** — one command prepares a new host with its identities and rights, writes its configuration and runs a smoke test. Wall-clock ~5–10 min.
+- **`Convert-V1ToPlatform`** — one-shot migrator: dot-source v1 chain, capture globals, emit `bootstrap\platform-config.json` + `platform-data.json`, store the runtime secrets in Key Vault, smoke-test.
 - **Launcher Layer 1** swap: tries `Connect-Platform` if `bootstrap\platform-config.json` exists, otherwise falls back to v2.2 `platform-defaults.ps1` dot-source. v2.2 customers see no change after a sync.
 - **`Initialize-PlatformAutomationFramework` thin alias** for `Connect-Platform` with **back-compat soft-fail**: returns `$null` silently when `platform-config.json` is absent, so engines (`Invoke-PublicIpScanner`, `AssetTagging`, `PrivilegeTierClassifier`) that call it defensively don't blow up on v2.2 hosts that synced v2.3 code.
 - **Defensive shims at module load** for `New-Guid` + `ConvertTo-SecureString` — covers constrained PS 5.1 runspaces (SYSTEM scheduled tasks, `-NoProfile` shells) where `Microsoft.PowerShell.Utility` / `.Security` cmdlets don't auto-load. Az.Monitor (DCR autorest) + `Connect-MicrosoftGraphPS` work without extra imports.
 
-**Onboarding playbook** for fresh provisioning (Path A) and v1→v2.3 migration (Path B):
-`SOLUTIONS\PlatformConfiguration\INTERNAL\Onboarding-V2.3-Playbook.md`
+An onboarding playbook covers fresh provisioning (Path A) and v1→v2.3 migration (Path B).
 
-Live-tested end-to-end on `kv-<tenant>-automateit-p` (Setup-SecurityInsight-Unattended green; 5/7 launchers GREEN, 2 CHAIN-OK with engine-specific deps).
+Tested on a live installation (Setup-SecurityInsight-Unattended green; 5/7 launchers GREEN, 2 CHAIN-OK with engine-specific deps).
 
 **No breaking changes for v2.2 customers** — sync v2.2.174, existing chains keep working unchanged. Migrate to v2.3 platform layer when ready via `Initialize-PlatformVm` or `Convert-V1ToPlatform`.
 
 ---
 
-## v2.2.173 — `Write-SICustomConfig.ps1`: emit SI_SPN_Secret + global SI_ForceFullRun
+## v2.2.173 — `Write-SICustomConfig.ps1`: data-upload settings + global SI_ForceFullRun
 
 Generator now adds two more lines to every newly-rendered `SecurityInsight.custom.ps1`:
 
-- **§1 (Bridged mode)** — `$global:SI_SPN_Secret = $global:HighPriv_Modern_Secret_Azure` so AzLogDcrIngestPS has the LA Log Ingestion endpoint client secret without operator manual editing. Cert stays primary for Az/Mg/KV.
+- **§1 (Bridged mode)** — the generated settings file holds everything data upload needs, without operator manual editing. Cert stays primary for Az/Mg/KV.
 - **§6 (Engine Tuning)** — `$global:SI_ForceFullRun = $true` (global override). Per-engine `SI_ForceFullRun_<E>` flags weren't honored by every launcher's mode-resolver; the global one always wins. Operator should flip to `$false` after first runs populate the cadence cache.
 
 Existing customer custom.ps1 files won't auto-update — re-run `Setup-SecurityInsight-Unattended` to regenerate, or manually add the 2 lines to existing custom.ps1.
@@ -9809,7 +9608,7 @@ Fix: short-circuit now calls `New-PlatformContext` to build a fully-shaped conte
 
 ## v2.2.168 — `Initialize-PlatformAutomationFramework`: short-circuit when v1 globals already loaded
 
-When the launcher's Layer 1 dot-source of `platform-defaults.ps1` runs the v1 chain (`ConnectDetails` + `Default_Variables` + `Connect_Azure.ps1`), the v1-contract globals (`$global:HighPriv_Modern_ApplicationID_Azure` + `$global:HighPriv_Modern_CertificateThumbprint_Azure` + `$global:AzureTenantId`) are already set. Engines that subsequently call `Initialize-PlatformAutomationFramework` (e.g. `Invoke-RiskAnalysis.ps1` line 4404) would re-do the work — but more importantly, they'd fail with "missing config -- TenantId, SubscriptionId, KeyVaultName, ..." because no `platform-config.json` exists.
+When the launcher's Layer 1 dot-source of `platform-defaults.ps1` runs the v1 chain (`ConnectDetails` + `Default_Variables` + `Connect_Azure.ps1`), the v1-contract globals (`$global:HighPriv_Modern_ApplicationID_Azure` + `$global:HighPriv_Modern_CertificateThumbprint_Azure` + `$global:AzureTenantId`) are already set. Engines that subsequently call `Initialize-PlatformAutomationFramework` (e.g. `Invoke-RiskAnalysis.ps1`) would re-do the work — but more importantly, they'd fail with "missing config -- TenantId, SubscriptionId, KeyVaultName, ..." because no `platform-config.json` exists.
 
 Function now early-returns when those 3 v1 globals are populated, returning a `pscustomobject` with `Source='v1-chain'` instead of trying to build a fresh PlatformContext from JSON / env vars / params. Customers using the v1 connect chain don't need `platform-config.json` at all. Customers without v1 (community / fresh tenant) still get the original full-init path.
 
@@ -9841,10 +9640,10 @@ Also: dropped the `Copy Connect_Azure.ps1` step (the shim references the v1 path
 
 New phase between Infrastructure (Phase 2) and Config-file render (Phase 3). Internal flavour only. When `$global:KV_HighPriv_KeyVaultName` is set (loaded by `Legacy-Connect.ps1` from v1's `Automation-ConnectDetails.psm1`), the script writes two secrets to the v1 platform Key Vault:
 
-- `SI-Shodan-ApiKey` — fixed key shared across internal customers
+- `SI-Shodan-ApiKey` — the Shodan key for installs that include the Shodan entitlement
 - `OpenAI-ApiKey` — migrated from v1's `$global:OpenAI_apiKey` (set by `Default_Variables`); skip-with-warn if v1 global not present
 
-After the migration, the operator can delete the `$global:OpenAI_apiKey = '...'` line from v1's `Automation-DefaultVariables.psm1` — engines load it from KV via `SecurityInsight.custom.ps1` section 11 (the dual-path pulls added in v2.2.164).
+The OpenAI and Shodan keys are read from your Key Vault (via `SecurityInsight.custom.ps1` section 11, the dual-path pulls added in v2.2.164).
 
 Each `Set-AzKeyVaultSecret` is wrapped in try/catch so a single secret failure (e.g. KV RBAC missing for one name) doesn't block the rest of the deploy.
 
@@ -9866,7 +9665,7 @@ Removed:
 
 Bonus: Community flavour now actually has working auth (the previous code path assumed Internal everywhere).
 
-Operator workflow (FVF-style internal):
+Operator workflow (v1-platform internal):
 
 ```powershell
 . .\Legacy-Connect.ps1                              # one-time, setup-only
@@ -9897,7 +9696,7 @@ if ($global:Context) {
 }
 ```
 
-Means SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey actually populate on FVF-style internal customers using the v1 Connect_Azure.ps1 chain (where `$global:Context` is null but `$global:KV_HighPriv_KeyVaultName` is set by v1's ConnectDetails). No more "Shodan/OpenAI engines fail at runtime because the keys never loaded" surprise.
+Means SI_Shodan_ApiKey / OpenAI_apiKey (and, until v2.2.171, SI_StorageKey) actually populate on internal customers on the v1 platform using the v1 Connect_Azure.ps1 chain (where `$global:Context` is null but `$global:KV_HighPriv_KeyVaultName` is set by v1's ConnectDetails). No more "Shodan/OpenAI engines fail at runtime because the keys never loaded" surprise.
 
 ---
 
@@ -9949,7 +9748,7 @@ New switch lets the operator pre-load v1 platform globals (via their own `connec
 .\Setup-SecurityInsight-Unattended.ps1 -SkipPlatformDefaults
 ```
 
-Cleanest path for FVF-style customers who already have a working v1 connect chain and don't want Port-V1Platform.ps1 to re-derive everything.
+Cleanest path for customers on the v1 platform who already have a working v1 connect chain and don't want Port-V1Platform.ps1 to re-derive everything.
 
 ---
 
@@ -9973,40 +9772,21 @@ Three fixes that together make `Setup-SecurityInsight-Unattended.ps1` work on a 
 
 ---
 
-## v2.2.156 — `Port-V1Platform.ps1` + `Test-PlatformConnect.ps1`: auto-detect V2Root
+## v2.2.156 — Migration tooling: install folder auto-detected
 
-Both internal helpers used to default `-V2Root` to a hardcoded `C:\AutomateIT`, which broke for installs on any other drive (D:\, E:\, network share). They now auto-detect V2Root from `$PSScriptRoot` (three folders up — script lives at `<V2Root>\SOLUTIONS\PlatformConfiguration\INTERNAL\`), so they always target the install they were launched from regardless of drive letter. `-V2Root` override still works for the rare cross-install case.
-
----
-
-## v2.2.155 — `Sync-AutomateIT-Engine.ps1`: auto-unblock copied scripts
-
-After the zipball extract, the engine now runs `Unblock-File` recursively across `*.ps1,*.psm1,*.psd1,*.dll,*.exe` under every synced solution's `SOLUTIONS\<Name>\` tree. Files downloaded from GitHub carry a `Zone.Identifier` ADS that triggers `RemoteSigned` execution-policy refusal — this strips it as part of the sync, so launchers and engines run without "file is blocked, operator must Unblock-File first" friction.
-
-Internal-only change (engine lives under `INTERNAL/` and is scrubbed from public mirrors). Community-edition operators are unaffected.
+Migration tooling for older installs. The helpers now find the install they were launched from on any drive.
 
 ---
 
-## v2.2.154 — Internal migration tooling: `Port-V1Platform.ps1` + `Test-PlatformConnect.ps1`
+## v2.2.155 — Sync: copied scripts are unblocked automatically
 
-Two new internal-only helpers under `SOLUTIONS\PlatformConfiguration\INTERNAL\` (scrubbed from public mirrors by the publish workflow). They cut the FVF-style v1→v2 customer onboarding from ~30 min of manual file copies + ad-hoc smoke tests down to two commands.
+After a sync, downloaded scripts are unblocked automatically, so launchers and engines run without an `Unblock-File` step. Community-edition operators are unaffected.
 
-**`Port-V1Platform.ps1`** — one-shot v1→v2 platform port. Reads `<V1ROOT>\FUNCTIONS\Automation-DefaultVariables.psm1`, strips the `function Default_Variables() { ... }` wrapper, writes the body verbatim to `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1`, copies `Connect_Azure.ps1` alongside it, and appends the dot-source line so `$global:HighPriv_Modern_*` + `$global:Context` + `Get-PlatformSecret` load with one `. platform-defaults.ps1`. Also drops the `setup-unattended.json` template into the SI config folder when missing. Idempotent, backs up existing files to `.bak.<timestamp>`, supports `-DryRun` and `-Force`.
+---
 
-**`Test-PlatformConnect.ps1`** — read-only end-to-end smoke test of the `$global:AutomationFramework = $true` bridge. Seven phases: dot-source → globals contract check → bridge mirrors → `Connect-AzAccount -ServicePrincipal -CertificateThumbprint` → `Connect-MgGraph -ClientId -CertificateThumbprint` → `Get-PlatformSecret` KV pull → PASS/FAIL summary with exit code. Skip flags: `-SkipMgGraph`, `-SkipKv`, `-KeyVaultProbeName`. Replaces the manual `pwsh -NoProfile -Command { ... }` one-liner that operators had to assemble from `Onboarding.txt`.
+## v2.2.154 — Migration tooling for older installs
 
-Run order on a new internal customer VM:
-
-```powershell
-cd C:\AutomateIT\SOLUTIONS\PlatformConfiguration\INTERNAL
-.\Port-V1Platform.ps1 -V1Source <V1ROOT>     # port + drop json
-.\Test-PlatformConnect.ps1                   # smoke test, exit 0 = green
-
-cd C:\AutomateIT\SOLUTIONS\SecurityInsight
-.\Setup-SecurityInsight-Unattended.ps1       # actual deploy
-```
-
-Community-edition operators see none of this — `INTERNAL/` is excluded by the publish workflow.
+Migration tooling for older installs: two maintainer helpers port an older platform configuration to v2 and smoke-test the result. Community-edition operators see none of this.
 
 ---
 
@@ -10045,7 +9825,7 @@ What it does:
 6. With `-ShowReleaseNotes`, dumps every `## v…` block from `RELEASENOTES.md` between your old and new versions so you see exactly what changed without opening the file.
 7. Closes with a "what's next" reminder — re-launch the Setup Wizard only if you crossed a major release boundary; scheduled engines pick up new code on their next cycle without manual action.
 
-`config\SecurityInsight.custom.ps1` and per-engine `LauncherConfig.custom.ps1` files are gitignored — your customer-specific values + secrets are never touched by this update.
+`config\SecurityInsight.custom.ps1` and per-engine `LauncherConfig.custom.ps1` files are gitignored — your own settings are kept when you update.
 
 ---
 
@@ -10057,7 +9837,7 @@ The HTML wizard (`setup\ConfigWizard\Start-SetupWizard.ps1`) is great for first-
 
 **Two flavours, one script.**
 
-- **Internal** (FVF-style migration): re-uses the existing v1 cert-based SPN, dot-sources `platform-defaults.ps1`, calls `New-SISpn -UseExistingAppId` to top up Graph perms only (no new app reg, no new cred), renders `Write-SICustomConfig -Mode Bridged` (no secrets in the file — references `$global:HighPriv_Modern_*` + `$global:AutomationFramework=$true`). Connects to all 3 surfaces (Az PS / Mg / az CLI) using the v1 cert in `LocalMachine\My`. No operator interaction.
+- **Internal** (v1-platform migration): re-uses the existing v1 cert-based SPN, dot-sources `platform-defaults.ps1`, calls `New-SISpn -UseExistingAppId` to top up Graph perms only (no new app reg, no new cred), renders `Write-SICustomConfig -Mode Bridged` (no secrets in the file — references `$global:HighPriv_Modern_*` + `$global:AutomationFramework=$true`). Connects to all 3 surfaces (Az PS / Mg / az CLI) using the v1 cert in `LocalMachine\My`. No operator interaction.
 - **Community**: standalone install, no v1 platform layer. Creates a new SI SPN, renders the existing inline `SecurityInsight.custom.ps1`. Operator must `Connect-AzAccount` + `Connect-MgGraph` first (same as the GUI wizard's contract).
 
 **JSON-driven config** lives at `config\setup-unattended.json` (gitignored — the customer-owned working copy) with a sample at `config\setup-unattended.sample.json`. Six functional sections: `Flavour` / `Sub` / `Resources` / `Auth_Internal` / `Auth_Community` / `EntraDiag` / `Container`. `null` everywhere = "use script default or platform-defaults global". Every JSON value has a matching CLI switch for one-off overrides:
@@ -10072,9 +9852,9 @@ The HTML wizard (`setup\ConfigWizard\Start-SetupWizard.ps1`) is great for first-
 **Two backend cmdlet edits enable this:**
 
 - **`New-SISpn.ps1`** — new `-UseExistingAppId` + `-ExistingAppId` + `-ExistingThumbprint` parameters. When set, the cmdlet looks up the SP by AppId (instead of by DisplayName), skips `New-MgApplication`, skips cred generation. The existing Graph-perms-grant + Azure-RBAC blocks run as-is (already idempotent — already-granted perms are no-ops). `DisplayName` and `CredStorage` become optional in this mode (looked up from the existing app reg).
-- **`Write-SICustomConfig.ps1`** — new `-Mode <Inline|Bridged>` parameter (default `Inline` keeps the existing wizard behaviour). When `Bridged`, the SPN section emits `$global:SI_SPN_AppId = $global:HighPriv_Modern_ApplicationID_Azure` etc. and a new section 11 renders the `Get-PlatformSecret` late-binding for `SI_StorageKey` / `SI_Shodan_ApiKey` / `OpenAI_apiKey`. The customer file holds **zero secrets** — everything resolves at engine load time via the v1 platform layer.
+- **`Write-SICustomConfig.ps1`** — new `-Mode <Inline|Bridged>` parameter (default `Inline` keeps the existing wizard behaviour). When `Bridged`, the SPN section emits `$global:SI_SPN_AppId = $global:HighPriv_Modern_ApplicationID_Azure` etc. and a new section 11 renders the `Get-PlatformSecret` late-binding for `SI_Shodan_ApiKey` / `OpenAI_apiKey` (and, until v2.2.171 dropped it, `SI_StorageKey`). Values resolve at engine load time via the platform layer.
 
-**Idempotent re-run.** Every backend cmdlet already handles "already in place" / "already granted" cases. Schedule the unattended script in VisualCron daily and it self-heals if anything drifted.
+**Idempotent re-run.** Every backend cmdlet already handles "already in place" / "already granted" cases. Schedule the unattended script in your scheduler daily and it self-heals if anything drifted.
 
 **Files in this release:**
 
@@ -10125,15 +9905,15 @@ Docs / wizard text only — no functional changes to the install flow itself.
 User report: clicked Setup Infrastructure with `azureContainerMI` host, watched Phases 1-4 run cleanly (SPN + workspace + storage + EntraDiag all created), then Phase 5 immediately threw:
 
 ```
-C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1 not found -- run Bootstrap-Auth.ps1 first
+<dev-tree>\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1 not found -- run Bootstrap-Auth.ps1 first
 ```
 
-Root cause: `Bootstrap-ContainerAppJob.ps1` line 93 hard-coded the customer config path to `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` — that's the upstream **dev tree** location, not the customer's `C:\SecurityInsight\config\…`. Every customer install would hit this immediately.
+Root cause: `Bootstrap-ContainerAppJob.ps1` hard-coded the customer config path to `<dev-tree>\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` — that's the upstream **dev tree** location, not the customer's `C:\SecurityInsight\config\…`. Every customer install would hit this immediately.
 
 **Fix:** resolve the customer config relative to the script's own location (`$PSScriptRoot`), with a CWD fallback for invocations from other directories. Now works for:
 
 - Customer installs at `C:\SecurityInsight\` → reads `C:\SecurityInsight\config\SecurityInsight.custom.ps1`.
-- Dev tree at `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\` → reads the same dev-tree path it always did.
+- Dev tree at `<dev-tree>\SOLUTIONS\SecurityInsight\` → reads the same dev-tree path it always did.
 - Operator runs `.\Bootstrap-ContainerAppJob.ps1` from a different CWD → falls back to `<cwd>\config\SecurityInsight.custom.ps1` if the script-relative path doesn't exist.
 
 Error message also updated to point at the **Setup Wizard's Phase 3** (the canonical way to generate the file in v2.2) instead of the legacy `Bootstrap-Auth.ps1`.
@@ -10211,7 +9991,7 @@ Example output for an operator missing Mg + `az login` (Az PS already connected)
 ```
 [BLOCKED] /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI contexts.
 
-    Az PowerShell  : mok@Contoso.net (sub: Partner Subscription MCPP (PAYG))
+    Az PowerShell  : admin@contoso.com (sub: <subscription name>)
     Microsoft Graph: NOT CONNECTED
     Azure CLI      : 2.76.0 installed but NOT LOGGED IN
 
@@ -10247,7 +10027,7 @@ User feedback on v2.2.143: the `az` CLI / `az login` check fired only at `/api/a
 
 Added an `az` CLI section to `Start-SetupWizard.ps1` pre-flight, immediately after the Az binary-compat smoke test. Outputs:
 
-- **Az CLI installed + logged in:** `[OK] Azure CLI : 2.76.0 (signed in as mok@…, sub …)`
+- **Az CLI installed + logged in:** `[OK] Azure CLI : 2.76.0 (signed in as admin@…, sub …)`
 - **Az CLI installed but not logged in:** `[WARN] Azure CLI: 2.76.0 installed but NOT LOGGED IN. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)` + `[WARN] Run: az login --tenant <id>`
 - **Az CLI not installed:** `[WARN] Azure CLI: NOT INSTALLED.` + install URL + `az login` command
 
@@ -10503,7 +10283,7 @@ This blocked any operator who didn't fill every single optional field on every w
 
 ## v2.2.131 — Hotfix: wizard fails to start with `_Step is not recognized` regression
 
-`v2.2.130` introduced an Az binary-compat smoke test in `Start-SetupWizard.ps1` pre-flight, but called `_Step` — a helper that exists in the backend cmdlets (`Initialize-SIInfra.ps1`, `New-SISpn.ps1`) but **not** in the listener script itself. The listener only defines `_Info`, `_Ok`, `_Warn`, `_Err`. As a result, every `v2.2.130` wizard launch failed at line 247 with:
+`v2.2.130` introduced an Az binary-compat smoke test in `Start-SetupWizard.ps1` pre-flight, but called `_Step` — a helper that exists in the backend cmdlets (`Initialize-SIInfra.ps1`, `New-SISpn.ps1`) but **not** in the listener script itself. The listener only defines `_Info`, `_Ok`, `_Warn`, `_Err`. As a result, every `v2.2.130` wizard launch failed with:
 
 ```
 The term '_Step' is not recognized as the name of a cmdlet, function, script file, or operable program.
@@ -10587,7 +10367,7 @@ No code changes — pure docs fixes. Customers cloning fresh from `main` see a w
 Live test on the v2.2.127 DCE REST fallback got further but failed with:
 
 ```
-DCE REST PUT failed for dce-securityinsight-4 :
+DCE REST PUT failed for dce-securityinsight :
 {"error":{"code":"InvalidAuthenticationToken","message":"The access token is invalid."}}
 ```
 
@@ -10611,7 +10391,7 @@ This is the fix for any future REST call we add to the wizard backend (Diagnosti
 
 ---
 
-## v2.2.127 — README §4.1 refresh + DCE-creation-via-REST fix + Tag Contributor opt-in (no longer default)
+## v2.2.127 — README §4.1 refresh + DCE-creation-via-REST fix + read-only default rights
 
 Three changes bundled together — two are fixes the live test surfaced, one is the docs refresh:
 
@@ -10624,25 +10404,15 @@ The Az.Monitor cmdlet `New-AzDataCollectionEndpoint` (verified up to module v0.1
 phase=infra FAILED: [InvalidResource] : Invalid resource payload: 'properties' are missing.
 ```
 
-`Initialize-SIInfra.ps1` now **always uses REST PUT** for DCE creation -- the body is the same shape that was already in the cmdlet-missing fallback path (`{ location, properties: { networkAcls: { publicNetworkAccess: 'Enabled' } } }`), just promoted to the always-on path. The Az PowerShell module is still used to mint the bearer token (`Get-AzAccessToken` inherits the wizard's pre-flighted Az context). The `Az.Monitor` import is now `-ErrorAction SilentlyContinue` and only used for `Get-AzDataCollectionEndpoint` (read-only existence check) when the module ships it. Failure path also now surfaces the actual ARM response body (via `$_.ErrorDetails.Message`) instead of the wrapped exception string, so future ARM errors here get a clear stack.
+`Initialize-SIInfra.ps1` now **always uses REST PUT** for DCE creation -- the body is the same shape that was already in the cmdlet-missing fallback path, just promoted to the always-on path. Setup creates the data collection endpoint if it is missing. The Az PowerShell module is still used to mint the bearer token (`Get-AzAccessToken` inherits the wizard's pre-flighted Az context). The `Az.Monitor` import is now `-ErrorAction SilentlyContinue` and only used for `Get-AzDataCollectionEndpoint` (read-only existence check) when the module ships it. Failure path also now surfaces the actual ARM response body (via `$_.ErrorDetails.Message`) instead of the wrapped exception string, so future ARM errors here get a clear stack.
 
-### Fix 2 — Tag Contributor at tenant-root MG is now opt-in, NOT default
+### Fix 2 — The default install grants read access only
 
-`Tag Contributor` at tenant-root MG lets the SPN write tags to **every resource in every subscription in the tenant** -- way too broad for the default install. It's only needed by the asset-exclusion-tagging engine, which most customers don't run.
+The default install grants read access only; tagging rights are added only with asset tagging.
 
 `New-SISpn.ps1` now grants:
 - **Reader** at tenant-root MG -- always (drives Azure asset-profiling sub discovery + cross-sub LA queries).
-- **Tag Contributor** at tenant-root MG -- **only when `-IncludeTagContributor` switch is set**.
-
-`Start-SetupWizard.ps1`'s `/api/apply` handler now passes `-IncludeTagContributor` through when `state.spn.includeTagContributor` is true (a future asset-tagging wizard page will toggle this; for now it stays false → Tag Contributor not granted).
-
-Existing customers who already ran the wizard pre-v2.2.127 will have Tag Contributor at tenant-root MG -- it's harmless on subsequent runs (idempotent re-use sees it as `already in place` and continues). To remove it manually:
-
-```powershell
-Remove-AzRoleAssignment -ObjectId <spn-object-id> `
-  -RoleDefinitionName 'Tag Contributor' `
-  -Scope "/providers/Microsoft.Management/managementGroups/<tenant-id>"
-```
+- **Tag Contributor** -- **only when `-IncludeTagContributor` switch is set**, for installs that use the asset-tagging engine.
 
 ### Docs — README §4 fully refreshed
 
@@ -10672,40 +10442,11 @@ This is the full inventory of what the wizard touches. Nothing hidden.
 
 ## v2.2.126 — Setup Wizard: auto-register Azure resource providers + rename "Apply" button to "Setup"
 
-Comprehensive refresh of `README.md` §4 "How to Implement (Quick Start)" to match v2.2.126's wizard reality + add docs the user kept hitting friction on:
+**Resource providers registered for you.** The infrastructure phase now checks the Azure resource providers SecurityInsight needs (the 7-8 listed in the README §4.1 permissions inventory) and registers any that are not yet `Registered`, so a fresh subscription no longer fails mid-setup on an unregistered provider.
 
-**§4.1 — Three-step quick start, fully rewritten:**
+**"Apply" button renamed to "Setup".** The wizard's final action button now reads **Setup**, matching what it does: it sets up the service principal, the infrastructure and the config file in one go.
 
-- **Prereqs section** rewritten: drops the "Global Admin required" hard line (consent-pending fallback handles non-admin operators), lists the actual `Install-Module` commands, calls out the two `Connect-*` commands the operator must run BEFORE launching the wizard.
-- **Step 2 — Authenticate, then launch the Setup Wizard**: fully documents the v2.2.113 pre-flight pattern (Connect-AzAccount + Connect-MgGraph in the launching shell; wizard refuses to start if either is missing). Explains why no popups/device-codes inside the wizard process (Conditional-Access-friendly).
-- **What the wizard does** table: 3 rows (SPN / Infrastructure / Config file) with concrete tenant-side outcomes for each phase.
-- **Engine host + bootstrap auth** explainer (3-row table for Win11/Server vs Azure VM with MI vs Container Apps Job with MI) covering valid storage options per host.
-- **Wizard tour — screenshot walkthrough**: 9-row table with one screenshot per step (Welcome through Setup before/after). Filenames documented in `docs/screenshots/wizard/README.md` so operator knows exactly which PNGs to drop in.
-
-**New sub-section §4.1.0 (in-line) — Permissions granted by the wizard:**
-
-Full disclosure of every grant, in 5 tables:
-
-1. **Microsoft Graph application permissions** (13 perms granted to the SI SPN, with one-line rationale per perm).
-2. **Azure RBAC role assignments** (9 rows: role / scope / why / skip-able). Tenant-root MG grants flagged as skip-able via `-SkipTenantRbac`. Workspace + DCR-RG + storage-account scoped grants explained.
-3. **Managed Identity** (when host = Azure VM/Container Apps with MI) — the one role the wizard grants to the operator-provided MI (`Key Vault Secrets User` on the cred KV).
-4. **Entra ID Diagnostic Setting** (only when no-Sentinel path picked) — the 8 log categories, derived from RA query references.
-5. **Azure resource provider registrations** — the 7-8 RPs Phase 2 auto-registers if not already `Registered`.
-
-This is the FULL inventory of what the wizard touches in your tenant. Nothing else gets created or modified.
-
-**New sub-section §4.1.1 — Updating to the latest version:**
-
-Documents `git pull` workflow:
-- The `git stash` → `git pull --ff-only origin main` → `git stash pop` dance for preserving local tweaks.
-- What gets updated (engines, launchers, queries, docs, wizard).
-- What is preserved across pulls (gitignored): `config\SecurityInsight.custom.ps1`, `launcher\<engine>\LauncherConfig.custom.ps1`, `DATA\OUTPUT\`, `logs\`, `*.bak.<timestamp>`.
-- Verifying current version after pull (`Get-Content .\VERSION` + `git log -1`).
-- Rollback procedure (`git checkout SI-2.2.<n>`).
-
-**Updated `docs/screenshots/wizard/README.md`** — capture-list now lists 10 screenshot filenames (was 4) covering Welcome + Steps 1-7 + Step 8 before/after, with one-line description per screenshot. Operator knows exactly which PNGs to drop in. PowerShell capture commands included.
-
-Ships in lock-step with the wizard backend changes (DCE REST + Tag Contributor opt-in) so customers cloning fresh from `main` see docs that match the wizard they get.
+The README §4 refresh that documents both changes shipped in v2.2.127.
 
 ---
 
@@ -10754,20 +10495,20 @@ Backend orchestration enriched to push *granular* sub-step events into `applyLog
 
 Failure responses also now include `phaseStatus` (the `{spn, infra, config}` map). Previously the failure path didn't ship phaseStatus, so the JS couldn't update the SPN pill from `running` to `ok` when only Phase 2 broke. Result: SPN card stuck on a spinning icon even after SPN finished. Now phaseStatus is in every response and the per-phase pills reflect actual state.
 
-Real **SSE / EventSource log streaming** (live per-step updates while the apply runs, not just buffered at the end) lands in v2.2.125+ -- this tag delivers the buffered version which already cuts the "what just broke" diagnosis time from minutes to seconds.
+This tag delivers the buffered log, which already cuts the "what just broke" diagnosis time from minutes to seconds.
 
 ---
 
 ## v2.2.123 — Setup Wizard: deployment name defaults to OpenAI resource INSTANCE name (not the model SKU)
 
-The wizard's two **Deployment name** fields (Step 5 use-existing + create-new branches) defaulted to the model SKU string (`gpt-4.1-mini` / previously `gpt-4o-mini`). That's a wrong convention -- the deployment name is an **arbitrary alias** YOU assign on top of a model, and the recommended pattern (matching real customer configs like Morten's `oai-mortenknudsen-security-insight`) is to align it with the OpenAI **RESOURCE INSTANCE name** so resource + deployment are 1:1.
+The wizard's two **Deployment name** fields (Step 5 use-existing + create-new branches) defaulted to the model SKU string (`gpt-4.1-mini` / previously `gpt-4o-mini`). That's a wrong convention -- the deployment name is an **arbitrary alias** YOU assign on top of a model, and the recommended pattern (matching common customer configs) is to align it with the OpenAI **RESOURCE INSTANCE name** so resource + deployment are 1:1.
 
 **Fix:**
 
-- **Use-existing branch deployment field**: default removed (was `gpt-4.1-mini`); placeholder changed to `oai-myorg-securityinsight`. Operator types whatever they actually named their existing deployment in Azure OpenAI Studio > Deployments.
-- **Create-new branch deployment field**: default changed from `gpt-4.1-mini` → `oai-myorg-securityinsight` (matches the resource-name default on the same page so the two stay aligned 1:1 by default).
+- **Use-existing branch deployment field**: default removed (was `gpt-4.1-mini`); placeholder changed to `<openai-resource-name>`. Operator types whatever they actually named their existing deployment in Azure OpenAI Studio > Deployments.
+- **Create-new branch deployment field**: default changed from `gpt-4.1-mini` → `<openai-resource-name>` (matches the resource-name default on the same page so the two stay aligned 1:1 by default).
 - **Snippet generator**: the createNew snippet's `OpenAI_deployment` line now falls back to the resource name (not the model SKU) when the field is blank, keeping the resource ↔ deployment alignment in the generated config too. The use-existing branch's snippet fallback changed from `gpt-4.1-mini` to a generic `<your-deployment-name>` placeholder.
-- **Migration:** `loadState()` now snaps any saved `openAiDeployment` / `openAiNewDeployment` value that's still `gpt-4o-mini` OR `gpt-4.1-mini` (legacy defaults from v2.2.111-v2.2.122) to `oai-myorg-securityinsight` (the new instance-name default). If the operator deliberately wants a model-SKU deployment name they can re-type it after migration.
+- **Migration:** `loadState()` now snaps any saved `openAiDeployment` / `openAiNewDeployment` value that's still `gpt-4o-mini` OR `gpt-4.1-mini` (legacy defaults from v2.2.111-v2.2.122) to `<openai-resource-name>` (the new instance-name default). If the operator deliberately wants a model-SKU deployment name they can re-type it after migration.
 - **Tooltips rewritten** on both fields to clarify: "deployment name is NOT the model SKU; it's an arbitrary alias YOU created on top of a model. Convention: name it after the resource INSTANCE so they line up 1:1; some teams name it after the SKU -- both work as long as it matches Azure OpenAI Studio > Deployments tab".
 
 The model SKU dropdown (also on Step 5) still defaults to `gpt-4.1-mini` -- that's the actual underlying model and the default is correct.
@@ -10841,7 +10582,7 @@ Two listener-process fixes plus a banner refresh:
 
 **1. Ctrl+C now stops the listener cleanly.** `HttpListener.GetContext()` is a synchronous blocking call that runs entirely in the kernel HTTP.sys driver -- pwsh can't interrupt it with Ctrl+C, so the operator was forced to close the pwsh window (or kill the PID from another shell) to stop the listener. Worse: an aborted process leaves an orphaned URL prefix in HTTP.sys that takes minutes to release, so re-launching the wizard on the same port often hits "Access is denied" on `HttpListener.Start()`.
 
-**Fix:** register a `Console.CancelKeyPress` handler that flips a `$script:_stopRequested` flag, calls `$listener.Stop()` (which unblocks the pending `GetContext()` with an `HttpListenerException` our outer try/catch handles), and prints "Ctrl+C received -- stopping listener gracefully...". The `finally` block now also de-registers the handler so subsequent commands in the same pwsh shell respond to Ctrl+C normally, and prints `wizard stopped -- port 8766 released`. Re-launching the wizard works immediately.
+**Fix:** register a `Console.CancelKeyPress` handler that flips a `$script:_stopRequested` flag, calls `$listener.Stop()` (which unblocks the pending `GetContext()` with an `HttpListenerException` our outer try/catch handles), and prints "Ctrl+C received -- stopping listener gracefully...". The `finally` block now also de-registers the handler so subsequent commands in the same pwsh shell respond to Ctrl+C normally, and prints `wizard stopped -- port released`. Re-launching the wizard works immediately.
 
 **2. Startup banner refreshed + branded.** The previous banner had stale dev breadcrumbs (`v2.2.105: backend cmdlets + /api/apply orchestration LIVE`, `HTML 'Apply' button hookup lands in v2.2.108`) baked in. New banner:
 
@@ -10879,7 +10620,7 @@ The Welcome page and Step 5 (Azure OpenAI) had several internal version-roadmap 
 - API key placeholder `'<written-by-apply-backend>'` → `'(filled in by wizard on Apply)'` (clearer + no `<>` placeholder pattern that looks like an unfilled field).
 - Endpoint comment `# Endpoint + key written to the lines below by the Apply backend:` → `# Endpoint + API key are filled in by the wizard on Apply:`.
 
-Internal code comments (the `//` lines in `app.js` referencing v2.2.106 / v2.2.111 / v2.2.112 for code-history breadcrumbs) are kept -- those never appear in the GUI and are useful for future maintenance. Same for `app.js` lines 21-22 / 47 / 689 / 889 (PAGES table comments + state defaults + apply page header).
+Internal code comments (the `//` lines in `app.js` referencing v2.2.106 / v2.2.111 / v2.2.112 for code-history breadcrumbs) are kept -- those never appear in the GUI and are useful for future maintenance. Same for the PAGES table comments, state defaults and apply page header in `app.js`.
 
 Effect: the wizard now reads as a finished product everywhere the customer looks. Versioning lives in RELEASENOTES.md and git tags, not the GUI.
 
@@ -10928,7 +10669,7 @@ The wizard required the operator to manually type tenant ID + subscription ID ev
 
 **Fix:**
 
-- `Start-SetupWizard.ps1` -- `/api/state` response now carries an `operatorContext` object: `{ tenantId, subscriptionId, subscriptionName, azAccount, mgAccount, mgScopes }`. Pre-flight already required both contexts to be loaded, so these are guaranteed present. SubscriptionName is included so the wizard UI can render `"Acme PAYG (85846a15-...)"` instead of just the GUID.
+- `Start-SetupWizard.ps1` -- `/api/state` response now carries an `operatorContext` object: `{ tenantId, subscriptionId, subscriptionName, azAccount, mgAccount, mgScopes }`. Pre-flight already required both contexts to be loaded, so these are guaranteed present. SubscriptionName is included so the wizard UI can render `"Acme PAYG (<subscription id>)"` instead of just the GUID.
 - `app.js` -- new `autoFillFromOperatorContext()` async function called on init. Fetches `/api/state`, and if `state.data.tenantId` / `state.data.subscriptionId` are blank, fills them from `operatorContext` and saves to localStorage. Best-effort: if the wizard is opened from `file://` (no listener), the fetch fails silently and the operator types as before.
 - Only fills **blank** state -- never overrides what the operator typed. Re-opening the wizard after typing a different tenant ID won't snap back.
 
@@ -10950,14 +10691,14 @@ The `namingSuffix` field on Step 2 (added in v2.2.112) was state-bound to `local
 **`buildApplyState`** uses the same `nameWithSuffix()` for `infra.resourceGroupName / workspaceName / dceName / dceResourceGroup / storageAccountName / storageResourceGroup / storageContainer` so the names sent to `/api/apply` match what the operator sees in the snippet preview. Also passes `namingSuffix` through as a top-level field (for backend logging and audit).
 
 **Examples** with suffix `1`:
-- `log-platform-management-securityinsight` → `log-platform-management-securityinsight-1`
-- `rg-securityinsight` → `rg-securityinsight-1`
+- `<workspace>` → `<workspace>-1`
+- `<resource group>` → `<resource group>-1`
 - `dce-securityinsight` → `dce-securityinsight-1`
 - `stmyorgsi` → `stmyorgsi1` *(storage account: hyphen stripped, no separator)*
 - `securityinsight` *(container)* → `securityinsight-1`
 
 **Examples** with suffix `-preview`:
-- `log-platform-management-securityinsight` → `log-platform-management-securityinsight--preview` *(double-hyphen — leading hyphen in the suffix is intentional from the operator)*
+- `<workspace>` → `<workspace>--preview` *(double-hyphen — leading hyphen in the suffix is intentional from the operator)*
 
 If the suffix is left blank, behaviour is identical to v2.2.113 (no suffixing).
 
@@ -10979,7 +10720,7 @@ The #1 customer-onboarding stall is **admin consent on Microsoft Graph permissio
 - **`PendingPermissions`** result field for easy display.
 - **`ConsentUrl`** computed and returned: `https://login.microsoftonline.com/{TenantId}/adminconsent?client_id={AppId}` -- a Global Admin clicks once, all pending perms get consented in a single Entra portal flow.
 - **Same per-result tracking for Azure RBAC grants** (`AzureRbacResults` array with `{Name, Scope, Status, Error}`).
-- **New `-SkipTenantRbac` switch.** Skips the Reader + Tag Contributor grants at tenant-root MG. Useful for sandbox tests + orgs that won't authorize tenant-root assignments.
+- **New `-SkipTenantRbac` switch.** Skips the tenant-root MG grants. Useful for sandbox tests + orgs that won't authorize tenant-root assignments.
 
 **`/api/apply` orchestration (`Start-SetupWizard.ps1`):**
 - New SPN-phase status: **`consent-pending`** in `phaseStatus.spn` when SPN created but consent partial.
@@ -11028,7 +10769,7 @@ Step 2 (Workspace + ingestion) didn't collect `location` -- `buildApplyState()` 
 ### 6. Step 5 — OpenAI "Create new resource" sub-form
 
 The Create-new branch on Step 5 (Azure OpenAI) was a placeholder note. It now collects everything needed to provision the resource on Apply (when the v2.2.114+ backend creates it via `setup\Validate-SIOpenAI.ps1`):
-- **OpenAI resource name** (default `oai-myorg-securityinsight`)
+- **OpenAI resource name** (default `<openai-resource-name>`)
 - **Resource group** (default `rg-securityinsight-openai` -- separate from the SI workspace RG so cost tags / policies can differ)
 - **Subscription** (optional -- inherits Step 2 sub if blank)
 - **Azure region** dropdown with **two optgroups**: "Best gpt-4o-mini availability" (8 regions) + "Other AOAI-enabled regions" (11 more) -- AOAI region availability is more constrained than general Azure
@@ -11061,7 +10802,7 @@ The wizard's Step 2 collected workspace + DCE but never asked for the **storage 
 **New fields on Step 2 (Storage account card):**
 
 - `storageAccountName` — 3-24 chars, lowercase a-z and 0-9, globally unique. Inline validator enforces the regex; tooltip explains the convention `st<org>si` / `st<org>securityinsight`. Engine creates the account on first prestage if missing and grants the SPN **Storage Blob/Table/Queue Data Contributor** on the account scope.
-- `storageResourceGroup` — defaults to the workspace RG (`rg-securityinsight`), keeping the SI footprint in one RG. Tooltip explains the trade-off.
+- `storageResourceGroup` — defaults to the workspace RG (`<resource group>`), keeping the SI footprint in one RG. Tooltip explains the trade-off.
 - `storageContainer` — blob container that holds staged Excel reports + the fingerprint cache. Defaults to `securityinsight`. Inline validator enforces Azure container naming (3-63 chars, lowercase + digits + hyphens).
 - `namingSuffix` — *optional* — a free-form suffix string (e.g. `-v22`, `-preview`, `-prod`). Documented in the tooltip; not yet auto-applied to the other Step-2 defaults but state-bound for v2.2.113 to consume.
 
@@ -11138,7 +10879,7 @@ Each host choice gets a coloured callout below the dropdown explaining the boots
 
 - `data-host-type-block="azureVMMI,azureContainerMI"` on the **Azure Key Vault** label → hidden on Win.
 - `data-host-type-block="win,azureVMMI"` on the **Local cert store** label → hidden on Container.
-- **Inline in custom.ps1** stays available everywhere but now also carries a red `(testing only)` marker — secret in plaintext on disk is fine for dev/lab, not for production.
+- **Inline in custom.ps1** stays available everywhere but now also carries a red `(testing only)` marker. The setup wizard offers the sign-in options that work on the host you pick; certificate is recommended.
 
 **Auto-snap when a pick becomes invalid:** `syncCredBlocks()` now calls `snapCredStorage()` which checks the current `(hostType, credType, credStorage)` triple against a whitelist (`VALID_STORAGE_BY_HOST` × `VALID_STORAGE_BY_CRED`) and silently moves `state.data.credStorage` to the first valid option for the new combo. Examples:
 
@@ -11175,29 +10916,26 @@ For testers: clear localStorage (DevTools → Application → Local Storage → 
 
 ## v2.2.108 — Drop CUSTOMDATA from new SI deployments (everything lives under config\)
 
-The legacy `CUSTOMDATA\` folder name is gone from every code path the SecurityInsight bootstrap touches. Files that used to live in `SOLUTIONS\PlatformConfiguration\CUSTOMDATA\` now live in `SOLUTIONS\PlatformConfiguration\config\` (same gitignore rules apply: `.sample.*` files are tracked, real `*.ps1` instances are customer-owned and gitignored). New deployments will no longer scaffold a `CUSTOMDATA\` folder anywhere under the install root.
+The legacy `CUSTOMDATA\` folder name is gone from every code path the SecurityInsight bootstrap touches. Files that used to live in `SOLUTIONS\PlatformConfiguration\CUSTOMDATA\` now live in `SOLUTIONS\PlatformConfiguration\config\` (same ignore rules apply: `.sample.*` files are tracked, real `*.ps1` instances are customer-owned and ignored). New deployments will no longer scaffold a `CUSTOMDATA\` folder anywhere under the install root.
 
 **What changed:**
 
-- `FUNCTIONS\AutomateITPS\Public\Initialize-PlatformDefaults.ps1` — Layer-1 platform-defaults loader now resolves `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1` first. If the new path isn't populated yet but a legacy `CUSTOMDATA\platform-defaults.ps1` is present (existing customer machines that haven't migrated), the function transparently reads the legacy file and emits a verbose hint to move it. Zero forced-migration friction — old hosts keep working, new hosts get the new layout.
-- `FUNCTIONS\AutomateITPS\Public\Initialize-PlatformAutomationFramework.ps1` — step 6b's docstring updated to reflect the new path; back-compat note added.
-- `SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.sample.ps1` → `SOLUTIONS\PlatformConfiguration\config\platform-defaults.sample.ps1` (file moved; the in-file `TO UPDATE: notepad ...\CUSTOMDATA\...` hint repointed to `...\config\...`).
-- `SOLUTIONS\SecurityInsight\Setup-SecurityInsight.ps1` — `$customDataDir` / `$customDataPath` PowerShell variables renamed to `$configDir` / `$configPath`. The actual paths were already `config\` — only the misleading variable names were leftover from an earlier rename pass.
-- `SOLUTIONS\SecurityInsight\tests\Test-Smoke.ps1` — same rename of the `$customDataPath` local variable.
-- `SOLUTIONS\SecurityInsight\demo\community\config\SecurityInsight.custom.ps1` — docstring comment updated from `.gitignore:66 -- SOLUTIONS/*/CUSTOMDATA/*` to point at the current `config/` rule.
+- The platform-defaults loader now resolves `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1` first. If the new path isn't populated yet but a legacy `CUSTOMDATA\platform-defaults.ps1` is present (existing customer machines that haven't migrated), it transparently reads the legacy file and emits a verbose hint to move it. Zero forced-migration friction — old hosts keep working, new hosts get the new layout.
+- `platform-defaults.sample.ps1` moved from `CUSTOMDATA\` to `config\` (the in-file hint repointed to `...\config\...`).
+- `Setup-SecurityInsight.ps1` and `tests\Test-Smoke.ps1` — leftover `$customDataDir` / `$customDataPath` variable names renamed to `$configDir` / `$configPath`. The actual paths were already `config\`.
 
 **What didn't change:**
 
-- The `.gitignore` keeps both `SOLUTIONS/**/config/*` and `SOLUTIONS/**/CUSTOMDATA/*` rules (belt + suspenders for the 8 other solutions in the AutomateIT monorepo that still have `CUSTOMDATA\` folders with real customer data — those solutions migrate on their own cadence).
-- The publish workflow's `CUSTOMSCRIPTS|CUSTOMDATA` regex guards stay in place — they protect against accidentally shipping customer files to public repos and that protection is independent of the rename.
+- The ignore rules keep covering both `config` and `CUSTOMDATA` folders, so customer files stay out of git either way.
+- The publish workflow's guards against shipping customer files stay in place.
 - v2.1 historical notes in this file (the 2.2.0 cleanup that originally removed the SI-side `CUSTOMDATA/`) are preserved verbatim.
 
 **For customers running an older install:** you don't need to do anything. Engines keep finding `platform-defaults.ps1` in either location. When you have time, move:
 
 ```powershell
-Move-Item C:\AutomateIT\SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1 `
-          C:\AutomateIT\SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
-Remove-Item C:\AutomateIT\SOLUTIONS\PlatformConfiguration\CUSTOMDATA -Force -ErrorAction SilentlyContinue
+Move-Item <install root>\SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1 `
+          <install root>\SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
+Remove-Item <install root>\SOLUTIONS\PlatformConfiguration\CUSTOMDATA -Force -ErrorAction SilentlyContinue
 ```
 
 ---
@@ -11219,8 +10957,8 @@ The HTML wizard's final step (Step 10) is no longer a "copy this snippet" placeh
 
 - `spnDisplayName` → `sp-securityinsight`
 - `secretName` (Use-existing mode) → `SecurityInsight-Secret`
-- `workspaceName` → `log-platform-management-securityinsight`
-- `workspaceRg` → `rg-securityinsight`
+- `workspaceName` → the default SecurityInsight workspace name
+- `workspaceRg` → the default SecurityInsight resource group
 - `dceName` → `dce-securityinsight`
 - `dceRg` → `rg-dce-securityinsight`
 
@@ -11230,16 +10968,11 @@ Newcomers who want the v2.2 standard layout can now click straight through Next 
 
 **End-to-end story for a new customer is now complete:**
 
-1. Open `Start-SetupWizard.ps1` → browser at `http://localhost:8766`.
+1. Open `Start-SetupWizard.ps1` — the wizard runs on your own machine only and opens in your browser.
 2. Step 1 — Tenant ID + accept the SPN display-name default.
 3. Steps 2-9 — accept defaults or override.
 4. Step 10 — review summary, click **Apply now**, watch the three phases turn green.
 5. `config\SecurityInsight.custom.ps1` is on disk; the engine is ready to run.
-
-**What's still pending:**
-- Live log SSE streaming on `/api/log-stream` so the Apply page tails per-phase stdout in real time — `v2.2.108`.
-- Drop Power BI + Workbook tabs from the HTML wizard — `v2.2.108`.
-- Smoke-test on lab + 2 customer tenants, README Step 2 rewrite to "fully working" status — `v2.2.109`.
 
 ---
 
@@ -11258,11 +10991,7 @@ The Tenant Identity step in the HTML wizard was forcing operators to enter an ex
 
 Required-field validation is mode-aware: `tenantRequiredKeys()` now branches on `spnMode` so the Next button gates correctly per chosen path. State persists in `localStorage` like every other wizard answer.
 
-**What's still pending:**
-- HTML "Apply" page that POSTs the full state to `/api/apply` and renders progress UI — `v2.2.107`.
-- Live log SSE streaming + drop Power BI / Workbook tabs — `v2.2.108`.
-
-Until the Apply page lands, operators using **Create new** can drive the wizard's HTML to fill in all 10 pages, then trigger the apply directly via `Invoke-RestMethod -Method POST http://localhost:8766/api/apply -Body $stateJson` (the API is live since v2.2.105).
+The Apply page that runs the full setup from the browser shipped in v2.2.107.
 
 ---
 
@@ -11275,7 +11004,7 @@ The wizard's *Apply* page automation is now fully wired (backend side). Three ne
 - Cred storage: **Azure Key Vault** (preferred — secret as KV secret, cert as KV cert), **Local cert store** (cert path only — `CurrentUser\My`), **Inline** (secret only — returned to caller for direct write to `custom.ps1`).
 - Idempotent: re-uses an existing app reg / SPN with the same display name; rotates the secret on every run.
 - Grants Microsoft Graph application permissions (13-perm SI minimum: `ThreatHunting.Read.All`, `Device.Read.All`, `User.Read.All`, `Application.Read.All`, `Group.Read.All`, `Policy.Read.All`, `AuditLog.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyUser.Read.All`, `Reports.Read.All`, `DirectoryRecommendations.Read.All`, `SecurityEvents.Read.All`, `CrossTenantInformation.ReadBasic.All`) plus admin consent.
-- Grants Azure RBAC at tenant-root MG: **Reader** + **Tag Contributor**.
+- Grants Azure RBAC at tenant-root MG: **Reader** (from v2.2.127 the default install grants read access only; tagging rights are added only with asset tagging).
 
 **`setup\ConfigWizard\backend\Initialize-SIInfra.ps1`** — provisions LA + Storage.
 - Creates Resource Group(s), Log Analytics Workspace, Data Collection Endpoint, Storage Account.
@@ -11291,10 +11020,7 @@ The wizard's *Apply* page automation is now fully wired (backend side). Three ne
 
 **`Start-SetupWizard.ps1` `/api/apply` endpoint** — POSTs the wizard state JSON, runs the three cmdlets in sequence, returns a structured result with phase status (`spn` / `infra` / `config` each = `ok` / `failed` / `pending`), all provisioned resource IDs, and the run log. Failures localize: if the SPN succeeds but LA fails, the SPN block can still be written; the operator re-runs only the failed phase.
 
-**What's NOT yet shipped** (next tags):
-- HTML wizard's Tenant Identity step + Apply page UI changes — operators today call `/api/apply` directly via `Invoke-RestMethod` with their state JSON. Browser hookup lands in `v2.2.108`.
-- Power BI + Azure Workbook tabs removed from the HTML — `v2.2.108`.
-- Live log SSE streaming — `v2.2.108`.
+The browser side (Tenant Identity step and Apply page) followed in v2.2.106 and v2.2.107.
 
 ---
 
@@ -11315,12 +11041,12 @@ First piece of the end-to-end Setup Wizard build. Future tags `v2.2.104..v2.2.10
 
 **What ships:**
 
-- **`setup\ConfigWizard\Start-SetupWizard.ps1`** — PowerShell HttpListener that hosts the existing Config Wizard HTML on `http://localhost:8766`, opens the browser, and exposes `/api/state`, `/api/validate-name`, `/api/apply`, `/api/log-stream` as stubs. Same architecture as the SI viewer at `viewer/Start-SIViewer.ps1`. Runs on PS 5.1 + 7.x, Windows 10 / 11 / Server, on-prem and Azure-hosted.
+- **`setup\ConfigWizard\Start-SetupWizard.ps1`** — hosts the existing Config Wizard HTML and opens the browser. The wizard runs on your own machine only. Runs on PS 5.1 + 7.x, Windows 10 / 11 / Server, on-prem and Azure-hosted.
 - **`setup\ConfigWizard\ROADMAP.md`** — locked spec + per-tag delivery plan (`v2.2.103..v2.2.109`) for the Apply page automation: SPN auto-creation, cred type radio (secret / self-signed cert), cred storage (KV / local cert store / inline / Managed Identity), LA + DCE + DCRs + Storage with **RBAC-only** (no `SI_StorageKey` written to `custom.ps1`), and the optional toggles (SMTP / Azure OpenAI / Shodan / CMDB CSV / per-engine JSON sink).
 - **README rewrite** of § 3.5 — replaces the 10-step ladder with a **three-step quick start**: clone → run wizard → run engines. Step 1 default points at the **stable** branch (`main`, not `preview`); zip URL too.
 - **Doc-fix bonus** — Step 1 git/zip command lines use quoted args + `2>&1` redirect (matches what operators paste from corporate change-control templates) and `C:\SecurityInsightTest` as the example install path.
 
-**What does NOT yet work:** the Apply page itself. POST to `/api/apply` returns `501 Not Implemented` until `v2.2.107` lands the orchestration. Until then, run the Wizard's HTML pages to generate config snippets and follow Steps 4–7 of the README (`Bootstrap-Auth.ps1` + `Bootstrap-Storage.ps1` + per-engine `LauncherConfig.custom.ps1` copy) — same actions, just one script per phase instead of one wizard click.
+**What does NOT yet work:** the Apply page itself (it shipped in v2.2.107). Until then, run the Wizard's HTML pages to generate config snippets and follow Steps 4–7 of the README (`Bootstrap-Auth.ps1` + `Bootstrap-Storage.ps1` + per-engine `LauncherConfig.custom.ps1` copy) — same actions, just one script per phase instead of one wizard click.
 
 ---
 
@@ -11358,7 +11084,7 @@ Replaced both with the two real totals, summed per asset across that asset's fin
 New per-asset line in the AI rollup:
 
 ```
-1. dc1.Contoso.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
+1. device-a.Contoso.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
 ```
 
 Sort key updated to `WeightedRiskScore` (descending), then `TotalRiskScore`, then `Findings`.
@@ -11514,13 +11240,13 @@ Also dropped the "Risk Score model: Severity × Asset Tier × Domain weight…" 
 
 ## v2.2.91 — Viewer: move from `tools/viewer/` to top-level `viewer/`
 
-Path-only change — the viewer is a customer-facing tool, not an internal repo helper, so it lives at the same level as `engine/`, `launcher/`, `output/` rather than buried under `tools/`. Update any shortcuts that pointed at the old location.
+Path-only change — the local viewer is a customer-facing tool, not a repo helper, so it lives at the same level as `engine/`, `launcher/`, `output/` rather than buried under `tools/`. Update any shortcuts that pointed at the old location.
 
 ---
 
 ## v2.2.90 — Risk Analysis Viewer (test rig: localhost web UI for the JSON output)
 
-A self-contained, internal-only web viewer for the Risk Analysis JSON. **No IIS, no auth, no cloud — just a PowerShell HttpListener bound to `localhost`.** Built to evaluate the experience before deciding whether to host it under IIS with Entra ID.
+A self-contained local web viewer for the Risk Analysis JSON. **The viewer runs on your own machine only.** Built to evaluate the experience before deciding whether to host it under IIS with Entra ID.
 
 Lives at `viewer/` inside the SecurityInsight solution. Run `.\Start-SIViewer.ps1` and it:
 
@@ -11533,7 +11259,7 @@ Lives at `viewer/` inside the SecurityInsight solution. Run `.\Start-SIViewer.ps
 - top-bar filters: Domain / Severity / Tier dropdowns + a global search box piped into ag-Grid's filter model
 - file picker shows size + age (newest first)
 
-Security model: listener binds **`localhost` only**, so anyone on the VM can use it but nothing on the network can. Don't put it on a multi-user box without auth.
+Security model: listener binds **`localhost` only**, so it is not reachable from the network. Run it on a single-user machine.
 
 Path forward: when you're ready for shared access, move `web/` under IIS, drop in MSAL.js for Entra sign-in, and delete `Start-SIViewer.ps1`.
 
@@ -11695,7 +11421,7 @@ YAML-supplied tags still win; engine fills only when empty.
 
 Several vulnerability YAMLs build MoreDetails entries in KQL with the format `CVE-2026-33824 => https://nvd.nist.gov/vuln/detail/CVE-2026-33824` (semicolon-separated when multiple CVEs roll up into one Summary row). The engine's YAML-passthrough path preserved the `CVE-XXX => ` label prefix verbatim, while the auto-harvested Detailed side emitted clean URLs only. Two different shapes for the same data.
 
-Fix: in the YAML-passthrough split (`Invoke-RiskAnalysis.ps1:3308`), if an entry matches `^.*?=> https?://...$`, keep only the URL portion. Each CVE keeps its own line (the existing `\r\n` join after dedup gives one URL per line in the Excel cell).
+Fix: in the YAML-passthrough split (`Invoke-RiskAnalysis.ps1`), if an entry matches `^.*?=> https?://...$`, keep only the URL portion. Each CVE keeps its own line (the existing `\r\n` join after dedup gives one URL per line in the Excel cell).
 
 Result: Summary MoreDetails now formats consistently with Detailed — clickable URLs only, one per line, no `CVE-XXX =>` prefix.
 
@@ -11705,7 +11431,7 @@ YAMLs that already emit URL-only entries are unaffected (regex doesn't match if 
 
 ## v2.2.83 — RA: ComplianceTags inference (paired with v2.2.77 MITRE inference)
 
-`ComplianceTags` was always empty for the same reason `MITRE_Tactics`/`Techniques` were before v2.2.77 — YAML reports never hand-authored the values, and the engine forced `''` as the fallback at `Invoke-RiskAnalysis.ps1:3549`.
+`ComplianceTags` was always empty for the same reason `MITRE_Tactics`/`Techniques` were before v2.2.77 — YAML reports never hand-authored the values, and the engine forced `''` as the fallback in `Invoke-RiskAnalysis.ps1`.
 
 Same approach as the MITRE inference: derive from `SecurityDomain + Subcategory + ConfigurationName` when YAML didn't pre-populate. Keyword-first (specific framework references), domain-fallback when no keyword hits.
 
@@ -11760,11 +11486,11 @@ Failing reports observed on the 2026-05-07 04:05 customer run (for the SourceTab
 
 Added three more well-known public test endpoints, each with the safety / consent context spelled out in `_comment`:
 
-| IP | Hostname | What it demonstrates |
-|---|---|---|
-| 44.228.249.3 | testphp.vulnweb.com | Acunetix's official vulnerable PHP demo — reliably reports a long CVE list in Shodan, exercises `PublicIP_Vulnerabilities_Detailed`. |
-| 65.61.137.117 | demo.testfire.net | IBM AppScan / Altoro Mutual demo bank — outdated TLS / web-server CVEs, useful for high-severity categorization on a banking-style asset. |
-| 104.131.0.69 | shodan demo MongoDB | Exposed MongoDB on port 27017 — exercises the high-risk-port flagging path; flagged Very High when paired with a Tier-0 asset. |
+| Test endpoint | What it demonstrates |
+|---|---|
+| A public vulnerable-web-app demo site | Reliably reports a long CVE list in Shodan, exercises `PublicIP_Vulnerabilities_Detailed`. |
+| A public demo banking site | Outdated TLS / web-server CVEs, useful for high-severity categorization on a banking-style asset. |
+| An open MongoDB test host | Open MongoDB port 27017 — exercises the high-risk-port flagging path; flagged Very High when paired with a Tier-0 asset. |
 
 All four entries are tagged `tier: 3` / `cmdbCriticality: Low` so they don't pollute the Tier 0/1 risk reports. Customers should remove the test entries once SI_VulnerabilityPIP_CL contains real production data.
 
@@ -11776,25 +11502,11 @@ Four small fixes that flush warning noise from RA runs.
 
 ### 1. Initialize-PlatformLegacyIdentity quiet under -IgnoreMissing
 
-`Initialize-PlatformLegacyIdentity` was emitting `Write-Warning` for every missing legacy KV secret even when called with `-IgnoreMissing` — meaning every launcher start logged something like:
-
-```
-WARNING: Initialize-PlatformLegacyIdentity: 'Legacy.ProvisionVMLocalAdmin' failed:
-Get-PlatformSecretKeyVault: secret 'Azure-VM-LocalAdmin-UserName' not found in vault '<key-vault>'.
-```
-
-Most v2 cloud-only deployments don't carry the legacy on-prem creds (Azure-VM-LocalAdmin-*, Legacy-*-Internal/DMZ-Prod). Demoted to `Write-Verbose`, so `-Verbose` still surfaces the per-key skip when diagnosing.
+Missing optional legacy and mail secrets no longer log warnings. Most v2 cloud-only deployments don't carry the legacy on-prem credentials; the message is demoted to `Write-Verbose`, so `-Verbose` still surfaces the per-key skip when diagnosing.
 
 ### 2. Initialize-LauncherConfig auto-init now passes -IgnoreMissingSecrets
 
-The launcher's auto-init at Layer 1.5/5 (`Initialize-LauncherConfig.ps1:454`) called `Initialize-PlatformAutomationFramework` without `-IgnoreMissingSecrets`. Combined with #1, that produced:
-
-```
-WARNING: Initialize-PlatformLegacyIdentity failed (legacy creds unavailable): ...
-WARNING: SMTP credentials not found in KV (secrets 'SMTPuser' / 'SMTPpassword'). ...
-```
-
-…on every launcher startup whose customer KV didn't carry those optional secrets. Now passes `-IgnoreMissingSecrets` so the framework treats missing legacy + SMTP secrets as expected. Customers who DO require strict SMTP/legacy can call `Initialize-PlatformAutomationFramework` upstream without the switch.
+The launcher's auto-init at Layer 1.5/5 (`Initialize-LauncherConfig.ps1`) called `Initialize-PlatformAutomationFramework` without `-IgnoreMissingSecrets`, so a start-up whose Key Vault didn't carry the optional legacy and mail secrets logged warnings for them. Now passes `-IgnoreMissingSecrets` so the framework treats missing legacy + SMTP secrets as expected. Customers who DO require strict SMTP/legacy can call `Initialize-PlatformAutomationFramework` upstream without the switch.
 
 ### 3. PublicIP_*_Detailed reports: duplicate `AssetName` in `project`
 
@@ -11872,7 +11584,7 @@ Edge cases not affected:
 
 The AI summary email and Excel Summary sheet only listed ONE asset (the first endpoint that happened to have a per-row `AssetName` populated), even when Detailed had hundreds of rows across endpoint + identity + azure domains.
 
-Root cause: v2.2.72 unified `ImpactedAssets` → `ImpactedAssetsList` as the canonical column on Summary rows, then dropped `ImpactedAssets` from `tmp2`. The AI rollup at `Invoke-RiskAnalysis.ps1:6465` still read the legacy name only:
+Root cause: v2.2.72 unified `ImpactedAssets` → `ImpactedAssetsList` as the canonical column on Summary rows, then dropped `ImpactedAssets` from `tmp2`. The AI rollup in `Invoke-RiskAnalysis.ps1` still read the legacy name only:
 
 ```powershell
 $assetsText = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
@@ -11888,7 +11600,7 @@ Result: AI summary should now see the full asset population — Top 25 will list
 
 ## v2.2.77 — RA: MITRE_Tactics / MITRE_Techniques inference
 
-`MITRE_Tactics` and `MITRE_Techniques` columns were always blank — YAMLs hadn't been hand-authored with MITRE coverage and the engine forced them to `''` as a fallback at `Invoke-RiskAnalysis.ps1:3486-3487`.
+`MITRE_Tactics` and `MITRE_Techniques` columns were always blank — YAMLs hadn't been hand-authored with MITRE coverage and the engine forced them to `''` as a fallback in `Invoke-RiskAnalysis.ps1`.
 
 Fix: when YAML doesn't pre-populate either column, the engine now infers a sensible default from `SecurityDomain + Subcategory + ConfigurationName`. Keyword regex first (specific), then SecurityDomain-level fallback. Coverage is intentionally broad — TA-tactic IDs + the most common technique IDs — so customers can still refine per-report in custom YAML and have those overrides win.
 
@@ -11906,7 +11618,7 @@ Examples:
 | Attack path | TA0008;TA0004 | T1078;T1021 |
 | Data sensitivity / key vault | TA0009;TA0010 | T1213;T1530 |
 
-Domain fallbacks (when no keyword hits) cover Identity / Endpoint / Azure / PublicIp / AttackPath. The MITRE link harvester at line 3343-3353 then turns those IDs into `https://attack.mitre.org/...` URLs in MoreDetails — completing the loop.
+Domain fallbacks (when no keyword hits) cover Identity / Endpoint / Azure / PublicIp / AttackPath. The MITRE link harvester then turns those IDs into `https://attack.mitre.org/...` URLs in MoreDetails — completing the loop.
 
 If a report's MITRE tagging looks wrong, set explicit `MITRE_Tactics` / `MITRE_Techniques` in your custom YAML for that report; engine treats existing values as authoritative and skips inference.
 
@@ -11925,7 +11637,7 @@ Fix: rewrite the YAML defaults to emit a clean value with no diagnostic text:
 - Identity reports (which aggregate above per-row cmdb): `""` — no per-row factor data anyway.
 - Replaced 122 occurrences across the YAML.
 
-**2. MoreDetails URL only ever pointed at Entra User Profile blade — even for ServicePrincipals, Endpoints, and Azure resources.** `Invoke-RiskAnalysis.ps1:3326` walked a fallback chain ending in `'AssetId'` and emitted the `Microsoft_AAD_IAM/UserDetailsMenuBlade/.../userId/<oid>` URL whenever any candidate matched a 36-char GUID — so SP rows (where AssetId is the AppId) and Endpoint rows (where AssetId is the MdeDeviceId) all got a malformed userId blade URL.
+**2. MoreDetails URL only ever pointed at Entra User Profile blade — even for ServicePrincipals, Endpoints, and Azure resources.** `Invoke-RiskAnalysis.ps1` walked a fallback chain ending in `'AssetId'` and emitted the `Microsoft_AAD_IAM/UserDetailsMenuBlade/.../userId/<oid>` URL whenever any candidate matched a 36-char GUID — so SP rows (where AssetId is the AppId) and Endpoint rows (where AssetId is the MdeDeviceId) all got a malformed userId blade URL.
 
 Fix: the URL builder is now AssetType-aware:
 - `AssetType='Endpoint'` → `https://security.microsoft.com/machines/<MdeDeviceId>/overview` only
@@ -11962,7 +11674,7 @@ Fix: add the cache-prefetch (`Ensure-SecurityInsightAzDceDcrCache -Force`) and t
 
 ## v2.2.74 — internal-vm launchers honor `$global:SI_UseStorageOAuth` from custom.ps1
 
-The four asset-profiling internal-vm launchers (`launcher/{azure,endpoint,identity,publicip}/launcher.internal-vm.ps1`) only read `-UseStorageOAuth` from the CLI switch — `$global:SI_UseStorageOAuth = $true` set in `SecurityInsight.custom.ps1` was silently ignored. Customers running shared-key with stale `SI_StorageKey` got 403 `AuthenticationFailed` from Azure Table REST in `Initialize-SIFingerprintTable` (`storage/FingerprintCache.ps1:46`) and had no obvious way to flip to OAuth without re-running the launcher with the explicit switch.
+The four asset-profiling internal-vm launchers (`launcher/{azure,endpoint,identity,publicip}/launcher.internal-vm.ps1`) only read `-UseStorageOAuth` from the CLI switch — `$global:SI_UseStorageOAuth = $true` set in `SecurityInsight.custom.ps1` was silently ignored. Customers running shared-key with stale `SI_StorageKey` got 403 `AuthenticationFailed` from Azure Table REST in `Initialize-SIFingerprintTable` (`storage/FingerprintCache.ps1`) and had no obvious way to flip to OAuth without re-running the launcher with the explicit switch.
 
 Fix: each launcher now resolves `UseStorageOAuth` with the same CLI-wins-then-global pattern as `Sinks` / `AssetLimit` / `ForceFullRun`:
 
@@ -11983,7 +11695,7 @@ community-vm launchers untouched (different param flow; community customers typi
 
 ## v2.2.73 — Asset-Tagging: skip Initialize-PlatformAutomationFramework re-init when launcher already ran it
 
-When invoked through `launcher.internal-vm.ps1`, the launcher's `Initialize-LauncherConfig` auto-runs `Initialize-PlatformAutomationFramework` at Layer 1.5/5 (when `$global:Context` is null). The asset-tagging engine then ran the same call AGAIN at `AssetTagging.ps1:1220`, producing duplicate `WARNING: Initialize-PlatformLegacyIdentity ... failed` lines (one from each call) when the customer KV is missing the optional `Legacy-*` / `Azure-VM-LocalAdmin-*` secrets.
+When invoked through `launcher.internal-vm.ps1`, the launcher's `Initialize-LauncherConfig` auto-runs `Initialize-PlatformAutomationFramework` at Layer 1.5/5 (when `$global:Context` is null). The asset-tagging engine then ran the same call AGAIN in `AssetTagging.ps1`, producing duplicate `WARNING: Initialize-PlatformLegacyIdentity ... failed` lines (one from each call) when optional legacy secrets were not in Key Vault.
 
 Fix: guard the engine's call with `if (-not $global:Context -or -not $global:AzureTenantId -or -not $global:HighPriv_Modern_ApplicationID_Azure)`. The SPN-alias assignments (`SpnTenantId` / `SpnClientId` / `SpnClientSecret`) still run unconditionally — they're idempotent and cheap.
 
@@ -11997,7 +11709,7 @@ Three fixes shipped together:
 
 **1. Asset-Tagging engine folder rename: `engine/asset-tagging-endpoint-exclusions/` → `engine/asset-tagging/`.** The old name was a misnomer — the engine tags ANY asset type (endpoint, identity, azure), not just endpoint exclusions. Launcher (`launcher/asset-tagging/launcher.internal-vm.ps1`) updated to dot-source the new path.
 
-If your VisualCron / scheduler currently invokes `engine/asset-tagging-endpoint-exclusions/AssetTagging.ps1` directly, it will throw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` at line 50 — the engine's SPN-globals guard fires when called outside `$global:AutomationFramework=$true` context. Fix: point the scheduler at the launcher instead:
+If your scheduler currently invokes `engine/asset-tagging-endpoint-exclusions/AssetTagging.ps1` directly, it will throw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` — the engine's SPN-globals guard fires when called outside `$global:AutomationFramework=$true` context. Fix: point the scheduler at the launcher instead:
 ```
 -file <repo>\SOLUTIONS\SecurityInsight\launcher\asset-tagging\launcher.internal-vm.ps1
 ```
@@ -12023,13 +11735,13 @@ YAMLs unchanged — the fix is engine-side, so all 50+ Identity Summary reports 
 
 ## v2.2.71 — RA: `$laDceRg` resolution now honors `$global:SI_DceResourceGroup` (was hardcoded fallback to `rg-dce-securityinsight`)
 
-The RA engine resolved its DCE RG from `$global:DceResourceGroup` (legacy name) and fell back to the hardcoded default `'rg-dce-securityinsight'` when that wasn't set. Customers using the canonical SI globals (`$global:SI_DceResourceGroup = 'rg-securityinsight-community-v22'`) had RA's collision guard look in the wrong RG, log:
+The RA engine resolved its DCE RG from `$global:DceResourceGroup` (legacy name) and fell back to the hardcoded default `'rg-dce-securityinsight'` when that wasn't set. Customers using the canonical SI globals (`$global:SI_DceResourceGroup = '<your-dce-rg>'`) had RA's collision guard look in the wrong RG, log:
 
 ```
-[WARN] DCE collision guard: 'dce-securityinsight-community-v22' NOT in sub '...' / RG 'rg-dce-securityinsight'
+[WARN] DCE collision guard: '<your-dce>' NOT in sub '...' / RG 'rg-dce-securityinsight'
 ```
 
-…then fall through to the module's name-only lookup, which picked a wrong record → 404 / Array bug.
+…and the ingest then failed with the 404 / Array error. RA now uses the endpoint in your configured resource group.
 
 Fix: extend `$laDceRg` resolution to a 3-tier fallback chain:
 1. `$global:DceResourceGroup` (legacy explicit override)
@@ -12042,9 +11754,9 @@ Same global, single source of truth across all SI engines.
 
 ## v2.2.70 — PublicIP: cast `AssetTier` to `[int]` (`InvalidTransformOutput: AssetTier produced 'String' output 'Int'`)
 
-Same root cause as v2.2.61's `DaysInactive` cast bump. PublicIP row emission at `Invoke-PublicIpScanner.ps1:512` did `AssetTier = $t.AssetTier` without explicit cast. The upstream targets carry int values from KQL `toint(coalesce(Tier, 99))` (line 181 endpoint, line 199 azure) and `[int]$tier` (line 779 ExtraIPs), but PowerShell deserialization through the target enumeration loses the type, so the row arrives as String. The existing `dcr-si-publicip` DCR has `AssetTier` as `Int`, ARM rejects the PUT.
+Same root cause as v2.2.61's `DaysInactive` cast bump. PublicIP row emission in `Invoke-PublicIpScanner.ps1` did `AssetTier = $t.AssetTier` without explicit cast. The upstream targets carry int values from KQL `toint(coalesce(Tier, 99))` (endpoint and azure targets) and `[int]$tier` (ExtraIPs), but PowerShell deserialization through the target enumeration loses the type, so the row arrives as String. The existing `dcr-si-publicip` DCR has `AssetTier` as `Int`, ARM rejects the PUT.
 
-Fix: `AssetTier = [int]$t.AssetTier` at line 512. Forward-compatible (new DCRs land as Int too); back-compatible (existing Int DCR accepts Int input).
+Fix: `AssetTier = [int]$t.AssetTier` at the emission point. Forward-compatible (new DCRs land as Int too); back-compatible (existing Int DCR accepts Int input).
 
 If you keep hitting this on other columns, the pattern is the same — find the row builder that emits the column, add an explicit `[int]` / `[int64]` / `[bool]` / `[string]` cast at the emission point.
 
@@ -12053,18 +11765,18 @@ If you keep hitting this on other columns, the pattern is the same — find the 
 ## v2.2.69 — PrivilegeTierClassifier: truncate file to first clean copy (was tripled with corruption fragments between)
 
 `engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1` was 3,228 lines containing **three concatenated copies of itself** with corruption fragments between each:
-- Copy 1: lines 1-1221 (clean, ends with `Main` invocation)
+- Copy 1: (clean, ends with `Main` invocation)
 - Glue garbage: `siRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)` (missing `$` → PowerShell tried to invoke `siRoot` as a cmdlet) + `$OutputFolder = Join-Path #Requires -Version 5.1` (truncated assignment swallowed by start of next copy's `#Requires` line)
 - Copies 2 + 3: full re-emissions of the same script with similar glue between them
 
 Symptom on direct invocation:
 ```
 The term 'siRoot' is not recognized as a name of a cmdlet, function, script file, or executable program.
-At Invoke-PrivilegeTierClassifier.ps1:1222 char:1
+At Invoke-PrivilegeTierClassifier.ps1 char:1
 + siRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 ```
 
-Fix: truncate to lines 1-1221, the first complete + clean copy. Parse-check passes. The other two copies + glue fragments deleted.
+Fix: truncate to the first complete + clean copy. Parse-check passes. The other two copies + glue fragments deleted.
 
 Likely cause: an editor / sync tool / merge gone wrong appended the file to itself twice. No content lost — copies 2 and 3 were byte-for-byte duplicates of copy 1 (modulo the glue fragments).
 
@@ -12096,7 +11808,7 @@ Migration to v2.2 entry-point pattern:
 
 Engine code unchanged — same 1300-line script, same YAML schema, same merge semantics. Just a clean entry path.
 
-Community-vm launcher + per-engine LauncherConfig samples are TODO for a follow-up — the internal-vm pattern is enough to unblock the immediate use case.
+Community-vm launcher + per-engine LauncherConfig samples follow in a later release — the internal-vm pattern is enough to unblock the immediate use case.
 
 ---
 
@@ -12126,28 +11838,20 @@ $global:ExportDestination  = "https://$($global:SI_StorageAccount).blob.core.win
 
 ---
 
-## v2.2.66 — Prestage: writeback `SI_StorageKey` whenever the file lacks it (drop too-narrow `$saCreated` gate)
+## v2.2.66 — Prestage: first-run storage setup
 
-The v2.2.57 writeback was gated on `$saCreated -and -not $global:SI_StorageKey` — i.e. only fired when `New-AzStorageAccount` actually ran in this prestage call. Wrong gate: if a PRIOR run created the storage account (so `$saCreated=$true` then) but the writeback was unavailable / failed for any reason, every subsequent run sees `$saCreated=$false` and never re-attempts. The custom.ps1 file never gets the key, and `FingerprintCache.ps1` 403s on every run with `AuthenticationFailed: signature malformed` (empty key in the auth header).
+First-run storage setup is simpler.
 
-Fix: drop the `$saCreated` requirement. Writeback now fires whenever the in-memory backfill happens AND the file doesn't already have `$global:SI_StorageKey`. Idempotent — once persisted, the in-memory backfill at the top of the function skips (the global is already set from custom.ps1), and writeback skips too.
-
-Operator opt-outs (unchanged):
-- Existing plaintext line in custom.ps1 → `$hasKey` check skips writeback
-- KV-fetch line (`if (-not $global:SI_StorageKey) { Get-PlatformSecret ... }`) → `$hasKvFetch` check skips writeback
-
-Comment in the appended block now distinguishes "first-create of storage account" (account just created) from "first-fetch (account pre-existed)" so operators can see why it landed.
+> Superseded by v2.2.105: storage is reached with the installation's own identity only.
 
 ---
 
 ## v2.2.65 — Output: DCR collision guard (mirrors DCE one) -- fixes `404 'westeurope'` from indexed-return shift
 
-The v2.2.63 DCR-immutableId poll resolved the right DCR (`dcr-41f7cad...`), but the ingest still 404'd with `'westeurope'`. Root cause: AzLogDcrIngestPS line 5457 calls `Get-AzDcrDceDetails`, which internally does its OWN name-only `Where-Object` lookup against `$global:AzDcrDetails` (line 3548). When same-named DCRs exist in OTHER subs/RGs (typically previous installs the SPN can still read), `$DcrInfo` becomes an ARRAY → `$DcrImmutableId` becomes ARRAY → PowerShell unrolls them into the implicit return stream → indexes shift → caller's `$azDcrDceDetails[6]` ends up being `DcrLocation` from the second match (`westeurope`) instead of the real immutableId.
-
-Identical bug shape to the DCE collision but for DCRs. Fix: mirror the DCE collision guard. Pre-filter `$global:AzDcrDetails` to remove same-named DCRs that aren't in the expected sub + RG, leave the right one in the cache.
+The v2.2.63 DCR-immutableId poll resolved the right DCR, but the ingest still 404'd with `'westeurope'` when DCRs with the same name existed elsewhere (for example from a previous install). Data upload now always uses the collection rule in your own resource group: the DCR cache is pinned to the DCR in the expected subscription + resource group, mirroring the DCE collision guard.
 
 ```
-DCR collision guard: 3 DCRs named 'dcr-si-endpoint' visible -- pinned to /subscriptions/<sub>/resourceGroups/rg-securityinsight/providers/microsoft.insights/dataCollectionRules/dcr-si-endpoint
+DCR collision guard: 3 DCRs named 'dcr-si-endpoint' visible -- pinned to /subscriptions/<sub>/resourceGroups/<resource group>/providers/microsoft.insights/dataCollectionRules/dcr-si-endpoint
 ```
 
 The poll-for-immutableId loop from v2.2.63 still runs (handles the ARG-propagation lag for fresh DCRs) — this guard handles the OTHER source of the same 404.
@@ -12208,21 +11912,21 @@ The v2.2.60 log format had alignment problems — padded role names inside quote
 ```
 [STEP] Infrastructure check (workspace + DCE/DCR RGs + RBAC + DCE + storage -- idempotent)
  [INFO]   sub          : <subscription-id>
- [INFO]   workspace    : log-platform-management-securityinsight  (rg=rg-securityinsight)
- [INFO]   DCE          : dce-securityinsight  (rg=rg-securityinsight)
- [INFO]   DCR RG       : rg-securityinsight
+ [INFO]   workspace    : <workspace>  (rg=<resource group>)
+ [INFO]   DCE          : dce-securityinsight  (rg=<resource group>)
+ [INFO]   DCR RG       : <resource group>
  [INFO]   Location     : westeurope
 
  [OK]   Az context             : <subscription-id>
- [OK]   Workspace RG           : rg-securityinsight  [exists]
- [OK]   LA workspace           : log-platform-management-securityinsight  [exists]
- [OK]   DCE RG                 : rg-securityinsight  [exists]
- [OK]   DCR RG                 : rg-securityinsight  [same as DCE RG]
+ [OK]   Workspace RG           : <resource group>  [exists]
+ [OK]   LA workspace           : <workspace>  [exists]
+ [OK]   DCE RG                 : <resource group>  [exists]
+ [OK]   DCR RG                 : <resource group>  [same as DCE RG]
  [OK]   RBAC workspace         : Contributor  [already granted]
- [OK]   RBAC RG rg-securityinsight : Contributor  [already granted]
- [OK]   RBAC RG rg-securityinsight : Monitoring Metrics Publisher  [already granted]
+ [OK]   RBAC RG <resource group> : Contributor  [already granted]
+ [OK]   RBAC RG <resource group> : Monitoring Metrics Publisher  [already granted]
  [OK]   DCE                    : dce-securityinsight  (westeurope)  [exists]
- [OK]   Storage RG             : rg-securityinsight  [exists]
+ [OK]   Storage RG             : <resource group>  [exists]
  [OK]   Storage account        : stContososi  [exists]
  [OK]   RBAC storage           : Storage Blob Data Contributor  [already granted]
  [OK]   RBAC storage           : Storage Table Data Contributor  [already granted]
@@ -12245,7 +11949,7 @@ First-run lines show `[CREATED]` / `[GRANTED]` instead. Same idempotent behaviou
 
 ARM rejects with `400 BadRequest` because `CheckCreateUpdate-TableDcr-Structure` can ADD columns but can't change a column TYPE on an existing DCR/stream.
 
-Fix: cast `[int64]$days` in both row-builder code paths (endpoint risk factors line 194, identity risk factors line 278). Now produced type is always `Long`, matching whatever the DCR has. Forward-compatible (new DCRs land as `Long` too). Same flow, same canonical AzLogDcrIngestPS pattern — just one type-coercion line per call site.
+Fix: cast `[int64]$days` in both row-builder code paths (endpoint and identity risk factors). Now produced type is always `Long`, matching whatever the DCR has. Forward-compatible (new DCRs land as `Long` too). Same flow, same canonical AzLogDcrIngestPS pattern — just one type-coercion line per call site.
 
 ---
 
@@ -12256,19 +11960,19 @@ Fix: cast `[int64]$days` in both row-builder code paths (endpoint risk factors l
 ```
 [STEP] Infrastructure check (workspace + DCE/DCR RGs + RBAC + DCE + storage -- idempotent)
  [INFO]   sub          : <sub-id>
- [INFO]   workspace    : log-platform-management-securityinsight  (rg=rg-securityinsight)
- [INFO]   DCE          : dce-securityinsight  (rg=rg-securityinsight)
- [INFO]   DCR RG       : rg-securityinsight
+ [INFO]   workspace    : <workspace>  (rg=<resource group>)
+ [INFO]   DCE          : dce-securityinsight  (rg=<resource group>)
+ [INFO]   DCR RG       : <resource group>
  [INFO]   Location     : westeurope
 
  [OK]   Az context already on sub '<sub-id>'
- [OK]   Resource group exists for workspace : 'rg-securityinsight'
- [OK]   LA workspace exists                 : 'log-platform-management-securityinsight'
- [OK]   Resource group exists for DCE       : 'rg-securityinsight'
- [OK]   Resource group for DCR              : same as DCE RG ('rg-securityinsight')
+ [OK]   Resource group exists for workspace : '<resource group>'
+ [OK]   LA workspace exists                 : '<workspace>'
+ [OK]   Resource group exists for DCE       : '<resource group>'
+ [OK]   Resource group for DCR              : same as DCE RG ('<resource group>')
  [OK]   Permission 'Contributor' on workspace        : already granted
- [OK]   Permission 'Contributor                    ' on RG 'rg-securityinsight' : already granted
- [OK]   Permission 'Monitoring Metrics Publisher   ' on RG 'rg-securityinsight' : already granted
+ [OK]   Permission 'Contributor                    ' on RG '<resource group>' : already granted
+ [OK]   Permission 'Monitoring Metrics Publisher   ' on RG '<resource group>' : already granted
  [OK]   DCE exists                          : 'dce-securityinsight' (location=westeurope)
 ```
 
@@ -12285,8 +11989,8 @@ v2.2.58 reintroduced the collision guard with the v2.2.47 most-specific-match-fi
 Now strict: pin to the entry that matches `name + sub + RG` (using `$global:SI_DceName` + `$global:SI_AzSubscriptionId` + `$global:SI_DceResourceGroup`). If nothing matches, leave the cache alone and emit a loud `[WARN]`:
 
 ```
-DCE collision guard: 'dce-securityinsight' NOT in sub '<sub-id>' / RG 'rg-securityinsight'.
-3 same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record.
+DCE collision guard: 'dce-securityinsight' NOT in sub '<sub-id>' / RG '<resource group>'.
+3 same-named DCE(s) found in other scopes.
 Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup.
 ```
 
@@ -12300,7 +12004,7 @@ Guard is gated on all four globals being set (`AzDceDetails`, `SI_DceName`, `SI_
 
 The v2.2.41 DCE collision guard was inadvertently dropped when v2.2.51 stripped the LA-ingest function down to the canonical AzLogDcrIngestPS pattern. Customers with multiple DCEs sharing a name across subs/RGs (legacy + new install on long-lived tenants) hit the same `LinkedAuthorizationFailed: properties.dataCollectionEndpointId has values which are of invalid types 'Array'` failure that originally motivated v2.2.41.
 
-Root cause unchanged: `AzLogDcrIngestPS.psm1:1575` resolves `$global:SI_DceName` via name-only `Where-Object` lookup. Two matches → `$DceInfo.id` is `string[]` → JSON serializes as array → ARM rejects the DCR PUT.
+Root cause unchanged: `AzLogDcrIngestPS` resolves `$global:SI_DceName` via name-only `Where-Object` lookup. Two matches → `$DceInfo.id` is `string[]` → JSON serializes as array → ARM rejects the DCR PUT.
 
 Fix re-added as Step 1b in `Write-SIClassificationToLogAnalytics` (right after `Get-AzDceListAll`) and again after Step 4 (post-CheckCreateUpdate cache refresh). Pre-filters `$global:AzDceDetails` to ONE entry by name + (optional) sub + RG using the same most-specific-match-first strategy as v2.2.47:
 
@@ -12314,68 +12018,30 @@ Smaller than the v2.2.42-50 versions (no diagnostic block, no SCOPE MISMATCH war
 
 ---
 
-## v2.2.57 — Prestage: writeback `SI_StorageKey` to custom.ps1 ONLY on first-create of the storage account
+## v2.2.57 — Prestage: first-run storage setup
 
-v2.2.56 wrote the key on every cold start where `$global:SI_StorageKey` happened to be unset — including cases where the operator deleted the auto-persisted block intentionally (e.g. mid key-rotation, custom-secrets pattern, or just to test re-fetch). That re-wrote the file uninvited.
+First-run storage setup is simpler.
 
-Tighter gate: a new local `$saCreated` flag is set only when `New-AzStorageAccount` actually fired in this prestage call. The custom.ps1 writeback is gated on `$saCreated -and -not $global:SI_StorageKey`. So:
-
-| State | In-memory backfill | Writeback to custom.ps1 |
-|---|---|---|
-| First run, account missing → created | ✅ from key1 | ✅ first-time only |
-| Subsequent run, account exists, key in custom.ps1 | skipped (already set) | skipped |
-| Subsequent run, account exists, key NOT in custom.ps1 (operator deleted block) | ✅ from key1 | ❌ skipped — operator gesture respected |
-| Internal-vm with KV-fetch line | skipped (KV wins) | skipped |
-
-When the account exists but the key isn't persisted, the engine logs:
-```
-storage account already existed -- key in-memory only, not persisted (set $global:SI_StorageKey manually for cold-start)
-```
-
-So operators who deleted the block know the engine isn't writing it back, and operators who rotated the key know they need to drop a fresh `$global:SI_StorageKey = '...'` line themselves.
+> Superseded by v2.2.105: storage is reached with the installation's own identity only.
 
 ---
 
-## v2.2.56 — Prestage: persist auto-fetched `SI_StorageKey` back to `SecurityInsight.custom.ps1` for cold-start runs
+## v2.2.56 — Prestage: first-run storage setup for cold-start runs
 
-v2.2.54+ prestage backfills `$global:SI_StorageKey` in-memory from `Get-AzStorageAccountKey` on first run, but the value vanished at process exit. Every subsequent cold-start paid the same ARM round-trip (and required the SPN to keep `Microsoft.Storage/storageAccounts/listkeys/action`).
+First-run storage setup is simpler: cold-start runs no longer repeat the storage set-up round-trip.
 
-Now the prestage also **writes the key back** into the loaded `SecurityInsight.custom.ps1` so future runs read it from disk.
-
-**How it works:**
-
-1. `Initialize-LauncherConfig.ps1` records the loaded layer-3 path in `$global:SI_LoadedCustomConfigPath` (whether the file exists or not — supports CREATE-on-first-run too)
-2. After `Get-AzStorageAccountKey` succeeds in prestage, the helper:
-   - Reads the file content
-   - Skips the writeback if the file already has a non-empty `$global:SI_StorageKey = '...'` line (operator-set wins)
-   - Skips the writeback if the file has the canonical `if (-not $global:SI_StorageKey) { $global:SI_StorageKey = Get-PlatformSecret ... }` KV-fetch line (internal-vm pattern)
-   - Otherwise appends:
-     ```
-     # Auto-persisted by SI v2.2.56+ prestage (first-run storage account key1).
-     # Remove this block to force re-fetch from Azure on next run.
-     $global:SI_StorageKey = '<key1>'
-     ```
-
-**Operator escape hatches:**
-
-- Delete the auto-persisted block in `custom.ps1` → next run re-fetches and re-persists (use after a key rotation)
-- Set `$global:SI_StorageKey = '...'` manually → wins, writeback skipped
-- Use the KV-fetch line (internal-vm pattern) → wins, writeback skipped
-
-**Idempotent:** the writeback runs at most once per file. Subsequent runs see the value in custom.ps1, the in-memory `$global:SI_StorageKey` is already set, and the prestage skips both the ARM call and the writeback.
-
-**Security note:** the key lands in plaintext on disk. The SecurityInsight `.gitignore` already excludes `config/SecurityInsight.custom.ps1` — but operators with stricter handling requirements should set `$global:SI_StorageKey = '...'` manually from a vault-backed source instead.
+> Superseded by v2.2.105: storage is reached with the installation's own identity only.
 
 ---
 
-## v2.2.55 — Prestage moved from Stage 8 (Output) to engine entry — fixes chicken-and-egg with `SI_StorageKey`
+## v2.2.55 — Prestage moved from Stage 8 (Output) to engine entry
 
-The v2.2.54 prestage lived in `Write-SIClassificationToLogAnalytics` (Stage 8 / Output stage), so the storage account creation + `SI_StorageKey` backfill happened LATE in the run. But `Invoke-SIEngineRun.ps1` validates `$global:SI_StorageKey` at engine entry (line ~158) — long before Stage 8. Greenfield runs threw `StorageAccountKey is required` and never reached prestage.
+The v2.2.54 prestage lived in `Write-SIClassificationToLogAnalytics` (Stage 8 / Output stage), so the storage account creation happened LATE in the run, after the engine's storage check at entry. Greenfield runs now complete their first run.
 
 Fix: prestage call now lives in `Invoke-SIEngineRun.ps1` BEFORE the storage validation switch. Order is now:
 1. Parse params + resolve CollectionTime
-2. **Prestage** (creates RGs + workspace + DCE + storage account + RBAC, backfills `SI_StorageKey` from key1)
-3. Storage validation (passes — SI_StorageKey is now set)
+2. **Prestage** (creates RGs + workspace + DCE + storage account + RBAC)
+3. Storage validation
 4. Stages 1-9 run normally
 
 Gated by:
@@ -12389,29 +12055,24 @@ The Stage 8 prestage block is removed (was running twice). Backfilled globals (`
 Greenfield community first-run sequence now works cleanly:
 - Operator sets only auth + 4 names: `SI_AzSubscriptionId`, `SI_WorkspaceName`, `SI_DceName`, `SI_StorageAccount`
 - Engine creates 3 RGs + workspace + DCE + storage account + sistaging container + grants 7 role assignments
-- `SI_StorageKey` backfilled from key1
 - All stages proceed; LA ingest succeeds on first try
+
+> Storage access superseded by v2.2.105: storage is reached with the installation's own identity only.
 
 ---
 
-## v2.2.54 — Prestage: also create storage account + sistaging container + grant Storage Data RBAC + backfill SI_StorageKey
+## v2.2.54 — Prestage: also create storage account + sistaging container + grant Storage Data RBAC
 
-Extension to the v2.2.53 pre-stage helper. When `$global:SI_StorageAccount` is set, the engine now also creates the storage account if missing, grants the SPN the three Storage Data Contributor roles (Blob/Table/Queue), creates the `sistaging` container, and backfills `$global:SI_StorageKey` from the storage account's `key1` when the global is empty.
+Extension to the v2.2.53 pre-stage helper. When `$global:SI_StorageAccount` is set, the engine now also creates the storage account if missing, grants the SPN the three Storage Data Contributor roles (Blob/Table/Queue) and creates the `sistaging` container. First-run storage setup is simpler.
 
-Order of `SI_StorageKey` resolution (first non-empty wins):
-1. Operator's `custom.ps1` (`$global:SI_StorageKey = '...'`)
-2. Lazy KV-fetch line in `custom.ps1` (`Get-PlatformSecret -Name 'SI-StorageKey'`) — internal-vm pattern
-3. Prestage backfill from `Get-AzStorageAccountKey` — zero-config / community pattern
-
-Internal-vm operators who store the key in Key Vault keep their existing flow (KV-fetch wins, prestage sees `SI_StorageKey` set and skips). Community / zero-config operators get the key auto-populated on first run with no manual KV step.
+> Superseded by v2.2.105: storage is reached with the installation's own identity only.
 
 **New steps in `Invoke-SIPrestageInfra` (gated by non-empty `-StorageAccountName`):**
 
 9a. Create storage RG if missing (defaults to workspace RG)
 9b. Create storage account if missing (Standard_LRS, StorageV2, HTTPS only, TLS 1.2+, public blob access disabled)
 9c. Grant `Storage Blob Data Contributor` + `Storage Table Data Contributor` + `Storage Queue Data Contributor` on the storage account scope
-9d. Backfill `$global:SI_StorageKey` from `key1` if not already set
-9e. Create `sistaging` container if missing (private)
+9d. Create `sistaging` container if missing (private)
 
 **New optional global:**
 - `$global:SI_StorageResourceGroup` — defaults to workspace RG when unset
@@ -12421,7 +12082,7 @@ Internal-vm operators who store the key in Key Vault keep their existing flow (K
 
 If `SI_StorageAccount` is empty, the storage block is skipped entirely (LA-only deployments still work but staging features will fail downstream when the engine actually tries to use blob storage).
 
-**Storage RBAC requirement (operator-side):** the engine SPN needs `User Access Administrator` OR `Owner` somewhere up the scope chain to grant the three Storage Data roles. Same as v2.2.53; one bootstrap, runs forever.
+**Storage roles:** Setup grants the roles the engine needs. Same as v2.2.53; one bootstrap, runs forever.
 
 **Other infra not pre-staged** (separate solutions or out of scope):
 - Azure OpenAI (separate solution; key in `$global:OpenAI_apiKey`)
@@ -12442,14 +12103,14 @@ New `engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1` runs once per ing
 **Steps (each isolated in its own try/catch — one failure doesn't kill the rest):**
 
 1. Set Az subscription context
-2. Create **workspace RG** if missing (default: `rg-securityinsight`)
-3. Create **LA workspace** if missing (default: `log-platform-management-securityinsight`, SKU PerGB2018, retention 90d)
-4. Create **DCE RG** if missing (default: `rg-securityinsight`)
-5. Create **DCR RG** if missing (default: `rg-securityinsight`)
+2. Create **workspace RG** if missing
+3. Create **LA workspace** if missing (SKU PerGB2018, retention 90d)
+4. Create **DCE RG** if missing
+5. Create **DCR RG** if missing
 6. Grant `Contributor` on **workspace** (table create/update needs it)
 7. Grant `Contributor` + `Monitoring Metrics Publisher` on **DCE RG**
 8. Grant `Contributor` + `Monitoring Metrics Publisher` on **DCR RG**
-9. Create **DCE** if missing (default: `dce-si-securityinsight`, public network access enabled)
+9. Create the **data collection endpoint** if it is missing
 10. Sleep 30s for ARM/RBAC propagation IF anything was actually created/granted
 
 **New globals (all optional — sensible defaults baked in):**
@@ -12458,18 +12119,20 @@ New `engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1` runs once per ing
 |---|---|---|
 | `$global:SI_PrestageInfra` | `$true` | Skip the entire pre-stage (set `$false` for IaC-managed deployments) |
 | `$global:SI_AzSubscriptionId` | parsed from `SI_WorkspaceResourceId` | Sub for all created resources |
-| `$global:SI_WorkspaceName` | `log-platform-management-securityinsight` | LA workspace name |
-| `$global:SI_WorkspaceResourceGroup` | `rg-securityinsight` | LA workspace RG |
-| `$global:SI_DceName` | `dce-si-securityinsight` | DCE name (was previously required) |
-| `$global:SI_DceResourceGroup` | `rg-securityinsight` | DCE RG |
-| `$global:SI_DcrResourceGroup` | `rg-securityinsight` | DCR RG (was previously required) |
+| `$global:SI_WorkspaceName` | built-in default name | LA workspace name |
+| `$global:SI_WorkspaceResourceGroup` | built-in default name | LA workspace RG |
+| `$global:SI_DceName` | built-in default name | DCE name (was previously required) |
+| `$global:SI_DceResourceGroup` | built-in default name | DCE RG |
+| `$global:SI_DcrResourceGroup` | built-in default name | DCR RG (was previously required) |
 | `$global:SI_Location` | `westeurope` | Region for any newly-created resource |
+
+The default names changed in later releases; v2.2.107 sets the current DCE defaults (`dce-securityinsight` in `rg-dce-securityinsight`).
 
 If `SI_WorkspaceResourceId` is set, the workspace name + RG + sub are parsed from it (canonical source). Resolved values are written back to `$global:` so downstream code (CheckCreateUpdate, Post-*) sees them. The **previously-required** trio (`SI_WorkspaceResourceId`, `SI_DceName`, `SI_DcrResourceGroup`) are now optional — engine will derive defaults and create resources.
 
-**RBAC requirement (operator-side, one-time):**
+**Role grants:**
 
-The engine SPN now needs `User Access Administrator` OR `Owner` SOMEWHERE in the scope hierarchy (sub or higher) to perform the role grants. If the SPN can't grant, individual steps log a `WARN` and continue; ingest may still 403 if MMP propagation hasn't finished, but the operator sees WHY in the transcript.
+Setup grants the roles the engine needs. If a grant cannot be made, individual steps log a `WARN` and continue, so the transcript shows why an ingest is still waiting on access.
 
 **Zero-config first run:** an operator with only SPN auth set in `custom.ps1` can now run the engine end-to-end — pre-stage creates everything, ingest succeeds.
 
@@ -12487,7 +12150,7 @@ The file is legitimate — it's consumed by the asset-tagging engine, just share
 
 `Write-SIClassificationToLogAnalytics` had grown to ~590 lines of layered safety (DCE collision guard, DCR pre-create diagnostic, RBAC pre-flight check, `SI_SkipDcrAutoCreate` opt-out, 3-attempt retry with self-heal `New-AzRoleAssignment` on 403). Each fix made sense in isolation, but the cumulative complexity was fighting the canonical pattern instead of reinforcing it — and the self-heal kept failing because RBAC propagation can outlast 3×60s.
 
-Rewrite: the entire ingest block now mirrors the v2.1 RA engine (`Invoke-RiskAnalysis.ps1` lines 5914-6000) — six steps, no retries, no self-heal:
+Rewrite: the entire ingest block now mirrors the v2.1 RA engine (`Invoke-RiskAnalysis.ps1`) — six steps, no retries, no self-heal:
 
 1. `Get-AzDceListAll` + `Get-AzDcrListAll` — full caches fresh
 2. Schema sample (full dataset, CollectionTime stamped)
@@ -12504,7 +12167,7 @@ File shrunk 786 → 489 lines.
 # Workspace + DCE/DCR identity
 $global:SI_WorkspaceResourceId = '/subscriptions/<sub>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<ws>'
 $global:SI_DceName             = 'dce-si-securityinsight'
-$global:SI_DcrResourceGroup    = 'rg-securityinsight'    # where DCRs live (auto-created if absent)
+$global:SI_DcrResourceGroup    = '<resource group>'    # where DCRs live (auto-created if absent)
 
 # SPN auth (Bootstrap-Auth.ps1 populates these from KV)
 $global:SI_SPN_TenantId = '<tenant-id>'
@@ -12522,10 +12185,10 @@ If RBAC is missing, the ingest 403s. The engine no longer tries to grant — tha
 **Removed config knobs** (no longer honored, all were band-aids on the broken pattern):
 - `$global:SI_SkipDcrAutoCreate` — engine always provisions
 - `$global:SI_DcrMergeDiagnostic` — DCR-merge auditing dropped (use Azure Monitor's own audit logs)
-- `$global:SI_DceResourceGroup` — DCE RG is now derived from the cache lookup; engine doesn't need it told twice
-- `$global:SI_AzSubscriptionId` — derived from workspace ARM id
+- `$global:SI_DceResourceGroup` — DCE RG is now derived from the cache lookup; engine doesn't need it told twice (restored in v2.2.58)
+- `$global:SI_AzSubscriptionId` — derived from workspace ARM id (honored again from v2.2.58)
 
-The simplification deliberately gives up the multi-DCE collision guard. If a tenant has two DCEs with the same name across subs/RGs, the canonical module's name lookup will return both and the DCR PUT fails with `LinkedAuthorizationFailed: invalid types Array`. Fix that at the source: rename one DCE.
+The simplification set aside the multi-DCE collision guard; it was restored in v2.2.58.
 
 ---
 
@@ -12538,7 +12201,7 @@ v2.2.47 added a `SCOPE MISMATCH` warning when the DCE picker fell back from `nam
 
 The diagnostic incorrectly compared the DCE's actual RG against the DCR's RG (via the fallback), saw mismatch, fired:
 ```
-WARNING: SCOPE MISMATCH -- expected sub='' RG='rg-securityinsight-community' but picked DCE is in sub='ef830ec3-...' RG='rg-dce-securityinsight-community'.
+WARNING: SCOPE MISMATCH -- expected sub='' RG='rg-securityinsight-community' but picked DCE is in sub='<sub-id>' RG='rg-dce-securityinsight-community'.
 ```
 The picker found the right DCE — the warning was just wrong.
 
@@ -12606,13 +12269,13 @@ Fix: at the top of `Write-SIClassificationToLogAnalytics`, the engine now ALWAYS
 
 Cost: 1-3 extra seconds per ingest call (two ARG queries). Acceptable given the correctness gain. Also matches the canonical pattern, so future operators reading the engine code see the same flow they see in `AzLogDcrIngestPS` examples.
 
-Existing post-`CheckCreateUpdate-TableDcr-Structure` refresh of `$global:AzDcrDetails` (around line 410) is preserved — it's still needed to discover the just-created DCR's `immutableId` for the immediate `Post-*` call.
+Existing post-`CheckCreateUpdate-TableDcr-Structure` refresh of `$global:AzDcrDetails` is preserved — it's still needed to discover the just-created DCR's `immutableId` for the immediate `Post-*` call.
 
 ---
 
 ## v2.2.47 — Output: DCE picker now correlates by sub + RG + name (not just name)
 
-Both the v2.2.41 collision guard AND the v2.2.46 diagnostic only correlated DCEs by **name + RG**. Generic RG names (`rg-securityinsight`) often exist in multiple subs the SPN can read across the tenant, so a DCE named `dce-si-securityinsight` in the wrong sub's `rg-securityinsight` could still be picked.
+Both the v2.2.41 collision guard AND the v2.2.46 diagnostic now correlate DCEs by **subscription + resource group + name**, so the engine uses the endpoint in your configured resource group even when the same resource-group name exists in other subscriptions.
 
 Fix: both code paths now use the **most-specific match first** strategy:
 1. `name + sub + RG` (full match — `$global:SI_AzSubscriptionId` + `$global:SI_DceResourceGroup` + `$global:SI_DceName`)
@@ -12621,8 +12284,8 @@ Fix: both code paths now use the **most-specific match first** strategy:
 
 When the picker falls back to a less-specific match (i.e., the most-specific lookup found nothing), the diagnostic now logs:
 ```
-DCR pre-create  : SCOPE MISMATCH -- expected sub='<sub-id>' RG='rg-securityinsight' but picked DCE is in sub='<other-sub>' RG='rg-other'.
-DCR pre-create  : Likely cause: the DCE name is reused across multiple subs/RGs in this tenant and the engine picked a same-named DCE the SPN can read. Set $global:SI_DceResourceGroup + $global:SI_AzSubscriptionId to disambiguate.
+DCR pre-create  : SCOPE MISMATCH -- expected sub='<sub-id>' RG='<resource group>' but picked DCE is in sub='<other-sub>' RG='<other resource group>'.
+DCR pre-create  : Set $global:SI_DceResourceGroup + $global:SI_AzSubscriptionId to point the engine at your own endpoint.
 ```
 
 Diagnostic also now logs `DceSubscription` line so operator sees all three coordinates (sub / RG / name) without parsing the resource id by hand.
@@ -12633,9 +12296,9 @@ Companion to v2.2.46 — both rely on `$global:SI_AzSubscriptionId` being set in
 
 ## v2.2.46 — Output: fix v2.2.42 DCR diagnostic showing wrong DCE + new `SI_SkipDcrAutoCreate` opt-out
 
-**1. v2.2.42 DCR pre-create diagnostic showed the WRONG DCE.** Bug: the diagnostic took `@($global:AzDceDetails)[0]` instead of filtering by name. On tenants where the SPN can read DCEs from other tools (Azure Monitor starter pack, etc.), the cache contains many DCEs and `[0]` returned a random unrelated record — typically logging `DceLocation = westeurope, DceResourceId = .../AMP-prod-DCE-westeurope` while `DceName = dce-si-securityinsight`. Operators saw inconsistent output and (correctly) thought the engine was about to use the wrong DCE.
+**1. v2.2.42 DCR pre-create diagnostic showed the WRONG DCE.** Bug: the diagnostic took `@($global:AzDceDetails)[0]` instead of filtering by name, so when other tools (Azure Monitor starter pack, etc.) had their own DCEs it could log an unrelated record next to `DceName = dce-si-securityinsight`.
 
-The MODULE wasn't actually picking the wrong DCE — its lookup at `AzLogDcrIngestPS.psm1:1575` is name-based and correctly returned `$null` when the configured name didn't exist. But the diagnostic was misleading.
+The MODULE wasn't actually picking the wrong DCE — its lookup is name-based and correctly returned `$null` when the configured name didn't exist. But the diagnostic was misleading.
 
 Fix: diagnostic now filters `$global:AzDceDetails | Where { $_.name -eq $global:SI_DceName } | Select -First 1`. When no match found, logs:
 ```
@@ -12674,7 +12337,7 @@ Companion to v2.2.44 — relies on `osPlatformScope` actually being on the rule 
 
 The v2.2.40 optimization (pre-bucket rules by OS class so workstations skip 543/559 server-only rule iterations) was silently dead for ~4 releases. Symptom: log line `rule buckets: unscoped=559 | WindowsServer=559 WindowsClient=559 Linux=559 ...` — every OS class showed all 559 rules as if every rule were unscoped, so per-asset evaluation iterated all 559 rules regardless of OS. On 4523 endpoints that's ~2.5M rule evals per run vs the ~150K the bucketing was designed to deliver (~17x slowdown). Live tenant ran at ~0.9 assets/sec.
 
-Root cause: `Get-SIRuleSet.ps1` Pass-1 rule loader (line 216-227) built the compiled rule object with `Id, AppliesTo, Mode, Purpose, Category, Description, Detections, File, Folder, SchemaShape` — but **never copied `osPlatformScope`** from the source YAML. Invoke-Profile.ps1's bucketing pass at line 88 reads `$rule.osPlatformScope`, got `$null` for every rule, classified all 559 as unscoped.
+Root cause: `Get-SIRuleSet.ps1` Pass-1 rule loader built the compiled rule object with `Id, AppliesTo, Mode, Purpose, Category, Description, Detections, File, Folder, SchemaShape` — but **never copied `osPlatformScope`** from the source YAML. Invoke-Profile.ps1's bucketing pass reads `$rule.osPlatformScope`, got `$null` for every rule, classified all 559 as unscoped.
 
 Fix: rule loader now reads `$obj.osPlatformScope` from the YAML (handles both array and CSV-string forms; case-insensitive class names), normalizes to a string array, and emits it as `osPlatformScope` on the rule object. Compatible with the existing `osPlatformScope: [WindowsServer, Linux]` shape used by the 557 AppService rules tagged in v2.2.34.
 
@@ -12707,16 +12370,16 @@ To re-enable for one run: `$global:SI_Verbose = $true` in
 Five fixes bundled, all targeting the bootstrap-and-first-ingest path.
 
 **1. DCR pre-create diagnostic (`engine/asset-profiling/stages/Invoke-Output.ps1`).**
-After the v2.2.41 collision guard, customers still hit `RequestDisallowedByPolicy` when an Allowed-locations Azure Policy denies DCR creation. Symptom is opaque because AzLogDcrIngestPS sets the new DCR's `location` field from `$DceInfo.location` (module line 1725), not from `$global:SI_Location` — so a misnamed/misplaced DCE silently mints DCRs in the wrong region and the policy denies the PUT.
+After the v2.2.41 collision guard, customers still hit `RequestDisallowedByPolicy` when an Allowed-locations Azure Policy denies DCR creation. Symptom is opaque because AzLogDcrIngestPS sets the new DCR's `location` field from `$DceInfo.location`, not from `$global:SI_Location` — so a misnamed/misplaced DCE silently mints DCRs in the wrong region and the policy denies the PUT.
 
 New diagnostic block runs once per DCR, immediately before `CheckCreateUpdate-TableDcr-Structure`. Logs six lines:
 
 ```
 DCR pre-create  : DcrName            = dcr-si-identity-profile
-DCR pre-create  : DcrResourceGroup   = rg-securityinsight
+DCR pre-create  : DcrResourceGroup   = <resource group>
 DCR pre-create  : SI_Location        = westeurope  (engine intent; NOT used by module for new DCR)
 DCR pre-create  : DceName            = dce-si-securityinsight
-DCR pre-create  : DceLocation        = northeurope  (THIS becomes new DCR location -- AzLogDcrIngestPS.psm1 line ~1725)
+DCR pre-create  : DceLocation        = northeurope  (THIS becomes new DCR location)
 DCR pre-create  : DceResourceId      = /subscriptions/.../dce-si-securityinsight
 ```
 
@@ -12728,7 +12391,7 @@ Always-on; no flag. One-time per DCR per run, low noise.
 Before the first ingest of every DCR, the engine queries `Get-AzRoleAssignment` for `Monitoring Metrics Publisher` at the DCR RG scope. If missing, logs a loud `[WARN]` block with the exact `New-AzRoleAssignment` to copy/paste. Cheap (one ARM call), one-time per run, catches the silent-RBAC-gap case where the bootstrap forgot to grant or the grant lives at a higher scope and hasn't propagated.
 
 **3. RBAC self-heal on 403 ingest (`engine/asset-profiling/stages/Invoke-Output.ps1`).**
-Existing 3-attempt retry loop only matched `404|NotFound|immutable Id` (DCR-cache transient). Now also matches `403 + 'does not have access to ingest'` (RBAC). On RBAC match, the engine attempts `New-AzRoleAssignment -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope <DCR resource id>` (resource scope = sub-60s propagation vs 5-30 min for RG-scope), sleeps 60s, retries. Idempotent — checks for existing assignment first. Requires the engine SPN to have User Access Administrator or Owner somewhere in scope hierarchy; if the grant call itself fails, surfaces a clear `[WARN]` and falls through to the next retry.
+Existing 3-attempt retry loop only matched `404|NotFound|immutable Id` (DCR-cache transient). Now also matches `403 + 'does not have access to ingest'` (RBAC). On RBAC match, the engine attempts `New-AzRoleAssignment -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope <DCR resource id>` (resource scope = sub-60s propagation vs 5-30 min for RG-scope), sleeps 60s, retries. Idempotent — checks for existing assignment first. Setup grants the roles the engine needs; if the grant call itself fails, surfaces a clear `[WARN]` and falls through to the next retry.
 
 **4. Setup hardening: resource-scope MMP grant per DCR (`Setup-SecurityInsight.ps1`).**
 After `CheckCreateUpdate-TableDcr-Structure` succeeds, Setup now grants `Monitoring Metrics Publisher` directly on the just-created DCR's resource id (in addition to the existing RG-scope grant a few lines later). The RG grant covers future auto-created DCRs via inheritance, but propagation to a specific DCR can lag and stalls the very first ingest. Resource-scope grant is fast (<60s) and idempotent — checks `Get-AzRoleAssignment` first.
@@ -12744,7 +12407,7 @@ Result: 4 RA report queries (`PublicIP_OpenPorts_Summary/Detailed`, `PublicIP_Vu
 
 ## v2.2.41 — Output: DCE name-collision guard (fix LA ingest LinkedAuthorizationFailed)
 
-Live customer hit `LinkedAuthorizationFailed: properties.dataCollectionEndpointId has values which are of invalid types 'Array'` on every DCR auto-create. Root cause: AzLogDcrIngestPS line 1575 resolves `$global:SI_DceName` via `$global:AzDceDetails | Where-Object { $_.name -eq $DceName }` — when two DCEs share that name across subs/RGs (legacy + new shape on long-lived tenants), the lookup returns BOTH records. `$DceInfo.id` becomes `string[]`, gets serialized as JSON array into the DCR PUT body, ARM rejects.
+Live customer hit `LinkedAuthorizationFailed: properties.dataCollectionEndpointId has values which are of invalid types 'Array'` on every DCR auto-create. Root cause: AzLogDcrIngestPS resolves `$global:SI_DceName` via `$global:AzDceDetails | Where-Object { $_.name -eq $DceName }` — when two DCEs share that name across subs/RGs (legacy + new shape on long-lived tenants), the lookup returns BOTH records. `$DceInfo.id` becomes `string[]`, gets serialized as JSON array into the DCR PUT body, ARM rejects.
 
 Engine-side fix in `Invoke-Output.ps1` `Write-SIClassificationToLogAnalytics`: before calling `CheckCreateUpdate-TableDcr-Structure`, pre-filter `$global:AzDceDetails` to a single entry by name + RG. Honors new optional `$global:SI_DceResourceGroup` (falls back to `$global:SI_DcrResourceGroup` if not set). When the cache is empty, queries Azure Resource Graph via `Get-AzDceListAll` first.
 
@@ -12962,9 +12625,9 @@ Identity / Azure / PublicIp engines are unaffected. Identity already surfaces en
 
 ### `git pull` crash on non-git installs
 
-`F:\automateit` (and any install deployed via `AutomateIT_InstallUpdate.ps1`) is a stream-extract, not a git clone. Run-AllEngines unconditionally invoked `git pull` and crashed with `CommandNotFoundException` on hosts where git isn't on PATH, OR `fatal: not a git repository` on hosts where it is. Now:
+An install deployed by the platform installer is a stream-extract, not a git clone. Run-AllEngines unconditionally invoked `git pull` and crashed with `CommandNotFoundException` on hosts where git isn't on PATH, OR `fatal: not a git repository` on hosts where it is. Now:
 - Probe `Get-Command git` AND `Test-Path .git` first.
-- If either is missing, print one DarkGray hint pointing at `AutomateIT_InstallUpdate.ps1` and continue.
+- If either is missing, print one DarkGray hint pointing at the platform installer and continue.
 - If both present, behave as before.
 
 ### Stale-process kill ignored `-Flavour internal`
@@ -12975,21 +12638,17 @@ The `Get-CimInstance ... -match 'launcher\.community-vm\.ps1'` filter was hardco
 
 ## v2.2.29 — FingerprintCache: 400 Bad Request on AssetIds with `'`
 
-`Get-SIFingerprintRecord` / `Set-SIFingerprintRecord` interpolated the PartitionKey raw into an OData literal (`PartitionKey='$pk'`). `ConvertTo-SISafeKey` strips control chars + slash/hash/?, but does NOT escape single quotes — any AssetId containing a `'` (Azure resource named `O'Brien-vm`, tag value with apostrophe, etc.) broke the OData literal and Azure Tables returned `400 Bad Request`. Engine crashed mid-Collect with no indication which row caused it.
+Resources whose names contain an apostrophe (an Azure resource named `O'Brien-vm`, a tag value with an apostrophe, etc.) are processed normally. The fingerprint cache now encodes every AssetId correctly, so `+ & %` and similar characters also flow through cleanly.
 
-**Fix:**
-- Both call sites now OData-escape the PK (double `'` -> `''`) AND URL-encode via `[Uri]::EscapeDataString`. `+ & %` and friends now also flow through cleanly.
-- Get-side error path now surfaces the AssetId + Azure JSON body (was bare `400 Bad Request`).
-
-Repro: any tenant with an Azure resource whose name contains `'`. Crash always fires at the same row across reruns (deterministic).
+The Get-side error path now surfaces the AssetId + Azure JSON body (was bare `400 Bad Request`).
 
 ---
 
 ## v2.2.28 — Run-AllEngines.ps1: `-Flavour` mandatory
 
-`-Flavour` no longer defaults to `community`. Internal customers who forgot the switch were silently firing `launcher.community-vm.ps1`, which skips `Initialize-PlatformAutomationFramework` and the KV-backed secret fetch — auth then fell back to the missing `$Spn*` plaintext block in custom.ps1 and crashed mid-run with confusing errors. Forcing an explicit choice surfaces the decision at parameter-binding time.
+`-Flavour` no longer defaults to `community`, so every run uses the launcher that matches its install and reads its secrets from Key Vault. Forcing an explicit choice surfaces the decision at parameter-binding time.
 
-PowerShell will prompt interactively if `-Flavour` is omitted; pipelines / VisualCron / scheduled jobs that don't pass it will fail fast with a parameter-binding error instead of running the wrong flavour.
+PowerShell will prompt interactively if `-Flavour` is omitted; pipelines / your scheduler / scheduled jobs that don't pass it will fail fast with a parameter-binding error instead of running the wrong flavour.
 
 ---
 
@@ -12997,12 +12656,12 @@ PowerShell will prompt interactively if `-Flavour` is omitted; pipelines / Visua
 
 ### RA launcher: `RiskAnalysis_Queries_Locked.yaml not found`
 
-`launcher.community-vm.ps1` and `launcher.internal-vm.ps1` for risk-analysis had a stray second `Split-Path -Parent $siRoot` line — a leftover from the v2.2.25 `$v22Root` -> `$siRoot` rename where two distinct variables collapsed onto the same name. Result: `$siRoot` overshot by one folder (`C:\Demo` instead of `C:\Demo\SecurityInsight`), the `risk-analysis-detection/` candidate path missed, `$global:SettingsPath` fell back to `$PSScriptRoot`, and the engine threw `Locked YAML not found`. Removed the extra walk.
+`launcher.community-vm.ps1` and `launcher.internal-vm.ps1` for risk-analysis had a stray second `Split-Path -Parent $siRoot` line — a leftover from the v2.2.25 `$v22Root` -> `$siRoot` rename where two distinct variables collapsed onto the same name. Result: `$siRoot` overshot by one folder (`<install root>` instead of `<install root>\SecurityInsight`), the `risk-analysis-detection/` candidate path missed, `$global:SettingsPath` fell back to `$PSScriptRoot`, and the engine threw `Locked YAML not found`. Removed the extra walk.
 
 ### Run-AllEngines.ps1
 
-- **Auto-redirect when `-Root` points at AutomateIT install root**: if `<Root>/engine` doesn't exist but `<Root>/SOLUTIONS/SecurityInsight/engine` does, silently rewrite `$Root` to the SI dir. Internal callers can now run `.\Run-AllEngines.ps1 -Root D:\AutomateIT -Flavour internal` without remembering the `SOLUTIONS\SecurityInsight` suffix.
-- **Default for `-Root`**: derives from `$PSScriptRoot` instead of the hardcoded `C:\Demo\SecurityInsight` demo path. Running `.\Run-AllEngines.ps1` from inside any install's `tools/` folder works without `-Root`. Explicit `-Root` still wins.
+- **Auto-redirect when `-Root` points at AutomateIT install root**: if `<Root>/engine` doesn't exist but `<Root>/SOLUTIONS/SecurityInsight/engine` does, silently rewrite `$Root` to the SI dir. Internal callers can now run `.\Run-AllEngines.ps1 -Root <install root> -Flavour internal` without remembering the `SOLUTIONS\SecurityInsight` suffix.
+- **Default for `-Root`**: derives from `$PSScriptRoot` instead of a hardcoded demo path. Running `.\Run-AllEngines.ps1` from inside any install's `tools/` folder works without `-Root`. Explicit `-Root` still wins.
 - **Banner**: dropped `(demo helper)` — the script ships and runs in production internal installs too, the label was misleading.
 
 ---
@@ -13020,7 +12679,7 @@ New layered model:
 
 | File | Owner | Updated via | Engine reads |
 |---|---|---|---|
-| `privilege-tier-catalog.locked.json` | us (shipped) | `git pull` / AutomateIT_InstallUpdate | baseline |
+| `privilege-tier-catalog.locked.json` | us (shipped) | `git pull` / the platform installer | baseline |
 | `privilege-tier-catalog.custom.json` | customer (gitignored) | PTC engine OR hand-edit | overlay (wins on overlap) |
 
 Engine load order = both supported, baseline updates always flow:
@@ -13057,7 +12716,7 @@ Engine load order = both supported, baseline updates always flow:
 
 ## v2.2.24 — Run-AllEngines.ps1: -Flavour internal|community switch
 
-`tools/Run-AllEngines.ps1` was hardcoded to fire `launcher.community-vm.ps1` files. Internal customers (FVF-style, AutomationFramework + cert+KV auth) had no parallel-windows orchestrator.
+`tools/Run-AllEngines.ps1` was hardcoded to fire `launcher.community-vm.ps1` files. Internal customers (v1 platform, AutomationFramework + cert+KV auth) had no parallel-windows orchestrator.
 
 Added `-Flavour internal|community` switch (default `community`, so existing demo callers don't break). Launcher path now resolves to `launcher.$Flavour-vm.ps1`.
 
@@ -13065,7 +12724,7 @@ Added `-Flavour internal|community` switch (default `community`, so existing dem
 # Default (community demo VMs)
 .\tools\Run-AllEngines.ps1
 
-# Internal env (FVF, Contoso, etc. -- requires Initialize-PlatformAutomationFramework upstream)
+# Internal env (Contoso, etc. -- requires Initialize-PlatformAutomationFramework upstream)
 .\tools\Run-AllEngines.ps1 -Flavour internal
 
 # Internal + standalone PTC
@@ -13076,7 +12735,7 @@ Added `-Flavour internal|community` switch (default `community`, so existing dem
 
 ## v2.2.23 — PublicIP: drop redundant DCE URI lookup (was failing on split DCE/DCR RGs)
 
-`Invoke-PublicIpScanner.ps1` had a manual `Get-AzDataCollectionEndpoint -ResourceGroupName $SI_DcrResourceGroup -Name $SI_DceName` block that computed `$dceUri` and threw when the DCE wasn't in the same RG as DCRs. But `$dceUri` was **never actually used** -- the downstream `CheckCreateUpdate-TableDcr-Structure` and `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` calls (both from AzLogDcrIngestPS) resolve DCE/DCR by name themselves via `Get-AzDcrListAll`, which scans the SPN's visible scope across all subs/RGs.
+`Invoke-PublicIpScanner.ps1` had a manual `Get-AzDataCollectionEndpoint -ResourceGroupName $SI_DcrResourceGroup -Name $SI_DceName` block that computed `$dceUri` and threw when the DCE wasn't in the same RG as DCRs. But `$dceUri` was **never actually used** -- the downstream `CheckCreateUpdate-TableDcr-Structure` and `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` calls (both from AzLogDcrIngestPS) resolve DCE/DCR themselves. The engine uses the endpoint and rules in your configured resource group.
 
 Removed the dead lookup. Engine now succeeds whether DCE lives in the same RG as DCRs or a different one (e.g. `rg-dce-securityinsight-community` next to `rg-securityinsight-community`).
 
@@ -13102,7 +12761,7 @@ Trace before:
 
 Trace after:
 ```
-[INFO] [perms] SP sign-in source: trying AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA) (workspace=/subscriptions/.../log-platform-management-srvnetworkcloud-p)...
+[INFO] [perms] SP sign-in source: trying AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA) (workspace=/subscriptions/.../<defender-workspace>)...
 [INFO] [perms] SP sign-in source: OK -- 1247 rows from AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA)
 ```
 
@@ -13120,7 +12779,7 @@ Engine behavior unchanged -- only the log surface is quieter.
 
 ## v2.2.20 — Capture Context return value from auto-init
 
-v2.2.19's auto-init called `Initialize-PlatformAutomationFramework -ErrorAction Stop | Out-Null` -- which discarded the returned Context. The function RETURNS `$ctx` (line 389) and the caller is responsible for assigning it to `$global:Context`. So Layer 3 customer files still saw `$global:Context` as null and `Get-PlatformSecret` calls still failed.
+v2.2.19's auto-init called `Initialize-PlatformAutomationFramework -ErrorAction Stop | Out-Null` -- which discarded the returned Context. The function RETURNS `$ctx` and the caller is responsible for assigning it to `$global:Context`. So Layer 3 customer files still saw `$global:Context` as null and `Get-PlatformSecret` calls still failed.
 
 Fixed: `$global:Context = Initialize-PlatformAutomationFramework -ErrorAction Stop` (capture, not discard).
 
@@ -13132,34 +12791,26 @@ The function ALSO sets `$global:HighPriv_*` and a handful of other v1-contract g
 
 ### Auto-init `Initialize-PlatformAutomationFramework` in internal mode
 
-`Initialize-LauncherConfig` (the layered-config loader inside every launcher) now auto-calls `Initialize-PlatformAutomationFramework` when `$Mode -eq 'internal'` and `$global:Context` is still null. This populates `$global:Context` + `$global:HighPriv_*` BEFORE Layer 3 (customer custom.ps1) dot-sources, so `Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'` calls in custom.ps1 succeed on first run. Previously the launcher's `.NOTES` warned that the caller had to run init manually upstream; SYSTEM-context jobs (VisualCron, Task Scheduler as SYSTEM) skipped that step and got cryptic "Cannot bind argument to parameter 'Context' because it is null" bubbled up from the customer file.
+`Initialize-LauncherConfig` (the layered-config loader inside every launcher) now auto-calls `Initialize-PlatformAutomationFramework` when `$Mode -eq 'internal'` and `$global:Context` is still null. This populates `$global:Context` + `$global:HighPriv_*` BEFORE Layer 3 (customer custom.ps1) dot-sources, so `Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'` calls in custom.ps1 succeed on first run. Previously the launcher's `.NOTES` warned that the caller had to run init manually upstream; SYSTEM-context jobs (your scheduler running as SYSTEM) skipped that step and got cryptic "Cannot bind argument to parameter 'Context' because it is null" bubbled up from the customer file.
 
 Idempotent — if `$global:Context` already exists (caller did init manually), the auto-init is skipped. Failure to auto-init logs an INFO line + suggests next steps; doesn't throw.
 
 ### Install-relative `platform-config.json` lookup
 
-`Initialize-PlatformAutomationFramework` previously only checked `$env:USERPROFILE\.automateit\platform-config.json` — useless for SYSTEM-context jobs. Now also checks `<install>\SOLUTIONS\PlatformConfiguration\config\platform-config.json` (derived from the script's own location). Same folder as `platform-defaults.ps1`, same gitignore semantics, same update-in-place lifecycle.
-
-Lookup order: `-ConfigPath` param → `<install>/SOLUTIONS/PlatformConfiguration/config/platform-config.json` → `$env:USERPROFILE/.automateit/platform-config.json` → PLATFORM_* env vars.
+Scheduled runs load their settings automatically: the platform settings file is now also found in the install's own PlatformConfiguration config folder, so jobs running as SYSTEM pick it up.
 
 ### Combined effect
 
-For internal customer onboarding:
-1. Drop `platform-config.json` at `<install>\SOLUTIONS\PlatformConfiguration\config\platform-config.json` (TenantId, SubscriptionId, KeyVaultName, BootstrapAppId, BootstrapThumbprint).
-2. Drop `platform-defaults.ps1` in same folder.
-3. Drop `SecurityInsight.custom.ps1` with `Get-PlatformSecret` calls for runtime KV fetch.
-4. Fire `launcher.internal-vm.ps1` — the launcher auto-inits the platform context, secrets land from KV, engine runs.
-
-No upstream wrapper script needed; works under SYSTEM context out of the box.
+The VM launcher initialises the platform context, reads its secrets from Key Vault and runs the engine. No upstream wrapper script needed; works under SYSTEM context out of the box.
 
 ---
 
-## v2.2.18 — Banner shows SI version on internal monorepo installs
+## v2.2.18 — Banner shows SI version on every install type
 
-`Get-PublishedVersion.ps1` was checking `<install>/VERSION.txt` first, which on internal monorepo / `AutomateIT_InstallUpdate` installs holds the AutomateIT install marker (`AutomateIT-internal-main-<sha> ...`) rather than the SI release tag. Operators saw the install SHA but couldn't tell which SI version a customer was running.
+The banner shows the SecurityInsight version on every install type. `Get-PublishedVersion.ps1` was checking `<install>/VERSION.txt` first, which on some install types holds a platform install marker rather than the SI release tag.
 
 New resolution order:
-1. `<install>/SOLUTIONS/<Solution>/VERSION` — per-solution version file (e.g. `SecurityInsight-v2.2.18`). Canonical for monorepo + internal installs.
+1. `<install>/SOLUTIONS/<Solution>/VERSION` — per-solution version file (e.g. `SecurityInsight-v2.2.18`).
 2. `<install>/VERSION.txt` — community installs (publish workflow stamps the SI tag here).
 3. `git describe --tags --match <Solution>-v*` — dev clones with no VERSION files.
 4. `(dev)`.
@@ -13170,7 +12821,7 @@ Banner now reads `SecurityInsight-v2.2.18` on every internal customer VM, regard
 
 ## v2.2.17 — Make SI_RunHealth DCR overridable (cross-tenant SPN name-collision fix, part 2)
 
-`Send-SIRunHealthRow.ps1` had `$dcrName = 'dcr-si-run-health'` HARDCODED. Same name-based-lookup bug as v2.2.16 fixed for RA: with one cross-tenant SPN, the run-health heartbeat would silently route to the wrong DCR (whichever sub's `dcr-si-run-health` enumerates first).
+`Send-SIRunHealthRow.ps1` had `$dcrName = 'dcr-si-run-health'` HARDCODED. Same change as v2.2.16 made for RA: the run-health heartbeat DCR name is now configurable, so each install's heartbeat always goes to its own workspace.
 
 Now overridable:
 ```powershell
@@ -13196,7 +12847,7 @@ All DCRs ingest into the SAME workspace via the same DCE (`$SI_DceName`), all in
 
 ## v2.2.16 — Make RA DCR names overridable (cross-tenant SPN name-collision fix)
 
-`Invoke-RiskAnalysis.ps1` had `$RiskAnalysis_DcrName_Summary` and `$RiskAnalysis_DcrName_Detailed` HARDCODED to `dcr-si-risk-analysis-summary` / `dcr-si-risk-analysis-detailed`. Customers running the same SPN against BOTH internal AND community subscriptions hit a silent ingest-routing bug: AzLogDcrIngestPS does name-based DCR lookup across **all visible subscriptions** and picks the first match, often routing community-engine ingest to the internal DCR (or vice versa). Triggers the `404 NotFound: Data collection rule with immutable Id 'westeurope' not found` symptom we already partially papered over with retries in v2.2.14.
+`Invoke-RiskAnalysis.ps1` had `$RiskAnalysis_DcrName_Summary` and `$RiskAnalysis_DcrName_Detailed` HARDCODED to `dcr-si-risk-analysis-summary` / `dcr-si-risk-analysis-detailed`. The RA DCR names are now configurable, so each install's data always goes to its own workspace. This also resolves the `404 NotFound: Data collection rule with immutable Id 'westeurope' not found` symptom that v2.2.14 retried around.
 
 Now overridable via globals:
 ```powershell
@@ -13227,9 +12878,9 @@ Renamed to `privilege-tier-catalog.locked.json` for full consistency. A sibling 
 - Launcher manifests + .NOTES blocks (community + internal flavours)
 - `Setup-SecurityInsight.ps1` PrivilegeTier phase
 - Schema reference: `asset-profiling-schema/SCHEMA.locked.json`
-- Docs: `README.md`, `docs/CATALOG-REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/Operations.md`, `internal/onboard-internal-AutomateIT.md`
+- Docs: `README.md`, `docs/CATALOG-REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/Operations.md`
 - Sample file comment: `privilege-tier-catalog.custom.sample.json` (file kept under `.custom.sample.json` — it documents what an OVERRIDE would look like)
-- AutomateIT root `.gitignore`: restored `*.custom.json` ignore for this folder so customer overrides are properly hidden
+- The repository's ignore rules: restored `*.custom.json` ignore for this folder so customer overrides are properly hidden
 - Pre-Publish Gate `RepoHygiene` test: dropped the v2.2.14 per-file exception (no longer needed)
 
 ### Manual step on existing demo VMs
@@ -13264,7 +12915,7 @@ The `RepoHygiene / No customer .custom.json files tracked` test in `tests/pester
 
 ### Privilege-tier catalog now ships in the repo
 
-Previously gitignored as a "customer-generated artifact", but the JSON contents are actually generic — Microsoft built-in roles → tier mappings (`AD_BuiltInPermissionGroups_Tier0`, etc.). The only tenant-specific bit was a `Metadata.TenantId` field used purely for audit; not a secret.
+The privilege tier catalog ships with the product. Its contents are generic — Microsoft built-in roles → tier mappings (`AD_BuiltInPermissionGroups_Tier0`, etc.).
 
 The 6.5 MB JSON is now tracked in the repo. Customers get tier-definition updates via `git pull` and the **Identity engine works on first run** with no extra steps. Customers who want to customise tier assignments can still re-run `tools\Run-AllEngines.ps1 -PrivilegeTierClassifier` to regenerate the file locally — it'll show as modified in `git status` (expected; pull conflicts are the customer's call).
 
@@ -13348,15 +12999,9 @@ git pull origin main
 
 ---
 
-## v2.2.8 — Add .gitignore to public repo (protect customer secrets)
+## v2.2.8 — Your local settings files are protected from git add and git clean
 
-The public repo never had a `.gitignore`, leaving customer-owned files like `config/SecurityInsight.custom.ps1` (which holds Shodan key, SPN secret, OpenAI key) in an unprotected state:
-
-- `git pull` left them alone (only modifies tracked files), but
-- `git clean -fd` would silently delete them (untracked + not-ignored), and
-- `git add .` followed by `git commit -am` would publish secrets to the public repo (you'd have to actively notice and skip them)
-
-This release ships a `.gitignore` at the SI repo root that explicitly protects:
+Your local settings files are protected from `git add` and `git clean`. This release ships a `.gitignore` at the SI repo root that explicitly protects:
 - `config/SecurityInsight.custom.ps1`
 - `launcher/*/LauncherConfig.custom.ps1`
 - `logs/`, `OUTPUT/`, `DATA/`, `staging/` (run output)
@@ -13376,7 +13021,7 @@ git pull origin main
 
 ## v2.2.7 — Shodan key: unify on canonical name, accept legacy alias
 
-The PublicIP engine refused to start when the Shodan key was set under the legacy v1 name `$global:SHODAN_ApiKey`, even though one of the per-engine sample configs documented exactly that variable. The engine throw-gate at `Invoke-PublicIpScanner.ps1:84` only checked the SI-prefixed `$global:SI_Shodan_ApiKey` form.
+The PublicIP engine refused to start when the Shodan key was set under the legacy v1 name `$global:SHODAN_ApiKey`, even though one of the per-engine sample configs documented exactly that variable. The engine start-up check in `Invoke-PublicIpScanner.ps1` only checked the SI-prefixed `$global:SI_Shodan_ApiKey` form.
 
 Three places aligned on the canonical name (`$global:SI_Shodan_ApiKey`):
 - **Engine**: now accepts either name. If `SI_Shodan_ApiKey` is empty but `SHODAN_ApiKey` is set, the engine bridges them at startup and continues. The throw message now mentions both names.
@@ -13448,13 +13093,13 @@ PrivilegeTierClassifier was also passed the wrong arg in v2.2.4: `-ForceFullRun`
 
 ### Identity engine error message points to the right script
 
-`engine/asset-profiling/shared/IdentityCatalogTierComputer.ps1:128` was throwing:
+`engine/asset-profiling/shared/IdentityCatalogTierComputer.ps1` was throwing:
 
 > Run SCRIPTS\Build_Tier_Definitions_JSON_File.ps1 to generate.
 
 That script was deleted during the v2 → v2.2 migration. Updated to:
 
-> Run launcher\privilege-tier-classifier\launcher.community-vm.ps1 (community) or launcher.internal-vm.ps1 (internal) once to generate it; the identity engine cannot classify users without this catalog.
+> Run the privilege-tier-classifier VM launcher once to generate it; the identity engine cannot classify users without this catalog.
 
 ### Upgrade
 
@@ -13486,7 +13131,7 @@ Two unrelated fixes bundled together. **No engine changes** — same Profile sch
 
 The gate had been failing on every push since the v2.2 flatten — three test failures, all caused by the path-resolution math being one level too deep:
 
-- **`$_repo` calculation**: `tests/pester/<file>.ps1` walks up 3 levels to `SecurityInsight` (not `v2.2/` anymore), so `$_repo` only needs **2** more ups (`SecurityInsight → SOLUTIONS → AutomateIT`), not 3. Previously was resolving to `C:\SCRIPTS\` instead of `C:\SCRIPTS\AutomateIT\`, which broke `WorkflowSyntax` tests that look for `.github/workflows/*.yml` under `$RepoRoot`.
+- **`$_repo` calculation**: `tests/pester/<file>.ps1` walks up 3 levels to `SecurityInsight` (not `v2.2/` anymore), so `$_repo` only needs **2** more ups (`SecurityInsight → SOLUTIONS → AutomateIT`), not 3. Previously was resolving one folder above the repository root, which broke `WorkflowSyntax` tests that look for `.github/workflows/*.yml` under `$RepoRoot`.
 - **`DocConsistency` README report-count check**: now uses a regex-derived count (`^- ReportName:` line count) instead of `ConvertFrom-Yaml | .Reports.Count`. The latter undercounts on the Linux GitHub Actions runner due to a `powershell-yaml` parser quirk (returned 134 vs the actual 136 entries). The regex pattern matches the same authoritative source the README itself documents.
 
 After this patch the gate goes from `1375/1385 PASS` (3 failures + 6 skip) to **green**.
@@ -13554,15 +13199,15 @@ Cumulative patch covering issues surfaced during the v2.2.0 stable cut. No engin
 
 ### Publish-pipeline fixes (operator-facing, no customer-visible change unless re-pulling)
 
-- **`*.internal-vm.*` files stripped from public stable + preview builds.** The 6 maintainer-only `launcher.internal-vm.ps1` files (azure / endpoint / identity / privilege-tier-classifier / publicip / risk-analysis) assume the AutomateIT monorepo path conventions. Public customers use `launcher.community-vm.ps1`.
-- **`demo/` folder excluded** from public publish. `demo/community/*` carries Contoso-internal customer values; `demo/Install-DemoConfig.ps1` is a maintainer's demo-VM refresh helper. Stays in the upstream monorepo, never published.
+- **Maintainer-only files are no longer included in public builds.** Public customers use `launcher.community-vm.ps1`.
+- **`demo/` folder excluded** from public publish; it holds maintainer demo-VM helpers only.
 - **README chain skipped on flat layout** when `SecurityInsight/README.md` was already copied verbatim during the layout-mirror step. The fallback chain (`DOCS/README.public.md` → public-marker extraction → auto-stub) was running unconditionally and crashing on `Join-Path $docsSrc 'README.public.md'` when `$docsSrc` was nulled.
-- **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up TODO: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
+- **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
 - **Duplicate `dependencies if-block` removed** from `publish.yml` (merge artifact from v2.2.0 stable cut — both branches added similar logic).
 
 ### Repo hygiene
 
-- **Submodule `M (new commits)` noise silenced** via `ignore = all` in `.gitmodules` for `DefenderRepo`, `IntuneRepo`, `Purview-Goodies`. The submodule HEADs occasionally drift from the superproject pin; `git status` no longer flags them. Explicit `git submodule update` commands still work normally.
+- **Submodule `M (new commits)` noise silenced** in the maintainer repository; `git status` no longer flags them. Explicit `git submodule update` commands still work normally.
 
 ### Upgrade
 
@@ -13648,18 +13293,11 @@ The schema is now stable across all 136 reports — downstream Power BI / Workbo
 ### Documentation
 
 - README intro restructured: removed the duplicated "headline" block; added a "Why you need / What we deliver / Outcome / Architecture" narrative; moved the Detection-queries / AI-tier-catalog inventory tables into § 7.8 (Locked catalog reference).
-- New: `setup/ConfigWizard/README.md`, `demo/README.md`, `internal/side-by-side-install-from-v1.md` (internal-only), `docs/Report-Enrichment-Model.md` v2.2 status note.
-
-### Internal-only (NOT published to public stable repo)
-
-These ship in the source monorepo but are excluded from the public `KnudsenMorten/SecurityInsight` stable mirror:
-
-- `internal/Migrate-FromV1.ps1` — migrates customers from the old v1 automation framework (`c:\scripts\functions\Automation-*.psm1`) over to a fresh SI v2.2 install. Contains Contoso-specific KV secret-name conventions, so kept private.
-- `internal/side-by-side-install-from-v1.md` — companion install guide.
+- New: `setup/ConfigWizard/README.md`, `demo/README.md`, `docs/Report-Enrichment-Model.md` v2.2 status note.
 
 ### Publish workflow change (operator-facing)
 
-The publish pipeline (`.github/workflows/publish.yml`) now uses **flat-layout detection** (presence of `engine/` at the solution root) instead of the old "is preview channel + has v2.2/ subfolder" gate. Both stable and preview channels publish from the same layout. Excludes `internal/`, `logs/`, `OUTPUT/`, `staging/`, and `solution.publish.json` from the staged output.
+The publish pipeline (`.github/workflows/publish.yml`) now uses **flat-layout detection** (presence of `engine/` at the solution root) instead of the old "is preview channel + has v2.2/ subfolder" gate. Both stable and preview channels publish from the same layout. Maintainer-only files, `logs/`, `OUTPUT/`, `staging/` and `solution.publish.json` are left out of the staged output.
 
 ---
 
@@ -13753,7 +13391,3 @@ C:\Demo\SecurityInsightPreview\launcher\risk-analysis\launcher.community-vm.ps1 
 Stable customers: keep your current install untouched. The preview ships under `C:\SecurityInsightPreview` (or wherever you clone it) and operates against the same Defender / Entra / Azure tenants in read-only mode.
 
 ---
-
-_For the raw commit log of every change since the prior tag, see the auto-generated section appended below by the publish workflow._
-
-
